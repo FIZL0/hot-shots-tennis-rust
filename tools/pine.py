@@ -31,6 +31,18 @@ class Pine:
     def read32(self, a): return struct.unpack("<I", self._call(2, struct.pack("<I", a)))[0]
     def read64(self, a): return struct.unpack("<Q", self._call(3, struct.pack("<I", a)))[0]
     def write32(self, a, v): self._call(6, struct.pack("<II", a, v))
+    def read_block(self, a, n):
+        """Read n bytes (multiple of 8) at a as one PINE batch message: one header, many read64 ops."""
+        ops = b"".join(struct.pack("<BI", 3, a + i) for i in range(0, n, 8))
+        return self._call_raw(ops)
+
+    def _call_raw(self, ops):
+        self.s.sendall(struct.pack("<I", 4 + len(ops)) + ops)
+        size, res = struct.unpack("<IB", self._recv(5))
+        body = self._recv(size - 5)
+        if res != OK: raise RuntimeError("PINE batch failed")
+        return body
+
     def save_state(self, slot): self._call(9, bytes([slot]))
     def load_state(self, slot): self._call(0x0A, bytes([slot]))
     def version(self): return self._str(8)

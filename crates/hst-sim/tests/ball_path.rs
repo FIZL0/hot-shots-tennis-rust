@@ -36,3 +36,29 @@ fn flight_matches_recorded_path() {
         }
     }
 }
+
+#[test]
+fn flight_matches_bot_match_shots() {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(text) = std::fs::read_to_string(format!("{dir}/shots_s05.csv")) else {
+        eprintln!("fixture missing, skipped");
+        return;
+    };
+    let rows: Vec<Vec<f64>> = text.lines().map(|l| l.split(',').map(|x| x.parse().unwrap()).collect()).collect();
+    let p = Params::default();
+    let mut checked = 0;
+    for w in rows.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        if a[0] != b[0] {
+            continue; // shot boundary
+        }
+        let mut ball = Ball { pos: [a[3] as f32, a[4] as f32, a[5] as f32], vel: [a[6] as f32, a[7] as f32, a[8] as f32], spin: a[2] as f32 };
+        ball.fly(&p);
+        for k in 0..3 {
+            let dv = (ball.vel[k] - b[6 + k] as f32).abs();
+            assert!(dv < 2e-6, "shot {} frame {}: vel[{k}] off by {dv}", b[0], b[1]);
+        }
+        checked += 1;
+    }
+    assert!(checked > 1000, "only {checked} frames checked");
+}
