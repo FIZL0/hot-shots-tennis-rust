@@ -10,6 +10,7 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 
 ## Research setup (rebuild with these if `context/` is lost)
 - `context/iso/` — 7z-extracted disc. `context/xb/` — `cargo run -p hst-data --bin xbdump -- <iso> context/xb`.
-- `context/mkoverlay_elf.py` — ELF + one Metrowerks overlay (ZZBIN/*.BIN, loaded whole at 0x322d00) per program.
+- `context/mkoverlay_elf.py` — disc ELF (`context/iso/SCUS_976.10`) + one Metrowerks overlay (ZZBIN/*.BIN, loaded whole at 0x322d00) per program.
 - `context/ghidra/` headless project `hst` (r5900:LE:32:default); `context/decomp/hst_{game,menu,movie}.c` full dumps
   via `context/ghidra_scripts/DumpDecomp.java`; `context/fn.sh <addr>` prints one function.
+- `replacements/` — user's upscaled texture pack (PCSX2 hash-named PNGs); to be mapped onto disc textures.

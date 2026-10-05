@@ -1,0 +1,6 @@
+# Retail data and anything derived from it never goes in git.
+*.iso
+replacements/
+context/
+target/
+__pycache__/
