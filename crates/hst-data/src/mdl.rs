@@ -64,12 +64,24 @@ pub struct Model {
     pub materials: Vec<Vec<Packet>>,
     /// Per node (pre-order), model space → node space.
     pub node_inverse: Vec<[[f32; 4]; 4]>,
+    /// Per node (pre-order), the node's own placement (its second matrix).
+    pub node_local: Vec<[[f32; 4]; 4]>,
+    /// Root node bounding sphere: centre (w = 1) and radius (header +0x20, +0x30).
+    pub center: [f32; 4],
+    pub radius: f32,
+    /// Material of every static batch, in file order.
+    pub static_materials: Vec<usize>,
     /// Triangles of static batches, in the order the game tests them: by node, then material, then file order.
     pub collision: Vec<CollisionTri>,
 }
 
 impl Model {
     /// The triangles the game collides with: those whose material has an attribute map.
+    /// Whether the game treats the model as a collision object: some static batch has an attribute-mapped material.
+    pub fn collides(&self, mtl: &crate::mtl::Mtl) -> bool {
+        self.static_materials.iter().any(|&m| mtl.materials.get(m).is_some_and(|m| m.attributes.is_some()))
+    }
+
     pub fn colliding<'a>(&'a self, mtl: &'a crate::mtl::Mtl) -> impl Iterator<Item = &'a CollisionTri> {
         self.collision.iter().filter(|t| mtl.materials.get(t.material).is_some_and(|m| m.attributes.is_some()))
     }
@@ -106,16 +118,22 @@ fn size_at(b: &[u8], o: usize) -> Result<usize, Error> {
 }
 
 /// Header, extra blob, 3 matrices, then a child count. Nodes hold groups, groups hold nodes.
-fn tree_item(c: &mut Cursor, depth: u32, inverse: &mut Vec<[[f32; 4]; 4]>) -> Result<(), Error> {
+fn tree_item(c: &mut Cursor, depth: u32, model: &mut Model) -> Result<(), Error> {
     if depth > 64 {
         return Err(Error("mdl: node tree too deep".into()));
     }
     let h = c.take(0x40)?;
+    if depth == 0 {
+        model.center = std::array::from_fn(|k| f32_at(h, 0x20 + 4 * k));
+        model.radius = f32_at(h, 0x30);
+    }
     c.take(size_at(h, 0x38)?)?;
     let m = c.take(0xc0)?;
-    inverse.push(std::array::from_fn(|r| std::array::from_fn(|k| f32_at(m, 0x80 + 16 * r + 4 * k))));
+    let mat = |o: usize| std::array::from_fn(|r| std::array::from_fn(|k| f32_at(m, o + 16 * r + 4 * k)));
+    model.node_local.push(mat(0x40));
+    model.node_inverse.push(mat(0x80));
     for _ in 0..c.count(4)? {
-        tree_item(c, depth + 1, inverse)?;
+        tree_item(c, depth + 1, model)?;
     }
     Ok(())
 }
@@ -124,13 +142,16 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
     let mut c = Cursor { d, p: 0 };
     let mut m = Model::default();
     c.take(1)?;
-    tree_item(&mut c, 0, &mut m.node_inverse)?;
+    tree_item(&mut c, 0, &mut m)?;
     m.node_count = m.node_inverse.len();
     for material in 0..c.count(4)? {
         let mut packets = Vec::new();
         for _ in 0..c.count(0xc)? {
             let bh = c.take(0x34)?;
             let node = size_at(bh, 4)?;
+            if i32_at(bh, 0) == 1 {
+                m.static_materials.push(material);
+            }
             for _ in 0..size_at(bh, 0x1c)? {
                 let ph = c.take(0x60)?;
                 let vif = c.take(size_at(ph, 0x34)? << 4)?;

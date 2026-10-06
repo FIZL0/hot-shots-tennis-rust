@@ -2957,6 +2957,9 @@ dependencies = [
 [[package]]
 name = "hst-sim"
 version = "0.1.0"
+dependencies = [
+ "hst-data",
+]
 
 [[package]]
 name = "icu_collections"

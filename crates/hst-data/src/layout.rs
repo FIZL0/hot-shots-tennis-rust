@@ -1,7 +1,7 @@
 //! Court layout: which models a court uses (`entry_cNN.txt`) and where props stand (`plant_cNN_hNN_N.dat`).
 //!
 //! The entry list is the editor's list of material files, grouped by directory. A plant record is 0x40 bytes:
-//! `i16 index, u8 category-0x11, u8 sub, f32 pos[3], f32 extra[4], f32 yaw, f32 scale, ...`. For placed
+//! `i16 index, u8 category-0x11, u8 sub, f32 pos[3], f32 extra[4], f32 yaw, f32 scale, u8 code[4], ...`. For placed
 //! categories the index counts entries of that category's directory, in list order.
 
 use crate::xb::Error;
@@ -54,6 +54,8 @@ pub struct Placement {
     pub pos: [f32; 3],
     pub yaw: f32,
     pub scale: f32,
+    /// Placement code characters (byte 0: extra turn, byte 1: tilt, in 36ths of a circle).
+    pub code: [u8; 4],
 }
 
 pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
@@ -69,6 +71,7 @@ pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
             pos: [f(r, 4), f(r, 8), f(r, 12)],
             yaw: f(r, 0x20),
             scale: f(r, 0x24),
+            code: r[0x28..0x2c].try_into().unwrap(),
         })
         .collect())
 }

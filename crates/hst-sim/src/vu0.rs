@@ -15,8 +15,16 @@ fn chop(x: f64) -> f32 {
     daz(r)
 }
 
+/// IEEE add rounded toward zero. The f64 sum alone can round away an addend that is far smaller, so the
+/// rounding error (TwoSum) decides the direction: x + tiny of opposite sign truncates to the next f32 down.
 pub fn add(a: f32, b: f32) -> f32 {
-    chop(daz(a) as f64 + daz(b) as f64)
+    let (a, b) = (daz(a) as f64, daz(b) as f64);
+    let s = a + b;
+    let bb = s - a;
+    let e = (a - (s - bb)) + (b - bb);
+    let r = s as f32;
+    let over = (r as f64 - s) - e; // r − exact sum
+    daz(if over != 0.0 && r != 0.0 && (over > 0.0) == (r > 0.0) { f32::from_bits(r.to_bits() - 1) } else { r })
 }
 pub fn sub(a: f32, b: f32) -> f32 {
     add(a, -b)

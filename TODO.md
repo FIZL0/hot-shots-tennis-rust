@@ -92,6 +92,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   fraction; its 0.005·r back-off only gates the ≤ 0 test), `quat` (matrix↔quat, VU0 slerp microprogram),
   `libm::sinf` (the game's fdlibm sinf, incl. its pio2_2 = 0x373543ff).
 - Net contact (flat net from the game's predictor), material-based bounce response.
+- Collision world placement: props from plant records (VU0 sin/cos, rotations, inverse) and the 20 m prop grid —
+  117 props and every grid cell bit-exact on court 10.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
 ## Prompts
@@ -130,9 +132,12 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
     restarts skipped), `node_inverse`; `mtl::Material::{two_sided, attributes}`, `Mtl::attributes` (embedded textures +
     16-byte material table). `crates/hst-data/tests/collision.rs`: slot 5 RAM vs disc, 15 models / 6368 triangles,
     node matrices, flags and maps bit-exact. Journal `2-COLLISION-DATA-FINAL.md`.
-  - [ ] **P0c2b — Collision world placement.** Which plant records become grid objects (65 on court 10) and their
-    world→model matrices (model instance +0x10: inverse of pos/yaw/scale) bit-exact, grid cells (20 m) and bounds;
-    test against slot 5 RAM like `tests/collision.rs`.
+  - [x] **P0c2b — Collision world placement.** `hst_sim::world`: plant records (categories 15, 17–20, model, scale ≠ 0)
+    → `place` (yaw, code-byte tilt/turn, net post at the origin) → `instance` (scaled node matrices, world→model,
+    bounding sphere) in the game's list order (`list_order`), and the 20 m `grid` of colliding props.
+    `crates/hst-sim/tests/world.rs`: 117 props / 66 colliding, matrices, spheres, grid box and all 704 cell lists
+    bit-exact vs slot 5. Also fixed `vu0::add` (exact round-toward-zero for far smaller addends). Journal
+    `3-PLACEMENT-FINAL.md`.
   - [ ] **P0c3 — Triangle sweep bit-exact.** Port `0x159630` → `0x1580b0` / `0x12fe40` (+ the transforms in
     `0x15c700`); `tests/live.rs` court bounces (material 1) and walls (48, 13) exact in position too.
   - [ ] **P0c4 — Net through the mesh.** Material 26 contacts and the after-first-bounce redirect `+0x1b0`
