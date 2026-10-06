@@ -187,9 +187,16 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
       1 (`CHANGE_ENDS` = 80, camera cut) or serve. `tests/score.rs::match_s05_post_point`: all 25 call-free
       point-over phases + 2 change-ends phases tick-exact (gm+0x58; vsync stalls while the game loads don't count).
       Set and tiebreak shows ported from the code, not yet in a recording.
-    - [ ] **P0b4b — Placement for the next point.** Where players (and the ball) are put on entering the serve
-      phase (message 0xe to the player objects; `324b50` saves the point-start block), ends swapped on court;
-      verify player positions on every phase-2 entry of `match_s05.bin`.
+    - [x] **P0b4b — Placement for the next point.** `hst_sim::flow::serve_placement`: server on the baseline at
+      its last toss's distance off centre (3.0 on the match's first point), receiver 3.0 off centre on the baseline
+      (11.0 deep for a second serve), partners 2.7425 off centre at 3.2 (server's) / 5.2 (receiver's) or 7.9 in the
+      back formation; facing by player parity, ends and the start flip. The singles ad-side receiver index names an
+      absent player, so that receiver takes the partner spot (game quirk, ported). `tests/score.rs::
+      match_s05_serve_placement`: all 4 players, position + facing bit-exact on all 37 set-ups (35 serve entries,
+      2 change-ends entries; a serve entry after change ends keeps that placement). Wired into `play.rs`
+      (`reset_positions`, stance remembered at the toss). Ends are not yet swapped on court in the app: `Side` is
+      both player and end there → P0c. Formation choice (first point, doubles, RNG) and the message-0xe pre-serve
+      motion (RNG 50%) → P0c / P8. Journal `5-PLACEMENT-FINAL.md`.
     - [ ] **P0b4c — Umpire-call timing.** Faults/outs/lets/double faults: scoreboard call show (`388190`, 0x427 →
       chained score show with a 1-tick pause for out / out-after-net / double fault) ends when the call sprite
       animation is done and the umpire voice has stopped (fallback countdown table 0x410f0c by call × language);

@@ -15,7 +15,7 @@ use hst_data::{exe::ScoreboardTiming, iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
 use hst_sim::court;
 use hst_sim::mesh::World;
-use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint};
+use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
@@ -75,6 +75,8 @@ struct Player {
     contact: Option<Contact>,
     /// Frames of wind-up before contact (sets the animation clock).
     wind: u32,
+    /// Distance off centre at this player's last toss: where they serve from next time.
+    stance: f32,
 }
 
 #[derive(PartialEq)]
@@ -196,7 +198,7 @@ fn setup(
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
         prev_ball: [0.0; 3],
-        players: [Player::default(); 2],
+        players: [Player { stance: 3.0, ..Player::default() }; 2],
         phase: Phase::Serve,
         server: Side::Near,
         last_hitter: Side::Near,
@@ -246,11 +248,13 @@ fn setup(
 }
 
 fn reset_positions(g: &mut Game) {
-    let sx = if g.score.side == 0 { -1.0 } else { 1.0 }; // deuce / ad court
     for (i, side) in [Side::Near, Side::Far].into_iter().enumerate() {
-        let x = if side == g.server { sx * 1.0 * side.z() } else { -sx * 2.5 * side.z() };
+        let stance = g.players[i].stance;
+        // ponytail: the remake sees game space turned 180° (player 0 near, at +z) and keeps each player on their own
+        // end, so `swapped` stays false here; ends swap on court with P0c's per-player ends
+        let at = serve_placement(i as i32, &g.score, g.rally.faults, stance, 0, false).pos;
         let p = &mut g.players[i];
-        *p = Player { pos: [x, 0.0, side.z() * (HALF_LENGTH + 0.3)], facing: if side == Side::Near { 0.0 } else { std::f32::consts::PI }, ..Player::default() };
+        *p = Player { pos: [-at[0], 0.0, -at[2]], facing: if side == Side::Near { 0.0 } else { std::f32::consts::PI }, stance, ..Player::default() };
         p.prev = p.pos;
     }
     let s = g.players[g.server as usize].pos;
@@ -516,7 +520,7 @@ fn advance_serve(g: &mut Game, i: usize, side: Side) {
 fn start_serve(g: &mut Game, i: usize, kind: i32) {
     let p = &mut g.players[i];
     if p.swing.is_none() {
-        *p = Player { swing: Some(0), wind: SERVE_CONTACT, serving: true, kind, ..*p };
+        *p = Player { swing: Some(0), wind: SERVE_CONTACT, serving: true, kind, stance: p.pos[0].abs(), ..*p };
     }
 }
 
@@ -655,10 +659,11 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
             match post.step(&mut g.score, &mut g.rally, &g.board) {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g),
-                // ponytail: ends are tracked, not yet swapped on court (P0b4b player placement)
+                // ponytail: ends are tracked, not yet swapped on court (P0c per-player ends)
                 Some(Next::ChangeEnds) => return g.phase = Phase::ChangeEnds(CHANGE_ENDS),
                 Some(Next::MatchOver) => {
                     g.score = Score::new();
+                    g.players.iter_mut().for_each(|p| p.stance = 3.0);
                     return next_point(g);
                 }
             }

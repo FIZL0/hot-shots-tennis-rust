@@ -202,3 +202,39 @@ impl Show {
         false
     }
 }
+
+/// Baseline depth of the server and (first serve) the receiver.
+const BASELINE: f32 = 12.25;
+/// Where a player is put when the next serve is set up (entering the serve or change-ends phase), in game space.
+/// `facing` is +1 for players looking toward +z (even players at the start, before ends change), else -1; the
+/// player stands on the −`facing` half.
+///
+/// - The server stands on the baseline at `stance` from the centre line on the side's court: `stance` is how far
+///   off centre this player was at their last toss (3.0 for the match's first point).
+/// - The receiver waits at 3.0 off centre on the baseline, 1.25 m inside it for a second serve.
+/// - Everyone else (doubles partners — and the singles receiver on the ad side, whose receiver index names an
+///   absent player) stands 2.7425 off centre on the other half: the server's partner 3.2 m from the net, the
+///   receiver's 5.2 m, both 7.9 m when their formation is 2 (back).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub pos: [f32; 3],
+    pub facing: f32,
+}
+
+/// `player` 0..3 (even = first team), `faults` this point's faults so far, `formation` the player's doubles
+/// formation (2 = both back), `swapped` the teams' ends have changed.
+pub fn serve_placement(player: i32, s: &Score, faults: i32, stance: f32, formation: u8, swapped: bool) -> Placement {
+    let facing = if (player & 1 == 0) != swapped { 1.0 } else { -1.0 };
+    let court: f32 = if s.side == 0 { 1.0 } else { -1.0 };
+    let deep = if formation == 2 { -7.9 } else { 0.0 };
+    let (x, z) = if player == s.server {
+        (court * stance * facing, facing * -BASELINE)
+    } else if s.server & 1 == player & 1 {
+        (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -3.2 })
+    } else if player == s.receiver {
+        (facing * 3.0 * court, facing * if faults == 0 { -BASELINE } else { -11.0 })
+    } else {
+        (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -5.2 })
+    };
+    Placement { pos: [x, 0.0, z], facing }
+}

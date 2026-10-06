@@ -453,3 +453,37 @@ fn match_s05_post_point() {
     eprintln!("match_s05: {checked} point-over phases, {changes} change-ends phases");
     assert!(checked > 20 && changes > 0);
 }
+
+/// Every serve set-up of the slot-5 doubles match: all four players placed exactly where the game put them
+/// (position and facing) on entering the serve or change-ends phase. A serve entry right after change ends
+/// keeps the change-ends placement.
+#[test]
+fn match_s05_serve_placement() {
+    use hst_sim::flow::serve_placement;
+    use hst_sim::replay::frames_live;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else {
+        return eprintln!("match_s05.bin absent, skipped");
+    };
+    let frames = frames_live(&data);
+    let mut placed = 0;
+    for k in 1..frames.len() {
+        let (a, f) = (frames[k - 1], frames[k]);
+        let phase = f.gm()[0x55];
+        if phase == a.gm()[0x55] || !(phase == 1 || phase == 2 && a.gm()[0x55] != 1) {
+            continue;
+        }
+        let s = Score { server: rd(f, 0x42304c), side: rd(f, 0x423050), receiver: rd(f, 0x423054), ..Score::new() };
+        let first_point = f.global_u8(0x423040) != 0;
+        let swapped = (f.global_u8(0x4230b4) != 0) != (f.global_u8(0x422f99) != 0 && rd(f, 0x422fa4) != 1);
+        for i in 0..4 {
+            let stance = if first_point { 3.0 } else { a.player_f32(i, 0x140c) };
+            let formation = f.player_f32(i, 0x13f4).to_bits() as u8; // the byte at +0x13f4
+            let p = serve_placement(i as i32, &s, f.rally(0x316608), stance, formation, swapped);
+            let got = (f.player_pos(i), f.player_f32(i, 0x3d68));
+            assert_eq!((p.pos.map(f32::to_bits), p.facing.to_bits()), (got.0.map(f32::to_bits), got.1.to_bits()), "vsync {} player {i}: {p:?} vs {got:?}", f.vsync());
+        }
+        placed += 1;
+    }
+    assert_eq!(placed, 37, "serve set-ups in the match");
+}
