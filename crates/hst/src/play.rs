@@ -432,7 +432,8 @@ fn setup(
     // the characters on court, from the disc (each loaded once)
     let mut loaded: std::collections::HashMap<usize, std::sync::Arc<CharacterData>> = Default::default();
     for i in 0..n {
-        let c = args.chars.get(i).copied().unwrap_or(i);
+        // default line-up: player 1 is Carol (character 6), then characters 1, 2, 3
+        let c = args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]);
         let data = match loaded.get(&c) {
             Some(d) => d.clone(),
             None => {

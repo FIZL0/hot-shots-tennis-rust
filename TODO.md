@@ -110,6 +110,25 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Prompts
 
+### Next (user priorities, 2026-10-06 — do these first, in order)
+- [ ] **N1 — Accurate, functional animations.** Replace the motion picking in `play.rs` (`motions`) with the
+  game's own: the motion setter `0x350280` (motion number, speed, loop/hold flags) and its callers per player
+  state (ready `ad00`/`ad01`, turns `tb_f`/`tb_b`, runs/dash by the stick and speed, receive, strokes and their
+  follow-through, serve stance/walk/toss/swing, whiffs, reactions `re_*` after points), motion blending
+  (`0x140360`/`0x1404c0`), the contact pose (frame 8) and the arm IK / body step at contact (`0x3561e0`, +0x3fd0/
+  +0x3fd8), faces (`.MOR`/`.UVA`). Verify per frame against a PINE recording of each player's motion number and
+  time (player +0x54 motion object: number +0x20, time +0x34/+0x38) in the slot-5 match and a slot-3 human game.
+- [ ] **N2 — The original ball when serving.** The ball sits in the server's hand and follows the serve motion's
+  ball track (`sh_pcNN_serve_ad00_ball`, `*_serve_t_dummy`) until the toss leaves the hand bone; drawn with the
+  game's ball model (`CMN/GAME.XB` `ball1.mdl`) and shadow instead of the toon sphere. Verify the ball position
+  per frame through a serve against a recording.
+- [ ] **N3 — Audio working.** Decompile the IOP sound driver (`IRX`) to resolve note → tone (see P20 journal), then
+  play the game's sounds at its trigger points: racket hits (court bank program 6 by grade/type, `0x340860`),
+  bounces, serve, character voices (per-player banks), umpire calls, crowd, music. Verify trigger frames against
+  recordings.
+- [x] **Player 1 is Carol** (character 6, left-handed) by default; `--chars` still overrides. Note: the contact
+  search and serve still use character 0's reach/timing data for everyone (P7/P3).
+
 ### Harness
 - [x] **P0 — Input replay harness.** Fixture reader `hst_sim::replay` (pad, globals, match, ball, player
   position = model matrix translation +0x3d70/+0x3d78), CLI `cargo run -p hst-sim --bin replay -- <fixture>
@@ -208,7 +227,8 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
       phase 5). Needs the sprite anim length from disc and the voice clip lengths (P13/P20).
     - [ ] **P0b4d — Instant replay.** The decision in `325cd0` (gm+0x32e; ball speed, shot count, options
       0x2ef2b6) and the replay run (saved block 0x4230d0/0x316640 restored, fast-forward/slow-mo ticks).
-  - [ ] **P0b5 — Serve.** Toss height/duration (`37af20`), the contact window and how the press timing during the
+  - [x] **P0b5 — Serve.** Done: `hst_sim::serve` (walk, three tosses, toss launch, serve contact search, box aim
+    with strong-toss mistiming errors), `tests/serve.rs` 36 recorded serves exact. Shot parameters → P6. Original: Toss height/duration (`37af20`), the contact window and how the press timing during the
     toss changes the serve (serve branch of `3467b0`). Verify with vpad-driven serves from slot 3/4 (pad + ball
     + player state over PINE) through the replay harness.
 - [~] **P0c — Up to 4 players.** Playable doubles: 4 slots, placement, rules, P1/P2 on controllers 1/2, CPU
@@ -285,7 +305,8 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - [ ] **P9 — Hit effects.** Hit flashes, ball trails, impact/bounce effects and their timing from `AZUMA/C_EFF`
   (EFFCT.XB0: `impact_*`, `ballbound_*`, `smash_*`, `chakudan`), including blend modes and UV animation (.UVA, .MTA). Verify spawn frame, position and lifetime of each effect
   against recordings and side-by-side screenshots (`tools/screenshot.sh`) at the same frames.
-- [ ] **P10 — Timing pop-ups as the original.** Use the game's own pop-up textures and animation (find the
+- [~] **P10 — Timing pop-ups as the original.** Balloons (sweet/note/bunny/turtle) from the disc with the game's
+  choice rule and fade timing; exact screen size/position vs frame-stepped screenshots still open. Original: Use the game's own pop-up textures and animation (find the
   sprite/texture for SWEET SPOT / QUICK / SLOW-style feedback in `AZUMA/INPANE`, `CMN`, `MENU` archives and the
   code that animates it: scale/fade curves, position, duration) instead of our text pop-up. Verify against frame-stepped screenshots of the original: same frames,
   position, scale and alpha.
