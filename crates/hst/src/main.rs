@@ -6,7 +6,7 @@
 //! `--ball` adds the game ball driven by the ported physics (Space: new shot); `--court` picks the
 //! physics surface table (0..11). `--play` is a playable match against a simple AI (see play.rs).
 
-mod figure;
+mod character;
 mod play;
 mod sandbox;
 
@@ -30,6 +30,10 @@ pub struct Args {
     stage: Option<u32>,
     play: bool,
     pub singles: bool,
+    /// Characters on court (player order), `--chars 0,2,1,5`.
+    pub chars: Vec<usize>,
+    /// Character viewer: `--character N [--motion M]`.
+    pub viewer: Option<(usize, usize)>,
 }
 
 #[derive(Component)]
@@ -43,7 +47,8 @@ pub struct Orbit {
 fn main() {
     let mut a = std::env::args().skip(1);
     let iso = a.next().expect("usage: hst <iso> <archive.XB>... [--shot out.png]");
-    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles) = (Vec::new(), None, None, false, 0, None, false, false);
+    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles, mut chars) = (Vec::new(), None, None, false, 0, None, false, false, Vec::new());
+    let (mut viewer_char, mut viewer_motion) = (None, 0);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -53,6 +58,9 @@ fn main() {
             "--stage" => stage = a.next().and_then(|r| r.parse().ok()),
             "--play" => play = true,
             "--singles" => singles = true,
+            "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
+            "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
+            "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
     }
@@ -60,10 +68,12 @@ fn main() {
     app.add_plugins(DefaultPlugins);
     if play {
         app.add_plugins(play::plugin);
+    } else if viewer_char.is_some() {
+        app.add_plugins(character::viewer);
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play, singles })
+    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)) })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot))

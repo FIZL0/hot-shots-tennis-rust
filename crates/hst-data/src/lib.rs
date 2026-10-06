@@ -2,6 +2,7 @@
 pub mod exe;
 pub mod iso;
 pub mod layout;
+pub mod ani;
 pub mod mdl;
 pub mod mtl;
 pub mod tim2;

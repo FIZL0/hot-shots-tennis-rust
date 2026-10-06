@@ -25,7 +25,8 @@ use hst_sim::shot::{Bounds, Table, launch, lookup};
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 
-use crate::{Args, GameSpace, Orbit, figure};
+use crate::character::{self, CharacterData, Motion};
+use crate::{Args, GameSpace, Orbit};
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_games: false, players: 2 };
@@ -83,6 +84,10 @@ struct Player {
     balloon: Option<(Balloon, u32)>,
     /// Stand-in AI: the contact frame it waits for before pressing.
     bot_due: Option<usize>,
+    /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
+    hand: f32,
+    /// The stroke motion playing (the contact search's swing animation) and its speed to reach the contact pose.
+    stroke: Option<(usize, f32)>,
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -235,8 +240,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, figure::animate, hud).chain())
-        .add_systems(FixedUpdate, (control, simulate, age_balloons).chain());
+        .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(FixedUpdate, (control, simulate, age_balloons, motions, character::tick).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -273,6 +278,18 @@ fn tparam_row(iso: &mut Iso) -> Vec<String> {
     let csv = arc.read(e).expect("TParam.csv bytes");
     let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(b"0,")).expect("character 0 row");
     row.split(|&b| b == b',').map(|c| String::from_utf8_lossy(c).trim().to_string()).collect()
+}
+
+/// A character's hand from TParam.csv (+1 right, −1 left).
+fn character_hand(iso: &mut Iso, n: usize) -> f32 {
+    let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).expect("TParam.csv");
+    let csv = arc.read(e).expect("TParam.csv bytes");
+    let tag = format!("{n},");
+    let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(tag.as_bytes()));
+    // 左 (left) in Shift-JIS
+    if row.and_then(|r| r.split(|&b| b == b',').nth(6)).is_some_and(|c| c.starts_with(&[0x8d, 0xb6])) { -1.0 } else { 1.0 }
 }
 
 /// Character 0's serve: heights from TParam.csv, the rest measured on character 0 (see `ServeData`).
@@ -377,6 +394,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -392,7 +410,7 @@ fn setup(
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
         prev_ball: [0.0; 3],
-        players: vec![Player { stance: 3.0, ..Player::default() }; rules.players as usize],
+        players: vec![Player { stance: 3.0, hand: 1.0, ..Player::default() }; rules.players as usize],
         phase: Phase::Serve,
         last_hitter: -1,
         since_hit: 0,
@@ -411,14 +429,25 @@ fn setup(
     };
     reset_positions(&mut game);
     let n = game.players.len();
-    commands.insert_resource(game);
 
     let Ok(root) = root.single() else { return };
-    let shirts = [Color::srgb(0.15, 0.4, 0.95), Color::srgb(0.9, 0.3, 0.15), Color::srgb(0.2, 0.75, 0.9), Color::srgb(0.95, 0.65, 0.1)];
-    for (i, shirt) in shirts.into_iter().enumerate().take(n) {
-        let f = figure::spawn(&mut commands, &mut meshes, &mut materials, shirt, root);
+    // the characters on court, from the disc (each loaded once)
+    let mut loaded: std::collections::HashMap<usize, std::sync::Arc<CharacterData>> = Default::default();
+    for i in 0..n {
+        let c = args.chars.get(i).copied().unwrap_or(i);
+        let data = match loaded.get(&c) {
+            Some(d) => d.clone(),
+            None => {
+                let d = std::sync::Arc::new(character::load_disc(&mut iso, c, 0, &mut meshes, &mut materials, &mut images, &mut bindposes).unwrap_or_else(|e| panic!("character {c}: {e}")));
+                loaded.insert(c, d.clone());
+                d
+            }
+        };
+        game.players[i].hand = character_hand(&mut iso, c);
+        let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
+    commands.insert_resource(game);
     // toon ball: flat yellow core plus an inverted hull (front faces culled) for the black outline
     let r = 0.033 * BALL_DRAW_SCALE;
     let core = materials.add(StandardMaterial { base_color: Color::srgb(0.95, 1.0, 0.25), unlit: true, ..default() });
@@ -451,10 +480,10 @@ fn setup(
 /// Put every player where the original does for the next serve (`serve_placement`) and the ball in the server's hand.
 fn reset_positions(g: &mut Game) {
     for i in 0..g.players.len() {
-        let stance = g.players[i].stance;
+        let (stance, hand) = (g.players[i].stance, g.players[i].hand);
         let at = serve_placement(i as i32, &g.score, g.rally.faults, stance, 0, g.score.swapped);
         let end = at.facing;
-        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, home: at.pos, ..Player::default() };
+        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, ..Player::default() };
     }
     g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
     g.cam.cut();
@@ -497,13 +526,13 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     list.sort_by_key(|(e, _)| *e);
     for (slot, (_, g)) in list.iter().take(2).enumerate() {
         let s = &mut now[slot];
-        s.stick += g.left_stick() + g.dpad();
+        s.stick += deadzone(g.left_stick()) + g.dpad();
         s.sprint |= g.pressed(GamepadButton::LeftTrigger);
         let buttons = [(GamepadButton::South, 0), (GamepadButton::East, 1), (GamepadButton::West, 2), (GamepadButton::North, 3), (GamepadButton::RightTrigger, 4)];
         s.shot = s.shot.or(buttons.into_iter().find(|(b, _)| g.just_pressed(*b)).map(|(_, k)| k));
         s.serve |= g.just_pressed(GamepadButton::Start);
         cycle |= g.just_pressed(GamepadButton::Select);
-        turn += g.right_stick().x;
+        turn += deadzone(g.right_stick()).x;
     }
     pads.connected = list.len();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
@@ -646,6 +675,12 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     }
 }
 
+/// Radial stick deadzone: worn or off-centre sticks rest a little off zero and would creep the player along.
+fn deadzone(v: Vec2) -> Vec2 {
+    const DEADZONE: f32 = 0.2; // ponytail: fixed; make it a setting if some pads need more
+    if v.length() < DEADZONE { Vec2::ZERO } else { v }
+}
+
 /// Whether player `i`'s serve aim comes from a stick (humans) rather than the stand-in AI's pick.
 fn pads_aim(g: &Game, i: usize) -> bool {
     g.serving.bot_due.is_none() || i != g.score.server as usize
@@ -744,6 +779,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.contact = Some(c);
             p.hit_at = Some(c.swing.ball);
             p.wind = c.frames.max(1);
+            p.stroke = Some((c.swing.anim as usize, serve::SWEET_FRAME as f32 / c.frames.max(1) as f32));
             p.backhand = !c.swing.forehand;
             p.swing = Some(0);
             p.swung = false;
@@ -779,15 +815,10 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
         p.swing = (f + 1 < p.wind + 16).then_some(f + 1);
         if p.swing.is_none() {
             p.hit_at = None;
+            p.stroke = None;
         }
     }
     struck
-}
-
-fn swing_progress(p: &Player) -> Option<f32> {
-    let f = p.swing? as f32;
-    let w = p.wind.max(1) as f32;
-    Some(if f <= w { 0.45 * f / w } else { 0.45 + 0.55 * ((f - w) / 16.0).min(1.0) })
 }
 
 /// A shot button press: remembered for a while and checked every frame until a contact is found.
@@ -1061,6 +1092,8 @@ fn camera(g: Res<Game>, mode: Res<CamMode>, cs: Res<CamState>, window: Query<&Wi
         // never show less than the game's 4:3 picture: windows narrower than 4:3 widen vertically
         let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
         p.fov = 2.0 * (v.fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
+        // the camera stays ~40 m out: a far near plane keeps depth precision for the layered character models
+        p.near = 5.0;
     }
 }
 
@@ -1093,22 +1126,75 @@ fn mark_landing(g: Res<Game>, mut q: Query<(&mut Transform, &mut Visibility), Wi
     }
 }
 
-fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut Transform, &mut figure::Pose)>, mut ball: Query<&mut Transform, (With<BallView>, Without<Figure>)>) {
+fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut Transform)>, mut ball: Query<&mut Transform, (With<BallView>, Without<Figure>)>) {
     let a = time.overstep_fraction();
-    for (f, mut t, mut pose) in &mut figures {
+    for (f, mut t) in &mut figures {
         let p = g.players[f.0];
         t.translation = Vec3::from(p.prev).lerp(Vec3::from(p.pos), a);
-        t.rotation = Quat::from_rotation_y(p.facing);
-        pose.speed = p.vel.length();
-        pose.stride = p.stride;
-        pose.swing = p.serve_anim.or_else(|| swing_progress(&p));
-        pose.backhand = p.backhand;
-        pose.serving = p.serve_anim.is_some();
-        // the racket reaches for the contact ball, in the figure's own frame
-        pose.reach = p.hit_at.map(|b| t.rotation.inverse() * (Vec3::from(b) - t.translation));
+        // the models face their local +z; `facing` is the stand-in yaw (0 = facing −z); left-handers mirrored
+        t.rotation = Quat::from_rotation_y(p.facing - std::f32::consts::PI);
+        t.scale = Vec3::new(p.hand, 1.0, 1.0);
     }
     for mut t in &mut ball {
         t.translation = Vec3::from(g.prev_ball).lerp(Vec3::from(g.flight.ball.pos), a);
+    }
+}
+
+/// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,
+/// toss and swing; a locked stroke's swing (timed so its contact pose, frame 8, meets the ball); otherwise the
+/// ready stance, runs by direction, or the dash when sprinting.
+fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
+    for (f, mut m) in &mut q {
+        let i = f.0;
+        let p = &g.players[i];
+        let serving = g.phase == Phase::Serve && g.score.server == i as i32;
+        if serving {
+            let s = g.serving;
+            let under = s.toss == Some(Toss::Under);
+            match (s.toss, s.swing) {
+                (None, _) if p.pos != p.prev => {
+                    let right = (p.pos[0] - p.prev[0]) * p.end * p.hand < 0.0;
+                    m.play(if right { 0x22 } else { 0x21 }, 1.0, true);
+                }
+                (None, _) => m.play(0x20, 1.0, true),
+                (Some(_), Some(sw)) => {
+                    let id = if under { 0x26 } else { 0x25 };
+                    let speed = if m.id == id { m.speed } else { serve::SWEET_FRAME as f32 / sw.frames.max(1) as f32 };
+                    let past = m.id == id && m.time >= serve::SWEET_FRAME as f32;
+                    m.play(id, if past { 1.0 } else { speed }, false);
+                }
+                (Some(_), None) if s.whiffed => m.play(if under { 0x2a } else { 0x29 }, 1.0, false),
+                (Some(_), None) => m.play(if under { 0x24 } else { 0x23 }, 1.0, false),
+            }
+            continue;
+        }
+        if let Some((anim, speed)) = p.stroke {
+            let past = m.id == anim && m.time >= serve::SWEET_FRAME as f32;
+            m.play(anim, if past { 1.0 } else { speed }, false);
+            continue;
+        }
+        // a finished serve swing plays out before running
+        if (m.id == 0x25 || m.id == 0x26) && m.time < 30.0 {
+            continue;
+        }
+        let v = p.vel;
+        let speed = v.length();
+        if speed < 0.01 {
+            m.play(0x00, 1.0, true);
+            continue;
+        }
+        // direction relative to where the player faces (+z for end +1)
+        let (fwd, side) = (v.y * p.end, v.x * p.end * p.hand);
+        let id = if speed > RUN * 1.1 && fwd > 0.0 {
+            0x07
+        } else if fwd.abs() >= side.abs() {
+            if fwd > 0.0 { 0x03 } else { 0x04 }
+        } else if side > 0.0 {
+            0x05
+        } else {
+            0x06
+        };
+        m.play(id, (speed / RUN).clamp(0.4, 1.5), true);
     }
 }
 

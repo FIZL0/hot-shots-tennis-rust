@@ -35,10 +35,31 @@ pub struct Vertex {
 
 #[derive(Debug, Default)]
 pub struct Packet {
+    /// One per position entry (for rigid packets, one per drawn vertex).
     pub vertices: Vec<Vertex>,
     pub triangles: Vec<[u32; 3]>,
-    /// Matrix palette indices used by this packet (skinned models).
+    /// Drawn vertex → first position entry (one more than the drawn vertices; in rigid packets the identity).
     pub bones: Vec<u8>,
+    /// Per position entry: its weight (the position's `w`) and the raw `w` of its normal (bits 3..5: the bone
+    /// slot in `palette`; bit 15: no-kick).
+    pub entry_weight: Vec<f32>,
+    pub entry_flags: Vec<u16>,
+    /// Per drawn vertex, in order: UV and colour.
+    pub uvs: Vec<[f32; 2]>,
+    pub colors: Vec<[u8; 4]>,
+    /// Nodes this packet's batch is bound to (bone slots).
+    pub palette: Vec<usize>,
+}
+
+/// A drawn vertex of a skinned model in its bind pose (model space), with up to four (node, weight) bindings.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkinVertex {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [u8; 4],
+    pub joints: [u16; 4],
+    pub weights: [f32; 4],
 }
 
 /// One triangle as the game's mesh sweep reads it (positions and UVs are the raw V4-32 qwords).
@@ -68,6 +89,10 @@ pub struct Model {
     pub node_local: Vec<[[f32; 4]; 4]>,
     /// Per node (pre-order), its parent's index (none for the root).
     pub node_parent: Vec<Option<usize>>,
+    /// Per node (pre-order), node space → model space in the bind pose (its first matrix).
+    pub node_bind: Vec<[[f32; 4]; 4]>,
+    /// Per node (pre-order), its name (3ds Max Biped names on characters: `Bip01Pelvis`, …, `Racket`).
+    pub node_names: Vec<String>,
     /// Root node bounding sphere: centre (w = 1) and radius (header +0x20, +0x30).
     pub center: [f32; 4],
     pub radius: f32,
@@ -81,6 +106,63 @@ pub struct Model {
 }
 
 impl Model {
+    /// Every material's packets as skinned geometry in the bind pose. A drawn vertex is the sum of its position
+    /// entries, each stored in its bone's space already multiplied by its weight (the weight is the entry's `w`):
+    /// Σ [p, w] · bind(bone). Normals likewise (pre-weighted, rotated by the bone). Bones beyond the four
+    /// heaviest are dropped and the rest renormalised.
+    pub fn skinned(&self) -> Vec<(usize, Vec<SkinVertex>, Vec<[u32; 3]>)> {
+        let mut out = Vec::new();
+        for (material, packets) in self.materials.iter().enumerate() {
+            for pk in packets {
+                let n = pk.bones.len().saturating_sub(1).min(pk.uvs.len());
+                let mut verts = Vec::with_capacity(n);
+                let mut kick = Vec::with_capacity(n);
+                for v in 0..n {
+                    let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
+                    let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
+                    let mut binds: Vec<(usize, f32)> = Vec::new();
+                    let (mut pos, mut nrm) = ([0.0f32; 3], [0.0f32; 3]);
+                    for e in a..b {
+                        let flags = pk.entry_flags.get(e).copied().unwrap_or(0);
+                        let node = pk.palette.get(((flags >> 3) & 7) as usize).copied().unwrap_or(pk.palette.first().copied().unwrap_or(0));
+                        let w = pk.entry_weight.get(e).copied().unwrap_or(1.0);
+                        let m = self.node_bind.get(node).copied().unwrap_or(IDENTITY);
+                        let p = pk.vertices[e].pos;
+                        let q = pk.vertices[e].normal;
+                        for k in 0..3 {
+                            pos[k] += p[0] * m[0][k] + p[1] * m[1][k] + p[2] * m[2][k] + w * m[3][k];
+                            nrm[k] += q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
+                        }
+                        binds.push((node, w));
+                    }
+                    binds.sort_by(|x, y| y.1.total_cmp(&x.1));
+                    binds.truncate(4);
+                    let total: f32 = binds.iter().map(|b| b.1).sum();
+                    for (k, (node, w)) in binds.iter().enumerate() {
+                        sv.joints[k] = *node as u16;
+                        sv.weights[k] = if total > 0.0 { w / total } else { 0.0 };
+                    }
+                    let len = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]).sqrt();
+                    sv.pos = pos;
+                    sv.normal = if len > 0.0 { nrm.map(|c| c / len) } else { [0.0, -1.0, 0.0] };
+                    verts.push(sv);
+                    kick.push(pk.entry_flags.get(a).is_some_and(|f| f & 0x8000 == 0));
+                }
+                // one strip per packet: a kicked vertex closes a triangle with the two before it, winding
+                // alternating along the strip (as the rigid decode)
+                let mut tris = Vec::new();
+                for (i, &k) in kick.iter().enumerate() {
+                    if k && i >= 2 {
+                        let i = i as u32;
+                        tris.push(if i % 2 == 0 { [i - 2, i - 1, i] } else { [i - 1, i - 2, i] });
+                    }
+                }
+                out.push((material, verts, tris));
+            }
+        }
+        out
+    }
+
     /// The triangles the game collides with: those whose material has an attribute map.
     /// Whether the game treats the model as a collision object: some static batch has an attribute-mapped material.
     pub fn collides(&self, mtl: &crate::mtl::Mtl) -> bool {
@@ -91,6 +173,8 @@ impl Model {
         self.collision.iter().filter(|t| mtl.materials.get(t.material).is_some_and(|m| m.attributes.is_some()))
     }
 }
+
+const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 struct Cursor<'a> {
     d: &'a [u8],
@@ -132,9 +216,11 @@ fn tree_item(c: &mut Cursor, depth: u32, parent: Option<usize>, model: &mut Mode
         model.center = std::array::from_fn(|k| f32_at(h, 0x20 + 4 * k));
         model.radius = f32_at(h, 0x30);
     }
-    c.take(size_at(h, 0x38)?)?;
+    let name = c.take(size_at(h, 0x38)?)?;
+    model.node_names.push(String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default()).into_owned());
     let m = c.take(0xc0)?;
     let mat = |o: usize| std::array::from_fn(|r| std::array::from_fn(|k| f32_at(m, o + 16 * r + 4 * k)));
+    model.node_bind.push(mat(0));
     model.node_local.push(mat(0x40));
     model.node_inverse.push(mat(0x80));
     model.node_parent.push(parent);
@@ -158,6 +244,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
         for _ in 0..size_at(mh, 0)? {
             let bh = c.take(0x34)?;
             let node = size_at(bh, 4)?;
+            let palette: Vec<usize> = (0..size_at(bh, 0)?.min(12)).map(|k| size_at(bh, 4 + 4 * k)).collect::<Result<_, _>>()?;
             if i32_at(bh, 0) == 1 {
                 m.static_materials.push(material);
             }
@@ -183,6 +270,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 }
                 let mut pk = decode_vif(vif)?;
                 pk.bones = bones;
+                pk.palette = palette.clone();
                 packets.push(pk);
             }
         }
@@ -291,12 +379,14 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                         color: [0x80; 4],
                                         ..Default::default()
                                     });
+                                    pk.entry_weight.push(f32_at(v, 12));
                                 }
                             }
                             _ => {
                                 for (v, uv) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(16)) {
                                     v.uv = [f32_at(uv, 0), f32_at(uv, 4)];
                                 }
+                                pk.uvs.extend(data.chunks_exact(16).map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
                                 slot = 0;
                                 continue;
                             }
@@ -305,6 +395,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                     }
                     (3, 1, _) => {
                         let mut kick = Vec::new();
+                        pk.entry_flags.extend(data.chunks_exact(8).map(|nb| u16::from_le_bytes([nb[6], nb[7]])));
                         for (i, (v, nb)) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(8)).enumerate() {
                             let s = |o: usize| i16::from_le_bytes([nb[o], nb[o + 1]]);
                             v.normal = [s(0) as f32 / 16384.0, s(2) as f32 / 16384.0, s(4) as f32 / 16384.0];
@@ -322,12 +413,14 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                         for (v, c) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(4)) {
                             v.color = [c[0], c[1], c[2], c[3]];
                         }
+                        pk.colors.extend(data.chunks_exact(4).take(n).map(|c| [c[0], c[1], c[2], c[3]]));
                     }
                     (3, 0, true) => {
                         let c = row.map(|r| r.min(255) as u8);
                         for v in &mut pk.vertices[strip_start..] {
                             v.color = c;
                         }
+                        pk.colors.extend(std::iter::repeat_n(c, n));
                     }
                     _ => return Err(Error(format!("vif: unexpected unpack {cmd:#x}"))),
                 }
