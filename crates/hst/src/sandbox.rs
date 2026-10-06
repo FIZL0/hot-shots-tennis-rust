@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3};
+use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3, rows4};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
 
 use crate::Args;
@@ -40,7 +40,7 @@ fn stroke_table(iso: &str) -> Table {
 
 fn setup(mut commands: Commands, args: Res<Args>) {
     let mut sim = Sim {
-        flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 3]; 3], [[0.0; 3]; 3]),
+        flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
         prev: [0.0; 3],
         rng: 0x1234_5678,
@@ -70,7 +70,7 @@ fn hit(sim: &mut Sim, at: V3) {
     let frame = [side.to_array(), [0.0, 1.0, 0.0], side.cross(Vec3::Y).normalize().to_array()];
     sim.shot = Shot { class: 1, kind: 0, curve_frames: l.frames + 1, ..Shot::default() };
     // ponytail: topspin of a typical recorded stroke; the per-character spin record comes with the shot params port
-    sim.flight = Flight::new(Ball { pos: at, vel, spin: 2.9671 }, frame, frame);
+    sim.flight = Flight::new(Ball { pos: at, vel, spin: 2.9671 }, rows4(frame), rows4(frame));
     sim.prev = at;
     sim.since_hit = 0;
 }

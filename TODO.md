@@ -73,8 +73,11 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   bit-identical to the game's runtime table, using the PS2 FPU model.
 - `hst_sim::ps2` — PCSX2's EE FPU model: chop rounding, add/sub alignment with one guard bit, **div and sqrt
   round to nearest** (the emulator's divider mode), DAZ. Proven on 2912 table values and the ball integrator.
-- Ball flight on PS2 arithmetic in the original's instruction order: every airborne frame of 39 recorded shots
-  is bit-exact (2160 frames). Bounce frames still differ in the last bits → P0a.
+- Ball flight **and bounces** on PS2 arithmetic in the original's instruction order: all 4524 frames of 39
+  recorded shots (flight, curve/bend, every bounce, rolling) bit-exact in position and velocity. Pieces:
+  `hst_sim::vu0` (VU0 chop model), `contact` (plane sweep, contact point — the original lerps to the raw hit
+  fraction; its 0.005·r back-off only gates the ≤ 0 test), `quat` (matrix↔quat, VU0 slerp microprogram),
+  `libm::sinf` (the game's fdlibm sinf, incl. its pio2_2 = 0x373543ff).
 - Net contact (flat net from the game's predictor), material-based bounce response.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
@@ -87,7 +90,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
   Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
   are accepted only when their recordings replay identically.
-- [ ] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
+- [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
   frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
   0.98 factor, VU0 dot products), contact point `0x12fc30`, VU0 helpers (normalize `0x125b10` with Q sqrt/div,
@@ -174,6 +177,16 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   net cord/posts, walls, fences, other materials; replaces the flat net. Net-cord hits must behave exactly:
   balls that clip the cord and dribble over (rally net cords and serve lets), balls stopped by the net, post
   hits. Verify with live-ball traces (the stored path ignores the net, so record the live ball `*(gm+0x98)`).
+- [ ] **P15a — Per-court bounce profiles.** Every court bounces the ball exactly as its original surface does
+  (hard, clay, grass, carpet, … — whatever the game defines). Today `hst_sim::ball::COURTS` hard-codes only
+  `spin_relax` and `spin_kick` per court and shares friction 0.3, spin→speed 0.2 and restitution 0.7 across all
+  12. Find the game's full per-court surface table (every field the bounce reads, plus any per-court values
+  elsewhere: rolling threshold/relax, first-bounce scales, material rows for that court's walls/fences) and read
+  it from GAME.BIN at runtime via `hst_data::exe` instead of the consts. Pin the disc court folder (`--stage
+  01..11`) ↔ physics court index (0..11) mapping from the game's own lookup (today unverified, see *Known gaps*)
+  so `--stage` picks the right surface automatically; keep `--court` as an override. Verify one recorded rally
+  with several bounces (incl. topspin, slice and lob kicks, and a roll-out) on every court through P0's replay
+  harness — bounce frames bit-exact on each surface.
 
 ### Presentation
 - [ ] **P16 — Camera.** Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
@@ -194,7 +207,9 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 
 ## Known gaps / caveats
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
-- Stored-path fixtures can't verify net hits (the game records paths against the court plane only).
+- Stored-path fixtures can't verify net hits (the game records paths against the court plane only); the net
+  response shares the exact code path but its sweep is our flat net, not the court mesh (→ P15).
+- `libm::sinf` ports only |x| ≤ 2^7·π/2 (asserts beyond); the game's callers stay in [0, π].
 - Disc court folder ↔ physics court index mapping is unverified (slot 5 = court index 10).
 
 ## Needs the human

@@ -12,7 +12,7 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3};
+use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3, rows4};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
 
 use crate::{Args, GameSpace, Orbit, figure};
@@ -167,7 +167,7 @@ fn setup(
 ) {
     let mut game = Game {
         tables: tables(&args.iso),
-        flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 3]; 3], [[0.0; 3]; 3]),
+        flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
         prev_ball: [0.0; 3],
         players: [Player::default(); 2],
@@ -223,7 +223,7 @@ fn reset_positions(g: &mut Game) {
         p.prev = p.pos;
     }
     let s = g.players[g.server as usize].pos;
-    g.flight = Flight::new(Ball { pos: [s[0] + 0.3, -1.0, s[2]], vel: [0.0; 3], spin: 0.0 }, [[0.0; 3]; 3], [[0.0; 3]; 3]);
+    g.flight = Flight::new(Ball { pos: [s[0] + 0.3, -1.0, s[2]], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
     g.prev_ball = g.flight.ball.pos;
 }
 
@@ -289,7 +289,7 @@ fn strike(g: &mut Game, who: Side, kind: i32, target: V3) {
     let side = Vec3::Y.cross(dir).normalize();
     let frame = [side.to_array(), [0.0, 1.0, 0.0], side.cross(Vec3::Y).normalize().to_array()];
     g.shot = Shot { class: 1, kind, curve_frames: l.frames + 1, ..Shot::default() };
-    g.flight = Flight::new(Ball { pos: at, vel, spin: KIND_SPIN[kind as usize] }, frame, frame);
+    g.flight = Flight::new(Ball { pos: at, vel, spin: KIND_SPIN[kind as usize] }, rows4(frame), rows4(frame));
     g.prev_ball = at;
     g.last_hitter = who;
     g.since_hit = 0;

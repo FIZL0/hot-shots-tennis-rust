@@ -1,8 +1,8 @@
 //! Replays whole shots recorded from a bot match (fixture `context/fixtures/flights_s05.csv`, not in git;
 //! made by `context/tools/fixture_flights.py`) from frame 3 through every bounce to the end of the
-//! game's own path, comparing every frame. Skips when the fixture is absent.
+//! game's own path, requiring every frame's position and velocity to match bit for bit. Skips when the fixture is absent.
 
-use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot};
+use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot, rows4};
 
 struct Case {
     court: usize,
@@ -56,31 +56,22 @@ fn whole_shots_match_the_game() {
         return;
     };
     let (mut frames, mut failures) = (0, Vec::new());
-    let mut exact = 0;
-    let mut first_inexact: Option<(usize, i32, i32)> = None;
     for (n, c) in cases.iter().enumerate() {
         let p0 = c.path[0].1;
-        let mut fl = Flight::new(Ball { pos: [p0[0], p0[1], p0[2]], vel: [p0[3], p0[4], p0[5]], spin: c.spin }, c.spin_frame, c.contact);
+        let mut fl = Flight::new(Ball { pos: [p0[0], p0[1], p0[2]], vel: [p0[3], p0[4], p0[5]], spin: c.spin }, rows4(c.spin_frame), rows4(c.contact));
         fl.frame = c.start;
         fl.net = false; // the game records paths against the court plane only
         for &(i, want) in &c.path[1..] {
             fl.step(&c.shot, &COURTS[c.court]);
-            let dp = (0..3).map(|k| (fl.ball.pos[k] - want[k]).abs()).fold(0.0, f32::max);
-            let dv = (0..3).map(|k| (fl.ball.vel[k] - want[k + 3]).abs()).fold(0.0, f32::max);
-            // velocity must match tightly; position may drift ~1e-4 over 150+ frames of f32 accumulation at 10 m
-            if dp > 5e-4 || dv > 1e-5 {
-                failures.push(format!("shot {n}: frame {i} (bounces {}): pos err {dp:.2e}, vel err {dv:.2e}", fl.bounces));
+            let got = [fl.ball.pos, fl.ball.vel].concat();
+            if (0..6).any(|k| got[k].to_bits() != want[k].to_bits()) {
+                failures.push(format!("shot {n}: frame {i} (bounces {}): got {got:?}, want {want:?}", fl.bounces));
                 break;
             }
             frames += 1;
-            if (0..3).all(|k| fl.ball.vel[k].to_bits() == want[k + 3].to_bits()) {
-                exact += 1;
-            } else if first_inexact.is_none() {
-                first_inexact = Some((n, i, fl.bounces));
-            }
         }
     }
-    eprintln!("{frames} frames matched across {} shots ({exact} bit-exact velocity, first inexact: {first_inexact:?})", cases.len());
+    eprintln!("{frames} frames bit-exact across {} shots", cases.len());
     assert!(failures.is_empty(), "{} shots diverged:\n{}", failures.len(), failures.join("\n"));
     assert!(frames > 3000);
 }
