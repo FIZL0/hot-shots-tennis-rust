@@ -9,6 +9,8 @@
 //!                 +0x10 7 × { u32 mip size, u16 w, u16 h }
 //! MTI: per MTI texture, its mip levels then palette (u32 RGBA, 0x80 = opaque), each 16-aligned.
 //! ```
+//! The embedded textures double as collision attribute maps: a hit's texel (4-bit palette index) picks a ground
+//! material id from the 16-byte map that follows the palette.
 
 use crate::xb::Error;
 
@@ -24,12 +26,26 @@ pub struct Material {
     pub texture: Option<usize>,
     /// RGBA modulate colour, 1.0 = PS2 0x80.
     pub color: [f32; 4],
+    /// Index into `Mtl::attributes`.
+    pub attributes: Option<usize>,
+    /// Collision tests both windings.
+    pub two_sided: bool,
     pub header: [u8; 0x30],
+}
+
+/// An embedded texture as raw collision data.
+pub struct AttributeMap {
+    pub header: [u8; 0x48],
+    /// Top mip level, unconverted.
+    pub texels: Vec<u8>,
+    /// Material id per palette index.
+    pub table: [u8; 0x10],
 }
 
 pub struct Mtl {
     pub textures: Vec<Texture>,
     pub materials: Vec<Material>,
+    pub attributes: Vec<AttributeMap>,
 }
 
 struct Cursor<'a> {
@@ -98,10 +114,17 @@ pub fn parse(mtl: &[u8], mti: Option<&[u8]>) -> Result<Mtl, Error> {
         let h = c.take(0x48)?;
         textures.push(texture(h, &mut src)?);
     }
+    let mut attributes = Vec::new();
     for _ in 0..c.count()? {
         let h = c.take(0x48)?;
+        let top = c.p;
         textures.push(texture(h, &mut c)?);
-        c.take(0x10)?;
+        let mip0 = i32::from_le_bytes(h[0x10..0x14].try_into().unwrap()).max(0) as usize;
+        attributes.push(AttributeMap {
+            header: h.try_into().unwrap(),
+            texels: mtl[top..top + mip0].to_vec(),
+            table: c.take(0x10)?.try_into().unwrap(),
+        });
     }
     let mut materials = Vec::with_capacity(nmat);
     for _ in 0..nmat {
@@ -111,8 +134,15 @@ pub fn parse(mtl: &[u8], mti: Option<&[u8]>) -> Result<Mtl, Error> {
             c.take(extra as usize)?;
         }
         let t = i16::from_le_bytes([h[0x20], h[0x21]]);
+        let a = i16::from_le_bytes([h[0x22], h[0x23]]);
         let color = std::array::from_fn(|i| f32::from_le_bytes(h[i * 4..i * 4 + 4].try_into().unwrap()) / 128.0);
-        materials.push(Material { texture: usize::try_from(t).ok().filter(|&t| t < textures.len()), color, header: h });
+        materials.push(Material {
+            texture: usize::try_from(t).ok().filter(|&t| t < textures.len()),
+            color,
+            attributes: usize::try_from(a).ok().filter(|&a| a < attributes.len()),
+            two_sided: h[0x24] != 0,
+            header: h,
+        });
     }
-    Ok(Mtl { textures, materials })
+    Ok(Mtl { textures, materials, attributes })
 }

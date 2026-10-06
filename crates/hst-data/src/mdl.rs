@@ -14,6 +14,13 @@
 //! ```
 //! Geometry is the VU1 upload itself: per strip a GIF tag, V4-32 positions, V4-16 normals whose
 //! `w` bit 15 is the GS no-kick flag (strip restart), a colour (STROW constant or V4-8), V4-32 UVs.
+//!
+//! Collision reads the same packets in place: packet header +0x44/+0x48/+0x4c/+0x50 are qword offsets of the
+//! positions, normals, colours (< 0: the 4-byte constant after the packet) and UVs in the VIF stream; the
+//! "bone list" is the strip-slot → position/normal index map, the +0x38 bytes are the strip slots that start a
+//! drawn triangle and the +0x38 × 32 bytes their bounding boxes. Batch header +0 = 1 marks a static batch,
+//! +4 is its node (pre-order index over nodes and groups); a node's third matrix (+0x80 of the 3 × mat4) takes
+//! model space to node space. Only batches whose material has an attribute map collide ([`Model::colliding`]).
 
 use crate::xb::Error;
 
@@ -34,11 +41,38 @@ pub struct Packet {
     pub bones: Vec<u8>,
 }
 
+/// One triangle as the game's mesh sweep reads it (positions and UVs are the raw V4-32 qwords).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollisionTri {
+    pub node: usize,
+    /// MTL material index.
+    pub material: usize,
+    pub pos: [[f32; 4]; 3],
+    /// `w` is ±1, the strip winding of the triangle.
+    pub uv: [[f32; 4]; 3],
+    pub color: [[u8; 4]; 3],
+    /// Low byte of each vertex normal's `w`, shifted right by 3.
+    pub flags: [u8; 3],
+    /// Bounding box min, max.
+    pub bounds: [[f32; 4]; 2],
+}
+
 #[derive(Debug, Default)]
 pub struct Model {
     pub node_count: usize,
     /// `materials[m]` = packets drawn with MTL material `m`.
     pub materials: Vec<Vec<Packet>>,
+    /// Per node (pre-order), model space → node space.
+    pub node_inverse: Vec<[[f32; 4]; 4]>,
+    /// Triangles of static batches, in the order the game tests them: by node, then material, then file order.
+    pub collision: Vec<CollisionTri>,
+}
+
+impl Model {
+    /// The triangles the game collides with: those whose material has an attribute map.
+    pub fn colliding<'a>(&'a self, mtl: &'a crate::mtl::Mtl) -> impl Iterator<Item = &'a CollisionTri> {
+        self.collision.iter().filter(|t| mtl.materials.get(t.material).is_some_and(|m| m.attributes.is_some()))
+    }
 }
 
 struct Cursor<'a> {
@@ -72,16 +106,16 @@ fn size_at(b: &[u8], o: usize) -> Result<usize, Error> {
 }
 
 /// Header, extra blob, 3 matrices, then a child count. Nodes hold groups, groups hold nodes.
-fn tree_item(c: &mut Cursor, depth: u32, count: &mut usize) -> Result<(), Error> {
+fn tree_item(c: &mut Cursor, depth: u32, inverse: &mut Vec<[[f32; 4]; 4]>) -> Result<(), Error> {
     if depth > 64 {
         return Err(Error("mdl: node tree too deep".into()));
     }
     let h = c.take(0x40)?;
     c.take(size_at(h, 0x38)?)?;
-    c.take(0xc0)?;
-    *count += 1;
+    let m = c.take(0xc0)?;
+    inverse.push(std::array::from_fn(|r| std::array::from_fn(|k| f32_at(m, 0x80 + 16 * r + 4 * k))));
     for _ in 0..c.count(4)? {
-        tree_item(c, depth + 1, count)?;
+        tree_item(c, depth + 1, inverse)?;
     }
     Ok(())
 }
@@ -90,18 +124,20 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
     let mut c = Cursor { d, p: 0 };
     let mut m = Model::default();
     c.take(1)?;
-    tree_item(&mut c, 0, &mut m.node_count)?;
-    for _ in 0..c.count(4)? {
+    tree_item(&mut c, 0, &mut m.node_inverse)?;
+    m.node_count = m.node_inverse.len();
+    for material in 0..c.count(4)? {
         let mut packets = Vec::new();
         for _ in 0..c.count(0xc)? {
             let bh = c.take(0x34)?;
+            let node = size_at(bh, 4)?;
             for _ in 0..size_at(bh, 0x1c)? {
                 let ph = c.take(0x60)?;
                 let vif = c.take(size_at(ph, 0x34)? << 4)?;
                 let bones = c.take(size_at(ph, 0x3c)? + 1)?.to_vec();
                 let n = size_at(ph, 0x38)?;
-                c.take(n)?;
-                c.take(n << 5)?;
+                let starts = c.take(n)?;
+                let bounds = c.take(n << 5)?;
                 if ph[0x56] != 0 {
                     c.take((ph[0x57] as usize) << 4)?;
                 }
@@ -111,8 +147,9 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                         c.take(k << 4)?;
                     }
                 }
-                if i32_at(ph, 0x4c) < 0 {
-                    c.take(4)?;
+                let constant = if i32_at(ph, 0x4c) < 0 { Some(c.take(4)?) } else { None };
+                if i32_at(bh, 0) == 1 {
+                    collision(&mut m.collision, node, material, ph, vif, &bones, starts, bounds, constant)?;
                 }
                 let mut pk = decode_vif(vif)?;
                 pk.bones = bones;
@@ -121,12 +158,60 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
         }
         m.materials.push(packets);
     }
+    m.collision.sort_by_key(|t| t.node); // stable: material, then file order, within a node
     let n = c.count(4)?;
     for _ in 0..n {
         let s = c.count(4)?;
         c.take(s)?;
     }
     Ok(m)
+}
+
+/// The packet's drawn triangles (strip slots `s, s+1, s+2` for every listed start `s`), skipping any whose
+/// third vertex is a strip restart, as the game does.
+#[allow(clippy::too_many_arguments)]
+fn collision(
+    out: &mut Vec<CollisionTri>,
+    node: usize,
+    material: usize,
+    ph: &[u8],
+    vif: &[u8],
+    map: &[u8],
+    starts: &[u8],
+    bounds: &[u8],
+    constant: Option<&[u8]>,
+) -> Result<(), Error> {
+    let at = |o: usize, n: usize| vif.get(o..o + n).ok_or_else(|| Error(format!("mdl: collision data past VIF block at {o:#x}")));
+    let (pos, nrm, col, uv) = (size_at(ph, 0x44)? << 4, size_at(ph, 0x48)? << 4, i32_at(ph, 0x4c), size_at(ph, 0x50)? << 4);
+    let qword = |b: &[u8]| -> [f32; 4] { std::array::from_fn(|k| f32_at(b, 4 * k)) };
+    for (i, &s) in starts.iter().enumerate() {
+        let s = s as usize;
+        let idx = |k: usize| map.get(s + k).map(|&v| v as usize).ok_or_else(|| Error("mdl: strip slot past index map".into()));
+        if at(nrm + idx(2)? * 8 + 6, 2)?[1] & 0x80 != 0 {
+            continue;
+        }
+        let mut t = CollisionTri {
+            node,
+            material,
+            pos: [[0.0; 4]; 3],
+            uv: [[0.0; 4]; 3],
+            color: [[0; 4]; 3],
+            flags: [0; 3],
+            bounds: [qword(&bounds[i * 32..]), qword(&bounds[i * 32 + 16..])],
+        };
+        for k in 0..3 {
+            t.pos[k] = qword(at(pos + idx(k)? * 16, 16)?);
+            t.flags[k] = at(nrm + idx(k)? * 8 + 6, 1)?[0] >> 3;
+            t.uv[k] = qword(at(uv + (s + k) * 16, 16)?);
+            let c = match constant {
+                Some(c) => c,
+                None => at(((col as usize) << 4) + (s + k) * 4, 4)?,
+            };
+            t.color[k] = c[..4].try_into().unwrap();
+        }
+        out.push(t);
+    }
+    Ok(())
 }
 
 /// Walk a VIF stream and rebuild triangle strips from the unpacked vertex attributes.

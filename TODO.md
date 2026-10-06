@@ -124,10 +124,15 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
     `crates/hst-sim/tests/live.rs` steps each recorded frame through `Flight`: 12309 airborne frames bit-exact;
     189 contacts listed (court 144, fence 19, outside ground 12, net 5, net cord 3, 6 uncounted pushes) — court
     bounce velocity already exact, position off ~1e-4·r. Journal `1-LIVE-RECORDING-PART.md`.
-  - [ ] **P0c2 — Collision world data.** Dump `*(gm+0x84)` (court object +0x138 → `0x14cdc0`, grid objects
-    `0x3365b0` gated by `0x3fc008`, optional +0x14c), the model/tree format `0x15c700`/`0x159630` reads (+0x54
-    tree, +0x64 transforms 0x120 stride, poly flag 0x8000, material byte), find its disc source, read it in
-    `hst_data`; verify the triangle set against RAM from slot 5.
+  - [x] **P0c2 — Collision world data.** The live ball queries the court object and the world grid's props (net =
+    `znet_s1000.mdl`, umpire chair, seats, hut, gate, trees); each is its `.mdl` loaded in place. `mdl::Model::collision`
+    / `colliding(&mtl)` (static batches of materials with an attribute map; order node → material → batch → strip slot,
+    restarts skipped), `node_inverse`; `mtl::Material::{two_sided, attributes}`, `Mtl::attributes` (embedded textures +
+    16-byte material table). `crates/hst-data/tests/collision.rs`: slot 5 RAM vs disc, 15 models / 6368 triangles,
+    node matrices, flags and maps bit-exact. Journal `2-COLLISION-DATA-FINAL.md`.
+  - [ ] **P0c2b — Collision world placement.** Which plant records become grid objects (65 on court 10) and their
+    world→model matrices (model instance +0x10: inverse of pos/yaw/scale) bit-exact, grid cells (20 m) and bounds;
+    test against slot 5 RAM like `tests/collision.rs`.
   - [ ] **P0c3 — Triangle sweep bit-exact.** Port `0x159630` → `0x1580b0` / `0x12fe40` (+ the transforms in
     `0x15c700`); `tests/live.rs` court bounces (material 1) and walls (48, 13) exact in position too.
   - [ ] **P0c4 — Net through the mesh.** Material 26 contacts and the after-first-bounce redirect `+0x1b0`
