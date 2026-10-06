@@ -118,6 +118,20 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   `tools/trace_live.py`-style capture and replay it through `Flight` bit-exact. Needs the live collision path:
   world mesh query instead of the flat net (court object + grid objects, per-model triangle sweep) and the
   after-first-bounce redirect `+0x1b0`. Findings so far: `context/artifacts/2026-10-06-net-hit/FINDINGS.md`.
+  Split (journal `context/artifacts/2026-10-06-net-hit/`):
+  - [x] **P0c1 — Live-ball recording + per-frame replay.** `tools/record_live.py` (slot 5, every frame at
+    0.25 speed: live ball `*(gm+0x88)`, predictor `*(gm+0x98)`, rally block) → `context/live/net_s05.bin`;
+    `crates/hst-sim/tests/live.rs` steps each recorded frame through `Flight`: 12309 airborne frames bit-exact;
+    189 contacts listed (court 144, fence 19, outside ground 12, net 5, net cord 3, 6 uncounted pushes) — court
+    bounce velocity already exact, position off ~1e-4·r. Journal `1-LIVE-RECORDING-PART.md`.
+  - [ ] **P0c2 — Collision world data.** Dump `*(gm+0x84)` (court object +0x138 → `0x14cdc0`, grid objects
+    `0x3365b0` gated by `0x3fc008`, optional +0x14c), the model/tree format `0x15c700`/`0x159630` reads (+0x54
+    tree, +0x64 transforms 0x120 stride, poly flag 0x8000, material byte), find its disc source, read it in
+    `hst_data`; verify the triangle set against RAM from slot 5.
+  - [ ] **P0c3 — Triangle sweep bit-exact.** Port `0x159630` → `0x1580b0` / `0x12fe40` (+ the transforms in
+    `0x15c700`); `tests/live.rs` court bounces (material 1) and walls (48, 13) exact in position too.
+  - [ ] **P0c4 — Net through the mesh.** Material 26 contacts and the after-first-bounce redirect `+0x1b0`
+    (`0x379bd0`, `0x379ae0`); `tests/live.rs` requires every contact frame bit-exact; drop the flat net from live play.
 
 ### Match basics (do these early)
 - [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the
@@ -228,7 +242,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P15 — Court collision mesh.** Live-ball collision against the court mesh (`FUN_0032f690` on `gm+0x84`):
   net cord/posts, walls, fences, other materials; replaces the flat net. Net-cord hits must behave exactly:
   balls that clip the cord and dribble over (rally net cords and serve lets), balls stopped by the net, post
-  hits. Verify with live-ball traces (the stored path ignores the net, so record the live ball `*(gm+0x98)`).
+  hits. Verify with live-ball traces (the stored path ignores the net, so record the live ball `*(gm+0x88)`; `tools/record_live.py`).
 - [ ] **P15a — Per-court bounce profiles.** Every court bounces the ball exactly as its original surface does
   (hard, clay, grass, carpet, … — whatever the game defines). Today `hst_sim::ball::COURTS` hard-codes only
   `spin_relax` and `spin_kick` per court and shares friction 0.3, spin→speed 0.2 and restitution 0.7 across all
