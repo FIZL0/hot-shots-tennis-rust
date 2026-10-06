@@ -53,6 +53,10 @@ Things that need the human go under **Needs the human** at the bottom, never int
 ## Controlling the real game (for recordings and checks)
 
 - `tools/pcsx2-hst.sh` launches PCSX2 with PINE on; `tools/pine.py` reads/writes RAM and loads/saves states.
+- **Save states (the user's — load only, scratch saves go to 8/9):** 3 = start of a game, P1 human + 3 bots;
+  4 = mid-rally right after the serve; 5 = full bot game. Slot 5 has no human input — use it for ball/AI
+  captures only. Controller-input recordings (P0 and anything gameplay-from-input) start from slot 3 or 4 with
+  P1 driven by `tools/vpad.py`.
 - `tools/vpad.py serve` creates a virtual Xbox-360 pad (uinput, no root); PCSX2 binds it as `SDL-0` when no
   real controller is connected. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
   Never press Select (PCSX2 hotkeys are Select + shoulder combos). Timing is wall-clock; frame-exact replays
@@ -95,6 +99,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
   Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
   are accepted only when their recordings replay identically.
+  **First real recording (use it):** `context/recordings/round1.p2m2` (+ `round1_SaveState.p2s`, its start
+  state) — the user playing a round as P1, recorded 2026-10-05 with PCSX2's Input Recording (frame-exact, starts
+  from that save state; replays only on this PCSX2 version). Replay it in PCSX2 (Tools → Input Recording → Play)
+  while capturing state over PINE to build the fixture; don't re-record it.
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
   frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
@@ -151,6 +159,9 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   original (verify with recorded let serves).
 
 ### Players
+- **Handedness:** characters can be left-handed; **Carol and Will are lefty by default**. Read handedness from
+  the game's character data (don't hard-code names) and mirror everything that depends on it: forehand/backhand
+  side, contact search reach/offsets, swing and serve animations, toss hand, racket attachment.
 - [ ] **P7 — Exact character movement stats.** Every character moves exactly as in the original, per
   character: walk/run speed, dash/sprint speed, acceleration and deceleration curves, turning rate, direction
   changes, split-step/ready hop, recovery after a shot, reach (forehand/backhand/volley/smash, e.g. the
