@@ -94,6 +94,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - Net contact (flat net from the game's predictor), material-based bounce response.
 - Collision world placement: props from plant records (VU0 sin/cos, rotations, inverse) and the 20 m prop grid —
   117 props and every grid cell bit-exact on court 10.
+- Live ball against the world mesh (court model, walls, net, props via the 20 m grid), ground material from attribute
+  maps, material table response — 12498 recorded frames of a bot match bit-exact, all contacts included.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
 ## Prompts
@@ -138,10 +140,17 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
     `crates/hst-sim/tests/world.rs`: 117 props / 66 colliding, matrices, spheres, grid box and all 704 cell lists
     bit-exact vs slot 5. Also fixed `vu0::add` (exact round-toward-zero for far smaller addends). Journal
     `3-PLACEMENT-FINAL.md`.
-  - [ ] **P0c3 — Triangle sweep bit-exact.** Port `0x159630` → `0x1580b0` / `0x12fe40` (+ the transforms in
-    `0x15c700`); `tests/live.rs` court bounces (material 1) and walls (48, 13) exact in position too.
-  - [ ] **P0c4 — Net through the mesh.** Material 26 contacts and the after-first-bounce redirect `+0x1b0`
-    (`0x379bd0`, `0x379ae0`); `tests/live.rs` requires every contact frame bit-exact; drop the flat net from live play.
+  - [x] **P0c3 — Triangle sweep bit-exact.** `hst_sim::mesh`: swept sphere vs triangle (face, edges, corners), the
+    attribute-map ground material (texel at the hit's UV; `mdl::Model::wrap` = GS CLAMP modes), the per-object sweep
+    (world→model, VU0 strict box test, two-sided passes, box shrink after a hit) and the world query (court, then grid
+    props with the sphere pre-test). `Flight::step_world` + `ball::Material` = rows of the game's material table
+    (`exe::Game::surfaces`); ghost material 32 (passes through, uncounted). `tests/live.rs` steps **all 12498 frames
+    bit-exact** against court 10 built from the disc, contacts included (court 144, outside 12, walls 19, net 5,
+    cord 3). Fix on the way: off-court spin loss also resets the kick's "spin before". Journal `4-TRIANGLE-SWEEP-FINAL.md`.
+  - [ ] **P0c4 — Net through the mesh in live play.** Net contacts already replay bit-exact through the mesh (P0c3).
+    Left: the after-first-bounce redirect `+0x1b0` (`0x379bd0`, `0x379ae0`; needs a recording with it non-zero) and
+    the app's live ball on `step_world` (build the `mesh::World` from the disc in `crates/hst`), dropping the flat net
+    from live play.
 
 ### Match basics (do these early)
 - [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the

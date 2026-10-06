@@ -56,19 +56,26 @@ pub const COURTS: [Surface; 12] = {
     out
 };
 
-/// What the ball touched. The court uses its surface table; other materials carry their own row.
+/// How a collision material treats the ball (one row of the game's material table).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Material {
-    Court,
-    /// Soft surfaces (the net): own restitution and spin loss; the first touch also kills most sliding speed.
-    Special { restitution: f32, spin_loss: f32 },
+pub struct Material {
+    /// The playing surface: bounces by the court's `Surface`.
+    pub court: bool,
+    /// Soft obstacles (the net): counted separately; the first touch also kills most sliding speed.
+    pub special: bool,
+    pub restitution: f32,
+    /// Spin lost per bounce, and how fast spin relaxes, off the court surface.
+    pub spin_loss: f32,
 }
 
+/// The court plane.
+pub const COURT: Material = Material { court: true, special: false, restitution: 0.0, spin_loss: 0.0 };
+
 /// The net, as the game's own path predictor sees it: a plane at z = 0 up to 0.91 m, across both courts' width.
-// ponytail: live play queries the court collision mesh (net cord, posts); this flat net is the predictor's view.
+// ponytail: the live ball queries the court collision mesh (`step_world`); this flat net is the predictor's view.
 pub const NET_TOP: f32 = 0.91;
 pub const NET_HALF_WIDTH: f32 = 6.4;
-pub const NET: Material = Material::Special { restitution: 0.18, spin_loss: 0.95 };
+pub const NET: Material = Material { court: false, special: true, restitution: 0.18, spin_loss: 0.95 };
 /// After touching the net the ball is pushed this much per frame away from it so it cannot stick.
 const NET_PUSH: f32 = 0.003;
 
@@ -190,6 +197,19 @@ pub struct Flight {
     pub line_distance: f32,
 }
 
+/// Contact state that lasts for the whole frame across sub-steps.
+#[derive(Default)]
+struct FrameFlags {
+    /// The bounce counters were advanced.
+    counted: bool,
+    /// A special material was touched (it then counts as special for rolling and court contacts).
+    special: bool,
+    /// The last special touch was the flight's first.
+    special_first: bool,
+    /// Touches of the ghost material.
+    ghosts: i32,
+}
+
 /// Constants of the original's contact code (exact bit patterns).
 mod k {
     pub const ROLL_SPEED: f32 = 0.02;
@@ -217,6 +237,39 @@ impl Flight {
     /// profile (first flight only), then sweep the step against the court (and the net when live), placing
     /// the ball at each contact and responding, for up to 30 sub-steps while more than 10% of the frame remains.
     pub fn step(&mut self, shot: &Shot, surface: &Surface) {
+        let (r, net) = (shot.params.radius, self.net);
+        self.advance(shot, surface, |pos, target, _| {
+            let ground = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [-0.0, -1.0, -0.0, -0.0], f32::MAX);
+            let mut hit = ground.map(|h| (h, COURT, false));
+            if net {
+                let side = if pos[2] > 0.0 { 1.0 } else if pos[2] < 0.0 { -1.0 } else { 0.0 };
+                if side != 0.0 {
+                    let best = hit.map_or(f32::MAX, |(h, _, _)| h.t);
+                    if let Some(h) = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, side, 0.0], best) {
+                        if h.centre[1] > -NET_TOP && h.centre[0].abs() <= NET_HALF_WIDTH {
+                            hit = Some((h, NET, false));
+                        }
+                    }
+                }
+            }
+            hit
+        });
+    }
+
+    /// One frame of the live ball against the world mesh (`step`, with every sub-step swept through `world`).
+    /// `materials` is the game's collision material table, by material id.
+    pub fn step_world(&mut self, shot: &Shot, surface: &Surface, world: &crate::mesh::World, materials: &[Material]) {
+        use crate::mesh::GHOST;
+        let r = shot.params.radius;
+        self.advance(shot, surface, |pos, target, ghosts| {
+            let ignore: &[u32] = if ghosts == 0 { &[] } else { &[GHOST] };
+            world.sweep(pos, target, r, ignore).map(|h| (h.contact(), materials[h.material as usize], h.material == GHOST))
+        });
+    }
+
+    /// The frame itself; `query(start, end, ghost touches so far)` finds the nearest contact of a sub-step: the
+    /// hit, its material and whether it is the ghost material (passed through, not counted).
+    fn advance(&mut self, shot: &Shot, surface: &Surface, mut query: impl FnMut(V4, V4, i32) -> Option<(crate::contact::Hit, Material, bool)>) {
         use crate::ps2;
         let r = shot.params.radius;
         self.ball.accelerate(&shot.params, 1.0);
@@ -245,31 +298,19 @@ impl Flight {
         let mut pos: V4 = [self.ball.pos[0], self.ball.pos[1], self.ball.pos[2], 1.0];
         let mut remaining = 1.0f32;
         let mut contacts = 0;
-        let mut counted = false;
-        let mut touched_special = false;
+        let mut f = FrameFlags::default();
         loop {
             let target: V4 = std::array::from_fn(|k| ps2::madd(ps2::add(0.0, pos[k]), d[k], remaining));
-            let ground = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [-0.0, -1.0, -0.0, -0.0], f32::MAX);
-            let mut hit = ground.map(|h| (h, Material::Court));
-            if self.net {
-                let side = if pos[2] > 0.0 { 1.0 } else if pos[2] < 0.0 { -1.0 } else { 0.0 };
-                if side != 0.0 {
-                    let best = hit.map_or(f32::MAX, |(h, _)| h.t);
-                    if let Some(h) = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, side, 0.0], best) {
-                        if h.centre[1] > -NET_TOP && h.centre[0].abs() <= NET_HALF_WIDTH {
-                            hit = Some((h, NET));
-                        }
-                    }
-                }
-            }
-            let Some((h, material)) = hit else {
+            let Some((h, material, ghost)) = query(pos, target, f.ghosts) else {
                 pos = target;
                 break;
             };
             contacts += 1;
             pos = crate::contact::contact_point(Some(&h), pos, target, r);
-            touched_special |= material != Material::Court;
-            d = self.respond(shot, surface, d, h.normal, material, &mut counted);
+            if ghost {
+                f.ghosts += 1;
+            }
+            d = self.respond(shot, surface, d, h.normal, material, ghost, &mut f);
             if let Some(l) = self.lines.filter(|_| !self.rolling && (self.bounces == 1 || self.contacts == 1)) {
                 if let Some((call, dist)) = crate::judge::call_landing(self.call, self.special_contacts != 0, pos, &l) {
                     self.call = call;
@@ -284,7 +325,7 @@ impl Flight {
         if contacts != 0 {
             self.ball.vel = [d[0], d[1], d[2]];
         }
-        if touched_special {
+        if f.special {
             self.ball.vel[2] = ps2::add(self.ball.vel[2], ps2::mul(pos[2].signum(), NET_PUSH));
         }
         self.ball.pos = [pos[0], pos[1], pos[2]];
@@ -293,16 +334,18 @@ impl Flight {
 
     /// Contact response to a surface with normal `n` (pointing out of the surface toward the ball, as the
     /// sweep reports it); returns the new velocity. `counted`: the bounce counters were already advanced this frame.
-    fn respond(&mut self, shot: &Shot, s: &Surface, d: V4, n: V4, material: Material, counted: &mut bool) -> V4 {
+    fn respond(&mut self, shot: &Shot, s: &Surface, d: V4, n: V4, material: Material, ghost: bool, f: &mut FrameFlags) -> V4 {
         use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
         use crate::{quat, vu0};
         let r = shot.params.radius;
-        let court = material == Material::Court;
-        let special = !court;
-        let special_first = special && self.special_contacts == 0;
-        if special {
+        let court = material.court;
+        if material.special {
+            // both stay set for the rest of the frame
+            f.special = true;
+            f.special_first = self.special_contacts == 0;
             self.special_contacts += 1;
         }
+        let (special, special_first) = (f.special, f.special_first);
         let sq = |v: V4| madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2]);
         let dot = madd(madd(mul(d[1], n[1]), d[0], n[0]), d[2], n[2]);
         let mut vn: V4 = n.map(|c| mul(c, dot));
@@ -311,12 +354,12 @@ impl Flight {
             self.ball.spin = shot.first_bounce_spin;
         }
         let normal_speed = sqrt(sq(vn));
-        let old_spin = self.ball.spin;
+        let mut old_spin = self.ball.spin;
         // rolling: settled on the court after two contacts (|n.y| ≥ sin 45°, not a special surface)
         let rolling = self.contacts >= 2 && normal_speed <= k::ROLL_SPEED && !(n[1].abs() < std::f32::consts::FRAC_PI_4.sin()) && !special;
         if !rolling {
-            if !*counted {
-                *counted = true;
+            if !ghost && !f.counted {
+                f.counted = true;
                 self.bounces += 1;
                 if !special {
                     self.contacts += 1;
@@ -343,12 +386,11 @@ impl Flight {
             let fwd = vu0::normalize(vu0::cross(side, up));
             self.contact = [side, up, fwd, self.contact[3]];
         }
-        let spin_loss = match material {
-            Material::Special { spin_loss, .. } => spin_loss,
-            Material::Court => 0.0,
-        };
-        if !rolling && special {
+        let spin_loss = material.spin_loss;
+        if !rolling && !court {
+            // the game keeps this reduced spin as the "spin before" the kick is measured from
             self.ball.spin = mul(self.ball.spin, sub(1.0, spin_loss));
+            old_spin = self.ball.spin;
         }
 
         // spin drags the slide toward rolling speed (in the contact frame)
@@ -396,11 +438,12 @@ impl Flight {
         self.spin_frame = quat::to_matrix(quat::slerp(quat::from_matrix(&l1), quat::from_matrix(&l2), turn));
 
         // restitution and the spin kick off the surface
-        let mut e = match material {
-            Material::Court => s.restitution,
-            Material::Special { restitution, .. } => {
-                if special_first && restitution == 0.0 { k::SPECIAL_DEFAULT_RESTITUTION } else { restitution }
-            }
+        let mut e = if special_first {
+            if material.restitution == 0.0 { k::SPECIAL_DEFAULT_RESTITUTION } else { material.restitution }
+        } else if court {
+            s.restitution
+        } else {
+            material.restitution
         };
         let mut kick = if special_first { k::SPECIAL_KICK } else { s.spin_kick };
         if self.bounces == 1 {
@@ -422,11 +465,16 @@ impl Flight {
                 }
             }
         }
-        let ne = -e;
-        let vn: V4 = vn.map(|c| mul(c, ne));
-        let change = sub(self.ball.spin, old_spin).abs();
-        let inv = div(1.0, sqrt(sq(vn)));
-        let vn: V4 = vn.map(|c| madd(add(0.0, c), mul(mul(c, inv), change), kick));
+        let vn: V4 = if ghost {
+            // passes through, slowed
+            vn.map(|c| mul(c, e))
+        } else {
+            let ne = -e;
+            let vn: V4 = vn.map(|c| mul(c, ne));
+            let change = sub(self.ball.spin, old_spin).abs();
+            let inv = div(1.0, sqrt(sq(vn)));
+            vn.map(|c| madd(add(0.0, c), mul(mul(c, inv), change), kick))
+        };
         if !rolling && court {
             self.ball.spin = mul(self.ball.spin, sub(1.0, s.spin_relax));
         }

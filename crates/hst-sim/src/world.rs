@@ -163,7 +163,7 @@ impl Grid {
 }
 
 /// Cell index of a coordinate: floor-like for negatives by stepping one cell down first, then truncating.
-fn cell_of(v: f32) -> i32 {
+pub fn cell_of(v: f32) -> i32 {
     let v = if v < 0.0 { ps2::sub(v, CELL) } else { v };
     ps2::div(v, CELL) as i32
 }

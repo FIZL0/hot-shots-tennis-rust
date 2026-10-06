@@ -151,7 +151,11 @@ fn court_10_collision_matches_ram() {
         }
         for (k, mat) in mt.materials.iter().enumerate() {
             let rec = r.u(data + 0x40) + k as u32 * 0x60;
-            assert_eq!(r.u((r.u(rec + 0x10) & 0x1ff_ffff) + 0x10) & 1 != 0, mat.two_sided, "{name}: material {k} sides");
+            let state = r.u(rec + 0x10) & 0x1ff_ffff;
+            assert_eq!(r.u(state + 0x10) & 1 != 0, mat.two_sided, "{name}: material {k} sides");
+            assert_eq!(r.u(state + 0x10) & 8 != 0, mat.texture.is_some(), "{name}: material {k} textured");
+            let clamp = r.b(state + 0x30);
+            assert_eq!([clamp & 3, clamp >> 2 & 3], m.wrap[k], "{name}: material {k} wrap");
             let map = r.u(r.u(rec + 0x58) + 0x94);
             assert_eq!(map != 0, mat.attributes.is_some(), "{name}: material {k} attribute map");
             let Some(a) = mat.attributes else { continue };

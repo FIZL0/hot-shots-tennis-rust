@@ -61,6 +61,19 @@ impl<'a> Game<'a> {
         self.f32(0x40_3bec)
     }
 
+    /// How the ball bounces off each collision material id (256 rows of 16 bytes).
+    pub fn surfaces(&self) -> Vec<Surface> {
+        self.at(0x41_0b70, 256 * 16)
+            .chunks_exact(16)
+            .map(|r| Surface {
+                court: r[0] != 0,
+                special: r[1] != 0,
+                restitution: f32::from_le_bytes(r[4..8].try_into().unwrap()),
+                spin_loss: f32::from_le_bytes(r[8..12].try_into().unwrap()),
+            })
+            .collect()
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)
@@ -73,4 +86,16 @@ pub struct ShotParamSource {
     pub kinds: Vec<i32>,
     pub weights: Vec<f32>,
     pub middle_mix: f32,
+}
+
+/// One row of the collision material table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surface {
+    /// Bounces by the court's own surface table (the playing surface).
+    pub court: bool,
+    /// Soft obstacle (the net): counted separately, the first touch kills most of the slide.
+    pub special: bool,
+    pub restitution: f32,
+    /// Share of spin lost per bounce (and how fast spin relaxes) off the court surface.
+    pub spin_loss: f32,
 }

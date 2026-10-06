@@ -12,3 +12,4 @@ pub mod vu0;
 pub mod libm;
 pub mod replay;
 pub mod world;
+pub mod mesh;
