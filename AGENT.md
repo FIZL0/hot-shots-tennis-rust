@@ -27,3 +27,9 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 ## Controlling the game
 `TODO.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
 *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.
+
+## If you get stuck, move on
+Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something
+needs the human, or ~20 minutes go by without progress: write what happened and what you tried in the prompt's
+journal, mark it `- [~] … BLOCKED: <one-line reason>` in TODO.md, commit what's solid, and start the next open
+prompt. Don't touch PCSX2 while a capture (`pgrep -f record_p2m2`) is running.
