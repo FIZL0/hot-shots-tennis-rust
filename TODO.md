@@ -26,8 +26,35 @@ Every prompt follows the same rules:
 - **Same input, same result.** Given the same controller input on the same frames from the same starting
   state, the port must produce the same hit spot, contact frame, timing grade, shot and ball path as the
   original. Prompt P0's input-replay harness is the acceptance test for every gameplay prompt.
+- **Never stop while work remains.** See *When blocked* below — switch to other open prompts instead of ending.
 - Record findings and evidence in `context/artifacts/<date>-<slug>/` (memory maps, decomp addresses, captures).
 - Update **Done** and the **Play it now** controls when a prompt lands.
+
+## When blocked
+
+A prompt is **blocked** when it can't be finished this run: missing recording, needs the human (a decision,
+root access, a physical controller), unresolved after real debugging, or the run is low on turns.
+
+1. Commit whatever is solid; leave nothing half-applied in the tree (`git stash` experiments if needed).
+2. Mark it `- [~] **Pn — …** BLOCKED: <one line why + what would unblock it>` and write the details and
+   evidence to its journal entry.
+3. Move to the next unchecked `- [ ]` prompt — preferably in a different section (Players, AI, Match,
+   Presentation: camera, HUD, pop-ups, rendering, audio, menus), since unrelated work rarely shares the blocker.
+4. Never end a run just because one prompt is stuck. Only stop when every prompt is `[x]` or `[~]`, and then
+   list the blockers for the human.
+
+Things that need the human go under **Needs the human** at the bottom, never into the code as guesses.
+
+## Controlling the real game (for recordings and checks)
+
+- `tools/pcsx2-hst.sh` launches PCSX2 with PINE on; `tools/pine.py` reads/writes RAM and loads/saves states.
+- `tools/vpad.py serve` creates a virtual Xbox-360 pad (uinput, no root); PCSX2 binds it as `SDL-0` when no
+  real controller is connected. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
+  Never press Select (PCSX2 hotkeys are Select + shoulder combos). Timing is wall-clock; frame-exact replays
+  should use PCSX2 input recording (`.p2m2`) — P0 decides.
+- `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it.
+- Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
+- `tools/overnight.sh` (in tmux) runs `claude -p continue` back to back and owns the virtual pad for the night.
 
 ## Play it now
 
@@ -161,3 +188,6 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
 - Stored-path fixtures can't verify net hits (the game records paths against the court plane only).
 - Disc court folder ↔ physics court index mapping is unverified (slot 5 = court index 10).
+
+## Needs the human
+- (none yet)

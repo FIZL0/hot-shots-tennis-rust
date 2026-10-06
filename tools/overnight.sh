@@ -13,6 +13,9 @@ mkdir -p "$(dirname "$log")"
 turns=${HST_MAX_TURNS:-400}
 pause=${HST_PAUSE:-60}
 run=0
+# the virtual pad lives for the whole night (PCSX2 picks it up as SDL-0 when no real pad is connected)
+pgrep -f 'vpad.py serve' >/dev/null || { tools/vpad.py serve >>"$log" 2>&1 & vpad=$!; }
+trap '[ -n "${vpad:-}" ] && kill "$vpad" 2>/dev/null' EXIT
 while grep -q '^- \[ \]' TODO.md; do
   run=$((run + 1))
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' TODO.md | cut -c1-100)" | tee -a "$log"

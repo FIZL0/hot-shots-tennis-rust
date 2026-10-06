@@ -23,3 +23,7 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 ## Plan
 `TODO.md` is the ordered plan; "continue" means: take the first open item there, consult its journal entry in
 `context/artifacts/`, port + verify, update TODO.md, commit.
+
+## Controlling the game
+`TODO.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
+*When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.
