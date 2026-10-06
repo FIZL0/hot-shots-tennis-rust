@@ -78,6 +78,35 @@ impl<'a> Game<'a> {
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)
     }
+
+    /// How long the scoreboard takes over the score after a point.
+    pub fn scoreboard_timing(&self) -> ScoreboardTiming {
+        let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
+        ScoreboardTiming {
+            point_wait: i(0x41_0e90),
+            game_wait: i(0x41_0e98),
+            point_hold: self.f32(0x41_0ea8),
+            game_hold: self.f32(0x41_0eb0),
+            game_rise: i(0x41_0eb8),
+            game_drop: i(0x41_0ec0),
+        }
+    }
+}
+
+/// Scoreboard timing after a point (frames unless noted).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScoreboardTiming {
+    /// Wait before a point's score is shown, when no player is mid-reaction.
+    pub point_wait: i32,
+    /// Wait before a game's or set's score is shown.
+    pub game_wait: i32,
+    /// Seconds a point (or tiebreak point) score stays up.
+    pub point_hold: f32,
+    /// Seconds a game or set score stays up.
+    pub game_hold: f32,
+    /// Game/set show: frames the new score rises, then falls.
+    pub game_rise: i32,
+    pub game_drop: i32,
 }
 
 /// Raw inputs of the shot parameter table builder.

@@ -8,6 +8,7 @@ pub mod contact;
 pub mod quat;
 pub mod score;
 pub mod judge;
+pub mod flow;
 pub mod vu0;
 pub mod libm;
 pub mod replay;

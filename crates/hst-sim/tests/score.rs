@@ -359,3 +359,97 @@ fn match_s05_rally_block() {
     eprintln!("match_s05: {} frames, {decisions} decisions (by call {calls:?}), {resets} resets, {replays} replays", frames.len());
     assert!(decisions > 0);
 }
+
+/// The point-over phase of every scored point of the slot-5 match without an umpire call (P0b4): `PostPoint`
+/// fed the recorded score and rally block at the decision must clear the faults, reset the score for a new
+/// game and ask for the next phase (serve or change ends) on the game's own ticks (gm+0x58), and every
+/// change-ends phase must last `CHANGE_ENDS`. Calls (faults, outs: umpire voice) and the match-over point are P0b4c.
+#[test]
+fn match_s05_post_point() {
+    use hst_data::exe;
+    use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint};
+    use hst_sim::replay::frames_live;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{root}/context/fixtures"));
+    let (Ok(data), Ok(cnf), Ok(bin)) = (
+        std::fs::read(format!("{dir}/match_s05.bin")),
+        std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
+        std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
+    ) else {
+        return eprintln!("match_s05.bin or disc files absent, skipped");
+    };
+    let timing = exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing();
+    let frames = frames_live(&data);
+    let tick = |f: Frame| u32::from_le_bytes(f.gm()[0x58..0x5c].try_into().unwrap());
+    let score_at = |f: Frame| {
+        let (points, games, sets) = snapshot(f);
+        let u = |a| f.global_u8(a) != 0;
+        Score {
+            points,
+            games,
+            sets,
+            deuce: f.rally_u8(0x316620) != 0,
+            advantage: f.rally_u8(0x316628) != 0,
+            tiebreak: f.rally_u8(0x31661a) != 0,
+            tiebreak_count: f.rally(0x31661c),
+            rotation: rd(f, 0x4230b0),
+            swapped: u(0x4230b4),
+            game_changed: u(0x4230ac),
+            games_played: rd(f, 0x4230c0),
+            match_over: u(0x4230be),
+            server: rd(f, 0x42304c),
+            side: rd(f, 0x423050),
+            receiver: rd(f, 0x423054),
+            ..Score::new()
+        }
+    };
+    let (mut checked, mut changes) = (0, 0);
+    for k in 1..frames.len() {
+        let (a, f) = (frames[k - 1], frames[k]);
+        if f.gm()[0x55] == 1 && a.gm()[0x55] != 1 {
+            let end = frames[k..].iter().find(|s| s.gm()[0x56] != 0xff).unwrap();
+            assert_eq!((end.gm()[0x56], tick(*end)), (2, CHANGE_ENDS + 1), "vsync {}: change ends", f.vsync());
+            changes += 1;
+        }
+        if !(f.gm()[0x55] == 4 && a.gm()[0x55] != 4) {
+            continue;
+        }
+        let mut score = score_at(f);
+        let mut rally = rally_block(f);
+        let body = Some(rd(f, 0x42305c)).filter(|&p| p >= 0);
+        let event = match rd(f, 0x4230b8) {
+            0 if score.tiebreak => Event::TiebreakPoint,
+            0 => Event::Point,
+            1 => Event::Game,
+            2 => Event::Set,
+            _ => continue, // no point: the umpire's call (P0b4c)
+        };
+        if score.match_over || rally.judge(body).call != 0 {
+            continue;
+        }
+        let mut pp = PostPoint::new(event);
+        let mut asked = None;
+        for &s in &frames[k..] {
+            while pp.tick < tick(s) {
+                if let Some(n) = pp.step(&mut score, &mut rally, &timing) {
+                    asked.get_or_insert((n, pp.tick));
+                }
+            }
+            if s.gm()[0x56] != 0xff {
+                let want = match s.gm()[0x56] {
+                    1 => Next::ChangeEnds,
+                    2 => Next::Serve,
+                    _ => Next::MatchOver,
+                };
+                assert_eq!(asked, Some((want, tick(s))), "vsync {}: {event:?} next phase", f.vsync());
+                break;
+            }
+            assert_eq!(asked, None, "vsync {}: port asked early, game at tick {}", f.vsync(), tick(s));
+            assert_eq!((rally.faults, score.points, score.games), (s.rally(0x316608), snapshot(s).0, snapshot(s).1), "vsync {} tick {}", s.vsync(), tick(s));
+        }
+        assert_eq!(score.swapped, frames[k..].iter().find(|s| s.gm()[0x55] != 4).unwrap().global_u8(0x4230b4) != 0);
+        checked += 1;
+    }
+    eprintln!("match_s05: {checked} point-over phases, {changes} change-ends phases");
+    assert!(checked > 20 && changes > 0);
+}

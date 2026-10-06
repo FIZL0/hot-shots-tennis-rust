@@ -11,10 +11,11 @@
 //! Select cycle camera, right stick turn the camera.
 
 use bevy::prelude::*;
-use hst_data::{iso::Iso, xb::Archive};
+use hst_data::{exe::ScoreboardTiming, iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
 use hst_sim::court;
 use hst_sim::mesh::World;
+use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
@@ -80,7 +81,11 @@ struct Player {
 enum Phase {
     Serve,
     Rally,
+    /// A scored point: the scoreboard's turn (`Game::post`).
+    Post,
+    /// No point (fault or let): ticks until the serve is taken again.
     Over(u32),
+    ChangeEnds(u32),
 }
 
 #[derive(Resource)]
@@ -100,6 +105,8 @@ struct Game {
     shots: i32,
     /// Line tolerance from the game program.
     line_margin: f32,
+    post: Option<PostPoint>,
+    board: ScoreboardTiming,
     /// The stage's collision world and material table (`--stage`); without one the ball meets a flat court and net.
     world: Option<(World, Vec<Material>)>,
     message: String,
@@ -168,12 +175,12 @@ fn tables(iso: &str) -> Vec<Table> {
         .collect()
 }
 
-/// Line margin, and the stage's collision world with the material table.
-fn disc(iso: &str, stage: Option<u32>) -> (f32, Option<(World, Vec<Material>)>) {
+/// Line margin, scoreboard timing, and the stage's collision world with the material table.
+fn disc(iso: &str, stage: Option<u32>) -> (f32, ScoreboardTiming, Option<(World, Vec<Material>)>) {
     let mut iso = Iso::open(iso).expect("open iso");
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
-    (game.line_margin(), stage.map(|n| (court::world(&mut iso, n), court::materials(&game))))
+    (game.line_margin(), game.scoreboard_timing(), stage.map(|n| (court::world(&mut iso, n), court::materials(&game))))
 }
 
 fn setup(
@@ -183,7 +190,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let (line_margin, world) = disc(&args.iso, args.stage);
+    let (line_margin, board, world) = disc(&args.iso, args.stage);
     let mut game = Game {
         tables: tables(&args.iso),
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
@@ -198,6 +205,8 @@ fn setup(
         rally: Rally::default(),
         shots: 0,
         line_margin,
+        post: None,
+        board,
         world,
         message: "Your serve".into(),
         rng: 0x2468_ace1,
@@ -631,20 +640,29 @@ fn bot(g: &mut Game, side: Side) {
 fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
     match g.phase {
         Phase::Serve => return,
+        Phase::ChangeEnds(0) => return next_point(&mut g),
+        Phase::ChangeEnds(n) => return g.phase = Phase::ChangeEnds(n - 1),
         Phase::Over(0) => {
             g.score.second_serve = g.rally.faults == 1;
             g.score.let_ = g.rally.let_;
-            g.score.change_ends(); // ponytail: ends are tracked, not yet swapped on court (P0b serve flow)
-            g.score.next_point(&RULES);
-            g.rally.next_point();
-            g.rally.new_point();
-            g.shots = 0;
-            g.server = if g.score.server % 2 == 0 { Side::Near } else { Side::Far };
-            g.phase = Phase::Serve;
-            reset_positions(&mut g);
-            return;
+            g.score.change_ends();
+            return next_point(&mut g);
         }
         Phase::Over(n) => g.phase = Phase::Over(n - 1),
+        Phase::Post => {
+            let g = &mut *g;
+            let mut post = g.post.take().expect("post-point state");
+            match post.step(&mut g.score, &mut g.rally, &g.board) {
+                None => g.post = Some(post),
+                Some(Next::Serve) => return next_point(g),
+                // ponytail: ends are tracked, not yet swapped on court (P0b4b player placement)
+                Some(Next::ChangeEnds) => return g.phase = Phase::ChangeEnds(CHANGE_ENDS),
+                Some(Next::MatchOver) => {
+                    g.score = Score::new();
+                    return next_point(g);
+                }
+            }
+        }
         Phase::Rally => {}
     }
     g.prev_ball = g.flight.ball.pos;
@@ -671,18 +689,11 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
     let Some(team) = verdict.winner else {
         g.message = if verdict.call == 2 { "Fault - second serve".into() } else { format!("{why} - serve again") };
         info!("no point: {why} after {} frames", g.since_hit);
-        g.phase = Phase::Over(90);
+        g.phase = Phase::Over(90); // ponytail: the umpire call sets this delay (call sprite + voice line, P0b4c)
         return;
     };
-    // a scored point ends the serve's faults (the scoreboard clears them as it shows the score)
-    g.rally.faults = 0;
     let side = if team == 0 { Side::Near } else { Side::Far };
     let event = g.score.point(&RULES, side as usize);
-    match event {
-        Some(Event::Game) => g.score.new_game(),
-        Some(Event::Set) => g.score.new_set(),
-        _ => {}
-    }
     g.score.note_tiebreak_start();
     let who = if side == Side::Near { "you" } else { "opponent" };
     g.message = match event {
@@ -692,10 +703,19 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
         _ => format!("{why} - point to {who}"),
     };
     info!("point: {} ({why}) after {} frames, {event:?} {:?}", if side == Side::Near { "near" } else { "far" }, g.since_hit, g.score);
-    if g.score.match_over {
-        g.score = Score::new();
-    }
-    g.phase = Phase::Over(90);
+    g.post = Some(PostPoint::new(event.expect("match in progress")));
+    g.phase = Phase::Post;
+}
+
+/// Leave the point: next server, receiver and side, and set up the serve.
+fn next_point(g: &mut Game) {
+    g.score.next_point(&RULES);
+    g.rally.next_point();
+    g.rally.new_point();
+    g.shots = 0;
+    g.server = if g.score.server % 2 == 0 { Side::Near } else { Side::Far };
+    g.phase = Phase::Serve;
+    reset_positions(g);
 }
 
 /// Camera modes drive the orbit rig: follow sits behind you, broadcast is the classic high baseline view,

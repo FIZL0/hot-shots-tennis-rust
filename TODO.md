@@ -100,6 +100,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   the world mesh.
 - Live-ball point verdicts (`hst_sim::judge::Rally`) — every decision of a recorded bot match frame-exact, rally
   block equal every frame (faults and net points included).
+- Post-point scoreboard timeline (`hst_sim::flow`): pause, wait, score shows, change ends — every call-free
+  point-over phase of a recorded bot match tick-exact.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
 ## Prompts
@@ -177,9 +179,24 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
     frame), rally block equal every frame, 36 decisions (26 points, 8 faults, 2 out after the net) frame-exact
     with the recorded winner. Lets, double faults, illegal hits, rally outs not in this match — still unverified.
     Journal `3-LIVE-VERDICTS-FINAL.md`.
-  - [ ] **P0b4 — Post-point flow.** Phase/sub-phase timeline (gm+0x55/0x56) from the decision to the next serve:
-    delays, the order of change-ends (`0x327ea0`) / next-point (`0x327d30`) / new game, and where players are
-    put for the next point. Port as a state machine; verify every transition frame of `match_s05.bin`.
+  - [ ] **P0b4 — Post-point flow.** Phase/sub-phase timeline (gm+0x55/0x56) from the decision to the next serve.
+    Split (journal `4-POST-POINT-FINAL.md`):
+    - [x] **P0b4a — Scoreboard timeline.** `hst_sim::flow::PostPoint`: pause 30, react, wait (point 20 / game 90,
+      GAME.BIN), score show per event (point/tiebreak/game/set stages, deuce variants, hold 1 s / 2 s, fade out),
+      faults cleared at the pause's end, points/games cleared when the game/set show starts, change ends → phase
+      1 (`CHANGE_ENDS` = 80, camera cut) or serve. `tests/score.rs::match_s05_post_point`: all 25 call-free
+      point-over phases + 2 change-ends phases tick-exact (gm+0x58; vsync stalls while the game loads don't count).
+      Set and tiebreak shows ported from the code, not yet in a recording.
+    - [ ] **P0b4b — Placement for the next point.** Where players (and the ball) are put on entering the serve
+      phase (message 0xe to the player objects; `324b50` saves the point-start block), ends swapped on court;
+      verify player positions on every phase-2 entry of `match_s05.bin`.
+    - [ ] **P0b4c — Umpire-call timing.** Faults/outs/lets/double faults: scoreboard call show (`388190`, 0x427 →
+      chained score show with a 1-tick pause for out / out-after-net / double fault) ends when the call sprite
+      animation is done and the umpire voice has stopped (fallback countdown table 0x410f0c by call × language);
+      recorded faults take 79 or 80 ticks (voice jitter). Also the match-over wait (`326270`: voice line, then
+      phase 5). Needs the sprite anim length from disc and the voice clip lengths (P13/P20).
+    - [ ] **P0b4d — Instant replay.** The decision in `325cd0` (gm+0x32e; ball speed, shot count, options
+      0x2ef2b6) and the replay run (saved block 0x4230d0/0x316640 restored, fast-forward/slow-mo ticks).
   - [ ] **P0b5 — Serve.** Toss height/duration (`37af20`), the contact window and how the press timing during the
     toss changes the serve (serve branch of `3467b0`). Verify with vpad-driven serves from slot 3/4 (pad + ball
     + player state over PINE) through the replay harness.
