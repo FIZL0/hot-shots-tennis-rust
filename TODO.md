@@ -19,10 +19,10 @@ Every prompt follows the same rules:
   a truncated product. Use `hst_sim::ps2` for anything that must match bit-for-bit.
 - **Game data is read from the user's disc at runtime**, never committed (`hst_data::iso`, `xb`, `exe` — the last
   is the only place allowed to know retail *data* offsets, disc-ID checked).
-- **Characters are original stand-in designs.** Players, the umpire and background NPCs are drawn with our own
-  stand-in figures (`crates/hst/src/figure.rs`); their *behaviour* — states, timings, contact frames, positions,
-  calls, reactions — is ported exactly from the game's code and animation timing data. Do not import or
-  reproduce the original character models or character artwork.
+- **Characters come from the user's disc.** (User decision, 2026-10-06: replaces the stand-in figures.) Players
+  are the game's own models and motions, loaded at runtime from the disc (`crates/hst/src/character.rs`), never
+  committed. The engine-side character format (joints with Biped names, skinned parts, clips by motion number)
+  is the seam for custom characters.
 - **Same input, same result.** Given the same controller input on the same frames from the same starting
   state, the port must produce the same hit spot, contact frame, timing grade, shot and ball path as the
   original. Prompt P0's input-replay harness is the acceptance test for every gameplay prompt.
@@ -76,7 +76,7 @@ cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (other team) = controller 2
 when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
-Shift/LB sprint · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
+J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
 C/Select camera (original/free) · arrows/right stick turn the free camera.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
@@ -258,7 +258,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   the game's character data (don't hard-code names) and mirror everything that depends on it: forehand/backhand
   side, contact search reach/offsets, swing and serve animations, toss hand, racket attachment.
 - [ ] **P7 — Exact character movement stats.** Every character moves exactly as in the original, per
-  character: walk/run speed, dash/sprint speed, acceleration and deceleration curves, turning rate, direction
+  character: walk/run speed, dash speed (if any; the original has no sprint button), acceleration and deceleration curves, turning rate, direction
   changes, split-step/ready hop, recovery after a shot, reach (forehand/backhand/volley/smash, e.g. the
   per-player `+0x13a0..0x13d0` fields), contact height windows, serve position and movement before/after serving,
   dive distance, and how stats like *Run CON* / *Body ADJ* / *Back ADJ* / *Rizing ADJ* in TParam.csv (and the
@@ -268,7 +268,9 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   position/velocity every frame over PINE with scripted `tools/vpad.py` input and replaying the same input
   through P0's harness — positions must match frame-exact. Document the derived per-character stat table in the
   journal (not in git).
-- [ ] **P8 — Player animation timing.** Port the player state machine and the animation timing from the game's
+- [~] **P8 — Player animation timing.** Models + motions from the disc, motions chosen by the game's numbers
+  (serve, strokes timed to the contact pose, runs). Open: the game's exact motion state machine and blending,
+  MOR/UVA (faces), arm IK at contact, reactions. Original text: Port the player state machine and the animation timing from the game's
   ANI/ANI2/MOR data and code: idle, ready, run directions (`run_f/b/l/r`, `dush_f`), shot animations
   (`sh_*`), contact frames, recovery, celebrations/reactions. Drive the stand-in figure's poses from those exact
   states and frame timings (stand-in visuals, original timing). Verify the state id and animation frame every
@@ -305,6 +307,48 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   game/set announcements, umpire call with P13), crowd reaction, and the delays until control returns. Verify
   recorded point endings of every type through P0's harness: state transitions, animation choice, score-change
   frame and next-serve frame all frame-exact, plus frame-stepped screenshots for the HUD update.
+- [ ] **P12b — Match pop-ups as the original.** (User request 2026-10-06: score count, fault, net, service ace
+  and the rest.) Scope still open with the user: exact-only, or the disc textures + exact timing now with the
+  call models as flat fading sprites until P12b2 (each gap a sub-prompt). Not started in code; another session
+  had uncommitted character-model work (`character.rs`, `ani.rs`, `mdl.rs`) in the tree — put this in its own
+  `crates/hst/src/popups.rs` with a small hook in `play.rs`.
+  **Textures** (all in `AZUMA/INPANE/INPANE.XB0` unless noted; names listed in the program at the inpane loader
+  `3a48d0`, archive `azuma/inpane/inpane.xb`):
+  - Calls, models `azuma/inpane/mdl/<name>.MDL` + .ANI/.MTA/.MOR/.MTI (table of {name, 6 flag bytes} at
+    0x4159a0, 12 bytes each, 6 entries, loaded by `38e870`): `i_let_00` (Let, blue, no ANI), `i_out_00` (Out, no
+    ANI, has MOR), `i_net_00` (Net, ANI+MOR), `i_fault_00` (Fault), `i_doublefault_00` (Double Fault, 512×64),
+    `i_coatchange_00` (Change / Sides, 256×128, ANI+MOR).
+  - 2D sheets `azuma/inpane/mtl/` (table of {name, arg} at 0x4159f0, 8 bytes each, 0x30 entries; entry 0x10 from
+    `saitou/hsmode/mtl`, 0x11 from `menu/2d`): `inpane_kihontokuten00` (yellow 0/15/30/40/Deuce/Advantage, 128×64
+    cells), `…01` (white, same layout — shadow/second pass), `inpane_duce00`/`01` (Deuce! yellow/red + digit
+    strips 0–9 ×), `inpane_tiebreak00` (red 0–7 / Deuce / Advantage), `…01`, `…02` (Tie break), `inpane_set`
+    (Set Point), `inpane_match` (Match Point), `inpane_finish00` (Untouchable Service Ace), `…01` (Untouchable
+    Return Ace), `…02` (Untouchable Smash Ace), `…03` (On the Line), `inpane_finish` (256², unchecked),
+    `inpane_Counter` (Counter), `inpane_p` (1P 2P 3P 4P COM), `inpane_sen1` (wipe bar), `inpane_mini0/1`
+    (Games: 0123456), `inpane_team`/`team1` (A Team / B Team), `result_game`/`result_set`/`result_gameset0x`.
+  **Scoreboard object** `*0x42d6c0` (built by `382520` from `3a4fb0`, handler `383350`, update `382810`):
+  sprite pointers at +0x74…+0x110; sprite struct +0x10 x, +0x14 y, +0x18 w, +0x1c h, +0x20 u, +0x24 v,
+  +0x28 uw, +0x2c vh, +0x50..+0x5c RGBA (0x80 = 1.0). Screen space is the PS2's (640×448 assumed — check).
+  Show start `384280(sb, kind)`: +0x148 = kind (1 point `384fa0`, 2 `3874b0`, 3 game `387910`, 4 set `387d10`,
+  5/7 call, 6 tiebreak `3891d0`); kind ≠ 0 is skipped while an instant replay is pending (gm+0x32e). Call (5):
+  +0x58 = call model (+0x5c + 4·call 0x427), all six reset to frame 0 at scale 1.0 (`38eeb0`), countdown
+  0x42d6e8 from table 0x410f0c (see P0b4c). Call over when `38ee70` (anim time ≥ end) and voice idle.
+  **Point show** update `384c00`, draw `384490`: fade-in/out alpha = 128·t/5 (t 5→0) on +0x74…+0x110; roll
+  steps +0x164 0..4 (deuce: 3..1), settle fade of +0x94/+0x9c over 15 (alpha 128·t/15); +0x2f4/+0x2f8 blink 20
+  ticks on/off. Draw (singles/doubles ≤ 2 teams): score digit sprite +0x90 at x 336, y 104 + 180·row (row =
+  team, flipped when +0x190 ends swapped), 128×64 from UV cell (col table 0x410fe0, row table 0x411000, index =
+  team's points 0x422f90[+0x35], the scoring team's −1 while rolling, 4 in tiebreak-deuce); the scoring team's
+  new value wiped in from x 336 + off, width 128 − off, off = (0x411020/24) − 25.6·step, via `3a6e70`; +0x94 is
+  the settled overlay. Background bars `3a6f40` (x 216/248 or 232/264/216 for doubles, y around 0x110−176·swap
+  and 0x60+176·swap, +0x14 for < 3 players). Then `38d500(sb, i)` for i = 0, 1, 0x23, 3, 4, 9, 10 (names, faces,
+  serve marker? — unread). Doubles/team mode (0x316620) → `387da0`.
+  **Still to read**: game/set shows (`3876c0`, `387ac0`, `387260`), tiebreak (`388ec0`), call draw (+0x58 model:
+  position/projection), `38d500` elements, Deuce!/Set Point/Match Point triggers, the finish banners' trigger
+  (ace = untouched serve/return/smash; On the Line = line-call margin?) and draw, Counter, Change Sides with the
+  phase-1 cut. Model animation players: node ANI `140360`/`1404c0`, material `14f3f0`/`14ef50`, MOR `156010`/
+  `155ba0`, plus `155020`, `150260`, `151200` (UVA?) — none ported (`hst_data::ani` reads only ANI2).
+  Verify: frame-stepped screenshots of the original vs `--shot` at the same ticks (position, size, alpha), and
+  the show timings already covered by `tests/score.rs::match_s05_post_point`.
 - [ ] **P13 — Umpire (Lily).** Port the umpire's behaviour: calls (score, fault, out, let, net) and their timing,
   chair placement per court, idle/turn reactions, voice-line triggers. Stand-in figure for visuals. Verify call type and frame for every recorded call (score,
   fault, out, let, net) against the original.
@@ -352,7 +396,8 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   folder shows up in the port.
 - [ ] **P19 — HUD.** Score display, names, serve indicator, in-match menus using the game's HUD textures
   (`AZUMA/INPANE`) and layout. Verify layout and update frames against frame-stepped screenshots of the original.
-- [ ] **P20 — Audio.** HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
+- [~] **P20 — Audio.** Bank formats, driver slots and the play call mapped; note → tone unresolved (IOP driver).
+  Journal `context/artifacts/2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md`. Original text: HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
   crowd, umpire voice), MIDI BGM with the game's banks. Verify each effect's trigger frame against recorded game events, and decoded
   samples against PCSX2 audio captures.
 - [ ] **P21 — Menus and modes.** (Includes the random-bounce option 0x2ef7e2 → `0x379ae0`, see net-hit journal 5.) Title, character/court select, exhibition, tournament/challenge modes, unlocks,

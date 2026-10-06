@@ -7,9 +7,9 @@
 //! The view is the original's match camera, behind the −z baseline; the stick moves and aims screen-relative.
 //! A red dot marks where the ball will bounce.
 //!
-//! Keyboard (player 1): WASD move (aim while swinging), Shift sprint, J topspin, K slice, I flat, L lob, U drive,
+//! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, I flat, L lob, U drive,
 //! J/Space serve, C camera (original / free), arrow keys turn the free camera.
-//! Gamepad: left stick or d-pad move/aim, LB sprint, A topspin, B slice, X flat, Y lob, RB drive, A/Start serve,
+//! Gamepad: left stick or d-pad move/aim, A topspin, B slice, X flat, Y lob, RB drive, A/Start serve,
 //! Select camera, right stick turns the free camera.
 
 use bevy::prelude::*;
@@ -33,9 +33,8 @@ const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_gam
 const DOUBLES: Rules = Rules { players: 4, ..SINGLES };
 /// The umpire's calls by verdict code.
 const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out", "Illegal hit"];
-/// Top running speed in metres per frame (≈ 6 m/s); sprint multiplies it.
+/// Top running speed in metres per frame (≈ 6 m/s).
 const RUN: f32 = 0.1;
-const SPRINT: f32 = 1.35;
 /// Speed change per frame while accelerating / braking.
 const ACCEL: f32 = 0.012;
 const BRAKE: f32 = 0.025;
@@ -178,7 +177,6 @@ struct ServeSwing {
 #[derive(Clone, Copy, Default)]
 struct SlotPad {
     stick: Vec2,
-    sprint: bool,
     /// Latched shot press (kind), so a press between fixed steps is never lost.
     shot: Option<i32>,
     serve: bool,
@@ -513,7 +511,6 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
             now[0].stick += d;
         }
     }
-    now[0].sprint = keys.pressed(KeyCode::ShiftLeft);
     now[0].shot = [(KeyCode::KeyJ, 0), (KeyCode::KeyK, 1), (KeyCode::KeyI, 2), (KeyCode::KeyL, 3), (KeyCode::KeyU, 4)]
         .into_iter()
         .find(|(k, _)| keys.just_pressed(*k))
@@ -527,7 +524,6 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     for (slot, (_, g)) in list.iter().take(2).enumerate() {
         let s = &mut now[slot];
         s.stick += deadzone(g.left_stick()) + g.dpad();
-        s.sprint |= g.pressed(GamepadButton::LeftTrigger);
         let buttons = [(GamepadButton::South, 0), (GamepadButton::East, 1), (GamepadButton::West, 2), (GamepadButton::North, 3), (GamepadButton::RightTrigger, 4)];
         s.shot = s.shot.or(buttons.into_iter().find(|(b, _)| g.just_pressed(*b)).map(|(_, k)| k));
         s.serve |= g.just_pressed(GamepadButton::Start);
@@ -537,7 +533,6 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     pads.connected = list.len();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
         slot.stick = n.stick.clamp_length_max(1.0);
-        slot.sprint = n.sprint;
         if n.shot.is_some() {
             slot.shot = n.shot;
         }
@@ -866,7 +861,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     }
     if g.players[i].contact.is_none() {
         // screen-relative: stick right follows the camera's right, stick up its ground-forward
-        let mut want = screen(g, pad.stick) * RUN * if pad.sprint { SPRINT } else { 1.0 };
+        let mut want = screen(g, pad.stick) * RUN;
         if g.players[i].swing.is_some() {
             want *= 0.25;
         }
@@ -1142,7 +1137,7 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,
 /// toss and swing; a locked stroke's swing (timed so its contact pose, frame 8, meets the ball); otherwise the
-/// ready stance, runs by direction, or the dash when sprinting.
+/// ready stance or runs by direction.
 fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
     for (f, mut m) in &mut q {
         let i = f.0;
@@ -1185,9 +1180,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         }
         // direction relative to where the player faces (+z for end +1)
         let (fwd, side) = (v.y * p.end, v.x * p.end * p.hand);
-        let id = if speed > RUN * 1.1 && fwd > 0.0 {
-            0x07
-        } else if fwd.abs() >= side.abs() {
+        let id = if fwd.abs() >= side.abs() {
             if fwd > 0.0 { 0x03 } else { 0x04 }
         } else if side > 0.0 {
             0x05
@@ -1245,7 +1238,7 @@ fn hud(g: Res<Game>, pads: Res<Pads>, mode: Res<CamMode>, mut q: Query<&mut Text
     let team = |t: usize| (t..g.players.len()).step_by(2).map(who).collect::<Vec<_>>().join("+");
     for mut t in &mut q {
         t.0 = format!(
-            "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · sprint Shift/LB · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive",
+            "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive",
             team(0),
             score_line(&g.score, 0),
             score_line(&g.score, 1),
