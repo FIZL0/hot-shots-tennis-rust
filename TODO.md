@@ -44,6 +44,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - Shot tables (TRAJ): lookup + launch speed/elevation/frames — 11 recorded strokes.
 - Per-character shot parameter records (17 per class/kind, record = character + 3) built from GAME.BIN —
   bit-identical to the game's runtime table, using the PS2 FPU model.
+- `hst_sim::ps2` — PCSX2's EE FPU model: chop rounding, add/sub alignment with one guard bit, **div and sqrt
+  round to nearest** (the emulator's divider mode), DAZ. Proven on 2912 table values and the ball integrator.
+- Ball flight on PS2 arithmetic in the original's instruction order: every airborne frame of 39 recorded shots
+  is bit-exact (2160 frames). Bounce frames still differ in the last bits → P0a.
 - Net contact (flat net from the game's predictor), material-based bounce response.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
@@ -56,6 +60,14 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
   Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
   are accepted only when their recordings replay identically.
+- [ ] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
+  `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
+  frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
+  0.98 factor, VU0 dot products), contact point `0x12fc30`, VU0 helpers (normalize `0x125b10` with Q sqrt/div,
+  cross `0x125ac8`, mat×vec `0x125a50`/`0x125a80`, inverse `0x32d190`), quaternion slerp (`0x12d620`, `0x12d860`,
+  `0x12d340`) and the game's own sin/cos/acos (`0x115fb8`, `0x115d18`, …). Needs a `vu0` arithmetic model
+  (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `context/ghidra_scripts/DumpAsm.java` →
+  `context/notes/asm_*.txt`.
 
 ### Shots
 - [ ] **P1 — Shot parameters in play.** Replace `KIND_SPIN` and every per-shot constant in `play.rs` with the
