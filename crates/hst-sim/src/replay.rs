@@ -12,6 +12,9 @@ const PLAYERS: usize = BALL + 0x290;
 /// Player object regions in the sample: +0x1380 (0x200 bytes), then +0x3c00 (0x400 bytes).
 const PLAYER_LEN: usize = 0x200 + 0x400;
 pub const SAMPLE: usize = PLAYERS + 4 * PLAYER_LEN;
+/// Newer recordings append the live ball (`gm+0x88`) and the rally block 0x3165f0 (0x50 bytes).
+pub const SAMPLE_LIVE: usize = SAMPLE + 0x290 + 0x50;
+pub const RALLY_ADDR: usize = 0x3165f0;
 
 /// Decoded pad state the game reads (stored active-high; libpad bits: 0x8 Start, 0x10 Up, 0x20 Right, 0x40 Down,
 /// 0x80 Left, 0x400 L1, 0x800 R1, 0x1000 Triangle, 0x2000 Circle, 0x4000 Cross, 0x8000 Square).
@@ -31,6 +34,11 @@ pub struct Frame<'a>(pub &'a [u8]);
 /// Every whole sample in a fixture file.
 pub fn frames(data: &[u8]) -> Vec<Frame<'_>> {
     data.chunks_exact(SAMPLE).map(Frame).collect()
+}
+
+/// Every whole sample of a recording with the live ball and rally block.
+pub fn frames_live(data: &[u8]) -> Vec<Frame<'_>> {
+    data.chunks_exact(SAMPLE_LIVE).map(Frame).collect()
 }
 
 fn i32_at(b: &[u8], o: usize) -> i32 {
@@ -63,6 +71,17 @@ impl<'a> Frame<'a> {
     /// The ball object recorded (`gm+0x98`: the path predictor, not the live ball).
     pub fn ball(self) -> &'a [u8] {
         &self.0[BALL..PLAYERS]
+    }
+    /// The live ball object (`gm+0x88`; `frames_live` recordings only).
+    pub fn live_ball(self) -> &'a [u8] {
+        &self.0[SAMPLE..SAMPLE + 0x290]
+    }
+    /// A word of the rally block by its RAM address (0x3165f0..0x316640; `frames_live` recordings only).
+    pub fn rally(self, addr: usize) -> i32 {
+        i32_at(self.0, SAMPLE + 0x290 + addr - RALLY_ADDR)
+    }
+    pub fn rally_u8(self, addr: usize) -> u8 {
+        self.0[SAMPLE + 0x290 + addr - RALLY_ADDR]
     }
     /// Player `i`'s field at object offset `off` (inside +0x1380..0x1580 or +0x3c00..0x4000).
     pub fn player_f32(self, i: usize, off: usize) -> f32 {

@@ -245,3 +245,117 @@ fn fault_then_double_fault() {
     r.next_point();
     assert_eq!(r.faults, 0);
 }
+
+/// The rally block 0x3165f0 as `Rally` models it.
+fn rally_block(f: Frame) -> hst_sim::judge::Rally {
+    use hst_sim::judge::{Call, Rally};
+    let call = |v: u8| [Call::None, Call::In, Call::Out, Call::Net, Call::NetIn, Call::NetOut][v as usize];
+    let r = |a| f.rally(a);
+    let u = |a| f.rally_u8(a) != 0;
+    Rally {
+        call: call(f.rally_u8(0x3165f0)),
+        shots: r(0x3165f4),
+        hitter: r(0x3165f8),
+        server: r(0x3165fc),
+        illegal_hit: u(0x316604),
+        faults: r(0x316608),
+        let_: u(0x31660c),
+        serve_call: call(f.rally_u8(0x316610)),
+        checked_shots: r(0x316614),
+        return_bounced: u(0x316618),
+        hit_on_serve: u(0x316629),
+        lose: u(0x31662a),
+        serve_bounced: u(0x31662b),
+    }
+}
+
+/// Every frame of the slot-5 bot match recorded with the live ball (`context/fixtures/match_s05.bin`, from
+/// `tools/record_p2m2.py 5 …`, not in git): the hit check and the point-over check run on the frames the game runs
+/// them (a shot counted; every rally frame until the decision), fed the live ball, and the rally block must match
+/// the recording after every frame. The point-start resets (`new_point`, `next_point`, faults cleared by a scored
+/// point) are applied where the recording shows them — their timing is the post-point flow (P0b4). Each decision's
+/// verdict must match the outcome: no point when the game marks one, else the team whose score moved.
+#[test]
+fn match_s05_rally_block() {
+    use hst_sim::judge::{BallState, Call};
+    use hst_sim::replay::frames_live;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else { return eprintln!("match_s05.bin absent, skipped") };
+    let frames = frames_live(&data);
+    let ball = |s: Frame| -> BallState {
+        let b = s.live_ball();
+        let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        BallState {
+            call: [Call::None, Call::In, Call::Out, Call::Net, Call::NetIn, Call::NetOut][b[0xa5] as usize],
+            contacts: i32::from_le_bytes(b[0x228..0x22c].try_into().unwrap()),
+            stopped: b[0xa4] == 3,
+            pos: [f(0xe0), f(0xe4), f(0xe8)],
+        }
+    };
+    let mut rally = rally_block(frames[0]);
+    let (mut saved, mut replaying, mut replays) = (rally, false, 0);
+    let (mut decisions, mut calls, mut resets) = (0, [0; 7], 0);
+    for (k, w) in frames.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        assert_eq!(b.vsync(), a.vsync() + 1, "frame missing after vsync {}", a.vsync());
+        if replaying {
+            // the instant replay re-runs the point at its own pace (gm+0x50 ticks ≠ vsyncs); it was judged live
+            replaying = !(a.gm()[0x55] == 4 && b.gm()[0x55] != 4);
+            rally = rally_block(b);
+            continue;
+        }
+        let (gm55, gm56) = (b.gm()[0x55], a.gm()[0x56]);
+        let in_rally = gm55 == 3 && gm56 != 4;
+        let shots = rd(b, 0x423060);
+        if in_rally && shots > rd(a, 0x423060) {
+            rally.on_hit(shots, rd(b, 0x423058), rd(b, 0x42304c), rd(b, 0x423054), ball(a).contacts);
+        }
+        if in_rally {
+            let body = Some(rd(a, 0x42305c)).filter(|&p| p >= 0);
+            let over = rally.check(&ball(a), shots, rd(b, 0x423058), rd(b, 0x42304c), body, true);
+            assert_eq!(over, b.gm()[0x56] == 4, "vsync {}: point-over check", b.vsync());
+            if over {
+                let v = rally.judge(body);
+                let before = snapshot(b);
+                let no_point = frames[k + 1..].iter().take(4).any(|&s| rd(s, 0x4230b8) == -1);
+                match v.winner {
+                    None => assert!(no_point, "vsync {}: port {v:?}, game scored", b.vsync()),
+                    Some(t) => {
+                        if let Some(after) = frames[k + 1..].iter().map(|&s| snapshot(s)).find(|s| *s != before) {
+                            let moved = (0..2).find(|&i| after.0[i] > before.0[i] || after.1[i] > before.1[i]);
+                            assert_eq!(moved, Some(t), "vsync {}: port {v:?}, score {before:?} -> {after:?}", b.vsync());
+                        }
+                    }
+                }
+                calls[v.call as usize] += 1;
+                decisions += 1;
+            }
+        }
+        let want = rally_block(b);
+        if rally != want {
+            // a point-start reset: some combination of the three, in the game's order
+            let fixed = (0..8).find_map(|m| {
+                let mut r = rally;
+                if m & 1 != 0 { r.faults = 0 }
+                if m & 2 != 0 { r.next_point() }
+                if m & 4 != 0 { r.new_point() }
+                (r == want).then_some((r, m & 4 != 0))
+            });
+            // or an instant replay: the block saved at the point's start comes back (0x316640 → 0x3165f0)
+            let Some((r, start)) = fixed.or((saved == want).then_some((saved, false))) else {
+                panic!("vsync {}: rally block\n port {rally:?}\n game {want:?}", b.vsync())
+            };
+            if start {
+                saved = r;
+            }
+            if fixed.is_none() {
+                replaying = true;
+                replays += 1;
+            }
+            rally = r;
+            resets += 1;
+        }
+    }
+    eprintln!("match_s05: {} frames, {decisions} decisions (by call {calls:?}), {resets} resets, {replays} replays", frames.len());
+    assert!(decisions > 0);
+}

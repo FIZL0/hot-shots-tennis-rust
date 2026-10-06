@@ -134,8 +134,8 @@ pub struct Rally {
     /// A player was hit by the ball and the serve decided it (fault or let).
     pub hit_on_serve: bool,
     /// Pending flags raised by the hit check, consumed by the next point-over check.
-    lose: bool,
-    serve_bounced: bool,
+    pub lose: bool,
+    pub serve_bounced: bool,
 }
 
 impl Default for Rally {

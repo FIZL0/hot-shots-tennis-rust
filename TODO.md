@@ -98,6 +98,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   maps, material table response — 12498 recorded frames of a bot match bit-exact, all contacts included.
 - First-bounce turn of serves (`+0x1b0`, game's atan2f) — round1's turned serves bit-exact; `--stage` play on
   the world mesh.
+- Live-ball point verdicts (`hst_sim::judge::Rally`) — every decision of a recorded bot match frame-exact, rally
+  block equal every frame (faults and net points included).
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
 ## Prompts
@@ -168,7 +170,19 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   covers the points captured so far. Part 2 done: line calls, point-over check, hit legality, umpire verdict
   (`hst_sim::judge`, in `Flight` and `play.rs`): 158 recorded calls bit-exact, 30 verdicts match. Faults/lets/
   net points are unverified until a capture includes the live ball `*(gm+0x88)` (the round1 capture's ball is
-  the path predictor) — see journal `2-JUDGE-PART.md`. Next: post-point flow and serve (Part 3).
+  the path predictor) — see journal `2-JUDGE-PART.md`. Rest split (journal `context/artifacts/2026-10-06-p0b-rules/`):
+  - [x] **P0b3 — Live-ball verdicts.** `tools/record_p2m2.py 5 …` (fixture + live ball + rally block 0x3165f0) →
+    `context/fixtures/match_s05.bin` (whole slot-5 match, 26400 frames); `tests/score.rs::match_s05_rally_block`:
+    hit check and point-over check on the game's frames (the check sees the ball and body hit as of the previous
+    frame), rally block equal every frame, 36 decisions (26 points, 8 faults, 2 out after the net) frame-exact
+    with the recorded winner. Lets, double faults, illegal hits, rally outs not in this match — still unverified.
+    Journal `3-LIVE-VERDICTS-FINAL.md`.
+  - [ ] **P0b4 — Post-point flow.** Phase/sub-phase timeline (gm+0x55/0x56) from the decision to the next serve:
+    delays, the order of change-ends (`0x327ea0`) / next-point (`0x327d30`) / new game, and where players are
+    put for the next point. Port as a state machine; verify every transition frame of `match_s05.bin`.
+  - [ ] **P0b5 — Serve.** Toss height/duration (`37af20`), the contact window and how the press timing during the
+    toss changes the serve (serve branch of `3467b0`). Verify with vpad-driven serves from slot 3/4 (pad + ball
+    + player state over PINE) through the replay harness.
 - [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
   singles (1v1) and doubles (2v2) in any human/AI mix, as the original allows. Controller assignment and
   hot-plug per slot, doubles court width (5.485 m) and doubles rules, partner positioning and who-takes-the-ball
