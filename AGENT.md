@@ -4,6 +4,11 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 
 - Retail data is read from the user's ISO at runtime. Never commit game data, extracted assets, or dumps.
 - No retail addresses or Ghidra names (`FUN_…`, `DAT_…`) in shipped code; describe behaviour instead.
+  Single exception (user decision, 2026-10-06): `hst-data::exe` reads tuning *data* that only exists inside the
+  game program from the user's own GAME.BIN at documented offsets, after checking the disc is SCUS-97610 US 1.00.
+  No code addresses, no game data in git.
+- Exactness: ported math uses `hst_sim::ps2` (PCSX2's EE FPU model: chop rounding, aligned adds) wherever the
+  original's float results must match bit for bit.
 - Research lives in `context/` (git-ignored). Journal: `context/artifacts/YYYY-MM-DD-<slug>/`, one README per task,
   newest iteration file says whose move it is: `-FINAL` done, `-PART` agent continues, `-READY` needs the human.
 - Gameplay ports are verified against the real game over PINE (`tools/pine.py`, launch with `tools/pcsx2-hst.sh`).
