@@ -69,6 +69,21 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `context/ghidra_scripts/DumpAsm.java` →
   `context/notes/asm_*.txt`.
 
+### Match basics (do these early)
+- [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the
+  original: server serves from behind the baseline alternating deuce/ad sides, the serve must land in the
+  diagonal service box, faults and double faults, second serve, receiver positions, server rotation each game,
+  point → game (deuce/advantage) → set scoring, side changes, and the original's serve timing: toss height and
+  duration, the contact window and how the press timing during the toss affects the serve (port `37af20` and the
+  serve branch of the hit routine `3467b0`), plus the delays between points. Verify against recorded serves
+  and full points from the save states with P0's replay harness. (P6/P12 cover the remaining details.)
+- [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
+  singles (1v1) and doubles (2v2) in any human/AI mix, as the original allows. Controller assignment and
+  hot-plug per slot, doubles court width (5.485 m) and doubles rules, partner positioning and who-takes-the-ball
+  logic from the original (port it; doubles AI data is in AIParam.csv, e.g. the 雁行/攻撃/守備 formation column),
+  serve/receive rotation for doubles, and the original's shared match camera behaviour with several humans.
+  Verify with slot 3 (P1 + 3 bots doubles) recordings through the replay harness.
+
 ### Shots
 - [ ] **P1 — Shot parameters in play.** Replace `KIND_SPIN` and every per-shot constant in `play.rs` with the
   character's record (`hst_sim::params`, record = character + 3) and the character's own TRAJ tables
@@ -87,7 +102,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P5 — Shot selection by input.** How buttons, hold/charge time and stick map to class/kind/power and the
   charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
   (capture pad state over PINE alongside shots).
-- [ ] **P6 — Serve.** Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
+- [ ] **P6 — Serve details.** (Basics in P0b.) Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
   service box rules, second serve, serve positions per side/court. **Lets:** a serve that clips the net cord
   and lands in the box is a let and is replayed; one that clips the cord and lands out is a fault — the cord
   contact must come from the exact net collision (P15), and the let/fault call and replay flow must match the
@@ -113,7 +128,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   court plane only). Verify AI decisions against slot 5 (all-bot) recordings.
 
 ### Match
-- [ ] **P12 — Rules and scoring.** Games, sets, deuce/advantage, tiebreak, side changes, doubles rules, match
+- [ ] **P12 — Rules and scoring details.** (Basics in P0b, doubles in P0c.) Games, sets, deuce/advantage, tiebreak, side changes, doubles rules, match
   flow states (point start/end delays, replays if any) exactly as the original.
 - [ ] **P13 — Umpire (Lily).** Port the umpire's behaviour: calls (score, fault, out, let, net) and their timing,
   chair placement per court, idle/turn reactions, voice-line triggers. Stand-in figure for visuals.
