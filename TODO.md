@@ -103,6 +103,11 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   state) — the user playing a round as P1, recorded 2026-10-05 with PCSX2's Input Recording (frame-exact, starts
   from that save state; replays only on this PCSX2 version). Replay it in PCSX2 (Tools → Input Recording → Play)
   while capturing state over PINE to build the fixture; don't re-record it.
+  **Playback needs the human:** PCSX2 has no CLI or PINE command for Input Recording playback, and menu
+  automation is flaky — don't drive the menus. Get the capture script running and waiting (polling over PINE for
+  round1's start state, speed set), then write `READY: start playback now` to `context/notes/playback.flag`; the
+  user starts Tools → Input Recording → Play → `round1.p2m2` by hand. If nobody does within the run, mark P0
+  `[~]` (waiting on playback) and move on — the capture script must be ready to rerun as-is.
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
   frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
