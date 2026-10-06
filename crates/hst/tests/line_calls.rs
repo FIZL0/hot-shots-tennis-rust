@@ -8,10 +8,8 @@
 use hst_data::exe::Game;
 use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot};
 use hst_sim::judge::{Call, Lines};
+use hst_sim::replay::frames;
 
-const GLOBALS: usize = 4 + 0x90;
-const BALL: usize = GLOBALS + 0x180 + 0x100;
-const SAMPLE: usize = BALL + 0x290 + 4 * (0x200 + 0x400);
 const STEPS_PER_FRAME: i32 = 15;
 
 fn f(b: &[u8], o: usize) -> f32 {
@@ -28,9 +26,6 @@ fn rows(b: &[u8], o: usize) -> [[f32; 4]; 4] {
 }
 fn call(c: u8) -> Call {
     [Call::None, Call::In, Call::Out, Call::Net, Call::NetIn, Call::NetOut][c as usize]
-}
-fn global(s: &[u8], addr: usize) -> i32 {
-    i(s, GLOBALS + addr - 0x422f80)
 }
 
 /// The predictor's flight and shot as recorded in its ball object.
@@ -71,26 +66,26 @@ fn round1_line_calls() {
         return eprintln!("disc or round1.bin absent, skipped");
     };
     let margin = Game::new(&cnf, &bin).unwrap().line_margin();
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let frames = frames(&data);
     // (frame pair, previous ball, current ball, lines)
     let mut cases = Vec::new();
     for w in frames.windows(2) {
-        let (a, b) = (&w[0][BALL..BALL + 0x290], &w[1][BALL..BALL + 0x290]);
+        let (a, b) = (w[0].ball(), w[1].ball());
         let open = matches!(call(a[0xa5]), Call::None | Call::Net);
         if !open || i(b, 0xac) != i(a, 0xac) + STEPS_PER_FRAME || i(a, 0xac) == 0 {
             continue;
         }
         let lines = Lines {
-            shots: global(w[0], 0x423060),
-            doubles: global(w[0], 0x422fa4) > 2,
-            side: global(w[0], 0x423050),
+            shots: w[0].global(0x423060),
+            doubles: w[0].global(0x422fa4) > 2,
+            side: w[0].global(0x423050),
             hitter_far: f(a, 0x138) < 0.0,
             margin,
         };
         // No calls before the rally phase (match phase gm+0x55 < 3, sub-phase gm+0x56 != 4).
-        let gm = &w[0][GLOBALS + 0x180..];
+        let gm = w[0].gm();
         let lines = (!(gm[0x55] < 3 && gm[0x56] != 4)).then_some(lines);
-        cases.push((u32::from_le_bytes(w[1][..4].try_into().unwrap()), a, b, lines));
+        cases.push((w[1].vsync(), a, b, lines));
     }
     assert!(!cases.is_empty(), "no predictor frames in round1.bin");
     // The court surface only shapes the flight after a bounce; take the one that reproduces the most frames.

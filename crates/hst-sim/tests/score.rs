@@ -3,6 +3,7 @@
 //! absent): each point's winner is read from the recorded score and fed through `Score`, which must then match
 //! the recorded points, games, sets, rotation, ends, server, receiver and court side exactly.
 
+use hst_sim::replay::{Frame, frames};
 use hst_sim::score::{Event, Rules, Score};
 
 const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_games: false, players: 2 };
@@ -101,30 +102,26 @@ fn rotation_receivers_and_ends() {
     assert_eq!((s.server, s.receiver, s.side), (1, 0, 0));
 }
 
-const BASE: usize = 4 + 0x90; // sample = u32 vsync + pad block, then the globals at 0x422f80
-const SAMPLE: usize = BASE + 0x180 + 0x100 + 0x290 + 4 * (0x200 + 0x400);
-
-fn rd(s: &[u8], addr: usize) -> i32 {
-    let o = BASE + addr - 0x422f80;
-    i32::from_le_bytes(s[o..o + 4].try_into().unwrap())
+fn rd(f: Frame, addr: usize) -> i32 {
+    f.global(addr)
 }
 
-fn snapshot(f: &[u8]) -> ([i32; 2], [i32; 2], [i32; 2]) {
-    ([rd(f, 0x423064), rd(f, 0x423068)], [rd(f, 0x42306c), rd(f, 0x423070)], [rd(f, 0x423074), rd(f, 0x423078)])
+fn snapshot(f: Frame) -> ([i32; 2], [i32; 2], [i32; 2]) {
+    f.score()
 }
 
 #[test]
 fn round1_replay() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/round1.bin")) else { return eprintln!("round1.bin absent, skipped") };
-    if data.len() < SAMPLE {
+    let frames = frames(&data);
+    if frames.is_empty() {
         return eprintln!("round1.bin empty, skipped");
     }
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
     let f0 = frames[0];
-    let r = Rules { sets: rd(f0, 0x423048), games: rd(f0, 0x423044), no_deuce: f0[BASE + 0x4230bc - 0x422f80] != 0, one_point_games: false, players: rd(f0, 0x422fa4) };
+    let r = Rules { sets: rd(f0, 0x423048), games: rd(f0, 0x423044), no_deuce: f0.global_u8(0x4230bc) != 0, one_point_games: false, players: rd(f0, 0x422fa4) };
     let (points, games, sets) = snapshot(f0);
-    let mut s = Score { points, games, sets, rotation: rd(f0, 0x4230b0), swapped: f0[BASE + 0x4230b4 - 0x422f80] != 0, games_played: rd(f0, 0x4230c0), server: rd(f0, 0x42304c), side: rd(f0, 0x423050), receiver: rd(f0, 0x423054), ..Score::new() };
+    let mut s = Score { points, games, sets, rotation: rd(f0, 0x4230b0), swapped: f0.global_u8(0x4230b4) != 0, games_played: rd(f0, 0x4230c0), server: rd(f0, 0x42304c), side: rd(f0, 0x423050), receiver: rd(f0, 0x423054), ..Score::new() };
     let mut scored = 0;
     // Instant replays restore the point's saved state and play it again: score states already seen are skipped.
     let mut seen = vec![snapshot(f0)];
@@ -137,7 +134,7 @@ fn round1_replay() {
         let model = (s.points, s.games, s.sets);
         if cur.0 == [0, 0] && (cur.1 == model.1 || cur.1 == [0, 0]) && model.0 != [0, 0] {
             if cur.1 == [0, 0] { s.new_set() } else { s.new_game() }
-            assert_eq!((s.points, s.games, s.sets), cur, "reset at vsync {}", u32::from_le_bytes(w[1][..4].try_into().unwrap()));
+            assert_eq!((s.points, s.games, s.sets), cur, "reset at vsync {}", w[1].vsync());
             continue;
         }
         let who = rd(w[0], 0x42304c);
@@ -167,10 +164,10 @@ fn round1_verdicts() {
     use hst_sim::judge::{BallState, Call, Rally};
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/round1.bin")) else { return eprintln!("round1.bin absent, skipped") };
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
-    let gm = |s: &[u8], o: usize| s[BASE + 0x180 + o];
-    let ball = |s: &[u8]| -> BallState {
-        let b = &s[BASE + 0x180 + 0x100..];
+    let frames = frames(&data);
+    let gm = |s: Frame, o: usize| s.gm()[o];
+    let ball = |s: Frame| -> BallState {
+        let b = s.ball();
         let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         BallState {
             call: [Call::None, Call::In, Call::Out, Call::Net, Call::NetIn, Call::NetOut][b[0xa5] as usize],
@@ -181,9 +178,13 @@ fn round1_verdicts() {
     };
     let mut rally = Rally::default();
     let (mut judged, mut reseeded, mut skipped, mut calls) = (0, false, 0, [0; 7]);
-    let frame_no = |s: &[u8]| i32::from_le_bytes(s[BASE + 0x180 + 0x100 + 0xac..][..4].try_into().unwrap());
+    let frame_no = |s: Frame| i32::from_le_bytes(s.ball()[0xac..0xb0].try_into().unwrap());
     for (k, w) in frames.windows(2).enumerate() {
         let (a, b) = (w[0], w[1]);
+        // A scored point ends the serve's faults (the scoreboard clears them as it shows the score).
+        if snapshot(b) != snapshot(a) {
+            rally.faults = 0;
+        }
         let shots = rd(b, 0x423060);
         if shots > rd(a, 0x423060) {
             rally.on_hit(shots, rd(b, 0x423058), rd(b, 0x42304c), rd(b, 0x423054), ball(a).contacts);
@@ -198,24 +199,24 @@ fn round1_verdicts() {
         }
         let body = Some(rd(b, 0x42305c)).filter(|&p| p >= 0);
         if reseeded && body.is_none() {
-            eprintln!("vsync {}: net point skipped (shots {shots}, game marks {})", u32::from_le_bytes(b[..4].try_into().unwrap()), if rd(frames[(k + 2).min(frames.len() - 1)], 0x4230b8) == -1 { "no point" } else { "a point" });
+            eprintln!("vsync {}: net point skipped (shots {shots}, game marks {})", b.vsync(), if rd(frames[(k + 2).min(frames.len() - 1)], 0x4230b8) == -1 { "no point" } else { "a point" });
             skipped += 1;
             rally.next_point();
             rally.new_point();
             continue;
         }
-        assert!(rally.check(&ball(b), shots, rd(b, 0x423058), rd(b, 0x42304c), body, true), "vsync {}: game ended the point, port did not", u32::from_le_bytes(b[..4].try_into().unwrap()));
+        assert!(rally.check(&ball(b), shots, rd(b, 0x423058), rd(b, 0x42304c), body, true), "vsync {}: game ended the point, port did not", b.vsync());
         let v = rally.judge(body);
         // outcome: the next score change, or none if the serve comes again
         let before = snapshot(b);
-        let after = frames[k + 1..].iter().map(|s| snapshot(s)).find(|s| *s != before);
+        let after = frames[k + 1..].iter().map(|&s| snapshot(s)).find(|s| *s != before);
         let no_point = rd(frames[(k + 2).min(frames.len() - 1)], 0x4230b8) == -1;
         match v.winner {
-            None => assert!(no_point, "vsync {}: port {v:?}, game scored", u32::from_le_bytes(b[..4].try_into().unwrap())),
+            None => assert!(no_point, "vsync {}: port {v:?}, game scored", b.vsync()),
             Some(t) => {
                 let Some(after) = after else { break };
                 let moved = (0..2).find(|&i| after.0[i] > before.0[i] || after.1[i] > before.1[i]);
-                assert_eq!(moved, Some(t), "vsync {}: port {v:?}, score {before:?} -> {after:?}", u32::from_le_bytes(b[..4].try_into().unwrap()));
+                assert_eq!(moved, Some(t), "vsync {}: port {v:?}, score {before:?} -> {after:?}", b.vsync());
             }
         }
         calls[v.call as usize] += 1;

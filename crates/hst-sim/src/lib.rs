@@ -10,3 +10,4 @@ pub mod score;
 pub mod judge;
 pub mod vu0;
 pub mod libm;
+pub mod replay;
