@@ -37,6 +37,10 @@ Every prompt follows the same rules:
 
 ## When blocked
 
+**Don't get trapped.** If anything stalls — a tool hangs, PCSX2 won't do what you need, the same fix fails
+twice, ~20 minutes on one obstacle — stop, write what happened and what you tried in the prompt's journal,
+mark the prompt `[~]` with a one-line reason, and move on to the next prompt. Never sit waiting on the human.
+
 A prompt is **blocked** when it can't be finished this run: missing recording, needs the human (a decision,
 root access, a physical controller), unresolved after real debugging, or the run is low on turns.
 
@@ -99,8 +103,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
   Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
   are accepted only when their recordings replay identically.
-  **First real recording (use it):** `context/recordings/round1.p2m2` (+ `round1_SaveState.p2s`, its start
-  state) — the user playing a round as P1, recorded 2026-10-05 with PCSX2's Input Recording (frame-exact, starts
+  **First real recording (use it):** `context/recordings/round1.p2m2` (+ `round1.p2m2_SaveState.p2s`, its start
+  state; PCSX2 looks for `<recording filename>_SaveState.p2s`) — the user playing a round as P1, recorded 2026-10-05 with PCSX2's Input Recording (frame-exact, starts
   from that save state; replays only on this PCSX2 version). Replay it in PCSX2 (Tools → Input Recording → Play)
   while capturing state over PINE to build the fixture; don't re-record it.
   **Playback needs the human:** PCSX2 has no CLI or PINE command for Input Recording playback, and menu
@@ -108,6 +112,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   round1's start state, speed set), then write `READY: start playback now` to `context/notes/playback.flag`; the
   user starts Tools → Input Recording → Play → `round1.p2m2` by hand. If nobody does within the run, mark P0
   `[~]` (waiting on playback) and move on — the capture script must be ready to rerun as-is.
+  **Check first, every run:** `context/notes/record_round1.log` and `pgrep -f record_p2m2`. If a capture is
+  running, do **not** touch PCSX2 (no relaunch, no state loads, no speed change) — mark P0 `[~] capture in
+  progress` and work on prompts that don't need the emulator. If `context/fixtures/round1.bin` is complete
+  (21666 samples), use it and finish P0's replay test.
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
   frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
