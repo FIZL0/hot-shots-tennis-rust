@@ -98,6 +98,8 @@ pub struct Shot {
     /// Shot class and kind; kinds 1 and 4 of classes 1–2 soften the first bounce's spin kick.
     pub class: u8,
     pub kind: i32,
+    /// Turn of the velocity's heading (radians) at the first bounce (+0x1b0; some characters' serves).
+    pub bounce_turn: f32,
 }
 
 impl Default for Shot {
@@ -113,6 +115,7 @@ impl Default for Shot {
             first_bounce_restitution: 0.0,
             class: 0,
             kind: 0,
+            bounce_turn: 0.0,
         }
     }
 }
@@ -195,6 +198,26 @@ pub struct Flight {
     pub call: crate::judge::Call,
     /// Signed distance from the called landing to the nearest line (+0x230).
     pub line_distance: f32,
+    /// A rally is on (shots this rally > 0); the first-bounce turn only happens then.
+    pub in_play: bool,
+}
+
+/// Turns `d` by `pitch` and `yaw` (radians), keeping its length: pitch clamped to ±π/2, heading wrapped to ±π.
+fn turn(d: V4, pitch: f32, yaw: f32) -> V4 {
+    use crate::{libm::atan2f, ps2, world};
+    const HALF_PI: f32 = f32::from_bits(0x3fc9_0fdb);
+    let (pi, two_pi) = (f32::from_bits(0x4049_0fdb), f32::from_bits(0x40c9_0fdb));
+    let p = ps2::add(atan2f(-d[1], ps2::sqrt(ps2::madd(ps2::mul(d[2], d[2]), d[0], d[0]))), pitch);
+    let p = if p < -HALF_PI { -HALF_PI } else if p <= HALF_PI { p } else { HALF_PI };
+    let mut y = ps2::add(atan2f(d[0], d[2]), yaw);
+    if !(y <= pi) {
+        y = ps2::sub(y, two_pi);
+    } else if y < -pi {
+        y = ps2::add(two_pi, y);
+    }
+    let m = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(p)), &world::rot_y(y));
+    let len = ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(d[1], d[1]), d[0], d[0]), d[2], d[2]));
+    m[2].map(|c| ps2::mul(c, len))
 }
 
 /// Contact state that lasts for the whole frame across sub-steps.
@@ -230,7 +253,7 @@ mod k {
 
 impl Flight {
     pub fn new(ball: Ball, spin_frame: [V4; 4], contact: [V4; 4]) -> Self {
-        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0 }
+        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0, in_play: true }
     }
 
     /// Advance one 60 Hz frame on `surface`, in the original's order: accelerate, add wind and the curve
@@ -311,6 +334,9 @@ impl Flight {
                 f.ghosts += 1;
             }
             d = self.respond(shot, surface, d, h.normal, material, ghost, &mut f);
+            if self.in_play && contacts == 1 && !self.rolling && self.bounces == 1 && shot.bounce_turn != 0.0 {
+                d = turn(d, 0.0, shot.bounce_turn);
+            }
             if let Some(l) = self.lines.filter(|_| !self.rolling && (self.bounces == 1 || self.contacts == 1)) {
                 if let Some((call, dist)) = crate::judge::call_landing(self.call, self.special_contacts != 0, pos, &l) {
                     self.call = call;

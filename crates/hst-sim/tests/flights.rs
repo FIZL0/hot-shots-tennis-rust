@@ -38,6 +38,7 @@ fn load() -> Option<Vec<Case>> {
                     kind: f[10] as i32,
                     side: v3(11),
                     wind: v3(14),
+                    bounce_turn: 0.0,
                 },
                 spin_frame: [v3(17), v3(20), v3(23)],
                 contact: [v3(26), v3(29), v3(32)],

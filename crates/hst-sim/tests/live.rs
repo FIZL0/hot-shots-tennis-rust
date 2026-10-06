@@ -5,12 +5,10 @@
 //! (court, ground around it, walls, net, net cord, the ghost material) must match exactly. Skips when the recording
 //! or the disc is absent.
 
+use hst_data::exe;
 use hst_data::iso::Iso;
-use hst_data::xb::Archive;
-use hst_data::{exe, layout, mdl, mtl};
-use hst_sim::ball::{Ball, COURTS, Flight, Material, Params, Shot};
-use hst_sim::mesh::{self, World};
-use hst_sim::world::{self, IDENTITY};
+use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot};
+use hst_sim::court;
 
 const SAMPLE: usize = 4 + 0x290 + 0x290 + 0x40;
 const COURT: usize = 10;
@@ -49,113 +47,9 @@ fn load(b: &[u8]) -> (Flight, Shot) {
         first_bounce_restitution: f(b, 0x1ac),
         class: b[0x58],
         kind: i(b, 0x5c),
+        bounce_turn: f(b, 0x1b0),
     };
     (fl, shot)
-}
-
-/// A disc model as collision geometry.
-fn collision_model(m: &mdl::Model, mt: &mtl::Mtl) -> mesh::Model {
-    let u16_at = |h: &[u8], o: usize| u16::from_le_bytes([h[o], h[o + 1]]) as i32;
-    mesh::Model {
-        tris: m
-            .colliding(mt)
-            .map(|t| mesh::Tri { node: t.node, material: t.material, pos: t.pos, uv: t.uv, bounds: t.bounds })
-            .collect(),
-        materials: mt
-            .materials
-            .iter()
-            .zip(&m.wrap)
-            .map(|(mat, &wrap)| mesh::Material {
-                two_sided: mat.two_sided,
-                textured: mat.texture.is_some(),
-                wrap,
-                map: mat.attributes.map(|a| {
-                    let a = &mt.attributes[a];
-                    mesh::AttributeMap {
-                        width: u16_at(&a.header, 2),
-                        height: u16_at(&a.header, 4),
-                        stride: u16_at(&a.header, 0x14),
-                        texels: a.texels.clone(),
-                        table: a.table,
-                    }
-                }),
-            })
-            .collect(),
-        node_from_model: m.node_inverse.clone(),
-    }
-}
-
-/// Court 10, hole 1: the court model at the origin and the colliding props in the game's list order and grid.
-fn court_world(iso: &mut Iso) -> World {
-    let mut files = std::collections::HashMap::new();
-    let (mut list, mut plants, mut court) = (Vec::new(), Vec::new(), None);
-    for arc in ["CMN.XB", "GRD01.XB", "HOL01.XB"] {
-        let data = iso.read(&format!("COURT/{COURT}/{arc}")).unwrap();
-        let a = Archive::parse(&data).unwrap();
-        let read = |n: &str| a.entries.iter().find(|e| e.name.eq_ignore_ascii_case(n)).map(|e| a.read(e).unwrap());
-        for e in &a.entries {
-            let name = e.name.to_ascii_lowercase();
-            if name.ends_with(&format!("entry_c{COURT}.txt")) {
-                list = layout::entries(&String::from_utf8_lossy(&a.read(e).unwrap()));
-            } else if name.ends_with(&format!("plant_c{COURT}_h01_0.dat")) {
-                plants = layout::plants(&a.read(e).unwrap()).unwrap();
-            } else if let Some(stem) = name.strip_suffix(".mdl") {
-                let base = &e.name[..e.name.len() - 4];
-                let m = mdl::parse(&a.read(e).unwrap()).unwrap();
-                let mt = mtl::parse(&read(&format!("{base}.MTL")).unwrap(), read(&format!("{base}.MTI")).as_deref()).unwrap();
-                if arc == "GRD01.XB" && m.collides(&mt) {
-                    assert!(court.is_none(), "one collision model in the court archive");
-                    court = Some((m, mt));
-                } else {
-                    files.insert(stem.rsplit(['/', '\\']).next().unwrap().to_string(), (m, mt));
-                }
-            }
-        }
-    }
-    let (cm, cmt) = court.expect("court collision model");
-    // the court stands at the origin, unscaled, every node in place
-    for (k, n) in cm.node_local.iter().chain(&cm.node_inverse).enumerate() {
-        assert_eq!(*n, IDENTITY, "court node matrix {k}");
-    }
-    let mut models = vec![collision_model(&cm, &cmt)];
-    let court = mesh::Object {
-        model: 0,
-        scale: 1.0,
-        to_model: IDENTITY,
-        nodes: vec![IDENTITY; cm.node_count],
-        center: cm.center,
-        radius: cm.radius,
-    };
-
-    let mut created = Vec::new();
-    for cat in [15, 17, 18, 19, 20] {
-        for p in plants.iter().filter(|p| p.category == cat && p.scale != 0.0) {
-            let Some(e) = layout::resolve(&list, p, 0) else { continue };
-            let (m, _) = &files[&e.stem];
-            let (at, _) = world::place(p.category, p.pos, p.yaw, p.code);
-            created.push((e.stem.clone(), world::instance(at, p.scale, &m.node_local[0], m.center, m.radius), p.scale));
-        }
-    }
-    let (mut props, mut stems, mut spheres) = (Vec::new(), Vec::<String>::new(), Vec::new());
-    for k in world::list_order(created.len()) {
-        let (stem, prop, scale) = &created[k];
-        let (m, mt) = &files[stem];
-        if !m.collides(mt) {
-            continue;
-        }
-        assert_eq!(m.node_count, 1, "{stem}: props are single-node");
-        let model = match stems.iter().position(|s| s == stem) {
-            Some(i) => i + 1,
-            None => {
-                stems.push(stem.clone());
-                models.push(collision_model(m, mt));
-                models.len() - 1
-            }
-        };
-        spheres.push((props.len(), prop.center, prop.radius));
-        props.push(mesh::Object { model, scale: *scale, to_model: prop.to_model, nodes: vec![prop.node], center: prop.center, radius: m.radius });
-    }
-    World { models, court, props, grid: world::grid(&spheres) }
 }
 
 #[test]
@@ -170,13 +64,8 @@ fn live_ball_frames_match_the_game() {
         eprintln!("recording or disc missing, skipped");
         return;
     };
-    let world = court_world(&mut iso);
-    let materials: Vec<Material> = exe::Game::new(&cnf, &bin)
-        .unwrap()
-        .surfaces()
-        .iter()
-        .map(|s| Material { court: s.court, special: s.special, restitution: s.restitution, spin_loss: s.spin_loss })
-        .collect();
+    let world = court::world(&mut iso, COURT as u32);
+    let materials = court::materials(&exe::Game::new(&cnf, &bin).unwrap());
 
     let s: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
     let (mut exact, mut touches, mut failures) = (0, std::collections::BTreeMap::new(), Vec::new());
@@ -207,4 +96,16 @@ fn live_ball_frames_match_the_game() {
     eprintln!("{exact} frames bit-exact; contact frames by material: {touches:?}");
     assert!(failures.is_empty(), "{} frames diverged:\n{}", failures.len(), failures[..failures.len().min(20)].join("\n"));
     assert!(exact > 12000);
+}
+
+#[test]
+fn every_court_builds_its_world() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    for n in 1..=11 {
+        let w = court::world(&mut iso, n);
+        assert!(!w.models[0].tris.is_empty(), "court {n} has no collision triangles");
+    }
 }

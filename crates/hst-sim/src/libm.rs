@@ -1,6 +1,7 @@
-//! The game's `sinf` (fdlibm's float version as compiled into the original), on PS2 float arithmetic.
+//! The game's `sinf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
+//! rounding of the constants), on PS2 float arithmetic.
 
-use crate::ps2::{add, mul, sub};
+use crate::ps2::{add, div, mul, sub};
 
 const fn f(b: u32) -> f32 {
     f32::from_bits(b)
@@ -120,6 +121,85 @@ pub fn sinf(x: f32) -> f32 {
     }
 }
 
+const ATAN_HI: [u32; 4] = [0x3eed6338, 0x3f490fda, 0x3f7b985d, 0x3fc90fda];
+const ATAN_LO: [u32; 4] = [0x31ac3769, 0x33222167, 0x33140fb4, 0x33a22168];
+const AT: [u32; 11] = [
+    0x3eaaaaab, 0xbe4ccccc, 0x3e124924, 0xbde38e38, 0x3dba2e6e, 0xbd9d8795, 0x3d886b34, 0xbd6ef16a, 0x3d4bda59, 0xbd15a221,
+    0x3c8569d7,
+];
+
+pub fn atanf(x0: f32) -> f32 {
+    let hx = x0.to_bits() as i32;
+    let ix = hx & 0x7fff_ffff;
+    if ix > 0x507f_ffff {
+        let (hi, lo) = (f(ATAN_HI[3]), f(ATAN_LO[3]));
+        return if hx > 0 { add(hi, lo) } else { sub(-hi, lo) };
+    }
+    let (x, id) = if ix <= 0x3edf_ffff {
+        if ix <= 0x30ff_ffff && 1.0 < add(x0, f(0x7149_f2c9)) {
+            return x0;
+        }
+        (x0, -1)
+    } else {
+        let x = x0.abs();
+        if ix <= 0x3f97_ffff {
+            if ix <= 0x3f2f_ffff { (div(sub(add(x, x), 1.0), add(x, 2.0)), 0) } else { (div(sub(x, 1.0), add(x, 1.0)), 1) }
+        } else if ix <= 0x401b_ffff {
+            (div(sub(x, 1.5), add(mul(x, 1.5), 1.0)), 2)
+        } else {
+            (div(-1.0, x), 3)
+        }
+    };
+    let a = AT.map(f);
+    let z = mul(x, x);
+    let w = mul(z, z);
+    let s1 = mul(z, add(a[0], mul(w, add(a[2], mul(w, add(a[4], mul(w, add(a[6], mul(w, add(a[8], mul(w, a[10])))))))))));
+    let s2 = mul(w, add(a[1], mul(w, add(a[3], mul(w, add(a[5], mul(w, add(a[7], mul(w, a[9])))))))));
+    if id < 0 {
+        return sub(x, mul(x, add(s1, s2)));
+    }
+    let id = id as usize;
+    let z = sub(f(ATAN_HI[id]), sub(sub(mul(x, add(s1, s2)), f(ATAN_LO[id])), x));
+    if hx < 0 { -z } else { z }
+}
+
+/// atan2f(y, x); denormals count as zero.
+pub fn atan2f(y: f32, x: f32) -> f32 {
+    const PI: u32 = 0x4049_0fda;
+    const HALF_PI: u32 = 0x3fc9_0fda;
+    const PI_LO: u32 = 0x3422_2168;
+    let (hy, hx) = (y.to_bits() as i32, x.to_bits() as i32);
+    if hx == 0x3f80_0000 {
+        return atanf(y);
+    }
+    let (iy, ix) = (hy & 0x7fff_ffff, hx & 0x7fff_ffff);
+    let m = ((hy as u32) >> 31) | ((hx >> 30) & 2) as u32;
+    if iy <= 0x007f_ffff {
+        match m {
+            2 => return f(PI),
+            3 => return -f(PI),
+            _ => return y,
+        }
+    }
+    if ix <= 0x007f_ffff {
+        return if hy < 0 { -f(HALF_PI) } else { f(HALF_PI) };
+    }
+    let k = (iy - ix) >> 23;
+    let z = if k >= 61 {
+        f(HALF_PI)
+    } else if hx < 0 && k < -60 {
+        0.0
+    } else {
+        atanf(div(y, x).abs())
+    };
+    match m {
+        0 => z,
+        1 => -z,
+        2 => sub(f(PI), sub(z, f(PI_LO))),
+        _ => sub(sub(z, f(PI_LO)), f(PI)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -127,6 +207,15 @@ mod tests {
         for i in 0..=1000 {
             let x = i as f32 * std::f32::consts::PI / 1000.0;
             assert!((super::sinf(x) - x.sin()).abs() < 1e-6, "{x}");
+        }
+    }
+
+    #[test]
+    fn close_to_host_atan2() {
+        for i in 0..=1000 {
+            let t = i as f32 * 2.0 * std::f32::consts::PI / 1000.0 - std::f32::consts::PI;
+            let (y, x) = (3.0 * t.sin(), 3.0 * t.cos());
+            assert!((super::atan2f(y, x) - y.atan2(x)).abs() < 2e-6, "{t}");
         }
     }
 }

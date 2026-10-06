@@ -12,7 +12,9 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3, rows4};
+use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
+use hst_sim::court;
+use hst_sim::mesh::World;
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
@@ -98,6 +100,8 @@ struct Game {
     shots: i32,
     /// Line tolerance from the game program.
     line_margin: f32,
+    /// The stage's collision world and material table (`--stage`); without one the ball meets a flat court and net.
+    world: Option<(World, Vec<Material>)>,
     message: String,
     rng: u32,
     /// Timing pop-up: text, frames left, grade.
@@ -164,10 +168,12 @@ fn tables(iso: &str) -> Vec<Table> {
         .collect()
 }
 
-fn line_margin(iso: &str) -> f32 {
+/// Line margin, and the stage's collision world with the material table.
+fn disc(iso: &str, stage: Option<u32>) -> (f32, Option<(World, Vec<Material>)>) {
     let mut iso = Iso::open(iso).expect("open iso");
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
-    hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").line_margin()
+    let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
+    (game.line_margin(), stage.map(|n| (court::world(&mut iso, n), court::materials(&game))))
 }
 
 fn setup(
@@ -177,6 +183,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let (line_margin, world) = disc(&args.iso, args.stage);
     let mut game = Game {
         tables: tables(&args.iso),
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
@@ -190,7 +197,8 @@ fn setup(
         score: Score::new(),
         rally: Rally::default(),
         shots: 0,
-        line_margin: line_margin(&args.iso),
+        line_margin,
+        world,
         message: "Your serve".into(),
         rng: 0x2468_ace1,
         popup: None,
@@ -640,8 +648,13 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
         Phase::Rally => {}
     }
     g.prev_ball = g.flight.ball.pos;
-    let shot = g.shot;
-    g.flight.step(&shot, &COURTS[args.court.min(COURTS.len() - 1)]);
+    let (shot, surface) = (g.shot, &COURTS[args.court.min(COURTS.len() - 1)]);
+    let g = &mut *g;
+    g.flight.in_play = g.shots > 0;
+    match &g.world {
+        Some((world, materials)) => g.flight.step_world(&shot, surface, world, materials),
+        None => g.flight.step(&shot, surface),
+    }
     g.since_hit += 1;
     if g.phase != Phase::Rally {
         return;

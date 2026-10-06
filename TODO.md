@@ -96,6 +96,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   117 props and every grid cell bit-exact on court 10.
 - Live ball against the world mesh (court model, walls, net, props via the 20 m grid), ground material from attribute
   maps, material table response — 12498 recorded frames of a bot match bit-exact, all contacts included.
+- First-bounce turn of serves (`+0x1b0`, game's atan2f) — round1's turned serves bit-exact; `--stage` play on
+  the world mesh.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
 ## Prompts
@@ -118,7 +120,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `context/ghidra_scripts/DumpAsm.java` →
   `context/notes/asm_*.txt`.
 
-- [ ] **P0c — Live net hit, bit-exact.** Record a natural net contact (bot match, slot 5) per frame with
+- [x] **P0c — Live net hit, bit-exact.** Record a natural net contact (bot match, slot 5) per frame with
   `tools/trace_live.py`-style capture and replay it through `Flight` bit-exact. Needs the live collision path:
   world mesh query instead of the flat net (court object + grid objects, per-model triangle sweep) and the
   after-first-bounce redirect `+0x1b0`. Findings so far: `context/artifacts/2026-10-06-net-hit/FINDINGS.md`.
@@ -147,10 +149,12 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
     (`exe::Game::surfaces`); ghost material 32 (passes through, uncounted). `tests/live.rs` steps **all 12498 frames
     bit-exact** against court 10 built from the disc, contacts included (court 144, outside 12, walls 19, net 5,
     cord 3). Fix on the way: off-court spin loss also resets the kick's "spin before". Journal `4-TRIANGLE-SWEEP-FINAL.md`.
-  - [ ] **P0c4 — Net through the mesh in live play.** Net contacts already replay bit-exact through the mesh (P0c3).
-    Left: the after-first-bounce redirect `+0x1b0` (`0x379bd0`, `0x379ae0`; needs a recording with it non-zero) and
-    the app's live ball on `step_world` (build the `mesh::World` from the disc in `crates/hst`), dropping the flat net
-    from live play.
+  - [x] **P0c4 — Net through the mesh in live play.** First-bounce turn `+0x1b0` (`0x379bd0`; per-character serve
+    table, game's atan2f/atanf in `libm`) on `Shot::bounce_turn`, gated as the original (rally on, first sub-step,
+    first bounce): round1's two turned serves now bit-exact, `line_calls.rs` exemption removed. `hst_sim::court`
+    builds any court's collision world from the disc (multi-node props: local·parent); `--stage N` play steps the
+    live ball through `step_world` (flat net only without a stage). `0x379ae0` (random bounce option) left for P21.
+    Journal `5-LIVE-PLAY-FINAL.md`.
 
 ### Match basics (do these early)
 - [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the
@@ -192,8 +196,9 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P5 — Shot selection by input.** How buttons, hold/charge time and stick map to class/kind/power and the
   charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
   (capture pad state over PINE alongside shots).
-- [ ] **P6 — Serve details.** (Basics in P0b.) **Bent serves** (class 0, bend ≠ 0) kick sideways at the bounce in
-  the original and not in `Flight` (round1 vsync 25559, `line_calls.rs` exempts them — remove that exemption). Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
+- [ ] **P6 — Serve details.** (Basics in P0b.) **Turned serves**: `Flight` applies `Shot::bounce_turn` (P0c4); the app
+  must fill it from the shot-effect table (`0x37e240`: per-character 0x404110 row, class 0 kind 0, special condition
+  `0x37f660`/0x410870, doubles exception) along with curve/bend. Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
   service box rules, second serve, serve positions per side/court. **Lets:** a serve that clips the net cord
   and lands in the box is a let and is replayed; one that clips the cord and lands out is a fault — the cord
   contact must come from the exact net collision (P15), and the let/fault call and replay flow must match the
@@ -296,7 +301,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P20 — Audio.** HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
   crowd, umpire voice), MIDI BGM with the game's banks. Verify each effect's trigger frame against recorded game events, and decoded
   samples against PCSX2 audio captures.
-- [ ] **P21 — Menus and modes.** Title, character/court select, exhibition, tournament/challenge modes, unlocks,
+- [ ] **P21 — Menus and modes.** (Includes the random-bounce option 0x2ef7e2 → `0x379ae0`, see net-hit journal 5.) Title, character/court select, exhibition, tournament/challenge modes, unlocks,
   options, save data. Verify menu flow, options and unlock conditions against the original screen by screen.
 - [ ] **P22 — Widescreen, high frame rate, input polish.** Render-side improvements that never change the 60 Hz
   simulation; rebindable controls; controller hot-plug. Verify P0's full replay suite still passes unchanged with every

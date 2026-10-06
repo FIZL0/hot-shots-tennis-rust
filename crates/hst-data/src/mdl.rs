@@ -66,6 +66,8 @@ pub struct Model {
     pub node_inverse: Vec<[[f32; 4]; 4]>,
     /// Per node (pre-order), the node's own placement (its second matrix).
     pub node_local: Vec<[[f32; 4]; 4]>,
+    /// Per node (pre-order), its parent's index (none for the root).
+    pub node_parent: Vec<Option<usize>>,
     /// Root node bounding sphere: centre (w = 1) and radius (header +0x20, +0x30).
     pub center: [f32; 4],
     pub radius: f32,
@@ -121,7 +123,7 @@ fn size_at(b: &[u8], o: usize) -> Result<usize, Error> {
 }
 
 /// Header, extra blob, 3 matrices, then a child count. Nodes hold groups, groups hold nodes.
-fn tree_item(c: &mut Cursor, depth: u32, model: &mut Model) -> Result<(), Error> {
+fn tree_item(c: &mut Cursor, depth: u32, parent: Option<usize>, model: &mut Model) -> Result<(), Error> {
     if depth > 64 {
         return Err(Error("mdl: node tree too deep".into()));
     }
@@ -135,8 +137,10 @@ fn tree_item(c: &mut Cursor, depth: u32, model: &mut Model) -> Result<(), Error>
     let mat = |o: usize| std::array::from_fn(|r| std::array::from_fn(|k| f32_at(m, o + 16 * r + 4 * k)));
     model.node_local.push(mat(0x40));
     model.node_inverse.push(mat(0x80));
+    model.node_parent.push(parent);
+    let me = Some(model.node_local.len() - 1);
     for _ in 0..c.count(4)? {
-        tree_item(c, depth + 1, model)?;
+        tree_item(c, depth + 1, me, model)?;
     }
     Ok(())
 }
@@ -145,7 +149,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
     let mut c = Cursor { d, p: 0 };
     let mut m = Model::default();
     c.take(1)?;
-    tree_item(&mut c, 0, &mut m)?;
+    tree_item(&mut c, 0, None, &mut m)?;
     m.node_count = m.node_inverse.len();
     for material in 0..c.count(4)? {
         let mut packets = Vec::new();
