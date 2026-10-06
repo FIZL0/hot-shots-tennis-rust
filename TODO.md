@@ -1,7 +1,30 @@
 # TODO — Hot Shots Tennis remaster
 
-When asked to "continue", start at the top of **Next up**. Details, evidence and memory maps for each item are in
-`context/artifacts/` (git-ignored research journal); this file is only the plan.
+## How to continue
+
+When the user says **"continue"**: take the first unchecked prompt under **Prompts** and carry it out
+completely as its own task, then tick it, commit, and stop to report. One prompt per iteration — do not merge
+prompts or skip ahead. If a prompt turns out too big, split it into numbered sub-prompts in this file first.
+
+Every prompt follows the same rules:
+
+- **Match the original exactly — no approximations, no placeholders left behind.** Find the behaviour in the
+  decompile (`context/decomp/`, `context/fn.sh <addr>`), port it, and prove it against the real game:
+  record ground truth over PINE (`tools/pine.py`, `tools/trace_shots.py`, launch with `tools/pcsx2-hst.sh`)
+  or from the user's save states (`~/Emulation/saves/ps2/states/SCUS-97610 (72326E67).NN.p2s`; slots 3, 4, 5
+  belong to the user — only load them, save scratch states to 8/9). A prompt is done when a test compares the
+  port to that recording and passes bit-exact (f32 via `hst_sim::ps2`) or frame-exact.
+- **Arithmetic is PS2 arithmetic.** The EE FPU rounds toward zero and (as PCSX2 emulates it) masks the smaller
+  addend to the exponent difference minus one guard bit before adding; `madd.s` = that add of the accumulator and
+  a truncated product. Use `hst_sim::ps2` for anything that must match bit-for-bit.
+- **Game data is read from the user's disc at runtime**, never committed (`hst_data::iso`, `xb`, `exe` — the last
+  is the only place allowed to know retail *data* offsets, disc-ID checked).
+- **Characters are original stand-in designs.** Players, the umpire and background NPCs are drawn with our own
+  stand-in figures (`crates/hst/src/figure.rs`); their *behaviour* — states, timings, contact frames, positions,
+  calls, reactions — is ported exactly from the game's code and animation timing data. Do not import or
+  reproduce the original character models or character artwork.
+- Record findings and evidence in `context/artifacts/<date>-<slug>/` (memory maps, decomp addresses, captures).
+- Update **Done** and the **Play it now** controls when a prompt lands.
 
 ## Play it now
 
@@ -10,43 +33,86 @@ cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
 WASD/left stick move (and aim at contact) · Shift/LB sprint · J/A topspin · K/B slice · I/X flat · L/Y lob ·
 U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) · arrows/right stick turn camera.
-`HST_AUTOPLAY=1` lets a bot play your side (unattended tests). Timing pop-ups: SWEET SPOT / QUICK / SLOW;
-red dot = where the ball will bounce.
-`--stage 01..11` picks the court; `--court 0..11` the bounce surface table.
+`HST_AUTOPLAY=1` lets a bot play your side (unattended tests). `--stage 01..11` court, `--court 0..11` surface.
 
 ## Done (ported and verified against the original)
-- Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer with 60 Hz fixed sim + interpolation.
-- Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — matches 4524 recorded frames.
-- Shot tables (TRAJ): lookup + launch speed/elevation/frames — matches 11 recorded strokes.
+- Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
+- Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — 4524 recorded frames.
+- Shot tables (TRAJ): lookup + launch speed/elevation/frames — 11 recorded strokes.
+- Per-character shot parameter records (17 per class/kind, record = character + 3) built from GAME.BIN —
+  bit-identical to the game's runtime table, using the PS2 FPU model.
 - Net contact (flat net from the game's predictor), material-based bounce response.
-- Stroke timing (original): press → search the predicted path (28 frames) for a contact the per-player
-  timing table allows (0–1.625 m high, within reach of a point 0.484 m in front, ball ≥ 0.5 m from the net,
-  nearest in depth); grade = table[frame], offset = frame − 8 → SWEET SPOT / QUICK / SLOW. Pending presses
-  re-check every frame. Swing animation is timed so contact lands on that frame.
+- Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 
-## Next up
-1. **Shot spin/param records** — decision pending: read the table from the user's GAME.BIN at runtime (data-only
-   offset exception to AGENT.md) or keep placeholders. Currently `KIND_SPIN` in `play.rs` (recorded typical values).
-   Journal: `ball-physics/5-SHOT-PARAMS-READY.md`.
-2. **Shot bearing / aim error** — the game launches toward target + offset (likely AI aim error from AIParam.csv).
-3. **Timing effects + other contact branches** — what the grade changes in the shot (table variant
-   `_dw/_up`, power param of the hit entry), and the volley / smash (1.85–2.65 m, reach 1.1) / diving branches
-   of the contact search (decomp 0x34d8a0). Reach growth while winding up is approximate (`find_contact`).
-4. **Real player movement** — speeds, acceleration, reach and swing timing per character (TParam.csv), replacing
-   `RUN`, `REACH`, `SWING_WINDOW` in `play.rs`. Capture player objects over PINE from save states 3/5.
-5. **Shot selection by input** — how the original maps buttons + timing + stick to class/kind/charge and to the
-   normal↔charged table blend (37e420 param_1), the `_dw/_up` table variants, volleys (`voly*`), smashes (`smsh*`).
-6. **Serve** — real toss (ported: straight up, spin 0.1) + serve tables (`serv0..3`), faults/lets, service boxes.
-7. **AI** — target choice, shot type, positioning, reaction/error frames from AIParam.csv; uses the stored path
-   (path recorder steps the ball 15 frames per frame against the court plane only).
-8. **Court collision mesh** — net cord/posts, walls, fences (live ball uses the mesh query, not the flat net).
-9. **Rules/scoring** — games/sets/tiebreak, doubles, side switching (current: point counter only).
-10. **Characters** — players are original stand-in athletes (`figure.rs`, procedural idle/run/swing/serve).
-   Importing the original character models/animations is not being done by the assistant.
-11. **Rendering polish** — material blend modes (clouds, decals), cloud placement (category 14 records), lighting,
-    upscaled texture pack from `replacements/` (PCSX2 hash names → disc textures), widescreen/HUD.
-12. **Audio** — HD/BD banks (Sony VAG) + MIDI BGM.
-13. **Menus/modes** — title, character select, exhibition, tournament.
+## Prompts
+
+### Shots
+- [ ] **P1 — Shot parameters in play.** Replace `KIND_SPIN` and every per-shot constant in `play.rs` with the
+  character's record (`hst_sim::params`, record = character + 3) and the character's own TRAJ tables
+  (class/kind/record → file, as mapped from the `gm+0x9c` table owner). Port `37e420` (normal↔charged blend),
+  `37e950` (launch frame, spin, curve/bend from `37e240`, frame count adjustment) and `379080`/`375da0` (launch,
+  including the two MT19937 draws). Verify launches against recorded shots (`context/shots_s05b`).
+- [ ] **P2 — Aim exactly as the original.** Port `37b110` + `37f740`: base target from the hit routine,
+  aim correction (court lines, net clearance), and the analog stick offset (`stick × 1.5 m`, rotated into the
+  shot frame). Verify recorded shot bearings (the leftover ~0.2–1° offsets must disappear).
+- [ ] **P3 — Timing grade effects.** What grade/offset change in the shot (power code → table variant
+  `_dw/_up`, `37b110` param_3 mapping, `3467b0` branches on `+0x3ee8` / `+0x3fa0`, reactions via `3553d0`).
+  Remove the approximate wind-up reach growth in `find_contact` by porting the exact reach term.
+- [ ] **P4 — All contact branches.** Port every branch of the contact search in `0x34d8a0`: forehand/backhand
+  ground strokes (body-shot variants `0x16/0x18/0x1a`), volleys, smash (1.85–2.65 m, reach 1.1), the
+  reaching/diving shot (offset −10), half-volleys, and their per-character timing tables (`+0x1510`, `+0x1644`, …).
+- [ ] **P5 — Shot selection by input.** How buttons, hold/charge time and stick map to class/kind/power and the
+  charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
+  (capture pad state over PINE alongside shots).
+- [ ] **P6 — Serve.** Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
+  lets, service box rules, second serve, serve positions per side/court.
+
+### Players
+- [ ] **P7 — Player movement.** Exact run/sprint speeds, acceleration, turning, split-step, auto-positioning
+  toward a locked contact, per character (TParam.csv + player object fields). Capture player position/velocity
+  per frame over PINE from slots 3/5 and match frame-exact.
+- [ ] **P8 — Player animation timing.** Port the player state machine and the animation timing from the game's
+  ANI/ANI2/MOR data and code: idle, ready, run directions (`run_f/b/l/r`, `dush_f`), shot animations
+  (`sh_*`), contact frames, recovery, celebrations/reactions. Drive the stand-in figure's poses from those exact
+  states and frame timings (stand-in visuals, original timing).
+- [ ] **P9 — Hit effects.** Hit flashes, ball trails, impact/bounce effects and their timing from `AZUMA/C_EFF`
+  (EFFCT.XB0: `impact_*`, `ballbound_*`, `smash_*`, `chakudan`), including blend modes and UV animation (.UVA, .MTA).
+- [ ] **P10 — Timing pop-ups as the original.** Use the game's own pop-up textures and animation (find the
+  sprite/texture for SWEET SPOT / QUICK / SLOW-style feedback in `AZUMA/INPANE`, `CMN`, `MENU` archives and the
+  code that animates it: scale/fade curves, position, duration) instead of our text pop-up.
+
+### AI
+- [ ] **P11 — Opponent AI.** Port target choice, shot type choice, positioning, reaction delay and timing error
+  from the AI code and AIParam.csv per character; it reads the stored path (path recorder: 15 steps/frame,
+  court plane only). Verify AI decisions against slot 5 (all-bot) recordings.
+
+### Match
+- [ ] **P12 — Rules and scoring.** Games, sets, deuce/advantage, tiebreak, side changes, doubles rules, match
+  flow states (point start/end delays, replays if any) exactly as the original.
+- [ ] **P13 — Umpire (Lily).** Port the umpire's behaviour: calls (score, fault, out, let, net) and their timing,
+  chair placement per court, idle/turn reactions, voice-line triggers. Stand-in figure for visuals.
+- [ ] **P14 — Background NPCs.** Spectators/ball kids/creatures from the layout's creature/gallery records
+  (categories 21/23) and their animation timing (`azuma/gallery/ani/npcNN_*`, `trgCreMdl`) — positions,
+  paths and triggers exact; stand-in figures for visuals.
+- [ ] **P15 — Court collision mesh.** Live-ball collision against the court mesh (`FUN_0032f690` on `gm+0x84`):
+  net cord/posts, walls, fences, other materials; replaces the flat net.
+
+### Presentation
+- [ ] **P16 — Camera.** Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
+  serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra.
+- [ ] **P17 — Court rendering fidelity.** Material blend modes and flags (MTL header), vertex colour/lighting,
+  cloud placement (category 14 records), sky time-of-day variants, seasons (`_sXXXX`, `SSN1`), animated
+  textures (MTA/UVA), shadows (incl. the per-frame shadow blobs), fog.
+- [ ] **P18 — Upscaled textures.** Map the user's `replacements/` pack (PCSX2 hash-named PNGs) onto disc
+  textures (compute PCSX2's texture hash from TIM2/MTI data + CLUT) and load them in place of the originals.
+- [ ] **P19 — HUD.** Score display, names, serve indicator, in-match menus using the game's HUD textures
+  (`AZUMA/INPANE`) and layout.
+- [ ] **P20 — Audio.** HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
+  crowd, umpire voice), MIDI BGM with the game's banks.
+- [ ] **P21 — Menus and modes.** Title, character/court select, exhibition, tournament/challenge modes, unlocks,
+  options, save data.
+- [ ] **P22 — Widescreen, high frame rate, input polish.** Render-side improvements that never change the 60 Hz
+  simulation; rebindable controls; controller hot-plug.
 
 ## Known gaps / caveats
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
