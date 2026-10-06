@@ -79,7 +79,15 @@ fn load(
         .spawn((GameSpace, Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default()))
         .id();
     let mut bounds = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    let skip = |n: &str| n.contains("debug") || n.contains("holeend");
+    // HST_ONLY / HST_SKIP: substring filters on model paths, for bisecting what draws what
+    let only = std::env::var("HST_ONLY").ok();
+    let not = std::env::var("HST_SKIP").ok();
+    let skip = move |n: &str| {
+        n.contains("debug")
+            || n.contains("holeend")
+            || only.as_deref().is_some_and(|o| !n.contains(o))
+            || not.as_deref().is_some_and(|o| n.contains(o))
+    };
     let spawn = |commands: &mut Commands, parts: &[(Handle<Mesh>, Handle<StandardMaterial>)], t: Transform| {
         let e = commands.spawn((t, Visibility::default())).id();
         for (m, mat) in parts {
@@ -109,13 +117,17 @@ fn load(
         let list = layout::entries(&String::from_utf8_lossy(&find(&cmn, &format!("entry_c{n:02}.txt")).expect("entry list")));
         let plants = layout::plants(&find(&hol, &format!("plant_c{n:02}_h01_0.dat")).expect("plant file")).expect("plant records");
         // ground, skies and clouds stand at the origin; props are placed from the plant records
-        for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg" | "cloud")) {
+        // the entry list names every hole variant; this layout is hole 01
+        let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
+        // ponytail: clouds are positioned by special-category records (14?) not yet mapped; left out
+        // instead of piling them on the court at the origin
+        for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole) {
             if let Some(parts) = library.get(&e.stem) {
                 spawn(&mut commands, parts, Transform::default());
             }
         }
         for p in &plants {
-            let Some(e) = layout::resolve(&list, p) else { continue };
+            let Some(e) = layout::resolve(&list, p, 0) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
                 continue; // creatures/gallery are animated NPCs, dmy are markers
             }

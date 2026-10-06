@@ -73,10 +73,32 @@ pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
         .collect())
 }
 
-/// The entry a placement refers to, if its category has a directory and the index is in range.
-pub fn resolve<'a>(entries: &'a [Entry], p: &Placement) -> Option<&'a Entry> {
+/// Split a `name_sXXXX[_rest]` stem into its base name and four-season mask (`_s1010` = seasons 0 and 2).
+fn season_split(stem: &str) -> (String, [bool; 4]) {
+    if let Some(i) = stem.rfind("_s") {
+        let m = stem.as_bytes().get(i + 2..i + 6).unwrap_or(&[]);
+        if m.len() == 4 && m.iter().all(|c| matches!(c, b'0' | b'1')) {
+            return (format!("{}{}", &stem[..i], &stem[i + 6..]), std::array::from_fn(|k| m[k] == b'1'));
+        }
+    }
+    (stem.to_string(), [true; 4])
+}
+
+/// The entry a placement refers to for `season` (0..3). Season variants of one model share an index:
+/// the index counts distinct base names in the category's directory, then the variant whose season
+/// mask includes `season` is picked (any variant if none does).
+pub fn resolve<'a>(entries: &'a [Entry], p: &Placement, season: usize) -> Option<&'a Entry> {
     let dir = (*CATEGORY_DIRS.get(p.category as usize)?)?;
-    entries.iter().filter(|e| e.dir == dir).nth(usize::try_from(p.index).ok()?)
+    let mut bases: Vec<String> = Vec::new();
+    for e in entries.iter().filter(|e| e.dir == dir) {
+        let (b, _) = season_split(&e.stem);
+        if !bases.contains(&b) {
+            bases.push(b);
+        }
+    }
+    let base = bases.get(usize::try_from(p.index).ok()?)?;
+    let variants: Vec<&Entry> = entries.iter().filter(|e| e.dir == dir && &season_split(&e.stem).0 == base).collect();
+    variants.iter().find(|e| season_split(&e.stem).1[season.min(3)]).or(variants.first()).copied()
 }
 
 #[cfg(test)]
@@ -91,6 +113,17 @@ mod tests {
         rec[2] = 17u8.wrapping_sub(0x11);
         let p = &plants(&rec).unwrap()[0];
         assert_eq!(p.category, 17);
-        assert_eq!(resolve(&list, p).unwrap().stem, "b_s1111");
+        assert_eq!(resolve(&list, p, 0).unwrap().stem, "b_s1111");
+    }
+
+    #[test]
+    fn season_variants_share_an_index() {
+        let list = entries("c:\\x\\tree\\a_s1111.mtl\nc:\\x\\tree\\net_s0100.mtl\nc:\\x\\tree\\net_s1000.mtl\n");
+        let mut rec = vec![0u8; 0x40];
+        rec[0] = 1;
+        rec[2] = 17u8.wrapping_sub(0x11);
+        let p = &plants(&rec).unwrap()[0];
+        assert_eq!(resolve(&list, p, 0).unwrap().stem, "net_s1000");
+        assert_eq!(resolve(&list, p, 1).unwrap().stem, "net_s0100");
     }
 }
