@@ -66,6 +66,12 @@ impl Bounds {
             long: 16.17,
         }
     }
+
+    /// Serves (class 0); `underhand` is serve kind 3. The low height bound never sits above the ball's radius.
+    pub fn serve(underhand: bool, radius: f32) -> Self {
+        let (low, high) = if underhand { (0.0, -1.25) } else { (-1.5, -3.45) };
+        Self { near: -8.885, far: -17.42, low: if -radius <= low { -radius } else { low }, high, short: 3.0, long: 8.22 }
+    }
 }
 
 pub struct Lookup {

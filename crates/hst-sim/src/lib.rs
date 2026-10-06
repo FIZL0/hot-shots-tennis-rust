@@ -10,6 +10,7 @@ pub mod score;
 pub mod judge;
 pub mod flow;
 pub mod swing;
+pub mod serve;
 pub mod camera;
 pub mod vu0;
 pub mod libm;

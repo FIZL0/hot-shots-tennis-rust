@@ -13,7 +13,7 @@
 //! Select camera, right stick turns the free camera.
 
 use bevy::prelude::*;
-use hst_data::{exe::ScoreboardTiming, iso::Iso, xb::Archive};
+use hst_data::{exe::ScoreboardTiming, iso::Iso, tim2, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
 use hst_sim::camera::{Camera, Scene};
 use hst_sim::court;
@@ -22,6 +22,7 @@ use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
+use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 
 use crate::{Args, GameSpace, Orbit, figure};
@@ -37,16 +38,12 @@ const SPRINT: f32 = 1.35;
 /// Speed change per frame while accelerating / braking.
 const ACCEL: f32 = 0.012;
 const BRAKE: f32 = 0.025;
-/// A serve swing lasts this many frames.
-const SWING_FRAMES: u32 = 30;
-/// Serve: frames from toss to contact.
-const SERVE_CONTACT: u32 = 18;
 /// Ball drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
 const BALL_DRAW_SCALE: f32 = 2.4;
 /// Typical recorded spin per shot kind (rad/frame); the real per-character records are not ported yet.
 const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
-const SWEET_FRAME: i32 = 8;
+const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// A press stays live this many frames looking for a contact.
 const PRESS_FRAMES: u32 = 28;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
@@ -67,7 +64,8 @@ struct Player {
     swing: Option<u32>,
     swung: bool,
     backhand: bool,
-    serving: bool,
+    /// Serve animation progress (0..1) while this player serves.
+    serve_anim: Option<f32>,
     kind: i32,
     aim: Vec2,
     /// A shot press still looking for its contact (frames it stays live).
@@ -81,6 +79,10 @@ struct Player {
     home: V3,
     /// The ball where the racket meets it (game space), while a stroke is locked.
     hit_at: Option<V3>,
+    /// The timing balloon over this player's head and its age in frames.
+    balloon: Option<(Balloon, u32)>,
+    /// Stand-in AI: the contact frame it waits for before pressing.
+    bot_due: Option<usize>,
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -110,6 +112,11 @@ enum Phase {
 struct Game {
     rules: Rules,
     tables: Vec<Table>,
+    /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
+    serve_tables: Vec<Table>,
+    serve_data: ServeData,
+    /// The serve in progress (server's toss and swing).
+    serving: Serving,
     reach: Reach,
     flight: Flight,
     shot: Shot,
@@ -132,12 +139,34 @@ struct Game {
     court: usize,
     message: String,
     rng: u32,
-    /// Timing pop-up: text, frames left, grade.
-    popup: Option<(&'static str, u32, u8)>,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// The human whose end the camera follows (the original turns round to stay behind its human).
     cam_owner: Option<usize>,
+}
+
+/// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
+/// (ball in the hand until the toss animation releases it), and the swing locked onto a contact frame.
+#[derive(Clone, Copy, Default)]
+struct Serving {
+    toss: Option<Toss>,
+    /// Frames since the toss press (or, before it, since the serve was set up).
+    t: u32,
+    tossed: bool,
+    swing: Option<ServeSwing>,
+    whiffed: bool,
+    /// Stand-in AI: the contact frame it aims its press at, and its aim.
+    bot_due: Option<usize>,
+    bot_aim: Vec2,
+}
+
+#[derive(Clone, Copy)]
+struct ServeSwing {
+    left: u32,
+    frames: u32,
+    offset: i32,
+    grade: u8,
+    kind: i32,
 }
 
 /// One controller slot's state, gathered every display frame and consumed by the 60 Hz simulation.
@@ -193,8 +222,12 @@ struct BallView;
 struct LandingMark;
 #[derive(Component)]
 struct ScoreText;
+/// A balloon billboard over player `.0`'s head (its own material).
 #[derive(Component)]
-struct PopupText;
+struct BalloonView(usize, Handle<StandardMaterial>);
+/// The balloon textures by `Balloon` (bunny, turtle, note, sweet).
+#[derive(Resource)]
+struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -202,8 +235,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, mark_landing, figure::animate, hud).chain())
-        .add_systems(FixedUpdate, (control, simulate, popup).chain());
+        .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, figure::animate, hud).chain())
+        .add_systems(FixedUpdate, (control, simulate, age_balloons).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -217,6 +250,82 @@ fn tables(iso: &mut Iso) -> Vec<Table> {
             Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
         })
         .collect()
+}
+
+/// Character 0's serve tables (`serv0..3`).
+fn serve_tables(iso: &mut Iso) -> Vec<Table> {
+    let data = iso.read("TRAJ/TRAJ00A.XB").expect("trajectory archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    (0..4)
+        .map(|k| {
+            let name = format!("tr_pc00_serv{k}.dat");
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&name)).expect("serve table");
+            Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
+        })
+        .collect()
+}
+
+/// TParam.csv's row for character 0 as cells (header cells hold quoted line breaks; character rows are plain).
+fn tparam_row(iso: &mut Iso) -> Vec<String> {
+    let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).expect("TParam.csv");
+    let csv = arc.read(e).expect("TParam.csv bytes");
+    let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(b"0,")).expect("character 0 row");
+    row.split(|&b| b == b',').map(|c| String::from_utf8_lossy(c).trim().to_string()).collect()
+}
+
+/// Character 0's serve: heights from TParam.csv, the rest measured on character 0 (see `ServeData`).
+fn serve_data(iso: &mut Iso) -> ServeData {
+    let row = tparam_row(iso);
+    let cm = |i: usize| -> [f32; 3] {
+        let v: Vec<f32> = row[i].split('/').map(|v| v.parse::<f32>().expect("TParam height") / 100.0).collect();
+        [v[0], v[1], v[2]]
+    };
+    // ponytail: timing tables (+0x1644/+0x1774), toss hand/apex drift (toss animation), mistiming error
+    // (0x3fc760, skill level 0) and the serve angle (+0x130c) are character 0's measured values; their sources
+    // are the motion data and the character tables (P3/P8)
+    let grades = vec![0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4];
+    ServeData {
+        over: cm(65),
+        under: cm(66),
+        strong_grades: grades.clone(),
+        weak_grades: grades,
+        hand_over: [0.144, -1.546, 0.12],
+        hand_under: [0.016, -0.774, 0.271],
+        apex_drift_over: [-0.133, 0.15],
+        apex_drift_under: [0.184, 0.033],
+        miss: [50, 30, 100],
+        max_angle: 22.0,
+    }
+}
+
+/// The timing balloons from the disc (`AZUMA/C_EFF/EFFCT.XB0`).
+fn balloon_art(iso: &mut Iso, images: &mut Assets<Image>) -> [Handle<Image>; 4] {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("effect archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    [Balloon::Bunny, Balloon::Turtle, Balloon::Note, Balloon::Sweet].map(|b| {
+        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&b.texture().to_ascii_lowercase())).expect("balloon texture");
+        let pic = tim2::decode(&arc.read(e).expect("balloon bytes")).expect("TIM2").remove(0);
+        images.add(Image::new(
+            Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 },
+            TextureDimension::D2,
+            pic.rgba,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        ))
+    })
+}
+
+fn balloon_index(b: Balloon) -> usize {
+    match b {
+        Balloon::Bunny => 0,
+        Balloon::Turtle => 1,
+        Balloon::Note => 2,
+        Balloon::Sweet => 3,
+    }
 }
 
 /// Character 0's reach for the contact search: TParam.csv from the disc (reach base, reach, ideal stroke and
@@ -267,13 +376,18 @@ fn setup(
     root: Query<Entity, With<GameSpace>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
+    let art = balloon_art(&mut iso, &mut images);
     let (line_margin, board, world) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
     let mut game = Game {
         rules,
         tables: tables(&mut iso),
+        serve_tables: serve_tables(&mut iso),
+        serve_data: serve_data(&mut iso),
+        serving: Serving::default(),
         reach: reach(&mut iso),
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
@@ -292,7 +406,6 @@ fn setup(
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
         rng: 0x2468_ace1,
-        popup: None,
         cam: Camera::new(),
         cam_owner: Some(0),
     };
@@ -326,9 +439,13 @@ fn setup(
         Transform::from_xyz(4.0, 12.0, -6.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((ScoreText, Text::new(""), Node { position_type: PositionType::Absolute, top: Val::Px(12.0), left: Val::Px(12.0), ..default() }));
-    commands
-        .spawn(Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), top: Val::Percent(30.0), justify_content: JustifyContent::Center, ..default() })
-        .with_child((PopupText, Text::new(""), TextFont { font_size: FontSize::Px(64.0), ..default() }, TextColor(Color::WHITE), TextShadow::default()));
+    // one balloon billboard per player (world space, turned to the camera every frame)
+    let quad = meshes.add(Rectangle::new(1.0, 1.0));
+    for i in 0..n {
+        let m = materials.add(StandardMaterial { base_color_texture: Some(art[0].clone()), unlit: true, alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, ..default() });
+        commands.spawn((BalloonView(i, m.clone()), Mesh3d(quad.clone()), MeshMaterial3d(m), Transform::default(), Visibility::Hidden));
+    }
+    commands.insert_resource(BalloonArt(art));
 }
 
 /// Put every player where the original does for the next serve (`serve_placement`) and the ball in the server's hand.
@@ -341,6 +458,7 @@ fn reset_positions(g: &mut Game) {
     }
     g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
     g.cam.cut();
+    g.serving = Serving::default();
     let s = &g.players[g.score.server as usize];
     let ball = [s.pos[0] + 0.3, -1.0, s.pos[2]];
     g.flight = Flight::new(Ball { pos: ball, vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
@@ -402,18 +520,24 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     cs.turn = turn * time.delta_secs() * 1.5;
 }
 
-/// Launch a stroke of `kind` by player `who` from the ball's position toward `target`.
-fn strike(g: &mut Game, who: usize, kind: i32, target: V3) {
+/// Launch a stroke (class 1) or serve (class 0) of `kind` by player `who` from the ball's position toward
+/// `target`, along the game's trajectory tables.
+fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3) {
     let at = g.flight.ball.pos;
-    let l = lookup(&g.tables[kind as usize], &Bounds::stroke(kind, at[2]), at, target);
+    let l = if class == 0 {
+        lookup(&g.serve_tables[kind as usize], &Bounds::serve(kind == 3, hst_sim::ball::Params::default().radius), at, target)
+    } else {
+        lookup(&g.tables[kind as usize], &Bounds::stroke(kind, at[2]), at, target)
+    };
     let vel = launch(at, target, l.elevation, l.speed);
     let dir = Vec3::new(vel[0], 0.0, vel[2]).normalize_or(Vec3::Z);
     let side = Vec3::Y.cross(dir).normalize();
     let frame = [side.to_array(), [0.0, 1.0, 0.0], side.cross(Vec3::Y).normalize().to_array()];
-    g.shot = Shot { class: 1, kind, curve_frames: l.frames + 1, ..Shot::default() };
+    g.shot = Shot { class, kind, curve_frames: l.frames + 1, ..Shot::default() };
     g.shots += 1;
     g.rally.on_hit(g.shots, who as i32, g.score.server, g.score.receiver, g.flight.contacts);
-    g.flight = Flight::new(Ball { pos: at, vel, spin: KIND_SPIN[kind as usize] }, rows4(frame), rows4(frame));
+    let spin = if class == 0 { KIND_SPIN[[0, 1, 2, 3][kind as usize]] } else { KIND_SPIN[kind as usize] };
+    g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
     g.prev_ball = at;
@@ -422,12 +546,117 @@ fn strike(g: &mut Game, who: usize, kind: i32, target: V3) {
     g.phase = Phase::Rally;
 }
 
-/// Placeholder serve: the toss ends overhead and the ball is driven into the diagonal service box.
-fn serve(g: &mut Game, who: usize, kind: i32) {
-    let p = g.players[who];
-    g.flight.ball.pos = [p.pos[0] - 0.25 * p.end, -2.6, p.pos[2] + 0.2 * p.end];
-    let target = [-p.pos[0].signum() * 2.0 + p.aim.x * 1.2, 0.0, p.end * 5.2];
-    strike(g, who, if kind == 3 { 0 } else { kind }, target);
+/// The server's turn while the serve is set up, as the original: before the toss the server stands or walks
+/// along the baseline (stick mostly sideways); a shot button tosses (topspin: strong toss, lob: underhand,
+/// others: weak toss) and the ball leaves the hand on the toss animation's release frame; a press while it is
+/// in the air (topspin/slice, or lob for an underhand toss) locks the swing onto the contact frame the serve
+/// search finds — the timing grade there decides the balloon and, for a strong toss, how far the aim is thrown
+/// off. No contact in reach is a whiff; a toss that lands is simply tossed again.
+fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
+    let (pos, end) = (g.players[i].pos, g.players[i].end);
+    let mut s = g.serving;
+    let Some(toss) = s.toss else {
+        if let Some(k) = press {
+            s.toss = Some(match k {
+                0 => Toss::Strong,
+                3 => Toss::Under,
+                _ => Toss::Weak,
+            });
+            s.t = 0;
+            g.players[i].stance = pos[0].abs();
+        } else if stick.x.abs() > stick.y.abs() {
+            // walk the baseline, between the centre mark's side and the sideline
+            let court = if g.score.side == 0 { 1.0 } else { -1.0 };
+            let far = end * court * if g.rules.players > 2 { serve::WALK_MAX_DOUBLES } else { serve::WALK_MAX_SINGLES };
+            let x = pos[0] + serve::WALK * stick.x.signum();
+            let p = &mut g.players[i];
+            p.prev = p.pos;
+            p.pos[0] = if far > 0.0 { x.clamp(serve::WALK_MIN, far) } else { x.clamp(far, -serve::WALK_MIN) };
+            p.stride += serve::WALK * 9.0;
+        }
+        s.t += 1;
+        g.serving = s;
+        hold_ball(g, i, Toss::Strong);
+        g.players[i].serve_anim = Some(0.0);
+        return;
+    };
+    s.t += 1;
+    if !s.tossed {
+        g.serving = s;
+        if s.t < serve::TOSS_RELEASE {
+            hold_ball(g, i, toss);
+        } else {
+            let (hand, apex) = serve::toss_points(&g.serve_data, toss, pos, end);
+            g.flight = Flight::new(Ball { pos: hand, vel: serve::toss_velocity(hand, apex), spin: 0.1 }, rows4([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), rows4([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
+            g.shot = Shot::default();
+            g.prev_ball = hand;
+            g.serving.tossed = true;
+        }
+        g.players[i].serve_anim = Some(0.35 * (s.t as f32 / serve::TOSS_RELEASE as f32).min(1.0));
+        return;
+    }
+    match s.swing {
+        None if !s.whiffed => {
+            let allowed = match (toss, press) {
+                (Toss::Under, Some(3)) => true,
+                (Toss::Strong | Toss::Weak, Some(0 | 1)) => true,
+                _ => false,
+            };
+            if allowed {
+                let grades = g.serve_data.grades(toss).to_vec();
+                match serve::search(&g.serve_data, toss, &predicted_path(g, grades.len())) {
+                    Some(k) => {
+                        let kind = if toss == Toss::Under { 3 } else { press.unwrap_or(0) };
+                        s.swing = Some(ServeSwing { left: k as u32, frames: k as u32, offset: k as i32 - SWEET_FRAME, grade: grades[k], kind });
+                    }
+                    None => s.whiffed = true,
+                }
+            }
+        }
+        Some(mut sw) => {
+            sw.left = sw.left.saturating_sub(1);
+            s.swing = Some(sw);
+        }
+        None => {}
+    }
+    g.serving = s;
+    // swing animation: wind up to contact, follow through
+    g.players[i].serve_anim = Some(match s.swing {
+        Some(sw) => 0.35 + 0.3 * (1.0 - sw.left as f32 / sw.frames.max(1) as f32),
+        None if s.whiffed => 0.9,
+        None => 0.35,
+    });
+    if let Some(sw) = s.swing.filter(|sw| sw.left == 0) {
+        let aim = if pads_aim(g, i) { stick } else { g.serving.bot_aim };
+        let rand_bit = rand(&mut g.rng) < 0.5;
+        let d = &g.serve_data;
+        let target = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], rand_bit);
+        debug!("player {i} serve {toss:?} kind {}: offset {} grade {} -> {target:?}", sw.kind, sw.offset, sw.grade);
+        g.players[i].balloon = serve::balloon(sw.grade, sw.offset, false).map(|b| (b, 0));
+        g.players[i].serve_anim = None;
+        g.players[i].stance = pos[0].abs();
+        strike(g, i, 0, sw.kind, target);
+        g.serving = Serving::default();
+        return;
+    }
+    // a toss that comes down untouched (or after a whiff) is tossed again
+    if g.flight.bounces > 0 {
+        g.serving = Serving { t: 0, ..Serving::default() };
+        hold_ball(g, i, Toss::Strong);
+    }
+}
+
+/// Whether player `i`'s serve aim comes from a stick (humans) rather than the stand-in AI's pick.
+fn pads_aim(g: &Game, i: usize) -> bool {
+    g.serving.bot_due.is_none() || i != g.score.server as usize
+}
+
+/// The ball rests in the server's tossing hand.
+fn hold_ball(g: &mut Game, i: usize, toss: Toss) {
+    let (pos, end) = (g.players[i].pos, g.players[i].end);
+    let (hand, _) = serve::toss_points(&g.serve_data, toss, pos, end);
+    g.flight = Flight::new(Ball { pos: hand, vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
+    g.prev_ball = hand;
 }
 
 /// A stick direction on screen as a direction on the court (x, z): right along the camera's right, up along its
@@ -533,11 +762,12 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
         if c.frames == 0 {
             let kind = g.players[i].kind;
             let target = aim(g);
-            strike(g, i, kind, target);
+            strike(g, i, 1, kind, target);
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
             let p = &mut g.players[i];
             p.contact = None;
             p.swung = true;
+            p.balloon = serve::balloon(c.grade, c.offset, false).map(|b| (b, 0));
             struck = Some(c);
         } else {
             p.contact = Some(Contact { frames: c.frames - 1, ..c });
@@ -558,33 +788,6 @@ fn swing_progress(p: &Player) -> Option<f32> {
     let f = p.swing? as f32;
     let w = p.wind.max(1) as f32;
     Some(if f <= w { 0.45 * f / w } else { 0.45 + 0.55 * ((f - w) / 16.0).min(1.0) })
-}
-
-/// Serve: toss, then contact at SERVE_CONTACT.
-fn advance_serve(g: &mut Game, i: usize) {
-    let Some(f) = g.players[i].swing else { return };
-    if g.phase == Phase::Serve {
-        let (p, end) = (g.players[i].pos, g.players[i].end);
-        let t = f as f32 / SERVE_CONTACT as f32;
-        g.flight.ball.pos = [p[0] - 0.25 * end, -1.3 - 1.3 * (t * std::f32::consts::FRAC_PI_2).sin(), p[2] + 0.2 * end];
-        g.prev_ball = g.flight.ball.pos;
-        if f == SERVE_CONTACT {
-            let kind = g.players[i].kind;
-            serve(g, i, kind);
-        }
-    }
-    let p = &mut g.players[i];
-    p.swing = (f + 1 < SWING_FRAMES).then_some(f + 1);
-    if p.swing.is_none() {
-        p.serving = false;
-    }
-}
-
-fn start_serve(g: &mut Game, i: usize, kind: i32) {
-    let p = &mut g.players[i];
-    if p.swing.is_none() {
-        *p = Player { swing: Some(0), wind: SERVE_CONTACT, serving: true, kind, stance: p.pos[0].abs(), ..*p };
-    }
 }
 
 /// A shot button press: remembered for a while and checked every frame until a contact is found.
@@ -613,7 +816,7 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
     let server = g.score.server as usize;
     if g.phase == Phase::Serve && g.message.is_empty() {
         g.message = match pads.slot_of(server) {
-            Some(s) => format!("Player {} serve: J/Space (A/Start)", s + 1),
+            Some(s) => format!("Player {} serve: walk the baseline, toss with J/A (strong), K/B (weak) or L/Y (underhand), hit at the top with J/A or K/B (L/Y underhand)", s + 1),
             None => "Serving".into(),
         };
     }
@@ -622,14 +825,10 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
 fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: bool) {
     g.players[i].aim = pad.stick;
     if g.phase == Phase::Serve && g.score.server == i as i32 {
-        if shot.is_some() || serve_press {
-            start_serve(g, i, shot.unwrap_or(0));
-        }
-        advance_serve(g, i);
+        let press = shot.or(serve_press.then_some(0));
+        let stick = screen(g, pad.stick);
+        serve_turn(g, i, stick, press);
         return;
-    }
-    if g.players[i].serving {
-        advance_serve(g, i);
     }
     if let Some(kind) = shot {
         press(g, i, kind);
@@ -644,9 +843,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     }
     // the stick at the moment of contact aims the shot
     let (aim, end) = (screen(g, pad.stick), g.players[i].end);
-    if let Some(c) = advance_stroke(g, i, move |g| aim_target(g, aim, end)) {
-        g.popup = Some((timing_word(&c), 50, c.grade));
-    }
+    advance_stroke(g, i, move |g| aim_target(g, aim, end));
 }
 
 /// Where the ball will be hittable on player `i`'s half: step a copy of the flight until it is waist-high after
@@ -667,23 +864,32 @@ fn intercept(g: &Game, i: usize) -> Option<(V3, u32)> {
     None
 }
 
-/// Timing error of the stand-in AI in frames (AIParam's "normal shot deviation" for character 0 is 9).
-const BOT_TIMING_ERROR: f32 = 9.0;
+/// How early/late the original's bots press (contact frame − sweet frame, with counts), measured over every
+/// stroke and serve of a recorded bot match (slot 5). The stand-in AI draws its timing from these.
+/// ponytail: the AI's own timing logic (AIParam, P11) replaces this.
+const BOT_STROKE_TIMING: [(i32, u32); 17] =
+    [(-6, 52), (-5, 16), (-4, 4), (-3, 4), (-2, 4), (-1, 9), (0, 7), (1, 4), (2, 9), (3, 4), (4, 4), (5, 3), (6, 4), (7, 1), (9, 2), (10, 2), (15, 2)];
+const BOT_SERVE_TIMING: [(i32, u32); 7] = [(-6, 9), (-5, 2), (-4, 1), (-3, 1), (-2, 1), (-1, 1), (0, 20)];
+
+/// A contact frame drawn from a recorded timing distribution.
+fn draw_due(rng: &mut u32, table: &[(i32, u32)]) -> usize {
+    let total: u32 = table.iter().map(|&(_, n)| n).sum();
+    let mut r = (rand(rng) * total as f32) as u32;
+    for &(off, n) in table {
+        if r < n {
+            return (SWEET_FRAME + off).max(0) as usize;
+        }
+        r -= n;
+    }
+    SWEET_FRAME as usize
+}
 
 /// Stand-in AI for player `i`: serves, runs to the predicted interception (in doubles only the teammate
 /// nearer to it; the other goes home), and presses the shot button around the sweet frame with a random timing
 /// error, through the same contact search as a human.
 fn bot(g: &mut Game, i: usize) {
     if g.phase == Phase::Serve && g.score.server == i as i32 {
-        if g.players[i].swing.is_none() {
-            let kind = if rand(&mut g.rng) < 0.5 { 0 } else { 2 };
-            start_serve(g, i, kind);
-        }
-        advance_serve(g, i);
-        return;
-    }
-    if g.players[i].serving {
-        advance_serve(g, i);
+        return bot_serve(g, i);
     }
     let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some();
     if !busy {
@@ -702,14 +908,21 @@ fn bot(g: &mut Game, i: usize) {
         let d = Vec2::new(goal[0] - p.pos[0], goal[2] - p.pos[2]);
         let want = if d.length() < 0.05 { Vec2::ZERO } else { d.clamp_length_max(RUN) };
         locomote(&mut g.players[i], want);
-        // press when the ball is due about SWEET_FRAME frames out, give or take the timing error
-        if let Some((_, frames)) = mine {
-            let due = SWEET_FRAME as f32 + (rand(&mut g.rng) * 2.0 - 1.0) * BOT_TIMING_ERROR * 0.1;
-            if frames as f32 <= due {
+        // press when the contact search would lock onto the drawn frame (or later, if it is already past)
+        if mine.is_some() {
+            if g.players[i].bot_due.is_none() {
                 let r = rand(&mut g.rng);
-                let kind = if r < 0.6 { 0 } else if r < 0.8 { 1 } else if r < 0.9 { 2 } else { 3 };
-                press(g, i, kind);
+                g.players[i].kind = if r < 0.6 { 0 } else if r < 0.8 { 1 } else if r < 0.9 { 2 } else { 3 };
+                g.players[i].bot_due = Some(draw_due(&mut g.rng, &BOT_STROKE_TIMING));
             }
+            let due = g.players[i].bot_due.unwrap_or(SWEET_FRAME as usize);
+            if find_contact(g, i).is_some_and(|c| c.frames as usize <= due) {
+                let kind = g.players[i].kind;
+                press(g, i, kind);
+                g.players[i].bot_due = None;
+            }
+        } else {
+            g.players[i].bot_due = None;
         }
     }
     let end = g.players[i].end;
@@ -719,12 +932,34 @@ fn bot(g: &mut Game, i: usize) {
     });
 }
 
+/// The stand-in AI's serve: strong toss, swing timed from the recorded bots' serve timing (a badly timed
+/// strong toss then goes wide or long, as in the original). ponytail: the AI's serve aim is P11.
+fn bot_serve(g: &mut Game, i: usize) {
+    if g.serving.bot_due.is_none() {
+        g.serving.bot_due = Some(draw_due(&mut g.rng, &BOT_SERVE_TIMING));
+        g.serving.bot_aim = Vec2::new(rand(&mut g.rng) * 2.0 - 1.0, rand(&mut g.rng) * 2.0 - 1.0);
+    }
+    let s = g.serving;
+    let press = if s.toss.is_none() {
+        (s.t >= 40).then_some(0)
+    } else if s.tossed && s.swing.is_none() && !s.whiffed {
+        let horizon = g.serve_data.grades(Toss::Strong).len();
+        let due = s.bot_due.unwrap_or(SWEET_FRAME as usize);
+        serve::search(&g.serve_data, Toss::Strong, &predicted_path(g, horizon)).filter(|&k| k <= due).map(|_| 0)
+    } else {
+        None
+    };
+    serve_turn(g, i, Vec2::ZERO, press);
+}
+
 fn simulate(mut g: ResMut<Game>) {
     let g2 = &mut *g;
     let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
     g2.cam.step(&Scene { players: &players, ball: g2.flight.ball.pos });
     match g.phase {
-        Phase::Serve => return,
+        // only the toss flies while the serve is set up
+        Phase::Serve if !g.serving.tossed => return,
+        Phase::Serve => {}
         Phase::ChangeEnds(0) => return next_point(&mut g),
         Phase::ChangeEnds(n) => return g.phase = Phase::ChangeEnds(n - 1),
         Phase::Over(0) => {
@@ -759,7 +994,7 @@ fn simulate(mut g: ResMut<Game>) {
         None => g.flight.step(&shot, surface),
     }
     g.since_hit += 1;
-    if g.phase != Phase::Rally {
+    if g.phase != Phase::Rally || g.shots == 0 {
         return;
     }
     let f = &g.flight;
@@ -866,9 +1101,9 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
         t.rotation = Quat::from_rotation_y(p.facing);
         pose.speed = p.vel.length();
         pose.stride = p.stride;
-        pose.swing = if p.serving { p.swing.map(|s| s as f32 / SWING_FRAMES as f32) } else { swing_progress(&p) };
+        pose.swing = p.serve_anim.or_else(|| swing_progress(&p));
         pose.backhand = p.backhand;
-        pose.serving = p.serving;
+        pose.serving = p.serve_anim.is_some();
         // the racket reaches for the contact ball, in the figure's own frame
         pose.reach = p.hit_at.map(|b| t.rotation.inverse() * (Vec3::from(b) - t.translation));
     }
@@ -877,20 +1112,45 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
     }
 }
 
-fn popup(mut g: ResMut<Game>, mut q: Query<(&mut Text, &mut TextColor), With<PopupText>>) {
-    if let Some((_, n, _)) = &mut g.popup {
-        *n = n.saturating_sub(1);
-    }
-    let shown = g.popup.filter(|(_, n, _)| *n > 0);
-    for (mut t, mut c) in &mut q {
-        match shown {
-            Some((word, n, _)) => {
-                t.0 = word.to_string();
-                let a = (n as f32 / 15.0).min(1.0);
-                c.0 = if word == "SWEET SPOT" { Color::srgba(1.0, 0.82, 0.15, a) } else { Color::srgba(1.0, 1.0, 1.0, a) };
-            }
-            None => t.0.clear(),
+/// Balloons live their fade-in, hold and fade-out, in simulation frames.
+fn age_balloons(mut g: ResMut<Game>) {
+    for p in &mut g.players {
+        if let Some((b, age)) = p.balloon {
+            p.balloon = serve::balloon_alpha(age + 1).map(|_| (b, age + 1));
         }
+    }
+}
+
+/// Each player's balloon: a billboard facing the camera, its tail just above the head.
+fn balloons(
+    g: Res<Game>,
+    art: Res<BalloonArt>,
+    time: Res<Time<Fixed>>,
+    cam: Query<&Transform, (With<Camera3d>, Without<BalloonView>)>,
+    mut q: Query<(&BalloonView, &mut Transform, &mut Visibility)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Ok(cam) = cam.single() else { return };
+    let a = time.overstep_fraction();
+    for (view, mut t, mut vis) in &mut q {
+        let p = &g.players[view.0];
+        let Some((b, age)) = p.balloon else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let Some(alpha) = serve::balloon_alpha(age) else { continue };
+        if let Some(mut m) = materials.get_mut(&view.1) {
+            m.base_color_texture = Some(art.0[balloon_index(b)].clone());
+            m.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
+        }
+        let at = Vec3::from(p.prev).lerp(Vec3::from(p.pos), a);
+        // game space → world: (x, -y, -z); the figure's head centre stands 1.77 m up
+        let size = 2.0 * serve::BALLOON_SIZE;
+        let up = 1.77 + serve::BALLOON_LIFT + size * 0.5;
+        t.translation = Vec3::new(at.x, up, -at.z);
+        t.rotation = cam.rotation;
+        t.scale = Vec3::splat(size);
+        *vis = Visibility::Visible;
     }
 }
 
