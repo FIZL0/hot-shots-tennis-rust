@@ -136,9 +136,17 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   original (verify with recorded let serves).
 
 ### Players
-- [ ] **P7 — Player movement.** Exact run/sprint speeds, acceleration, turning, split-step, auto-positioning
-  toward a locked contact, per character (TParam.csv + player object fields). Capture player position/velocity
-  per frame over PINE from slots 3/5 and match frame-exact.
+- [ ] **P7 — Exact character movement stats.** Every character moves exactly as in the original, per
+  character: walk/run speed, dash/sprint speed, acceleration and deceleration curves, turning rate, direction
+  changes, split-step/ready hop, recovery after a shot, reach (forehand/backhand/volley/smash, e.g. the
+  per-player `+0x13a0..0x13d0` fields), contact height windows, serve position and movement before/after serving,
+  dive distance, and how stats like *Run CON* / *Body ADJ* / *Back ADJ* / *Rizing ADJ* in TParam.csv (and the
+  player object derived from them) turn into those numbers. Read every value from the disc at runtime (TParam.csv,
+  GAME.BIN via `hst_data::exe`), never hard-coded. Auto-positioning toward a locked contact must follow the same
+  rules. Verify each character (at least Kaito pc03 and Carol pc06 first, then all 14) by recording player
+  position/velocity every frame over PINE with scripted `tools/vpad.py` input and replaying the same input
+  through P0's harness — positions must match frame-exact. Document the derived per-character stat table in the
+  journal (not in git).
 - [ ] **P8 — Player animation timing.** Port the player state machine and the animation timing from the game's
   ANI/ANI2/MOR data and code: idle, ready, run directions (`run_f/b/l/r`, `dush_f`), shot animations
   (`sh_*`), contact frames, recovery, celebrations/reactions. Drive the stand-in figure's poses from those exact
