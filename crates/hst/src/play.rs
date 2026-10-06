@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 use hst_data::{exe::ScoreboardTiming, iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
+use hst_sim::camera::{Camera, Scene};
 use hst_sim::court;
 use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
@@ -48,11 +49,9 @@ const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 const SWEET_FRAME: i32 = 8;
 /// A press stays live this many frames looking for a contact.
 const PRESS_FRAMES: u32 = 28;
-/// The original's serve camera (camera-to-world rows, game space) and field of view: the game stores the
-/// horizontal half-angle of its 4:3 picture (vertical = horizontal × 0.75, measured on the court lines).
-const SERVE_CAM_EYE: [f32; 3] = [0.0, -11.89, -39.238];
-const SERVE_CAM_FORWARD: [f32; 3] = [0.0, 0.292, 0.956];
-const SERVE_CAM_FOV: f32 = 0.1745;
+/// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
+/// of it (measured on the court lines against the real game).
+const SHOWN_ASPECT: f32 = 0.75;
 
 #[derive(Clone, Copy, Default)]
 struct Player {
@@ -135,6 +134,10 @@ struct Game {
     rng: u32,
     /// Timing pop-up: text, frames left, grade.
     popup: Option<(&'static str, u32, u8)>,
+    /// The original's match camera, stepped with the simulation.
+    cam: Camera,
+    /// The human whose end the camera follows (the original turns round to stay behind its human).
+    cam_owner: Option<usize>,
 }
 
 /// One controller slot's state, gathered every display frame and consumed by the 60 Hz simulation.
@@ -290,6 +293,8 @@ fn setup(
         message: String::new(),
         rng: 0x2468_ace1,
         popup: None,
+        cam: Camera::new(),
+        cam_owner: Some(0),
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -334,6 +339,8 @@ fn reset_positions(g: &mut Game) {
         let end = at.facing;
         g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, home: at.pos, ..Player::default() };
     }
+    g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
+    g.cam.cut();
     let s = &g.players[g.score.server as usize];
     let ball = [s.pos[0] + 0.3, -1.0, s.pos[2]];
     g.flight = Flight::new(Ball { pos: ball, vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
@@ -423,8 +430,17 @@ fn serve(g: &mut Game, who: usize, kind: i32) {
     strike(g, who, if kind == 3 { 0 } else { kind }, target);
 }
 
-/// Analog aim, screen-relative (the camera looks toward +z): sideways spans the court, stick up moves the target
-/// toward +z (deeper for the near team, shorter for the far one); centred is a deep middle ball.
+/// A stick direction on screen as a direction on the court (x, z): right along the camera's right, up along its
+/// forward.
+fn screen(g: &Game, stick: Vec2) -> Vec2 {
+    let r = g.cam.view.rot;
+    let right = Vec2::new(r[0][0], r[0][2]).normalize_or(Vec2::X);
+    let up = Vec2::new(r[2][0], r[2][2]).normalize_or(Vec2::Y);
+    right * stick.x + up * stick.y
+}
+
+/// Analog aim on the court (x, z direction from `screen`, or a bot's random pick): sideways spans the court,
+/// +z moves the target toward +z (deeper for the −z team, shorter for the other); centred is a deep middle ball.
 fn aim_target(g: &Game, stick: Vec2, end: f32) -> V3 {
     let width = if g.rules.players > 2 { 4.4 } else { 3.4 };
     let x = stick.x.clamp(-1.0, 1.0) * width;
@@ -593,6 +609,7 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
             None => bot(g, i),
         }
     }
+    g.cam_owner = (0..g.players.len()).find(|&i| pads.slot_of(i).is_some());
     let server = g.score.server as usize;
     if g.phase == Phase::Serve && g.message.is_empty() {
         g.message = match pads.slot_of(server) {
@@ -618,15 +635,15 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         press(g, i, kind);
     }
     if g.players[i].contact.is_none() {
-        // screen-relative: the camera looks toward +z, so stick right is +x and stick up is +z
-        let mut want = pad.stick * RUN * if pad.sprint { SPRINT } else { 1.0 };
+        // screen-relative: stick right follows the camera's right, stick up its ground-forward
+        let mut want = screen(g, pad.stick) * RUN * if pad.sprint { SPRINT } else { 1.0 };
         if g.players[i].swing.is_some() {
             want *= 0.25;
         }
         locomote(&mut g.players[i], want);
     }
     // the stick at the moment of contact aims the shot
-    let (aim, end) = (pad.stick, g.players[i].end);
+    let (aim, end) = (screen(g, pad.stick), g.players[i].end);
     if let Some(c) = advance_stroke(g, i, move |g| aim_target(g, aim, end)) {
         g.popup = Some((timing_word(&c), 50, c.grade));
     }
@@ -703,6 +720,9 @@ fn bot(g: &mut Game, i: usize) {
 }
 
 fn simulate(mut g: ResMut<Game>) {
+    let g2 = &mut *g;
+    let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
+    g2.cam.step(&Scene { players: &players, ball: g2.flight.ball.pos });
     match g.phase {
         Phase::Serve => return,
         Phase::ChangeEnds(0) => return next_point(&mut g),
@@ -789,21 +809,23 @@ fn orbit_from(eye: [f32; 3], forward: [f32; 3]) -> (Vec3, f32, f32) {
     (Vec3::new(eye[0], -eye[1], -eye[2]), (-back.y).asin(), back.x.atan2(back.z))
 }
 
-/// The original's match camera; free mode leaves the mouse/right stick in charge.
-fn camera(mode: Res<CamMode>, cs: Res<CamState>, mut q: Query<(&mut Orbit, &mut Projection)>) {
+/// The original's match camera (`hst_sim::camera`); free mode leaves the mouse/right stick in charge.
+fn camera(g: Res<Game>, mode: Res<CamMode>, cs: Res<CamState>, window: Query<&Window>, mut q: Query<(&mut Orbit, &mut Projection)>) {
     let Ok((mut o, mut proj)) = q.single_mut() else { return };
     if *mode == CamMode::Free {
         o.yaw += cs.turn;
         return;
     }
-    // ponytail: the serve camera's resting pose; the rally camera's dolly and fit are being ported (P16)
-    let (eye, pitch, yaw) = orbit_from(SERVE_CAM_EYE, SERVE_CAM_FORWARD);
+    let v = g.cam.view;
+    let (eye, pitch, yaw) = orbit_from(v.eye, v.rot[2]);
     o.radius = 40.0;
     o.pitch = pitch;
     o.yaw = yaw;
     o.focus = eye - Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z * o.radius;
     if let Projection::Perspective(p) = &mut *proj {
-        p.fov = 2.0 * (SERVE_CAM_FOV.tan() * 0.75).atan();
+        // never show less than the game's 4:3 picture: windows narrower than 4:3 widen vertically
+        let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+        p.fov = 2.0 * (v.fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
     }
 }
 

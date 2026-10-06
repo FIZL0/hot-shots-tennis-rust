@@ -328,10 +328,12 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   harness — bounce frames bit-exact on each surface.
 
 ### Presentation
-- [~] **P16 — Camera.** Serve camera exact (eye 0/11.89 up/−39.238, 17° down, fov = horizontal half-angle
-  0.1745 of the 4:3 picture, checked on court lines against slot 3). Rally camera recorded
-  (`tools/record_camera.py 5 6000 context/fixtures/camera_s05.bin`): it dollies straight back when near players
-  go deep (`36a4a0`), and fits the ball at the top (`369ce0` tail); mode table 0x3fcd4c. Port next. Original text: Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
+- [~] **P16 — Camera.** Match camera mode 0 ported (`hst_sim::camera`, update `369ce0`): orbit 41 m / 17° /
+  framing offset, smoothed dolly-back for the near team (`36a4a0`), bottom fit (`36acc0`), sideways slide + widen
+  (`36a840`), 10 % easing, ball top fit, cut on each new point, turned round behind a human on the +z half.
+  `tests/camera.rs`: all 4883 serve/rally frames of `camera_s05.bin` within 4 mm (f32, not the PS2 sequence).
+  Shown fov: game horizontal half-angle of 4:3, vertical ×0.75, never less than 4:3 in any window. Open: other
+  modes (table 0x3fcd4c rows 1+), point-over/replay/cut-away cameras (+0x60/+0x64), two-human behaviour. Original text: Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
   serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra. Verify camera position/target/FOV every frame against the game's
   camera state recorded over PINE (rally, serve, point end, replay) — bit-exact where the math is ported.
 - [ ] **P17 — Court rendering fidelity.** Material blend modes and flags (MTL header), vertex colour/lighting,
