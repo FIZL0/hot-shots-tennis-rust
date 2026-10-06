@@ -182,6 +182,12 @@ pub struct Flight {
     /// Collide with the net. The live ball does; the game's stored path (what the AI reads) is stepped
     /// against the court plane only, so replays of recorded paths turn this off.
     pub net: bool,
+    /// Make line calls at the first landing (the live ball in a rally, and the game's path predictor).
+    pub lines: Option<crate::judge::Lines>,
+    /// Line call so far (+0xa5).
+    pub call: crate::judge::Call,
+    /// Signed distance from the called landing to the nearest line (+0x230).
+    pub line_distance: f32,
 }
 
 /// Constants of the original's contact code (exact bit patterns).
@@ -204,7 +210,7 @@ mod k {
 
 impl Flight {
     pub fn new(ball: Ball, spin_frame: [V4; 4], contact: [V4; 4]) -> Self {
-        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, spin_frame, contact, slide: 0.0, net: true }
+        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0 }
     }
 
     /// Advance one 60 Hz frame on `surface`, in the original's order: accelerate, add wind and the curve
@@ -264,6 +270,12 @@ impl Flight {
             pos = crate::contact::contact_point(Some(&h), pos, target, r);
             touched_special |= material != Material::Court;
             d = self.respond(shot, surface, d, h.normal, material, &mut counted);
+            if let Some(l) = self.lines.filter(|_| !self.rolling && (self.bounces == 1 || self.contacts == 1)) {
+                if let Some((call, dist)) = crate::judge::call_landing(self.call, self.special_contacts != 0, pos, &l) {
+                    self.call = call;
+                    self.line_distance = dist.unwrap_or(self.line_distance);
+                }
+            }
             remaining = ps2::mul(remaining, ps2::sub(1.0, h.t));
             if remaining <= k::MIN_REMAINDER || contacts >= 30 {
                 break;

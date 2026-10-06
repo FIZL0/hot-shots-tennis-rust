@@ -13,6 +13,7 @@
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3, rows4};
+use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
 
@@ -21,7 +22,8 @@ use crate::{Args, GameSpace, Orbit, figure};
 /// The original's default exhibition: one set to 4 games, deuce on.
 const RULES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_games: false, players: 2 };
 const HALF_LENGTH: f32 = 11.885;
-const SINGLES_HALF_WIDTH: f32 = 4.115;
+/// The umpire's calls by verdict code.
+const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out", "Illegal hit"];
 /// Top running speed in metres per frame (≈ 6 m/s); sprint multiplies it.
 const RUN: f32 = 0.1;
 const SPRINT: f32 = 1.35;
@@ -47,9 +49,6 @@ impl Side {
     /// Sign of z on this side of the net (game space).
     fn z(self) -> f32 {
         if self == Side::Near { 1.0 } else { -1.0 }
-    }
-    fn other(self) -> Side {
-        if self == Side::Near { Side::Far } else { Side::Near }
     }
 }
 
@@ -93,8 +92,12 @@ struct Game {
     server: Side,
     last_hitter: Side,
     since_hit: u32,
-    first_bounce_checked: bool,
     score: Score,
+    rally: Rally,
+    /// Shots this rally (1 = the serve).
+    shots: i32,
+    /// Line tolerance from the game program.
+    line_margin: f32,
     message: String,
     rng: u32,
     /// Timing pop-up: text, frames left, grade.
@@ -161,6 +164,12 @@ fn tables(iso: &str) -> Vec<Table> {
         .collect()
 }
 
+fn line_margin(iso: &str) -> f32 {
+    let mut iso = Iso::open(iso).expect("open iso");
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
+    hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").line_margin()
+}
+
 fn setup(
     mut commands: Commands,
     args: Res<Args>,
@@ -178,8 +187,10 @@ fn setup(
         server: Side::Near,
         last_hitter: Side::Near,
         since_hit: 0,
-        first_bounce_checked: false,
         score: Score::new(),
+        rally: Rally::default(),
+        shots: 0,
+        line_margin: line_margin(&args.iso),
         message: "Your serve".into(),
         rng: 0x2468_ace1,
         popup: None,
@@ -292,11 +303,13 @@ fn strike(g: &mut Game, who: Side, kind: i32, target: V3) {
     let side = Vec3::Y.cross(dir).normalize();
     let frame = [side.to_array(), [0.0, 1.0, 0.0], side.cross(Vec3::Y).normalize().to_array()];
     g.shot = Shot { class: 1, kind, curve_frames: l.frames + 1, ..Shot::default() };
+    g.shots += 1;
+    g.rally.on_hit(g.shots, who as i32, g.score.server, g.score.receiver, g.flight.contacts);
     g.flight = Flight::new(Ball { pos: at, vel, spin: KIND_SPIN[kind as usize] }, rows4(frame), rows4(frame));
+    g.flight.lines = Some(Lines { shots: g.shots, doubles: RULES.players > 2, side: g.score.side, hitter_far: who == Side::Near, margin: g.line_margin });
     g.prev_ball = at;
     g.last_hitter = who;
     g.since_hit = 0;
-    g.first_bounce_checked = false;
     g.phase = Phase::Rally;
 }
 
@@ -611,8 +624,13 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
     match g.phase {
         Phase::Serve => return,
         Phase::Over(0) => {
+            g.score.second_serve = g.rally.faults == 1;
+            g.score.let_ = g.rally.let_;
             g.score.change_ends(); // ponytail: ends are tracked, not yet swapped on court (P0b serve flow)
             g.score.next_point(&RULES);
+            g.rally.next_point();
+            g.rally.new_point();
+            g.shots = 0;
             g.server = if g.score.server % 2 == 0 { Side::Near } else { Side::Far };
             g.phase = Phase::Serve;
             reset_positions(&mut g);
@@ -628,41 +646,43 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
     if g.phase != Phase::Rally {
         return;
     }
-    let (b, hitter) = (g.flight.ball, g.last_hitter);
-    let receiver = hitter.other();
-    let mut winner = None;
-    if g.flight.special_contacts > 0 && b.pos[2] * hitter.z() > 0.0 && g.since_hit > 30 {
-        winner = Some((receiver, "Net"));
-    } else if g.flight.bounces >= 1 && !g.first_bounce_checked {
-        g.first_bounce_checked = true;
-        let inside = b.pos[0].abs() <= SINGLES_HALF_WIDTH + 0.033 && b.pos[2] * receiver.z() > 0.0 && b.pos[2].abs() <= HALF_LENGTH + 0.033;
-        if !inside {
-            winner = Some((receiver, "Out"));
-        }
-    } else if g.flight.bounces >= 2 || g.flight.rolling || g.since_hit > 400 {
-        winner = Some((hitter, "Winner"));
+    let f = &g.flight;
+    // ponytail: no ball body hits and no rest detection on steep surfaces yet; the rally timeout counts as at rest
+    let view = BallState { call: f.call, contacts: f.contacts, stopped: f.frame > 1800, pos: f.ball.pos };
+    let (shots, hitter, server) = (g.shots, g.last_hitter as i32, g.score.server);
+    if !g.rally.check(&view, shots, hitter, server, None, true) {
+        return;
     }
-    if let Some((side, why)) = winner {
-        let event = g.score.point(&RULES, side as usize);
-        match event {
-            Some(Event::Game) => g.score.new_game(),
-            Some(Event::Set) => g.score.new_set(),
-            _ => {}
-        }
-        g.score.note_tiebreak_start();
-        let who = if side == Side::Near { "you" } else { "opponent" };
-        g.message = match event {
-            Some(Event::Set) if g.score.match_over => format!("{why} - match to {who}"),
-            Some(Event::Set) => format!("{why} - set to {who}"),
-            Some(Event::Game) => format!("{why} - game to {who}"),
-            _ => format!("{why} - point to {who}"),
-        };
-        info!("point: {} ({why}) after {} frames, {event:?} {:?}", if side == Side::Near { "near" } else { "far" }, g.since_hit, g.score);
-        if g.score.match_over {
-            g.score = Score::new();
-        }
+    let verdict = g.rally.judge(None);
+    let why = CALLS[verdict.call as usize];
+    let Some(team) = verdict.winner else {
+        g.message = if verdict.call == 2 { "Fault - second serve".into() } else { format!("{why} - serve again") };
+        info!("no point: {why} after {} frames", g.since_hit);
         g.phase = Phase::Over(90);
+        return;
+    };
+    // a scored point ends the serve's faults (the scoreboard clears them as it shows the score)
+    g.rally.faults = 0;
+    let side = if team == 0 { Side::Near } else { Side::Far };
+    let event = g.score.point(&RULES, side as usize);
+    match event {
+        Some(Event::Game) => g.score.new_game(),
+        Some(Event::Set) => g.score.new_set(),
+        _ => {}
     }
+    g.score.note_tiebreak_start();
+    let who = if side == Side::Near { "you" } else { "opponent" };
+    g.message = match event {
+        Some(Event::Set) if g.score.match_over => format!("{why} - match to {who}"),
+        Some(Event::Set) => format!("{why} - set to {who}"),
+        Some(Event::Game) => format!("{why} - game to {who}"),
+        _ => format!("{why} - point to {who}"),
+    };
+    info!("point: {} ({why}) after {} frames, {event:?} {:?}", if side == Side::Near { "near" } else { "far" }, g.since_hit, g.score);
+    if g.score.match_over {
+        g.score = Score::new();
+    }
+    g.phase = Phase::Over(90);
 }
 
 /// Camera modes drive the orbit rig: follow sits behind you, broadcast is the classic high baseline view,

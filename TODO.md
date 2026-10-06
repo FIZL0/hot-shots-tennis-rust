@@ -139,7 +139,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   serve branch of the hit routine `3467b0`), plus the delays between points. Verify against recorded serves
   and full points from the save states with P0's replay harness. (P6/P12 cover the remaining details.)
   Part 1 done: score, rotation, ends (`hst_sim::score`, wired into `play.rs`); its round1 replay test only
-  covers the points captured so far. Next: judge/faults (Part 2), post-point flow and serve (Part 3).
+  covers the points captured so far. Part 2 done: line calls, point-over check, hit legality, umpire verdict
+  (`hst_sim::judge`, in `Flight` and `play.rs`): 120 recorded calls bit-exact, 22 verdicts match. Faults/lets/
+  net points are unverified until a capture includes the live ball `*(gm+0x88)` (the round1 capture's ball is
+  the path predictor) — see journal `2-JUDGE-PART.md`. Next: post-point flow and serve (Part 3).
 - [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
   singles (1v1) and doubles (2v2) in any human/AI mix, as the original allows. Controller assignment and
   hot-plug per slot, doubles court width (5.485 m) and doubles rules, partner positioning and who-takes-the-ball
@@ -167,7 +170,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P5 — Shot selection by input.** How buttons, hold/charge time and stick map to class/kind/power and the
   charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
   (capture pad state over PINE alongside shots).
-- [ ] **P6 — Serve details.** (Basics in P0b.) Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
+- [ ] **P6 — Serve details.** (Basics in P0b.) **Bent serves** (class 0, bend ≠ 0) kick sideways at the bounce in
+  the original and not in `Flight` (round1 vsync 25559, `line_calls.rs` exempts them — remove that exemption). Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
   service box rules, second serve, serve positions per side/court. **Lets:** a serve that clips the net cord
   and lands in the box is a let and is replayed; one that clips the cord and lands out is a fault — the cord
   contact must come from the exact net collision (P15), and the let/fault call and replay flow must match the

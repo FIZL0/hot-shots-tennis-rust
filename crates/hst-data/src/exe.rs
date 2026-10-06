@@ -56,6 +56,11 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// Tolerance the line calls add to every court line (metres).
+    pub fn line_margin(&self) -> f32 {
+        self.f32(0x40_3bec)
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)

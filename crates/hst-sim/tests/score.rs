@@ -126,11 +126,14 @@ fn round1_replay() {
     let (points, games, sets) = snapshot(f0);
     let mut s = Score { points, games, sets, rotation: rd(f0, 0x4230b0), swapped: f0[BASE + 0x4230b4 - 0x422f80] != 0, games_played: rd(f0, 0x4230c0), server: rd(f0, 0x42304c), side: rd(f0, 0x423050), receiver: rd(f0, 0x423054), ..Score::new() };
     let mut scored = 0;
+    // Instant replays restore the point's saved state and play it again: score states already seen are skipped.
+    let mut seen = vec![snapshot(f0)];
     for w in frames.windows(2) {
         let (prev, cur) = (snapshot(w[0]), snapshot(w[1]));
-        if prev == cur {
+        if prev == cur || seen.contains(&cur) {
             continue;
         }
+        seen.push(cur);
         let model = (s.points, s.games, s.sets);
         if cur.0 == [0, 0] && (cur.1 == model.1 || cur.1 == [0, 0]) && model.0 != [0, 0] {
             if cur.1 == [0, 0] { s.new_set() } else { s.new_game() }
@@ -153,4 +156,91 @@ fn round1_replay() {
     }
     eprintln!("round1: {scored} points replayed");
     assert!(scored > 0);
+}
+
+/// The umpire's verdict at every point the game decided in round1 (sub-phase gm+0x56 = 4 is set on the
+/// frame the point-over check fires): fed the recorded hits and ball state, `Rally` must also see the point
+/// over, and its verdict must match the recorded outcome (no point when the game marks one, else the team
+/// whose score moved). The recorded ball is the path predictor; its call is final by the decision frame.
+#[test]
+fn round1_verdicts() {
+    use hst_sim::judge::{BallState, Call, Rally};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/round1.bin")) else { return eprintln!("round1.bin absent, skipped") };
+    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let gm = |s: &[u8], o: usize| s[BASE + 0x180 + o];
+    let ball = |s: &[u8]| -> BallState {
+        let b = &s[BASE + 0x180 + 0x100..];
+        let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        BallState {
+            call: [Call::None, Call::In, Call::Out, Call::Net, Call::NetIn, Call::NetOut][b[0xa5] as usize],
+            contacts: i32::from_le_bytes(b[0x228..0x22c].try_into().unwrap()),
+            stopped: b[0xa4] == 3,
+            pos: [f(0xe0), f(0xe4), f(0xe8)],
+        }
+    };
+    let mut rally = Rally::default();
+    let (mut judged, mut reseeded, mut skipped, mut calls) = (0, false, 0, [0; 7]);
+    let frame_no = |s: &[u8]| i32::from_le_bytes(s[BASE + 0x180 + 0x100 + 0xac..][..4].try_into().unwrap());
+    for (k, w) in frames.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let shots = rd(b, 0x423060);
+        if shots > rd(a, 0x423060) {
+            rally.on_hit(shots, rd(b, 0x423058), rd(b, 0x42304c), rd(b, 0x423054), ball(a).contacts);
+            reseeded = false;
+        } else if gm(b, 0x55) == 3 && shots > 0 && frame_no(b) < frame_no(a) {
+            // The predictor restarted from the live ball without a hit: the live ball met the net, which the
+            // predictor ignores. The live ball (gm+0x88) is not in this capture, so its call is unknown.
+            reseeded = true;
+        }
+        if !(gm(b, 0x56) == 4 && gm(a, 0x56) != 4 && gm(b, 0x55) == 3) {
+            continue;
+        }
+        let body = Some(rd(b, 0x42305c)).filter(|&p| p >= 0);
+        if reseeded && body.is_none() {
+            eprintln!("vsync {}: net point skipped (shots {shots}, game marks {})", u32::from_le_bytes(b[..4].try_into().unwrap()), if rd(frames[(k + 2).min(frames.len() - 1)], 0x4230b8) == -1 { "no point" } else { "a point" });
+            skipped += 1;
+            rally.next_point();
+            rally.new_point();
+            continue;
+        }
+        assert!(rally.check(&ball(b), shots, rd(b, 0x423058), rd(b, 0x42304c), body, true), "vsync {}: game ended the point, port did not", u32::from_le_bytes(b[..4].try_into().unwrap()));
+        let v = rally.judge(body);
+        // outcome: the next score change, or none if the serve comes again
+        let before = snapshot(b);
+        let after = frames[k + 1..].iter().map(|s| snapshot(s)).find(|s| *s != before);
+        let no_point = rd(frames[(k + 2).min(frames.len() - 1)], 0x4230b8) == -1;
+        match v.winner {
+            None => assert!(no_point, "vsync {}: port {v:?}, game scored", u32::from_le_bytes(b[..4].try_into().unwrap())),
+            Some(t) => {
+                let Some(after) = after else { break };
+                let moved = (0..2).find(|&i| after.0[i] > before.0[i] || after.1[i] > before.1[i]);
+                assert_eq!(moved, Some(t), "vsync {}: port {v:?}, score {before:?} -> {after:?}", u32::from_le_bytes(b[..4].try_into().unwrap()));
+            }
+        }
+        calls[v.call as usize] += 1;
+        rally.next_point();
+        rally.new_point();
+        judged += 1;
+    }
+    eprintln!("round1: {judged} verdicts (by call {calls:?}), {skipped} net points skipped (no live ball in the capture)");
+    assert!(judged > 0);
+}
+
+#[test]
+fn fault_then_double_fault() {
+    use hst_sim::judge::{BallState, Call, Rally};
+    let out = BallState { call: Call::Out, contacts: 1, stopped: false, pos: [0.0; 3] };
+    let mut r = Rally::default();
+    r.on_hit(1, 0, 0, 1, 0);
+    assert!(r.check(&out, 1, 0, 0, None, true));
+    assert_eq!((r.judge(None).call, r.judge(None).winner, r.faults), (2, None, 1));
+    r.next_point();
+    r.new_point();
+    assert_eq!(r.faults, 1, "second serve keeps the fault");
+    r.on_hit(1, 0, 0, 1, 0);
+    assert!(r.check(&out, 1, 0, 0, None, true));
+    assert_eq!((r.judge(None).call, r.judge(None).winner), (3, Some(1)));
+    r.next_point();
+    assert_eq!(r.faults, 0);
 }

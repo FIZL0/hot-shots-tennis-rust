@@ -7,5 +7,6 @@ pub mod shot;
 pub mod contact;
 pub mod quat;
 pub mod score;
+pub mod judge;
 pub mod vu0;
 pub mod libm;
