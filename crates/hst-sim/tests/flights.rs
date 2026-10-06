@@ -60,6 +60,7 @@ fn whole_shots_match_the_game() {
         let p0 = c.path[0].1;
         let mut fl = Flight::new(Ball { pos: [p0[0], p0[1], p0[2]], vel: [p0[3], p0[4], p0[5]], spin: c.spin }, c.spin_frame, c.contact);
         fl.frame = c.start;
+        fl.net = false; // the game records paths against the court plane only
         for &(i, want) in &c.path[1..] {
             fl.step(&c.shot, &COURTS[c.court]);
             let dp = (0..3).map(|k| (fl.ball.pos[k] - want[k]).abs()).fold(0.0, f32::max);
