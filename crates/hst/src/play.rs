@@ -13,10 +13,13 @@
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Shot, V3, rows4};
+use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
 
 use crate::{Args, GameSpace, Orbit, figure};
 
+/// The original's default exhibition: one set to 4 games, deuce on.
+const RULES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_games: false, players: 2 };
 const HALF_LENGTH: f32 = 11.885;
 const SINGLES_HALF_WIDTH: f32 = 4.115;
 /// Top running speed in metres per frame (≈ 6 m/s); sprint multiplies it.
@@ -91,7 +94,7 @@ struct Game {
     last_hitter: Side,
     since_hit: u32,
     first_bounce_checked: bool,
-    score: [u32; 2],
+    score: Score,
     message: String,
     rng: u32,
     /// Timing pop-up: text, frames left, grade.
@@ -176,7 +179,7 @@ fn setup(
         last_hitter: Side::Near,
         since_hit: 0,
         first_bounce_checked: false,
-        score: [0; 2],
+        score: Score::new(),
         message: "Your serve".into(),
         rng: 0x2468_ace1,
         popup: None,
@@ -215,7 +218,7 @@ fn setup(
 }
 
 fn reset_positions(g: &mut Game) {
-    let sx = if (g.score[0] + g.score[1]) % 2 == 0 { -1.0 } else { 1.0 }; // deuce/ad court alternates
+    let sx = if g.score.side == 0 { -1.0 } else { 1.0 }; // deuce / ad court
     for (i, side) in [Side::Near, Side::Far].into_iter().enumerate() {
         let x = if side == g.server { sx * 1.0 * side.z() } else { -sx * 2.5 * side.z() };
         let p = &mut g.players[i];
@@ -608,7 +611,9 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
     match g.phase {
         Phase::Serve => return,
         Phase::Over(0) => {
-            g.server = g.server.other();
+            g.score.change_ends(); // ponytail: ends are tracked, not yet swapped on court (P0b serve flow)
+            g.score.next_point(&RULES);
+            g.server = if g.score.server % 2 == 0 { Side::Near } else { Side::Far };
             g.phase = Phase::Serve;
             reset_positions(&mut g);
             return;
@@ -638,9 +643,24 @@ fn simulate(mut g: ResMut<Game>, args: Res<Args>) {
         winner = Some((hitter, "Winner"));
     }
     if let Some((side, why)) = winner {
-        g.score[side as usize] += 1;
-        g.message = format!("{why} - point to {}", if side == Side::Near { "you" } else { "opponent" });
-        info!("point: {} ({why}) after {} frames, score {:?}", if side == Side::Near { "near" } else { "far" }, g.since_hit, g.score);
+        let event = g.score.point(&RULES, side as usize);
+        match event {
+            Some(Event::Game) => g.score.new_game(),
+            Some(Event::Set) => g.score.new_set(),
+            _ => {}
+        }
+        g.score.note_tiebreak_start();
+        let who = if side == Side::Near { "you" } else { "opponent" };
+        g.message = match event {
+            Some(Event::Set) if g.score.match_over => format!("{why} - match to {who}"),
+            Some(Event::Set) => format!("{why} - set to {who}"),
+            Some(Event::Game) => format!("{why} - game to {who}"),
+            _ => format!("{why} - point to {who}"),
+        };
+        info!("point: {} ({why}) after {} frames, {event:?} {:?}", if side == Side::Near { "near" } else { "far" }, g.since_hit, g.score);
+        if g.score.match_over {
+            g.score = Score::new();
+        }
         g.phase = Phase::Over(90);
     }
 }
@@ -734,8 +754,8 @@ fn hud(g: Res<Game>, mode: Res<CamMode>, mut q: Query<&mut Text, With<ScoreText>
     for mut t in &mut q {
         t.0 = format!(
             "You {}  -  {} Opponent\n{}\ncamera: {} (C / Select)\nmove WASD/stick · sprint Shift/LB · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive",
-            g.score[0],
-            g.score[1],
+            score_line(&g.score, 0),
+            score_line(&g.score, 1),
             g.message,
             match *mode {
                 CamMode::Follow => "follow",
@@ -744,4 +764,11 @@ fn hud(g: Res<Game>, mode: Res<CamMode>, mut q: Query<&mut Text, With<ScoreText>
             }
         );
     }
+}
+
+/// Games and points for one team, tennis style (points 0/15/30/40/Ad; tiebreak points as numbers).
+fn score_line(s: &Score, team: usize) -> String {
+    let p = s.points[team];
+    let pts = if s.tiebreak { p.to_string() } else { ["0", "15", "30", "40", "Ad"].get(p as usize).unwrap_or(&"Ad").to_string() };
+    format!("{} | {pts}", s.games[team])
 }

@@ -97,7 +97,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 ## Prompts
 
 ### Harness
-- [ ] **P0 — Input replay harness.** (Capture restarted 2026-10-05 ~23:20, detached; if `context/fixtures/round1.bin` has all 21666 samples, build the replay test from it. If it is short and `record_p2m2` is no longer running, mark `[~]` waiting on a new playback and move on.) Record the original's controller state every frame over PINE (find the
+- [~] **P0 — Input replay harness.** BLOCKED: capture waiting on the user's round1 playback (see `context/notes/playback.flag`). (Capture restarted 2026-10-05 ~23:20, detached; if `context/fixtures/round1.bin` has all 21666 samples, build the replay test from it. If it is short and `record_p2m2` is no longer running, mark `[~]` waiting on a new playback and move on.) Record the original's controller state every frame over PINE (find the
   pad buffer the game reads in RAM) together with ball, player and match state, starting from a save state.
   Replay the same input sequence into the port from the matching starting state and diff every frame: contact
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
@@ -138,6 +138,8 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   duration, the contact window and how the press timing during the toss affects the serve (port `37af20` and the
   serve branch of the hit routine `3467b0`), plus the delays between points. Verify against recorded serves
   and full points from the save states with P0's replay harness. (P6/P12 cover the remaining details.)
+  Part 1 done: score, rotation, ends (`hst_sim::score`, wired into `play.rs`); its round1 replay test only
+  covers the points captured so far. Next: judge/faults (Part 2), post-point flow and serve (Part 3).
 - [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
   singles (1v1) and doubles (2v2) in any human/AI mix, as the original allows. Controller assignment and
   hot-plug per slot, doubles court width (5.485 m) and doubles rules, partner positioning and who-takes-the-ball
