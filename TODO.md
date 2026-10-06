@@ -74,9 +74,13 @@ Things that need the human go under **Needs the human** at the bottom, never int
 ```
 cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
-WASD/left stick move (and aim at contact) · Shift/LB sprint · J/A topspin · K/B slice · I/X flat · L/Y lob ·
-U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) · arrows/right stick turn camera.
-`HST_AUTOPLAY=1` lets a bot play your side (unattended tests). `--stage 01..11` court, `--court 0..11` surface.
+Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (other team) = controller 2
+when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
+Shift/LB sprint · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
+C/Select camera (original/free) · arrows/right stick turn the free camera.
+`HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface.
+Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
+`third_party/gilrs-core` (read-only fallback, no rumble).
 
 ## Done (ported and verified against the original)
 - Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
@@ -207,7 +211,9 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   - [ ] **P0b5 — Serve.** Toss height/duration (`37af20`), the contact window and how the press timing during the
     toss changes the serve (serve branch of `3467b0`). Verify with vpad-driven serves from slot 3/4 (pad + ball
     + player state over PINE) through the replay harness.
-- [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
+- [~] **P0c — Up to 4 players.** Playable doubles: 4 slots, placement, rules, P1/P2 on controllers 1/2, CPU
+  for the rest, ends swap on court. Open: the original's partner positioning / who-takes-the-ball, formations,
+  shared-camera behaviour, hot-plug beyond two pads. Original text: Four player slots, each human (keyboard or any connected controller) or AI;
   singles (1v1) and doubles (2v2) in any human/AI mix, as the original allows. Controller assignment and
   hot-plug per slot, doubles court width (5.485 m) and doubles rules, partner positioning and who-takes-the-ball
   logic from the original (port it; doubles AI data is in AIParam.csv, e.g. the 雁行/攻撃/守備 formation column),
@@ -227,7 +233,12 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   `_dw/_up`, `37b110` param_3 mapping, `3467b0` branches on `+0x3ee8` / `+0x3fa0`, reactions via `3553d0`).
   Remove the approximate wind-up reach growth in `find_contact` by porting the exact reach term. Verify recorded shots at each grade (QUICK/SWEET SPOT/SLOW, early and late
   offsets): launch and grade bit-exact through P0's harness.
-- [ ] **P4 — All contact branches.** Port every branch of the contact search in `0x34d8a0`: forehand/backhand
+- [~] **P4 — All contact branches.** Ported (`hst_sim::swing::search`): smash, volley (high/low/body) and ground
+  stroke (by shot type/body) branches, forehand/backhand by hand side, timing grades; `tests/swing.rs`: all 131
+  stroke decisions of `match_s05.bin` (55+22+9 ground, 11+23+2 volley, 9 smash) frame, branch, side, body flag and
+  contact ball exact (ball within 1e-5). Open: the dive/reach branch (+0x3e58), the swing animation's
+  skeleton-derived values (`ahead`, body widths, anchors +0x2f60/+0x3000/+0x3028 — measured for character 0) and
+  the arm-IK sideways step (stand-in 0.1 m; P8). Original text: Port every branch of the contact search in `0x34d8a0`: forehand/backhand
   ground strokes (body-shot variants `0x16/0x18/0x1a`), volleys, smash (1.85–2.65 m, reach 1.1), the
   reaching/diving shot (offset −10), half-volleys, and their per-character timing tables (`+0x1510`, `+0x1644`, …). Verify a recorded contact for every branch (volley, smash, dive, half-volley, body
   shots): contact frame, hit spot and branch frame-exact through P0's harness.
@@ -317,7 +328,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   harness — bounce frames bit-exact on each surface.
 
 ### Presentation
-- [ ] **P16 — Camera.** Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
+- [~] **P16 — Camera.** Serve camera exact (eye 0/11.89 up/−39.238, 17° down, fov = horizontal half-angle
+  0.1745 of the 4:3 picture, checked on court lines against slot 3). Rally camera recorded
+  (`tools/record_camera.py 5 6000 context/fixtures/camera_s05.bin`): it dollies straight back when near players
+  go deep (`36a4a0`), and fits the ball at the top (`369ce0` tail); mode table 0x3fcd4c. Port next. Original text: Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
   serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra. Verify camera position/target/FOV every frame against the game's
   camera state recorded over PINE (rally, serve, point end, replay) — bit-exact where the math is ported.
 - [ ] **P17 — Court rendering fidelity.** Material blend modes and flags (MTL header), vertex colour/lighting,

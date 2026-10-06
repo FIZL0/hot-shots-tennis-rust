@@ -29,6 +29,7 @@ pub struct Args {
     pub court: usize,
     stage: Option<u32>,
     play: bool,
+    pub singles: bool,
 }
 
 #[derive(Component)]
@@ -42,7 +43,7 @@ pub struct Orbit {
 fn main() {
     let mut a = std::env::args().skip(1);
     let iso = a.next().expect("usage: hst <iso> <archive.XB>... [--shot out.png]");
-    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play) = (Vec::new(), None, None, false, 0, None, false);
+    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles) = (Vec::new(), None, None, false, 0, None, false, false);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -51,6 +52,7 @@ fn main() {
             "--court" => court = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--stage" => stage = a.next().and_then(|r| r.parse().ok()),
             "--play" => play = true,
+            "--singles" => singles = true,
             _ => archives.push(x),
         }
     }
@@ -61,7 +63,7 @@ fn main() {
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play })
+    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play, singles })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot))

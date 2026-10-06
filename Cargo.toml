@@ -4,3 +4,7 @@ members = ["crates/*"]
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# gilrs-core with a read-only fallback for gamepads whose device node isn't writable (third_party/gilrs-core).
+[patch.crates-io]
+gilrs-core = { path = "third_party/gilrs-core" }

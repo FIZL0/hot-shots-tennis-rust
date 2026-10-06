@@ -14,6 +14,8 @@ pub struct Pose {
     pub swing: Option<f32>,
     pub backhand: bool,
     pub serving: bool,
+    /// Where the racket meets the ball, in the figure's frame: the swing aims the racket arm at it.
+    pub reach: Option<Vec3>,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -109,6 +111,9 @@ pub fn animate(poses: Query<(&Pose, &Children)>, children: Query<&Children>, mut
     }
 }
 
+/// Right shoulder in the figure's frame (hips −0.95, torso −0.1, arm −0.5, 0.24 out).
+const SHOULDER_R: Vec3 = Vec3::new(0.24, -1.55, 0.0);
+
 /// Torso twist and arm rotations for the current swing/serve, if any.
 fn swing_pose(p: &Pose) -> (f32, Option<Quat>, Option<Quat>) {
     let Some(t) = p.swing else {
@@ -129,5 +134,16 @@ fn swing_pose(p: &Pose) -> (f32, Option<Quat>, Option<Quat>) {
     let yaw = side * 1.1 * phase;
     let arm_r = Quat::from_rotation_y(side * 1.3 * phase) * Quat::from_rotation_z(side * 1.35) * Quat::from_rotation_x(0.3);
     let arm_l = if p.backhand { Some(Quat::from_rotation_y(-1.1 * phase) * Quat::from_rotation_z(-1.2)) } else { None };
+    // around contact the racket arm (hanging along +y from the shoulder) points at the contact ball, so the
+    // racket face meets it where the game's contact search put it
+    let arm_r = match p.reach {
+        Some(ball) => {
+            let torso = Quat::from_rotation_y(yaw);
+            let dir = torso.inverse() * (ball - torso * SHOULDER_R);
+            let aim = Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y));
+            arm_r.slerp(aim, (1.0 - (t - 0.45).abs() / 0.2).clamp(0.0, 1.0))
+        }
+        None => arm_r,
+    };
     (yaw, Some(arm_r), arm_l)
 }
