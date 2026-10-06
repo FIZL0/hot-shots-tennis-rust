@@ -19,7 +19,7 @@ use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
 
 #[derive(Resource)]
 pub struct Args {
-    iso: String,
+    pub iso: String,
     archives: Vec<String>,
     shot: Option<String>,
     radius: Option<f32>,
