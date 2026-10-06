@@ -31,7 +31,7 @@ impl Table {
 
 /// Where a coordinate falls on a 16-point axis: cell index and fraction, with the game's edge rule.
 fn axis(num: f32, den: f32) -> (usize, f32) {
-    let u = (num / den).clamp(0.0, 1.0);
+    let u = if den == 0.0 { if num > 0.0 { 1.0 } else { 0.0 } } else { (num / den).clamp(0.0, 1.0) };
     let s = (N - 1) as f32 * u;
     let i = s as usize;
     (i, if i == N - 1 { 1.0 } else { s - i as f32 })
@@ -52,7 +52,9 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    /// Ground strokes: `kind` 2 (flat) starts the target axis deeper; heights depend on court depth.
+    /// Ground strokes (class 1) by the ball's stored shot `kind` (0..4). Verified on recorded kinds 0–4:
+    /// only kind 2 starts the target axis deeper. (The decompiled range function has extra branches for
+    /// kinds 1 and 4, but recorded shots match these bounds — its index is not the ball's stored kind.)
     pub fn stroke(kind: i32, hit_z: f32) -> Self {
         let u = ((11.385 - (hit_z.abs() - 0.5)) / 11.385).clamp(0.0, 1.0);
         Self {

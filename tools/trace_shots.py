@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Capture every shot's starting ball state and its precomputed path over PINE.
 Usage: trace_shots.py <state_slot> <seconds> <out_dir>
-Writes <out_dir>/shot_NNN.ball (0x290-byte ball object at path frame 0, plus its params block) and
+Writes <out_dir>/shot_NNN.ball (u32 frame, 0x290-byte ball object at path frame 0, 0x900 params block,
+0x300 bytes of per-swing data at 0x2f0e80) and
 shot_NNN.path (n × 0x30 entries). Only loads the slot; never saves states."""
 import os, struct, sys, time
 from pine import Pine
@@ -9,6 +10,7 @@ from pine import Pine
 GM_PTR = 0x422f80                    # game manager pointer (US 1.00)
 BALL, PATH = 0x98, 0xa4              # gm offsets: live ball sim, stored path record
 BALL_SIZE, PARAMS_PTR, PARAMS_SIZE = 0x290, 0x54, 0x900
+SWING_BLOCK, SWING_SIZE = 0x2f0e80, 0x300   # per-swing character reach heights (shot table axis bounds)
 
 p = Pine()
 p.load_state(int(sys.argv[1]))
@@ -35,7 +37,8 @@ while time.time() < end:
         cur = None
         if frame <= 1 and 0 < n <= 180:
             params = p.read_block(struct.unpack_from("<I", blk, PARAMS_PTR)[0], PARAMS_SIZE)
-            cur = [os.path.join(sys.argv[3], f"shot_{shots:03d}"), struct.pack("<I", frame) + blk + params, b"", frame]
+            swing = p.read_block(SWING_BLOCK, SWING_SIZE)
+            cur = [os.path.join(sys.argv[3], f"shot_{shots:03d}"), struct.pack("<I", frame) + blk + params + swing, b"", frame]
     if cur is not None:
         cur[3] = frame
         if 0 < n <= 180:

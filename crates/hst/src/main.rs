@@ -4,8 +4,9 @@
 //! `--radius r` orbits the origin at distance r instead of framing everything (skyboxes are huge).
 //! `--stage NN` loads disc court NN (01..11) with every prop placed from its layout data.
 //! `--ball` adds the game ball driven by the ported physics (Space: new shot); `--court` picks the
-//! physics surface table (0..11).
+//! physics surface table (0..11). `--play` is a playable match against a simple AI (see play.rs).
 
+mod play;
 mod sandbox;
 
 use bevy::asset::RenderAssetUsages;
@@ -26,6 +27,7 @@ pub struct Args {
     ball: bool,
     pub court: usize,
     stage: Option<u32>,
+    play: bool,
 }
 
 #[derive(Component)]
@@ -39,7 +41,7 @@ struct Orbit {
 fn main() {
     let mut a = std::env::args().skip(1);
     let iso = a.next().expect("usage: hst <iso> <archive.XB>... [--shot out.png]");
-    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage) = (Vec::new(), None, None, false, 0, None);
+    let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play) = (Vec::new(), None, None, false, 0, None, false);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -47,15 +49,18 @@ fn main() {
             "--ball" => ball = true,
             "--court" => court = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--stage" => stage = a.next().and_then(|r| r.parse().ok()),
+            "--play" => play = true,
             _ => archives.push(x),
         }
     }
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
-    if ball {
+    if play {
+        app.add_plugins(play::plugin);
+    } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage })
+    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot))
@@ -153,7 +158,7 @@ fn load(
             spawn(&mut commands, &parts, Transform::default());
         }
     }
-    if args.ball {
+    if args.ball && !args.play {
         let data = iso.read("CMN/GAME.XB").expect("ball archive on disc");
         let parts: Vec<_> = models(&data, |n| n.ends_with("ball1.mdl"), &mut images)
             .into_iter()
@@ -177,7 +182,8 @@ fn load(
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection { far: 20_000.0, ..default() }),
         Transform::default(),
-        Orbit { focus, radius, yaw: 0.6, pitch: -0.4 },
+        // play mode: broadcast view from behind the near (your) baseline
+        if args.play { Orbit { focus: Vec3::new(0.0, 0.0, 2.0), radius: 24.0, yaw: std::f32::consts::PI, pitch: -0.38 } } else { Orbit { focus, radius, yaw: 0.6, pitch: -0.4 } },
     ));
 }
 

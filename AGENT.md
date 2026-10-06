@@ -14,3 +14,7 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 - `context/ghidra/` headless project `hst` (r5900:LE:32:default); `context/decomp/hst_{game,menu,movie}.c` full dumps
   via `context/ghidra_scripts/DumpDecomp.java`; `context/fn.sh <addr>` prints one function.
 - `replacements/` — user's upscaled texture pack (PCSX2 hash-named PNGs); to be mapped onto disc textures.
+
+## Plan
+`TODO.md` is the ordered plan; "continue" means: take the first open item there, consult its journal entry in
+`context/artifacts/`, port + verify, update TODO.md, commit.
