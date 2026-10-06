@@ -23,6 +23,9 @@ Every prompt follows the same rules:
   stand-in figures (`crates/hst/src/figure.rs`); their *behaviour* — states, timings, contact frames, positions,
   calls, reactions — is ported exactly from the game's code and animation timing data. Do not import or
   reproduce the original character models or character artwork.
+- **Same input, same result.** Given the same controller input on the same frames from the same starting
+  state, the port must produce the same hit spot, contact frame, timing grade, shot and ball path as the
+  original. Prompt P0's input-replay harness is the acceptance test for every gameplay prompt.
 - Record findings and evidence in `context/artifacts/<date>-<slug>/` (memory maps, decomp addresses, captures).
 - Update **Done** and the **Play it now** controls when a prompt lands.
 
@@ -46,6 +49,14 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 
 ## Prompts
 
+### Harness
+- [ ] **P0 — Input replay harness.** Record the original's controller state every frame over PINE (find the
+  pad buffer the game reads in RAM) together with ball, player and match state, starting from a save state.
+  Replay the same input sequence into the port from the matching starting state and diff every frame: contact
+  frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
+  Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
+  are accepted only when their recordings replay identically.
+
 ### Shots
 - [ ] **P1 — Shot parameters in play.** Replace `KIND_SPIN` and every per-shot constant in `play.rs` with the
   character's record (`hst_sim::params`, record = character + 3) and the character's own TRAJ tables
@@ -65,7 +76,10 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
   (capture pad state over PINE alongside shots).
 - [ ] **P6 — Serve.** Real toss (`37af20`), serve tables `serv0..3`, serve timing/power meter if any, faults,
-  lets, service box rules, second serve, serve positions per side/court.
+  service box rules, second serve, serve positions per side/court. **Lets:** a serve that clips the net cord
+  and lands in the box is a let and is replayed; one that clips the cord and lands out is a fault — the cord
+  contact must come from the exact net collision (P15), and the let/fault call and replay flow must match the
+  original (verify with recorded let serves).
 
 ### Players
 - [ ] **P7 — Player movement.** Exact run/sprint speeds, acceleration, turning, split-step, auto-positioning
@@ -95,7 +109,9 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   (categories 21/23) and their animation timing (`azuma/gallery/ani/npcNN_*`, `trgCreMdl`) — positions,
   paths and triggers exact; stand-in figures for visuals.
 - [ ] **P15 — Court collision mesh.** Live-ball collision against the court mesh (`FUN_0032f690` on `gm+0x84`):
-  net cord/posts, walls, fences, other materials; replaces the flat net.
+  net cord/posts, walls, fences, other materials; replaces the flat net. Net-cord hits must behave exactly:
+  balls that clip the cord and dribble over (rally net cords and serve lets), balls stopped by the net, post
+  hits. Verify with live-ball traces (the stored path ignores the net, so record the live ball `*(gm+0x98)`).
 
 ### Presentation
 - [ ] **P16 — Camera.** Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
