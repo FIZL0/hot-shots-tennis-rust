@@ -97,7 +97,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 ## Prompts
 
 ### Harness
-- [~] **P0 — Input replay harness.** BLOCKED: capture waiting on the user's round1 playback (see `context/notes/playback.flag`). (Capture restarted 2026-10-05 ~23:20, detached; if `context/fixtures/round1.bin` has all 21666 samples, build the replay test from it. If it is short and `record_p2m2` is no longer running, mark `[~]` waiting on a new playback and move on.) Record the original's controller state every frame over PINE (find the
+- [ ] **P0 — Input replay harness.** **Capture done (2026-10-05 23:43):** `context/fixtures/round1.bin` = 20791 consecutive frames, vsync 10018–30808, no gaps, 7588-byte samples (layout in `tools/record_p2m2.py`); the playback ended there (PCSX2 pauses at the end — the .p2m2 count of 21666 includes non-game frames). Don't re-capture: build the replay test from this file. Record the original's controller state every frame over PINE (find the
   pad buffer the game reads in RAM) together with ball, player and match state, starting from a save state.
   Replay the same input sequence into the port from the matching starting state and diff every frame: contact
   frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
