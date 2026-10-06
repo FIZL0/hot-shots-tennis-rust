@@ -56,6 +56,8 @@ fn whole_shots_match_the_game() {
         return;
     };
     let (mut frames, mut failures) = (0, Vec::new());
+    let mut exact = 0;
+    let mut first_inexact: Option<(usize, i32, i32)> = None;
     for (n, c) in cases.iter().enumerate() {
         let p0 = c.path[0].1;
         let mut fl = Flight::new(Ball { pos: [p0[0], p0[1], p0[2]], vel: [p0[3], p0[4], p0[5]], spin: c.spin }, c.spin_frame, c.contact);
@@ -71,9 +73,14 @@ fn whole_shots_match_the_game() {
                 break;
             }
             frames += 1;
+            if (0..3).all(|k| fl.ball.vel[k].to_bits() == want[k + 3].to_bits()) {
+                exact += 1;
+            } else if first_inexact.is_none() {
+                first_inexact = Some((n, i, fl.bounces));
+            }
         }
     }
-    eprintln!("{frames} frames matched across {} shots", cases.len());
+    eprintln!("{frames} frames matched across {} shots ({exact} bit-exact velocity, first inexact: {first_inexact:?})", cases.len());
     assert!(failures.is_empty(), "{} shots diverged:\n{}", failures.len(), failures.join("\n"));
     assert!(frames > 3000);
 }

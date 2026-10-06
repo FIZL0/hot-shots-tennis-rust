@@ -171,26 +171,34 @@ fn turn_toward(from: V3, target: V3, axis: V3, t: f32) -> [V3; 3] {
 impl Ball {
     /// Velocity update for one airborne frame: drag, Magnus, gravity. `dt` is the slow-motion scale (1 normally).
     pub fn accelerate(&mut self, p: &Params, dt: f32) {
-        let v = self.vel.map(|c| c * dt);
-        let s = len(v);
+        // The original's instruction sequence, on PS2 float arithmetic (see `ps2`): every product, sum and
+        // accumulator step in the same order, so recorded flights reproduce bit for bit.
+        use crate::ps2::{add, div, madd, msub, mul, sqrt};
+        let g = mul(dt, mul(GRAVITY_PER_FRAME, p.gravity));
+        let v = self.vel.map(|c| mul(c, dt));
+        let sq = |v: V3| madd(add(add(0.0, mul(v[1], v[1])), mul(v[0], v[0])), v[2], v[2]);
+        let s = sqrt(sq(v));
         if s == 0.0 {
             self.vel = v;
             return;
         }
-        let inv = 1.0 / s;
-        let v = v.map(|c| c - c * inv * s * s * p.drag);
-        // lift acts along v × (axis × v), i.e. perpendicular to travel within the spin plane
-        let w = cross(v, cross(p.axis, v));
-        let wl = 1.0 / len(w);
-        let mut v = [0, 1, 2].map(|i| w[i] * wl * s * self.spin * p.magnus + v[i]);
-        v[1] += dt * p.gravity * GRAVITY_PER_FRAME;
+        // drag: v − ((v·(1/|v|))·|v|)·|v|·k
+        let inv = div(1.0, sqrt(sq(v)));
+        let v = v.map(|c| msub(add(0.0, c), mul(mul(mul(c, inv), s), s), p.drag));
+        // Magnus: c = axis × v, w = v × c, v += (((w/|w|)·s)·spin)·magnus
+        let [ax, ay, az] = p.axis;
+        let c = [msub(mul(ay, v[2]), az, v[1]), msub(mul(az, v[0]), ax, v[2]), msub(mul(ax, v[1]), ay, v[0])];
+        let w = [msub(mul(v[1], c[2]), v[2], c[1]), msub(mul(v[2], c[0]), v[0], c[2]), msub(mul(v[0], c[1]), v[1], c[0])];
+        let winv = div(1.0, sqrt(madd(add(mul(w[1], w[1]), mul(w[0], w[0])), w[2], w[2])));
+        let mut v = [0, 1, 2].map(|i| madd(add(0.0, v[i]), mul(mul(mul(w[i], winv), s), self.spin), p.magnus));
+        v[1] = add(v[1], g);
         self.vel = v;
     }
 
     /// One airborne frame with no contact and no curve: semi-implicit Euler.
     pub fn fly(&mut self, p: &Params) {
         self.accelerate(p, 1.0);
-        self.pos = add(self.pos, self.vel);
+        self.pos = [0, 1, 2].map(|i| crate::ps2::add(self.pos[i], self.vel[i]));
     }
 }
 

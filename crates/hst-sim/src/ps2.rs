@@ -3,6 +3,7 @@
 //! - results are rounded toward zero (FPU round mode "chop");
 //! - before an add/sub the smaller operand loses the mantissa bits the EE would shift out, keeping one guard
 //!   bit, and vanishes (sign only) when the exponents differ by 25 or more;
+//! - divide and square root round to nearest (the emulator's separate divider round mode);
 //! - denormals read and write as zero.
 //! Verified bit-exact against the game's runtime shot-parameter table (2912 madd/add/sub/mul results).
 
@@ -46,6 +47,25 @@ pub fn mul(a: f32, b: f32) -> f32 {
 /// `madd.s`: accumulator + a·b, the product rounded first, then added through the aligning adder.
 pub fn madd(acc: f32, a: f32, b: f32) -> f32 {
     add(acc, mul(a, b))
+}
+
+/// `msub.s`: accumulator − a·b.
+pub fn msub(acc: f32, a: f32, b: f32) -> f32 {
+    sub(acc, mul(a, b))
+}
+
+/// `sqrt.s` of |x|: square root shares the divider's round-to-nearest mode in the reference emulator.
+pub fn sqrt(x: f32) -> f32 {
+    daz(daz(x).abs().sqrt())
+}
+
+/// `div.s`: the divider is configured round-to-nearest in the reference emulator; x/0 gives ±max.
+pub fn div(a: f32, b: f32) -> f32 {
+    let (a, b) = (daz(a), daz(b));
+    if b == 0.0 {
+        return f32::MAX.copysign(if a.is_sign_negative() != b.is_sign_negative() { -1.0 } else { 1.0 });
+    }
+    daz(a / b)
 }
 
 /// The game's lerp idiom (`adda 0, from` ; `sub to, from` ; `madd w`): from + w·(to − from).
