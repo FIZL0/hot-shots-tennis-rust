@@ -6,6 +6,7 @@
 //! `--ball` adds the game ball driven by the ported physics (Space: new shot); `--court` picks the
 //! physics surface table (0..11). `--play` is a playable match against a simple AI (see play.rs).
 
+mod figure;
 mod play;
 mod sandbox;
 
@@ -31,11 +32,11 @@ pub struct Args {
 }
 
 #[derive(Component)]
-struct Orbit {
-    focus: Vec3,
-    radius: f32,
-    yaw: f32,
-    pitch: f32,
+pub struct Orbit {
+    pub focus: Vec3,
+    pub radius: f32,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 fn main() {
