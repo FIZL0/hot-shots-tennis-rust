@@ -26,6 +26,11 @@ Every prompt follows the same rules:
 - **Same input, same result.** Given the same controller input on the same frames from the same starting
   state, the port must produce the same hit spot, contact frame, timing grade, shot and ball path as the
   original. Prompt P0's input-replay harness is the acceptance test for every gameplay prompt.
+- **Look at the original, too.** You can screenshot the real game any time (`tools/screenshot.sh`, PCSX2 paused
+  or frame-advanced via PINE) and the port (`--shot out.png` or `tools/screenshot.sh out.png hst`), then compare
+  them side by side at the same moment: animations, poses and their timing, effects, camera, HUD, pop-ups, menus,
+  court rendering. Use it for anything visual and as a sanity check on gameplay work; numbers over PINE stay the
+  proof where they exist. Keep the screenshot pairs in the prompt's journal folder.
 - **Never stop while work remains.** See *When blocked* below — switch to other open prompts instead of ending.
 - Record findings and evidence in `context/artifacts/<date>-<slug>/` (memory maps, decomp addresses, captures).
 - Update **Done** and the **Play it now** controls when a prompt lands.
@@ -99,6 +104,11 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `context/ghidra_scripts/DumpAsm.java` →
   `context/notes/asm_*.txt`.
 
+- [ ] **P0c — Live net hit, bit-exact.** Record a natural net contact (bot match, slot 5) per frame with
+  `tools/trace_live.py`-style capture and replay it through `Flight` bit-exact. Needs the live collision path:
+  world mesh query instead of the flat net (court object + grid objects, per-model triangle sweep) and the
+  after-first-bounce redirect `+0x1b0`. Findings so far: `context/artifacts/2026-10-06-net-hit/FINDINGS.md`.
+
 ### Match basics (do these early)
 - [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the
   original: server serves from behind the baseline alternating deuce/ad sides, the serve must land in the
@@ -125,10 +135,12 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   shot frame). Verify recorded shot bearings (the leftover ~0.2–1° offsets must disappear).
 - [ ] **P3 — Timing grade effects.** What grade/offset change in the shot (power code → table variant
   `_dw/_up`, `37b110` param_3 mapping, `3467b0` branches on `+0x3ee8` / `+0x3fa0`, reactions via `3553d0`).
-  Remove the approximate wind-up reach growth in `find_contact` by porting the exact reach term.
+  Remove the approximate wind-up reach growth in `find_contact` by porting the exact reach term. Verify recorded shots at each grade (QUICK/SWEET SPOT/SLOW, early and late
+  offsets): launch and grade bit-exact through P0's harness.
 - [ ] **P4 — All contact branches.** Port every branch of the contact search in `0x34d8a0`: forehand/backhand
   ground strokes (body-shot variants `0x16/0x18/0x1a`), volleys, smash (1.85–2.65 m, reach 1.1), the
-  reaching/diving shot (offset −10), half-volleys, and their per-character timing tables (`+0x1510`, `+0x1644`, …).
+  reaching/diving shot (offset −10), half-volleys, and their per-character timing tables (`+0x1510`, `+0x1644`, …). Verify a recorded contact for every branch (volley, smash, dive, half-volley, body
+  shots): contact frame, hit spot and branch frame-exact through P0's harness.
 - [ ] **P5 — Shot selection by input.** How buttons, hold/charge time and stick map to class/kind/power and the
   charged blend; double-tap / combo inputs; special shots (`0x408e60` list). Verify with recorded inputs
   (capture pad state over PINE alongside shots).
@@ -153,12 +165,22 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 - [ ] **P8 — Player animation timing.** Port the player state machine and the animation timing from the game's
   ANI/ANI2/MOR data and code: idle, ready, run directions (`run_f/b/l/r`, `dush_f`), shot animations
   (`sh_*`), contact frames, recovery, celebrations/reactions. Drive the stand-in figure's poses from those exact
-  states and frame timings (stand-in visuals, original timing).
+  states and frame timings (stand-in visuals, original timing). Verify the state id and animation frame every
+  frame against recorded player state over PINE (run, every shot, recovery, reactions) — frame-exact.
+- [ ] **P8a — Missed swings (whiffs).** Pressing a shot button when the contact search finds no ball (out of
+  reach, too early/late, ball not in play) must swing at nothing exactly as the original: the miss branch of the
+  hit routine / contact search (`3467b0`, `0x34d8a0`), which swing animation it plays (forehand/backhand/volley/
+  smash variant, by ball side and height), its frame timing, and the movement lockout — the frames the player
+  can't move or swing again after whiffing, plus any slowed recovery. Also whether a ball arriving during the
+  whiff can still be hit. Verify with recorded whiffs (pad + player position/state over PINE): lockout start/end
+  and positions frame-exact through P0's harness.
 - [ ] **P9 — Hit effects.** Hit flashes, ball trails, impact/bounce effects and their timing from `AZUMA/C_EFF`
-  (EFFCT.XB0: `impact_*`, `ballbound_*`, `smash_*`, `chakudan`), including blend modes and UV animation (.UVA, .MTA).
+  (EFFCT.XB0: `impact_*`, `ballbound_*`, `smash_*`, `chakudan`), including blend modes and UV animation (.UVA, .MTA). Verify spawn frame, position and lifetime of each effect
+  against recordings and side-by-side screenshots (`tools/screenshot.sh`) at the same frames.
 - [ ] **P10 — Timing pop-ups as the original.** Use the game's own pop-up textures and animation (find the
   sprite/texture for SWEET SPOT / QUICK / SLOW-style feedback in `AZUMA/INPANE`, `CMN`, `MENU` archives and the
-  code that animates it: scale/fade curves, position, duration) instead of our text pop-up.
+  code that animates it: scale/fade curves, position, duration) instead of our text pop-up. Verify against frame-stepped screenshots of the original: same frames,
+  position, scale and alpha.
 
 ### AI
 - [ ] **P11 — Opponent AI.** Port target choice, shot type choice, positioning, reaction delay and timing error
@@ -167,12 +189,23 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 
 ### Match
 - [ ] **P12 — Rules and scoring details.** (Basics in P0b, doubles in P0c.) Games, sets, deuce/advantage, tiebreak, side changes, doubles rules, match
-  flow states (point start/end delays, replays if any) exactly as the original.
+  flow states (point start/end delays, replays if any) exactly as the original. Verify full recorded games/sets
+  (incl. a tiebreak and a side change) through P0's harness: score and state transitions frame-exact.
+- [ ] **P12a — Post-point sequence and score update.** Everything between the point ending and the next
+  serve, exactly as the original: who won and why (winner, out, net, double fault, missed return), the players'
+  post-point animations and reactions (winner celebration / loser frustration variants, by character and point
+  type, from ANI/ANI2 + the state code; stand-in figures, original timing), walking back to positions, the
+  point-end and replay cameras (with P16), the moment and animation of the score update (HUD score change,
+  game/set announcements, umpire call with P13), crowd reaction, and the delays until control returns. Verify
+  recorded point endings of every type through P0's harness: state transitions, animation choice, score-change
+  frame and next-serve frame all frame-exact, plus frame-stepped screenshots for the HUD update.
 - [ ] **P13 — Umpire (Lily).** Port the umpire's behaviour: calls (score, fault, out, let, net) and their timing,
-  chair placement per court, idle/turn reactions, voice-line triggers. Stand-in figure for visuals.
+  chair placement per court, idle/turn reactions, voice-line triggers. Stand-in figure for visuals. Verify call type and frame for every recorded call (score,
+  fault, out, let, net) against the original.
 - [ ] **P14 — Background NPCs.** Spectators/ball kids/creatures from the layout's creature/gallery records
   (categories 21/23) and their animation timing (`azuma/gallery/ani/npcNN_*`, `trgCreMdl`) — positions,
-  paths and triggers exact; stand-in figures for visuals.
+  paths and triggers exact; stand-in figures for visuals. Verify NPC positions and trigger frames against PINE
+  recordings on at least three courts.
 - [ ] **P15 — Court collision mesh.** Live-ball collision against the court mesh (`FUN_0032f690` on `gm+0x84`):
   net cord/posts, walls, fences, other materials; replaces the flat net. Net-cord hits must behave exactly:
   balls that clip the cord and dribble over (rally net cords and serve lets), balls stopped by the net, post
@@ -190,20 +223,32 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 
 ### Presentation
 - [ ] **P16 — Camera.** Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
-  serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra.
+  serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra. Verify camera position/target/FOV every frame against the game's
+  camera state recorded over PINE (rally, serve, point end, replay) — bit-exact where the math is ported.
 - [ ] **P17 — Court rendering fidelity.** Material blend modes and flags (MTL header), vertex colour/lighting,
   cloud placement (category 14 records), sky time-of-day variants, seasons (`_sXXXX`, `SSN1`), animated
-  textures (MTA/UVA), shadows (incl. the per-frame shadow blobs), fog.
-- [ ] **P18 — Upscaled textures.** Map the user's `replacements/` pack (PCSX2 hash-named PNGs) onto disc
-  textures (compute PCSX2's texture hash from TIM2/MTI data + CLUT) and load them in place of the originals.
+  textures (MTA/UVA), shadows (incl. the per-frame shadow blobs), fog. Verify with side-by-side screenshots of the same court and camera
+  (original via PCSX2 at native resolution vs. port) and document any remaining difference.
+- [ ] **P18 — Upscaled and moddable textures.** The remake must use upscaled textures and let the user edit
+  them. (1) Map the user's `replacements/` pack (PCSX2 hash-named PNGs) onto disc textures (compute PCSX2's
+  texture hash from TIM2/MTI data + CLUT) and load them in place of the originals, any size, with alpha.
+  (2) Add a mod folder of readable names (archive/texture path, e.g. `mods/textures/COURT/05/<name>.png`) that
+  overrides both the pack and the disc, plus a `--dump-textures` command that writes every disc texture there
+  (with its matching pack PNG if one exists) so the user can edit and drop files back. Lookup order: mod
+  folder → PCSX2 pack → disc. Reload on file change while running. Same rules as the disc: user files are read
+  at runtime, never committed (add `mods/` to `.gitignore`). Verify the computed hash matches PCSX2's dump
+  name for every texture the pack covers on at least one court and the HUD, and that an edited PNG in the mod
+  folder shows up in the port.
 - [ ] **P19 — HUD.** Score display, names, serve indicator, in-match menus using the game's HUD textures
-  (`AZUMA/INPANE`) and layout.
+  (`AZUMA/INPANE`) and layout. Verify layout and update frames against frame-stepped screenshots of the original.
 - [ ] **P20 — Audio.** HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
-  crowd, umpire voice), MIDI BGM with the game's banks.
+  crowd, umpire voice), MIDI BGM with the game's banks. Verify each effect's trigger frame against recorded game events, and decoded
+  samples against PCSX2 audio captures.
 - [ ] **P21 — Menus and modes.** Title, character/court select, exhibition, tournament/challenge modes, unlocks,
-  options, save data.
+  options, save data. Verify menu flow, options and unlock conditions against the original screen by screen.
 - [ ] **P22 — Widescreen, high frame rate, input polish.** Render-side improvements that never change the 60 Hz
-  simulation; rebindable controls; controller hot-plug.
+  simulation; rebindable controls; controller hot-plug. Verify P0's full replay suite still passes unchanged with every
+  option on.
 
 ## Known gaps / caveats
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
