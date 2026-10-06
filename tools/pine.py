@@ -36,6 +36,10 @@ class Pine:
         ops = b"".join(struct.pack("<BI", 3, a + i) for i in range(0, n, 8))
         return self._call_raw(ops)
 
+    def read_regions(self, regions):
+        """Read several (addr, n) blocks (n multiple of 8) in one PINE batch; returns their bytes concatenated."""
+        return self._call_raw(b"".join(struct.pack("<BI", 3, a + i) for a, n in regions for i in range(0, n, 8)))
+
     def _call_raw(self, ops):
         self.s.sendall(struct.pack("<I", 4 + len(ops)) + ops)
         size, res = struct.unpack("<IB", self._recv(5))
