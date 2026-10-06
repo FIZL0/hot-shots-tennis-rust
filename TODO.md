@@ -97,25 +97,14 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
 ## Prompts
 
 ### Harness
-- [ ] **P0 — Input replay harness.** **Capture done (2026-10-05 23:43):** `context/fixtures/round1.bin` = 20791 consecutive frames, vsync 10018–30808, no gaps, 7588-byte samples (layout in `tools/record_p2m2.py`); the playback ended there (PCSX2 pauses at the end — the .p2m2 count of 21666 includes non-game frames). Don't re-capture: build the replay test from this file. Record the original's controller state every frame over PINE (find the
-  pad buffer the game reads in RAM) together with ball, player and match state, starting from a save state.
-  Replay the same input sequence into the port from the matching starting state and diff every frame: contact
-  frame, hit spot (ball position at contact), timing grade/offset, launch, ball path, player positions, score.
-  Ship it as a test runner (`cargo test` on recorded fixtures + a CLI for new recordings). All later prompts
-  are accepted only when their recordings replay identically.
-  **First real recording (use it):** `context/recordings/round1.p2m2` (+ `round1.p2m2_SaveState.p2s`, its start
-  state; PCSX2 looks for `<recording filename>_SaveState.p2s`) — the user playing a round as P1, recorded 2026-10-05 with PCSX2's Input Recording (frame-exact, starts
-  from that save state; replays only on this PCSX2 version). Replay it in PCSX2 (Tools → Input Recording → Play)
-  while capturing state over PINE to build the fixture; don't re-record it.
-  **Playback needs the human:** PCSX2 has no CLI or PINE command for Input Recording playback, and menu
-  automation is flaky — don't drive the menus. Get the capture script running and waiting (polling over PINE for
-  round1's start state, speed set), then write `READY: start playback now` to `context/notes/playback.flag`; the
-  user starts Tools → Input Recording → Play → `round1.p2m2` by hand. If nobody does within the run, mark P0
-  `[~]` (waiting on playback) and move on — the capture script must be ready to rerun as-is.
-  **Check first, every run:** `context/notes/record_round1.log` and `pgrep -f record_p2m2`. If a capture is
-  running, do **not** touch PCSX2 (no relaunch, no state loads, no speed change) — mark P0 `[~] capture in
-  progress` and work on prompts that don't need the emulator. If `context/fixtures/round1.bin` is complete
-  (21666 samples), use it and finish P0's replay test.
+- [x] **P0 — Input replay harness.** Fixture reader `hst_sim::replay` (pad, globals, match, ball, player
+  position = model matrix translation +0x3d70/+0x3d78), CLI `cargo run -p hst-sim --bin replay -- <fixture>
+  [from] [to]` (CSV per frame), recorder `tools/record_p2m2.py`. round1 (`context/fixtures/round1.bin`, doubles,
+  20791 frames, vsync 10018–30808, frame-exact, complete) replays score (29 points), verdicts (30) and line
+  calls (158, bit-exact); `tests/replay.rs` checks the fixture itself. Input-driven player diffs land with P7
+  (the port has no ported movement yet; P7 builds them on `Frame::{pad, player_pos}`). Next recording: add the
+  live ball `*(gm+0x88)` and the rally block 0x3165f0. Journal: `context/artifacts/2026-10-06-p0-input-replay/`.
+
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne
   frames exact, first miss at the first bounce). Pieces: plane sweep `0x328ed0` (contact skin 1.005×r, eps 0.005,
@@ -140,7 +129,7 @@ U/RB drive · J/Space/A/Start serve · C/Select camera (follow/broadcast/free) �
   and full points from the save states with P0's replay harness. (P6/P12 cover the remaining details.)
   Part 1 done: score, rotation, ends (`hst_sim::score`, wired into `play.rs`); its round1 replay test only
   covers the points captured so far. Part 2 done: line calls, point-over check, hit legality, umpire verdict
-  (`hst_sim::judge`, in `Flight` and `play.rs`): 120 recorded calls bit-exact, 22 verdicts match. Faults/lets/
+  (`hst_sim::judge`, in `Flight` and `play.rs`): 158 recorded calls bit-exact, 30 verdicts match. Faults/lets/
   net points are unverified until a capture includes the live ball `*(gm+0x88)` (the round1 capture's ball is
   the path predictor) — see journal `2-JUDGE-PART.md`. Next: post-point flow and serve (Part 3).
 - [ ] **P0c — Up to 4 players.** Four player slots, each human (keyboard or any connected controller) or AI;
