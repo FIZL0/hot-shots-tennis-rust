@@ -292,6 +292,28 @@ impl Clip {
     }
 }
 
+/// A root path (the `*_dummy` motions: where a reaction carries the player): the first track's position keys,
+/// sampled as any position list, unscaled; (0, 0, 0, 1) without keys.
+pub struct Path {
+    ticks_per_frame: f32,
+    keys: Keys,
+}
+
+impl Path {
+    pub fn new(anim: &Anim) -> Option<Path> {
+        let t = anim.tracks.first()?;
+        Some(Path { ticks_per_frame: anim.ticks_per_frame as f32, keys: Keys::position(&t.position) })
+    }
+
+    /// The path point at `t` frames.
+    pub fn at(&self, t: f32) -> [f32; 4] {
+        if self.keys.tick.is_empty() {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+        self.keys.hermite(ps2::mul(t, self.ticks_per_frame))
+    }
+}
+
 /// Model-space matrices from local ones down the hierarchy.
 pub fn model(sk: &Skeleton, local: &[M4]) -> Vec<M4> {
     let mut out: Vec<M4> = Vec::with_capacity(local.len());

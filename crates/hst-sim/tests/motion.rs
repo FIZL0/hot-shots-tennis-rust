@@ -218,3 +218,70 @@ fn clip_sampler_ram() {
     }
     eprintln!("{players} players, {tracks} tracks bit-exact");
 }
+
+/// Post-point reactions carry the player along their `*_dummy` path (team reactions co03–co05 forward only,
+/// ×0.55 for character 5; `gu_set` the whole path of the character's own dummy): the accumulated spot +0x3da0
+/// of every reacting frame of the slot-5 match, bit-exact, with the motion time = frames since the reaction began
+/// (held at the motion's length). The phase's last frames don't run the reaction (spot unchanged).
+#[test]
+fn match_s05_reaction_root() {
+    use hst_data::{ani, iso::Iso, xb::Archive};
+    use hst_sim::motion::reaction_root;
+    use hst_sim::pose::Path;
+    let Some(data) = load() else { return eprintln!("match_s05.bin absent, skipped") };
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let cg = iso.read("PCDATA/PCCG0.XB").unwrap();
+    let carc = Archive::parse(&cg).unwrap();
+    let file = |stem: String| {
+        carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&format!("mtgrl/{stem}.ani2"))).map(|e| ani::parse(&carc.read(e).unwrap()).unwrap())
+    };
+    let co = ["co01_f", "co02_f", "co03", "co04", "co05"];
+    let paths: Vec<Option<Path>> = co.iter().map(|n| file(format!("re_pc00_{n}_dummy")).and_then(|a| Path::new(&a))).collect();
+    let lens: Vec<f32> = co.iter().map(|n| { let a = file(format!("re_pc00_{n}")).unwrap(); a.end_tick() as f32 / a.ticks_per_frame as f32 }).collect();
+    // gu_set (0x2e) and its root path (motion 0x35) per character
+    let mut gu_set = std::collections::HashMap::new();
+    for c in CHARS {
+        let arc_data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+        let arc = Archive::parse(&arc_data).unwrap();
+        let get = |m: usize| { let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase(); arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).map(|e| ani::parse(&arc.read(e).unwrap()).unwrap()) };
+        let a = get(0x2e).unwrap();
+        gu_set.insert(c, (get(0x35).and_then(|d| Path::new(&d)), a.end_tick() as f32 / a.ticks_per_frame as f32));
+    }
+    let frames = frames_live(&data);
+    let (mut exact, mut held, mut gu, mut t) = (0, 0, 0, [0f32; 4]);
+    for k in 1..frames.len() {
+        let (a, fr) = (frames[k - 1], frames[k]);
+        for p in 0..4 {
+            if p_u8(fr, p, 0x3fa4) != 2 || p_u8(fr, p, 0x3fa7) != 1 {
+                continue;
+            }
+            if p_u8(a, p, 0x3fa7) != 1 {
+                t[p] = 0.0;
+            }
+            let m = p_i32(fr, p, 0x3db0);
+            let v = |f: Frame, o: usize| [0, 4, 8, 12].map(|d| f.player_f32(p, o + d));
+            let (pt, team) = if m >= 0x30 {
+                let k = (m - 0x30) as usize;
+                (paths[k].as_ref().map_or([0.0; 4], |c| c.at(t[p].min(lens[k]))), true)
+            } else if m == 0x2e {
+                let (path, len) = &gu_set[&CHARS[p]];
+                let Some(path) = path else { continue };
+                gu += 1;
+                (path.at(t[p].min(*len)), false)
+            } else {
+                continue;
+            };
+            t[p] += 1.0;
+            let got = reaction_root(pt, team, CHARS[p], [v(fr, 0x3d40), v(fr, 0x3d50), v(fr, 0x3d60)], v(fr, 0x3d90), v(a, 0x3da0));
+            let want = v(fr, 0x3da0);
+            if got.map(f32::to_bits) == want.map(f32::to_bits) {
+                exact += 1;
+            } else {
+                assert_eq!(want, v(a, 0x3da0), "k={k} p={p} motion {m:#x} t={}: {got:?}", t[p] - 1.0);
+                held += 1;
+            }
+        }
+    }
+    eprintln!("{exact} reacting frames bit-exact ({gu} gu_set), {held} held at the phase's end");
+    assert!(exact > 7000 && held < 50);
+}

@@ -100,6 +100,18 @@ struct Player {
     stats: Stats,
     /// Run, stamina, stand/run motion and facing as the game's play state (`hst_sim::player::Body`).
     body: loco::Body,
+    /// The post-point reaction carrying the player along its root path, if any.
+    root: Option<Root>,
+}
+
+/// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
+/// w carried as the game's), and the frames it has run.
+#[derive(Clone, Copy, Default)]
+struct Root {
+    motion: usize,
+    base: [f32; 4],
+    acc: [f32; 4],
+    t: f32,
 }
 
 /// A motion set by the game's code (the motion setter): number, speed, looping, start frame.
@@ -183,8 +195,9 @@ struct Game {
     cam_owner: Option<usize>,
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
     pelvis: Vec<Vec<[f32; 2]>>,
-    /// Each player's character number.
+    /// Each player's character number and data.
     chars: Vec<i32>,
+    data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
 }
@@ -484,6 +497,7 @@ fn setup(
         cam_owner: Some(0),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
         chars: vec![0; rules.players as usize],
+        data: Vec::new(),
         post_winner: 0,
     };
     reset_positions(&mut game);
@@ -508,6 +522,7 @@ fn setup(
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
+        game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
@@ -855,7 +870,23 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     };
     // reacting to the point: the reaction plays, nobody runs
     if g.post.as_ref().is_some_and(|p| p.reacted) {
-        g.players[i].prev = g.players[i].pos;
+        let (p, data) = (&mut g.players[i], &g.data[i]);
+        p.prev = p.pos;
+        if let Some(r) = p.root.as_mut()
+            && let Some(path) = data.paths.get(&r.motion)
+        {
+            // the motion's time, held at its end
+            let t = r.t.min(data.motions.get(&r.motion).map_or(0.0, |c| c.length));
+            r.t += 1.0;
+            let [fx, _, fz, _] = p.body.face.dir;
+            let rows = [[p.hand * fz, 0.0, -(p.hand * fx), 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0]];
+            let acc = motion::reaction_root(path.at(t), r.motion >= 0x30, g.chars[i], rows, r.base, r.acc);
+            // ponytail: moved straight by the change; the game's mover (0x34a960) also checks collisions
+            p.pos[0] += acc[0] - r.acc[0];
+            p.pos[2] += acc[2] - r.acc[2];
+            r.acc = acc;
+            if std::env::var("HST_DBG").is_ok() { eprintln!("DBG root p{i} m{:#x} t{} pos {:?}", r.motion, r.t, p.pos); }
+        }
         return;
     }
     let Game { players, pelvis, .. } = g;
@@ -1274,6 +1305,8 @@ fn react(g: &mut Game, event: Event) {
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
         set_motion(p, id, 1.0, false, 0.0);
+        let spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+        p.root = Some(Root { motion: id as usize, base: spot, acc: spot, t: 0.0 });
     }
 }
 

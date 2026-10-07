@@ -98,3 +98,22 @@ pub fn team_reaction(base: i32, character: i32, taken: &[i32], draw: impl FnOnce
     let k = draw(free.len() as u32 + 1) as usize;
     free.get(k).map_or(base, |c| c + 0x30)
 }
+
+/// One frame of a post-point reaction's root motion: the reaction's path point `p` (its `*_dummy` motion at the
+/// motion's time; zero without one) turned by the player's rows (right × hand, up, forward) and added to the
+/// spot where the reaction started (`base`, +0x3d90). Returns the new accumulated spot (+0x3da0, from `acc`);
+/// the player moves by the change. Team reactions (`team`, motions 0x30..) only go forward (path x, y dropped),
+/// 0.55 as far for character 5; `gu_set` follows the whole path.
+pub fn reaction_root(p: [f32; 4], team: bool, character: i32, rows: [[f32; 4]; 3], base: [f32; 4], acc: [f32; 4]) -> [f32; 4] {
+    use crate::ps2::{add, madd, mul, sub};
+    let m = [rows[0], rows[1], rows[2], [0.0, 0.0, 0.0, 1.0]];
+    let to = if team {
+        let v = crate::vu0::transform(&m, [0.0, 0.0, p[2], p[3]]);
+        let s = if character == 5 { 0.55 } else { 1.0 };
+        [add(base[0], mul(v[0], s)), madd(add(0.0, base[1]), v[1], s), madd(add(0.0, base[2]), v[2], s), madd(add(0.0, base[3]), v[3], s)]
+    } else {
+        let v = crate::vu0::transform(&m, p);
+        std::array::from_fn(|k| add(base[k], v[k]))
+    };
+    std::array::from_fn(|k| add(acc[k], sub(to[k], acc[k])))
+}

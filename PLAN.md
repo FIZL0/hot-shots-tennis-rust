@@ -43,7 +43,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 - [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
-- [ ] **P16a** Post-point cut-aways in play (user priority) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
 - [x] **N1d1** Exact ANI sampler (in N1d) → `hst-sim/src/pose.rs` · `character.rs` animate | t: motion.rs clip_sampler_ram | j: 2026-10-06-n1-animations
 - [ ] **N1d2** Motion time/speed per frame (in N1d) → `motion.rs` `pose.rs` · `character.rs` Motion/tick · `play.rs` motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1d3** Contact IK + body step `0x3561e0` (in N1d) → `pose.rs` · `character.rs` animate | t: motion.rs | j: 2026-10-06-n1-animations
@@ -68,7 +67,9 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
+- [ ] **P5a** Verify hit types (user 2026-10-07): the original has only ✕ normal, ○ cut, △ lob; we have flat and drive extra. Match the button set and how each is used → `play.rs` read_input/press/strike · `shot.rs` `params.rs` | t: shot_tables.rs
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
+- [ ] **P6a** Lob serves don't clear the net (bug, user 2026-10-07) → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
 
 ### Players
 - [ ] **P7** Exact character movement stats → `hst-sim/src/player.rs` · `play.rs` locomote/character_stats/tparam | t: player.rs
@@ -82,6 +83,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Match
 - [ ] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs
+- [ ] **P12c** Net-cord bug: ball clips the net, drops over, and the point goes to the hitter's side. May need new recordings of net-cord rallies → `judge.rs` · `ball.rs` · `mesh.rs` (net) | t: score.rs, live.rs
 - [ ] **P12a** Post-point sequence → `flow.rs` · `motion.rs` · `play.rs` react/next_point | t: score.rs, motion.rs
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
 - [ ] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
@@ -98,6 +100,12 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P21** Menus and modes → `main.rs`
 - [ ] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
 - [ ] **P23** Graphics settings menu (after P21) → `main.rs`
+- [ ] **P21a** Controller assignment screen (after P21): P1 picks which connected controller drives which player. The original shakes a controller's selector when that controller moves its right stick → `main.rs` · `play.rs` read_input/Pads
+- [ ] **P16b** Changing ends: with more than one human player, keep the camera on the same side; only swap it in solo games (user 2026-10-07) → `play.rs` camera/next_point · `flow.rs`
+- [ ] **P16a** Post-point cut-aways in play (low priority, user 2026-10-06) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
+
+### Stretch
+- [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 

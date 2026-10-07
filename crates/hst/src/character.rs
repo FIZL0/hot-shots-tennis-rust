@@ -12,7 +12,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mtl, xb::Archive};
-use hst_sim::pose::{Clip, Skeleton};
+use hst_sim::pose::{Clip, Path, Skeleton};
 
 /// One joint of the skeleton.
 pub struct Joint {
@@ -32,6 +32,9 @@ pub struct CharacterData {
     pub racket: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     /// Motions by the game's motion number, bound to the skeleton (the game's sampler, `hst_sim::pose`).
     pub motions: HashMap<usize, Clip>,
+    /// Root paths of the post-point reactions that carry the player, by reaction motion number (`gu_set` from
+    /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies).
+    pub paths: HashMap<usize, Path>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
     /// Per motion number (0..48): the forward row (x, z) of `Bip01Pelvis`'s model matrix at the motion's first
@@ -233,6 +236,7 @@ pub fn load_disc(
     let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
     let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
     let mut pelvis = vec![[0.0, 1.0]; 48];
+    let mut paths = HashMap::new();
     for id in 0..ani::MOTIONS.len() {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
@@ -245,6 +249,10 @@ pub fn load_disc(
         if id < 0x30 {
             motions.insert(id, Clip::new(&skeleton, &a));
         }
+        // gu_set's root path
+        if id == 0x35 {
+            paths.extend(Path::new(&a).map(|p| (0x2e, p)));
+        }
     }
     // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
     if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
@@ -254,10 +262,14 @@ pub fn load_disc(
             let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
             let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
             motions.insert(0x30 + k, Clip::new(&skeleton, &a));
+            let name = format!("mtgrl/re_pc00_{stem}_dummy.ani2");
+            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
+            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
+            paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
         }
     }
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, binds, pelvis })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis })
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
