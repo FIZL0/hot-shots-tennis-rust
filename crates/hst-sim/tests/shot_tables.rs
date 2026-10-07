@@ -132,3 +132,58 @@ fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
     }
     Some((smashes, exact))
 }
+
+/// Every unscattered volley (class 2) launch in the live-ball recordings against the hitter's own `voly` table
+/// (base, or the dw1/dw2 the game's mode pick took) with the volley bounds and the near-net speed correction.
+#[test]
+fn volleys_launch_like_the_game() {
+    use hst_sim::replay::{frames_live, SAMPLE_LIVE};
+    let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
+    let table = |c: i32, name: &str| {
+        ["A", "B"].iter().find_map(|ab| {
+            std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ{c:02}{ab}.XB/data/hatsuyama/traj/tr_pc{c:02}_{name}.dat")).ok()
+        })
+        .and_then(|b| Table::parse(&b))
+    };
+    let (mut seen, mut exact) = (0, 0);
+    for fx in ["match_s05.bin", "new_recording.bin"] {
+        let Ok(data) = std::fs::read(format!("{ctx}/fixtures/{fx}")) else { continue };
+        assert_eq!(data.len() % SAMPLE_LIVE, 0, "{fx}: not a live-ball recording");
+        for w in frames_live(&data).windows(2) {
+            let (a, b) = (w[0].live_ball(), w[1].live_ball());
+            // the launch frame: class 2, flight frame 0, a new hit point, a table's flight time (0 off the table)
+            if b[0x58] != 2 || i(b, 0xac) != 0 || i(b, 0x260) == 0 || (i(a, 0xac) == 0 && v3(a, 0x70) == v3(b, 0x70)) {
+                continue;
+            }
+            let (hit, target, vel, kind) = (v3(b, 0x70), v3(b, 0x80), v3(b, 0x130), i(b, 0x5c));
+            let d2 = |p: usize| {
+                let q = w[1].player_pos(p);
+                (q[0] - hit[0]).powi(2) + (q[2] - hit[2]).powi(2)
+            };
+            let p = (0..4).min_by(|&x, &y| d2(x).total_cmp(&d2(y))).unwrap();
+            // late/side timing scatter moves the lookup's hit point away from the ball's; those are P3's
+            if w[1].player_f32(p, 0x3ecc) != 0.0 || w[1].player_f32(p, 0x3ed0) != 0.0 {
+                continue;
+            }
+            seen += 1;
+            let ch = w[1].global(0x422fa8 + 4 * p);
+            let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
+            exact += ["", "_dw1", "_dw2"].iter().any(|suf| {
+                let Some(t) = table(ch, &format!("voly{kind}{suf}")) else { return false };
+                let l = lookup(&t, &Bounds::volley(kind, hit[2]), hit, target);
+                let v = launch(hit, target, l.elevation, l.speed);
+                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                (len - speed).abs() < 2e-6 && (v[1] - vel[1]).abs() < 4e-6 && l.frames + 1 == i(b, 0x260)
+            }) as usize;
+        }
+    }
+    if seen == 0 {
+        eprintln!("fixtures missing, skipped");
+        return;
+    }
+    eprintln!("{exact} of {seen} volleys exact");
+    assert!(exact == seen && seen >= 9, "only {exact} of {seen} volleys exact");
+}
