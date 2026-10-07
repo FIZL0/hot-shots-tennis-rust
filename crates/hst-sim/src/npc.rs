@@ -2,9 +2,9 @@
 //! what, and where they stand. A creature linked to an anchor record (category 14) stands at the anchor's position
 //! minus its own (FPU subtractions); every figure's matrix is a turn by its yaw at that position.
 
-use crate::ps2;
+use crate::{ps2, sound};
 use crate::world::{self, M4};
-use hst_data::exe::NpcEntry;
+use hst_data::exe::{EmitterRow, NpcEntry};
 use hst_data::layout::{self, Entry, Placement};
 
 /// What a creature record becomes.
@@ -186,5 +186,79 @@ impl Walker {
         if go {
             self.advance();
         }
+    }
+}
+
+/// Trigger creature types that just play their sound now and then (`exe::Game::emitter` gives the sound and gap).
+pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36, 41, 42, 45, 46, 50, 51];
+/// The emitter type whose sound sweeps across the stereo field after it starts.
+const SWEEPER: u8 = 36;
+
+/// An ambient sound emitter: counts down to its next play, then draws a new gap.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Emitter {
+    pub ty: u8,
+    pub row: EmitterRow,
+    /// Where the sound plays from.
+    pub pos: [f32; 3],
+    /// Ticks to the next play (re-armed when it runs out).
+    pub timer: i32,
+    /// The countdown kept aside while a replay shows.
+    pub saved: i32,
+    /// Ticks left of the pan sweep after a play.
+    pub sweep: i16,
+    /// Pan in degrees: the sound's bearing when it starts (`sound::place`), then swept.
+    pub pan: f32,
+    /// Sweep direction: down (true) or up.
+    pub down: bool,
+}
+
+impl Emitter {
+    /// Made at court load: draws the first gap.
+    pub fn new(ty: u8, row: EmitterRow, pos: [f32; 3], roll: &mut impl FnMut() -> u32) -> Emitter {
+        let mut e = Emitter { ty, row, pos, timer: 0, saved: 0, sweep: 0, pan: 0.0, down: false };
+        e.arm(roll);
+        e
+    }
+
+    fn arm(&mut self, roll: &mut impl FnMut() -> u32) {
+        let r = ps2::mul(2.3283064e-10, ps2::utof(roll()));
+        self.timer = ps2::mul(self.row.base as f32, ps2::msub(1.0, self.row.jitter, r)) as i32;
+    }
+
+    /// One tick; true when the sound starts (program 7, positional at `pos`, volume 0x40).
+    pub fn step(&mut self, roll: &mut impl FnMut() -> u32) -> bool {
+        let mut play = false;
+        if self.timer != 0 {
+            self.timer -= 1;
+            if self.timer == 0 && self.row.sound != -1 {
+                (self.pan, self.sweep, play) = (sound::place(self.pos).0 as f32, 240, true);
+                self.down = roll() >> 16 & 1 != 0;
+            }
+        }
+        if self.timer < 1 {
+            self.arm(roll);
+        }
+        if self.ty == SWEEPER && self.sweep != 0 {
+            self.sweep -= 1;
+            self.pan = if self.down { ps2::sub(self.pan, 0.375) } else { ps2::add(self.pan, 0.375) };
+            if 359.0 <= self.pan {
+                self.pan = 0.0;
+            } else if self.pan <= 0.0 {
+                self.pan = 359.0;
+            }
+        }
+        play
+    }
+
+    /// The figures' reset (a new point, a serve, a replay starting or ending). `replay`: a replay starts (false)
+    /// or ends (true): the countdown is kept aside or taken back.
+    pub fn reset(&mut self, replay: Option<bool>) {
+        match replay {
+            Some(true) => self.timer = self.saved,
+            Some(false) => self.saved = self.timer,
+            None => {}
+        }
+        self.sweep = 0;
     }
 }

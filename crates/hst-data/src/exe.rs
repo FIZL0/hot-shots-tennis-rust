@@ -136,6 +136,17 @@ impl<'a> Game<'a> {
         std::array::from_fn(|k| [t[3 * k], t[3 * k + 1], t[3 * k + 2]])
     }
 
+    /// Trigger creature type `ty`'s (0..53) sound (program 7 key, −1 none) and, for the types that play it now and
+    /// then, the mean gap between plays in ticks and the gap's jitter.
+    pub fn emitter(&self, ty: u8) -> EmitterRow {
+        let row = self.at(0x41_aec0 + 0x74 * ty as u32, 0x74);
+        EmitterRow {
+            sound: i32::from_le_bytes(self.at(0x41_c6e4 + 0x18 * ty as u32, 4).try_into().unwrap()),
+            base: i16::from_le_bytes(row[0x54..0x56].try_into().unwrap()),
+            jitter: f32::from_le_bytes(row[0x58..0x5c].try_into().unwrap()),
+        }
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
@@ -204,6 +215,14 @@ fn boot_at(elf: &[u8], addr: usize, n: usize) -> &[u8] {
 pub struct NpcEntry {
     pub name: String,
     pub kind: u8,
+}
+
+/// A trigger creature type's ambient sound: `sound` played every `base`·(1 − `jitter`·r) ticks, r uniform in [0, 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmitterRow {
+    pub sound: i32,
+    pub base: i16,
+    pub jitter: f32,
 }
 
 /// Scoreboard timing after a point (frames unless noted).

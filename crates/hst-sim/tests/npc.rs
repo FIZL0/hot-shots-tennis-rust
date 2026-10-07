@@ -228,3 +228,102 @@ fn walkers_animate_like_the_game() {
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
 }
+
+/// Ambient sound emitters against `context/fixtures/trig_sNN.bin` (tools/record_npc.py with `trig`; not in git,
+/// skipped when absent): every tick of every emitter, from the recorded state of the tick before, must give the
+/// game's countdown, kept-aside countdown, sweep, pan and direction bit for bit (a play's start pan taken from the
+/// recording), and its random draws consecutive outputs among those the game drew that tick. Where the figures
+/// were reset (their last message changed) the reset may come before or after the tick.
+#[test]
+fn emitters_count_down_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let mut courts = Vec::new();
+    // ponytail: courts 2 (slot 10) and 4 (slot 3) still to pass (journal 4-EMITTERS-PART.md)
+    for slot in [5, 7] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/trig_s{slot:02}.bin")) else {
+            eprintln!("trig_s{slot:02}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let n = u(&d, 0) as usize;
+        let (g, mt) = (4, 4 + 0x180);
+        let wo = |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300;
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(wo(n)).collect();
+        let court = u(samples[0], g + 0x10);
+        let ours: Vec<usize> = (0..n).filter(|&k| npc::EMITTERS.contains(&samples[0][wo(k) + 0x50])).collect();
+        let state = |s: &[u8], k: usize| {
+            let (o, ty) = (wo(k), s[wo(k) + 0x50]);
+            npc::Emitter {
+                ty,
+                row: game.emitter(ty),
+                pos: std::array::from_fn(|c| f32::from_bits(u(s, o + 0x1e0 + 4 * c))),
+                timer: u(s, o + 200) as i32,
+                saved: u(s, o + 0xcc) as i32,
+                sweep: u(s, o + 0xd0) as i16,
+                pan: f32::from_bits(u(s, o + 0xd4)),
+                down: s[o + 0xd8] != 0,
+            }
+        };
+        let still = |i: usize| i > 0 && samples[i][4..] == samples[i - 1][4..];
+        let (mut ticks, mut plays, mut resets) = (0, 0, 0);
+        for i in 1..samples.len() {
+            let (a, b) = (samples[i - 1], samples[i]);
+            if u(b, 0) != u(a, 0) + 1 || (i.saturating_sub(2)..(i + 2).min(samples.len())).any(still) {
+                continue;
+            }
+            let mut rng = Mt::of(&a[mt..]);
+            let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+            while rng != end && out.len() < 2000 {
+                out.push(rng.next());
+            }
+            if rng != end {
+                let mut fresh = Mt(end.0, 0);
+                out = (0..end.1).map(|_| fresh.next()).collect();
+            }
+            for &k in &ours {
+                let (before, want) = (state(a, k), state(b, k));
+                let msg = u(b, wo(k) + 0xc0);
+                let reset = msg != u(a, wo(k) + 0xc0);
+                let replays: &[Option<bool>] = if !reset { &[] } else if msg == 0xe { &[Some(false), Some(true)] } else { &[None] };
+                // (reset before the tick?, replay flag) variants
+                let mut ways = vec![(false, None, false)];
+                for &r in replays {
+                    ways.extend([(true, r, true), (true, r, false)]);
+                }
+                let found = ways.iter().find_map(|&(re, r, first)| {
+                    (0..=out.len()).find_map(|j| {
+                        let (mut e, mut it, mut used) = (before.clone(), out[j..].iter(), 0);
+                        if re && first {
+                            e.reset(r);
+                        }
+                        let played = e.step(&mut || {
+                            used += 1;
+                            *it.next().unwrap_or(&0)
+                        });
+                        if re && !first {
+                            e.reset(r);
+                        }
+                        if played {
+                            e.pan = want.pan; // the start pan is not always the bearing (P14c2 open point)
+                        }
+                        (e == want && j + used <= out.len()).then_some((played, re))
+                    })
+                });
+                let Some((played, re)) = found else {
+                    panic!("court {court} vsync {} emitter {k}:\n from {before:?}\n want {want:?}", u(b, 0))
+                };
+                (ticks, plays, resets) = (ticks + 1, plays + played as usize, resets + re as usize);
+            }
+        }
+        eprintln!("court {court}: {} emitters, {ticks} ticks, {plays} plays, {resets} resets", ours.len());
+        if !ours.is_empty() {
+            courts.push(court);
+        }
+    }
+    assert!(courts.is_empty() || courts.len() >= 2, "fewer than two courts checked: {courts:?}");
+}
