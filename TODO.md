@@ -170,9 +170,11 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   calls (158, bit-exact); `tests/replay.rs` checks the fixture itself. Input-driven player diffs land with P7
   (the port has no ported movement yet; P7 builds them on `Frame::{pad, player_pos}`). Next recording: add the
   live ball `*(gm+0x88)` and the rally block 0x3165f0. Journal: `context/artifacts/2026-10-06-p0-input-replay/`.
-  - [ ] **Capture `context/recordings/new_recording.p2m2`** (user-recorded, with its save state) to a fixture. It
-    contains player–player collision, a player hit by the ball, dives and smashes: the source for P4's dive
-    branch, N5/smash contacts and player collision / ball-hits-player verification.
+  - [x] **Capture `context/recordings/new_recording.p2m2`** (user-recorded, with its save state) →
+    `context/fixtures/new_recording.bin` (`frames_live` layout, doubles, 5454 frames, vsync 5863–11316, no gaps,
+    captured at NominalScalar 0.5). Contains player–player collision, a player hit by the ball, dives and
+    smashes: the source for P4's dive branch, N5/smash contacts and player collision / ball-hits-player
+    verification. The `replay` CLI picks the layout by file size.
 
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne

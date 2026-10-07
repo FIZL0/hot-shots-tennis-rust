@@ -1,13 +1,14 @@
 //! Dump a recorded fixture (`tools/record_p2m2.py`) as CSV, one row per frame:
 //! `replay <fixture.bin> [first vsync] [last vsync]`. Gaps in the vsync sequence are reported on stderr.
 
-use hst_sim::replay::frames;
+use hst_sim::replay::{frames, frames_live, SAMPLE, SAMPLE_LIVE};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.get(1) else { return eprintln!("usage: replay <fixture.bin> [first vsync] [last vsync]") };
     let data = std::fs::read(path).expect("read fixture");
-    let all = frames(&data);
+    // ponytail: format by size (round1 predates the live ball); ambiguous only if both strides divide it
+    let all = if data.len() % SAMPLE != 0 && data.len() % SAMPLE_LIVE == 0 { frames_live(&data) } else { frames(&data) };
     let bound = |i: usize, d: u32| args.get(i).map_or(d, |s| s.parse().expect("vsync"));
     let (from, to) = (bound(2, 0), bound(3, u32::MAX));
     for w in all.windows(2).filter(|w| w[1].vsync() != w[0].vsync() + 1) {

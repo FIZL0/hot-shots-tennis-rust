@@ -3,7 +3,7 @@
 Usage: record_p2m2.py <state.p2s | slot> <out.bin> <frames>. With a .p2s: start it first, then start playback; it
 arms on that state's load (vsync counter jumps). With a slot number it loads the state itself (bot games: slot 5).
 Writes `frames` samples. Run PCSX2 slowed down ([Framerate] NominalScalar =
-0.25 in PCSX2.ini) so each frame's emulation burst ends well before the next vsync: a sample is taken only when two
+0.5 in PCSX2.ini; 0.5 captured new_recording gap-free, drop to 0.25 if it reports missed frames) so each frame's emulation burst ends well before the next vsync: a sample is taken only when two
 reads in a row are identical, so it is never torn mid-frame.
 Sample = u32 vsync counter + the regions in REGIONS order (fixed size; layout in README of the P0 journal), then
 the live ball *(gm+0x88) and the rally block 0x3165f0 (not in round1.bin, which predates them)."""
