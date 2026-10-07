@@ -11,7 +11,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use hst_data::{ani, iso::Iso, mdl, mtl, xb::Archive};
+use hst_data::{ani, iso::Iso, mdl, mor, mtl, xb::Archive};
 use hst_sim::pose::{arm_table, ArmTable, Clip, Path, Skeleton};
 use hst_sim::motion::Clock;
 
@@ -28,7 +28,8 @@ pub struct Joint {
 pub struct CharacterData {
     pub joints: Vec<Joint>,
     /// Skinned body parts.
-    pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// Skinned parts; `true` where the mesh carries the face morph targets.
+    pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)>,
     /// Rigid parts carried by the `Racket` joint.
     pub racket: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     /// Motions by the game's motion number, bound to the skeleton (the game's sampler, `hst_sim::pose`).
@@ -43,6 +44,16 @@ pub struct CharacterData {
     pub pelvis: Vec<[f32; 2]>,
     /// The arm table (strokes 0x10–0x19 and volleys 0x1a/0x1b at frame 8) the contact solve reaches from.
     pub arm: Option<Arc<ArmTable>>,
+    /// Face morph targets of the skinned parts (`MorphWeights` on the rig root, one weight per target).
+    pub morph_targets: usize,
+    /// Faces by motion number (`.MOR`, `hst_sim::face`).
+    pub faces: HashMap<usize, Face>,
+}
+
+/// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
+pub struct Face {
+    pub tracks: Vec<(usize, Vec<i32>, Vec<[f32; 4]>)>,
+    pub length: f32,
 }
 
 impl CharacterData {
@@ -69,18 +80,26 @@ pub struct Motion {
     pub serial: u32,
     /// The contact IK's turn of right hand, right forearm, right upper arm and left upper arm, and its weight.
     pub arm: Option<([[f32; 4]; 4], f32)>,
+    /// The face playing (`CharacterData::faces`) and its clock.
+    pub face: usize,
+    pub face_clock: Clock,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0, arm: None }
+        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0, arm: None, face: 0, face_clock: Clock::start(1.0, true, None) }
     }
 }
 
 impl Motion {
     /// The game's motion setter: restart motion `id` at its start.
     pub fn set(&mut self, id: usize, speed: f32, looping: bool, hold: Option<i32>, serial: u32) {
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm };
+        // the soft follow-throughs 0x1c/0x1d keep the stroke's face; the face clock restarts with the motion
+        // ponytail: the face clock ignores the crossfade hold; team reactions (0x30..) use their own clip's face, not the co offset
+        let face = if id == 0x1c || id == 0x1d { self.face } else { id };
+        let mut face_clock = Clock::start(speed, looping, None);
+        face_clock.speed = speed;
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
@@ -90,6 +109,8 @@ impl Motion {
         } else {
             self.clock.speed = speed;
             self.clock.looping = looping;
+            self.face_clock.speed = speed;
+            self.face_clock.looping = looping;
         }
     }
 }
@@ -174,10 +195,18 @@ pub fn load_disc(
         .collect();
 
     // skinned parts, one mesh per material
-    let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>)> = HashMap::new();
-    for (material, verts, tris) in model.skinned() {
+    #[allow(clippy::type_complexity)]
+    let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
+    let targets = model.morph_names.len();
+    for (material, verts, tris, morph) in model.skinned() {
         let e = by_material.entry(material).or_default();
         let base = e.0.len() as u32;
+        // per target, every vertex of the material (0 where a packet has no morphs)
+        e.7.resize(targets, Vec::new());
+        for (t, offsets) in e.7.iter_mut().enumerate() {
+            offsets.resize(base as usize, [0.0; 3]);
+            offsets.extend(morph.get(t).cloned().unwrap_or_else(|| vec![[0.0; 3]; verts.len()]));
+        }
         for v in &verts {
             e.0.push(v.pos);
             e.1.push(v.normal);
@@ -192,11 +221,12 @@ pub fn load_disc(
     let mut keys: Vec<_> = by_material.keys().copied().collect();
     keys.sort();
     for m in keys {
-        let (pos, nrm, uv, col, joint, weight, idx) = by_material.remove(&m).unwrap();
+        let (pos, nrm, uv, col, joint, weight, idx, morph) = by_material.remove(&m).unwrap();
         if idx.is_empty() {
             continue;
         }
-        let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        let n = pos.len();
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
@@ -204,7 +234,12 @@ pub fn load_disc(
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, bevy::mesh::VertexAttributeValues::Uint16x4(joint))
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weight)
             .with_inserted_indices(Indices::U32(idx));
-        parts.push((meshes.add(mesh), handles.get(m).cloned().unwrap_or_default()));
+        let morphed = morph.iter().flatten().any(|d| *d != [0.0; 3]);
+        if morphed {
+            let attrs = morph.iter().flat_map(|t| (0..n).map(|v| bevy::mesh::morph::MorphAttributes::new(Vec3::from(t.get(v).copied().unwrap_or_default()), Vec3::ZERO, Vec3::ZERO)));
+            mesh.set_morph_targets(attrs.collect());
+        }
+        parts.push((meshes.add(mesh), handles.get(m).cloned().unwrap_or_default(), morphed));
     }
 
     // the racket: a rigid model in its own space, carried by the `Racket` joint
@@ -247,8 +282,15 @@ pub fn load_disc(
     let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
     let mut pelvis = vec![[0.0, 1.0]; 48];
     let mut paths = HashMap::new();
+    let mut faces = HashMap::new();
     for id in 0..ani::MOTIONS.len() {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
+        if let Some(t) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.mor"))).and_then(|e| mor::parse(&aarc.read(e).ok()?, 1).ok()) {
+            // the game binds a track to the target of the same name; others are dropped
+            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((model.morph_names.iter().position(|n| *n == tr.name)?, tr.ticks, tr.values))).collect();
+            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
+            faces.insert(id, Face { tracks, length });
+        }
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
         let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
         if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
@@ -281,12 +323,13 @@ pub fn load_disc(
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces })
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
 pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity) -> Entity {
-    let root = commands.spawn((Transform::default(), Visibility::default(), Motion::default())).id();
+    let weights = bevy::mesh::morph::MorphWeights::new(vec![0.0; data.morph_targets], None).unwrap_or_default();
+    let root = commands.spawn((Transform::default(), Visibility::default(), Motion::default(), weights)).id();
     commands.entity(parent).add_child(root);
     let joints: Vec<Entity> = data.joints.iter().map(|j| commands.spawn((j.rest, Visibility::default())).id()).collect();
     for (i, j) in data.joints.iter().enumerate() {
@@ -294,8 +337,11 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
         commands.entity(up).add_child(joints[i]);
     }
     let skin = SkinnedMesh { inverse_bindposes: data.binds.clone(), joints: joints.clone() };
-    for (mesh, material) in &data.parts {
+    for (mesh, material, morphed) in &data.parts {
         let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default())).id();
+        if *morphed {
+            commands.entity(part).insert(bevy::mesh::morph::MeshMorphWeights::Reference(root));
+        }
         commands.entity(root).add_child(part);
     }
     if let Some(r) = data.joint("Racket") {
@@ -309,8 +355,18 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
 }
 
 /// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
-pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints: Query<&mut Transform>) {
-    for (rig, motion) in &rigs {
+pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights)>, mut joints: Query<&mut Transform>) {
+    for (rig, motion, mut weights) in &mut rigs {
+        // the face: each bound track's weight at the face clock's last sampled time (unbound targets 0)
+        // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
+        let w = weights.weights_mut();
+        w.fill(0.0);
+        if let Some(face) = rig.data.faces.get(&motion.face) {
+            let t = hst_sim::ps2::mul(motion.face_clock.sampled, 80.0);
+            for (target, ticks, values) in &face.tracks {
+                w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
+            }
+        }
         let Some(clip) = rig.data.motions.get(&motion.id) else { continue };
         // between the last two ticks' sampled times (across a loop's wrap)
         let (a, b) = (motion.prev, motion.clock.sampled);
@@ -350,6 +406,8 @@ pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
         let length = rig.data.motions.get(&m.id).map_or(0.0, |c| c.length);
         m.prev = m.clock.sampled;
         m.clock.tick(length);
+        let face = rig.data.faces.get(&m.face).map_or(0.0, |f| f.length);
+        m.face_clock.tick(face);
     }
 }
 

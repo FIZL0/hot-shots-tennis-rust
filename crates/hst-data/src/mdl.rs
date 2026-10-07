@@ -8,9 +8,11 @@
 //!   per material : 0xc header (+0 batch count, +8/+0xa texture wrap u/v)
 //!     per batch  : 0x34 header (+0x1c packet count)
 //!       per packet: 0x60 header, VIF stream (+0x34 qwords), bone list (+0x3c + 1 bytes),
-//!                   +0x38 bytes, +0x38 × 32 bytes, [+0x57 qwords if +0x56], +0x54 × sub-blocks,
+//!                   +0x38 bytes, +0x38 × 32 bytes, [+0x57 qwords if +0x56], +0x54 × morph blocks,
 //!                   [4 bytes if +0x4c < 0]
-//! u32 n, n × { u32 size, data }
+//!   morph block   : 0xc header (+0 qwords k, k − 3, 3), k qwords of VIF: an UNPACK of (count, 1.0, 0x50, 0x31),
+//!                   an UNPACK of `count` × (dx, dy, dz, position entry as an int)
+//! u32 n, n × { u32 size, name }  (morph target names, one per morph block)
 //! ```
 //! Geometry is the VU1 upload itself: per strip a GIF tag, V4-32 positions, V4-16 normals whose
 //! `w` bit 15 is the GS no-kick flag (strip restart), a colour (STROW constant or V4-8), V4-32 UVs.
@@ -49,6 +51,8 @@ pub struct Packet {
     pub colors: Vec<[u8; 4]>,
     /// Nodes this packet's batch is bound to (bone slots).
     pub palette: Vec<usize>,
+    /// Per morph target ([`Model::morph_names`]): (position entry, offset) — the entry moves by weight × offset.
+    pub morphs: Vec<Vec<(usize, [f32; 3])>>,
 }
 
 /// A drawn vertex of a skinned model in its bind pose (model space), with up to four (node, weight) bindings.
@@ -103,20 +107,25 @@ pub struct Model {
     pub static_materials: Vec<usize>,
     /// Triangles of static batches, in the order the game tests them: by node, then material, then file order.
     pub collision: Vec<CollisionTri>,
+    /// Face morph targets (`face\x01blink_eye`, `face\x01joy_mouth`, …), what `.MOR` tracks bind to by name.
+    pub morph_names: Vec<String>,
 }
 
 impl Model {
     /// Every material's packets as skinned geometry in the bind pose. A drawn vertex is the sum of its position
     /// entries, each stored in its bone's space already multiplied by its weight (the weight is the entry's `w`):
     /// Σ [p, w] · bind(bone). Normals likewise (pre-weighted, rotated by the bone). Bones beyond the four
-    /// heaviest are dropped and the rest renormalised.
-    pub fn skinned(&self) -> Vec<(usize, Vec<SkinVertex>, Vec<[u32; 3]>)> {
+    /// heaviest are dropped and the rest renormalised. Last, per morph target ([`Model::morph_names`]), each drawn
+    /// vertex's model-space offset at weight 1 (empty for a packet without morphs).
+    #[allow(clippy::type_complexity)]
+    pub fn skinned(&self) -> Vec<(usize, Vec<SkinVertex>, Vec<[u32; 3]>, Vec<Vec<[f32; 3]>>)> {
         let mut out = Vec::new();
         for (material, packets) in self.materials.iter().enumerate() {
             for pk in packets {
                 let n = pk.bones.len().saturating_sub(1).min(pk.uvs.len());
                 let mut verts = Vec::with_capacity(n);
                 let mut kick = Vec::with_capacity(n);
+                let mut morph = vec![vec![[0.0f32; 3]; n]; pk.morphs.len()];
                 for v in 0..n {
                     let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
                     let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
@@ -134,6 +143,14 @@ impl Model {
                             nrm[k] += q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
                         }
                         binds.push((node, w));
+                        // a morph offset moves the entry in its bone's space: rotate it like the position
+                        for (t, target) in pk.morphs.iter().enumerate() {
+                            for &(_, d) in target.iter().filter(|(i, _)| *i == e) {
+                                for k in 0..3 {
+                                    morph[t][v][k] += d[0] * m[0][k] + d[1] * m[1][k] + d[2] * m[2][k];
+                                }
+                            }
+                        }
                     }
                     binds.sort_by(|x, y| y.1.total_cmp(&x.1));
                     binds.truncate(4);
@@ -157,7 +174,7 @@ impl Model {
                         tris.push(if i % 2 == 0 { [i - 2, i - 1, i] } else { [i - 1, i - 2, i] });
                     }
                 }
-                out.push((material, verts, tris));
+                out.push((material, verts, tris, morph));
             }
         }
         out
@@ -258,11 +275,17 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 if ph[0x56] != 0 {
                     c.take((ph[0x57] as usize) << 4)?;
                 }
+                let mut morphs = Vec::new();
                 for _ in 0..i16::from_le_bytes([ph[0x54], ph[0x55]]).max(0) {
                     let k = c.count(0xc)?;
-                    if k != 0 {
-                        c.take(k << 4)?;
-                    }
+                    let b = if k != 0 { c.take(k << 4)? } else { &[][..] };
+                    let n = if k >= 3 { size_at(b, 0x10)?.min(k - 3) } else { 0 };
+                    morphs.push(
+                        b.get(0x30..0x30 + n * 16).unwrap_or_default()
+                            .chunks_exact(16)
+                            .map(|q| Ok((size_at(q, 12)?, [f32_at(q, 0), f32_at(q, 4), f32_at(q, 8)])))
+                            .collect::<Result<_, Error>>()?,
+                    );
                 }
                 let constant = if i32_at(ph, 0x4c) < 0 { Some(c.take(4)?) } else { None };
                 if i32_at(bh, 0) == 1 {
@@ -271,16 +294,17 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 let mut pk = decode_vif(vif)?;
                 pk.bones = bones;
                 pk.palette = palette.clone();
+                pk.morphs = morphs;
                 packets.push(pk);
             }
         }
         m.materials.push(packets);
     }
     m.collision.sort_by_key(|t| t.node); // stable: material, then file order, within a node
-    let n = c.count(4)?;
-    for _ in 0..n {
+    for _ in 0..c.count(4)? {
         let s = c.count(4)?;
-        c.take(s)?;
+        let name = c.take(s)?;
+        m.morph_names.push(String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default()).into_owned());
     }
     Ok(m)
 }

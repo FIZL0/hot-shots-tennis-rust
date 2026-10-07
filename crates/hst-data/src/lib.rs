@@ -4,6 +4,7 @@ pub mod iso;
 pub mod layout;
 pub mod ani;
 pub mod mdl;
+pub mod mor;
 pub mod mtl;
 pub mod tim2;
 pub mod xb;

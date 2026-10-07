@@ -1,0 +1,14 @@
+# N1d4 — Faces: MOR / UVA / MDL morph targets (FINAL)
+- Code: `hst-data::mor` (parser), `hst-data::mdl` (morph blocks), `hst-sim::face` (`sample`, `length`), `crates/hst/src/character.rs` (Bevy morph targets, face clock). Tests in `crates/hst-sim/tests/face.rs`. Dumper: `research/tools/mdl_morph.py` (prints an MDL's morph blocks and target names).
+- Per-player anim object has 6 controller slots; slot 0 is the morph player (MOR), slot 1 the UV animation (UVA).
+- Motion start: face index = motion number; motions > 0x2f add 0x1404 unless the player's co flag bit equals the team; 0x1c/0x1d keep the previous face. The loop flag and speed are copied to the morph player and its time is set to 0. At contact all controllers are set to time 5.0.
+- Morph player (0x30 bytes): +8 binding count, +0xc bindings, +0x10 ticks per frame (80), +0x14 end = max last tick / 80, +0x18 base speed, +0x1c last sampled time (-1 init), +0x20 time, +0x24 speed, +0x28 weight (1.0), +0x2c loop.
+- Binding: only tracks whose full name (with the `face\x01` prefix) strcmp-equals a model target bind. Trailing-space names and targets the model lacks (pc07 has no blink_eye) do not bind; the game drops them too.
+- Clock: set time (looping: wrap by end, no wrap if end is 0; else clamp to [0,end]); if changed from the last sampled time, sample every binding at t*80 times weight; then time += speed. Same as `motion::Clock` with the face length.
+- MOR sampler: n=0 gives 0; t >= last tick gives the last value; t < t0 gives v0*t/t0; else the cursor walks down while ticks[k] > t, then up while t > ticks[k+1]; result v0 + ((t-tk)/(tk1-tk))*(v1-v0) as a madd.
+- UVA sampler: vec4 values, same search; before the first key the value is v*t*(1/t0).
+- MDL morph block: header (k, k-3, 3); VIF unpack of (count, 1.0, 0x50, 0x31), then count x (dx,dy,dz, position entry int); deltas at body+0x30. Target names are in the model's trailing name section.
+- Files: MOR = u32 80, u32 tracks; per track u32 name size, u32 keys, name, i32 ticks, f32 values, 16-byte aligned. UVA is the same with vec4 values and the name is a texture (e.g. mai_me). PCANI has one UVA per character (re_pcNN_gu_set.UVA).
+- Result: 176 morph players / 470 weights bit-exact vs RAM captures s03/s04/s05/s08/s09; 460 MOR files parse, 1627 tracks bound, 36 unbound.
+- Not done (ponytail): UVA playback in the app (only gu_set win pose and co reactions use it; MTL has no texture names to map to), co faces from PCCG0 MtGrl, the +0x1404 team-reaction offset, key cursor restarts at 0 (<=1 ulp after a wrap).
+- Unverified: morph delta semantics (entry += weight*delta, bone space) assumed; VU1 microcode not checked.
