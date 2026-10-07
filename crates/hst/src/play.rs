@@ -116,6 +116,8 @@ struct Player {
     /// and this frame's arm turn and weight for drawing.
     ik: Option<ArmIk>,
     arm: Option<([[f32; 4]; 4], f32)>,
+    /// A dive under way (the press found no stroke while running).
+    dive: Option<swing::Dive>,
 }
 
 /// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
@@ -455,6 +457,10 @@ fn reach(iso: &mut Iso) -> Reach {
         // ponytail: character 0's timing grades (player +0x1510, 28-frame horizon); their source is P3
         grades: vec![0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
         hand: if right { 1.0 } else { -1.0 },
+        // ponytail: character 0's arm joints in the receive pose (shoulder, racket tip 0.7 m along the hand
+        // joint); per-character from the skeleton with P8
+        shoulder: [0.08548, -0.83622, 0.20118],
+        tip: [0.006694, -0.646701, 1.220628],
     }
 }
 
@@ -894,6 +900,18 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
     Some(Contact { frames: s.frame as u32, swing: s, grade: g.reach.grades[s.frame], offset: s.frame as i32 - SWEET_FRAME })
 }
 
+/// The search's last branch: a running player whose press finds no stroke dives toward the ball.
+fn find_dive(g: &Game, i: usize) -> Option<swing::Dive> {
+    let p = &g.players[i];
+    // ponytail: this frame's run stands in for the game's previous-frame locomotion state
+    if g.phase != Phase::Rally || g.last_hitter < 0 || g.last_hitter & 1 == i as i32 & 1 || !p.body.running {
+        return None;
+    }
+    let path = predicted_path(g, swing::DIVE_HORIZON);
+    let f = p.body.face.dir;
+    swing::dive(&g.reach, &path, p.pos, p.end, [f[0], f[2]], [p.body.vel[0], p.body.vel[2]])
+}
+
 /// The game's contact-search branch number (+0x3ec1).
 fn branch_code(b: swing::Branch) -> u8 {
     match b {
@@ -1021,6 +1039,18 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 let solve = contact_solve(&t, a - 0x10, [b[0], -b[1], b[2], 1.0], pos, [p.end, 1.0]);
                 p.ik = Some(ArmIk::new(solve, c.frames as i32, pos));
             }
+        } else if let Some(d) = find_dive(g, i) {
+            let p = &mut g.players[i];
+            debug!("player {i} dives {} frames toward the ball ({})", d.frame, if d.contact { "reaching it" } else { "short of it" });
+            p.pending = None;
+            p.dive = Some(d);
+            let dir = [d.dir[0], 0.0, d.dir[1], 0.0];
+            p.body.target = dir;
+            p.body.face = loco::Facing { dir, ..loco::Facing::default() };
+            p.body.running = false;
+            p.facing = yaw(dir);
+            p.vel = Vec2::ZERO;
+            set_motion(p, 0x1e, 1.0, false, None);
         } else {
             g.players[i].pending = left.checked_sub(1);
             if left == 0 {
@@ -1028,6 +1058,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             }
         }
     }
+    dive_frame(g, i, &aim);
     // the contact IK's frame: the body steps into the shot through the mover, the arm turns by its weight
     let mate = (g.players.len() == 4).then(|| g.players[i ^ 2].pos);
     let p = &mut g.players[i];
@@ -1110,6 +1141,38 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
     struck
 }
 
+/// One frame of a dive: the slide and the receive motion's root path through the mover (its motion held on its
+/// 4th frame through the slide); a dive that reaches the ball volleys it on its frame.
+fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
+    let Some(mut d) = g.players[i].dive else { return };
+    let mate = (g.players.len() == 4).then(|| g.players[i ^ 2].pos);
+    let Game { players, data, .. } = g;
+    let (p, root) = (&mut players[i], data.get(i).and_then(|d| d.paths.get(&0x1e)));
+    let n = d.tick;
+    p.cmd.speed = if (4..d.frame.saturating_sub(1)).contains(&n) { 0.0 } else { 1.0 };
+    p.prev = p.pos;
+    let (pos, end) = (p.pos, p.end);
+    let at = d.step([pos[0], pos[2]], |t| root.map_or(0.0, |r| r.at(t)[2]), |m| {
+        let q = loco::mover(pos, [m[0], 0.0, m[1]], end, mate, false);
+        [q[0], q[2]]
+    });
+    p.dive = at.map(|_| d);
+    if let Some(q) = at {
+        (p.pos[0], p.pos[2]) = (q[0], q[1]);
+    }
+    if d.contact && n == d.frame {
+        let stick = aim(g);
+        let kind = hst_sim::shot::stick_kind(3, g.players[i].kind, [stick.x, stick.y], end);
+        let target = aim_target(g, stick, end);
+        let offset = d.frame as i32 - SWEET_FRAME;
+        strike(g, i, 2, kind, target, (3, if offset.abs() < 2 { 2 } else { 4 }, offset));
+        if g.phase == Phase::Rally && g.players.len() > 1 {
+            let p = &mut g.players[i];
+            p.body.stamina = loco::stroke_stamina(&p.stats, p.body.stamina, 3, true, 0);
+        }
+    }
+}
+
 /// One frame of the follow-through after contact: past its recovery a stick or press (`input`) breaks it off, else
 /// it plays to the end of its motion; either way the swing is over and the player stands, runs or swings again.
 fn follow_through(p: &mut Player, input: bool) {
@@ -1138,7 +1201,7 @@ fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>
 fn press(g: &mut Game, i: usize, kind: i32) {
     let p = &mut g.players[i];
     let free = p.whiff.is_none_or(|(_, f)| f >= WHIFF_REPRESS);
-    if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && free {
+    if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && p.dive.is_none() && free {
         p.whiff = None;
         p.kind = kind;
         let theirs = g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
@@ -1206,7 +1269,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     // screen-relative: stick right follows the camera's right, stick up its ground-forward; nothing moves the
     // player (or sets its motion) through the swing
     let p = &g.players[i];
-    if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() {
+    if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
         let dir = screen(g, pad.stick);
         locomote(g, i, dir);
     }
@@ -1262,7 +1325,7 @@ fn bot(g: &mut Game, i: usize) {
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
     follow_through(&mut g.players[i], true);
-    let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some() || g.players[i].whiff.is_some();
+    let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some() || g.players[i].whiff.is_some() || g.players[i].dive.is_some();
     if !busy {
         let plan = match g.phase {
             Phase::Rally if g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1 => intercept(g, i),

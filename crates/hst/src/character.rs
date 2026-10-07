@@ -34,8 +34,9 @@ pub struct CharacterData {
     pub racket: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     /// Motions by the game's motion number, bound to the skeleton (the game's sampler, `hst_sim::pose`).
     pub motions: HashMap<usize, Clip>,
-    /// Root paths of the post-point reactions that carry the player, by reaction motion number (`gu_set` from
-    /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies)).
+    /// Root paths of the motions that carry the player, by motion number: the post-point reactions (`gu_set` from
+    /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies) and the
+    /// dive (`receive_f` from `*_receive_f_dummy`).
     pub paths: HashMap<usize, Path>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
@@ -322,6 +323,10 @@ pub fn load_disc(
         // gu_set's root path
         if id == 0x35 {
             paths.extend(Path::new(&a).map(|p| (0x2e, p)));
+        }
+        // the dive's (receive_f) root path
+        if id == 51 {
+            paths.extend(Path::new(&a).map(|p| (0x1e, p)));
         }
         if id == 52 {
             stance_ball = Path::new(&a);
