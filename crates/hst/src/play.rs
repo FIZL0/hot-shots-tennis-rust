@@ -760,7 +760,10 @@ fn reset_positions(g: &mut Game) {
         let body = loco::Body::new(at.pos, end, &stats);
         g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), prev_facing: base_yaw(end), stance, hand, home: at.pos, stats, body, ..Player::default() };
     }
-    g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
+    // with more than one human the camera keeps its end through changes of ends; only solo games turn it
+    if g.humans.iter().filter(|&&h| h).count() <= 1 {
+        g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
+    }
     g.cam.cut();
     g.cam_cut = true;
     g.serving = Serving::default();
