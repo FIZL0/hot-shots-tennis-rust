@@ -128,6 +128,18 @@ pub fn pitch_table(irx: &[u8]) -> Result<Vec<u16>, Error> {
     Ok(irx[0x4880..0x4880 + 2 * 608].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
 }
 
+/// The sound library's voice volume tables (`snd::Level`), read from the main program `SCUS_976.10` of the supported
+/// disc: `pan` 128 × u16 (high byte left gain, low byte right, 0x7f = full) and `gain` 129 × u16 (32767 · cos of
+/// i · 90° / 128, the centre-panned tones' L/R gains).
+pub fn sound_tables(elf: &[u8]) -> Result<(Vec<u16>, Vec<u16>), Error> {
+    // one loadable segment from file offset 0x100 to vaddr 0x100000
+    if elf.len() != 864_720 || elf.get(..4) != Some(b"\x7fELF") || elf.get(0x3c..0x40) != Some(&0x10_0000u32.to_le_bytes()) {
+        return Err(Error("SCUS_976.10 does not match the supported US 1.00 program".into()));
+    }
+    let u16s = |addr: usize, n: usize| -> Vec<u16> { elf[addr - 0x10_0000 + 0x100..][..2 * n].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
+    Ok((u16s(0x1b_b880, 128), u16s(0x1b_b988, 129)))
+}
+
 /// Scoreboard timing after a point (frames unless noted).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScoreboardTiming {

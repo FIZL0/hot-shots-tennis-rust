@@ -76,7 +76,7 @@ python3 research/mkirx_elf.py context/iso/MODULES2/SG2IOPM1.IRX context/elf/sg2i
 | `context/shots_s05/` → `fixtures/shots_s05.csv`, `flights_s05.csv`, `shot_tables_s05.csv` | `tools/trace_shots.py 5 …`, then `research/tools/fixture_shots.py`, `fixture_flights.py`, `traj_inverse2.py` + `fixture_shot_tables.py` |
 | `context/fixtures/ball_path_s08.csv` | `research/tools/fixture_ball_path.py` on a RAM image |
 | `context/fixtures/shot_params_ram.bin` | the shot parameter table from a save state's RAM |
-| `context/fixtures/spu_s03.csv`, `spu_s04.csv`, `spu_s05.csv` | `research/tools/fixture_spu.py <slot N .p2s> …` (sound banks, key-ons and pitch registers of slots 3/4/5) |
+| `context/fixtures/spu_s03.csv`, `spu_s04.csv`, `spu_s05.csv` | `research/tools/fixture_spu.py <slot N .p2s> …` (sound banks, key-ons, pitch registers, SPU2 voice decoder/envelope state and the driver's voice volume inputs of slots 3/4/5) |
 | `context/recordings/*.p2m2` | PCSX2 input recordings (Tools → Input Recording) |
 
 Each test names the recording it needs in its header comment and skips itself when that recording is missing.

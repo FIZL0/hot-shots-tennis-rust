@@ -5,6 +5,13 @@
 #                                                             after the last sample upload (cmd 19), so the
 #                                                             loaded banks are the ones that played
 #   pitch,voice,pitch_word,scale_word,vp                      each voice's last pitch command and its SPU2 pitch register
+#   spu,voice,adsr1,adsr2,ssa,lsa,nxa,pitch,phase,level,counter,prev1,prev2,sp,write,read,flags,out,vol_l,vol_r,fifo×32
+#                                                             every sounding SPU2 voice (PCSX2 2.9 V_Voice: decoder and
+#                                                             envelope state; addresses in SPU halfwords)
+#   level,voice,seq_l,seq_r,bank,tone,velocity,pan×3,centre,gain_l,gain_r,vol_l,vol_r
+#                                                             the EE driver's voice table (0x30e1c0, 0xec per voice) for
+#                                                             every voice it has keyed on: volume inputs and the volume
+#                                                             it sent last
 # Needs context/xb (xbdump) to name the banks.
 import glob, struct, subprocess, sys
 st, out = sys.argv[1:3]
@@ -46,5 +53,21 @@ for i, (c, v, w8, wc) in enumerate(ring):
         if len(cur.get(v, ())) == 3: rows.append('tone,%d,%d,%d,%d,%d' % (v, *cur.pop(v), w8))
 for v, (w8, wc) in sorted(last.items()):
     rows.append(f'pitch,{v},{w8},{wc},{struct.unpack_from("<H", spu, VOICE(v))[0]}')
+for v in range(48):
+    b = VOICE(v) - 80                        # V_Voice: volume slides 24, ADSR 56, then pitch
+    vol_l, vol_r = struct.unpack_from('<H10xH', spu, b)
+    a1, a2 = struct.unpack_from('<HH', spu, b + 24)
+    counter, level, phase = struct.unpack_from('<IiB', spu, b + 68)
+    pitch, lsa, ssa, nxa, p1, p2 = struct.unpack_from('<HxxIIIii', spu, b + 80)
+    flags, sp = struct.unpack_from('<b4xi', spu, b + 107)[0], struct.unpack_from('<i', spu, b + 108)[0]
+    out_x, = struct.unpack_from('<i', spu, b + 112)   # last sample after the envelope, before volume
+    fifo = struct.unpack_from('<32i', spu, b + 128)
+    write, read = struct.unpack_from('<II', spu, b + 256)
+    if phase:
+        rows.append('spu,' + ','.join(map(str, (v, a1, a2, ssa, lsa, nxa, pitch, phase, level, counter, p1, p2, sp,
+                                                write, read, flags & 0xff, out_x, vol_l, vol_r, *fifo))))
+    w = struct.unpack_from('<59i', ee, 0x30e1c0 + 0xec * v)
+    if w[0] & 1:
+        rows.append('level,' + ','.join(map(str, (v, w[0xe], w[0xf], *w[0x10:0x19], w[0x1d], w[0x1e]))))
 open(out, 'w').write('\n'.join(rows) + '\n')
 print(len(rows), 'rows', sum(r.startswith('bank') for r in rows), 'banks')

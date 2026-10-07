@@ -56,7 +56,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N2** Ball in the server's hand + game ball model → `play.rs` hold_ball/serve_turn · `hst-sim/src/serve.rs` · `character.rs` | t: serve.rs
 - [x] **N2a** Serve ball bouncing before the toss (after N2) → `play.rs` hold_ball/serve_turn/motions · `serve.rs` · `motion.rs` | t: serve.rs, motion.rs
 - [x] **N3a** Sound banks, note → tone, SPU pitch (in N3) → `hst-data/src/snd.rs` · `exe.rs` pitch_table | t: hst-data sound.rs | j: 2026-10-07-n3-audio
-- [ ] **N3b** Voice playback in the app: ADPCM, ADSR, volume/pan (in N3) → `hst-data/src/snd.rs` · new `hst/src/audio.rs` | j: 2026-10-07-n3-audio
+- [x] **N3b** Voice playback in the app: ADPCM, ADSR, volume/pan (in N3) → `hst-data/src/snd.rs` · new `hst/src/audio.rs` | t: hst-data sound.rs, hst audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3c** Hit, bounce, serve sounds at their frames (in N3) → `play.rs` strike/bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
