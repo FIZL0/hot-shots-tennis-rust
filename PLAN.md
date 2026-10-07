@@ -131,6 +131,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Stretch
 
 - [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
+- [ ] **M2** Online play: matches over the network (the sim is deterministic and tick-based, so input-only lockstep/rollback fits) → `hst-sim` · `play.rs` input
+- [ ] **M3** In-browser version (wasm build) with online multiplayer (builds on M2) → `hst` app · `audio.rs`
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 
