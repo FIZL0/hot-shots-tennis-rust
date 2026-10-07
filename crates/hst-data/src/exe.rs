@@ -119,6 +119,15 @@ impl<'a> Game<'a> {
     }
 }
 
+/// The sound driver's pitch table (`snd::pitch`): 608 steps, 192 per octave, 0x1000 at the root note. Read from the
+/// IOP sound driver `MODULES2/SG2IOPM1.IRX` of the supported disc.
+pub fn pitch_table(irx: &[u8]) -> Result<Vec<u16>, Error> {
+    if irx.len() != 28093 || !irx.windows(13).any(|w| w == b"sg2iop_driver") {
+        return Err(Error("SG2IOPM1.IRX does not match the supported US 1.00 driver".into()));
+    }
+    Ok(irx[0x4880..0x4880 + 2 * 608].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
+}
+
 /// Scoreboard timing after a point (frames unless noted).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScoreboardTiming {

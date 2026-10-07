@@ -31,6 +31,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- N3a: sound banks (`hst_data::snd`), note → tone and SPU pitch bit-exact vs save states (sound.rs).
 - Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
 - Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — 4524 recorded frames.
 - Shot tables (TRAJ): lookup + launch speed/elevation/frames — 11 recorded strokes.

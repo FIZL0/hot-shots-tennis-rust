@@ -6,5 +6,6 @@ pub mod ani;
 pub mod mdl;
 pub mod mor;
 pub mod mtl;
+pub mod snd;
 pub mod tim2;
 pub mod xb;

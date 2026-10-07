@@ -12,6 +12,7 @@ game lives in `context/`, which is git-ignored and must never be shared.
 | `journal/` | Research notes per task (`YYYY-MM-DD-<slug>/N-TOPIC-STATE.md`). `-FINAL` done, `-PART` in progress, `-READY` needs the human. `TODO.md` links each item to its entry. |
 | `fn.sh <addr>` | Prints one function from the decompilation dump, e.g. `research/fn.sh 34afc0`. |
 | `mkoverlay_elf.py` | Builds one ELF per program overlay (GAME, MENU, MOVIE) from the disc's boot ELF, so Ghidra sees the overlay code at its load address. |
+| `mkirx_elf.py` | Turns an IOP module (`.IRX`, e.g. the sound driver `MODULES2/SG2IOPM1.IRX`) into a plain MIPS ELF with function-start symbols for Ghidra. |
 | `ghidra_scripts/` | `DumpDecomp.java` decompiles every function to one `.c` file. `DumpAsm.java` prints the instructions of chosen functions. |
 | `tools/` | Python analysis scripts: format walkers (`mdlwalk`, `mtlwalk`, `mdlvif`, `vifwalk`), the PS2 FPU model (`ps2fpu`), a VU0 disassembler, ball-flight and shot-table models, and the generators for test recordings (`fixture_*.py`). |
 
@@ -53,6 +54,12 @@ done
 # Instructions of a few functions, from the existing project (no re-analysis):
 /opt/ghidra/support/analyzeHeadless context/ghidra hst -process hst_game.elf -readOnly -noanalysis \
   -scriptPath research/ghidra_scripts -postScript DumpAsm.java "$PWD/context/notes/asm_x.txt" 32f690 335b70
+
+# The IOP sound driver (R3000) on its own project
+python3 research/mkirx_elf.py context/iso/MODULES2/SG2IOPM1.IRX context/elf/sg2iop.elf
+/opt/ghidra/support/analyzeHeadless context/ghidra sg2 -import context/elf/sg2iop.elf -overwrite \
+  -processor MIPS:LE:32:default -scriptPath research/ghidra_scripts -postScript DumpDecomp.java "$PWD/context/decomp"
+# → context/decomp/sg2iop.c
 ```
 
 `context/` in use looks like this:
@@ -69,6 +76,7 @@ done
 | `context/shots_s05/` → `fixtures/shots_s05.csv`, `flights_s05.csv`, `shot_tables_s05.csv` | `tools/trace_shots.py 5 …`, then `research/tools/fixture_shots.py`, `fixture_flights.py`, `traj_inverse2.py` + `fixture_shot_tables.py` |
 | `context/fixtures/ball_path_s08.csv` | `research/tools/fixture_ball_path.py` on a RAM image |
 | `context/fixtures/shot_params_ram.bin` | the shot parameter table from a save state's RAM |
+| `context/fixtures/spu_s03.csv`, `spu_s04.csv`, `spu_s05.csv` | `research/tools/fixture_spu.py <slot N .p2s> …` (sound banks, key-ons and pitch registers of slots 3/4/5) |
 | `context/recordings/*.p2m2` | PCSX2 input recordings (Tools → Input Recording) |
 
 Each test names the recording it needs in its header comment and skips itself when that recording is missing.

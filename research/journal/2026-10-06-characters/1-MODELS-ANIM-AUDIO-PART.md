@@ -28,3 +28,4 @@
   ADSR/volume/pan/root note/fine tune after.
 - UNRESOLVED: note → tone (section +0x14 key map + +0x20 regions; identity fits only 60%). The resolution is in the
   IOP sound driver (IRX) — decompile it (R3000) next. BD samples: end flag (byte 1 bit 0) then one silent block.
+- RESOLVED in 2026-10-07-n3-audio/1-BANKS-PITCH-FINAL.md (EE-side, 4-byte a0 key-on with a tone-set index).
