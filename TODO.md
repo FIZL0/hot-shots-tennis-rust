@@ -67,13 +67,14 @@ Things that need the human go under **Needs the human** at the bottom, never int
   should use PCSX2 input recording (`.p2m2`) — P0 decides.
 - `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it.
 - Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
-- `tools/overnight.sh` (in tmux) runs `claude -p continue` back to back and owns the virtual pad for the night.
+- `tools/overnight.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
 
 ## Play it now
 
 ```
 cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
+
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (other team) = controller 2
 when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
 J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
@@ -83,6 +84,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 `third_party/gilrs-core` (read-only fallback, no rumble).
 
 ## Done (ported and verified against the original)
+
 - Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
 - Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — 4524 recorded frames.
 - Shot tables (TRAJ): lookup + launch speed/elevation/frames — 11 recorded strokes.
@@ -111,7 +113,8 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 ## Prompts
 
 ### Next (user priorities, 2026-10-06 — do these first, in order)
-- [ ] **N1 — Accurate, functional animations.** Replace the motion picking in `play.rs` (`motions`) with the
+
+- [ ] **N1 — Accurate, functional animations & also original movement speed.** Replace the motion picking in `play.rs` (`motions`) with the
   game's own: the motion setter `0x350280` (motion number, speed, loop/hold flags) and its callers per player
   state (ready `ad00`/`ad01`, turns `tb_f`/`tb_b`, runs/dash by the stick and speed, receive, strokes and their
   follow-through, serve stance/walk/toss/swing, whiffs, reactions `re_*` after points), motion blending
@@ -126,10 +129,18 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   play the game's sounds at its trigger points: racket hits (court bank program 6 by grade/type, `0x340860`),
   bounces, serve, character voices (per-player banks), umpire calls, crowd, music. Verify trigger frames against
   recordings.
+- [ ] **N4 — Landing markers as the original.** Replace our red dot with the game's own bounce marker (texture,
+  size, colour, alpha/pulse, when it appears and disappears; `chakudan` in `AZUMA/C_EFF` EFFCT.XB0 is a likely
+  source), and add the yellow outline the original draws where a lob will land. Verify against frame-stepped
+  screenshots of the original (`tools/screenshot.sh`): same frames, position, size and colour.
+- [ ] **N5 — Lob smash.** Let a player smash a lob (overhead on a high ball), as the original: the smash
+  branch of the contact search (`hst_sim::swing::search`, P4) for lobs, the smash shot table, its motion and
+  the movement to get under the ball. Verify a recorded lob smash's contact frame, branch and ball launch.
 - [x] **Player 1 is Carol** (character 6, left-handed) by default; `--chars` still overrides. Note: the contact
   search and serve still use character 0's reach/timing data for everyone (P7/P3).
 
 ### Harness
+
 - [x] **P0 — Input replay harness.** Fixture reader `hst_sim::replay` (pad, globals, match, ball, player
   position = model matrix translation +0x3d70/+0x3d78), CLI `cargo run -p hst-sim --bin replay -- <fixture>
   [from] [to]` (CSV per frame), recorder `tools/record_p2m2.py`. round1 (`context/fixtures/round1.bin`, doubles,
@@ -184,6 +195,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
     Journal `5-LIVE-PLAY-FINAL.md`.
 
 ### Match basics (do these early)
+
 - [ ] **P0b — Tennis rules and serve flow.** Proper match flow before polishing anything else, exactly as the
   original: server serves from behind the baseline alternating deuce/ad sides, the serve must land in the
   diagonal service box, faults and double faults, second serve, receiver positions, server rotation each game,
@@ -230,7 +242,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   - [x] **P0b5 — Serve.** Done: `hst_sim::serve` (walk, three tosses, toss launch, serve contact search, box aim
     with strong-toss mistiming errors), `tests/serve.rs` 36 recorded serves exact. Shot parameters → P6. Original: Toss height/duration (`37af20`), the contact window and how the press timing during the
     toss changes the serve (serve branch of `3467b0`). Verify with vpad-driven serves from slot 3/4 (pad + ball
-    + player state over PINE) through the replay harness.
+    - player state over PINE) through the replay harness.
 - [~] **P0c — Up to 4 players.** Playable doubles: 4 slots, placement, rules, P1/P2 on controllers 1/2, CPU
   for the rest, ends swap on court. Open: the original's partner positioning / who-takes-the-ball, formations,
   shared-camera behaviour, hot-plug beyond two pads. Original text: Four player slots, each human (keyboard or any connected controller) or AI;
@@ -241,6 +253,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   Verify with slot 3 (P1 + 3 bots doubles) recordings through the replay harness.
 
 ### Shots
+
 - [ ] **P1 — Shot parameters in play.** Replace `KIND_SPIN` and every per-shot constant in `play.rs` with the
   character's record (`hst_sim::params`, record = character + 3) and the character's own TRAJ tables
   (class/kind/record → file, as mapped from the `gm+0x9c` table owner). Port `37e420` (normal↔charged blend),
@@ -274,6 +287,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   original (verify with recorded let serves).
 
 ### Players
+
 - **Handedness:** characters can be left-handed; **Carol and Will are lefty by default**. Read handedness from
   the game's character data (don't hard-code names) and mirror everything that depends on it: forehand/backhand
   side, contact search reach/offsets, swing and serve animations, toss hand, racket attachment.
@@ -312,11 +326,13 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   position, scale and alpha.
 
 ### AI
+
 - [ ] **P11 — Opponent AI.** Port target choice, shot type choice, positioning, reaction delay and timing error
   from the AI code and AIParam.csv per character; it reads the stored path (path recorder: 15 steps/frame,
   court plane only). Verify AI decisions against slot 5 (all-bot) recordings.
 
 ### Match
+
 - [ ] **P12 — Rules and scoring details.** (Basics in P0b, doubles in P0c.) Games, sets, deuce/advantage, tiebreak, side changes, doubles rules, match
   flow states (point start/end delays, replays if any) exactly as the original. Verify full recorded games/sets
   (incl. a tiebreak and a side change) through P0's harness: score and state transitions frame-exact.
@@ -393,6 +409,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   harness — bounce frames bit-exact on each surface.
 
 ### Presentation
+
 - [~] **P16 — Camera.** Match camera mode 0 ported (`hst_sim::camera`, update `369ce0`): orbit 41 m / 17° /
   framing offset, smoothed dolly-back for the near team (`36a4a0`), bottom fit (`36acc0`), sideways slide + widen
   (`36a840`), 10 % easing, ball top fit, cut on each new point, turned round behind a human on the +z half.
@@ -428,6 +445,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   option on.
 
 ## Known gaps / caveats
+
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
 - Stored-path fixtures can't verify net hits (the game records paths against the court plane only); the net
   response shares the exact code path but its sweep is our flat net, not the court mesh (→ P15).
@@ -435,4 +453,5 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Disc court folder ↔ physics court index mapping is unverified (slot 5 = court index 10).
 
 ## Needs the human
+
 - (none yet)

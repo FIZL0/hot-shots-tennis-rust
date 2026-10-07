@@ -1,6 +1,6 @@
 //! Playable test mode (`--play`): doubles (four players, `--singles` for two) on the ported ball physics, rules,
-//! serve placement, contact search and the game's own shot tables. Players 1 and 2 (one per team) are humans on
-//! controllers 1 and 2 (the keyboard also drives player 1); every other slot is a stand-in AI. Players are
+//! serve placement, contact search and the game's own shot tables. Players 1 and 3 (one team; 1 and 2 in singles) are
+//! humans on controllers 1 and 2 (the keyboard also drives player 1); every other slot is a stand-in AI. Players are
 //! original stand-in athletes (`figure.rs`); movement tuning, AI and the serve motion are placeholders until those
 //! systems are ported (see TODO.md).
 //!
@@ -46,6 +46,11 @@ const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// A press stays live this many frames looking for a contact.
 const PRESS_FRAMES: u32 = 28;
+/// A whiff: the stroke motion reaches its contact pose on this frame and turns into the whiff motion; a new
+/// press is taken from 2 frames after that, and the player is free again 30 frames after it, as the original.
+const WHIFF_POSE: u32 = 8;
+const WHIFF_REPRESS: u32 = WHIFF_POSE + 2;
+const WHIFF_FRAMES: u32 = WHIFF_POSE + 30;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
 /// of it (measured on the court lines against the real game).
 const SHOWN_ASPECT: f32 = 0.75;
@@ -87,6 +92,8 @@ struct Player {
     hand: f32,
     /// The stroke motion playing (the contact search's swing animation) and its speed to reach the contact pose.
     stroke: Option<(usize, f32)>,
+    /// A swing at nothing: its stroke motion and frames since the press.
+    whiff: Option<(usize, u32)>,
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -182,7 +189,7 @@ struct SlotPad {
     serve: bool,
 }
 
-/// Controller slots 1 and 2 (keyboard and the first gamepad drive slot 1). Slot `i` controls player `i`.
+/// Controller slots 1 and 2 (keyboard and the first gamepad drive slot 1). See `slot_of` for which player each drives.
 #[derive(Resource, Default)]
 struct Pads {
     slots: [SlotPad; 2],
@@ -191,14 +198,15 @@ struct Pads {
 }
 
 impl Pads {
-    /// Which slot controls player `i`, if any (slot 2 only while a second gamepad is connected).
-    fn slot_of(&self, i: usize) -> Option<usize> {
+    /// Which slot controls player `i` of `n`, if any (slot 2 only while a second gamepad is connected). In
+    /// doubles slot 2 is player 1's partner (player 3, teams are {1,3} vs {2,4}); in singles the opponent.
+    fn slot_of(&self, i: usize, n: usize) -> Option<usize> {
         if std::env::var_os("HST_AUTOPLAY").is_some() {
             return None;
         }
         match i {
             0 => Some(0),
-            1 if self.connected >= 2 => Some(1),
+            _ if i == n / 2 && self.connected >= 2 => Some(1),
             _ => None,
         }
     }
@@ -520,7 +528,8 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     let mut cycle = keys.just_pressed(KeyCode::KeyC);
     let mut turn = keys.pressed(KeyCode::ArrowRight) as i32 as f32 - keys.pressed(KeyCode::ArrowLeft) as i32 as f32;
     // controllers in connection order: the first is slot 1, the second slot 2
-    let mut list: Vec<_> = gamepads.iter().collect();
+    // ponytail: Steam Input's virtual pads (Valve, 0x28de) mirror real ones; skip them so slot 2 is the second real pad
+    let mut list: Vec<_> = gamepads.iter().filter(|(_, g)| g.vendor_id() != Some(0x28de)).collect();
     list.sort_by_key(|(e, _)| *e);
     for (slot, (_, g)) in list.iter().take(2).enumerate() {
         let s = &mut now[slot];
@@ -783,6 +792,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.facing = base_yaw(p.end);
         } else {
             g.players[i].pending = left.checked_sub(1);
+            if left == 0 {
+                whiff(g, i);
+            }
         }
     }
     if let Some(c) = g.players[i].contact {
@@ -807,6 +819,10 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
     }
     // animation clock: contact at 45% of the swing, follow-through over the remaining frames
     let p = &mut g.players[i];
+    if let Some((anim, f)) = p.whiff {
+        p.prev = p.pos;
+        p.whiff = (f + 1 < WHIFF_FRAMES).then_some((anim, f + 1));
+    }
     if let Some(f) = p.swing {
         p.swing = (f + 1 < p.wind + 16).then_some(f + 1);
         if p.swing.is_none() {
@@ -817,20 +833,47 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
     struck
 }
 
-/// A shot button press: remembered for a while and checked every frame until a contact is found.
+/// A shot button press: remembered for a while and checked every frame until a contact is found. With no
+/// ball for this player to hit (or none found in time) the player swings at nothing, as the original.
+/// ponytail: the original holds an early press only while its auto-approach (P7) finds a reachable ball ahead;
+/// the fixed PRESS_FRAMES window stands in, so an early whiff comes up to 28 frames late.
 fn press(g: &mut Game, i: usize, kind: i32) {
     let p = &mut g.players[i];
-    if p.contact.is_none() && p.swing.is_none() {
-        p.pending = Some(PRESS_FRAMES);
+    let free = p.whiff.is_none_or(|(_, f)| f >= WHIFF_REPRESS);
+    if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && free {
+        p.whiff = None;
         p.kind = kind;
+        let theirs = g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
+        if theirs {
+            g.players[i].pending = Some(PRESS_FRAMES);
+        } else {
+            whiff(g, i);
+        }
     }
+}
+
+/// Swing at nothing: the ground stroke of the pressed shot type, on the side the ball passes (the side of the
+/// ball's line the player stands on), at full speed.
+fn whiff(g: &mut Game, i: usize) {
+    let (b, p) = (g.flight.ball, &mut g.players[i]);
+    let base = match p.kind {
+        1 => 0x12,
+        3 => 0x14,
+        _ => 0x10,
+    };
+    let d = [p.pos[0] - b.pos[0], p.pos[2] - b.pos[2]];
+    let right = d[1] * b.vel[0] - d[0] * b.vel[2] > 0.0;
+    let other = if right { p.hand >= 0.0 } else { p.hand < 0.0 };
+    p.whiff = Some((base + other as usize, 0));
+    p.vel = Vec2::ZERO;
+    p.facing = base_yaw(p.end);
 }
 
 /// Every player's turn this frame: humans from their controller slot, the rest from the stand-in AI.
 fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
     let g = &mut *g;
     for i in 0..g.players.len() {
-        match pads.slot_of(i) {
+        match pads.slot_of(i, g.players.len()) {
             Some(s) => {
                 let pad = &mut pads.slots[s];
                 let (shot, serve_press) = (pad.shot.take(), std::mem::take(&mut pad.serve));
@@ -839,10 +882,10 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
             None => bot(g, i),
         }
     }
-    g.cam_owner = (0..g.players.len()).find(|&i| pads.slot_of(i).is_some());
+    g.cam_owner = (0..g.players.len()).find(|&i| pads.slot_of(i, g.players.len()).is_some());
     let server = g.score.server as usize;
     if g.phase == Phase::Serve && g.message.is_empty() {
-        g.message = match pads.slot_of(server) {
+        g.message = match pads.slot_of(server, g.players.len()) {
             Some(s) => format!("Player {} serve: walk the baseline, toss with J/A (strong), K/B (weak) or L/Y (underhand), hit at the top with J/A or K/B (L/Y underhand)", s + 1),
             None => "Serving".into(),
         };
@@ -860,7 +903,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     if let Some(kind) = shot {
         press(g, i, kind);
     }
-    if g.players[i].contact.is_none() {
+    if g.players[i].contact.is_none() && g.players[i].whiff.is_none() {
         // screen-relative: stick right follows the camera's right, stick up its ground-forward
         let mut want = screen(g, pad.stick) * RUN;
         if g.players[i].swing.is_some() {
@@ -918,17 +961,18 @@ fn bot(g: &mut Game, i: usize) {
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         return bot_serve(g, i);
     }
-    let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some();
+    let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some() || g.players[i].whiff.is_some();
     if !busy {
         let plan = match g.phase {
             Phase::Rally if g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1 => intercept(g, i),
             _ => None,
         };
-        // ponytail: who takes the ball in doubles is the nearer teammate; the original's partner logic is P0c/P11
+        // ponytail: in doubles each teammate takes the balls on its side of the court (the nearer by distance left
+        // the one at the net standing all rally); the original's partner logic is P0c/P11
         let mine = plan.filter(|(b, _)| {
-            let d = |j: usize| Vec2::new(b[0] - g.players[j].pos[0], b[2] - g.players[j].pos[2]).length();
+            let d = |j: usize| (b[0] - g.players[j].pos[0]).abs();
             let mate = i ^ 2;
-            mate >= g.players.len() || d(i) <= d(mate)
+            mate >= g.players.len() || d(i) < d(mate) || (d(i) == d(mate) && i < mate)
         });
         let p = g.players[i];
         let goal = mine.map_or(p.home, |(b, _)| [b[0] - 1.1 * (b[0] - p.pos[0]).signum(), 0.0, b[2] - p.end * g.reach.ahead]);
@@ -1164,6 +1208,11 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             }
             continue;
         }
+        // a whiff's stroke turns into the whiff motion at the contact pose (forehand-side strokes 0x27, the others 0x28)
+        if let Some((anim, f)) = p.whiff {
+            m.play(if f < WHIFF_POSE { anim } else if anim % 2 == 0 { 0x27 } else { 0x28 }, 1.0, false);
+            continue;
+        }
         if let Some((anim, speed)) = p.stroke {
             let past = m.id == anim && m.time >= serve::SWEET_FRAME as f32;
             m.play(anim, if past { 1.0 } else { speed }, false);
@@ -1235,7 +1284,7 @@ fn balloons(
 }
 
 fn hud(g: Res<Game>, pads: Res<Pads>, mode: Res<CamMode>, mut q: Query<&mut Text, With<ScoreText>>) {
-    let who = |i: usize| pads.slot_of(i).map_or("CPU".to_string(), |s| format!("P{}", s + 1));
+    let who = |i: usize| pads.slot_of(i, g.players.len()).map_or("CPU".to_string(), |s| format!("P{}", s + 1));
     let team = |t: usize| (t..g.players.len()).step_by(2).map(who).collect::<Vec<_>>().join("+");
     for mut t in &mut q {
         t.0 = format!(
