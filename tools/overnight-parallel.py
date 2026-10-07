@@ -22,7 +22,8 @@ reports to; it merges task/<ID> into main, fixes conflicts, runs the tests and k
 Reports queue in context/notes/master.outbox; each waits until the master is idle, then goes in after a /clear with
 the master's instructions, so the session lives on across runs without its context growing. Nothing ends the master:
 it outlives a done or stopped run, and the next run adopts it. Restarting the runner adopts the master and the sessions still running in panes s1..sN instead of resetting them. A run that only
-hit the usage limit is discarded and its slot sleeps until the reset.
+hit the usage limit is discarded and its slot sleeps until the reset; one that hit it partway waits in its pane (the stop
+hook spares it) and Claude Code continues it at the reset.
 """
 import glob, json, os, re, shlex, subprocess as sp, time, uuid
 from datetime import datetime, timedelta
@@ -45,7 +46,9 @@ input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Ot
 time: keep your play.rs changes local (add functions, systems or new modules; don't move, rename or reformat existing \
 code) so the merges stay clean. Close it with `tools/pcsx2-hst.sh stop` \
 (never pkill pcsx2-qt: the other agents' copies are running too). When done, tick \
-{id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop."""
+{id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
+is not stuck: commit what's solid but don't mark it `[~]` or stop PCSX2 — the session waits for the reset and continues \
+the task."""
 
 
 def git(*a, cwd=ROOT):
