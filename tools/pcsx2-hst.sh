@@ -10,9 +10,11 @@ set -e
 T=$(dirname "$(realpath "$0")")
 N=${HST_PCSX2:-}
 PID=${XDG_RUNTIME_DIR:-/tmp}/hst-pcsx2$N.pid  # pcsx2-qt hides its environment (file caps), so track it by pid
+PAD=${XDG_RUNTIME_DIR:-/tmp}/hst-vpad$N.fifo.lock  # held by copy N's vpad.py serve (started below)
+nopad() { [ -n "$N" ] && fuser -k -TERM "$PAD" >/dev/null 2>&1; true; }
 mine() { p=$(cat "$PID" 2>/dev/null) && [ "$(ps -o comm= -p "$p")" = pcsx2-qt ] && echo "$p"; true; }
-if [ "$1" = stop ]; then p=$(mine); [ -n "$p" ] && kill $p; exit 0; fi
-if [ "$1" = status ]; then p=$(mine); echo "PCSX2 ${N:+copy $N }${p:+running (pid $p)}${p:-not running}"; exit 0; fi
+if [ "$1" = stop ]; then p=$(mine); [ -n "$p" ] && kill $p; nopad; exit 0; fi
+if [ "$1" = status ]; then p=$(mine); echo "PCSX2 ${N:+copy $N }$([ -n "$p" ] && echo "running (pid $p)" || echo "not running")"; exit 0; fi
 # anything else that isn't a pcsx2-qt flag would be opened as a file (an error dialog that blocks the copy)
 case $1 in ''|-*) ;; *) echo "usage: pcsx2-hst.sh [stop | status | -pcsx2-qt-flags]" >&2; exit 2;; esac
 [ -n "$(mine)" ] && { echo "PCSX2 ${N:+copy $N }already running"; exit 0; }
@@ -30,5 +32,8 @@ sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the i
 # copies: no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause,
 # which pine.py presses to resume a paused copy
 [ -n "$N" ] && sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' "$INI"
-echo $$ >"$PID"  # exec keeps the pid
-exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"
+[ -z "$N" ] && { echo $$ >"$PID"; exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"; }  # exec keeps the pid
+# a copy's pad goes with it, however PCSX2 ends (stop, kill, crash)
+pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso" & echo $! >"$PID"
+wait $! || true
+nopad
