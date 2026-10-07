@@ -430,13 +430,13 @@ fn layout(v: &View) -> Vec<Quad> {
 
 /// The panel's textures: `TEXTURES` in order, then each player's face.
 #[derive(Resource)]
-pub(super) struct Art(Vec<Handle<Image>>);
+pub(super) struct Art(pub(super) Vec<Handle<Image>>);
 /// The pool of screen rectangles, drawn in order.
 #[derive(Component)]
 pub(super) struct Slot(usize);
 /// Per-player colours from the game program: pill/label tint and rank tint.
 #[derive(Resource)]
-pub(super) struct Colours([[u8; 3]; 4], [[u8; 3]; 4]);
+pub(super) struct Colours(pub(super) [[u8; 3]; 4], pub(super) [[u8; 3]; 4]);
 
 const POOL: usize = 48;
 
@@ -447,7 +447,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, draw);
 }
 
-fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
+pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let pic = tim2::decode(data).expect("TIM2").remove(0);

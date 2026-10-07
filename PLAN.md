@@ -130,7 +130,11 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 - [~] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs — BLOCKED: no recorded tiebreak (fixtures cover deuce/adv, side changes, sets, doubles only); needs the human's tiebreak recording, see *Needs the human*
 - [x] **P12a** Post-point sequence → `flow.rs` · `motion.rs` · `play.rs` react/next_point | t: score.rs, motion.rs
-- [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
+- [x] **P12b** (split into P12b1–4) Match pop-ups → `play/popups.rs` + hook in `play.rs` · `flow.rs` | j: 2026-10-07-p12b-popups
+- [x] **P12b1** Point show: plates, score roll/flash, Deuce! banner + count (in P12b) → `play/popups.rs` · `flow.rs` show() | t: hst popups | j: 2026-10-07-p12b-popups
+- [ ] **P12b2** Game/set shows (`3876c0`/`387ac0`, start `387910`/`387d10`) and tiebreak point show (`388ec0`/`3891d0`, inpane_tiebreak00–02) (in P12b) → `play/popups.rs` | j: 2026-10-07-p12b-popups
+- [ ] **P12b3** Call pop-ups Let/Out/Net/Fault/Double Fault/Change Sides: 3D models `azuma/inpane/mdl` with ANI/MOR/MTA players (`38e870`, `38eeb0`, update `388190`, countdown 0x410f0c) (in P12b) → `hst-data` · `play/popups.rs` | j: 2026-10-07-p12b-popups
+- [ ] **P12b4** Finish banners (Untouchable Service/Return/Smash Ace, On the Line, Counter) and Set/Match Point: triggers and draw (in P12b) → `play/popups.rs` | j: 2026-10-07-p12b-popups
 - [x] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs

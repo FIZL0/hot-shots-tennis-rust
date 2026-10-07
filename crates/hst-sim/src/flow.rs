@@ -207,6 +207,27 @@ impl PostPoint {
     }
 }
 
+/// What the score show is drawing this tick (after `PostPoint::step`), for the pop-ups: the show's stage
+/// (0 fade in, 1 roll, 2 flash, 3 settle, 4 hold), its countdown `t` and roll step `n`, and whether it is fading out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShowState {
+    pub event: Event,
+    pub stage: u8,
+    pub t: i32,
+    pub n: i32,
+    pub fading_out: bool,
+}
+
+impl PostPoint {
+    /// The running score show, if any.
+    pub fn show(&self) -> Option<ShowState> {
+        match self.board {
+            Board::Show(s) => Some(ShowState { event: s.event, stage: s.step, t: s.t, n: s.n, fading_out: s.fading_out }),
+            _ => None,
+        }
+    }
+}
+
 impl Show {
     fn new(event: Event) -> Self {
         let t = if matches!(event, Event::Game | Event::Set) { 14 } else { 5 };
