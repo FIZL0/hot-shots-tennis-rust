@@ -71,3 +71,31 @@ Fixtures (context/fixtures, not in git): p7_carol_s04.bin (420 samples, slot 4, 
   from slot 4 instead. Copy 2's PCSX2.ini now has NominalScalar 0.5.
 - play.rs: `serve_turn` walks by `serve_walk` (a human's direction through `pad_run`, a bot's stick) and sets the
   walk motion; `motions` plays it from `cmd`.
+
+## P7e — dive travel, recovery, split-step
+
+- **Dive travel is per character through the receive motion's root path** (motion 51, `mo_pcNN_receive_f_dummy`; the
+  port loads it per character into `paths[0x1e]`, `character.rs`). The z samples fall into six groups:
+  {0, 1, 2, 4, 6, 8, 9, 12, 13} share one path; 3 (Kaito), 5, 7 (Bull), 10 and 11 each have their own.
+- `tests/swing.rs recorded_dives` replays every dive of new_recording, match_s05, lob_smash_s05,
+  human_smash_s04, p7b_c00..13 and p7e_c03/07. Each player's character comes from its TParam record copy
+  (+0x13a8..0x13f0) at the dive frame; where records collide, the candidates must share the root path. The dive
+  search must pick the game's frame and kind (+0x3ec4), and the miss slide. The body must step bit-exact through
+  `mover` while the dive counter runs. Result: 58 dives, 3532 dive frames, characters {0, 1, 2, 3, 5, 6, 7, 8, 10,
+  11}, so every root-path group is covered.
+  - One dive is skipped (human_smash_s04 vsync 15054 p0). The live ball meets the net there, but the game's dive
+    predictor flies through the net and finds no dive. The test allows at most one skip.
+  - A contact dive's arm slide isn't checked: it needs the receive pose's shoulder and racket tip (only miss slides
+    and all frames/kinds are).
+  - The direction tolerance is 1e-5 (match_s05 vsync 22670 p2 is 1.3e-6 off).
+- **Recovery after a stroke** is N1f's `motion::recovery` (15 frames for kind 1 on branch 1/2, else 30) and
+  `follow_over` (tests/motion.rs, match_s05). It has no character term: it is keyed by stroke branch and kind
+  only. It is verified on match_s05's characters only, not checked in the decompile per character.
+- **Split-step / ready hop: none.** The 55-entry motion list (`hst_data::ani::MOTIONS`) has no hop. The only
+  waiting motions are the stances ad00/ad01 and tb_f/tb_b, which `player::stance` already plays.
+- Recordings: `research/p7e_dive_record.py <char> <out> [frames] [--slot N]`. P1 serves, drifts sideways
+  until the incoming ball is 16 frames off, then runs at it. It presses ✕ while running, 6–13 frames out and
+  1.8–4.5 m away, which makes a dive. Pressing while standing gives a stroke; reaching the ball gives no dive.
+  On PCSX2 copy 2, vpad's "circle" reaches the menus as cancel. So the script picks through "cross" (it wraps
+  pick.py's `vpad`; pick.py itself is unchanged, and on copy 2 it backs out to the main menu).
+  The p7b_c*.bin fixtures were copied from the s5 slot's context/fixtures.

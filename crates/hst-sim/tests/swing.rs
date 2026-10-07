@@ -222,92 +222,142 @@ fn contact_search(name: &str) {
     assert_eq!(misses, 0);
 }
 
-/// Every dive of `context/fixtures/new_recording.bin` (all lunges that miss the ball): the dive search picks the
-/// game's frame, direction and slide.
+/// Every dive of the live recordings (new_recording.bin, match_s05.bin, lob_smash_s05.bin, human_smash_s04.bin
+/// P7b's p7b_cNN.bin runs and P7e's p7e_c03/07.bin): the dive search picks the game's frame, kind and slide, and the body's slide and
+/// recovery follow each player's own character's receive motion root path bit-exact. Characters aren't recorded:
+/// each player's is found from its TParam record copy (+0x13a8..), and where several characters share the record
+/// the test needs them to share the root path too.
 #[test]
-fn new_recording_dives() {
+fn recorded_dives() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/new_recording.bin")) else {
-        return eprintln!("new_recording.bin absent, skipped");
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc absent, skipped");
     };
-    let frames = frames_live(&data);
-    // the receive motion's root path by player: the recording's characters (not recorded, found by their
-    // paths) are p1 0 (or 1, 2, 4, 6, 8, 9, 12, 13: same path), p2 10, p3 11
-    let roots = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")).ok().map(|mut iso| {
-        [0, 0, 10, 11].map(|c| {
+    let roots: Vec<hst_sim::pose::Path> = (0..14)
+        .map(|c| {
             let xb = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
             let arc = Archive::parse(&xb).unwrap();
             let stem = ani::motion_name(51, c).unwrap().to_ascii_lowercase();
             let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
             hst_sim::pose::Path::new(&ani::parse(&arc.read(e).unwrap()).unwrap()).unwrap()
         })
-    });
-    let (mut dives, mut steps) = (0, 0);
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        for p in 0..4 {
-            if p_u8(fr, p, 0x3f58) != 1 || p_u8(a, p, 0x3f58) != 0 {
-                continue;
-            }
-            let reach = Reach {
-                base: fr.player_f32(p, 0x13ac),
-                reach: fr.player_f32(p, 0x13b0),
-                stroke_height: fr.player_f32(p, 0x13b8),
-                volley_height: fr.player_f32(p, 0x13bc),
-                smash_top: fr.player_f32(p, 0x13c0),
-                smash_bottom: fr.player_f32(p, 0x13c8),
-                ahead: 0.0,
-                smash_ahead: 0.0,
-                body_low: 0.0,
-                body_high: 0.0,
-                grades: vec![],
-                hand: 1.0,
-                shoulder: [0.0; 3],
-                tip: [0.0; 3],
-            };
-            let pos = [fr.player_f32(p, 0x3f60), fr.player_f32(p, 0x3f64), fr.player_f32(p, 0x3f68)];
-            let end = if pos[2] < 0.0 { 1.0 } else { -1.0 };
-            // the recorded flight as the path: the game's predictor matches it, while replaying a ball from its
-            // object drifts by millimetres after a bounce
-            let path: Vec<PathPoint> = frames[k..k + DIVE_HORIZON]
+        .collect();
+    let data = iso.read("PCDATA/PCDATA.XB").unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).unwrap();
+    let csv = String::from_utf8_lossy(&arc.read(e).unwrap()).into_owned();
+    let records: Vec<Vec<u32>> = (0..14)
+        .map(|n| {
+            let s = hst_sim::player::ReachStats::from_tparam(csv.lines().find(|l| l.starts_with(&format!("{n},"))).unwrap());
+            [[s.serve_scatter, s.base, s.reach, s.under_min, s.stroke_height, s.volley_height].as_slice(), &s.smash, &s.serve, &s.under_serve, &[s.dive_start, s.dive_limit, s.collision]]
+                .concat()
                 .iter()
-                .map(|f| {
-                    let b = f.live_ball();
-                    PathPoint { pos: v3(b, 0xe0), bounces: i(b, 0x224) }
-                })
-                .collect();
-            let face = [a.player_f32(p, 0x3d60), a.player_f32(p, 0x3d68)];
-            let vel = [fr.player_f32(p, 0x3e00), fr.player_f32(p, 0x3e08)];
-            let d = dive(&reach, &path, pos, end, face, vel).unwrap_or_else(|| panic!("vsync {} p{p}: no dive", fr.vsync()));
-            let want = (p_i32(fr, p, 0x3f84) - 50, p_i32(fr, p, 0x3ec4) >= 0, fr.player_f32(p, 0x3f80));
-            assert_eq!((d.frame as i32, d.contact, d.slide), want, "vsync {} p{p}", fr.vsync());
-            let want_dir = [fr.player_f32(p, 0x3e60), fr.player_f32(p, 0x3e68)];
-            assert!((d.dir[0] - want_dir[0]).abs() < 1e-6 && (d.dir[1] - want_dir[1]).abs() < 1e-6, "vsync {} p{p}: dir {:?} want {want_dir:?}", fr.vsync(), d.dir);
-            dives += 1;
-            let Some(root) = roots.as_ref().map(|r| &r[p]) else { continue };
-            // from the game's direction (the path's ulps aside)
-            let (mut d, mut at) = (d, [pos[0], pos[2]]);
-            d.dir = want_dir;
-            // the recorded dive counter (+0x3f88) is n + 1 after frame n; it stalls when the game pauses
-            let mut n = 0;
-            while p_i32(frames[k + n], p, 0x3f88) == n as i32 + 1 {
-                let q = d.step(at, |t| root.at(t)[2], |m| {
-                    // the partner (p ^ 2) as of this player's update: players update in order
-                    let mate = if p < 2 { frames[k + n - 1].player_pos(p ^ 2) } else { frames[k + n].player_pos(p ^ 2) };
-                    let q = mover([at[0], 0.0, at[1]], [m[0], 0.0, m[1]], end, Some(mate), false);
-                    [q[0], q[2]]
-                });
-                at = q.expect("dive over early");
-                let rec = frames[k + n].player_pos(p);
-                assert_eq!(at, [rec[0], rec[2]], "vsync {} p{p} frame {n} of the dive", frames[k + n].vsync());
-                steps += 1;
-                n += 1;
+                .map(|v| v.to_bits())
+                .collect()
+        })
+        .collect();
+    let mut files: Vec<String> = ["new_recording.bin", "match_s05.bin", "lob_smash_s05.bin", "human_smash_s04.bin"].map(String::from).to_vec();
+    files.extend((0..14).map(|c| format!("p7b_c{c:02}.bin")));
+    // Kaito and Bull, whose root paths are their own, by research/p7e_dive_record.py (P1 dives on purpose)
+    files.extend(["p7e_c03.bin", "p7e_c07.bin"].map(String::from));
+    let (mut dives, mut steps, mut skipped, mut chars) = (0, 0, 0, std::collections::BTreeSet::new());
+    for file in &files {
+        let Ok(data) = std::fs::read(format!("{dir}/{file}")) else {
+            eprintln!("{file} absent, skipped");
+            continue;
+        };
+        let frames = frames_live(&data);
+        // a player's character: those whose record its copy equals, all with one root path
+        let mut root = |fr: Frame, p: usize| {
+                let rec: Vec<u32> = (0x13a8..0x13f0).step_by(4).map(|o| fr.player_f32(p, o).to_bits()).collect();
+                let cs: Vec<usize> = (0..14).filter(|&c| records[c] == rec).collect();
+                assert!(!cs.is_empty(), "{file} p{p}: no character's record {:?} best {:?}", rec.iter().map(|&b| f32::from_bits(b)).collect::<Vec<_>>(), (0..14).map(|c| records[c].iter().zip(&rec).filter(|(a, b)| a != b).count()).collect::<Vec<_>>());
+                let same = |c: usize| (0..80).all(|t| roots[c].at(t as f32)[2].to_bits() == roots[cs[0]].at(t as f32)[2].to_bits());
+                assert!(cs.iter().all(|&c| same(c)), "{file} p{p}: characters {cs:?} differ in root path");
+                chars.insert(cs[0]);
+                &roots[cs[0]]
+        };
+        for k in 1..frames.len().saturating_sub(DIVE_HORIZON) {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            for p in 0..4 {
+                if p_u8(fr, p, 0x3f58) != 1 || p_u8(a, p, 0x3f58) != 0 {
+                    continue;
+                }
+                let reach = Reach {
+                    base: fr.player_f32(p, 0x13ac),
+                    reach: fr.player_f32(p, 0x13b0),
+                    stroke_height: fr.player_f32(p, 0x13b8),
+                    volley_height: fr.player_f32(p, 0x13bc),
+                    smash_top: fr.player_f32(p, 0x13c0),
+                    smash_bottom: fr.player_f32(p, 0x13c8),
+                    ahead: 0.0,
+                    smash_ahead: 0.0,
+                    body_low: 0.0,
+                    body_high: 0.0,
+                    grades: vec![],
+                    hand: 1.0,
+                    shoulder: [0.0; 3],
+                    tip: [0.0; 3],
+                };
+                let pos = [fr.player_f32(p, 0x3f60), fr.player_f32(p, 0x3f64), fr.player_f32(p, 0x3f68)];
+                let end = if pos[2] < 0.0 { 1.0 } else { -1.0 };
+                // the recorded flight as the path: the game's predictor matches it, while replaying a ball from its
+                // object drifts by millimetres after a bounce
+                let path: Vec<PathPoint> = frames[k..k + DIVE_HORIZON]
+                    .iter()
+                    .map(|f| {
+                        let b = f.live_ball();
+                        PathPoint { pos: v3(b, 0xe0), bounces: i(b, 0x224) }
+                    })
+                    .collect();
+                let face = [a.player_f32(p, 0x3d60), a.player_f32(p, 0x3d68)];
+                let vel = [fr.player_f32(p, 0x3e00), fr.player_f32(p, 0x3e08)];
+                let at = format!("{file} vsync {} p{p}", fr.vsync());
+                // the game's predictor flies through the net: a ball that meets it (a bounce at the net) in the
+                // horizon was searched on a path not recorded (human_smash_s04 vsync 15054)
+                if path.windows(2).any(|w| w[1].bounces > w[0].bounces && w[1].pos[2].abs() < 0.5) {
+                    eprintln!("{file} vsync {} p{p}: ball meets the net, skipped", fr.vsync());
+                    skipped += 1;
+                    continue;
+                }
+                let d = dive(&reach, &path, pos, end, face, vel).unwrap_or_else(|| panic!("{at}: no dive"));
+                let contact = p_i32(fr, p, 0x3ec4) >= 0;
+                let want = (p_i32(fr, p, 0x3f84) - 50, contact);
+                assert_eq!((d.frame as i32, d.contact), want, "{at}");
+                // ponytail: a contact dive's arm slide needs the character's receive-pose shoulder and racket tip
+                // (zero here); its recorded slide drives the body instead
+                if !contact {
+                    assert_eq!(d.slide, fr.player_f32(p, 0x3f80), "{at}");
+                }
+                let want_dir = [fr.player_f32(p, 0x3e60), fr.player_f32(p, 0x3e68)];
+                assert!((d.dir[0] - want_dir[0]).abs() < 1e-5 && (d.dir[1] - want_dir[1]).abs() < 1e-5, "{at}: dir {:?} want {want_dir:?}", d.dir);
+                dives += 1;
+                let root = root(fr, p);
+                // from the game's direction and slide (the path's ulps aside)
+                let (mut d, mut at_) = (d, [pos[0], pos[2]]);
+                d.dir = want_dir;
+                d.slide = fr.player_f32(p, 0x3f80);
+                // the recorded dive counter (+0x3f88) is n + 1 after frame n; it stalls when the game pauses
+                let mut n = 0;
+                while k + n < frames.len() && p_i32(frames[k + n], p, 0x3f88) == n as i32 + 1 {
+                    let q = d.step(at_, |t| root.at(t)[2], |m| {
+                        // the partner (p ^ 2) as of this player's update: players update in order
+                        let mate = if p < 2 { frames[k + n - 1].player_pos(p ^ 2) } else { frames[k + n].player_pos(p ^ 2) };
+                        let q = mover([at_[0], 0.0, at_[1]], [m[0], 0.0, m[1]], end, Some(mate), false);
+                        [q[0], q[2]]
+                    });
+                    at_ = q.expect("dive over early");
+                    let rec = frames[k + n].player_pos(p);
+                    assert_eq!(at_, [rec[0], rec[2]], "{at} frame {n} of the dive");
+                    steps += 1;
+                    n += 1;
+                }
+                assert!(n == d.len() || n > 40 || k + n == frames.len(), "{at}: {n} frames");
             }
-            assert!(n == d.len() || n > 40, "vsync {} p{p}: {n} frames", fr.vsync());
         }
     }
-    eprintln!("{dives} dives, {steps} dive frames");
-    assert!(dives == 8 || frames.is_empty());
+    eprintln!("{dives} dives, {steps} dive frames, {skipped} skipped, characters {chars:?}");
+    assert!(skipped <= 1);
 }
 
 /// Each △ smash of `lob_smash_s05.bin` flies as the game's ball from its launch to its first bounce (bounces

@@ -111,7 +111,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P7b** All 14 characters' running, own bodies; hand source (in P7) → `tests/player.rs` · `play.rs` character_hand | t: player.rs
 - [x] **P7c** Reach and contact height windows (in P7) → `player.rs` · `play.rs` character_stats | t: player.rs
 - [x] **P7d** Serve position and movement around the serve (in P7) → `player.rs` · `play.rs` serve_turn | t: player.rs | j: 2026-10-07-p7-movement
-- [ ] **P7e** Dive distance, recovery, split-step (in P7) → `player.rs` · `play.rs` | t: player.rs
+- [x] **P7e** Dive distance, recovery, split-step (in P7) → `player.rs` · `play.rs` | t: player.rs
 - [ ] **P7f** Auto-positioning and bot direction (in P7) → `player.rs` · `play.rs` bot | t: player.rs
 - [~] **P8** Player animation timing (overlaps N1) → `motion.rs` · `character.rs` · `play.rs` motions | t: motion.rs
 - [x] **P8a** Whiffs → `motion.rs` · `play.rs` whiff/press | t: motion.rs
