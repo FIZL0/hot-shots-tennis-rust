@@ -219,9 +219,12 @@ impl<'a> Game<'a> {
     }
 
     /// How long the scoreboard takes over the score after a point.
-    pub fn scoreboard_timing(&self) -> ScoreboardTiming {
+    /// `language` and `umpire` pick the call sprite's countdowns (the US disc's match: language 0, umpire 4).
+    pub fn scoreboard_timing(&self, language: u8, umpire: u8) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
+        let calls = 0x41_0f0c + language as u32 * 0x14 + umpire as u32 * 0x28;
         ScoreboardTiming {
+            call_wait: std::array::from_fn(|k| i(calls + 4 * k as u32)),
             point_wait: i(0x41_0e90),
             game_wait: i(0x41_0e98),
             point_hold: self.f32(0x41_0ea8),
@@ -349,6 +352,10 @@ pub struct TriggerRow {
 /// Scoreboard timing after a point (frames unless noted).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScoreboardTiming {
+    /// Ticks the umpire's call sprite stays up at most, by the judge's call (1 out, 2 fault, 3 double fault,
+    /// 4 let; 5 out after net reads past this umpire's row, as the game does); it settles earlier when her
+    /// voice line ends.
+    pub call_wait: [i32; 6],
     /// Wait before a point's score is shown, when no player is mid-reaction.
     pub point_wait: i32,
     /// Wait before a game's or set's score is shown.

@@ -360,50 +360,126 @@ fn match_s05_rally_block() {
     assert!(decisions > 0);
 }
 
-/// The point-over phase of every scored point of the slot-5 match without an umpire call (P0b4): `PostPoint`
-/// fed the recorded score and rally block at the decision must clear the faults, reset the score for a new
-/// game and ask for the next phase (serve or change ends) on the game's own ticks (gm+0x58), and every
-/// change-ends phase must last `CHANGE_ENDS`. Calls (faults, outs: umpire voice) and the match-over point are P0b4c.
+fn score_at(f: Frame) -> Score {
+    let (points, games, sets) = snapshot(f);
+    let u = |a| f.global_u8(a) != 0;
+    Score {
+        points,
+        games,
+        sets,
+        deuce: f.rally_u8(0x316620) != 0,
+        advantage: f.rally_u8(0x316628) != 0,
+        tiebreak: f.rally_u8(0x31661a) != 0,
+        tiebreak_count: f.rally(0x31661c),
+        rotation: rd(f, 0x4230b0),
+        swapped: u(0x4230b4),
+        game_changed: u(0x4230ac),
+        games_played: rd(f, 0x4230c0),
+        match_over: u(0x4230be),
+        server: rd(f, 0x42304c),
+        side: rd(f, 0x423050),
+        receiver: rd(f, 0x423054),
+        ..Score::new()
+    }
+}
+
+fn tick(f: Frame) -> u32 {
+    u32::from_le_bytes(f.gm()[0x58..0x5c].try_into().unwrap())
+}
+
+/// The point-over phase entered at `frames[0]`, run through `PostPoint` fed the recorded score and rally block
+/// at the decision: faults, points and games must match every game tick (gm+0x58), and the next phase must be
+/// asked for on the game's tick. `settle`: the tick the umpire's call line ends (`None`: it never does, the
+/// countdown settles the call). A face-button press on port 0 is a human's press. Err: what differed.
+fn post_point(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming, settle: Option<u32>) -> Result<u32, String> {
+    use hst_sim::flow::{Next, PostPoint};
+    let f = frames[0];
+    let mut score = score_at(f);
+    let mut rally = rally_block(f);
+    let body = Some(rd(f, 0x42305c)).filter(|&p| p >= 0);
+    let event = match rd(f, 0x4230b8) {
+        0 if score.tiebreak => Some(Event::TiebreakPoint),
+        0 => Some(Event::Point),
+        1 => Some(Event::Game),
+        2 => Some(Event::Set),
+        _ => None,
+    };
+    let mut pp = PostPoint::called(event, rally.judge(body).call, t);
+    let (mut asked, mut prev) = (None, f);
+    for &s in frames {
+        let press = s.pad(0).buttons & !prev.pad(0).buttons & 0xf000 != 0;
+        prev = s;
+        while pp.tick < tick(s) {
+            let idle = settle.is_some_and(|v| pp.tick + 1 >= v);
+            // a press is seen on the tick it is sampled
+            if let Some(n) = pp.step_with(&mut score, &mut rally, t, idle, press && pp.tick + 1 == tick(s)) {
+                asked.get_or_insert((n, pp.tick));
+            }
+        }
+        if s.gm()[0x56] != 0xff {
+            let want = match s.gm()[0x56] {
+                1 => Next::ChangeEnds,
+                2 => Next::Serve,
+                _ => Next::MatchOver,
+            };
+            return if asked == Some((want, tick(s))) { Ok(tick(s)) } else { Err(format!("{event:?}: asked {asked:?}, game {want:?} at {}", tick(s))) };
+        }
+        if asked.is_some() {
+            return Err(format!("{event:?}: port asked early ({asked:?}), game at tick {}", tick(s)));
+        }
+        let want = (s.rally(0x316608), snapshot(s).0, snapshot(s).1);
+        if (rally.faults, score.points, score.games) != want {
+            return Err(format!("{event:?} tick {}: port {:?}, game {want:?}", tick(s), (rally.faults, score.points, score.games)));
+        }
+    }
+    Err("recording ends mid-phase".into())
+}
+
+/// Every point-over phase of a recording (from the phase's entry; the match-over point and its instant replay
+/// left out, P0b4c/P0b4d): those without a call must match as recorded; a called one must match for one tick
+/// where her call line ends (not recorded: searched from 1 to the call's countdown). Returns (phases, called
+/// phases' line ends by call).
+fn post_points(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming) -> (usize, Vec<(u8, u32)>) {
+    let (mut checked, mut lines) = (0, Vec::new());
+    for k in 1..frames.len() {
+        let (a, f) = (frames[k - 1], frames[k]);
+        if !(f.gm()[0x55] == 4 && a.gm()[0x55] != 4) || score_at(f).match_over {
+            continue;
+        }
+        let call = rally_block(f).judge(Some(rd(f, 0x42305c)).filter(|&p| p >= 0)).call;
+        if call == 0 || call == 6 {
+            post_point(&frames[k..], t, None).unwrap_or_else(|e| panic!("vsync {}: {e}", f.vsync()));
+        } else {
+            let line = (1..=t.call_wait[call as usize] as u32).find(|&v| post_point(&frames[k..], t, Some(v)).is_ok());
+            let line = line.unwrap_or_else(|| panic!("vsync {}: call {call}: {}", f.vsync(), post_point(&frames[k..], t, None).unwrap_err()));
+            lines.push((call, line));
+        }
+        checked += 1;
+    }
+    (checked, lines)
+}
+
+fn disc_timing() -> Option<hst_data::exe::ScoreboardTiming> {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let cnf = std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")).ok()?;
+    let bin = std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")).ok()?;
+    Some(hst_data::exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing(0, 4))
+}
+
+/// The point-over phase of every point of the slot-5 bot match (P0b4, P12a): scored points, the umpire's
+/// calls (fault, double fault, out after net) chained or not into the score show, faults cleared, the score reset
+/// for a new game and the next phase (serve or change ends) asked on the game's own ticks (gm+0x58); every
+/// change-ends phase lasts `CHANGE_ENDS`.
 #[test]
 fn match_s05_post_point() {
-    use hst_data::exe;
-    use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint};
+    use hst_sim::flow::CHANGE_ENDS;
     use hst_sim::replay::frames_live;
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{root}/context/fixtures"));
-    let (Ok(data), Ok(cnf), Ok(bin)) = (
-        std::fs::read(format!("{dir}/match_s05.bin")),
-        std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
-        std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
-    ) else {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Some(timing)) = (std::fs::read(format!("{dir}/match_s05.bin")), disc_timing()) else {
         return eprintln!("match_s05.bin or disc files absent, skipped");
     };
-    let timing = exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing();
     let frames = frames_live(&data);
-    let tick = |f: Frame| u32::from_le_bytes(f.gm()[0x58..0x5c].try_into().unwrap());
-    let score_at = |f: Frame| {
-        let (points, games, sets) = snapshot(f);
-        let u = |a| f.global_u8(a) != 0;
-        Score {
-            points,
-            games,
-            sets,
-            deuce: f.rally_u8(0x316620) != 0,
-            advantage: f.rally_u8(0x316628) != 0,
-            tiebreak: f.rally_u8(0x31661a) != 0,
-            tiebreak_count: f.rally(0x31661c),
-            rotation: rd(f, 0x4230b0),
-            swapped: u(0x4230b4),
-            game_changed: u(0x4230ac),
-            games_played: rd(f, 0x4230c0),
-            match_over: u(0x4230be),
-            server: rd(f, 0x42304c),
-            side: rd(f, 0x423050),
-            receiver: rd(f, 0x423054),
-            ..Score::new()
-        }
-    };
-    let (mut checked, mut changes) = (0, 0);
+    let mut changes = 0;
     for k in 1..frames.len() {
         let (a, f) = (frames[k - 1], frames[k]);
         if f.gm()[0x55] == 1 && a.gm()[0x55] != 1 {
@@ -411,47 +487,24 @@ fn match_s05_post_point() {
             assert_eq!((end.gm()[0x56], tick(*end)), (2, CHANGE_ENDS + 1), "vsync {}: change ends", f.vsync());
             changes += 1;
         }
-        if !(f.gm()[0x55] == 4 && a.gm()[0x55] != 4) {
-            continue;
-        }
-        let mut score = score_at(f);
-        let mut rally = rally_block(f);
-        let body = Some(rd(f, 0x42305c)).filter(|&p| p >= 0);
-        let event = match rd(f, 0x4230b8) {
-            0 if score.tiebreak => Event::TiebreakPoint,
-            0 => Event::Point,
-            1 => Event::Game,
-            2 => Event::Set,
-            _ => continue, // no point: the umpire's call (P0b4c)
-        };
-        if score.match_over || rally.judge(body).call != 0 {
-            continue;
-        }
-        let mut pp = PostPoint::new(event);
-        let mut asked = None;
-        for &s in &frames[k..] {
-            while pp.tick < tick(s) {
-                if let Some(n) = pp.step(&mut score, &mut rally, &timing) {
-                    asked.get_or_insert((n, pp.tick));
-                }
-            }
-            if s.gm()[0x56] != 0xff {
-                let want = match s.gm()[0x56] {
-                    1 => Next::ChangeEnds,
-                    2 => Next::Serve,
-                    _ => Next::MatchOver,
-                };
-                assert_eq!(asked, Some((want, tick(s))), "vsync {}: {event:?} next phase", f.vsync());
-                break;
-            }
-            assert_eq!(asked, None, "vsync {}: port asked early, game at tick {}", f.vsync(), tick(s));
-            assert_eq!((rally.faults, score.points, score.games), (s.rally(0x316608), snapshot(s).0, snapshot(s).1), "vsync {} tick {}", s.vsync(), tick(s));
-        }
-        assert_eq!(score.swapped, frames[k..].iter().find(|s| s.gm()[0x55] != 4).unwrap().global_u8(0x4230b4) != 0);
-        checked += 1;
     }
-    eprintln!("match_s05: {checked} point-over phases, {changes} change-ends phases");
-    assert!(checked > 20 && changes > 0);
+    let (checked, lines) = post_points(&frames, &timing);
+    eprintln!("match_s05: {checked} point-over phases (call line ends {lines:?}), {changes} change-ends phases");
+    assert!(checked > 30 && !lines.is_empty() && changes > 0);
+}
+
+/// The point-over phases of a match with a human (`new_recording.bin`, slot 3): a face-button press ends the
+/// phase once the new score has settled, earlier presses do nothing.
+#[test]
+fn human_post_point() {
+    use hst_sim::replay::frames_live;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Some(timing)) = (std::fs::read(format!("{dir}/new_recording.bin")), disc_timing()) else {
+        return eprintln!("new_recording.bin or disc files absent, skipped");
+    };
+    let (checked, lines) = post_points(&frames_live(&data), &timing);
+    eprintln!("new_recording: {checked} point-over phases (call line ends {lines:?})");
+    assert!(checked >= 8);
 }
 
 /// Every serve set-up of the slot-5 doubles match: all four players placed exactly where the game put them

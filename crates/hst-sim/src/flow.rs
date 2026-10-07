@@ -14,6 +14,9 @@ use hst_data::exe::ScoreboardTiming;
 pub const CHANGE_ENDS: u32 = 80;
 /// Ticks the scoreboard pauses after a decided point before it shows anything.
 const PAUSE: i32 = 30;
+/// Ticks the umpire's call sprite holds once settled, and its fade-out.
+const CALL_HOLD: i32 = 29;
+const CALL_FADE: i32 = 5;
 
 /// Where the match goes when the point-over phase ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,23 +26,44 @@ pub enum Next {
     MatchOver,
 }
 
-/// The point-over phase: the scoreboard's pause, wait and score show, and the match deciding what's next.
+/// The point-over phase: the umpire's call sprite (if any), the scoreboard's pause, wait and score show, and
+/// the match deciding what's next.
 #[derive(Clone, Debug)]
 pub struct PostPoint {
     /// Ticks run in this phase.
     pub tick: u32,
-    pub event: Event,
+    /// What the point did to the score; `None` for no point (a fault or let): only the call shows.
+    pub event: Option<Event>,
     board: Board,
+    /// Pause before the score show: 30, or 1 after a call sprite that chains into it.
+    pause: i32,
     /// The scoreboard has paused; the players have been told to react to the point.
     pub reacted: bool,
+    /// The new score is on the board (a point: from its roll, after the 6-frame fade-in; a game or set: the show's start).
+    pub shown: bool,
+    /// The score the board shows until `shown` (the caller keeps it: the score before the point).
+    pub before: Option<Score>,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Board {
+    Call(CallShow),
     Pause(i32),
     Wait(i32),
     Show(Show),
     Done,
+}
+
+/// The umpire's call sprite: up until its voice line ends (or its countdown runs out), held, faded out.
+#[derive(Clone, Copy, Debug)]
+struct CallShow {
+    /// Out, out after net or double fault: the score show follows after a one-tick pause.
+    chain: bool,
+    countdown: i32,
+    settled: bool,
+    held: i32,
+    /// Fade-out frames left, -1 before the fade.
+    fade: i32,
 }
 
 /// One score show. `step` counts the show's own stages; `held` the frames since the new score settled.
@@ -55,9 +79,22 @@ struct Show {
 }
 
 impl PostPoint {
-    /// The point that produced `event` was just scored.
+    /// The point that produced `event` was just scored, without an umpire call.
     pub fn new(event: Event) -> Self {
-        PostPoint { tick: 0, event, board: Board::Pause(0), reacted: false }
+        PostPoint { tick: 0, event: Some(event), board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None }
+    }
+
+    /// The point ended on the judge's `call` (1 out, 2 fault, 3 double fault, 4 let, 5 out after net, 6
+    /// illegal hit; 0 none): `event` what it did to the score, `None` for no point. Calls 1..5 show the umpire's
+    /// call sprite first (its countdown from `t.call_wait`); out, out after net and double fault then chain into
+    /// the score show, a fault or let ends the phase.
+    pub fn called(event: Option<Event>, call: u8, t: &ScoreboardTiming) -> Self {
+        let mut p = PostPoint { tick: 0, event, board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None };
+        if (1..=5).contains(&call) {
+            let chain = matches!(call, 1 | 3 | 5);
+            p.board = Board::Call(CallShow { chain, countdown: t.call_wait[call as usize], settled: false, held: 0, fade: -1 });
+        }
+        p
     }
 
     /// The scoreboard's pause is over (the umpire calls the score then, `Umpire::call_score`).
@@ -70,29 +107,70 @@ impl PostPoint {
         matches!(self.board, Board::Show(_) | Board::Done)
     }
 
+    /// The new score has settled on the board: a human's press ends the phase from here.
+    pub fn settled(&self) -> bool {
+        match self.board {
+            Board::Show(s) => s.settled,
+            Board::Done => true,
+            _ => false,
+        }
+    }
+
+    /// One tick without a voice line or a press (bots, or a call that runs on its countdown).
+    pub fn step(&mut self, score: &mut Score, rally: &mut Rally, t: &ScoreboardTiming) -> Option<Next> {
+        self.step_with(score, rally, t, false, false)
+    }
+
     /// One tick: the match checks the scoreboard, then the scoreboard runs. Returns where the match goes,
     /// on the tick it decides (the phase changes on the next one). After `Serve` or `ChangeEnds` the caller
-    /// moves to the next point (`Score::next_point`, `Rally::next_point`).
-    pub fn step(&mut self, score: &mut Score, rally: &mut Rally, t: &ScoreboardTiming) -> Option<Next> {
+    /// moves to the next point (`Score::next_point`, `Rally::next_point`). `voice_idle`: the umpire's call
+    /// line has ended (settles the call sprite). `press`: a human pressed a face button this tick (ends the
+    /// phase once the score has settled).
+    pub fn step_with(&mut self, score: &mut Score, rally: &mut Rally, t: &ScoreboardTiming, voice_idle: bool, press: bool) -> Option<Next> {
         let mut next = None;
-        if !self.reacted && !matches!(self.board, Board::Pause(_)) {
-            // ponytail: player reactions (P12a); the match-over branch waits on the umpire's voice line (P0b4c)
+        if !self.reacted && self.event.is_some() && !matches!(self.board, Board::Call(_) | Board::Pause(_)) {
+            // ponytail: the match-over branch waits on the umpire's voice line (P0b4c)
             self.reacted = true;
         }
         if self.reacted && score.match_over {
             next = Some(Next::MatchOver);
-        } else if matches!(self.board, Board::Done) {
+        } else if matches!(self.board, Board::Done) || (press && self.event.is_some() && self.settled()) {
             score.second_serve = rally.faults == 1;
             score.let_ = rally.let_;
             let swapped = score.swapped;
             score.change_ends();
-            if self.event == Event::Set {
+            if self.event == Some(Event::Set) {
                 score.games_played = 0;
             }
-            next = Some(if swapped == score.swapped || self.event == Event::Set { Next::Serve } else { Next::ChangeEnds });
+            next = Some(if swapped == score.swapped || self.event == Some(Event::Set) { Next::Serve } else { Next::ChangeEnds });
         }
         self.board = match self.board {
-            Board::Pause(n) if n + 1 > PAUSE => {
+            Board::Call(mut c) => {
+                if c.fade >= 0 {
+                    c.fade -= 1;
+                } else {
+                    if !c.settled {
+                        // ponytail: the sprite's own animation is assumed shorter than the voice line
+                        c.countdown -= 1;
+                        c.settled = voice_idle || c.countdown < 1;
+                    }
+                    if c.settled {
+                        c.held += 1;
+                        if c.held > CALL_HOLD {
+                            c.fade = CALL_FADE;
+                        }
+                    }
+                }
+                if c.fade >= 0 || c.held <= CALL_HOLD {
+                    Board::Call(c)
+                } else if c.chain {
+                    self.pause = 1;
+                    Board::Pause(0)
+                } else {
+                    Board::Done
+                }
+            }
+            Board::Pause(n) if n + 1 > self.pause => {
                 // a scored point ends the serve's faults
                 rally.faults = 0;
                 Board::Wait(0)
@@ -100,14 +178,15 @@ impl PostPoint {
             Board::Pause(n) => Board::Pause(n + 1),
             Board::Wait(n) => {
                 // ponytail: a player already mid-reaction would shorten the point wait (never seen: they're idle then)
-                let wait = if matches!(self.event, Event::Game | Event::Set) { t.game_wait } else { t.point_wait };
+                let event = self.event.unwrap_or(Event::Point);
+                let wait = if matches!(event, Event::Game | Event::Set) { t.game_wait } else { t.point_wait };
                 if n + 1 > wait {
-                    match self.event {
+                    match event {
                         Event::Game => score.new_game(),
                         Event::Set => score.new_set(),
                         _ => {}
                     }
-                    let mut s = Show::new(self.event);
+                    let mut s = Show::new(event);
                     if s.step(score, t) { Board::Done } else { Board::Show(s) }
                 } else {
                     Board::Wait(n + 1)
@@ -117,6 +196,11 @@ impl PostPoint {
                 if s.step(score, t) { Board::Done } else { Board::Show(s) }
             }
             Board::Done => Board::Done,
+        };
+        self.shown |= match self.board {
+            Board::Show(s) => s.step >= 1 || matches!(s.event, Event::Game | Event::Set),
+            Board::Done => true,
+            _ => false,
         };
         self.tick += 1;
         next

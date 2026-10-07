@@ -109,7 +109,7 @@ fn umpire_s05() {
         return eprintln!("umpire_s05.bin or disc files absent, skipped");
     };
     let game = exe::Game::new(&cnf, &bin).unwrap();
-    let timing = game.scoreboard_timing();
+    let timing = game.scoreboard_timing(0, 4);
     // the last sample of each game tick (a sample taken mid-tick shows the tick half done)
     let mut ss: Vec<S> = data.chunks_exact(N).map(S).collect();
     ss.dedup_by(|b, a| a.tick() == b.tick() && {
@@ -164,7 +164,7 @@ fn umpire_s05() {
                     calls += 1;
                 }
                 if p.showing() && !showing {
-                    u.announce(&s.score(), p.event, s.g(0x4230a8));
+                    u.announce(&s.score(), p.event.unwrap(), s.g(0x4230a8));
                     calls += 1;
                 }
             }
