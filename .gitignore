@@ -10,3 +10,7 @@ research/**/*.jpg
 research/**/*.bin
 research/**/*.p2s
 research/**/*.p2m2
+# journal entries are .md only
+research/journal/**/*
+!research/journal/**/
+!research/journal/**/*.md
