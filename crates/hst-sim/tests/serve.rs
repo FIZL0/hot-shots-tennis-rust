@@ -224,3 +224,53 @@ fn anim_s05_held_ball() {
     assert!(stance > 500 && hand > 50 && bounces > 20);
 }
 
+
+/// Every serve's launch against the game's (velocity within 2e-5 as for smashes, the launch's trig not being
+/// the game's own; flight frames and spin exact): the server's own trajectory table (the `dw1` variant
+/// for a weak toss), looked up from the contact less the scatter toward the aim, and the spin of the
+/// character's shot record (the variant's for a weak toss). Slice serves (kind 1) bend by a wind not ported
+/// yet (P6) and are skipped.
+#[test]
+fn serves_launch_like_the_game() {
+    use hst_sim::params::{ShotParams, record_of, spin};
+    use hst_sim::shot::Table;
+    let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let (Ok(data), Ok(cnf), Ok(bin)) = (
+        std::fs::read(format!("{ctx}/fixtures/match_s05.bin")),
+        std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")),
+        std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN")),
+    ) else {
+        return eprintln!("match_s05.bin or the extracted disc absent, skipped");
+    };
+    let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    let src = game.shot_params();
+    let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
+    let table = |c: usize, k: i32, dw: bool| {
+        let (ab, sfx) = if dw { ("B", "_dw1") } else { ("A", "") };
+        Table::parse(&std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ{c:02}{ab}.XB/data/hatsuyama/traj/tr_pc{c:02}_serv{k}{sfx}.dat")).unwrap()).unwrap()
+    };
+    let launched = |x: &[u8]| x[0x58] == 0 && i(x, 0xac) == 0 && f(x, 0x130).abs() + f(x, 0x138).abs() > 0.05;
+    let mut checked = [0; 3];
+    for w in frames_live(&data).windows(2) {
+        let b = w[1].live_ball();
+        if !launched(b) || launched(w[0].live_ball()) || i(b, 0x5c) == 1 {
+            continue;
+        }
+        let kind = i(b, 0x5c);
+        let p = (0..4).find(|&p| pu8(w[1], p, 0x3ec1) == 0 && pu8(w[1], p, 0x3fa6) == 3).expect("server");
+        // slot 5's line-up
+        let c = [0, 2, 1, 5][p];
+        let weak = pi(w[1], p, 0x3ea0) == 2;
+        let (hit, aim) = (v3(b, 0x70), [0x3e90, 0x3e94, 0x3e98].map(|o| w[1].player_f32(p, o)));
+        let scatter = [f(b, 0x80) - aim[0], 0.0, f(b, 0x88) - aim[2]];
+        let (vel, frames) = serve::launch(&table(c, kind, weak), kind == 3, Params::default().radius, hit, aim, scatter);
+        let want = v3(b, 0x130);
+        assert!((0..3).all(|j| (vel[j] - want[j]).abs() < 2e-5), "vsync {} player {p} kind {kind}: {vel:?} vs {want:?}", w[1].vsync());
+        assert_eq!(frames + 1, i(b, 0x260), "vsync {}", w[1].vsync());
+        let rec = if weak { params.variant(0, kind as usize, record_of(c), -0.5) } else { params.record(0, kind as usize, record_of(c)).try_into().unwrap() };
+        assert_eq!(spin(&rec).to_bits(), f(b, 0x1a4).to_bits(), "vsync {} spin", w[1].vsync());
+        checked[if weak { 1 } else if kind == 3 { 2 } else { 0 }] += 1;
+    }
+    eprintln!("strong/weak/underhand serves: {checked:?}");
+    assert!(checked.iter().all(|&n| n > 0), "{checked:?}");
+}

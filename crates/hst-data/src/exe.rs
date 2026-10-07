@@ -56,6 +56,23 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// A character's shot variants (the `up1`/`dw1`/`dw2`/`dw3` trajectory tables): 0x48-byte entries, ended by
+    /// a zero weight. The 13-float record in each entry is blank on disc; `hst_sim::params` builds it.
+    pub fn shot_variants(&self, character: usize) -> Vec<ShotVariant> {
+        let mut at = 0x40_8e60 + character as u32 * 0x8b8;
+        let mut out = Vec::new();
+        loop {
+            let e = self.at(at, 0x10);
+            let weight = f32::from_le_bytes(e[8..12].try_into().unwrap());
+            if weight == 0.0 {
+                return out;
+            }
+            let kind = i32::from_le_bytes(e[4..8].try_into().unwrap()) as usize;
+            out.push(ShotVariant { class: e[0] as usize, kind, weight, uses: e[12..16].try_into().unwrap() });
+            at += 0x48;
+        }
+    }
+
     /// Tolerance the line calls add to every court line (metres).
     pub fn line_margin(&self) -> f32 {
         self.f32(0x40_3bec)
@@ -196,6 +213,17 @@ pub struct ShotParamSource {
     pub kinds: Vec<i32>,
     pub weights: Vec<f32>,
     pub middle_mix: f32,
+}
+
+/// One per-character shot variant: its record is the character's record of (class, kind) moved by |weight|
+/// toward archetype 0 (weight > 0) or 2 (weight < 0). `uses[v]` is set when variant table v (0 up1, 1 dw1,
+/// 2 dw2, 3 dw3) takes this record.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotVariant {
+    pub class: usize,
+    pub kind: usize,
+    pub weight: f32,
+    pub uses: [u8; 4],
 }
 
 /// One row of the collision material table.

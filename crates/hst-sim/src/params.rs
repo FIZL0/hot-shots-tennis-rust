@@ -80,10 +80,22 @@ impl ShotParams {
         &self.table[o..o + REC]
     }
 
+    /// A variant record (see `hst_data::exe::ShotVariant`): record `r` moved by |weight| toward archetype 0
+    /// (weight > 0) or 2 (weight < 0).
+    pub fn variant(&self, class: usize, kind: usize, r: usize, weight: f32) -> [f32; REC] {
+        let (rec, to) = (self.record(class, kind, r), self.record(class, kind, if weight > 0.0 { 0 } else { 2 }));
+        std::array::from_fn(|f| ps2::lerp(rec[f], to[f], weight.abs()))
+    }
+
     /// Whole table in the game's layout (for verification).
     pub fn raw(&self) -> &[f32] {
         &self.table
     }
+}
+
+/// A record's launch spin (field 7, degrees) in the ball's radians, rounded as the game's FPU does.
+pub fn spin(record: &[f32]) -> f32 {
+    ps2::mul(record[7], 0.017453292)
 }
 
 /// Record index of a character (pc00 = 0 … pc13 = 13).

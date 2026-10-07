@@ -43,7 +43,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **P6a** Serve ball logic (bug, user 2026-10-07): lob serves don't clear the net, and sweet-spot serves don't fly the way the original's do → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
+- [x] **P6a** Serve ball logic (bug, user 2026-10-07): lob serves don't clear the net, and sweet-spot serves don't fly the way the original's do → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
 - [x] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)
 - [x] **N6** Diving for the ball (P4's open dive branch) → `swing.rs` · `motion.rs` · `player.rs` · `play.rs` find_contact/advance_stroke/locomote | t: swing.rs, motion.rs, player.rs (fixture new_recording.bin)
 - [x] **N2b** Ball regressed (bug, user 2026-10-07): it is tiny now. It must be big with the game's outline like it was before → `play.rs` ball draw · `character.rs` · N2's ball1.mdl/shadow swap (e06fa6a) | t: serve.rs

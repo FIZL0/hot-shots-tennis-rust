@@ -3,6 +3,7 @@
 //! over a hitter's head (strokes too).
 
 use crate::swing::PathPoint;
+use crate::shot::{self, Bounds, Table};
 
 /// Toss gravity (the ball's gravity factor × g per frame²).
 const TOSS_GRAVITY: f32 = 0.9 * 0.0027222224;
@@ -110,6 +111,7 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
 /// A mistimed weak or underhand toss shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the
 /// aim deep (late) or short (early) and sideways, which is where faults come from. `side` 0 deuce / 1 ad,
 /// `stick` on the court (x, z), `rand_bit` a coin flip for the sideways error when the stick is centred.
+/// Returns the aim and that error (the scatter); the ball lands at their sum (see `launch`).
 #[allow(clippy::too_many_arguments)]
 pub fn target(
     d: &ServeData,
@@ -122,7 +124,7 @@ pub fn target(
     doubles: bool,
     stick: [f32; 2],
     rand_bit: bool,
-) -> [f32; 3] {
+) -> ([f32; 3], [f32; 3]) {
     let mistimed = offset.abs() > 1 && toss != Toss::Strong;
     let (range_x, depth) = if mistimed { (1.56, 2.4) } else { (2.0575, 3.4) };
     let range_z = depth / 2.0;
@@ -164,10 +166,17 @@ pub fn target(
         } else {
             e[0] += if rand_bit { -1.0 } else { 1.0 } * d.miss[2] as f32 * 0.01;
         }
-        t[0] += e[0] * 2.0 / 3.0;
-        t[2] += e[2] * 2.0 / 3.0;
+        return (t, [e[0] * 2.0 / 3.0, 0.0, e[2] * 2.0 / 3.0]);
     }
-    t
+    (t, [0.0; 3])
+}
+
+/// A serve's launch velocity and flight frames, as the original: the trajectory table is looked up as if
+/// from the contact point less the scatter toward the aim, and the ball flies to aim + scatter.
+pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3]) -> ([f32; 3], i32) {
+    let l = shot::lookup(table, &Bounds::serve(underhand, radius), [hit[0] - scatter[0], hit[1], hit[2] - scatter[2]], aim);
+    let target = [aim[0] + scatter[0], aim[1], aim[2] + scatter[2]];
+    (shot::launch(hit, target, l.elevation, l.speed), l.frames)
 }
 
 /// The balloon over a hitter's head.
@@ -251,15 +260,15 @@ mod tests {
         let d = data();
         let server = [3.0, 0.0, -12.25];
         // centred: the deuce box's centre; full tilt reaches its corner exactly
-        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], false), [-2.0575, 0.0, 4.7]);
-        let corner = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], false);
+        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], false), ([-2.0575, 0.0, 4.7], [0.0; 3]));
+        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], false);
         assert!((corner[0] + 4.115).abs() < 1e-3 && (corner[2] - 6.4).abs() < 1e-3, "{corner:?}");
         // the same aim with a late strong toss lands past the service line (fault)
-        let late = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
-        assert!(late[2] > 6.4, "{late:?}");
+        let (aim, e) = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
+        assert!(aim[2] + e[2] > 6.4, "{aim:?} {e:?}");
         // a mistimed weak toss stays inside
-        let weak = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
-        assert!(weak[2] <= 6.4, "{weak:?}");
+        let (weak, e) = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
+        assert!(weak[2] <= 6.4 && e == [0.0; 3], "{weak:?}");
     }
 
     #[test]

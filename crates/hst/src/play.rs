@@ -22,6 +22,7 @@ use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
 use hst_sim::motion;
+use hst_sim::params::{self, ShotParams};
 use hst_sim::pose::{ArmIk, contact_solve};
 use hst_sim::player::{self as loco, Stats};
 use hst_sim::score::{Event, Rules, Score};
@@ -42,7 +43,7 @@ const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out",
 /// Ball (and shadow) drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
 /// ponytail: the original draws `ball1.mdl` at scale 1 (ball object matrix in s03–s05); this is the remaster's look.
 const BALL_DRAW_SCALE: f32 = 2.4;
-/// Typical recorded spin per shot kind (rad/frame); the real per-character records are not ported yet.
+/// Typical recorded spin per stroke kind (rad/frame); the real per-character records are not ported yet (serves use them).
 const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
@@ -176,7 +177,9 @@ struct Game {
     rules: Rules,
     tables: Vec<Table>,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
-    serve_tables: Vec<Table>,
+    /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
+    /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
+    serve_tables: Vec<[Vec<(Table, f32)>; 2]>,
     /// Smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
     smash_tables: Vec<Table>,
     serve_data: ServeData,
@@ -258,6 +261,8 @@ struct Serving {
     /// Stand-in AI: the contact frame it aims its press at, and its aim.
     bot_due: Option<usize>,
     bot_aim: Vec2,
+    /// The serve's error off its aim (a mistimed strong toss), set at contact.
+    scatter: V3,
 }
 
 #[derive(Clone, Copy)]
@@ -342,11 +347,16 @@ pub fn plugin(app: &mut App) {
 
 /// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
 fn tables(iso: &mut Iso, archive: &str, name: &str, n: usize) -> Vec<Table> {
-    let data = iso.read(&format!("TRAJ/{archive}")).expect("trajectory archive on disc");
+    character_tables(iso, 0, archive, name, "", n)
+}
+
+/// Character `c`'s trajectory tables `tr_pc<c>_<name><k><suffix>.dat`, k in 0..n, from its archive `TRAJ<c><ab>.XB`.
+fn character_tables(iso: &mut Iso, c: usize, ab: &str, name: &str, suffix: &str, n: usize) -> Vec<Table> {
+    let data = iso.read(&format!("TRAJ/TRAJ{c:02}{ab}.XB")).expect("trajectory archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     (0..n)
         .map(|k| {
-            let file = format!("tr_pc00_{name}{k}.dat");
+            let file = format!("tr_pc{c:02}_{name}{k}{suffix}.dat");
             let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&file)).expect("trajectory table");
             Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
         })
@@ -483,11 +493,25 @@ fn reach(iso: &mut Iso) -> Reach {
 }
 
 /// Line margin, scoreboard timing, the umpire's word gaps, and the stage's collision world with the material table.
-fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, [i32; 14], Option<(World, Vec<Material>)>) {
+/// Line margin, scoreboard timing, the umpire's word gaps, the stage's collision world with the material table,
+/// and the shot parameter table.
+#[allow(clippy::type_complexity)]
+fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, [i32; 14], Option<(World, Vec<Material>)>, ShotParams) {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
+    let src = game.shot_params();
+    let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
     // ponytail: umpire 4, voice a (the bank audio.rs loads); the game's menu picks one of five, a or b
-    (game.line_margin(), game.scoreboard_timing(), game.umpire_gaps(4, false), stage.map(|n| (court::world(iso, n), court::materials(&game))))
+    (game.line_margin(), game.scoreboard_timing(), game.umpire_gaps(4, false), stage.map(|n| (court::world(iso, n), court::materials(&game))), params)
+}
+
+/// Character `c`'s serve tables and spins (see `Game::serve_tables`): the weak toss serves by the `dw1`
+/// variant tables and records (every character's serve variants are weighted −0.5 on disc).
+fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32)>; 2] {
+    let r = params::record_of(c);
+    let base = character_tables(iso, c, "A", "serv", "", 4).into_iter().enumerate().map(|(k, t)| (t, params::spin(params.record(0, k, r))));
+    let weak = character_tables(iso, c, "B", "serv", "_dw1", 3).into_iter().enumerate().map(|(k, t)| (t, params::spin(&params.variant(0, k, r, -0.5))));
+    [base.collect(), weak.collect()]
 }
 
 fn setup(
@@ -501,13 +525,13 @@ fn setup(
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
-    let (line_margin, board, umpire_gaps, world) = disc(&mut iso, args.stage);
+    let (line_margin, board, umpire_gaps, world, shot_params) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
     let mut game = Game {
         rules,
-        tables: tables(&mut iso, "TRAJ00A.XB", "strk", 5),
-        serve_tables: tables(&mut iso, "TRAJ00A.XB", "serv", 4),
-        smash_tables: tables(&mut iso, "TRAJ00B.XB", "smsh", 2),
+        tables: tables(&mut iso, "A", "strk", 5),
+        serve_tables: Vec::new(),
+        smash_tables: tables(&mut iso, "B", "smsh", 2),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
         reach: reach(&mut iso),
@@ -575,6 +599,7 @@ fn setup(
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
+        game.serve_tables.push(serve_tables(&mut iso, &shot_params, c));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
@@ -697,18 +722,18 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
 /// `branch`, `grade` and `offset` are the swing's (branch code, timing grade and offset) for the hit sounds.
 fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, grade, offset): (u8, u8, i32)) {
     let at = g.flight.ball.pos;
-    let l = if class == 0 {
-        lookup(&g.serve_tables[kind as usize], &Bounds::serve(kind == 3, hst_sim::ball::Params::default().radius), at, target)
-    } else if class == 3 {
-        lookup(&g.smash_tables[kind as usize], &Bounds::smash(kind), at, target)
+    let weak = (g.serving.toss == Some(Toss::Weak)) as usize;
+    let (vel, frames) = if class == 0 {
+        let (table, _) = &g.serve_tables[who][weak][kind as usize];
+        serve::launch(table, kind == 3, hst_sim::ball::Params::default().radius, at, target, g.serving.scatter)
     } else {
-        lookup(&g.tables[kind as usize], &Bounds::stroke(kind, at[2]), at, target)
+        let l = if class == 3 { lookup(&g.smash_tables[kind as usize], &Bounds::smash(kind), at, target) } else { lookup(&g.tables[kind as usize], &Bounds::stroke(kind, at[2]), at, target) };
+        (launch(at, target, l.elevation, l.speed), l.frames)
     };
-    let vel = launch(at, target, l.elevation, l.speed);
     let dir = Vec3::new(vel[0], 0.0, vel[2]).normalize_or(Vec3::Z);
     let side = Vec3::Y.cross(dir).normalize();
     let frame = [side.to_array(), [0.0, 1.0, 0.0], side.cross(Vec3::Y).normalize().to_array()];
-    g.shot = Shot { class, kind, curve_frames: l.frames + 1, ..Shot::default() };
+    g.shot = Shot { class, kind, curve_frames: frames + 1, ..Shot::default() };
     g.shots += 1;
     g.rally.on_hit(g.shots, who as i32, g.score.server, g.score.receiver, g.flight.contacts);
     // ponytail: framed/dull mis-hits and the power gap are not modelled (P3), so their sounds never play
@@ -734,7 +759,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     g.whistle = if kind == 3 { (true, g.whistle.1 + 1) } else { (false, g.whistle.1) };
     // every recorded smash (kind 0) spins 5°; ponytail: kind 1's own spin waits for the per-character records
     let spin = match class {
-        0 => KIND_SPIN[[0, 1, 2, 3][kind as usize]],
+        0 => g.serve_tables[who][weak][kind as usize].1,
         3 => 5f32.to_radians(),
         _ => KIND_SPIN[kind as usize],
     };
@@ -833,7 +858,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         let aim = if pads_aim(g, i) { stick } else { g.serving.bot_aim };
         let rand_bit = rand(&mut g.rng) < 0.5;
         let d = &g.serve_data;
-        let target = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], rand_bit);
+        let (target, scatter) = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], rand_bit);
+        g.serving.scatter = scatter;
         // the stick toward the net turns a topspin serve flat
         let sw = ServeSwing { kind: hst_sim::shot::stick_kind(0, sw.kind, [aim.x, aim.y], end), ..sw };
         debug!("player {i} serve {toss:?} kind {}: offset {} grade {} -> {target:?}", sw.kind, sw.offset, sw.grade);
