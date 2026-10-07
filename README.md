@@ -1,4 +1,4 @@
-# Hot Shots Tennis / Everybody's Tennis — Rust rewrite
+# Hot Shots Tennis — Rust rewrite
 
 A from-scratch rewrite of the PlayStation 2 game **Hot Shots Tennis** (US, 2007), known as **Everybody's Tennis**
 in Europe and **Minna no Tennis** (みんなのテニス) in Japan, in Rust with the [Bevy](https://bevyengine.org) engine.
