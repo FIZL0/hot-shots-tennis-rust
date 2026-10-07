@@ -278,3 +278,61 @@ pub fn smash_whiff(path: &[PathPoint], ball: [f32; 3], pos: [f32; 3], middle: f3
     let (dx, dz) = (ball[0] - pos[0], ball[2] - pos[2]);
     dx * dx + dz * dz < 4.0 && path.iter().take_while(|p| p.bounces <= 1).any(|p| middle < -p.pos[1])
 }
+
+/// The approach run a press starts before its search (the original's stroke state, on a press while standing or
+/// running): a unit direction square to the ball's line, toward it from `pos` (x, z), and how many frames to run
+/// it before the one search. `path` is the ball from this frame, at most the horizon plus 20 frames long. Each
+/// frame from 0 to 20 checks the window of `grades.len()` frames starting there against the player's position
+/// after that many steps, first match per branch (smash, volley, ground): found at 0 searches at once. `step`
+/// moves the position one frame along the direction (the run speed and the mover), None when the mover clamps
+/// it (court edge, net, partner). None: nothing within 20 frames, or blocked.
+pub fn approach(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, mut step: impl FnMut([f32; 2], [f32; 2]) -> Option<[f32; 2]>) -> Option<(usize, [f32; 2])> {
+    let n = path.len();
+    let dir = approach_dir(path, pos);
+    let look = r.grades.len();
+    let height = |k: usize| -path[k].pos[1];
+    let wide = mul(r.reach, 1.3);
+    let mut at = [pos[0], pos[2]];
+    for i in 0..=20 {
+        let end = (look + i).min(n);
+        let (mut d3, mut d2) = (vec![0.0; n], vec![0.0; n]);
+        for k in i..end {
+            let (x, y, z) = (sub(path[k].pos[0], at[0]), sub(height(k), r.base), sub(path[k].pos[2], at[1]));
+            d3[k] = sqrt(add(add(mul(z, z), mul(x, x)), mul(y, y)));
+            d2[k] = sqrt(add(mul(x, x), mul(z, z)));
+        }
+        let first = |max_bounces: i32, ok: &dyn Fn(usize) -> bool| {
+            (i..end).take_while(|&k| path[k].bounces <= max_bounces).find(|&k| {
+                let z = path[k].pos[2];
+                z.abs() >= 0.5 && (z >= 0.0) != (facing >= 0.0) && r.grades[k - i] != 0 && ok(k)
+            })
+        };
+        let found = first(1, &|k| r.smash_bottom <= height(k) && height(k) <= r.smash_top && d2[k] <= r.reach)
+            .or_else(|| first(0, &|k| 0.0 <= height(k) && height(k) <= mul(r.volley_height, 1.3) && d3[k] <= wide))
+            .or_else(|| first(1, &|k| height(k) <= add(r.base, wide) && d2[k] <= wide));
+        if found.is_some() {
+            return Some((i, dir));
+        }
+        if i == 20 {
+            break;
+        }
+        at = step(at, dir)?;
+    }
+    None
+}
+
+/// The approach direction: square to the ball's line from `path[0]` to its end, turned toward that line from `pos`.
+pub fn approach_dir(path: &[PathPoint], pos: [f32; 3]) -> [f32; 2] {
+    let n = path.len();
+    let unit = |x: f32, z: f32| {
+        let inv = div(1.0, sqrt(add(mul(x, x), mul(z, z))));
+        [mul(x, inv), mul(z, inv)]
+    };
+    let [dx, dz] = unit(sub(path[n - 1].pos[0], path[0].pos[0]), sub(path[n - 1].pos[2], path[0].pos[2]));
+    let mut dir = [sub(mul(dz, 1.0), 0.0), sub(0.0, mul(dx, 1.0))];
+    let [qx, qz] = unit(sub(pos[0], path[0].pos[0]), sub(pos[2], path[0].pos[2]));
+    if 0.0 < add(add(mul(qz, dir[1]), mul(qx, dir[0])), mul(sub(mul(dx, 0.0), mul(dz, 0.0)), 0.0)) {
+        dir = [mul(dir[0], -1.0), mul(dir[1], -1.0)];
+    }
+    dir
+}

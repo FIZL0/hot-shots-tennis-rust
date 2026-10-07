@@ -4,9 +4,10 @@
 
 use hst_data::{ani, iso::Iso, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot};
+use hst_sim::ps2::{add, mul};
 use hst_sim::replay::{Frame, frames_live};
-use hst_sim::player::mover;
-use hst_sim::swing::{Branch, DIVE_HORIZON, PathPoint, Reach, dive, search};
+use hst_sim::player::{Stats, drain, mover, run_speed};
+use hst_sim::swing::{Branch, DIVE_HORIZON, PathPoint, Reach, approach, dive, search};
 
 fn f(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
@@ -64,6 +65,86 @@ fn match_s05_contact_search() {
 #[test]
 fn lob_smash_contact_search() {
     contact_search("lob_smash_s05.bin");
+}
+
+/// The recorded reach of player `p` (as the game holds it at frame `fr`); `obj` its object in the slot-5 RAM.
+fn reach_of(fr: Frame, p: usize, ram: &[u8], obj: usize) -> Reach {
+    let rf = |o: usize| f32::from_le_bytes(ram[obj + o..obj + o + 4].try_into().unwrap());
+    let look = p_i32(fr, p, 0x154c) as usize;
+    Reach {
+        base: fr.player_f32(p, 0x13ac),
+        reach: fr.player_f32(p, 0x13b0),
+        stroke_height: fr.player_f32(p, 0x13b8),
+        volley_height: fr.player_f32(p, 0x13bc),
+        smash_top: fr.player_f32(p, 0x13c0),
+        smash_bottom: fr.player_f32(p, 0x13c8),
+        ahead: rf(0x3050),
+        smash_ahead: rf(0x38f8),
+        body_low: rf(0x3054),
+        body_high: rf(0x3058),
+        grades: (0..look).map(|j| p_u8(fr, p, 0x1510 + j)).collect(),
+        hand: rf(0x12b4),
+        shoulder: [0.0; 3],
+        tip: [0.0; 3],
+    }
+}
+
+/// The slot-5 players' TParam movement stats (as in tests/player.rs).
+const STATS: [(i32, i32, i32, [i32; 3]); 4] = [(10, 40, 40, [8, 4, 7]), (11, 40, 40, [8, 4, 7]), (9, 40, 40, [6, 3, 7]), (12, 10, 40, [8, 6, 6])];
+
+/// Every approach run of the slot-5 match (a press with the ball out of reach: the player runs square to the
+/// ball's line first, +0x3f24 set): same frame count as the game and the same direction (3 of 4 bit-exact).
+#[test]
+fn match_s05_approaches() {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
+        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    };
+    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
+    let gm = ru(0x422f80);
+    let frames = frames_live(&data);
+    let (mut seen, mut bad) = (0, 0);
+    for k in 1..frames.len() {
+        let (a, fr) = (frames[k - 1], frames[k]);
+        for p in 0..4 {
+            if !(p_u8(fr, p, 0x3f24) == 1 && p_u8(a, p, 0x3f24) == 0) {
+                continue;
+            }
+            let reach = reach_of(fr, p, &ram, ru(gm + 0xa8 + 4 * p));
+            let pos = a.player_pos(p);
+            let facing = if pos[2] < 0.0 { 1.0 } else { -1.0 };
+            let (mut fl, shot) = load(fr.live_ball());
+            let mut path = vec![];
+            for _ in 0..reach.grades.len() + 20 {
+                path.push(PathPoint { pos: fl.ball.pos, bounces: fl.bounces });
+                fl.step(&shot, &COURTS[10]);
+            }
+            let (spe, agi, sta, costs) = STATS[p];
+            let s = Stats::new(spe, agi, sta, costs, 0);
+            let running = p_u8(a, p, 0x3fa5) == 1;
+            let (mut stamina, mut tick, mut run) = (p_i32(a, p, 0x3df4), p_i32(a, p, 0x3df8), if running { p_i32(a, p, 0x3dfc) } else { 0 });
+            let mate = a.player_pos(p ^ 2);
+            let got = approach(&reach, &path, pos, facing, |at, d| {
+                let speed = run_speed(&s, run, stamina, 100);
+                let delta = [mul(d[0], speed), 0.0, mul(d[1], speed)];
+                let to = mover([at[0], pos[1], at[1]], delta, facing, Some(mate), false);
+                run += 1;
+                (stamina, tick) = drain(&s, stamina, tick, 4, true, 0);
+                (to[0] == add(at[0], delta[0]) && to[2] == add(at[1], delta[2])).then_some([to[0], to[2]])
+            });
+            let want = (p_i32(fr, p, 0x3f28) as usize + 1, [fr.player_f32(p, 0x3f30), fr.player_f32(p, 0x3f38)]);
+            seen += 1;
+            // the game steps its own predicted path, which can drift ~1e-7 from this flight (vsync 29934's end ball)
+            let close = got.is_some_and(|(n, d)| n == want.0 && (0..2).all(|j| (d[j] - want.1[j]).abs() < 1e-6));
+            if !close {
+                bad += 1;
+                eprintln!("vsync {} p{p}: want {want:?} got {got:?}", fr.vsync());
+            }
+        }
+    }
+    eprintln!("{seen} approaches, {bad} off");
+    assert!(seen >= 4);
+    assert_eq!(bad, 0);
 }
 
 fn contact_search(name: &str) {
