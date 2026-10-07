@@ -71,7 +71,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N3c5** Flight whistle (lob, framed hit) following the ball (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
 - [x] **N3c6** Footsteps, serve bounce, rolling scrape (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
 - [x] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
-- [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
+- [x] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
 - [ ] **P16b** Changing ends: with more than one human player, keep the camera on the same side; only swap it in solo games (user 2026-10-07) → `play.rs` camera/next_point · `flow.rs`
 
@@ -133,6 +133,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
 - [ ] **M2** Online play: matches over the network (the sim is deterministic and tick-based, so input-only lockstep/rollback fits) → `hst-sim` · `play.rs` input
 - [ ] **M3** In-browser version (wasm build) with online multiplayer (builds on M2) → `hst` app · `audio.rs`
+- [ ] **M4** Music support (BGM is off by default; `--music` plays the court's): verify the BGM sequencer's note-on timing against the ring recording `context/recordings/bgm_s01.bin` (menu `bgmm_05` from save slot 1), live controller changes on sounding voices, the director's BGM restart and fade cues (messages 6/0xe/0xc), the menu BGM in a menu, jingle key 0 → `hst-data/src/snd.rs` · `audio.rs` `play.rs` | j: 2026-10-07-n3-audio/13-MUSIC-FINAL.md
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 

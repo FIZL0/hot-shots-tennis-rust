@@ -32,7 +32,7 @@ use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 use hst_sim::umpire::Umpire;
 
-use crate::audio::{CourtBank, GalleryBank, Sound, VoiceBanks, umpire_bank, voice_bank};
+use crate::audio::{CourtBank, GalleryBank, MusicBanks, Sound, SoundBank, VoiceBanks, umpire_bank, voice_bank};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace, Orbit};
 
@@ -246,6 +246,10 @@ struct Game {
     cheers: Vec<(sound::Play, i32)>,
     /// Which players are on a controller (the gallery favours their side).
     humans: Vec<bool>,
+    /// The jingle due (slot 8 key: 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
+    /// stays faded until the next point.
+    jingle: Option<u8>,
+    music_hold: bool,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -583,6 +587,8 @@ fn setup(
         gallery_game: false,
         cheers: Vec::new(),
         humans: Vec::new(),
+        jingle: None,
+        music_hold: false,
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
     };
     reset_positions(&mut game);
@@ -618,6 +624,14 @@ fn setup(
     // her voice bank in slot 5 (`VoiceBanks` holds slots 1..)
     voices.resize(4, None);
     voices.push(umpire_bank(&mut iso, 4, 0).map(std::sync::Arc::new));
+    // the jingles (slot 8: `jig_00` in a match) and, with `--music`, the court's BGM (`bgmg_NN`; `bgmg_14` off the
+    // 11 courts)
+    let stage = game.stage as usize;
+    let bgm = if (1..=11).contains(&stage) { format!("bgmg_{stage:02}") } else { "bgmg_14".into() };
+    commands.insert_resource(MusicBanks {
+        jingles: SoundBank::load(&mut iso, "SND/JGL/JIG_00.XB", "data/sound/JINGLE/jig_00.hd").map(std::sync::Arc::new),
+        bgm: args.music.then(|| SoundBank::music(&mut iso, "Court", &bgm)).flatten().map(|(b, mid)| (std::sync::Arc::new(b), mid)),
+    });
     // ponytail: a stand-in figure for her (a capsule on the chair) until the umpire model is drawn
     let chair = game.umpire.pos;
     let coat = materials.add(StandardMaterial { base_color: Color::srgb(0.9, 0.85, 0.7), ..default() });
@@ -1600,6 +1614,13 @@ fn simulate(mut g: ResMut<Game>) {
     g.umpire.point_over(event, team as i32, g.score.swapped, verdict.call as u8);
     g.score.note_tiebreak_start();
     g.gallery_game = matches!(event, Some(Event::Game | Event::Set));
+    // ponytail: played at the verdict; the game's director cues it a little later in the post-point sequence
+    g.jingle = match event {
+        Some(Event::Set) if g.score.match_over => Some(if g.humans.iter().enumerate().any(|(i, &h)| h && i & 1 == team as usize) { 3 } else { 4 }),
+        Some(Event::Set) => Some(2),
+        Some(Event::Game) => Some(1),
+        _ => None,
+    };
     let applause = if g.gallery_game { sound::favoured(&g.humans)[team as usize] } else { g.smashed && g.last_hitter & 1 == team as i32 };
     if let Some(r) = sound::reaction(verdict.call, g.gallery_game, applause, &mut g.errors) {
         let rng = &mut g.rng;
@@ -1651,6 +1672,7 @@ fn react(g: &mut Game, event: Event) {
 /// Leave the point: next server, receiver and side, and set up the serve. `fresh`: not after a change of ends.
 fn next_point(g: &mut Game, fresh: bool) {
     g.umpire.serve(fresh, false, g.flight.ball.pos);
+    g.music_hold = false;
     g.gallery.hush();
     g.score.next_point(&g.rules);
     g.rally.next_point();
@@ -1856,6 +1878,50 @@ fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
     }
 }
 
+/// The BGM's level as the game's director sets it each frame: full (55) until a game or set jingle, then down to
+/// silence over 60 frames, held there while the jingle plays and until the next point, then back up over 60 frames.
+#[derive(Default)]
+struct Bgm {
+    started: bool,
+    volume: f32,
+    fading: bool,
+    jingle: u64,
+}
+
+impl Bgm {
+    const FULL: f32 = 55.0;
+
+    fn step(&mut self, g: &mut Game, sound: &Sound, music: &MusicBanks) {
+        if !self.started {
+            self.started = true;
+            if let Some((bank, mid)) = &music.bgm {
+                sound.music(bank, mid, Self::FULL as u32);
+            }
+        }
+        if let (Some(key), Some(b)) = (g.jingle.take(), &music.jingles) {
+            sound.stop(self.jingle);
+            self.jingle = sound.play_centre(b, sound::Play { slot: 8, program: 0, key, volume: 0x80, speed: 1.0 });
+            // ponytail: the match-end jingles (3, 4) leave the BGM as it is, as the game's match end does
+            if key < 3 {
+                (self.fading, g.music_hold) = (true, true);
+            }
+        }
+        if self.jingle != 0 && !sound.playing(self.jingle) {
+            self.jingle = 0;
+        }
+        let step = Self::FULL / 60.0;
+        self.volume = if !self.fading {
+            Self::FULL
+        } else if self.jingle == 0 && !g.music_hold {
+            self.fading = self.volume + step < Self::FULL;
+            (self.volume + step).clamp(0.0, Self::FULL)
+        } else {
+            (self.volume - step).max(0.0)
+        };
+        sound.music_volume(self.volume as u32);
+    }
+}
+
 /// Plays the sounds due on the court's bank.
 /// The flight whistle follows the ball: started at the hit, re-placed and re-pitched each tick, stopped at the bounce.
 fn play_sounds(
@@ -1864,9 +1930,14 @@ fn play_sounds(
     bank: Option<Res<CourtBank>>,
     voices: Option<Res<VoiceBanks>>,
     gallery: Option<Res<GalleryBank>>,
+    music: Option<Res<MusicBanks>>,
     mut whistle: Local<(u32, u64)>,
+    mut bgm: Local<Bgm>,
 ) {
     let g = &mut *g;
+    if let (Some(sound), Some(music)) = (&sound, &music) {
+        bgm.step(g, sound, music);
+    }
     for w in &mut g.whooshes {
         w.0 = w.0.saturating_sub(1);
         if w.0 == 0 {

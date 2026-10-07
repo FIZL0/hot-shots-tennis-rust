@@ -4,7 +4,10 @@
 //!
 //! ```text
 //! .hd  u32 hd size, u32 bd size, u32 0, "SShd"
-//!      i32 × 6 section offsets at 0x10 (-1 = absent); 0x1c sequences, 0x24 tone sets
+//!      i32 × 6 section offsets at 0x10 (-1 = absent); 0x10 programs, 0x1c sequences, 0x24 tone sets
+//! programs   u16 last program, u16 offset × programs (0xffff = none); a program is a tone set whose header byte 0
+//!            picks the tones a MIDI note plays: ff = one tone per note from the lowest, else (byte & 0x7f) + 1
+//!            tones each with a key range (tone bytes 0..1), the first that holds the note, or every one (0x80)
 //! sequences  u16 last program, u16 offset × programs           (offsets from the section start)
 //!            program: u16 last key, u16 offset × keys          (offsets from the *section* start too)
 //!            sequence: { event, varlen delta }* ending ff 2f 00
@@ -22,6 +25,7 @@ use crate::xb::Error;
 
 pub struct Bank<'a> {
     hd: &'a [u8],
+    programs: Option<usize>,
     sequences: Option<usize>,
     sets: Option<usize>,
 }
@@ -77,7 +81,7 @@ impl<'a> Bank<'a> {
             return Err(Error("snd: not an SShd bank".into()));
         }
         let section = |o: usize| usize::try_from(i32::from_le_bytes(hd[o..o + 4].try_into().unwrap())).ok();
-        Ok(Self { hd, sequences: section(0x1c), sets: section(0x24) })
+        Ok(Self { hd, programs: section(0x10), sequences: section(0x1c), sets: section(0x24) })
     }
 
     fn u16(&self, o: usize) -> Option<usize> {
@@ -159,7 +163,165 @@ impl<'a> Bank<'a> {
         let o = h + 8 + 16 * note.checked_sub(low)? as usize;
         Some(Tone { raw: self.hd.get(o..o + 16)?.try_into().unwrap() })
     }
+
+    /// The tones a MIDI note-on of `note` plays on `program` (the BGM driver's lookup), with the program's volume.
+    pub fn program(&self, program: usize, note: u8) -> (Vec<Tone>, u8) {
+        let mut out = Vec::new();
+        let Some(h) = self.programs.filter(|&p| self.u16(p).is_some_and(|last| program <= last)).and_then(|p| {
+            let o = self.u16(p + 2 + 2 * program).filter(|&o| o != 0xffff)?;
+            self.hd.get(p + o..p + o + 8).map(|_| p + o)
+        }) else {
+            return (out, 0);
+        };
+        let (mode, low) = (self.hd[h], self.hd[h + 6]);
+        let Some(first) = note.checked_sub(low) else { return (out, 0) };
+        let (first, last, layered) = match mode {
+            0xff => (first as usize, first as usize, false),
+            m => (0, (m & 0x7f) as usize, m & 0x80 != 0),
+        };
+        for i in first..=last {
+            let Some(raw) = self.hd.get(h + 8 + 16 * i..h + 24 + 16 * i) else { break };
+            let t = Tone { raw: raw.try_into().unwrap() };
+            if mode != 0xff && !(t.raw[0]..=t.raw[1]).contains(&note) {
+                continue;
+            }
+            if t.raw[0xd] == 0xff {
+                break;
+            }
+            out.push(t);
+            if !layered {
+                break;
+            }
+        }
+        (out, self.hd[h + 1])
+    }
 }
+
+/// A standard MIDI file's single track (format 0) as the BGM player reads it, one `frame` per 60 Hz frame:
+/// a double-precision tick clock (120 bpm until a tempo event), deltas summed exactly, and the loop controllers
+/// (CC99 20 loop start, CC99 30 loop end, CC102 loop count, 127 = forever) handled in the player.
+pub struct Sequencer {
+    track: Vec<u8>,
+    at: Option<usize>,
+    status: u8,
+    division: f64,
+    /// Play-speed percentage (100 = as written).
+    pub scale: f64,
+    inc: f64,
+    time: f64,
+    next: f64,
+    loop_at: (usize, u8),
+    count: u32,
+}
+
+impl Sequencer {
+    /// From an `MThd` file; the clock starts at 0 with the first delta read.
+    pub fn new(mid: &[u8]) -> Option<Self> {
+        if mid.get(..4)? != b"MThd" || mid.get(14..18)? != b"MTrk" {
+            return None;
+        }
+        let division = u16::from_be_bytes([mid[12], mid[13]]) as f64;
+        let len = u32::from_be_bytes(mid.get(18..22)?.try_into().unwrap()) as usize;
+        let track = mid.get(22..22 + len)?.to_vec();
+        let mut s = Self { track, at: Some(0), status: 0, division, scale: 100.0, inc: 0.0, time: 0.0, next: 0.0, loop_at: (0, 0), count: 127 };
+        s.inc = 2.0 * division / FPS * s.scale / 100.0;
+        s.next = s.delta()? as f64;
+        Some(s)
+    }
+
+    fn byte(&mut self) -> Option<u8> {
+        let at = self.at.as_mut()?;
+        let b = *self.track.get(*at)?;
+        *at += 1;
+        Some(b)
+    }
+
+    fn delta(&mut self) -> Option<u32> {
+        let mut v = 0u32;
+        loop {
+            let b = self.byte()?;
+            v = v << 7 | (b & 0x7f) as u32;
+            if b & 0x80 == 0 {
+                return Some(v);
+            }
+        }
+    }
+
+    /// The track has ended (`ff 2f`).
+    pub fn done(&self) -> bool {
+        self.at.is_none()
+    }
+
+    /// One frame: the channel messages due (`[status, data1, data2]`, data2 0 for the one-byte messages).
+    pub fn frame(&mut self) -> Vec<[u8; 3]> {
+        let mut out = Vec::new();
+        self.time += self.inc;
+        while self.at.is_some() && self.time - self.next >= 0.0 {
+            if self.event(&mut out).is_none() {
+                self.at = None;
+                break;
+            }
+            if let Some(d) = self.delta() {
+                self.next += d as f64;
+            }
+        }
+        out
+    }
+
+    fn event(&mut self, out: &mut Vec<[u8; 3]>) -> Option<()> {
+        let b = *self.track.get(self.at?)?;
+        if b & 0x80 != 0 {
+            self.status = b;
+            self.byte();
+        }
+        let s = self.status;
+        match s & 0xf0 {
+            0x80 | 0x90 | 0xa0 | 0xe0 => out.push([s, self.byte()?, self.byte()?]),
+            0xc0 | 0xd0 => out.push([s, self.byte()?, 0]),
+            0xb0 => {
+                let (c, v) = (self.byte()?, self.byte()?);
+                match (c, v) {
+                    (99, 20) => self.loop_at = (self.at?, s),
+                    (99, 30) => {
+                        if self.count != 127 {
+                            self.count = self.count.saturating_sub(1);
+                        }
+                        if self.count > 0 {
+                            (self.at, self.status) = (Some(self.loop_at.0), self.loop_at.1);
+                        }
+                    }
+                    (102, _) => self.count = v as u32,
+                    (90, _) => {} // ponytail: the marker callback; the game sets none for BGM
+                    _ => out.push([s, c, v]),
+                }
+            }
+            _ if s == 0xff => {
+                let (kind, len) = (self.byte()?, self.byte()? as usize);
+                let at = self.at?;
+                match kind {
+                    0x2f => self.at = None,
+                    0x51 => {
+                        let d = self.track.get(at..at + 3)?;
+                        let bpm = 60_000_000.0 / (u32::from_be_bytes([0, d[0], d[1], d[2]]) as f64);
+                        self.inc = 1_000_000.0 / (60_000_000.0 / bpm) * self.division / FPS * self.scale / 100.0;
+                        self.at = Some(at + 3);
+                    }
+                    0x58 => self.at = Some(at + 4), // the bar/beat counters aren't kept
+                    _ => self.at = Some(at + len),
+                }
+            }
+            _ => {
+                // sysex (f0 / f7): skipped, the sound driver ignores it
+                let n = self.delta()? as usize;
+                self.at = Some(self.at? + n);
+            }
+        }
+        Some(())
+    }
+}
+
+/// The game's frame rate the BGM clock counts in.
+const FPS: f64 = 60.0;
 
 /// SPU pitch register for a voice. `word` packs root note << 24 | note << 16 | fine tune << 8 | bend (0x40 centre);
 /// `scale` packs bend range << 24 | 12-bit pitch scale (0x1000 = 1). `table` is the driver's 192-steps-per-octave
@@ -201,6 +363,13 @@ impl Level {
         self.pan[2] = if t.centre() { 0x40 } else { t.pan().clamp(1, 127) as u32 };
         let p = (t.pan() as usize).min(0x80); // ponytail: pans above 0x80 not seen
         self.gain = if t.centre() { [gain[p] as u32, gain[0x80 - p] as u32] } else { [0; 2] };
+    }
+
+    /// A BGM note's tone part: channel volume (CC7) and expression (CC11) and the program's volume.
+    pub fn program(&mut self, volume: u8, expression: u8, program_volume: u8, t: Tone, gain: &[u16]) {
+        self.tone(program_volume, t, gain);
+        let v = volume as u64 * expression as u64 * program_volume as u64 * t.volume() as u64;
+        self.tone = (v / (127 * 127 * 127)) as u32;
     }
 
     /// The voice volume registers, from `exe::sound_tables`' pan table.

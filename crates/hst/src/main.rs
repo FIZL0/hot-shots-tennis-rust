@@ -5,7 +5,9 @@
 //! `--stage NN` loads disc court NN (01..11) with every prop placed from its layout data.
 //! `--ball` adds the game ball driven by the ported physics (Space: new shot); `--court` picks the
 //! physics surface table (0..11). `--play` is a playable match against a simple AI (see play.rs).
-//! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs).
+//! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs); a BGM archive
+//! (`--sound SND/BGM/BGMM_05.XB data/sound/BGM/Menu/bgmm_05.hd`) plays its music. `--music` turns on the court's
+//! BGM in a `--play` match (off by default).
 
 mod audio;
 mod character;
@@ -40,6 +42,8 @@ pub struct Args {
     pub viewer: Option<(usize, usize)>,
     /// Sound audition: archive, bank header, program, key.
     pub sound: Option<(String, String, usize, usize)>,
+    /// `--music`: the court's BGM in a match (off by default).
+    pub music: bool,
 }
 
 #[derive(Component)]
@@ -57,6 +61,7 @@ fn main() {
     let (mut viewer_char, mut viewer_motion) = (None, 0);
     // drawing runs uncapped by default; the simulation stays a fixed 60 Hz tick either way
     let mut vsync = false;
+    let mut music = false;
     let mut shot_at = 0.5;
     let mut sound = None;
     while let Some(x) = a.next() {
@@ -72,6 +77,7 @@ fn main() {
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--vsync" => vsync = true,
+            "--music" => music = true,
             "--sound" => {
                 let mut n = || a.next().unwrap_or_default();
                 let (xb, hd, program, key) = (n(), n(), n(), n());
@@ -92,7 +98,7 @@ fn main() {
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)), sound })
+    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot))
