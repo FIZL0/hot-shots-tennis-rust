@@ -168,8 +168,14 @@ fn load(
         let dir = format!("COURT/{n:02}");
         let mut library = std::collections::HashMap::new();
         let mut anims = std::collections::HashMap::new();
-        for name in ["CMN.XB", "GRD01.XB", "HOL01.XB"] {
+        // the game's season is 1 in singles (hole archive SSN1/HOL01.XB, which differs by the net), 0 in doubles
+        let season = args.singles as usize;
+        let mut sky_colour = std::collections::HashMap::new();
+        for name in ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
+            for_models(&data, |n| n.contains("_sky"), |stem, model, mats| {
+                sky_colour.insert(stem, sky_top(&model, &mats));
+            });
             for (stem, parts, anim) in gs_models_anim(&data, |n| !skip(n), &mut images) {
                 let tags: Vec<_> = parts.iter().flat_map(|(_, g, t)| std::iter::repeat_n(*t, g.len())).collect();
                 let parts = add(parts.into_iter().map(|(m, g, _)| (m, g)).collect(), &mut meshes, &mut gs_materials);
@@ -177,12 +183,12 @@ fn load(
                 library.insert(stem, parts);
             }
         }
-        // fog for time of day 0 on every court material (FGE batches use it); ponytail: P17e picks the time of day
+        // the season's fog on every court material (FGE batches use it)
         let envir = iso.read(&format!("{dir}/CMN.XB")).ok().and_then(|d| {
             let arc = Archive::parse(&d).ok()?;
             arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}.dat")))?).ok()
         });
-        if let Some((fog, colour)) = envir.and_then(|e| gs::court_fog(&e, 0)) {
+        if let Some((fog, colour)) = envir.as_ref().and_then(|e| gs::court_fog(e, season)) {
             for (_, m) in gs_materials.iter_mut() {
                 (m.uniform.fog, m.uniform.fog_color) = (fog, colour);
             }
@@ -193,7 +199,15 @@ fn load(
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
         // the hole's ground model is the one shadow receiver
         let sun = shadow::Sun::read(&mut iso, n as usize);
-        for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole) {
+        // the game loads every in-season sky but draws only the first; its colour also clears the screen
+        let mut sky = None;
+        for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole).filter(|e| layout::in_season(&e.stem, season)) {
+            if e.stem.contains("_sky") {
+                if sky.is_some() {
+                    continue;
+                }
+                sky = sky_colour.get(&e.stem).copied();
+            }
             if let Some(parts) = library.get(&e.stem) {
                 spawn(&mut commands, parts, Transform::default());
                 for (_, m) in parts.iter().filter(|_| e.dir == "hole") {
@@ -206,11 +220,14 @@ fn load(
                 }
             }
         }
+        if let Some([r, g, b]) = envir.as_ref().zip(sky).and_then(|(e, c)| gs::court_clear(e, season, c)) {
+            commands.insert_resource(ClearColor(Color::srgb_u8(r, g, b)));
+        }
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
         for p in &plants {
-            let Some(e) = layout::resolve(&list, p, 0) else { continue };
+            let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
                 continue; // creatures/gallery are animated NPCs, dmy are markers
             }
@@ -232,7 +249,7 @@ fn load(
             let envir = read(&mut iso, "CMN.XB", &format!("envir_c{n:02}.dat"));
             let hole = read(&mut iso, "GRD01.XB", &format!("envir_c{n:02}_h01.dat"));
             let count = envir.zip(hole).and_then(|(e, h)| layout::cloud_count(&e, &h, 1)).unwrap_or(20);
-            let models: Vec<_> = list.iter().filter(|e| e.dir == "cloud").filter_map(|e| library.get(&e.stem)).collect();
+            let models: Vec<_> = list.iter().filter(|e| e.dir == "cloud" && layout::in_season(&e.stem, season)).filter_map(|e| library.get(&e.stem)).collect();
             if !models.is_empty() {
                 let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
                 let (directions, speed) = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").wind(n);
@@ -376,6 +393,21 @@ fn for_models(data: &[u8], keep: impl Fn(&str) -> bool, mut f: impl FnMut(String
         };
         f(stem.rsplit(['\\', '/']).next().unwrap_or(stem).to_ascii_lowercase(), model, mats);
     }
+}
+
+/// A sky's colour where the game reads it: the top-most vertex (smallest game y, the last of equals)
+/// colour × its material colour / 128, in 0..255.
+fn sky_top(model: &mdl::Model, mats: &mtl::Mtl) -> [f32; 3] {
+    let mut top = (f32::MAX, [0.0; 3]);
+    for (mi, pk) in model.materials.iter().enumerate() {
+        let m = mats.materials.get(mi).map_or([1.0; 4], |m| m.color);
+        for v in pk.iter().flat_map(|p| &p.vertices) {
+            if v.pos[1] <= top.0 {
+                top = (v.pos[1], std::array::from_fn(|i| v.color[i] as f32 * m[i]));
+            }
+        }
+    }
+    top.1
 }
 
 /// One triangle-list mesh of these packets; vertex colours stay in PS2 units (0x80 = 1.0).
