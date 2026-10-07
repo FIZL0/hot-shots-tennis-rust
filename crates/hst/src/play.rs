@@ -987,6 +987,18 @@ fn screen(g: &Game, stick: Vec2) -> Vec2 {
     right * stick.x + up * stick.y
 }
 
+/// The run direction the original gives a human's stick (`hst_sim::player::pad_dir`): the stick as pad bytes, its
+/// dead square, rescale and ×1.2 clip, on world axes, turned by π when the camera looks from the +z side.
+/// ponytail: the app's stick already merges d-pad and keys into one vector, so the d-pad's own (faster diagonal)
+/// path isn't taken; world axes also under the free camera
+fn pad_run(g: &Game, stick: Vec2) -> Vec2 {
+    // 0x00 full left/up, 0x80 centre, 0xff full right/down
+    let byte = |v: f32| (128.0 + v.clamp(-1.0, 1.0) * if v < 0.0 { 128.0 } else { 127.0 }).round() as u8;
+    let phase = if matches!(g.phase, Phase::ChangeEnds(_)) { 1 } else { 3 };
+    let [x, z] = loco::pad_dir(0, byte(stick.x), byte(-stick.y), phase);
+    if g.cam.view.eye[2] >= 0.0 { Vec2::new(-x, -z) } else { Vec2::new(x, z) }
+}
+
 /// Analog aim on the court (x, z direction from `screen`, or a bot's random pick): sideways spans the court,
 /// +z moves the target toward +z (deeper for the −z team, shorter for the other); centred is a deep middle ball.
 fn aim_target(g: &Game, stick: Vec2, end: f32) -> V3 {
@@ -1408,7 +1420,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     // player (or sets its motion) through the swing
     let p = &g.players[i];
     if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
-        let dir = screen(g, pad.stick);
+        let dir = pad_run(g, pad.stick);
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot

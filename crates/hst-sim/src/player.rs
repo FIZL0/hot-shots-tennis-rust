@@ -426,6 +426,42 @@ pub fn turn(f: &mut Facing, target: [f32; 4], forward: f32, hand: f32, start: us
     f.cross = cross(t, f.dir);
 }
 
+/// A human's run direction (game x, z) from the pad: the left stick (`lx`, `ly` bytes, 0x80 centre; bytes ≥ 0x81 drop
+/// by one, so the centre itself reads a hair right/down) rescaled past a 48/127 dead square, or the d-pad (`buttons`
+/// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit inside |48|; then
+/// ×1.2, clipped to length 1. Zero outside serve, rally and point-over (phases 2–4). The camera on the +z side flips
+/// it by π about y — not done here (callers negate).
+pub fn pad_dir(buttons: u16, lx: u8, ly: u8, phase: u8) -> [f32; 2] {
+    let axis = |b: u8| b as i32 - (b >= 0x81) as i32 - 0x7f;
+    let (ix, iy) = (axis(lx), axis(ly));
+    let (mut x, mut z) = if ix.abs() < 48 && iy.abs() < 48 {
+        let (r, l, u, d) = (buttons & 0x20 != 0, buttons & 0x80 != 0, buttons & 0x10 != 0, buttons & 0x40 != 0);
+        let x: f32 = if r { 1.0 } else if l { -1.0 } else { 0.0 };
+        let z: f32 = if u { 1.0 } else if d { -1.0 } else { -0.0 };
+        let len = sqrt(madd(madd(mul(0.0, 0.0), x, x), z, z));
+        if len <= 1.0 { (x, z) } else { let n = div(1.0, len); (mul(x, n), mul(z, n)) }
+    } else {
+        let (fx, fz) = (div(ix as f32, 127.0), div(-iy as f32, 127.0));
+        let n = div(1.0, sqrt(madd(mul(fz, fz), fx, fx)));
+        let mut mag = fx.abs();
+        if mag <= fz.abs() {
+            mag = fz.abs();
+        }
+        let t = f32::from_bits(0x3ec1_8306);
+        let m = if mag <= t { 0.0 } else { div(sub(mag, t), f32::from_bits(0x3f1f_3e7d)) };
+        (mul(mul(fx, n), m), mul(mul(fz, n), m))
+    };
+    let k = f32::from_bits(0x3f99_999a);
+    (x, z) = (mul(x, k), mul(z, k));
+    let len = sqrt(madd(mul(z, z), x, x));
+    if 1.0 < len {
+        let n = div(1.0, len);
+        (x, z) = (mul(x, n), mul(z, n));
+    }
+    // the camera matrix (identity) turns −0 into +0
+    if (2..=4).contains(&phase) { [x + 0.0, z + 0.0] } else { [0.0, 0.0] }
+}
+
 /// What a standing or running player sees of the match this frame.
 pub struct Scene {
     pub players: i32,
