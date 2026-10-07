@@ -135,6 +135,10 @@ struct Player {
     ai_back: hst_sim::position::Return,
     ai_tick: u32,
     ai_shot: i32,
+    /// The AI's guess at the serve and where it stood when it drew it (`hst_sim::ai::Guess`), and the frames it
+    /// holds before reading the ball: the guess's move frames, or the stuck frames after a wrong guess.
+    ai_guess: Option<(hst_sim::ai::Guess, [f32; 2])>,
+    ai_hold: i32,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -2387,6 +2391,63 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
             None
         };
         ai_draw(g, i, shots);
+        if shots.is_some() {
+            ai_draw_guess(g, i, kind);
+        }
+    }
+}
+
+/// A computer player's guess (ヤマ張り) after an opponent's hit, drawn right after its timing errors.
+/// ponytail: the app has no special serves yet, so the special-serve draw never comes in.
+fn ai_draw_guess(g: &mut Game, i: usize, kind: i32) {
+    let partner_bot = g.players.len() == 2 || g.humans.get(i ^ 2) != Some(&true);
+    let rng = &mut g.rng;
+    let p = &mut g.players[i];
+    let guess = p.ai.guess(&p.ai_timing, kind == 0, false, partner_bot, &mut || {
+        rand(rng);
+        *rng
+    });
+    p.ai_guess = guess.map(|q| (q, [p.pos[0], p.pos[2]]));
+    if guess.is_some() {
+        p.ai_hold = p.ai.guess[1];
+    }
+}
+
+/// While the ball comes to its team, a guessing AI first runs sideways toward the guessed half for the move frames
+/// (stopping once there), then judges the guess against its contact point: right, it times the hit within a frame;
+/// wrong, it stands still for the stuck frames before it goes for the ball. Some(goal) while it holds.
+/// ponytail: the original's run boost after a right guess (×2, ×1.5 with the body-shot roll) is left out until the
+/// AI's own approach run (P7f).
+fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Option<V3> {
+    use hst_sim::ai::Verdict;
+    let (ad, p) = (g.score.side == 1, g.players[i]);
+    if !coming {
+        return None;
+    }
+    if p.ai_hold > 0 {
+        g.players[i].ai_hold -= 1;
+        let Some((q, _)) = p.ai_guess else { return Some(p.pos) };
+        let goal = [q.target_x(p.end, ad), 0.0, p.pos[2]];
+        if (goal[0] - p.pos[0]).abs() < 0.1 {
+            g.players[i].ai_hold = 0; // there
+        }
+        return Some(goal);
+    }
+    let ((q, from), b) = (p.ai_guess?, contact?);
+    g.players[i].ai_guess = None;
+    match q.verdict(p.end, from, [b[0], b[2]]) {
+        Verdict::Right => {
+            rand(&mut g.rng);
+            let e = (g.rng >> 16 & 0x7fff) as i32 % 3 - 1;
+            let t = &mut g.players[i].ai_timing;
+            (t.stroke, t.volley, t.smash) = (e, e, e);
+            None
+        }
+        Verdict::Wrong => {
+            g.players[i].ai_hold = p.ai.guess[2];
+            Some(p.pos)
+        }
+        Verdict::Neither => None,
     }
 }
 
@@ -2432,7 +2493,9 @@ fn bot(g: &mut Game, i: usize) {
                 g.whooshes.push((0, i, call));
             }
         }
-        let wait = if mine.is_none() { ai_wait(g, i) } else { None };
+        let guessing = ai_guessing(g, i, plan.is_some(), mine.map(|(b, _)| b));
+        let mine = if guessing.is_some() { None } else { mine };
+        let wait = if mine.is_none() { guessing.or_else(|| ai_wait(g, i)) } else { None };
         let p = g.players[i];
         let goal = mine.map_or(wait.unwrap_or(p.home), |(b, _)| {
             [

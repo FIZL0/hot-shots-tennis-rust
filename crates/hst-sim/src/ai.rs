@@ -305,6 +305,8 @@ pub struct Timing {
     pub pace: i32,
     /// Extra reaction for a fast ball (frames; reaction itself is P11c's).
     pub fast_ball: i32,
+    /// A change of pace or the fast-ball reaction took hold (even a pace of 0 frames); the AI then doesn't guess.
+    pub reacted: bool,
 }
 
 /// The ball's speed as the game sums it (y² first).
@@ -361,15 +363,17 @@ impl AiParams {
                 Some(b) if b.kind != 0 && chance(roll, self.pace_error[3]) => Some(pace(s.last.vel, b.vel, self.pace_error)),
                 _ => None,
             };
-            t.pace = match rally {
-                Some(p) => p.unwrap_or(0),
+            let paced = match rally {
+                Some(p) => p,
                 None => match s.serve_before {
                     Some(v) if s.last.kind == 0 && receiver && chance(roll, self.serve_pace_error[3]) => {
-                        pace(s.last.vel, v, self.serve_pace_error).unwrap_or(0)
+                        pace(s.last.vel, v, self.serve_pace_error)
                     }
-                    _ => 0,
+                    _ => None,
                 },
             };
+            t.reacted = paced.is_some();
+            t.pace = paced.unwrap_or(0);
             // a ball faster than react_speed[0] km/h adds react_speed[1] frames, react_speed[2] % of the time
             if !first
                 && chance(roll, self.react_speed[2])
@@ -377,6 +381,7 @@ impl AiParams {
                 && ps2::div(ps2::mul(3600.0, ps2::mul(60.0, speed(s.last.vel))), 1000.0) > self.react_speed[0] as f32
             {
                 t.fast_ball = self.react_speed[1];
+                t.reacted = true;
             }
         }
         t.stroke = with_pace(error(roll, 0, self.stroke_error), t.pace);
@@ -388,5 +393,74 @@ impl AiParams {
         t.smash = with_pace(error(roll, base, self.smash_error_random), t.pace);
         t.serve = error(roll, 0, self.serve_error);
         t
+    }
+}
+
+/// Which way an AI guesses (ヤマ張り) the serve will come before reading it, as its draw leaves it: `Wide` the
+/// half on its side sign's +x, `Other` the opposite one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Guess {
+    Wide,
+    Other,
+}
+
+/// How a guess turned out once the AI reads the ball: right (it then runs harder and times the hit within a
+/// frame), wrong (it stops dead for the stuck frames, then reads again) or neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Right,
+    Wrong,
+    Neither,
+}
+
+impl AiParams {
+    /// The guess drawn at the tail of a hit-message draw, when an opponent has just served: never if a change of
+    /// pace or the fast-ball reaction took hold (`t.reacted`), beside a human partner, or for any shot but the serve.
+    /// `partner_bot`: true in singles. `special_serve`: the serve was a special one. `roll`: the generator right after `timing`'s draws.
+    /// ponytail: the draws in between (quick serve, body/low shot, the four level picks, the reaction and its
+    /// special-serve part) belong to P11c/P11g/P11h; they are taken and dropped here until those land.
+    pub fn guess(
+        &self,
+        t: &Timing,
+        serve: bool,
+        special_serve: bool,
+        partner_bot: bool,
+        roll: &mut impl FnMut() -> u32,
+    ) -> Option<Guess> {
+        for _ in 0..8 + special_serve as usize {
+            roll();
+        }
+        if t.reacted || !serve || !partner_bot || !chance(roll, self.guess[0]) {
+            return None;
+        }
+        Some(if chance(roll, 50) { Guess::Wide } else { Guess::Other })
+    }
+}
+
+impl Guess {
+    /// The x the AI runs to while it guesses, keeping its depth: the doubles sideline on the guessed half when that
+    /// is the half the serve comes from (`ad`: the ad court serves), else the centre line. `side`: its side sign.
+    pub fn target_x(self, side: f32, ad: bool) -> f32 {
+        match (self, ad) {
+            (Guess::Wide, false) => side * 5.485,
+            (Guess::Other, true) => side * -5.485,
+            _ => 0.0,
+        }
+    }
+
+    /// Judged when the AI first finds its contact point: the direction from where it stood at the draw (x, z) to
+    /// that point, against the guessed side.
+    pub fn verdict(self, side: f32, from: [f32; 2], contact: [f32; 2]) -> Verdict {
+        let dir = if self == Guess::Wide { side } else { -side };
+        let (dx, dz) = (ps2::sub(contact[0], from[0]), ps2::sub(contact[1], from[1]));
+        let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dx, dx), dz, dz)));
+        let d = ps2::add(ps2::madd(ps2::mul(ps2::mul(dz, inv), 0.0), ps2::mul(dx, inv), dir), 0.0);
+        if d >= 0.5 {
+            Verdict::Right
+        } else if d < 0.0 {
+            Verdict::Wrong
+        } else {
+            Verdict::Neither
+        }
     }
 }

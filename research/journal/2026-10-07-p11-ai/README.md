@@ -33,3 +33,8 @@ for byte; the slot-5 bots (characters 0,2,1,5, outfit 0 → rows 84,86,85,89, le
 
 See 2-P11E1-FORMATION-FINAL.md. P11e is split into P11e1–P11e4; P11e1 is done (`hst_sim::position`, test
 `tests/position.rs` against `context/fixtures/ai_pos_s05.bin` from `tools/record_ai_pos.py`).
+
+## P11e3 (guessing)
+
+See 3-P11E3-GUESS-FINAL.md. Done: `AiParams::guess`, `Guess`, tests `guesses_match_the_game` and
+`guess_verdicts_match_the_game` (fixture `ai_guess_s05.bin`).
