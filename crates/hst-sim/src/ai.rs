@@ -464,3 +464,141 @@ impl Guess {
         }
     }
 }
+
+/// The bounds an ALL-style AI's net rate is kept in after each point (the same for both AI classes).
+pub const NET_RATE: (i32, i32) = (15, 85);
+
+/// What an AI's per-frame update runs: its top-level state. A point starts it at `Start`; on the first update it
+/// becomes `Serve` (the server), `Receive` (the receiver) or `Rally` (the partners), and the serve and receive
+/// states hand over to `Rally` once their stroke is done.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
+    #[default]
+    Start,
+    Serve,
+    Receive,
+    Rally,
+}
+
+/// The rally routine an AI plays: from the net or from the baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Play {
+    Net,
+    Base,
+}
+
+/// The per-player AI object (the singles and doubles classes share all of this): its state, whether it drives
+/// its stick at all this point, and the ALL-style player's choice between net and baseline play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mind {
+    pub phase: Phase,
+    /// Off, it stands still: at each point's end a coin flip, back on at the next point.
+    pub active: bool,
+    /// An ALL-style player's pick: plays the net routine (else the baseline one).
+    pub net: bool,
+    /// The chance (%) of picking the net, moved 5 after each point by how the pick fared.
+    pub net_rate: i32,
+    /// Its team's hits left before it picks again.
+    pub net_left: i32,
+}
+
+impl Default for Mind {
+    fn default() -> Self {
+        Mind { phase: Phase::Start, active: true, net: false, net_rate: 50, net_left: 0 }
+    }
+}
+
+impl Mind {
+    /// The AI's point reset (before the timing draw). `match_start`: the first point, which deals a fresh net
+    /// pick at even odds; doubles only does so when its partner is a computer player too (`partner_bot`, true in
+    /// singles).
+    pub fn reset(&mut self, match_start: bool, partner_bot: bool, roll: &mut impl FnMut() -> u32) {
+        self.active = true;
+        if match_start && partner_bot {
+            self.net_rate = 50;
+            self.net = chance(roll, 50);
+        }
+        self.phase = Phase::Start;
+    }
+
+    /// The tail of a timing draw made at a point reset or the serve: its team gets 2 to 4 hits before the next pick.
+    pub fn count(&mut self, roll: &mut impl FnMut() -> u32) {
+        self.net_left = (roll() >> 16 & 0x7fff) as i32 % 3 + 2;
+    }
+
+    /// Its team has hit (the hit-message draw, in place of `count`).
+    pub fn own_hit(&mut self) {
+        self.net_left -= 1;
+    }
+
+    /// The first update of a point: which state it takes.
+    pub fn start(&mut self, server: bool, receiver: bool) -> Phase {
+        self.phase = if server {
+            Phase::Serve
+        } else if receiver {
+            Phase::Receive
+        } else {
+            Phase::Rally
+        };
+        self.phase
+    }
+
+    /// Entering the rally (also on each new ball path while it rallies): picks again once its team has used up
+    /// its hits. The caller first rolls its return-to-centre (`position::Return::new`).
+    pub fn rally(&mut self, roll: &mut impl FnMut() -> u32) {
+        self.phase = Phase::Rally;
+        if self.net_left < 1 {
+            self.net = chance(roll, self.net_rate);
+            self.count(roll);
+        }
+    }
+
+    /// The routine its rally state plays, by the row's style: 1 net, 2 baseline, 3 (ALL) its pick.
+    pub fn play(&self, style: u8) -> Play {
+        match style {
+            1 => Play::Net,
+            2 => Play::Base,
+            _ if self.net => Play::Net,
+            _ => Play::Base,
+        }
+    }
+
+    /// The point is over: whether it keeps moving until the next.
+    pub fn point_over(&mut self, roll: &mut impl FnMut() -> u32) {
+        self.active = chance(roll, 50);
+    }
+
+    /// The players react to the point: an ALL-style AI (`style` 3) leans 5 toward the pick that won it (away from
+    /// the one that lost), within `NET_RATE`, and picks again.
+    pub fn point_result(&mut self, style: u8, won: bool, roll: &mut impl FnMut() -> u32) {
+        if style != 3 {
+            return;
+        }
+        self.net_rate += if won == self.net { 5 } else { -5 };
+        self.net_rate = self.net_rate.clamp(NET_RATE.0, NET_RATE.1);
+        self.net = chance(roll, self.net_rate);
+    }
+}
+
+/// Where a serving AI walks along the baseline before its toss (x; its side sign `side`, `ad` the ad court): its
+/// usual spot near the centre mark, or at serve level 0 one of three spots out to the singles or doubles sideline.
+pub fn serve_spot(level0: bool, doubles: bool, side: f32, ad: bool, roll: &mut impl FnMut() -> u32) -> f32 {
+    let x = if level0 {
+        match (roll() >> 16 & 0x7fff) % 3 {
+            0 => 0.7,
+            1 if doubles => 2.7425,
+            1 => 2.0575,
+            // one ulp off the round numbers, as the game has them
+            _ if doubles => f32::from_bits(0x4099_1eb9), // 4.785
+            _ => f32::from_bits(0x405a_8f5b),            // 3.415
+        }
+    } else {
+        0.7
+    };
+    ps2::mul(ps2::mul(x, side), if ad { -1.0 } else { 1.0 })
+}
+
+/// How long a serving AI stands on its spot before the toss: 60 to 119 frames.
+pub fn serve_wait(roll: &mut impl FnMut() -> u32) -> i32 {
+    (roll() >> 16 & 0x7fff) as i32 % 60 + 60
+}
