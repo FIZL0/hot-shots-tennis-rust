@@ -92,12 +92,8 @@ struct Player {
     whiff: Option<(usize, u32)>,
     /// Movement stats from TParam.csv.
     stats: Stats,
-    /// Frames into the current run (None: standing), stamina left and the frames toward its next drain.
-    run: Option<i32>,
-    stamina: i32,
-    stamina_tick: i32,
-    /// The stand/run motion the game picks (`hst_sim::player`).
-    motion: i32,
+    /// Run, stamina, stand/run motion and facing as the game's play state (`hst_sim::player::Body`).
+    body: loco::Body,
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -158,6 +154,8 @@ struct Game {
     cam: Camera,
     /// The human whose end the camera follows (the original turns round to stay behind its human).
     cam_owner: Option<usize>,
+    /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
+    pelvis: Vec<Vec<[f32; 2]>>,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -451,6 +449,7 @@ fn setup(
         rng: 0x2468_ace1,
         cam: Camera::new(),
         cam_owner: Some(0),
+        pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -471,7 +470,8 @@ fn setup(
         };
         game.players[i].hand = character_hand(&mut iso, c);
         game.players[i].stats = character_stats(&mut iso, c);
-        game.players[i].stamina = game.players[i].stats.stamina;
+        game.players[i].body.stamina = game.players[i].stats.stamina;
+        game.pelvis[i] = data.pelvis.clone();
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
@@ -512,8 +512,8 @@ fn reset_positions(g: &mut Game) {
         let at = serve_placement(i as i32, &g.score, g.rally.faults, stance, 0, g.score.swapped);
         let end = at.facing;
         // stamina is full again every point
-        let stamina = stats.stamina;
-        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, stats, stamina, ..Player::default() };
+        let body = loco::Body::new(at.pos, end, &stats);
+        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, stats, body, ..Player::default() };
     }
     g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
     g.cam.cut();
@@ -781,59 +781,54 @@ fn timing_word(c: &Contact) -> &'static str {
     }
 }
 
-/// Run in direction `dir` (game-space x, z; any length) or stand, as the original (`hst_sim::player`): full
-/// speed in the stick's direction growing by 30 % over the character's agility frames, stamina drained while
-/// running in a rally, the run motion by direction (dash past half the agility) or the ready stance, and the
-/// court bounds of the game's mover.
-/// ponytail: the turn-around for a run behind the player (facing +0x3d60 turning with the motion's root,
-/// flag +0x3dd1) is not ported; the body keeps facing the other end.
+/// Run in direction `dir` (game-space x, z; any length) or stand, as the original's play state
+/// (`hst_sim::player::Body`): full speed in the stick's direction growing by 30 % over the character's agility
+/// frames, stamina drained while running in a rally, the body turning toward the run 22.5° a frame, the run motion
+/// by direction (dash past half the agility) or the ready stance, the doubles partner kept 1 m away and the court
+/// bounds of the game's mover.
 fn locomote(g: &mut Game, i: usize, dir: Vec2) {
-    let players = g.players.len() as i32;
-    let phase = match g.phase {
-        Phase::ChangeEnds(_) => 1,
-        Phase::Serve => 2,
-        Phase::Rally => 3,
-        Phase::Post | Phase::Over(_) => 4,
+    let n = g.players.len();
+    let sc = loco::Scene {
+        players: n as i32,
+        phase: match g.phase {
+            Phase::ChangeEnds(_) => 1,
+            Phase::Serve => 2,
+            Phase::Rally => 3,
+            Phase::Post | Phase::Over(_) => 4,
+        },
+        last_hitter: g.last_hitter,
+        team: i as i32,
+        forward: g.players[i].end,
+        hand: g.players[i].hand,
+        // the partner, already moved this frame if it updates first
+        mate: (n == 4).then(|| g.players[i ^ 2].pos),
+        ball: g.flight.ball.pos,
+        ball_dir: g.flight.ball.vel,
+        short: false,
     };
-    let (ball, last) = (g.flight.ball, g.last_hitter);
-    // doubles: the partner (already moved this frame if it updates first)
-    let mate = (players == 4).then(|| g.players[i ^ 2].pos);
-    let p = &mut g.players[i];
+    let Game { players, pelvis, .. } = g;
+    let p = &mut players[i];
     p.prev = p.pos;
-    p.facing = base_yaw(p.end);
-    let current = loco::base_motion(p.motion);
-    if dir == Vec2::ZERO {
-        p.run = None;
-        p.vel = Vec2::ZERO;
-        let a = loco::angle([0.0, 0.0, p.end], p.end, p.hand);
-        p.pos = loco::mover(p.pos, [0.0; 3], p.end, mate, false);
-        let m = loco::stand_motion(a, || {
-            loco::stance(&loco::StanceInput {
-                players,
-                phase,
-                last_hitter: last,
-                team: i as i32,
-                current,
-                watching: true,
-                pos: p.pos,
-                ball: ball.pos,
-                ball_dir: ball.vel,
-                hand: p.hand,
-            })
-        });
-        p.motion = loco::with_tiredness(m, p.stamina);
-        return;
-    }
-    let d = dir.normalize();
-    let run = p.run.map_or(0, |r| r + 1);
-    p.run = Some(run);
-    (p.stamina, p.stamina_tick) = loco::drain(&p.stats, p.stamina, p.stamina_tick, players, phase == 3, 0);
-    let v = loco::run_velocity([d.x, 0.0, d.y], loco::run_speed(&p.stats, run, p.stamina, 100));
-    p.vel = Vec2::new(v[0], v[2]);
-    p.pos = loco::mover(p.pos, v, p.end, mate, false);
+    p.body.pos = p.pos;
+    p.body.step(&p.stats, [dir.x, dir.y], &sc, &pelvis[i]);
+    p.pos = p.body.pos;
+    p.vel = if p.body.running { Vec2::new(p.body.vel[0], p.body.vel[2]) } else { Vec2::ZERO };
     p.stride += p.vel.length() * 9.0;
-    let a = loco::angle([d.x, 0.0, d.y], p.end, p.hand);
-    p.motion = loco::with_tiredness(loco::run_motion(current, a, loco::dashing(&p.stats, run)), p.stamina);
+    p.facing = yaw(p.body.face.dir);
+}
+
+/// Figure yaw (0 faces −z) of a game-space facing direction.
+fn yaw(d: [f32; 4]) -> f32 {
+    (-d[0]).atan2(-d[2])
+}
+
+/// A stroke squares the body up to the other end (the game's stroke mode sets facing and target forward).
+fn square_up(p: &mut Player) {
+    let dir = [0.0, 0.0, p.end, 0.0];
+    p.body.target = dir;
+    p.body.face = loco::Facing { dir, way: -1, ..loco::Facing::default() };
+    p.body.running = false;
+    p.facing = base_yaw(p.end);
 }
 
 /// One frame of a player's stroke: a pending press keeps searching for a contact (pressing early grades
@@ -853,7 +848,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.swing = Some(0);
             p.swung = false;
             p.vel = Vec2::ZERO;
-            p.facing = base_yaw(p.end);
+            square_up(p);
         } else {
             g.players[i].pending = left.checked_sub(1);
             if left == 0 {
@@ -880,7 +875,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
                     swing::Branch::Volley => 2,
                     swing::Branch::Smash => 4,
                 };
-                p.stamina = loco::stroke_stamina(&p.stats, p.stamina, branch, c.swing.forehand, 0);
+                p.body.stamina = loco::stroke_stamina(&p.stats, p.body.stamina, branch, c.swing.forehand, 0);
             }
             p.contact = None;
             p.swung = true;
@@ -1294,7 +1289,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         if (m.id == 0x25 || m.id == 0x26) && m.time < 30.0 {
             continue;
         }
-        m.play(p.motion as usize, 1.0, true);
+        m.play(p.body.motion as usize, 1.0, true);
     }
 }
 

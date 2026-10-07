@@ -19,3 +19,4 @@ pub mod world;
 pub mod mesh;
 pub mod court;
 pub mod player;
+pub mod pose;

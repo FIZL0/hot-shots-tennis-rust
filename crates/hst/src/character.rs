@@ -39,6 +39,9 @@ pub struct CharacterData {
     pub motions: HashMap<usize, Clip>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
+    /// Per motion number (0..48): the forward row (x, z) of `Bip01Pelvis`'s model matrix at the motion's first
+    /// frame — what the game's body turn compares (`hst_sim::player::turn`).
+    pub pelvis: Vec<[f32; 2]>,
 }
 
 impl CharacterData {
@@ -230,10 +233,17 @@ pub fn load_disc(
     let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
     let aarc = Archive::parse(&anims).map_err(|e| e.0)?;
     let mut motions = HashMap::new();
+    let skeleton = hst_sim::pose::Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+    let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
+    let mut pelvis = vec![[0.0, 1.0]; 48];
     for id in 0..ani::MOTIONS.len() {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
         let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
+        if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
+            let r = hst_sim::pose::first_frame(&skeleton, &a)[h][2];
+            *row = [r[0], r[2]];
+        }
         let per_frame = a.ticks_per_frame.max(1) as f32;
         let tracks = a
             .tracks
@@ -249,7 +259,7 @@ pub fn load_disc(
         motions.insert(id, Clip { end: a.end_tick() as f32 / per_frame, tracks });
     }
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, binds })
+    Ok(CharacterData { joints, parts, racket, motions, binds, pelvis })
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).

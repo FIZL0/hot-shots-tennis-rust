@@ -2,7 +2,7 @@
 //! bit-exact and the motion the game sets for standing and running players, frame by frame. Characters 0, 2, 1, 5
 //! (TParam.csv SPE/Agili/STA), all right-handed.
 
-use hst_sim::player::{Stats, mover, stroke_stamina, StanceInput, angle, base_motion, dashing, run_motion, run_speed, run_velocity, stance, stand_motion, with_tiredness};
+use hst_sim::player::{Facing, Stats, mover, stroke_stamina, turn, StanceInput, angle, base_motion, dashing, run_motion, run_speed, run_velocity, stance, stand_motion, with_tiredness};
 use hst_sim::replay::{Frame, frames_live};
 
 fn p_u8(fr: Frame, p: usize, off: usize) -> u8 {
@@ -143,4 +143,110 @@ fn match_s05_stroke_stamina() {
         }
     }
     assert!(n > 60, "{n}");
+}
+
+/// The body's facing every frame: snap within 22.5°, else a 22.5° step the way the game decides. The per-motion
+/// pelvis rows are the game's own (slot-5 RAM, player + 0x6b0 + motion·0x40).
+#[test]
+fn match_s05_facing() {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
+        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    };
+    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
+    let gm = ru(0x422f80);
+    let pelvis: Vec<Vec<[f32; 2]>> = (0..4)
+        .map(|p| {
+            let obj = ru(gm + 0xa8 + 4 * p);
+            (0..48).map(|m| [f(&ram, obj + 0x6b0 + m * 0x40 + 0x20), f(&ram, obj + 0x6b0 + m * 0x40 + 0x28)]).collect()
+        })
+        .collect();
+    let frames = frames_live(&data);
+    let p_v4 = |fr: Frame, p: usize, off: usize| [0, 4, 8, 12].map(|o| fr.player_f32(p, off + o));
+    let (mut n, mut steps, mut bad) = (0, 0, 0);
+    for k in 1..frames.len() {
+        let (a, fr) = (frames[k - 1], frames[k]);
+        if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
+            break;
+        }
+        if f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 || fr.gm()[0x55] != a.gm()[0x55] {
+            continue;
+        }
+        for p in 0..4 {
+            // the turn runs in the play state (+0x3fa4 = 0), not while serving or after the point
+            if p_u8(fr, p, 0x3fa4) != 0 {
+                continue;
+            }
+            let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
+            let mut face = Facing {
+                dir: p_v4(a, p, 0x3d60),
+                turned: p_u8(fr, p, 0x3dd1) != 0,
+                reversed: p_u8(fr, p, 0x3dd0) != 0,
+                way: p_i32(a, p, 0x3dd4),
+                cross: p_v4(a, p, 0x3de0),
+            };
+            let (start, now) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
+            if !(0..48).contains(&start) || !(0..48).contains(&now) {
+                continue;
+            }
+            let target = p_v4(fr, p, 0x3dc0);
+            // a stroke or dive starting this frame squares the body up first (its target is set alike)
+            let mode = p_u8(fr, p, 0x3fa5);
+            if mode >= 2 && mode != p_u8(a, p, 0x3fa5) {
+                face.dir = target;
+            }
+            let stepping = target.map(f32::to_bits) != face.dir.map(f32::to_bits);
+            turn(&mut face, target, fwd, 1.0, start as usize, base_motion(start), now as usize, &pelvis[p]);
+            n += 1;
+            steps += stepping as i32;
+            let want = (p_v4(fr, p, 0x3d60), p_i32(fr, p, 0x3dd4), p_v4(fr, p, 0x3de0));
+            if (face.dir.map(f32::to_bits), face.way, face.cross.map(f32::to_bits)) != (want.0.map(f32::to_bits), want.1, want.2.map(f32::to_bits)) {
+                bad += 1;
+                if bad <= 10 {
+                    eprintln!("facing k={k} p={p} start={start:#x} now={now:#x}: {:?} way {} vs {:?} way {} (cross {:?} vs {:?})", face.dir, face.way, want.0, want.1, face.cross, want.2);
+                }
+            }
+        }
+    }
+    eprintln!("facing {n} checked ({steps} turning), {bad} off");
+    assert!(steps > 100);
+    assert_eq!(bad, 0);
+}
+
+/// The turn's per-motion pelvis rows computed from the disc (skeleton + each motion's first keys) agree with
+/// the game's table in slot-5 RAM.
+#[test]
+fn pelvis_table_from_disc() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{Skeleton, first_frame};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(ram), Ok(mut iso)) = (std::fs::read(format!("{dir}/slot5_ee.bin")), Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"))) else {
+        return eprintln!("slot5_ee.bin or ISO absent, skipped");
+    };
+    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
+    let gm = ru(0x422f80);
+    let mut worst = 0.0f32;
+    for (p, c) in [(0, 0), (1, 2), (2, 1), (3, 5)] {
+        let obj = ru(gm + 0xa8 + 4 * p);
+        let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        let e = arc.entries.iter().find(|e| { let n = e.name.to_ascii_lowercase(); n.contains(&format!("pc{c:02}_t")) && n.ends_with("_c00.mdl") }).unwrap();
+        let m = mdl::parse(&arc.read(e).unwrap()).unwrap();
+        let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+        let pelvis = sk.names.iter().position(|n| n == "Bip01Pelvis").unwrap();
+        let anims = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+        let aarc = Archive::parse(&anims).unwrap();
+        for mo in 0..48 {
+            let stem = ani::motion_name(mo, c).unwrap().to_ascii_lowercase();
+            let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
+            let a = ani::parse(&aarc.read(e).unwrap()).unwrap();
+            let row = first_frame(&sk, &a)[pelvis][2];
+            let want = [f(&ram, obj + 0x6b0 + mo * 0x40 + 0x20), f(&ram, obj + 0x6b0 + mo * 0x40 + 0x28)];
+            let d = (row[0] - want[0]).abs().max((row[2] - want[1]).abs());
+            if d > 1e-3 { eprintln!("char {c} motion {mo:#x}: {:?} vs {want:?}", [row[0], row[2]]); }
+            worst = worst.max(d);
+        }
+    }
+    eprintln!("worst pelvis row difference {worst}");
+    assert!(worst < 1e-4);
 }

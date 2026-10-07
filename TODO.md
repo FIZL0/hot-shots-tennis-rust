@@ -131,8 +131,13 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
     `35ae50`) on every recorded drop; weather 2/3 agility ×1.5 (`Stats::new`; the app passes clear weather until
     the weather table is ported). The partner push never fires in `match_s05.bin` — unit-checked only; verify with a
     slot-3 recording where P1 runs into its partner. Journal `1-LOCOMOTION-FINAL.md`.
-  - [ ] **N1b — Facing turn.** The rest of `349410`: turning +0x3d60 toward +0x3dc0 (turn flag +0x3dd1/+0x3dd0, the
-    motion's root matrices at player + motion·0x40 + 0x6b0); verify facing every frame of `match_s05.bin`.
+  - [x] **N1b — Facing turn.** `hst_sim::player::turn`: snap within 22.5°, else a 22.5° step a frame; the way
+    round decided once per turn from the pelvis forward of the start/new motion (player + 0x6b0 + motion·0x40 =
+    `Bip01Pelvis` model matrix at the motion's first frame) against the angle left either way; `Body::step` = the
+    play state's stand/run frame (run target snapping, turn-around flags, stance on stopping from a back run).
+    `tests/player.rs`: facing, way and cross bit-exact on 78255 play-state frames (5480 turning); the pelvis table
+    computed from the disc (`hst_sim::pose::first_frame`) within 5e-7 of the game's. The app turns the body (model
+    yaw = facing).
   - [ ] **N1c — Mode state machine.** When each mode/motion applies: stroke mode 2 (`3ec4` countdown, recovery
     +0x3e50, re-press), mode 3, serve motions, receive, reactions `re_*`, `3553d0`; verify the motion number on
     every frame of `match_s05.bin` (not only stand/run frames).
@@ -165,6 +170,9 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   calls (158, bit-exact); `tests/replay.rs` checks the fixture itself. Input-driven player diffs land with P7
   (the port has no ported movement yet; P7 builds them on `Frame::{pad, player_pos}`). Next recording: add the
   live ball `*(gm+0x88)` and the rally block 0x3165f0. Journal: `context/artifacts/2026-10-06-p0-input-replay/`.
+  - [ ] **Capture `context/recordings/new_recording.p2m2`** (user-recorded, with its save state) to a fixture. It
+    contains player–player collision, a player hit by the ball, dives and smashes: the source for P4's dive
+    branch, N5/smash contacts and player collision / ball-hits-player verification.
 
 - [x] **P0a — Bit-exact bounce.** Port the contact path with the original instruction order so
   `crates/hst-sim/tests/flights.rs` can require bit-exact position *and* velocity on every frame (today: airborne

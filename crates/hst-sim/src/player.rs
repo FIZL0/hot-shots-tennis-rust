@@ -303,6 +303,248 @@ pub fn base_motion(motion: i32) -> i32 {
     if (8..16).contains(&motion) { motion - 8 } else { motion }
 }
 
+/// A player's facing (+0x3d60) and its turn state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Facing {
+    /// Unit direction the body faces (game space, w carried along).
+    pub dir: [f32; 4],
+    /// Turning round toward the run direction (+0x3dd1; the stand/run motion uses `dir` meanwhile).
+    pub turned: bool,
+    /// The turn runs the other way round except while dashing (+0x3dd0).
+    pub reversed: bool,
+    /// Which way round the turn goes (0 / 1), −1 undecided (+0x3dd4).
+    pub way: i32,
+    /// Target × facing after the last step (+0x3de0).
+    pub cross: [f32; 4],
+}
+
+/// cos 22.5°: the turn's step per frame.
+const STEP: f32 = f32::from_bits(0x3f6c_835e);
+
+/// Rotation about −y by the angle with cosine `c` (sign of its sine `s`), as the game's axis-angle builder.
+fn rot_y(c: f32, s: f32) -> [[f32; 4]; 4] {
+    let (ax, ay, az) = (mul(0.0, -1.0), mul(1.0, -1.0), mul(0.0, -1.0));
+    let k = sub(1.0, c);
+    let sn = mul(s, sqrt(msub(add(0.0, 1.0), c, c)));
+    let (xy, zx, yz) = (mul(ax, ay), mul(az, ax), mul(ay, az));
+    [
+        [madd(add(0.0, c), k, mul(ax, ax)), msub(mul(k, xy), az, sn), madd(mul(ay, sn), k, zx), 0.0],
+        [madd(mul(az, sn), k, xy), madd(add(0.0, c), k, mul(ay, ay)), msub(mul(k, yz), ax, sn), 0.0],
+        [msub(mul(k, zx), ay, sn), madd(mul(ax, sn), k, yz), madd(add(0.0, c), k, mul(az, az)), 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
+fn clamp1(x: f32) -> f32 {
+    if x < -1.0 { -1.0 } else if x <= 1.0 { x } else { 1.0 }
+}
+
+/// FPU dot product in the game's order: (a.y·b.y + a.x·b.x) + a.z·b.z.
+fn dot(a: [f32; 4], b: [f32; 4]) -> f32 {
+    madd(madd(mul(a[1], b[1]), a[0], b[0]), a[2], b[2])
+}
+
+/// a × b (w = 0), each component `a.i·b.j − a.j·b.i` through the accumulator.
+fn cross(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [msub(mul(a[1], b[2]), a[2], b[1]), msub(mul(a[2], b[0]), a[0], b[2]), msub(mul(a[0], b[1]), a[1], b[0]), 0.0]
+}
+
+/// One frame of the body turning toward `target` (+0x3dc0): within 22.5° it snaps, otherwise it steps 22.5°.
+/// Which way round is decided once per turn by comparing the pelvis orientation of the motion playing at the
+/// frame's start (`start`, raw number; `start_base` folded) and the one chosen this frame (`now`) — `pelvis[m]`
+/// is the forward row (x, z) of motion m's `Bip01Pelvis` model matrix at frame 0 — against the angle still to
+/// turn, either way round.
+pub fn turn(f: &mut Facing, target: [f32; 4], forward: f32, hand: f32, start: usize, start_base: i32, now: usize, pelvis: &[[f32; 2]]) {
+    let d = f.dir;
+    let settle = |f: &mut Facing| {
+        f.reversed = false;
+        f.turned = false;
+        f.way = -1;
+        f.cross = [0.0; 4];
+    };
+    if target.map(f32::to_bits) == d.map(f32::to_bits) {
+        return settle(f);
+    }
+    if !(dot(target, d) < STEP) {
+        f.dir = target;
+        return settle(f);
+    }
+    let mut t = target;
+    if hand < 0.0 {
+        t[0] = madd(add(0.0, t[0]), f32::from_bits(0x3c23_d70a), if t[2] < 0.0 { -1.0 } else { 1.0 });
+    }
+    let side = |x: f32| if x < 0.0 { -1.0 } else { 1.0 };
+    if side(msub(mul(t[2], d[0]), t[0], d[2])) != side(f.cross[1]) {
+        f.way = -1;
+    }
+    if f.way == -1 {
+        // the pelvis forward of motion m on the court plane, toward the player's forward
+        let pfwd = |m: usize| {
+            let [x, z] = pelvis[m];
+            let x = mul(x, hand);
+            let inv = div(1.0, sqrt(madd(mul(z, z), x, x)));
+            [mul(mul(x, inv), forward), mul(0.0, forward), mul(mul(z, inv), forward), mul(0.0, forward)]
+        };
+        let p1 = pfwd(start);
+        let c = cross(t, d);
+        let r = rot_y(clamp1(madd(madd(mul(d[1], 0.0), d[0], 0.0), d[2], forward)), side(c[1]));
+        let q1 = crate::vu0::transform(&r, p1);
+        let (q2, p2) = if start == now {
+            let r = rot_y(clamp1(dot(d, t)), side(msub(mul(d[2], t[0]), d[0], t[2])));
+            (crate::vu0::transform(&r, q1), p1)
+        } else {
+            let p2 = pfwd(now);
+            let r = rot_y(clamp1(madd(madd(mul(t[1], 0.0), t[0], 0.0), t[2], forward)), side(msub(mul(d[2], t[0]), d[0], t[2])));
+            (crate::vu0::transform(&r, p2), p2)
+        };
+        let mut a = acosf(clamp1(dot(q2, q1)));
+        let mut b = acosf(clamp1(dot(p2, p1)));
+        let mut g = acosf(clamp1(dot(t, d)));
+        if -msub(mul(q2[2], q1[0]), q2[0], q1[2]) < 0.0 {
+            a = mul(a, -1.0);
+        }
+        if -msub(mul(p2[2], p1[0]), p2[0], p1[2]) < 0.0 {
+            b = mul(b, -1.0);
+        }
+        let mut other = -sub(f32::from_bits(0x40c9_0fdb), g);
+        f.way = 0;
+        if -c[1] < 0.0 {
+            f.way = 1;
+            g = mul(g, -1.0);
+            other = mul(other, -1.0);
+        }
+        let (e1, e2) = (sub(a, add(b, g)), sub(a, add(b, other)));
+        if !(e1.abs() <= e2.abs()) {
+            f.way = 1 - f.way;
+        }
+    }
+    let mut s = if f.way != 0 { -1.0 } else { 1.0 };
+    if start_base != 7 && f.reversed {
+        s = mul(s, -1.0);
+    }
+    f.dir = crate::vu0::transform(&rot_y(STEP, s), d);
+    f.cross = cross(t, f.dir);
+}
+
+/// What a standing or running player sees of the match this frame.
+pub struct Scene {
+    pub players: i32,
+    /// Match phase (gm+0x55): 1 change ends, 2 serve, 3 rally, 4 point over.
+    pub phase: u8,
+    pub last_hitter: i32,
+    pub team: i32,
+    /// Forward (±1 along z) and hand (−1 left-handed).
+    pub forward: f32,
+    pub hand: f32,
+    /// The doubles partner's position (as of this player's update).
+    pub mate: Option<[f32; 3]>,
+    pub ball: [f32; 3],
+    pub ball_dir: [f32; 3],
+    /// The half-court singles mode.
+    pub short: bool,
+}
+
+/// A player's body in the play state: position, run, stamina, motion and facing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Body {
+    pub pos: [f32; 3],
+    /// Last run velocity (+0x3e00).
+    pub vel: [f32; 3],
+    /// Running (mode 1) or standing (mode 0).
+    pub running: bool,
+    pub run: i32,
+    pub stamina: i32,
+    pub stamina_tick: i32,
+    /// Motion number set this frame (tired variants included).
+    pub motion: i32,
+    /// Where the body should face (+0x3dc0) and where it faces.
+    pub target: [f32; 4],
+    pub face: Facing,
+}
+
+impl Body {
+    /// A body standing at `pos` squarely facing `forward`, with full stamina.
+    pub fn new(pos: [f32; 3], forward: f32, s: &Stats) -> Self {
+        let dir = [0.0, 0.0, forward, 0.0];
+        Body { pos, stamina: s.stamina, target: dir, face: Facing { dir, way: -1, ..Facing::default() }, ..Body::default() }
+    }
+
+    /// One frame of the play state for a standing or running player: `input` is the wanted direction (game x, z;
+    /// zero to stand), `pelvis` the character's per-motion pelvis rows (see [`turn`]).
+    pub fn step(&mut self, s: &Stats, input: [f32; 2], sc: &Scene, pelvis: &[[f32; 2]]) {
+        let start = self.motion;
+        let len = sqrt(madd(mul(input[1], input[1]), input[0], input[0]));
+        if self.running {
+            self.run += 1;
+            (self.stamina, self.stamina_tick) = drain(s, self.stamina, self.stamina_tick, sc.players, sc.phase == 3, 0);
+        }
+        if 0.0 < len {
+            if !self.running {
+                self.run = 0;
+            }
+            let inv = div(1.0, len);
+            self.go(s, [mul(input[0], inv), 0.0, mul(input[1], inv), 0.0], sc);
+        } else {
+            if self.running && base_motion(self.motion) == 4 && self.stance(sc) == 2 {
+                self.face.turned = true;
+                self.face.reversed = true;
+            }
+            self.stand(sc);
+        }
+        let now = self.motion.clamp(0, pelvis.len() as i32 - 1) as usize;
+        let from = start.clamp(0, pelvis.len() as i32 - 1) as usize;
+        turn(&mut self.face, self.target, sc.forward, sc.hand, from, base_motion(start), now, pelvis);
+    }
+
+    fn stance(&self, sc: &Scene) -> i32 {
+        stance(&StanceInput {
+            players: sc.players,
+            phase: sc.phase,
+            last_hitter: sc.last_hitter,
+            team: sc.team,
+            current: base_motion(self.motion),
+            watching: true,
+            pos: self.pos,
+            ball: sc.ball,
+            ball_dir: sc.ball_dir,
+            hand: sc.hand,
+        })
+    }
+
+    /// Standing (mode 0): face forward, the stance or a turning step.
+    fn stand(&mut self, sc: &Scene) {
+        self.running = false;
+        self.target = [0.0, 0.0, sc.forward, 0.0];
+        let d = if self.face.turned { self.face.dir } else { self.target };
+        let m = stand_motion(angle([d[0], d[1], d[2]], sc.forward, sc.hand), || self.stance(sc));
+        self.motion = with_tiredness(m, self.stamina);
+        self.pos = mover(self.pos, [0.0; 3], sc.forward, sc.mate, sc.short);
+    }
+
+    /// Running (mode 1) in unit direction `dir`.
+    fn go(&mut self, s: &Stats, dir: [f32; 4], sc: &Scene) {
+        let current = base_motion(self.motion);
+        self.running = true;
+        let ahead = madd(madd(mul(0.0, dir[1]), 0.0, dir[0]), sc.forward, dir[2]);
+        self.target = if f32::from_bits(0x3f7d_70a4) < ahead {
+            [0.0, 0.0, sc.forward, 0.0]
+        } else if ahead < -f32::from_bits(0x3f7d_70a4) {
+            [-0.0, -0.0, mul(sc.forward, -1.0), -0.0]
+        } else {
+            dir
+        };
+        self.vel = run_velocity([dir[0], dir[1], dir[2]], run_speed(s, self.run, self.stamina, 100));
+        self.pos = mover(self.pos, self.vel, sc.forward, sc.mate, sc.short);
+        let t = [self.target[0], self.target[1], self.target[2]];
+        if !self.face.turned && !(angle(t, sc.forward, sc.hand).abs() < THREE_QUARTERS) && current == 2 {
+            self.face.turned = true;
+            self.face.reversed = true;
+        }
+        let d = if self.face.turned { [self.face.dir[0], self.face.dir[1], self.face.dir[2]] } else { t };
+        self.motion = with_tiredness(run_motion(current, angle(d, sc.forward, sc.hand), dashing(s, self.run)), self.stamina);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
