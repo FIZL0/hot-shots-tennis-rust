@@ -43,6 +43,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 - [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
+- [ ] **P16a** Post-point cut-aways in play (user priority) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
 - [x] **N1d1** Exact ANI sampler (in N1d) → `hst-sim/src/pose.rs` · `character.rs` animate | t: motion.rs clip_sampler_ram | j: 2026-10-06-n1-animations
 - [ ] **N1d2** Motion time/speed per frame (in N1d) → `motion.rs` `pose.rs` · `character.rs` Motion/tick · `play.rs` motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1d3** Contact IK + body step `0x3561e0` (in N1d) → `pose.rs` · `character.rs` animate | t: motion.rs | j: 2026-10-06-n1-animations

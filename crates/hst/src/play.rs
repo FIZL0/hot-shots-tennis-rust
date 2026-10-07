@@ -648,6 +648,8 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3) {
 /// off. No contact in reach is a whiff; a toss that lands is simply tossed again.
 fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     let (pos, end) = (g.players[i].pos, g.players[i].end);
+    // standing still unless this tick walks
+    g.players[i].prev = pos;
     let mut s = g.serving;
     let Some(toss) = s.toss else {
         if let Some(k) = press {
@@ -664,7 +666,6 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             let far = end * court * if g.rules.players > 2 { serve::WALK_MAX_DOUBLES } else { serve::WALK_MAX_SINGLES };
             let x = pos[0] + serve::WALK * stick.x.signum();
             let p = &mut g.players[i];
-            p.prev = p.pos;
             p.pos[0] = if far > 0.0 { x.clamp(serve::WALK_MIN, far) } else { x.clamp(far, -serve::WALK_MIN) };
             p.stride += serve::WALK * 9.0;
         }

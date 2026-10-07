@@ -1,6 +1,6 @@
 //! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png]`
 //! Loads every model in the given disc archives and shows them with an orbit camera
-//! (drag: orbit, wheel: zoom). `--shot` saves one frame and exits, for unattended checks;
+//! (drag: orbit, wheel: zoom). `--shot` saves one frame (after `--shot-at` seconds) and exits, for unattended checks;
 //! `--radius r` orbits the origin at distance r instead of framing everything (skyboxes are huge).
 //! `--stage NN` loads disc court NN (01..11) with every prop placed from its layout data.
 //! `--ball` adds the game ball driven by the ported physics (Space: new shot); `--court` picks the
@@ -24,6 +24,8 @@ pub struct Args {
     pub iso: String,
     archives: Vec<String>,
     shot: Option<String>,
+    /// Seconds of game time before the shot (`--shot-at`, default 0.5).
+    shot_at: f32,
     radius: Option<f32>,
     ball: bool,
     pub court: usize,
@@ -51,9 +53,11 @@ fn main() {
     let (mut viewer_char, mut viewer_motion) = (None, 0);
     // drawing runs uncapped by default; the simulation stays a fixed 60 Hz tick either way
     let mut vsync = false;
+    let mut shot_at = 0.5;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
+            "--shot-at" => shot_at = a.next().and_then(|r| r.parse().ok()).unwrap_or(shot_at),
             "--radius" => radius = a.next().and_then(|r| r.parse().ok()),
             "--ball" => ball = true,
             "--court" => court = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
@@ -77,7 +81,7 @@ fn main() {
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)) })
+    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)) })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot))
@@ -299,14 +303,14 @@ fn orbit(
     }
 }
 
-fn auto_shot(mut commands: Commands, args: Res<Args>, mut frame: Local<u32>, mut exit: MessageWriter<AppExit>) {
+fn auto_shot(mut commands: Commands, args: Res<Args>, time: Res<Time>, mut taken: Local<bool>, mut exit: MessageWriter<AppExit>) {
     let Some(path) = &args.shot else { return };
-    *frame += 1;
-    if *frame == 30 {
+    if !*taken && time.elapsed_secs() >= args.shot_at {
+        *taken = true;
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.clone()));
     }
-    // the save is asynchronous: wait for the file (uncapped frames come fast)
-    if *frame > 30 && std::path::Path::new(path).exists() || *frame == 100_000 {
+    // the save is asynchronous: wait for the file
+    if *taken && std::path::Path::new(path).exists() {
         exit.write(AppExit::Success);
     }
 }
