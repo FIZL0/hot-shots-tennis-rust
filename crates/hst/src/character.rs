@@ -307,10 +307,12 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
 }
 
 /// Sample every character's motion into its joints.
-pub fn animate(rigs: Query<(&Rig, &Motion)>, mut joints: Query<&mut Transform>) {
+pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints: Query<&mut Transform>) {
     for (rig, motion) in &rigs {
         let Some(clip) = rig.data.motions.get(&motion.id) else { continue };
-        let t = if motion.looping && clip.end > 0.0 { motion.time.rem_euclid(clip.end) } else { motion.time.min(clip.end) };
+        // between the last two ticks: `tick` advanced it by `speed`
+        let t = motion.time - motion.speed * (1.0 - time.overstep_fraction());
+        let t = if motion.looping && clip.end > 0.0 { t.rem_euclid(clip.end) } else { t.min(clip.end) };
         for (j, rot, pos) in &clip.tracks {
             let Ok(mut tf) = joints.get_mut(rig.joints[*j]) else { continue };
             if let Some(q) = sample(rot, t, |a, b, u| a.slerp(b, u)) {

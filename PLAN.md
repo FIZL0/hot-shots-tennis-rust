@@ -42,7 +42,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 `new_recording.bin` dives/smashes/collisions).
 
 ### Next (user priorities, in order)
-- [ ] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
+- [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
 - [ ] **N1d** Motion playback: time/speed, contact IK, faces (in N1) → `hst-sim/src/motion.rs` `pose.rs` · `hst-data/src/ani.rs` · `character.rs` animate/sample | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1e** Motion crossfade `0x140130` (in N1d) → same as N1d + `play.rs` set_motion/motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1f** Full follow-through after contact (bug) → `play.rs` motions/advance_stroke/set_motion · `motion.rs` | t: motion.rs | j: 2026-10-06-n1-animations

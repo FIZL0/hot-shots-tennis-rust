@@ -15,7 +15,7 @@
 use bevy::prelude::*;
 use hst_data::{exe::ScoreboardTiming, iso::Iso, tim2, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
-use hst_sim::camera::{Camera, Scene};
+use hst_sim::camera::{Camera, Scene, View};
 use hst_sim::court;
 use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
@@ -61,6 +61,8 @@ struct Player {
     end: f32,
     /// Yaw of the figure; 0 faces −z.
     facing: f32,
+    /// `facing` one tick earlier (drawing blends the two).
+    prev_facing: f32,
     stride: f32,
     /// Frames into the current swing.
     swing: Option<u32>,
@@ -174,6 +176,9 @@ struct Game {
     rng: u32,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
+    /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
+    prev_view: View,
+    cam_cut: bool,
     /// The human whose end the camera follows (the original turns round to stay behind its human).
     cam_owner: Option<usize>,
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
@@ -275,7 +280,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
         .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (control, simulate, age_balloons, motions, character::tick).chain());
+        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -474,6 +479,8 @@ fn setup(
         message: String::new(),
         rng: 0x2468_ace1,
         cam: Camera::new(),
+        prev_view: Camera::new().view,
+        cam_cut: false,
         cam_owner: Some(0),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
         chars: vec![0; rules.players as usize],
@@ -542,10 +549,11 @@ fn reset_positions(g: &mut Game) {
         let end = at.facing;
         // stamina is full again every point
         let body = loco::Body::new(at.pos, end, &stats);
-        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, stats, body, ..Player::default() };
+        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), prev_facing: base_yaw(end), stance, hand, home: at.pos, stats, body, ..Player::default() };
     }
     g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
     g.cam.cut();
+    g.cam_cut = true;
     g.serving = Serving::default();
     let s = &g.players[g.score.server as usize];
     let ball = [s.pos[0] + 0.3, -1.0, s.pos[2]];
@@ -1152,10 +1160,21 @@ fn bot_serve(g: &mut Game, i: usize) {
     serve_turn(g, i, Vec2::ZERO, press);
 }
 
+/// What drawing blends from: facing and camera as the last tick left them.
+fn remember(mut g: ResMut<Game>) {
+    g.prev_view = g.cam.view;
+    for p in &mut g.players {
+        p.prev_facing = p.facing;
+    }
+}
+
 fn simulate(mut g: ResMut<Game>) {
     let g2 = &mut *g;
     let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
     g2.cam.step(&Scene { players: &players, ball: g2.flight.ball.pos });
+    if std::mem::take(&mut g2.cam_cut) {
+        g2.prev_view = g2.cam.view; // a cut doesn't blend
+    }
     match g.phase {
         // only the toss flies while the serve is set up
         Phase::Serve if !g.serving.tossed => return,
@@ -1277,14 +1296,17 @@ fn orbit_from(eye: [f32; 3], forward: [f32; 3]) -> (Vec3, f32, f32) {
 }
 
 /// The original's match camera (`hst_sim::camera`); free mode leaves the mouse/right stick in charge.
-fn camera(g: Res<Game>, mode: Res<CamMode>, cs: Res<CamState>, window: Query<&Window>, mut q: Query<(&mut Orbit, &mut Projection)>) {
+fn camera(g: Res<Game>, time: Res<Time<Fixed>>, mode: Res<CamMode>, cs: Res<CamState>, window: Query<&Window>, mut q: Query<(&mut Orbit, &mut Projection)>) {
     let Ok((mut o, mut proj)) = q.single_mut() else { return };
     if *mode == CamMode::Free {
         o.yaw += cs.turn;
         return;
     }
-    let v = g.cam.view;
-    let (eye, pitch, yaw) = orbit_from(v.eye, v.rot[2]);
+    // between the last two ticks' views
+    let (a, v0, v) = (time.overstep_fraction(), g.prev_view, g.cam.view);
+    let mix = |x: V3, y: V3| Vec3::from(x).lerp(Vec3::from(y), a).to_array();
+    let (eye, pitch, yaw) = orbit_from(mix(v0.eye, v.eye), mix(v0.rot[2], v.rot[2]));
+    let fov = v0.fov + (v.fov - v0.fov) * a;
     o.radius = 40.0;
     o.pitch = pitch;
     o.yaw = yaw;
@@ -1292,7 +1314,7 @@ fn camera(g: Res<Game>, mode: Res<CamMode>, cs: Res<CamState>, window: Query<&Wi
     if let Projection::Perspective(p) = &mut *proj {
         // never show less than the game's 4:3 picture: windows narrower than 4:3 widen vertically
         let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
-        p.fov = 2.0 * (v.fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
+        p.fov = 2.0 * (fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
         // the camera stays ~40 m out: a far near plane keeps depth precision for the layered character models
         p.near = 5.0;
     }
@@ -1333,7 +1355,8 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
         let p = g.players[f.0];
         t.translation = Vec3::from(p.prev).lerp(Vec3::from(p.pos), a);
         // the models face their local +z; `facing` is the stand-in yaw (0 = facing −z); left-handers mirrored
-        t.rotation = Quat::from_rotation_y(p.facing - std::f32::consts::PI);
+        let turn = |y: f32| Quat::from_rotation_y(y - std::f32::consts::PI);
+        t.rotation = turn(p.prev_facing).slerp(turn(p.facing), a);
         t.scale = Vec3::new(p.hand, 1.0, 1.0);
     }
     for mut t in &mut ball {
@@ -1404,6 +1427,9 @@ fn balloons(
             continue;
         };
         let Some(alpha) = serve::balloon_alpha(age) else { continue };
+        // fades blend from the last tick's alpha (none before the first)
+        let before = age.checked_sub(1).and_then(serve::balloon_alpha).unwrap_or(0.0);
+        let alpha = before + (alpha - before) * a;
         if let Some(mut m) = materials.get_mut(&view.1) {
             m.base_color_texture = Some(art.0[balloon_index(b)].clone());
             m.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);

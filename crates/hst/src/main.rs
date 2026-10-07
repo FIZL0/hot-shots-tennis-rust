@@ -49,6 +49,8 @@ fn main() {
     let iso = a.next().expect("usage: hst <iso> <archive.XB>... [--shot out.png]");
     let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles, mut chars) = (Vec::new(), None, None, false, 0, None, false, false, Vec::new());
     let (mut viewer_char, mut viewer_motion) = (None, 0);
+    // drawing runs uncapped by default; the simulation stays a fixed 60 Hz tick either way
+    let mut vsync = false;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -60,12 +62,14 @@ fn main() {
             "--singles" => singles = true,
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
+            "--vsync" => vsync = true,
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
     }
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins);
+    let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
