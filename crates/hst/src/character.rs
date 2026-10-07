@@ -41,7 +41,7 @@ pub struct CharacterData {
     /// Per motion number (0..48): the forward row (x, z) of `Bip01Pelvis`'s model matrix at the motion's first
     /// frame — what the game's body turn compares (`hst_sim::player::turn`).
     pub pelvis: Vec<[f32; 2]>,
-    /// The stroke arm table (motions 0x10–0x19 at frame 8) the contact solve reaches from.
+    /// The arm table (strokes 0x10–0x19 and volleys 0x1a/0x1b at frame 8) the contact solve reaches from.
     pub arm: Option<Arc<ArmTable>>,
 }
 
@@ -278,7 +278,7 @@ pub fn load_disc(
             paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
         }
     }
-    let strokes: Option<Vec<Clip>> = (0x10..0x1a).map(|m| motions.get(&m).cloned()).collect();
+    let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm })

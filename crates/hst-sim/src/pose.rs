@@ -411,6 +411,8 @@ pub struct ArmPose {
 
 /// The arm table the game builds at player load: per stroke motion, the pose at frame 8 and the arm's geometry.
 pub struct ArmTable {
+    /// Strokes 0x10–0x19, then the volleys 0x1a/0x1b (of these the volley solve reads the right arm's locals,
+    /// chain and shoulder).
     pub poses: Vec<ArmPose>,
     /// Mean forward reach of the racket point.
     pub reach: f32,
@@ -423,7 +425,7 @@ pub struct ArmTable {
 /// The node names the table reads.
 const ARM_NODES: [&str; 5] = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
 
-/// The arm table from the skeleton and the ten stroke motions (0x10 … 0x19) of `character`.
+/// The arm table from the skeleton and the stroke and volley motions (0x10 … 0x1b) of `character`.
 pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
     use ps2::{add, div, madd, msub, mul, sqrt, sub};
     use crate::vu0::transform;
@@ -448,7 +450,9 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
         let l_chain = chain(&local, idx[4]);
         let sign = if i % 2 == 1 { -1.0 } else { 1.0 };
         let p = [racket, r_hand, r_forearm, r_upper, r_chain].iter().fold(tip, |v, m| transform(m, v));
-        reach = add(reach, p[2]);
+        if i < 10 {
+            reach = add(reach, p[2]);
+        }
         if i == 0 {
             let t = r_hand[3];
             hand_len = sqrt(madd(madd(mul(t[1], t[1]), t[0], t[0]), t[2], t[2]));
@@ -458,7 +462,7 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
         }
         let upper = vmul(&r_upper, &r_chain);
         let sh = row3(&upper);
-        if i % 2 == 0 && i != 6 {
+        if i % 2 == 0 && i != 6 && i < 10 {
             side = add(side, sh[0].abs());
         }
         // turn about y so the racket point lies along ±z from the shoulder
@@ -540,6 +544,9 @@ fn keep_row3(m: M4, keep: &M4) -> M4 {
 pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> ArmSolve {
     use crate::vu0::transform;
     use ps2::{add, div, madd, msub, mul, sqrt, sub};
+    if i >= 10 {
+        return volley_solve(&t.poses[i], contact, pos, scale);
+    }
     let a = &t.poses[i];
     let sign = if i % 2 == 1 { -1.0 } else { 1.0 };
     let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
@@ -629,6 +636,56 @@ pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], s
     step[2] = mul(step[2], scale[0]);
     let q = |pose: &M4, m: &M4| crate::quat::from_matrix(&vmul(&transpose3(pose), m));
     ArmSolve { step, quats: [q(&a.r_hand, &hand), q(&a.r_forearm, &forearm), q(&a.r_upper, &aimed), q(&a.l_upper, &l_upper)] }
+}
+
+/// The volley's contact solve: no facing turn or reach clamp; the hand, the upper arm (to 30°) and the hand again
+/// each turn about z once to bring the racket point toward the contact point, then the body steps sideways half the
+/// x left, the hand turns once more (within 30°), and steps forward or back the z left. Forearm and left arm stay.
+fn volley_solve(a: &ArmPose, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> ArmSolve {
+    use crate::vu0::transform;
+    use ps2::{div, madd, msub, mul, sub};
+    let id: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
+    let s01 = mul(scale[0], scale[1]);
+    let sh = a.shoulder;
+    let mut v = [sub(mul(d[0], s01), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
+    let mut m = [a.racket, a.r_hand, a.r_forearm, a.r_upper, a.r_chain];
+    let dot_cross = |p: [f32; 4], v: [f32; 4], o: [f32; 4]| {
+        let (u, w) = (unit_xy(p, o), unit_xy(v, o));
+        (madd(madd(mul(u[1], w[1]), u[0], w[0]), 0.0, 0.0), if msub(mul(u[0], w[1]), u[1], w[0]) < 0.0 { -1.0 } else { 1.0 })
+    };
+    let turn = |m: &mut [M4; 5], j: usize, frame: &M4, c: f32, s: f32| {
+        let bent = vmul(&vmul(&vmul(&m[j], frame), &axis_cos(c, s, [0.0, 0.0, 1.0])), &transpose3(frame));
+        m[j] = keep_row3(bent, &m[j]);
+    };
+    for j in [1, 3, 1] {
+        let frame = m[j + 1..].iter().fold(id, |acc, x| vmul(&acc, x));
+        let p = transform(&m.iter().fold(id, |acc, x| vmul(&acc, x)), TIP);
+        let (dot, s) = dot_cross(p, v, vmul(&m[j], &frame)[3]);
+        let c = dot.clamp(-1.0, 1.0);
+        if c < f32::from_bits(0x3f7f_ff58) {
+            turn(&mut m, j, &frame, if j != 1 && c < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { c }, s);
+        }
+    }
+    let frame = vmul(&vmul(&m[2], &m[3]), &m[4]);
+    let tip = |m: &[M4; 5]| transform(&frame, transform(&m[1], transform(&m[0], TIP)));
+    let mut p = tip(&m);
+    let mut step = [0.0f32; 4];
+    if p[0].abs() < v[0].abs() {
+        step[0] = div(sub(v[0], p[0]), 2.0);
+        v[0] = sub(v[0], step[0]);
+        let (dot, s) = dot_cross(p, v, vmul(&m[1], &frame)[3]);
+        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+            turn(&mut m, 1, &frame, dot.clamp(-1.0, 1.0), s);
+            p = tip(&m);
+        }
+    }
+    step[2] = sub(v[2], p[2]);
+    step[0] = mul(step[0], s01);
+    step[2] = mul(step[2], scale[0]);
+    let q = |pose: &M4, m: &M4| crate::quat::from_matrix(&vmul(&transpose3(pose), m));
+    let one = [0.0, 0.0, 0.0, 1.0];
+    ArmSolve { step, quats: [q(&a.r_hand, &m[1]), one, q(&a.r_upper, &m[3]), one] }
 }
 
 /// The swing's IK frames from the frames left to contact: (ramp length, start offset).

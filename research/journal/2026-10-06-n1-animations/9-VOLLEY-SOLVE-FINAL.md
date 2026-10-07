@@ -1,0 +1,12 @@
+# N1d3d — The volley contact solve (FINAL)
+- Code: `volley_solve` in `pose.rs` (0x357bd0); `contact_solve` dispatches index >= 10 to it; `arm_table` now takes 12 clips. Wired into `play.rs` / `character.rs`, so the app IKs volleys too.
+- Volley solve (0x357bd0, motions 0x1a/0x1b, index motion-0x1a): same target vector as the stroke solve (contact - pos, x*s0*s1, z*s0, minus shoulder) but no facing turn about y, no reach clamp, no 50-pass CCD.
+  - Three single turns about z in joint order hand, upper arm, hand (joint order table {1,3} alternating). Each turns the joint so the racket tip (0,0.7,0,1) points at the target around the joint's model origin; skipped when the clamped cosine >= 0.99999.
+  - Upper arm limited to 30 degrees (cos clamped up to 0.8660254); the hand is unlimited.
+  - Then if |tip.x| < |v.x|: step.x = (v.x - tip.x)/2, v.x -= step.x, and one more hand turn only if within 30 degrees. step.z = v.z - tip.z (no forward/back clamp).
+  - Quats: hand and upper arm; forearm and left upper arm identity. Frames/pos0/cache/flags as the stroke solve.
+- Volley table (0x3579e0, load time): motions 0x1a/0x1b at frame 8; racket, r_hand, r_forearm locals, r_upper local with translation (0,0,0,1), r_upper's parent chain with translation zeroed, shoulder = row 3 of r_upper*chain. Identical to the stroke table's fields, so the clips are poses[10..12] of the same table; the averages use only the first 10.
+- Constants came from RAM (s0*.bin) since the ELF has them in bss: TIP at 0x41e280, identity 0x1cc360, joint order {1,3} at 0x3fc850, clamps +-1.
+- Result: 4/4 volley solves of anim_s05 bit-exact on first try (39 solves total with the strokes); volley table bit-exact for all 20 RAM players.
+- Decision: motions >= 0x1c call the stroke solve with an out-of-range index (reads neighbouring player fields). anim_s05 shows serves 0x25/0x26 with step 0 and 0x1f with steps <= 1 cm, so they get no IK; their arm turn is unreproduced.
+- Not covered: quats still unverified (beyond +0x4000 in the anim capture), same as N1d3b.

@@ -935,9 +935,10 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.swung = false;
             p.vel = Vec2::ZERO;
             square_up(p);
-            // the arm reaches for the ball: ground strokes 0x10–0x19 (volleys 0x1a/0x1b have their own solve, N1d3d)
+            // the arm reaches for the ball: strokes 0x10–0x19 and volleys 0x1a/0x1b (higher motions: the game indexes
+            // past its table; serves step 0, so no IK)
             let a = c.swing.anim as usize;
-            if let (Some(t), true) = (g.data.get(i).and_then(|d| d.arm.clone()), (0x10..0x1a).contains(&a)) {
+            if let (Some(t), true) = (g.data.get(i).and_then(|d| d.arm.clone()), (0x10..0x1c).contains(&a)) {
                 let p = &mut g.players[i];
                 let b = c.swing.ball;
                 let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];

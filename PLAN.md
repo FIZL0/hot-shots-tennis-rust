@@ -49,7 +49,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N1d3a** Stroke arm table `0x355650` (in N1d3) → `hst-sim/src/pose.rs` | t: motion.rs | j: 2026-10-06-n1-animations
 - [x] **N1d3b** Contact solve `0x3561e0` body step + arm quats (in N1d3) → `pose.rs` · `swing.rs` | t: motion.rs | j: 2026-10-06-n1-animations
 - [x] **N1d3c** Apply IK per frame `0x34ec70` (in N1d3) → `play.rs` find_contact/advance_stroke · `character.rs` animate | t: motion.rs | j: 2026-10-06-n1-animations
-- [ ] **N1d3d** Volley contact solve `0x357bd0` (in N1d3) → `pose.rs` | t: motion.rs | j: 2026-10-06-n1-animations
+- [x] **N1d3d** Volley contact solve `0x357bd0` (in N1d3) → `pose.rs` | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1d4** Faces .MOR/.UVA (in N1d) → `hst-data` new format · `character.rs` | j: 2026-10-06-n1-animations
 - [ ] **N1e** Motion crossfade `0x140130` (in N1d) → same as N1d + `play.rs` set_motion/motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1f** Full follow-through after contact (bug) → `play.rs` motions/advance_stroke/set_motion · `motion.rs` | t: motion.rs | j: 2026-10-06-n1-animations

@@ -355,7 +355,7 @@ fn ram_arm_table(iso: &mut hst_data::iso::Iso, ram: &[u8], pl: usize) -> (hst_si
         .unwrap_or_else(|| panic!("no costume of character {c} matches"));
     let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
     let arc = Archive::parse(&data).unwrap();
-    let clips: Vec<Clip> = (0x10..0x1a)
+    let clips: Vec<Clip> = (0x10..0x1c)
         .map(|m| {
             let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase();
             let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
@@ -385,7 +385,14 @@ fn arm_table_ram() {
             let ctx = format!("{s} p{p} char {c}");
             let bits = |a: usize, n: usize| (0..n).map(|k| u(a + 4 * k) as u32).collect::<Vec<_>>();
             let mbits = |m: &M4| m.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
-            for (i, a) in t.poses.iter().enumerate() {
+            for (i, a) in t.poses.iter().enumerate().skip(10) {
+                let b = pl + 0x140 * (i - 10);
+                for (name, m, off) in [("racket", &a.racket, 0x3220), ("r_hand", &a.r_hand, 0x3260), ("r_forearm", &a.r_forearm, 0x32a0), ("r_upper", &a.r_upper, 0x32e0), ("r_chain", &a.r_chain, 0x3320)] {
+                    assert_eq!(mbits(m), bits(b + off, 16), "{ctx} volley {i} {name}");
+                }
+                assert_eq!(a.shoulder.map(f32::to_bits).to_vec(), bits(pl + 0x34a0 + 0x10 * (i - 10), 4), "{ctx} volley {i} shoulder");
+            }
+            for (i, a) in t.poses.iter().enumerate().take(10) {
                 let b = pl + 0x200 * i;
                 for (name, m, off) in [("racket", &a.racket, 0x18e0), ("r_hand", &a.r_hand, 0x1920), ("r_forearm", &a.r_forearm, 0x1960), ("r_upper", &a.r_upper, 0x19a0), ("l_upper", &a.l_upper, 0x19e0), ("r_chain", &a.r_chain, 0x1a20), ("l_chain", &a.l_chain, 0x1a60), ("aimed", &a.r_upper_aimed, 0x1aa0)] {
                     assert_eq!(mbits(m), bits(b + off, 16), "{ctx} stroke {i} {name}");
@@ -435,8 +442,8 @@ fn contact_solve_anim() {
             assert_eq!((f0, f1 + 1), (i32_at(b, 0x3fc0), i32_at(b, 0x3fc4)), "frame {k} p{p} frames of {n}");
             // the stroke the search chose: the first stroke-range motion the player starts within 20 frames
             let m = (k..k + 20).map(|j| i32_at(&anim[j * S + 0x104 + p * 0x484..][..0x484], 0x3c00 + 0x420)).find(|&m| m >= 0x10).unwrap();
-            if !(0x10..0x1a).contains(&m) {
-                other += 1; // volleys 0x1a/0x1b take their own solve; higher motions index past the table
+            if !(0x10..0x1c).contains(&m) {
+                other += 1; // higher motions index past the table (serves step 0, 0x1f under 1 cm): no IK
                 continue;
             }
             tried += 1;
@@ -447,8 +454,8 @@ fn contact_solve_anim() {
             assert_eq!(r.step.map(f32::to_bits), want, "frame {k} p{p} motion {m:#x}: {:?}", r.step);
         }
     }
-    eprintln!("{tried} contact solves bit-exact ({other} outside strokes 0x10-0x19)");
-    assert!(tried > 30);
+    eprintln!("{tried} contact solves bit-exact ({other} outside strokes and volleys 0x10-0x1b)");
+    assert!(tried > 35);
 }
 
 /// The contact IK's frames after each recorded solve of the slot-5 match: the counter +0x3fc4, the flag +0x3fc8
