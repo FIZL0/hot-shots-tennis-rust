@@ -1,11 +1,13 @@
 //! `.ANI2` skeletal animations (`PCANI/PCnnANI.XB`, exported from 3ds Max). 16-byte aligned:
 //!
 //! ```text
-//! u32 ticks per game frame (80: 4800 ticks/s at 60 Hz), u32 track count, 8 bytes pad
+//! u32 ticks per game frame (80: 4800 ticks/s at 60 Hz), u32 root track count, 8 bytes pad
 //! per track: u32 name length, f32 bone length, 8 pad; name (padded)
-//!            3 key lists (rotation, position, scale): u32 count (padded); count × u32 tick (padded);
+//!            2 key lists (rotation, position): u32 count (padded); count × u32 tick (padded);
 //!            count × 16 bytes (rotation: quaternion x y z w; position: x y z 1)
+//!            u32 child count (padded), then the children, depth first
 //! ```
+//! Character files are flat (no children); effect files (`AZUMA/C_EFF`) hang their parts under a scene root.
 //! Tracks are named after the skeleton's nodes (3ds Max Biped: `Bip01`, `Bip01Pelvis`, …). A rotation key is
 //! the conjugate of the node's local rotation in the usual (column-vector) sense; position keys are the local
 //! translation. `*_dummy` / `*_ball` files hold one track: the ball's path during that motion.
@@ -18,7 +20,8 @@ pub struct Track {
     pub length: f32,
     pub rotation: Vec<(i32, [f32; 4])>,
     pub position: Vec<(i32, [f32; 4])>,
-    pub scale: Vec<(i32, [f32; 4])>,
+    /// Index of the parent track (tracks are stored depth first, so the parent comes earlier).
+    pub parent: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +33,7 @@ pub struct Anim {
 impl Anim {
     /// Last key time over all tracks (ticks).
     pub fn end_tick(&self) -> i32 {
-        self.tracks.iter().flat_map(|t| [&t.rotation, &t.position, &t.scale]).filter_map(|k| k.last().map(|k| k.0)).max().unwrap_or(0)
+        self.tracks.iter().flat_map(|t| [&t.rotation, &t.position]).filter_map(|k| k.last().map(|k| k.0)).max().unwrap_or(0)
     }
 }
 
@@ -42,15 +45,23 @@ pub fn parse(d: &[u8]) -> Result<Anim, Error> {
     let ticks_per_frame = rd_i32(0)?;
     let count = usize::try_from(rd_i32(4)?).map_err(|_| bad("track count"))?;
     let mut p = 0x10usize;
-    let mut tracks = Vec::with_capacity(count);
-    for _ in 0..count {
+    let mut tracks = Vec::new();
+    // (parent, children still to read) for each open level of the tree
+    let mut open = vec![(None, count)];
+    while let Some(top) = open.last_mut() {
+        if top.1 == 0 {
+            open.pop();
+            continue;
+        }
+        top.1 -= 1;
+        let parent = top.0;
         let name_len = usize::try_from(rd_i32(p)?).map_err(|_| bad("name length"))?;
         let length = rd_f32(p + 4)?;
         p += 16;
         let raw = d.get(p..p + name_len).ok_or_else(|| bad("name"))?;
         let name = String::from_utf8_lossy(raw.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
         p = align(p + name_len);
-        let mut lists: [Vec<(i32, [f32; 4])>; 3] = Default::default();
+        let mut lists: [Vec<(i32, [f32; 4])>; 2] = Default::default();
         for list in &mut lists {
             let n = usize::try_from(rd_i32(p)?).map_err(|_| bad("key count"))?;
             p = align(p + 4);
@@ -62,8 +73,11 @@ pub fn parse(d: &[u8]) -> Result<Anim, Error> {
             }
             p += 16 * n;
         }
-        let [rotation, position, scale] = lists;
-        tracks.push(Track { name, length, rotation, position, scale });
+        let children = usize::try_from(rd_i32(p)?).map_err(|_| bad("child count"))?;
+        p = align(p + 4);
+        let [rotation, position] = lists;
+        tracks.push(Track { name, length, rotation, position, parent });
+        open.push((Some(tracks.len() - 1), children));
     }
     if p != d.len() {
         return Err(Error(format!("ani2: {} bytes left after the tracks", d.len() as isize - p as isize)));

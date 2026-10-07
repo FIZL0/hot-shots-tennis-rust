@@ -22,6 +22,7 @@ pub mod player;
 pub mod pose;
 pub mod motion;
 pub mod face;
+pub mod effect;
 pub mod cutaway;
 pub mod sound;
 pub mod umpire;

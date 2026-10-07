@@ -88,7 +88,13 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P7** Exact character movement stats → `hst-sim/src/player.rs` · `play.rs` locomote/character_stats/tparam | t: player.rs
 - [~] **P8** Player animation timing (overlaps N1) → `motion.rs` · `character.rs` · `play.rs` motions | t: motion.rs
 - [ ] **P8a** Whiffs → `motion.rs` · `play.rs` whiff/press | t: motion.rs
-- [ ] **P9** Hit effects → new; `hst-data/src/xb.rs` `mtl.rs` (AZUMA/C_EFF)
+- [x] **P9** (split into P9a–f) Hit effects → new; `hst-data/src/xb.rs` `mtl.rs` (AZUMA/C_EFF)
+- [x] **P9a** Effect model player (in P9) → `hst-data` mtl.rs/mor.rs · new `hst-sim/src/effect.rs` | j: 2026-10-07-p9-hit-effects
+- [x] **P9b** Racket impact model (in P9) → `effect.rs` · `play.rs` strike | j: 2026-10-07-p9-hit-effects
+- [x] **P9c** Hit sparks (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
+- [x] **P9d** Ball trail ribbon (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
+- [x] **P9e** Flight effects (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
+- [x] **P9f** Bounce and smash-bounce effects (in P9) → `effect.rs` · `play.rs` bounce | j: 2026-10-07-p9-hit-effects
 - [~] **P10** Timing pop-ups (screen size/position open) → `play.rs` balloon_art/balloons/age_balloons
 
 ### AI

@@ -34,6 +34,7 @@ use hst_sim::umpire::Umpire;
 
 use crate::audio::{CourtBank, GalleryBank, Sound, VoiceBanks, umpire_bank, voice_bank};
 use crate::character::{self, CharacterData, Motion};
+use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -246,6 +247,8 @@ struct Game {
     cheers: Vec<(sound::Play, i32)>,
     /// Which players are on a controller (the gallery favours their side).
     humans: Vec<bool>,
+    /// The racket impact a shot started this tick.
+    hit_effect: Option<effects::Hit>,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -341,8 +344,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
+        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, effects::draw_flight, effects::draw_bounce, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, effects::tick_trails, played_out, held_ball, play_sounds).chain());
 }
 
 /// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
@@ -584,6 +587,7 @@ fn setup(
         cheers: Vec::new(),
         humans: Vec::new(),
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
+        hit_effect: None,
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -613,7 +617,7 @@ fn setup(
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
-        commands.entity(f).insert(Figure(i));
+        commands.entity(f).insert((Figure(i), effects::SwingTrail::default()));
     }
     // her voice bank in slot 5 (`VoiceBanks` holds slots 1..)
     voices.resize(4, None);
@@ -625,6 +629,17 @@ fn setup(
     commands.entity(root).add_child(stand_in);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
+    let impacts = effects::load(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("hit effects");
+    commands.insert_resource(impacts);
+    let sparks = effects::load_sparks(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("hit sparks");
+    commands.insert_resource(sparks);
+    let trails = effects::load_trails(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("swing trails");
+    commands.insert_resource(trails);
+    let flight = effects::load_flight(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("ball flight");
+    commands.insert_resource(flight);
+    let stage = args.stage.map_or(args.court, |s| s as usize);
+    let bounce = effects::load_bounce(&mut iso, stage, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("bounce effects");
+    commands.insert_resource(bounce);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
@@ -781,6 +796,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         _ => KIND_SPIN[kind as usize],
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
+    g.hit_effect = Some(effects::Hit { kind, smash: class == 3, pos: at, vel });
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
     g.prev_ball = at;
@@ -1740,6 +1756,29 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
             t.translation.y = 0.0;
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_effects(
+    mut g: ResMut<Game>,
+    mut fx: ResMut<effects::Impacts>,
+    mut sparks: ResMut<effects::HitSparks>,
+    mut flight: ResMut<effects::BallFlight>,
+    mut bounce: ResMut<effects::BallBounce>,
+    mut transforms: Query<&mut Transform>,
+    mut commands: Commands,
+) {
+    let hit = g.hit_effect.take();
+    if let Some(h) = hit {
+        fx.start(h, &mut transforms);
+    }
+    sparks.frame(hit, &mut commands);
+    let dead = !matches!(g.phase, Phase::Serve | Phase::Rally);
+    flight.frame(hit, dead, g.flight.ball.pos, g.flight.ball.vel, &mut commands);
+    let f = &g.flight;
+    let smash = g.smashed && sound::kmh(f.ball.vel) >= 85.0;
+    // ponytail: marks age while a point is on (the game's own on/off messages are not traced)
+    bounce.frame(f.bounces, f.landing.0, f.ball.vel, f.landing.1.court, smash, !dead, &mut transforms);
 }
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,

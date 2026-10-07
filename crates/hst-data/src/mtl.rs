@@ -30,6 +30,9 @@ pub struct Material {
     pub attributes: Option<usize>,
     /// Collision tests both windings.
     pub two_sided: bool,
+    /// The material's name from its extra bytes (3ds Max, e.g. `spark1`, `2 - Default@add`); `.MTA` tracks
+    /// are matched to materials by it.
+    pub name: String,
     pub header: [u8; 0x30],
 }
 
@@ -130,9 +133,8 @@ pub fn parse(mtl: &[u8], mti: Option<&[u8]>) -> Result<Mtl, Error> {
     for _ in 0..nmat {
         let h: [u8; 0x30] = c.take(0x30)?.try_into().unwrap();
         let extra = i16::from_le_bytes([h[0x1c], h[0x1d]]);
-        if extra > 0 {
-            c.take(extra as usize)?;
-        }
+        let name = if extra > 0 { c.take(extra as usize)? } else { &[] };
+        let name = String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
         let t = i16::from_le_bytes([h[0x20], h[0x21]]);
         let a = i16::from_le_bytes([h[0x22], h[0x23]]);
         let color = std::array::from_fn(|i| f32::from_le_bytes(h[i * 4..i * 4 + 4].try_into().unwrap()) / 128.0);
@@ -141,8 +143,33 @@ pub fn parse(mtl: &[u8], mti: Option<&[u8]>) -> Result<Mtl, Error> {
             color,
             attributes: usize::try_from(a).ok().filter(|&a| a < attributes.len()),
             two_sided: h[0x24] != 0,
+            name,
             header: h,
         });
     }
     Ok(Mtl { textures, materials, attributes })
+}
+
+/// How a material blends with the frame buffer (GS ALPHA), chosen by a tag in its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blend {
+    /// `(Cs - Cd) * As + Cd`
+    Normal,
+    /// `@add`: `Cs * As + Cd`
+    Add,
+    /// `@sub`: `Cd - Cs * As`
+    Sub,
+}
+
+impl Material {
+    pub fn blend(&self) -> Blend {
+        // the game tests @add first, then @sub (which wins)
+        if self.name.contains("@sub") {
+            Blend::Sub
+        } else if self.name.contains("@add") {
+            Blend::Add
+        } else {
+            Blend::Normal
+        }
+    }
 }
