@@ -290,6 +290,8 @@ impl Show {
                         self.n += 1;
                         self.n > 4
                     } else {
+                        // the tiebreak's old points keep sliding up while the new ones flash in
+                        self.n += 1;
                         self.t -= 1;
                         self.t < 0
                     };

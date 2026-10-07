@@ -4,6 +4,12 @@
 //! white copy of the new points flashed on top and faded out over 15 ticks, the hold, then the whole thing fading out
 //! over 5 ticks (alpha 128·t/5). At deuce it is the "Deuce!" banner instead, with the deuce count (×N) from the
 //! second deuce on, squashed and restored as the show rolls. Coordinates are the PS2's 640×448 screen, as the panel.
+//!
+//! A tiebreak point shows the red tiebreak points instead, under the "Tie break" banner: the scorer's old points
+//! slide up 3 px a tick and fade over the 4-tick swap while the new ones appear with a white flash (red "Deuce!" at
+//! deuce). A game or set brings up the result board: both teams' plates, each set's games (a losing count at half
+//! alpha), with sets the sets won; the scorer's new count grows to twice its size over 6 ticks while the old one
+//! still shows, then shrinks back over 10 under a fading white copy.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -26,6 +32,17 @@ enum Tex {
     PointsWhite,
     /// "Deuce!" (256×64 at 0,0), the × and digits 0–9 in 32×32 cells below.
     Deuce,
+    /// The tiebreak's red "Deuce!", same layout.
+    DeuceRed,
+    /// Tiebreak points 0–7 / Deuce / Advantage, 64×64 cells (128 wide for the words).
+    Tiebreak,
+    /// The same cells in white.
+    TiebreakWhite,
+    /// "Tie break", 256×64.
+    TiebreakBanner,
+    /// The result board's sheets `result_gameset00`–`03`: frame, stripes and pill; small digits; the current set's
+    /// digits (white copies below); the sets-won digits (48×48, white copies below) and "Set".
+    Board(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +68,15 @@ struct View {
     /// The first team's row is the top one (the original's "ends swapped" flag for the scoreboard).
     swapped: bool,
     show: ShowState,
+    /// Each team's games per set, the set being played, sets won and to win, and whether the match is over.
+    set_games: [[i32; 5]; 2],
+    set: i32,
+    sets: [i32; 2],
+    sets_to_win: i32,
+    match_over: bool,
+    /// The board's grow and shrink steps.
+    rise: i32,
+    drop: i32,
 }
 
 /// Points cells (column, row) by point index; 4 is Deuce, 5 Advantage.
@@ -59,17 +85,29 @@ const POINT_V: [i32; 7] = [0, 0, 1, 1, 2, 2, 3];
 
 fn layout(v: &View) -> Vec<Quad> {
     let mut out = Vec::new();
-    let st = v.show;
-    // ponytail: game/set/tiebreak shows are P12b2
-    if st.event != Event::Point || v.players < 2 {
+    if v.players < 2 {
         return out;
     }
-    let mut q = |tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| {
-        if dst[2] > 0.0 && dst[3] > 0.0 && alpha > 0 {
-            out.push(Quad { tex, src, dst, rgb, alpha: alpha as f32 })
-        }
-    };
-    const WHITE: [f32; 3] = [128.0; 3];
+    match v.show.event {
+        Event::Point | Event::TiebreakPoint => scores(v, &mut out),
+        Event::Game | Event::Set => board(v, &mut out),
+    }
+    out
+}
+
+const WHITE: [f32; 3] = [128.0; 3];
+
+fn push(out: &mut Vec<Quad>, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32) {
+    if dst[2] > 0.0 && dst[3] > 0.0 && alpha > 0 {
+        out.push(Quad { tex, src, dst, rgb, alpha: alpha as f32 })
+    }
+}
+
+/// The point and tiebreak-point shows.
+fn scores(v: &View, out: &mut Vec<Quad>) {
+    let st = v.show;
+    let tiebreak = st.event == Event::TiebreakPoint;
+    let mut q = |tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| push(out, tex, src, dst, rgb, alpha);
     let rgb = |c: [u8; 3]| c.map(f32::from);
     // the fade: in over 5 ticks, out over 5 (t has already counted down this tick)
     let a = if st.fading_out {
@@ -81,7 +119,8 @@ fn layout(v: &View) -> Vec<Quad> {
     };
 
     if v.deuce {
-        q(Tex::Deuce, [0.0, 0.0, 256.0, 64.0], [192.0, 192.0, 256.0, 64.0], WHITE, a);
+        let deuce = if tiebreak { Tex::DeuceRed } else { Tex::Deuce };
+        q(deuce, [0.0, 0.0, 256.0, 64.0], [192.0, 192.0, 256.0, 64.0], WHITE, a);
         let c = v.deuce_count;
         if c > 1 {
             let (y, h) = match st.stage {
@@ -92,7 +131,7 @@ fn layout(v: &View) -> Vec<Quad> {
             let cell = |d: i32| if d < 8 { [d * 32, 64] } else { [(d - 8) * 32, 96] };
             let mut glyph = |[u, v]: [i32; 2], x: i32| {
                 q(
-                    Tex::Deuce,
+                    deuce,
                     [u as f32, v as f32, 32.0, 32.0],
                     [x as f32, y as f32, 32.0, h as f32],
                     WHITE,
@@ -109,7 +148,7 @@ fn layout(v: &View) -> Vec<Quad> {
                 glyph(cell(c % 10), 336);
             }
         }
-        return out;
+        return;
     }
 
     let n = v.players;
@@ -137,6 +176,9 @@ fn layout(v: &View) -> Vec<Quad> {
         }
     }
 
+    if tiebreak {
+        return tiebreak_points(v, a, out);
+    }
     // points: the scorer's previous value (Deuce when it just took the advantage), squeezed by the roll
     let k = v.scorer;
     let mut idx = v.points.map(|p| p.clamp(0, 6) as usize);
@@ -169,16 +211,205 @@ fn layout(v: &View) -> Vec<Quad> {
         _ => 0,
     };
     q(Tex::PointsWhite, cell(new), [336.0, y(k), 128.0, 64.0], WHITE, flash);
-    out
 }
 
-/// kihontokuten01 (white points) and duce00 ("Deuce!").
+/// Tiebreak points by index (0–7, 8 Deuce, 9 Advantage): cell column and row.
+const TB_U: [i32; 11] = [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 0];
+const TB_V: [i32; 11] = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3];
+
+/// The tiebreak's points, after the plates: the scorer's old points slide up 3 px a tick from the roll on and fade
+/// over the swap (alpha 128·t/3) while the new ones show under a white copy (128 − 128·t/3, then 128·t/15 over the
+/// settle). With advantage the words are 128 wide and the other team's points (64 wide) at half alpha.
+fn tiebreak_points(v: &View, a: i32, out: &mut Vec<Quad>) {
+    let st = v.show;
+    let k = v.scorer;
+    let mut idx = v.points.map(|p| p.clamp(0, 9) as usize);
+    idx[k] = if v.advantage { 8 } else { idx[k].saturating_sub(1) };
+    let new = (idx[k] + 1).min(10);
+    let cell = |i: usize, w: i32| [(w * TB_U[i]) as f32, (64 * TB_V[i]) as f32, w as f32, 64.0];
+    let y = |t: usize| 104.0 + 180.0 * ((t == 0) != v.swapped) as i32 as f32;
+    let slide = if (1..=2).contains(&st.stage) { 3 * st.n } else { 0 };
+    for t in 0..2 {
+        if st.fading_out && t == k {
+            continue;
+        }
+        let alpha = if t == k {
+            match st.stage {
+                2 => 128 * st.t / 3,
+                3.. => 0,
+                _ => a,
+            }
+        } else if !v.advantage {
+            a
+        } else if st.stage == 0 {
+            a / 2
+        } else {
+            64
+        };
+        let w = if v.advantage && t == k { 128 } else { 64 };
+        let up = if t == k { slide } else { 0 };
+        push(out, Tex::Tiebreak, cell(idx[t], w), [336.0, y(t) - up as f32, w as f32, 64.0], WHITE, alpha);
+    }
+    if st.stage >= 2 {
+        let w = if v.advantage { 128 } else { 64 };
+        let dst = [336.0, y(k), w as f32, 64.0];
+        push(out, Tex::Tiebreak, cell(new, w), dst, WHITE, a);
+        let flash = match st.stage {
+            _ if st.fading_out => 0,
+            2 => 128 - 128 * st.t / 3,
+            3 => 128 * st.t / 15,
+            _ => 0,
+        };
+        push(out, Tex::TiebreakWhite, cell(new, w), dst, WHITE, flash);
+    }
+    // ponytail: the original draws it from a 256×128 rectangle; the texture is 64 tall and clamps to clear below
+    push(out, Tex::TiebreakBanner, [0.0, 0.0, 256.0, 64.0], [176.0, 32.0, 256.0, 64.0], WHITE, a);
+}
+
+/// The game / set result board. `rise`/`drop`: the show's grow and shrink steps.
+fn board(v: &View, out: &mut Vec<Quad>) {
+    let st = v.show;
+    let game = st.event == Event::Game;
+    if !game && v.match_over {
+        return; // the match's last set has its own finish
+    }
+    // the fade: in over 14 ticks, out over 5 (t has already counted down this tick)
+    let a = if st.fading_out {
+        (128 * (st.t + 1) / 5).min(128)
+    } else if st.stage == 0 {
+        128 - 128 * (st.t + 1) / 14
+    } else {
+        128
+    };
+    // phase 0: the old count, growing in the rise; 1: the new one shrinking back under its fading white copy; 2: settled
+    let (phase, scale, flash) = match st.stage {
+        _ if st.fading_out => (2, 1.0, 128),
+        0 => (0, 1.0, 128),
+        1 => (0, 1.0 + st.n as f32 / v.rise as f32, 128),
+        2 => (1, 1.0 + st.n as f32 / v.drop as f32, (st.n << 7) / v.drop),
+        _ => (2, 1.0, 128),
+    };
+    let mut q = |tex, src: [i32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| {
+        push(out, tex, src.map(|c| c as f32), dst, rgb, alpha)
+    };
+    let rect = |x: i32, y: i32, w: i32, h: i32| [x as f32, y as f32, w as f32, h as f32];
+    // scaled about its centre
+    let grown = |x: i32, y: i32, w: i32, s: f32| {
+        let (x, y, w) = (x as f32, y as f32, w as f32);
+        [x + w / 2.0 - w * s / 2.0, y + w / 2.0 - w * s / 2.0, w * s, w * s]
+    };
+    let (x0, mid_w, centre_x, centre_w, stripe_x, plate_x, label_x) = if game {
+        (152, 304, 248, 144, [160, 392], [164, 432], [208, 392])
+    } else {
+        (88, 432, 184, 272, [96, 456], [100, 496], [144, 456])
+    };
+    let short = (1..=2).contains(&v.sets_to_win);
+    let (rows, edge_h, top, y0, centre_h, diag_y) =
+        if short { (6, 80, 320, 328, 96, 368) } else { (10, 144, 256, 264, 160, 336) };
+    let n = v.players;
+    let b0 = Tex::Board(0);
+    // each player's stripes behind the plates; in doubles two players a side, split by a diagonal
+    for p in 0..n {
+        let (count, off) = if n < 3 { (rows, 0) } else { (rows / 2, if p > 1 { rows * 8 } else { 0 }) };
+        for r in 0..count {
+            q(b0, [1 + 16 * p as i32, 40, 14, 16], rect(stripe_x[p & 1], y0 + off + 16 * r, 88, 16), WHITE, a);
+        }
+    }
+    if n >= 3 {
+        for side in 0..2 {
+            q(b0, [0, [56, 80][side], 88, 24], rect(stripe_x[side], diag_y, 88, 24), WHITE, a);
+        }
+    }
+    // the frame, nine pieces
+    let bottom = top + 16 + edge_h;
+    for (u, x, w) in [(0, x0, 16), (16, x0 + 16, mid_w), (40, x0 + 16 + mid_w, 16)] {
+        q(b0, [u, 0, 16, 16], rect(x, top, w, 16), WHITE, a);
+        q(b0, [u, 16, 16, 8], rect(x, top + 16, w, edge_h), WHITE, a);
+        q(b0, [u, 24, 16, 16], rect(x, bottom, w, 16), WHITE, a);
+    }
+    q(b0, [65, 41, 14, 14], rect(centre_x, y0, centre_w, centre_h), WHITE, a);
+    let bars: &[i32] = if game { &[248, 390] } else { &[248, 390, 184, 454] };
+    for &x in bars {
+        q(b0, [64, 9, 8, 22], rect(x, y0, 8, centre_h), WHITE, a);
+    }
+    // plates: pill, face, slot label in the player's colour
+    let (y1, y2) = if short { (328, 380) } else { (272, 372) };
+    let plate_y = if n < 3 { [y1 + (y2 - y1) / 2; 2] } else { [y1, y2] };
+    for p in 0..n {
+        let (x, y) = (plate_x[p & 1], plate_y[p / 2]);
+        q(b0, [80, 0, 48, 48], rect(x, y, 48, 48), WHITE, a);
+        q(Tex::Face(p), [0, 0, 64, 64], rect(x + 2, y + 2, 64, 64), WHITE, a);
+        let tint = v.pill[p].map(f32::from);
+        q(Tex::Slot, [v.slots[p] as i32 * 40, 0, 40, 24], rect(label_x[p & 1], y + 6, 40, 24), tint, a);
+    }
+    // each set's games; the set in play on the bright sheet, a set lost at half alpha
+    let cur = if game { v.set } else { v.set - 1 };
+    let (cols, games_y) = match v.sets_to_win {
+        1 => (1, 360),
+        2 => (3, 328),
+        _ => (5, 264),
+    };
+    for team in 0..2 {
+        for col in 0..cols {
+            let y = games_y + 32 * col;
+            let sheet = Tex::Board(if col == cur { 2 } else { 1 });
+            if col <= cur {
+                let c = col.min(4) as usize;
+                let now = col == cur && team == v.scorer;
+                let g = v.set_games[team][c] - (game && phase == 0 && now) as i32;
+                let alpha = if col == cur || v.set_games[team ^ 1][c] < g { a } else { a / 2 };
+                let s = if game && now { scale } else { 1.0 };
+                q(sheet, [g * 32, 0, 32, 32], grown([272, 336][team], y, 32, s), WHITE, alpha);
+                if game && phase == 1 && now {
+                    q(sheet, [g * 32, 32, 32, 32], grown([272, 336][team], y, 32, s), WHITE, flash);
+                }
+            }
+            if team == 0 {
+                q(sheet, [320, 0, 24, 32], rect(308, y, 24, 32), WHITE, a);
+            }
+        }
+    }
+    // sets won, under "Set"
+    if !game {
+        let y = if short { 344 } else { 312 };
+        for team in 0..2 {
+            let x = [192, 400][team];
+            let won = team == v.scorer;
+            let sets = v.sets[team] - (phase == 0 && won) as i32;
+            let s = if won { scale } else { 1.0 };
+            q(Tex::Board(3), [288, 0, 56, 24], rect(x - 4, y + 48, 56, 24), WHITE, a);
+            q(Tex::Board(3), [sets * 48, 0, 48, 48], grown(x, y, 48, s), WHITE, a);
+            if phase == 1 && won {
+                q(Tex::Board(3), [sets * 48, 48, 48, 48], grown(x, y, 48, s), WHITE, flash);
+            }
+        }
+    }
+    // the original queues each sheet and draws them in turn
+    out.sort_by_key(|q| match q.tex {
+        Tex::Board(k) => k,
+        Tex::Face(_) => 4,
+        _ => 5,
+    });
+}
+
+/// The sheets the panel doesn't load, in `ART` order.
 #[derive(Resource)]
-struct Art([Handle<Image>; 2]);
+struct Art([Handle<Image>; 9]);
+const ART: [&str; 9] = [
+    "/inpane_kihontokuten01.tm2",
+    "/inpane_duce00.tm2",
+    "/inpane_duce01.tm2",
+    "/inpane_tiebreak01.tm2",
+    "/inpane_tiebreak02.tm2",
+    "/result_gameset00.tm2",
+    "/result_gameset01.tm2",
+    "/result_gameset02.tm2",
+    "/result_gameset03.tm2",
+];
 #[derive(Component)]
 struct Slot(usize);
 
-const POOL: usize = 20;
+const POOL: usize = 80;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup)).add_systems(Update, draw);
@@ -188,7 +419,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
-    let art = ["/inpane_kihontokuten01.tm2", "/inpane_duce00.tm2"].map(|name| {
+    let art = ART.map(|name| {
         let e = arc
             .entries
             .iter()
@@ -201,7 +432,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         .spawn(Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() })
         .with_children(|p| {
             for i in 0..POOL {
-                p.spawn((Slot(i), ImageNode::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+                p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
             }
         });
 }
@@ -243,6 +474,13 @@ fn draw(
                 deuce_count: g.score.deuce_count,
                 swapped: !first_near.unwrap_or(true),
                 show,
+                set_games: g.score.set_games,
+                set: g.score.set,
+                sets: g.score.sets,
+                sets_to_win: g.rules.sets,
+                match_over: g.score.match_over,
+                rise: g.board.game_rise,
+                drop: g.board.game_drop,
             })
         }
         None => Vec::new(),
@@ -261,6 +499,11 @@ fn draw(
             Tex::Face(p) => &panel_art.0[10 + p],
             Tex::PointsWhite => &art.0[0],
             Tex::Deuce => &art.0[1],
+            Tex::DeuceRed => &art.0[2],
+            Tex::Tiebreak => &panel_art.0[4],
+            Tex::TiebreakWhite => &art.0[3],
+            Tex::TiebreakBanner => &art.0[4],
+            Tex::Board(k) => &art.0[5 + k as usize],
         };
         let [u, v, w, h] = quad.src;
         img.image = handle.clone();
@@ -294,6 +537,13 @@ mod tests {
             deuce_count: 0,
             swapped: false,
             show: ShowState { event: Event::Point, stage, t, n, fading_out },
+            set_games: [[0; 5]; 2],
+            set: 0,
+            sets: [0; 2],
+            sets_to_win: 1,
+            match_over: false,
+            rise: 6,
+            drop: 10,
         }
     }
 
@@ -363,6 +613,70 @@ mod tests {
                 ([64, 96, 32, 32], [272, 266, 32, 22]),
                 ([32, 64, 32, 32], [308, 266, 32, 22]),
                 ([64, 64, 32, 32], [336, 266, 32, 22]),
+            ]
+        );
+    }
+
+    fn quads(v: &View, f: impl Fn(Tex) -> bool) -> Vec<(Tex, [i32; 4], [i32; 4], i32)> {
+        layout(v)
+            .iter()
+            .filter(|q| f(q.tex))
+            .map(|q| (q.tex, q.src.map(|s| s as i32), q.dst.map(|s| s as i32), q.alpha as i32))
+            .collect()
+    }
+
+    /// Doubles, 5-5 → 5-6 in the first set of a best of three (as captured): the scorer's old 5 at 1.5× mid-rise,
+    /// then the new 6 at 1.8× under its white copy (alpha 102) early in the drop.
+    #[test]
+    fn game_board() {
+        let mut v = singles(1, -1, 3, false);
+        v.players = 4;
+        v.scorer = 1;
+        v.sets_to_win = 2;
+        v.set_games = [[5, 0, 0, 0, 0], [6, 0, 0, 0, 0]];
+        v.show.event = Event::Game;
+        let digits = |v: &View| quads(v, |t| t == Tex::Board(2)).into_iter().filter(|q| q.1[0] < 320).collect::<Vec<_>>();
+        assert_eq!(
+            digits(&v),
+            [(Tex::Board(2), [160, 0, 32, 32], [272, 328, 32, 32], 128), (Tex::Board(2), [160, 0, 32, 32], [328, 320, 48, 48], 128)]
+        );
+        (v.show.stage, v.show.n) = (2, 8);
+        assert_eq!(
+            digits(&v),
+            [
+                (Tex::Board(2), [160, 0, 32, 32], [272, 328, 32, 32], 128),
+                (Tex::Board(2), [192, 0, 32, 32], [323, 315, 57, 57], 128),
+                (Tex::Board(2), [192, 32, 32, 32], [323, 315, 57, 57], 102),
+            ]
+        );
+        // the frame: 16 px edges round a 304×80 middle from (152, 320)
+        let frame = quads(&v, |t| t == Tex::Board(0));
+        assert!(frame.contains(&(Tex::Board(0), [0, 0, 16, 16], [152, 320, 16, 16], 128)));
+        assert!(frame.contains(&(Tex::Board(0), [40, 24, 16, 16], [472, 416, 16, 16], 128)));
+        // later sets' columns are blank but for the dash; the sheets in draw order
+        assert_eq!(quads(&v, |t| t == Tex::Board(1)).len(), 2);
+        let order: Vec<_> = layout(&v).iter().map(|q| q.tex).collect();
+        assert!(order.windows(2).all(|w| !matches!((w[0], w[1]), (Tex::Board(a), Tex::Board(b)) if a > b)));
+        // the last set has its own finish
+        v.show.event = Event::Set;
+        v.match_over = true;
+        assert!(layout(&v).is_empty());
+    }
+
+    /// Tiebreak 0-0 → 0-1 mid-swap: the old 0 slid up and fading, the new 1 under its fading white copy, the banner.
+    #[test]
+    fn tiebreak() {
+        let mut v = singles(2, 2, 9, false);
+        v.show.event = Event::TiebreakPoint;
+        (v.points, v.scorer) = ([0, 1], 1);
+        assert_eq!(
+            quads(&v, |t| matches!(t, Tex::Tiebreak | Tex::TiebreakWhite | Tex::TiebreakBanner)),
+            [
+                (Tex::Tiebreak, [0, 0, 64, 64], [336, 284, 64, 64], 128),
+                (Tex::Tiebreak, [0, 0, 64, 64], [336, 77, 64, 64], 85),
+                (Tex::Tiebreak, [64, 0, 64, 64], [336, 104, 64, 64], 128),
+                (Tex::TiebreakWhite, [64, 0, 64, 64], [336, 104, 64, 64], 43),
+                (Tex::TiebreakBanner, [0, 0, 256, 64], [176, 32, 256, 64], 128),
             ]
         );
     }

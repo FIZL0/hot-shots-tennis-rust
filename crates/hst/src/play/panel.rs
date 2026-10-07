@@ -447,10 +447,11 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, draw);
 }
 
+/// An INPANE sheet (alpha authored 0–255: the board's 0x80 centre shows the court through it on the PS2).
 pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let pic = tim2::decode(data).expect("TIM2").remove(0);
+    let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
     images.add(Image::new(
         Extent3d {
             width: pic.width,

@@ -75,6 +75,8 @@ fn tiebreak_and_set() {
     assert_eq!(win(&mut s, &r, 1, 1), Some(Event::TiebreakPoint)); // advantage
     assert_eq!(win(&mut s, &r, 1, 1), Some(Event::Set));
     assert!(s.match_over && s.sets == [0, 1] && !s.tiebreak);
+    // The result board's history: the tiebreak set counts as 4-5 (the original's 7-6 for a 6-game set).
+    assert_eq!((s.set, s.set_games), (1, [[4, 0, 0, 0, 0], [5, 0, 0, 0, 0]]));
     // Ends restored to the tiebreak start, then changed again: 9 games played.
     assert_eq!((s.rotation, s.swapped), (start.0 + 1, !start.1));
 }
