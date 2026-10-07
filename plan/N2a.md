@@ -1,6 +1,6 @@
 # N2a
 
-- [ ] **N2a — Serve ball bouncing.** (User request 2026-10-06.) Before the toss the server bounces the ball on
+- [x] **N2a — Serve ball bouncing.** (User request 2026-10-06.) Before the toss the server bounces the ball on
   the court as the original: when it starts (on entering the serve stance / after the walk), how many bounces
   and whether that varies (per character, RNG, held input), the ball's path hand → ground → hand (a scripted
   track on the motion's ball bone like N2's `sh_pcNN_serve_ad00_ball`, or real ball physics), the motion that

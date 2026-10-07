@@ -54,7 +54,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N1e** Motion crossfade `0x140130` (in N1d) → same as N1d + `play.rs` set_motion/motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [x] **N1f** Full follow-through after contact (bug) → `play.rs` motions/advance_stroke/set_motion · `motion.rs` | t: motion.rs | j: 2026-10-06-n1-animations
 - [x] **N2** Ball in the server's hand + game ball model → `play.rs` hold_ball/serve_turn · `hst-sim/src/serve.rs` · `character.rs` | t: serve.rs
-- [ ] **N2a** Serve ball bouncing before the toss (after N2) → `play.rs` hold_ball/serve_turn/motions · `serve.rs` · `motion.rs` | t: serve.rs, motion.rs
+- [x] **N2a** Serve ball bouncing before the toss (after N2) → `play.rs` hold_ball/serve_turn/motions · `serve.rs` · `motion.rs` | t: serve.rs, motion.rs
 - [ ] **N3** Audio working (IOP driver note→tone) → `hst-data/src/xb.rs` (banks), new audio module | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
 - [ ] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)

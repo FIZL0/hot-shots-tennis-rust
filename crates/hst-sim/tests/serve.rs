@@ -190,7 +190,7 @@ fn anim_s05_held_ball() {
     }).collect();
     const S: usize = 4 + 0x100 + 4 * 0x484;
     let frames = frames_live(&mdata);
-    let (mut stance, mut hand) = (0, 0);
+    let (mut stance, mut hand, mut bounces) = (0, 0, 0);
     for k in 0..(anim.len() / S).min(frames.len() - 1) {
         let fr = frames[k + 1];
         for p in 0..4 {
@@ -210,6 +210,8 @@ fn anim_s05_held_ball() {
                 let got = serve::stance_ball(ch.ball.at(t), [rows[0], rows[1], rows[2]], pos);
                 assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "k={k} p={p} t={t}");
                 stance += 1;
+                // the stance loop is the bounce: the track takes the ball down to the court (y up is negative, radius ~0.06) twice a loop
+                bounces += (got[1] > -0.07) as i32;
             } else if (mode == 1 || (mode == 2 && blk[0x2c0] == 0 && blk[0x248] == 0)) && !fading && ch.clips.contains_key(&motion) {
                 let local = ch.clips[&motion].locals(&ch.sk, t);
                 let got = transform(&node_world(&ch.sk, &local, ch.finger, &rows), serve::HAND_BALL);
@@ -218,6 +220,7 @@ fn anim_s05_held_ball() {
             }
         }
     }
-    eprintln!("{stance} stance frames bit-exact; {hand} hand frames bit-exact");
-    assert!(stance > 500 && hand > 50);
+    eprintln!("{stance} stance frames bit-exact ({bounces} on the court); {hand} hand frames bit-exact");
+    assert!(stance > 500 && hand > 50 && bounces > 20);
 }
+
