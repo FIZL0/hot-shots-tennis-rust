@@ -65,7 +65,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N3c2** Racket hit sounds at contact: program 6 keys, volumes, pitch factors (in N3c) → `play.rs` strike · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c3** Swing whoosh at the hand, 4-frame delay case (in N3c) → `play.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c4** Bounce sounds by surface, net (in N3c) → `play.rs` bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
-- [ ] **N3c5** Flight sound: one voice following the ball (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
+- [x] **N3c5** Flight whistle (lob, framed hit) following the ball (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3c6** Footsteps, serve bounce, rolling scrape (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio

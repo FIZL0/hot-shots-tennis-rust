@@ -215,3 +215,23 @@ impl Bounces {
 pub fn kmh(vel: [f32; 3]) -> f32 {
     div(mul(mul(sqrt(madd(madd(mul(vel[2], vel[2]), vel[0], vel[0]), vel[1], vel[1])), 60.0), 3600.0), 1000.0)
 }
+
+/// The whistle of a lob or a framed mis-hit, on the court bank (slot 0) program 5 key 2 at the ball: from the hit
+/// until the ball's first bounce or the next hit, re-placed at the ball every frame.
+/// ponytail: two characters' own key (5) and range (low 0.3, top 8) at the start, the training mode's whistle (its
+/// own volume table) and the fast-serve/smash rush (mode 2, ≥140 km/h) are left out.
+pub const FLIGHT: Play = play(0, 5, 2, 0x80);
+
+/// The whistle's play speed at ball height `height` (|y|): `low` below 1 m, rising linearly by (2 − low) over `top`
+/// metres, 2 from `top` up. The start uses low 0 and top 10, every later frame low 0.3 and top 10.
+pub fn flight_speed(height: f32, low: f32, top: f32) -> f32 {
+    let h = height.abs();
+    let s = if h >= top {
+        2.0
+    } else if h < 1.0 {
+        low
+    } else {
+        add(mul(div(sub(2.0, low), top), sub(h, 1.0)).abs(), low)
+    };
+    s.clamp(0.0, 2.0)
+}

@@ -46,12 +46,20 @@ struct Mix {
     stereo: [Vec<i32>; 2],
     bank_volumes: Vec<u32>,
     // ponytail: every key-on gets its own voice; the driver's 48-voice allocation by priority is not ported
-    voices: Vec<(Voice, Arc<SoundBank>, u64, u8)>,
+    /// Each voice with its bank, play id, note, pitch word and level (for `Sound::update`).
+    voices: Vec<(Voice, Arc<SoundBank>, u64, u8, u32, Level)>,
     playing: Vec<Playing>,
     ids: u64,
 }
 
 impl Mix {
+    /// The play call's part of the level for `p` at `pos`.
+    fn level(&self, p: sound::Play, pos: [f32; 3]) -> Level {
+        let (angle, dist) = sound::place(pos);
+        let seq = sound::stereo(sound::falloff(p.volume, dist), angle, &self.stereo).map(|x| x as u32);
+        Level { seq, bank: self.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
+    }
+
     /// One frame: the sequences' events due now, then `FRAME` stereo samples.
     fn render(&mut self, out: &mut Vec<f32>) {
         let mut playing = std::mem::take(&mut self.playing);
@@ -89,7 +97,7 @@ impl Mix {
         let word = (t.root() as u32) << 24 | (e.note as u32) << 16 | (t.fine() as u8 as u32) << 8 | 0x40;
         let pitch = snd::pitch(&self.pitch, word, 0x0100_0000 | p.scale);
         let voice = Voice::key_on(t.sample() as u32 / 2, t.adsr(), pitch, level.volume(&self.pan));
-        self.voices.push((voice, p.bank.clone(), p.id, e.note));
+        self.voices.push((voice, p.bank.clone(), p.id, e.note, word, level));
     }
 }
 
@@ -100,24 +108,44 @@ pub struct Sound(Arc<Mutex<Mix>>);
 impl Sound {
     /// Plays `(program, key)` of `bank`. `level` holds the play call's part: sequence volume per side, bank volume
     /// and the play and channel pans (`pan[0..2]`); the tone and velocity parts come from the sequence.
-    pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32) {
-        let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return };
+    /// Returns the play's id for `update` and `stop` (0 if the bank has no such sequence).
+    pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32) -> u64 {
+        let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return 0 };
         let mut m = self.0.lock().unwrap();
         m.ids += 1;
         let id = m.ids;
         m.playing.push(Playing { id, bank: bank.clone(), events, next: 0, frame: 0, level, scale });
+        id
+    }
+
+    /// The play `id` moved to `pos` at play speed `speed`: its voices re-placed (volume `p.volume`) and re-pitched.
+    pub fn update(&self, id: u64, p: sound::Play, pos: [f32; 3]) {
+        let mut m = self.0.lock().unwrap();
+        let seq = m.level(p, pos).seq;
+        let scale = sound::speed_word(p.speed);
+        let m = &mut *m;
+        for q in m.playing.iter_mut().filter(|q| q.id == id) {
+            (q.level.seq, q.scale) = (seq, scale);
+        }
+        for (v, .., word, level) in m.voices.iter_mut().filter(|v| v.2 == id) {
+            level.seq = seq;
+            v.volume = level.volume(&m.pan);
+            v.pitch = snd::pitch(&m.pitch, *word, 0x0100_0000 | scale);
+        }
+    }
+
+    /// Ends the play `id`: no more key-ons, its voices released.
+    pub fn stop(&self, id: u64) {
+        let mut m = self.0.lock().unwrap();
+        m.playing.retain(|q| q.id != id);
+        m.voices.iter_mut().filter(|v| v.2 == id).for_each(|v| v.0.key_off());
     }
 
     /// A game sound at `pos` (game space): bearing and falloff from the fixed listener, L/R from the stereo
     /// tables, the bank volume of the play's slot and its play speed.
-    pub fn play_at(&self, bank: &Arc<SoundBank>, p: sound::Play, pos: [f32; 3]) {
-        let (angle, dist) = sound::place(pos);
-        let level = {
-            let m = self.0.lock().unwrap();
-            let seq = sound::stereo(sound::falloff(p.volume, dist), angle, &m.stereo).map(|x| x as u32);
-            Level { seq, bank: m.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
-        };
-        self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed));
+    pub fn play_at(&self, bank: &Arc<SoundBank>, p: sound::Play, pos: [f32; 3]) -> u64 {
+        let level = self.0.lock().unwrap().level(p, pos);
+        self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed))
     }
 }
 

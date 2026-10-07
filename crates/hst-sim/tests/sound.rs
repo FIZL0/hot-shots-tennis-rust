@@ -318,3 +318,50 @@ fn bounce_sounds_match_the_game() {
     eprintln!("{plays} bounce plays ({zeros} key 0, {superseded} superseded), {heard} bounce tones keyed");
     assert!(plays >= 20 && superseded <= 1 && zeros + 2 == heard);
 }
+/// The flight whistle (`sound::FLIGHT`): every lob and framed mis-hit of `hits_s05.bin` starts it; each later frame
+/// its scale word is `flight_speed` of the ball height and its L/R the court chain for program 5 key 2 at the ball,
+/// re-placed at 0x80 (from this frame's ball or the last, the recording's phase); it stops at the first bounce.
+#[test]
+fn flight_whistle_matches_the_game() {
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let s = samples(&data, 0x330);
+    let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+    let ball = |k: usize| std::array::from_fn(|j| f(s[k].ball, 0xe0 + 4 * j));
+    let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
+    // hits that start it: a lob (kind 3) or a framed mis-hit
+    let mut want = Vec::new();
+    for k in 1..s.len() {
+        let (a, h) = (s[k - 1].hit, s[k].hit);
+        let n = u(h, rally + 0x20);
+        if n != 0 && n != u(a, rally + 0x20) && (u(h, fx(0xd0)) == 3 || h[fx(0xbc)] != 0) {
+            want.push(k);
+        }
+    }
+    let (mut voice, mut adsr, mut starts, mut frames) = (None, (0, 0), Vec::new(), 0);
+    for k in 2..s.len() {
+        for c in &s[k].cmds {
+            match (c[0], voice) {
+                (2, _) if s[k].cmds.iter().any(|d| d[0] == 3 && d[1] == c[1] && d[2] == BASE + 0x9e30) => {
+                    (voice, adsr) = (Some(c[1]), (c[2] as u16, c[3] as u16));
+                    starts.push(k);
+                }
+                (3, Some(v)) if c[1] == v && c[2] != BASE + 0x9e30 => voice = None,
+                (4, Some(v)) if c[1] == v && k > *starts.last().unwrap() + 1 => {
+                    assert!((k - 1..=k).any(|j| sound::speed_word(sound::flight_speed(ball(j)[1], 0.3, 10.0)) == c[3] & 0xffff), "frame {k}: scale {:x}", c[3]);
+                    assert!((k - 2..=k).any(|j| u(s[j].ball, 0x224) == 0), "frame {k}: whistle after the bounce");
+                    frames += 1;
+                }
+                (1, Some(v)) if c[1] == v && k > *starts.last().unwrap() => {
+                    let key = (adsr, BASE + 0x9e30, [c[2] as i16, c[3] as i16]);
+                    let at = |j| { let (angle, dist) = sound::place(ball(j)); [angle, dist, sound::falloff(0x80, dist)] };
+                    let p = sound::FLIGHT;
+                    assert!((k - 1..=k).any(|j| court.gives(&key, at(j), [(p.program as usize, p.key as usize)])), "frame {k}: L/R {key:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    eprintln!("{} whistles from hits {want:?}, keyed {starts:?}, {frames} frames", want.len());
+    assert!(want.len() >= 5 && frames >= 200);
+    assert!(want.iter().zip(&starts).all(|(&h, &k)| (h..=h + 1).contains(&k)) && want.len() == starts.len());
+}

@@ -205,6 +205,8 @@ struct Game {
     /// The ball's bounce sounds, and whether the last shot was a smash in a game of more than one player.
     bounces: sound::Bounces,
     smashed: bool,
+    /// The flight whistle (`sound::FLIGHT`) is on, and how many have started (a new one restarts it).
+    whistle: (bool, u32),
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
@@ -515,6 +517,7 @@ fn setup(
         whooshes: Vec::new(),
         bounces: default(),
         smashed: false,
+        whistle: (false, 0),
         cam: Camera::new(),
         prev_view: Camera::new().view,
         cam_cut: false,
@@ -691,6 +694,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     };
     g.sounds.extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
     g.smashed = branch == 4 && g.rules.players > 1;
+    g.whistle = if kind == 3 { (true, g.whistle.1 + 1) } else { (false, g.whistle.1) };
     let spin = if class == 0 { KIND_SPIN[[0, 1, 2, 3][kind as usize]] } else { KIND_SPIN[kind as usize] };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     let hitter_far = g.players[who].end < 0.0;
@@ -1380,6 +1384,7 @@ fn simulate(mut g: ResMut<Game>) {
     let bounce = (n != before && n > 0 && g.phase == Phase::Rally).then_some((n, &material));
     let smash = g.smashed.then(|| sound::kmh(g.flight.ball.vel));
     g.sounds.extend(g.bounces.frame(bounce, smash).into_iter().map(|p| (p, at)));
+    g.whistle.0 &= n == 0;
     g.since_hit += 1;
     if g.phase != Phase::Rally || g.shots == 0 {
         return;
@@ -1648,7 +1653,8 @@ fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
 }
 
 /// Plays the sounds due on the court's bank.
-fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>) {
+/// The flight whistle follows the ball: started at the hit, re-placed and re-pitched each tick, stopped at the bounce.
+fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>, mut whistle: Local<(u32, u64)>) {
     let g = &mut *g;
     for w in &mut g.whooshes {
         w.0 = w.0.saturating_sub(1);
@@ -1664,4 +1670,15 @@ fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<
     for (p, at) in due.into_iter().filter(|(p, _)| p.slot == 0) {
         sound.play_at(&bank, p, at);
     }
+    let ball = g.flight.ball.pos;
+    if whistle.0 != g.whistle.1 || !g.whistle.0 {
+        sound.stop(whistle.1);
+        whistle.1 = 0;
+    }
+    if g.whistle.0 && whistle.1 == 0 && whistle.0 != g.whistle.1 {
+        whistle.1 = sound.play_at(&bank, sound::Play { speed: sound::flight_speed(ball[1], 0.0, 10.0), ..sound::FLIGHT }, ball);
+    } else if whistle.1 != 0 {
+        sound.update(whistle.1, sound::Play { speed: sound::flight_speed(ball[1], 0.3, 10.0), ..sound::FLIGHT }, ball);
+    }
+    whistle.0 = g.whistle.1;
 }
