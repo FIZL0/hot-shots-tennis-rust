@@ -106,6 +106,18 @@ fn main() {
         .run();
 }
 
+/// Court `n`'s entry list and hole-01 placement records.
+fn court_layout(iso: &mut Iso, n: usize) -> Option<(Vec<layout::Entry>, Vec<layout::Placement>)> {
+    let find = |data: &[u8], suffix: &str| {
+        let arc = Archive::parse(data).ok()?;
+        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix))?;
+        arc.read(e).ok()
+    };
+    let (cmn, hol) = (iso.read(&format!("COURT/{n:02}/CMN.XB")).ok()?, iso.read(&format!("COURT/{n:02}/HOL01.XB")).ok()?);
+    let list = layout::entries(&String::from_utf8_lossy(&find(&cmn, &format!("entry_c{n:02}.txt"))?));
+    Some((list, layout::plants(&find(&hol, &format!("plant_c{n:02}_h01_0.dat"))?).ok()?))
+}
+
 /// Parent for everything in game space: game space is Y-down, a half-turn about X maps it to Bevy's
 /// Y-up without mirroring.
 #[derive(Component)]
@@ -151,15 +163,7 @@ fn load(
                 library.insert(stem, add(parts, &mut meshes, &mut materials));
             }
         }
-        let find = |data: &[u8], suffix: &str| {
-            let arc = Archive::parse(data).ok()?;
-            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix))?;
-            arc.read(e).ok()
-        };
-        let cmn = iso.read(&format!("{dir}/CMN.XB")).expect("cmn archive");
-        let hol = iso.read(&format!("{dir}/HOL01.XB")).expect("hole archive");
-        let list = layout::entries(&String::from_utf8_lossy(&find(&cmn, &format!("entry_c{n:02}.txt")).expect("entry list")));
-        let plants = layout::plants(&find(&hol, &format!("plant_c{n:02}_h01_0.dat")).expect("plant file")).expect("plant records");
+        let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
