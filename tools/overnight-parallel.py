@@ -25,13 +25,14 @@ it outlives a done or stopped run, and the next run adopts it. Restarting the ru
 hit the usage limit is discarded and its slot sleeps until the reset; one that hit it partway waits in its pane (the stop
 hook spares it) and Claude Code continues it at the reset.
 """
-import glob, json, os, re, shlex, subprocess as sp, time, uuid
+import glob, json, os, re, shlex, subprocess as sp, threading, time, uuid
 from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WT = ROOT + '-slots'
 SLOTS, PAUSE = int(os.environ.get('HST_SLOTS', 3)), int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
+WATCH = 600  # seconds between match-over checks of a slot's game while a capture drives it
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
@@ -254,11 +255,41 @@ def limit_only(n, sid, since):
     return max(at, now)
 
 
-def main():
+def watch(n):
+    """While slot n's game is being driven (its PCSX2 lock is held): F8-screenshot it and ask Haiku whether the match
+    is over (slot 5's bot match ends, and captures ran on past it unnoticed); if so, tell the agent in its pane."""
+    lock = os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), f'hst-pcsx2{n}.lock')
+    if sp.run(['flock', '-n', lock, 'true']).returncode == 0:
+        return  # nobody is driving it
+    png = os.path.join(WT, 'pcsx2', f'watch_s{n}.png')  # outside the repo, so `claude -p` loads none of its hooks
+    if sp.run([os.path.join(ROOT, 'tools/screenshot.sh'), png], env={**os.environ, 'HST_PCSX2': str(n)},
+              capture_output=True).returncode:
+        return  # paused or down
+    # ponytail: a Haiku look per check (~cents); a RAM flag over PINE once someone finds the match-over state
+    ask = (f'Read {os.path.basename(png)}. Is this Hot Shots Tennis\'s match-over screen ("Game, Set, Match!" banner, '
+           '"Continue" prompt, or the stats/results screen after it) rather than gameplay or a menu? Answer only yes or no.')
+    try:
+        a = sp.run(['claude', '-p', ask, '--model', 'haiku', '--allowedTools', 'Read'], cwd=os.path.dirname(png),
+                   stdin=sp.DEVNULL, capture_output=True, text=True, timeout=180).stdout
+    except sp.TimeoutExpired:
+        return
+    if not a.strip().lower().startswith('yes'):
+        return
+    log(f'slot {n}: match over while its game is being driven; told the agent')
+    pane_id = panes().get(f's{n}', [None])[0]
+    if pane_id:
+        msg = (f'From the runner: your PCSX2 (copy {n}) is on the match-over screen ("Game, Set, Match!"; screenshot '
+               f'{png}) while something drives it. Anything a capture recorded after the match ended is not gameplay: '
+               'stop or cut it, and re-record from a save state if you need more.')
+        sp.run(['tmux', 'send-keys', '-t', pane_id, '-l', msg])
+        sp.run(['tmux', 'send-keys', '-t', pane_id, 'Enter'])
+
+
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
     os.makedirs(NOTES, exist_ok=True)
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
+    watched = {}  # slot -> time of its last match-over check
     log(f'parallel run, {SLOTS} slots')
     master()
     for n, (proc, task) in adopt().items():
@@ -287,6 +318,10 @@ def main():
             done = True
             report('RUN DONE')
             log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
+        for n in procs:
+            if time.time() - watched.setdefault(n, time.time()) >= WATCH:
+                watched[n] = time.time()
+                threading.Thread(target=watch, args=(n,), daemon=True).start()
         flush()
         if done and not queued():
             return  # the master stays up for the next run
