@@ -325,7 +325,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, effects::draw_flight, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, effects::draw_flight, effects::draw_bounce, balloons, mark_landing, character::animate, hud).chain())
         .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, effects::tick_trails, played_out, held_ball, play_sounds).chain());
 }
 
@@ -571,6 +571,9 @@ fn setup(
     commands.insert_resource(trails);
     let flight = effects::load_flight(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("ball flight");
     commands.insert_resource(flight);
+    let stage = args.stage.map_or(args.court, |s| s as usize);
+    let bounce = effects::load_bounce(&mut iso, stage, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("bounce effects");
+    commands.insert_resource(bounce);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
@@ -1648,7 +1651,16 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
     }
 }
 
-fn start_effects(mut g: ResMut<Game>, mut fx: ResMut<effects::Impacts>, mut sparks: ResMut<effects::HitSparks>, mut flight: ResMut<effects::BallFlight>, mut transforms: Query<&mut Transform>, mut commands: Commands) {
+#[allow(clippy::too_many_arguments)]
+fn start_effects(
+    mut g: ResMut<Game>,
+    mut fx: ResMut<effects::Impacts>,
+    mut sparks: ResMut<effects::HitSparks>,
+    mut flight: ResMut<effects::BallFlight>,
+    mut bounce: ResMut<effects::BallBounce>,
+    mut transforms: Query<&mut Transform>,
+    mut commands: Commands,
+) {
     let hit = g.hit_effect.take();
     if let Some(h) = hit {
         fx.start(h, &mut transforms);
@@ -1656,6 +1668,10 @@ fn start_effects(mut g: ResMut<Game>, mut fx: ResMut<effects::Impacts>, mut spar
     sparks.frame(hit, &mut commands);
     let dead = !matches!(g.phase, Phase::Serve | Phase::Rally);
     flight.frame(hit, dead, g.flight.ball.pos, g.flight.ball.vel, &mut commands);
+    let f = &g.flight;
+    let smash = g.smashed && sound::kmh(f.ball.vel) >= 85.0;
+    // ponytail: marks age while a point is on (the game's own on/off messages are not traced)
+    bounce.frame(f.bounces, f.landing.0, f.ball.vel, f.landing.1.court, smash, !dead, &mut transforms);
 }
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,

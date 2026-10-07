@@ -93,7 +93,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P9c** Hit sparks (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
 - [x] **P9d** Ball trail ribbon (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
 - [x] **P9e** Flight effects (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
-- [ ] **P9f** Bounce and smash-bounce effects (in P9) → `effect.rs` · `play.rs` bounce | j: 2026-10-07-p9-hit-effects
+- [x] **P9f** Bounce and smash-bounce effects (in P9) → `effect.rs` · `play.rs` bounce | j: 2026-10-07-p9-hit-effects
 - [~] **P10** Timing pop-ups (screen size/position open) → `play.rs` balloon_art/balloons/age_balloons
 
 ### AI

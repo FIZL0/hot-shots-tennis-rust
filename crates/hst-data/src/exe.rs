@@ -76,6 +76,12 @@ impl<'a> Game<'a> {
             .collect()
     }
 
+    /// Per court (13) how ball bounces look on it: the dust and the mark colours and whether dust puffs rise.
+    pub fn bounce_looks(&self) -> Vec<BounceLook> {
+        let rgb = |r: &[u8], o: usize| std::array::from_fn(|k| f32::from_le_bytes(r[o + 4 * k..o + 4 * k + 4].try_into().unwrap()));
+        self.at(0x41_5000, 13 * 0x90).chunks_exact(0x90).map(|r| BounceLook { dust: rgb(r, 0), mark: rgb(r, 0x60), puffs: r[0x80] != 0 }).collect()
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)
@@ -206,6 +212,14 @@ pub struct Surface {
     pub effect: u8,
     /// Court program 2 key a bounce plays (0 none).
     pub sound: u8,
+}
+
+/// One court's bounce effects look (colours 0..128 per channel).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BounceLook {
+    pub dust: [f32; 3],
+    pub mark: [f32; 3],
+    pub puffs: bool,
 }
 
 /// Number of scripted camera shots.

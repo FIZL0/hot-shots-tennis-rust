@@ -14,7 +14,7 @@ use crate::{
     face,
     motion::Clock,
     pose::{Clip, M4, Skeleton},
-    ps2,
+    ps2, world,
 };
 
 struct Track {
@@ -493,5 +493,177 @@ impl Glow {
 
     pub fn tick(&mut self) {
         self.life = (self.life - 1).max(0);
+    }
+}
+
+/// What a bounce effect needs of one of the ball's contacts this frame (its contact record).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Contact {
+    pub point: [f32; 4],
+    pub vel: [f32; 4],
+    pub normal: [f32; 4],
+    /// The material is the playing surface.
+    pub court: bool,
+}
+
+/// Ball marks kept at once (the oldest goes) and the frames one stays.
+pub const MARKS: usize = 20;
+pub const MARK_LIFE: i32 = 1800;
+const PUFFS: usize = 2;
+const PUFF_LIFE: i32 = 20;
+
+/// A ball mark on the court: a ground quad stretched along the bounce by the ball's level speed.
+#[derive(Clone, Copy, Debug)]
+pub struct Mark {
+    /// Rows side, up, along the bounce, centre (0.01 below the court).
+    pub m: [[f32; 4]; 4],
+    pub life: i32,
+    /// The ball's level speed into the bounce.
+    pub len: f32,
+    /// 128 fading to 0 over its life.
+    pub alpha: f32,
+}
+
+/// A dust puff (court colour): a camera-facing quad growing and fading out over 20 frames.
+#[derive(Clone, Copy, Debug)]
+pub struct Puff {
+    pub pos: [f32; 4],
+    pub life: i32,
+    pub size: f32,
+    grow: f32,
+    pub alpha: f32,
+    fade: f32,
+    /// Born this frame: left as is.
+    fresh: bool,
+}
+
+impl Puff {
+    fn new(pos: [f32; 4], size: f32, grow: f32) -> Puff {
+        let life = PUFF_LIFE as f32;
+        Puff { pos, life: PUFF_LIFE, size, grow: ps2::div(grow, life), alpha: 128.0, fade: -ps2::div(128.0, life), fresh: true }
+    }
+
+    /// One frame; false once it has died out.
+    fn tick(&mut self, mut more: impl FnMut(&mut Puff)) -> bool {
+        if std::mem::take(&mut self.fresh) {
+            return true;
+        }
+        self.size = ps2::add(self.size, self.grow);
+        self.alpha = ps2::add(self.alpha, self.fade);
+        more(self);
+        self.life -= 1;
+        self.life >= 1
+    }
+}
+
+/// The ball's bounce effects: on the first bounce off the court a mark and a puff of dust, and the `ballbound` ring
+/// model lying in the bounce; a second bounce puffs again. A smash landing (more than one player, 85 km/h or more)
+/// plays the court's `chakudan` crater model instead, with a drifting dust cloud and no mark.
+pub struct Bounce {
+    pub marks: Vec<Mark>,
+    pub puffs: Vec<Puff>,
+    /// The smash dust cloud, its level drift and speed.
+    pub dust: Option<(Puff, [f32; 4], f32)>,
+    pub ring: Effect,
+    /// The ring's world matrix: turned to lie in the bounce surface, at the bounce.
+    pub ring_at: [[f32; 4]; 4],
+    pub crater: Effect,
+    /// The crater's world matrix: rows side, up, along the bounce, at the bounce.
+    pub crater_at: [[f32; 4]; 4],
+    /// Marks age (in play); held marks stay.
+    pub fading: bool,
+    /// The court raises dust (`BounceLook::puffs`): puffs only animate on such courts.
+    pub puffing: bool,
+    /// Bounces seen so far this flight.
+    seen: i32,
+}
+
+impl Bounce {
+    pub fn new(ring: Effect, crater: Effect, puffing: bool) -> Bounce {
+        let z = [[0.0; 4]; 4];
+        Bounce { marks: vec![], puffs: vec![], dust: None, ring, ring_at: z, crater, crater_at: z, fading: false, puffing, seen: 0 }
+    }
+
+    fn puff(&mut self, p: Puff) {
+        if self.puffs.len() == PUFFS {
+            self.puffs.remove(0);
+        }
+        self.puffs.push(p);
+    }
+
+    /// One frame of the ball with `bounces` so far and its contact records (`contacts` empty when it has none);
+    /// `smash` when a first bounce now would be a smash landing.
+    // ponytail: wet courts (spray model, rising puffs) and the replay's larger crater are left out
+    pub fn tick(&mut self, bounces: i32, contacts: &[Contact], smash: bool) {
+        use ps2::{add, div, mul, sub};
+        let (mut ring, mut crater) = (false, false);
+        if let Some(c) = contacts.first().filter(|_| bounces == 1 && self.seen != 1) {
+            let mut p = c.point;
+            let v: [f32; 4] = std::array::from_fn(|k| sub(add(p[k], c.vel[k]), p[k]));
+            let q = div(1.0, ps2::sqrt(add(mul(v[0], v[0]), mul(v[2], v[2]))));
+            let fwd = [mul(v[0], q), 0.0, mul(v[2], q), 0.0];
+            let up = [0.0, 1.0, 0.0, 0.0];
+            let side = [
+                sub(mul(up[1], fwd[2]), mul(up[2], 0.0)),
+                sub(mul(up[2], fwd[0]), mul(up[0], fwd[2])),
+                sub(mul(up[0], 0.0), mul(up[1], fwd[0])),
+                0.0,
+            ];
+            if c.court {
+                p[1] = 0.0; // effects sit on the court plane
+            }
+            if c.court && smash {
+                crater = true;
+                self.crater.start();
+                self.crater_at = [side, up, fwd, p];
+                let d = Puff::new([p[0], 0.1, p[2], p[3]], mul(0.15, 2.0), mul(0.3, 2.0));
+                self.dust = Some((d, [fwd[0], 0.0, fwd[2], 0.0], 0.05));
+            } else if c.court {
+                if self.marks.len() == MARKS {
+                    self.marks.remove(0);
+                }
+                let len = ps2::sqrt(add(mul(c.vel[0], c.vel[0]), mul(c.vel[2], c.vel[2])));
+                self.marks.push(Mark { m: [side, up, fwd, [p[0], -0.01, p[2], p[3]]], life: MARK_LIFE, len, alpha: 0.0 });
+                self.puff(Puff::new(p, 0.15, 0.3));
+            }
+            if !self.crater.live {
+                ring = true;
+                let n = c.normal;
+                let pitch = crate::libm::atan2f(-n[1], ps2::sqrt(ps2::madd(mul(n[2], n[2]), n[0], n[0])));
+                let m = world::mat_mul(&world::rot_x(pitch), &world::rot_y(crate::libm::atan2f(n[0], n[2])));
+                self.ring_at = [m[0], m[1], m[2], [p[0], p[1], p[2], 1.0]];
+                self.ring.start();
+            }
+        }
+        if let Some(c) = contacts.get(1).filter(|c| bounces == 2 && self.seen != 2 && c.court) {
+            self.puff(Puff::new(c.point, 0.1, 0.2));
+        }
+
+        let fading = self.fading;
+        self.marks.retain_mut(|m| {
+            let before = m.life;
+            m.life -= fading as i32;
+            m.alpha = div((before << 7) as f32, MARK_LIFE as f32);
+            m.life >= 0
+        });
+        if self.puffing {
+            self.puffs.retain_mut(|p| p.tick(|_| {}));
+        }
+        if let Some((d, dir, speed)) = &mut self.dust {
+            let alive = d.tick(|d| {
+                d.pos = std::array::from_fn(|k| add(add(mul(dir[k], *speed), d.pos[k]), 0.0));
+                *speed = mul(*speed, 0.95);
+            });
+            if !alive {
+                self.dust = None;
+            }
+        }
+        if !ring {
+            self.ring.tick();
+        }
+        if !crater {
+            self.crater.tick();
+        }
+        self.seen = if contacts.is_empty() { 0 } else { bounces };
     }
 }

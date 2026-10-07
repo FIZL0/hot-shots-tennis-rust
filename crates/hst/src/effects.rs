@@ -2,19 +2,19 @@
 //! kind, the smash its own), started as a shot leaves the racket, at the ball, along its velocity; and the hit
 //! sparks thrown off the ball with it (camera-facing quads, `*tubu00` by shot kind); and each player's swing trail
 //! (a `zanzou` ribbon behind the racket); the ball's flight ribbon (`ballrolling`, coloured by shot kind) and the
-//! glow spinning about it after a stroke (`impactef_*`).
+//! glow spinning about it after a stroke (`impactef_*`); and the ball's bounce: a mark on the court, dust puffs in
+//! the court's colours, the `ballbound` ring model (a smash landing: the court's `chakudan` crater and a dust cloud).
 
 use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
-use hst_sim::effect::{Effect, Roll, SPARK_FADE, SPARKS, Sparks, Trail, impact_matrix, impact_scale, FLIGHT_POINTS, Flight, GLOW_FRAMES, Glow};
+use hst_sim::effect::{Bounce, Contact, Effect, Puff, Roll, SPARK_FADE, SPARKS, Sparks, Trail, impact_matrix, impact_scale, FLIGHT_POINTS, Flight, GLOW_FRAMES, Glow};
 
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
-/// One effect model on court: its player and the entities drawing it.
+/// The entities drawing one effect model.
 struct Shown {
-    effect: Effect,
     root: Entity,
     joints: Vec<Entity>,
     materials: Vec<Handle<StandardMaterial>>,
@@ -22,7 +22,7 @@ struct Shown {
 
 #[derive(Resource)]
 pub struct Impacts {
-    models: Vec<Shown>,
+    models: Vec<(Effect, Shown)>,
     /// The impact playing (the game has one).
     playing: Option<usize>,
 }
@@ -41,10 +41,10 @@ impl Impacts {
     pub fn start(&mut self, h: Hit, transforms: &mut Query<&mut Transform>) {
         let k = if h.smash { 5 } else { h.kind.clamp(0, 4) as usize };
         self.playing = Some(k);
-        let m = &mut self.models[k];
-        m.effect.start();
+        let (effect, view) = &mut self.models[k];
+        effect.start();
         let world = Mat4::from_cols_array_2d(&impact_matrix([h.vel[0], h.vel[1], h.vel[2], 0.0], h.pos));
-        if let Ok(mut t) = transforms.get_mut(m.root) {
+        if let Ok(mut t) = transforms.get_mut(view.root) {
             *t = Transform::from_matrix(world).with_scale(Vec3::splat(impact_scale(h.kind, h.vel)));
         }
     }
@@ -61,67 +61,105 @@ pub fn load(
 ) -> Result<Impacts, String> {
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
-    let get = |name: &str| arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(name)).and_then(|e| arc.read(e).ok());
     let mut models = Vec::new();
     for k in IMPACTS {
-        let s = format!("yumoto/impact_{k}_a");
-        let file = |ext: &str| get(&format!("{s}.{ext}")).ok_or(format!("{s}.{ext} missing"));
-        let model = mdl::parse(&file("mdl")?).map_err(|e| e.0)?;
-        let mtl = mtl::parse(&file("mtl")?, get(&format!("{s}.mti")).as_deref()).map_err(|e| e.0)?;
-        let effect = Effect::new(
-            &model,
-            &ani::parse(&file("ani")?).map_err(|e| e.0)?,
-            &mor::parse(&file("mor")?, 1).map_err(|e| e.0)?,
-            &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
-            &mtl.materials,
-        );
-        let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| images.add(crate::character::texture_image(t))).collect();
-        let mats: Vec<Handle<StandardMaterial>> = mtl
-            .materials
-            .iter()
-            .map(|m| {
-                let [r, g, b, a] = m.color;
-                materials.add(StandardMaterial {
-                    base_color: Color::linear_rgba(r, g, b, a),
-                    base_color_texture: m.texture.map(|t| tex[t].clone()),
-                    unlit: true,
-                    double_sided: true,
-                    cull_mode: None,
-                    // ponytail: @sub (Cd − Cs·As) has no Bevy mode and no impact uses it; drawn as Blend
-                    alpha_mode: if m.blend() == Blend::Add { AlphaMode::Add } else { AlphaMode::Blend },
-                    ..default()
-                })
-            })
-            .collect();
-        let parts = crate::character::skinned_parts(&model, &mats, meshes);
-        let binds = bindposes.add(SkinnedMeshInverseBindposes::from(model.node_bind.iter().map(|b| Mat4::from_cols_array_2d(b).inverse()).collect::<Vec<_>>()));
-
-        let weights = MorphWeights::new(vec![0.0; model.morph_names.len()], None).unwrap_or_default();
-        let root = commands.spawn((Transform::default(), Visibility::Hidden, weights)).id();
-        commands.entity(parent).add_child(root);
-        let joints: Vec<Entity> = model.node_local.iter().map(|l| commands.spawn((Transform::from_matrix(Mat4::from_cols_array_2d(l)), Visibility::default())).id()).collect();
-        for (i, p) in model.node_parent.iter().enumerate() {
-            commands.entity(p.map_or(root, |p| joints[p])).add_child(joints[i]);
-        }
-        let skin = SkinnedMesh { inverse_bindposes: binds, joints: joints.clone() };
-        for (mesh, material, morphed) in parts {
-            let part = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
-            if morphed {
-                commands.entity(part).insert(MeshMorphWeights::Reference(root));
-            }
-            commands.entity(root).add_child(part);
-        }
-        models.push(Shown { effect, root, joints, materials: mats });
+        models.push(model(&arc, &format!("yumoto/impact_{k}_a"), commands, parent, meshes, materials, images, bindposes)?);
     }
     Ok(Impacts { models, playing: None })
+}
+
+/// Effect model `s` (archive path without extension): its player and its hidden entities under `parent`.
+#[allow(clippy::too_many_arguments)]
+fn model(
+    arc: &Archive,
+    s: &str,
+    commands: &mut Commands,
+    parent: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Result<(Effect, Shown), String> {
+    let get = |name: &str| arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(name)).and_then(|e| arc.read(e).ok());
+    let file = |ext: &str| get(&format!("{s}.{ext}")).ok_or(format!("{s}.{ext} missing"));
+    let model = mdl::parse(&file("mdl")?).map_err(|e| e.0)?;
+    let mtl = mtl::parse(&file("mtl")?, get(&format!("{s}.mti")).as_deref()).map_err(|e| e.0)?;
+    let effect = Effect::new(
+        &model,
+        &ani::parse(&file("ani")?).map_err(|e| e.0)?,
+        &mor::parse(&file("mor")?, 1).map_err(|e| e.0)?,
+        &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
+        &mtl.materials,
+    );
+    let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| images.add(crate::character::texture_image(t))).collect();
+    let mats: Vec<Handle<StandardMaterial>> = mtl
+        .materials
+        .iter()
+        .map(|m| {
+            let [r, g, b, a] = m.color;
+            materials.add(StandardMaterial {
+                base_color: Color::linear_rgba(r, g, b, a),
+                base_color_texture: m.texture.map(|t| tex[t].clone()),
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                // ponytail: @sub (Cd − Cs·As) has no Bevy mode; drawn as Blend
+                alpha_mode: if m.blend() == Blend::Add { AlphaMode::Add } else { AlphaMode::Blend },
+                ..default()
+            })
+        })
+        .collect();
+    let parts = crate::character::skinned_parts(&model, &mats, meshes);
+    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(model.node_bind.iter().map(|b| Mat4::from_cols_array_2d(b).inverse()).collect::<Vec<_>>()));
+
+    let weights = MorphWeights::new(vec![0.0; model.morph_names.len()], None).unwrap_or_default();
+    let root = commands.spawn((Transform::default(), Visibility::Hidden, weights)).id();
+    commands.entity(parent).add_child(root);
+    let joints: Vec<Entity> = model.node_local.iter().map(|l| commands.spawn((Transform::from_matrix(Mat4::from_cols_array_2d(l)), Visibility::default())).id()).collect();
+    for (i, p) in model.node_parent.iter().enumerate() {
+        commands.entity(p.map_or(root, |p| joints[p])).add_child(joints[i]);
+    }
+    let skin = SkinnedMesh { inverse_bindposes: binds, joints: joints.clone() };
+    for (mesh, material, morphed) in parts {
+        let part = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
+        if morphed {
+            commands.entity(part).insert(MeshMorphWeights::Reference(root));
+        }
+        commands.entity(root).add_child(part);
+    }
+    Ok((effect, Shown { root, joints, materials: mats }))
+}
+
+/// Show `effect` on `view` this frame (posed, morphed, faded) when live, else hide it.
+fn pose<F: bevy::ecs::query::QueryFilter>(effect: &Effect, view: &Shown, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<StandardMaterial>) {
+    let live = effect.live;
+    if let Ok((mut v, mut w)) = q.get_mut(view.root) {
+        *v = if live { Visibility::Visible } else { Visibility::Hidden };
+        if live {
+            w.weights_mut().copy_from_slice(&effect.weights);
+        }
+    }
+    if !live {
+        return;
+    }
+    for (j, l) in view.joints.iter().zip(effect.locals()) {
+        if let Ok(mut t) = joints.get_mut(*j) {
+            *t = Transform::from_matrix(Mat4::from_cols_array_2d(&l));
+        }
+    }
+    for (h, a) in view.materials.iter().zip(&effect.alphas) {
+        if let Some(mut mat) = materials.get_mut(h) {
+            mat.base_color.set_alpha(*a);
+        }
+    }
 }
 
 /// One game frame of the playing impact (before this frame's shots start new ones).
 pub fn tick(mut fx: ResMut<Impacts>) {
     let fx = &mut *fx;
     if let Some(k) = fx.playing {
-        fx.models[k].effect.tick();
-        if !fx.models[k].effect.live {
+        fx.models[k].0.tick();
+        if !fx.models[k].0.live {
             fx.playing = None;
         }
     }
@@ -129,26 +167,11 @@ pub fn tick(mut fx: ResMut<Impacts>) {
 
 /// Pose, morph, fade and show the playing impact; hide the others.
 pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    for (k, m) in fx.models.iter().enumerate() {
-        let live = fx.playing == Some(k);
-        if let Ok((mut v, mut w)) = q.get_mut(m.root) {
-            *v = if live { Visibility::Visible } else { Visibility::Hidden };
-            if live {
-                w.weights_mut().copy_from_slice(&m.effect.weights);
-            }
-        }
-        if !live {
-            continue;
-        }
-        for (j, l) in m.joints.iter().zip(m.effect.locals()) {
-            if let Ok(mut t) = joints.get_mut(*j) {
-                *t = Transform::from_matrix(Mat4::from_cols_array_2d(&l));
-            }
-        }
-        for (h, a) in m.materials.iter().zip(&m.effect.alphas) {
-            if let Some(mut mat) = materials.get_mut(h) {
-                mat.base_color.set_alpha(*a);
-            }
+    for (k, (effect, view)) in fx.models.iter().enumerate() {
+        if fx.playing == Some(k) {
+            pose(effect, view, &mut q, &mut joints, &mut materials);
+        } else if let Ok((mut v, _)) = q.get_mut(view.root) {
+            *v = Visibility::Hidden;
         }
     }
 }
@@ -175,14 +198,14 @@ fn roll(rng: &mut u32) -> Roll {
     Roll::new(rand(rng) * std::f32::consts::PI, [rand(rng), rand(rng), rand(rng)])
 }
 
-/// `yumoto/<name>.tm2` from the effect archive as an unlit, alpha-blended, two-sided material.
+/// `yumoto/<name>.tm2` (or `<dir>/<name>.tm2`) from the effect archive as an unlit, alpha-blended, two-sided material.
 fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Handle<StandardMaterial>, String> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     // ponytail: re-reads the archive per texture; a handful at load
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
-    let path = format!("yumoto/{name}.tm2");
+    let path = if name.contains('/') { format!("{name}.tm2") } else { format!("yumoto/{name}.tm2") };
     let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&path)).ok_or(format!("{path} missing"))?;
     let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
     let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
@@ -422,4 +445,140 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
     mesh.insert_indices(Indices::U32(index));
+}
+
+/// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
+#[derive(Resource)]
+pub struct BallBounce {
+    bounce: Bounce,
+    ring: Shown,
+    crater: Shown,
+    /// This flight's contacts so far (the first two bounces).
+    contacts: Vec<Contact>,
+    marks: Handle<Mesh>,
+    puffs: Handle<Mesh>,
+    dust: Handle<Mesh>,
+    /// The court's dust and mark colours (1 = the game's 128).
+    look: ([f32; 3], [f32; 3]),
+}
+
+/// Bounce effects for disc court `court` (1..11; others borrow court 10's crater).
+#[allow(clippy::too_many_arguments)]
+pub fn load_bounce(
+    iso: &mut Iso,
+    court: usize,
+    commands: &mut Commands,
+    parent: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Result<BallBounce, String> {
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").map_err(|e| e.to_string())?, iso.read("ZZBIN/GAME.BIN").map_err(|e| e.to_string())?);
+    let looks = hst_data::exe::Game::new(&cnf, &bin).map_err(|e| e.0)?.bounce_looks();
+    let colours = looks.get(court).copied().unwrap_or(looks[10]);
+    let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let (ring, ring_view) = model(&arc, "bnd/ballbound_00", commands, parent, meshes, materials, images, bindposes)?;
+    let c = if (1..=11).contains(&court) { court } else { 10 };
+    let (crater, crater_view) = model(&arc, &format!("smash_bnd/c{c:02}/c{c:02}_chakudan"), commands, parent, meshes, materials, images, bindposes)?;
+    let mut mesh = |tex: &str, commands: &mut Commands| -> Result<Handle<Mesh>, String> {
+        let m = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
+        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(look(iso, tex, materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+        commands.entity(parent).add_child(view);
+        Ok(m)
+    };
+    let marks = mesh("bnd/ballkon_00", commands)?;
+    let puffs = mesh("run/kemuri_01", commands)?;
+    let dust = mesh("run/kemuri_00", commands)?;
+    Ok(BallBounce {
+        bounce: Bounce::new(ring, crater, colours.puffs),
+        ring: ring_view,
+        crater: crater_view,
+        contacts: vec![],
+        marks,
+        puffs,
+        dust,
+        look: (colours.dust.map(|v| v / 128.0), colours.mark.map(|v| v / 128.0)),
+    })
+}
+
+impl BallBounce {
+    /// One game frame of the ball (`bounces` so far, the last landing `at` on `court` ground moving at `vel`);
+    /// `smash` a smash landing at 85 km/h or more; `fading` the marks age (a point is on).
+    // ponytail: every contact's surface is the flat court (normal up); the stage mesh's own normal would tilt the ring
+    pub fn frame(&mut self, bounces: i32, at: [f32; 3], vel: [f32; 3], court: bool, smash: bool, fading: bool, transforms: &mut Query<&mut Transform>) {
+        if bounces == 0 {
+            self.contacts.clear();
+        } else if bounces as usize > self.contacts.len() && self.contacts.len() < 3 {
+            self.contacts.push(Contact { point: [at[0], at[1], at[2], 1.0], vel: [vel[0], vel[1], vel[2], 0.0], normal: [0.0, -1.0, 0.0, 0.0], court });
+        }
+        self.bounce.fading = fading;
+        self.bounce.tick(bounces, &self.contacts, smash);
+        for (view, at) in [(&self.ring, self.bounce.ring_at), (&self.crater, self.bounce.crater_at)] {
+            if let Ok(mut t) = transforms.get_mut(view.root) {
+                *t = Transform::from_matrix(Mat4::from_cols_array_2d(&at));
+            }
+        }
+    }
+}
+
+/// The ring and crater models; the marks as ground quads (a spot stretched along the bounce by the ball's speed),
+/// the puffs and dust cloud as camera-facing quads rising from their foot, in the court's colours.
+#[allow(clippy::type_complexity)]
+pub fn draw_bounce(
+    fx: Res<BallBounce>,
+    cam: Query<&Transform, With<Camera3d>>,
+    mut q: Query<(&mut Visibility, &mut MorphWeights)>,
+    mut joints: Query<&mut Transform, Without<Camera3d>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    use bevy::mesh::Indices;
+    let b = &fx.bounce;
+    pose(&b.ring, &fx.ring, &mut q, &mut joints, &mut materials);
+    pose(&b.crater, &fx.crater, &mut q, &mut joints, &mut materials);
+    let Ok(cam) = cam.single() else { return };
+    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
+    let (right, up) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y));
+    let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 2], [f32; 4])>| {
+        let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+        for (corners, [v0, v1], c) in quads {
+            let n = pos.len() as u32;
+            pos.extend(corners.map(|v| v.to_array()));
+            uv.extend([[0.0, v0], [1.0, v0], [0.0, v1], [1.0, v1]]);
+            colour.extend([c; 4]);
+            index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
+        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+        mesh.insert_indices(Indices::U32(index));
+    };
+    let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
+    let mut quads = vec![];
+    let [r, g, bl] = fx.look.1;
+    for m in &b.marks {
+        let (c, s, f) = (v3(m.m[3]), v3(m.m[0]) * 0.05, v3(m.m[2]));
+        let colour = [r, g, bl, m.alpha / 128.0];
+        // ponytail: the game's spot halves; a cap, the stretch, a cap
+        let rows = [c - f * 0.05, c, c + f * m.len, c + f * (m.len + 0.05)];
+        for (k, v) in [(0, [0.0, 0.5]), (1, [0.5, 0.5]), (2, [0.5, 1.0])] {
+            quads.push(([rows[k] - s, rows[k] + s, rows[k + 1] - s, rows[k + 1] + s], v, colour));
+        }
+    }
+    if let Some(mut mesh) = meshes.get_mut(&fx.marks) {
+        put(&mut mesh, quads);
+    }
+    let [r, g, bl] = fx.look.0;
+    let billboard = |p: &Puff| {
+        let (foot, w, h) = (v3(p.pos), right * p.size, up * 2.0 * p.size);
+        ([foot - w + h, foot + w + h, foot - w, foot + w], [0.0, 1.0], [r, g, bl, p.alpha / 128.0])
+    };
+    if let Some(mut mesh) = meshes.get_mut(&fx.puffs) {
+        put(&mut mesh, b.puffs.iter().filter(|p| p.life > 0).map(billboard).collect());
+    }
+    if let Some(mut mesh) = meshes.get_mut(&fx.dust) {
+        put(&mut mesh, b.dust.iter().map(|(p, _, _)| billboard(p)).collect());
+    }
 }
