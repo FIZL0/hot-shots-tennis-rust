@@ -129,6 +129,12 @@ struct Player {
     ai_serves: [Option<V3>; 2],
     ai_hit: bool,
     ai_timing: hst_sim::ai::Timing,
+    /// A doubles bot's place in the formation and its walk back there (`hst_sim::position`), placed afresh every
+    /// point; the frames since it last looked again while waiting, and the shot count it last re-picked on.
+    ai_form: hst_sim::position::Formation,
+    ai_back: hst_sim::position::Return,
+    ai_tick: u32,
+    ai_shot: i32,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -1184,6 +1190,8 @@ fn reset_positions(g: &mut Game) {
         let end = at.facing;
         // stamina is full again every point
         let body = loco::Body::new(at.pos, end, &stats);
+        // the AI keeps its row and whether its team has hit yet across points
+        let ai = (g.players[i].ai, g.players[i].ai_hit);
         g.players[i] = Player {
             pos: at.pos,
             prev: at.pos,
@@ -1197,6 +1205,7 @@ fn reset_positions(g: &mut Game) {
             body,
             ..Player::default()
         };
+        (g.players[i].ai, g.players[i].ai_hit) = ai;
     }
     // with more than one human the camera keeps its end through changes of ends; only solo games turn it
     if g.humans.iter().filter(|&&h| h).count() <= 1 {
@@ -2420,8 +2429,9 @@ fn bot(g: &mut Game, i: usize) {
                 g.whooshes.push((0, i, call));
             }
         }
+        let wait = if mine.is_none() { ai_wait(g, i) } else { None };
         let p = g.players[i];
-        let goal = mine.map_or(p.home, |(b, _)| {
+        let goal = mine.map_or(wait.unwrap_or(p.home), |(b, _)| {
             [
                 b[0] - 1.1 * (b[0] - p.pos[0]).signum(),
                 0.0,
@@ -2466,6 +2476,58 @@ fn bot(g: &mut Game, i: usize) {
     advance_stroke(g, i, |g| {
         Vec2::new(rand(&mut g.rng) * 1.8 - 0.9, rand(&mut g.rng) * 1.6 - 0.8)
     });
+}
+
+/// A doubles bot's goal while the ball isn't its own (`hst_sim::position`): its formation spot, walked to once
+/// the centre roll passes and until it's inside the centre radius (its own position otherwise). It takes its place
+/// at the start of a point and looks again when its team hits and every 30 frames after. None in singles (the
+/// serve spot stays the goal).
+/// ponytail: the original looks from the partner's shot record (where it means to hit) and also when the partner
+/// shapes for a volley at the net (`Formation::hold`); this uses the hitter's position and skips the hold.
+fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
+    use hst_sim::position::{Cue, Formation, Return, Team};
+    if g.players.len() != 4 {
+        return None;
+    }
+    let mate = i ^ 2;
+    let human_mate = g.humans.get(mate) == Some(&true);
+    let (p, m) = (g.players[i], g.players[mate]);
+    // beside a human the row's formation and doubles centre numbers, beside a bot staggered and the singles ones
+    let (formation, rate, radius) = if human_mate {
+        (p.ai.formation, p.ai.doubles_center_rate, p.ai.doubles_center_radius)
+    } else {
+        (0, p.ai.singles_center_rate, p.ai.singles_center_radius)
+    };
+    let t = Team { side: p.end, formation, lean: Team::lean(formation, !human_mate, p.ai.style, m.ai.style) };
+    let at = |q: &Player| [q.pos[0], q.pos[2]];
+    let rng = &mut g.rng;
+    let mut roll = || {
+        rand(rng);
+        *rng
+    };
+    let pl = &mut g.players[i];
+    if pl.ai_form.lane == 0 {
+        let starter = g.score.server == i as i32 || g.score.receiver == i as i32;
+        pl.ai_form = Formation::start(&t, starter, g.score.side == 1);
+        pl.ai_back = Return::new(rate, &mut roll);
+        pl.ai_shot = g.shots;
+    }
+    let ours = g.last_hitter >= 0 && g.last_hitter & 1 == i as i32 & 1;
+    let hit = std::mem::replace(&mut pl.ai_shot, g.shots) != g.shots;
+    pl.ai_tick = if hit { 0 } else { pl.ai_tick + 1 };
+    if ours && (hit || pl.ai_tick >= 30) {
+        pl.ai_tick = 0;
+        let cue = if g.last_hitter == i as i32 { Cue::Me(at(&m)) } else { Cue::Other(at(&g.players[g.last_hitter as usize])) };
+        let ball_z = g.flight.ball.pos[2];
+        let pl = &mut g.players[i];
+        if pl.ai_form.repick(&t, cue, at(&p), ball_z, ours) {
+            pl.ai_back = Return::new(rate, &mut roll);
+        }
+    }
+    let pl = &mut g.players[i];
+    let spot = pl.ai_form.spot;
+    let go = pl.ai_back.step(rate, radius, spot, at(&p), &mut roll);
+    Some(if go { [spot[0], 0.0, spot[1]] } else { p.pos })
 }
 
 /// The stand-in AI's serve: strong toss, swing timed by the AI's serve error (a badly timed

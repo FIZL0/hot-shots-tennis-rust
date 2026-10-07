@@ -28,3 +28,8 @@ for byte; the slot-5 bots (characters 0,2,1,5, outfit 0 → rows 84,86,85,89, le
 
 - `play.rs`: `Player` has `ai: AiParams`, set at setup with outfit 0 (the app has no outfit choice yet).
 - `bot()`'s stand-in "yours" call-out is gated to `g.shots >= 2`, so it never fires on the serve (user note).
+
+## P11e1 (doubles formation)
+
+See 2-P11E1-FORMATION-FINAL.md. P11e is split into P11e1–P11e4; P11e1 is done (`hst_sim::position`, test
+`tests/position.rs` against `context/fixtures/ai_pos_s05.bin` from `tools/record_ai_pos.py`).
