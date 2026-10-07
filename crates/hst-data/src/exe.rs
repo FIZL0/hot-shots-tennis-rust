@@ -230,6 +230,15 @@ impl<'a> Game<'a> {
             game_drop: i(0x41_0ec0),
         }
     }
+
+    /// The in-match panel's per-player colours, by player 0..3 (GS colour, 128 = the texture's own): the tint
+    /// of each player's pill and slot label, and of their rank label. Two-player matches use the first two.
+    pub fn hud_colours(&self) -> ([[u8; 3]; 4], [[u8; 3]; 4]) {
+        let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap()) as u8;
+        // the tables list pink, orange, blue, green; players take pink, blue, orange, green
+        let read = |base: u32| [0u32, 2, 1, 3].map(|k| std::array::from_fn(|c| i(base + 12 * k + 4 * c as u32)));
+        (read(0x41_5930), read(0x41_5960))
+    }
 }
 
 /// The sound driver's pitch table (`snd::pitch`): 608 steps, 192 per octave, 0x1000 at the root note. Read from the
