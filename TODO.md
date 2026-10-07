@@ -126,8 +126,11 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
     slow-down), run counter, stamina drain, stand/run motion choice (ready, turned stances to the ball, run
     f/b/l/r with hysteresis, dash, tired +8), game `acosf`. `tests/player.rs`: run velocity bit-exact (9657 frames),
     motion exact on all 70575 stand/run frames of `match_s05.bin`. Wired into `play.rs` (`locomote`; per-character
-    stats; mover bounds). Not ported: doubles 1 m partner push, slow-surface agility (court surface byte), stroke
-    stamina costs. Journal `1-LOCOMOTION-FINAL.md`.
+    stats; mover bounds). Then: the mover (`34a960`: 1 m doubles partner push with on-court fallback, bounds,
+    half-court mode) bit-exact on 69701 ticking stand/run frames; stroke stamina costs (TParam dive/backhand/smash,
+    `35ae50`) on every recorded drop; weather 2/3 agility ×1.5 (`Stats::new`; the app passes clear weather until
+    the weather table is ported). The partner push never fires in `match_s05.bin` — unit-checked only; verify with a
+    slot-3 recording where P1 runs into its partner. Journal `1-LOCOMOTION-FINAL.md`.
   - [ ] **N1b — Facing turn.** The rest of `349410`: turning +0x3d60 toward +0x3dc0 (turn flag +0x3dd1/+0x3dd0, the
     motion's root matrices at player + motion·0x40 + 0x6b0); verify facing every frame of `match_s05.bin`.
   - [ ] **N1c — Mode state machine.** When each mode/motion applies: stroke mode 2 (`3ec4` countdown, recovery

@@ -3,26 +3,118 @@
 //! stances toward the ball, runs by direction relative to the player's forward, dash, tired variants).
 
 use crate::libm::acosf;
-use crate::ps2::{add, div, madd, msub, mul};
+use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
 
-/// A character's movement stats (TParam.csv: SPE, Agili, STA).
+/// A character's movement stats (TParam.csv: SPE, Agili, STA, and the stamina a dive / backhand / smash costs).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Stats {
     /// SPE / 10.
     pub speed: f32,
-    /// Frames of running until full speed (Agili; ×1.5 on court surfaces 2 and 3).
+    /// Frames of running until full speed (Agili; ×1.5 in weather 2 and 3).
     pub agility: i32,
-    /// Stamina at the start of a match (STA).
+    /// Stamina at the start of every point (STA).
     pub stamina: i32,
+    /// Stamina spent by a dive, a backhand ground stroke and a smash.
+    pub dive: i32,
+    pub backhand: i32,
+    pub smash: i32,
 }
 
 impl Stats {
-    /// From TParam.csv's SPE, Agili and STA cells; `surface` is the court's surface kind.
-    pub fn new(spe: i32, agility: i32, stamina: i32, surface: u8) -> Self {
-        // the game's integer ×150/100 for the slow surfaces
-        let agility = if surface.wrapping_sub(2) < 2 { agility * 150 / 100 } else { agility };
-        Stats { speed: spe as f32 / 10.0, agility, stamina }
+    /// From TParam.csv's SPE, Agili, STA and dive/backhand/smash cost cells; `weather` is the court's weather
+    /// state (court object +0x135, from the match's weather table).
+    pub fn new(spe: i32, agility: i32, stamina: i32, [dive, backhand, smash]: [i32; 3], weather: u8) -> Self {
+        // the game's integer ×150/100 in weather 2 and 3
+        let agility = if weather.wrapping_sub(2) < 2 { agility * 150 / 100 } else { agility };
+        Stats { speed: spe as f32 / 10.0, agility, stamina, dive, backhand, smash }
     }
+}
+
+/// Stamina after a stroke's contact (during the rally of a game with more than one player): ground strokes
+/// (branch 1) cost the backhand value on the backhand side, dives (3) and smashes (4) theirs, volleys nothing.
+pub fn stroke_stamina(s: &Stats, stamina: i32, branch: u8, forehand: bool, floor: i32) -> i32 {
+    let cost = match branch {
+        1 if !forehand => s.backhand,
+        3 => s.dive,
+        4 => s.smash,
+        _ => return stamina,
+    };
+    let st = stamina - cost;
+    if st < floor { floor } else { st.min(s.stamina) }
+}
+
+/// Court bounds of the mover: |x| ≤ 8.685 and 1.5..17.885 deep on the player's own half.
+const SIDE: f32 = f32::from_bits(0x410a_f5c3);
+const BACK: f32 = f32::from_bits(0x418f_147b);
+const NET: f32 = 1.5;
+
+fn on_court(x: f32, z: f32) -> bool {
+    x.abs() <= SIDE && z.abs() <= BACK && !(z.abs() < NET)
+}
+
+/// Push `cur` out to 1 m from the doubles partner at `mate` (`None`: no push). Returns the pushed position, or
+/// with `fallback` the nearest on-court point of four around the partner (else `restore`) when the push leaves
+/// the court; `None` when the push leaves the court and there is no fallback.
+fn push(cur: [f32; 3], mate: [f32; 3], restore: [f32; 3], fallback: bool) -> Option<[f32; 3]> {
+    let (dx, dz) = (sub(cur[0], mate[0]), sub(cur[2], mate[2]));
+    let d2 = madd(mul(dz, dz), dx, dx);
+    if !(d2 < 1.0) {
+        return Some(cur);
+    }
+    let inv = div(1.0, sqrt(d2));
+    let out = [add(mate[0], mul(dx, inv)), add(mate[1], 0.0), add(mate[2], mul(dz, inv))];
+    if on_court(out[0], out[2]) {
+        return Some(out);
+    }
+    if !fallback {
+        return None;
+    }
+    let (sx, sz) = (sqrt(msub(1.0, dz, dz)), sqrt(msub(1.0, dx, dx)));
+    let cands = [(sub(mate[0], sx), restore[2]), (add(mate[0], sx), restore[2]), (restore[0], sub(mate[2], sz)), (restore[0], add(mate[2], sz))];
+    let mut best: Option<((f32, f32), f32)> = None;
+    for c in cands.into_iter().filter(|c| on_court(c.0, c.1)) {
+        let (ex, ez) = (sub(c.0, restore[0]), sub(c.1, restore[2]));
+        let d = madd(mul(ez, ez), ex, ex);
+        if best.is_none_or(|(_, b)| d < b) {
+            best = Some((c, d));
+        }
+    }
+    Some(best.map_or(restore, |((x, z), _)| [x, restore[1], z]))
+}
+
+/// The game's mover: keep 1 m from the doubles partner (`mate`, its position as of this player's update), step
+/// by `delta`, clamp to the court bounds (`forward` = ±1 the way the player faces), and keep 1 m from the partner
+/// again. `short`: the half-court singles mode (z within 6.4 of the net).
+pub fn mover(pos: [f32; 3], delta: [f32; 3], forward: f32, mate: Option<[f32; 3]>, short: bool) -> [f32; 3] {
+    let mut cur = pos;
+    if let Some(m) = mate {
+        cur = push(cur, m, pos, true).unwrap_or(pos);
+    }
+    let saved = cur;
+    cur = [add(cur[0], delta[0]), add(cur[1], delta[1]), add(cur[2], delta[2])];
+    if !(cur[0].abs() <= SIDE) {
+        cur[0] = mul(SIDE, if cur[0] < 0.0 { -1.0 } else { 1.0 });
+    }
+    if !(cur[2].abs() <= BACK) {
+        cur[2] = mul(-BACK, forward);
+    }
+    if cur[2].abs() < NET {
+        cur[2] = mul(-NET, forward);
+    }
+    if short {
+        let lim = f32::from_bits(0x40cc_cccd);
+        if forward < 0.0 {
+            if !(cur[2] <= lim) {
+                cur[2] = lim;
+            }
+        } else if cur[2] < -lim {
+            cur[2] = -lim;
+        }
+    }
+    if let Some(m) = mate {
+        cur = push(cur, m, saved, false).unwrap_or(saved);
+    }
+    [cur[0], pos[1], cur[2]]
 }
 
 /// Base run speed, metres per frame.
@@ -209,4 +301,20 @@ pub fn with_tiredness(motion: i32, stamina: i32) -> i32 {
 /// Tired variants folded onto their base motion (8..15 → 0..7).
 pub fn base_motion(motion: i32) -> i32 {
     if (8..16).contains(&motion) { motion - 8 } else { motion }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partner_push() {
+        // stepping into the partner ends 1 m from it, along the line between them
+        let p = mover([0.0, 0.0, -5.0], [0.0, 0.0, 0.5], 1.0, Some([0.0, 0.0, -4.0]), false);
+        assert_eq!(p, [0.0, 0.0, -5.0]);
+        let p = mover([0.6, 0.0, -5.0], [0.0, 0.0, 0.5], 1.0, Some([0.0, 0.0, -4.0]), false);
+        assert!(((p[0] * p[0] + (p[2] + 4.0) * (p[2] + 4.0)).sqrt() - 1.0).abs() < 1e-5, "{p:?}");
+        // far apart: a plain step, clamped to the court
+        assert_eq!(mover([8.6, 0.0, -17.8], [0.2, 0.0, -0.2], 1.0, Some([0.0, 0.0, -4.0]), false), [8.685, 0.0, -17.885]);
+    }
 }

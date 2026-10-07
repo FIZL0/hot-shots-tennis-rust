@@ -296,12 +296,13 @@ fn tparam(iso: &mut Iso, n: usize) -> Vec<String> {
     row.split(|&b| b == b',').map(|c| String::from_utf8_lossy(c).trim().to_string()).collect()
 }
 
-/// A character's movement stats from TParam.csv (SPE, Agili, STA).
-/// ponytail: surface 0 (no slow-surface agility ×1.5); the court's surface byte is read with P15a
+/// A character's movement stats from TParam.csv (SPE, Agili, STA, dive/backhand/smash stamina costs).
+/// ponytail: clear weather (0); the match's weather table (rain/snow slow the acceleration) comes with P17/P21
 fn character_stats(iso: &mut Iso, n: usize) -> Stats {
     let row = tparam(iso, n);
     let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
-    Stats::new(cell(40), cell(43), cell(41), 0)
+    let costs: Vec<i32> = row[42].split('/').map(|v| v.parse().expect("TParam stamina cost")).collect();
+    Stats::new(cell(40), cell(43), cell(41), [costs[0], costs[1], costs[2]], 0)
 }
 
 /// A character's hand from TParam.csv (+1 right, −1 left).
@@ -785,7 +786,7 @@ fn timing_word(c: &Contact) -> &'static str {
 /// running in a rally, the run motion by direction (dash past half the agility) or the ready stance, and the
 /// court bounds of the game's mover.
 /// ponytail: the turn-around for a run behind the player (facing +0x3d60 turning with the motion's root,
-/// flag +0x3dd1) and the doubles partners' 1 m separation are not ported; the body keeps facing the other end.
+/// flag +0x3dd1) is not ported; the body keeps facing the other end.
 fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     let players = g.players.len() as i32;
     let phase = match g.phase {
@@ -795,6 +796,8 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
         Phase::Post | Phase::Over(_) => 4,
     };
     let (ball, last) = (g.flight.ball, g.last_hitter);
+    // doubles: the partner (already moved this frame if it updates first)
+    let mate = (players == 4).then(|| g.players[i ^ 2].pos);
     let p = &mut g.players[i];
     p.prev = p.pos;
     p.facing = base_yaw(p.end);
@@ -803,6 +806,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
         p.run = None;
         p.vel = Vec2::ZERO;
         let a = loco::angle([0.0, 0.0, p.end], p.end, p.hand);
+        p.pos = loco::mover(p.pos, [0.0; 3], p.end, mate, false);
         let m = loco::stand_motion(a, || {
             loco::stance(&loco::StanceInput {
                 players,
@@ -826,10 +830,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     (p.stamina, p.stamina_tick) = loco::drain(&p.stats, p.stamina, p.stamina_tick, players, phase == 3, 0);
     let v = loco::run_velocity([d.x, 0.0, d.y], loco::run_speed(&p.stats, run, p.stamina, 100));
     p.vel = Vec2::new(v[0], v[2]);
-    // the mover's bounds: |x| ≤ 8.685, own half 1.5..17.885 deep
-    p.pos[0] = (p.pos[0] + v[0]).clamp(-8.685, 8.685);
-    let z = p.pos[2] + v[2];
-    p.pos[2] = if z.abs() > 17.885 { -17.885 * p.end } else if z.abs() < 1.5 || z * p.end > 0.0 { -1.5 * p.end } else { z };
+    p.pos = loco::mover(p.pos, v, p.end, mate, false);
     p.stride += p.vel.length() * 9.0;
     let a = loco::angle([d.x, 0.0, d.y], p.end, p.hand);
     p.motion = loco::with_tiredness(loco::run_motion(current, a, loco::dashing(&p.stats, run)), p.stamina);
@@ -871,7 +872,16 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             let target = aim(g);
             strike(g, i, 1, kind, target);
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
+            let rally = g.phase == Phase::Rally && g.players.len() > 1;
             let p = &mut g.players[i];
+            if rally {
+                let branch = match c.swing.branch {
+                    swing::Branch::Ground => 1,
+                    swing::Branch::Volley => 2,
+                    swing::Branch::Smash => 4,
+                };
+                p.stamina = loco::stroke_stamina(&p.stats, p.stamina, branch, c.swing.forehand, 0);
+            }
             p.contact = None;
             p.swung = true;
             p.balloon = serve::balloon(c.grade, c.offset, false).map(|b| (b, 0));
