@@ -203,3 +203,139 @@ impl Return {
         false
     }
 }
+
+/// Half the singles court's width.
+const SINGLES: f32 = 4.115;
+/// How far across the dash spot may go: two thirds of the singles half-width.
+const DASH_X: f32 = 2.743333;
+
+/// Where a point lies on the singles court seen from its own end: its lane (1 the middle third, 2 the third on the
+/// +x side seen from that end, 0 the other) and depth band (0 nearest the net, 2 deepest) past 1.5 from the net.
+/// `blur`: the game's look at where the opponent stands, which rolls between bands near their edges.
+pub fn zone(p: [f32; 2], blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
+    let (x, d) = (p[0].abs(), ps2::sub(p[1].abs(), 1.5));
+    let third = ps2::div(SINGLES, 3.0);
+    let wide = if across(p) > 0.0 { 2 } else { 0 };
+    let Some(roll) = blur else {
+        let lane = if x <= third { 1 } else { wide };
+        let depth = if d <= 3.4616668 { 0 } else if d <= 6.9233336 { 1 } else { 2 };
+        return (lane, depth);
+    };
+    // the MT word as a fraction of 2³²
+    let mut roll = || ps2::mul(2.3283064e-10, ps2::utof(roll()));
+    let q = ps2::div(ps2::div(ps2::mul(SINGLES, 2.0), 3.0), 4.0);
+    let inner = ps2::sub(third, q);
+    let lane = if x <= inner {
+        1
+    } else if ps2::add(third, q) <= x {
+        wide
+    } else {
+        let t = ps2::div(ps2::sub(x, inner), ps2::mul(q, 2.0));
+        if roll() < t { wide } else { 1 }
+    };
+    let band = |lo: f32, d: f32, roll: &mut dyn FnMut() -> f32| roll() < ps2::div(ps2::sub(d, lo), 1.7308334);
+    let depth = if d <= 2.59625 {
+        0
+    } else if d < 4.3270836 {
+        band(2.59625, d, &mut roll) as u8
+    } else if d <= 6.057917 {
+        1
+    } else if d < 7.78875 {
+        1 + band(6.057917, d, &mut roll) as u8
+    } else {
+        2
+    };
+    (lane, depth)
+}
+
+/// A singles bot between its shots: the centre spot it walks back to, the spot it dashes in to instead when it
+/// means to take the net, and the walk (`Return`, rolled afresh after each of its shots).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Single {
+    /// Plays the net style's after-hit and dash spots (NET, or ALL on its coin), not the baseline one's.
+    pub net: bool,
+    pub spot: [f32; 2],
+    pub dash: Option<[f32; 2]>,
+    pub back: Return,
+}
+
+/// The fixed inputs of a singles bot.
+#[derive(Clone, Copy, Debug)]
+pub struct Court {
+    /// The side sign (+1 plays at −z).
+    pub side: f32,
+    /// The volley reach depth (2.5, 2.85 or 3.2 by the AI's level).
+    pub reach: f32,
+    /// The centre rate and radius.
+    pub rate: i32,
+    pub radius: f32,
+}
+
+impl Single {
+    /// At the start of a point: in the middle, 10 back (net style) or 11.
+    pub fn start(c: &Court, net: bool, roll: &mut impl FnMut() -> u32) -> Single {
+        let z = ps2::mul(c.side, if net { -10.0 } else { -11.0 });
+        Single { net, spot: [0.0, z], dash: None, back: Return::new(c.rate, roll) }
+    }
+
+    /// The net spot: straight up at the reach depth, or a third of the way back from it after shot choice 10.
+    fn net_spot(&self, c: &Court, deep: bool) -> [f32; 2] {
+        let d = if deep { ps2::add(ps2::div(ps2::sub(11.885, c.reach), 3.0), c.reach) } else { c.reach };
+        [0.0, ps2::mul(c.side, -d)]
+    }
+
+    /// Go in to the net (a smash seen, a net-dash roll on the serve): to the middle at the reach depth.
+    pub fn go_in(&mut self, c: &Court) {
+        self.dash.get_or_insert(self.net_spot(c, false));
+    }
+
+    /// The ball has passed it on its own side: the dash is off.
+    pub fn passed(&mut self, me: [f32; 2], ball: [f32; 2]) {
+        if (ball[1] < 0.0) == (me[1] < 0.0) && me[1].abs() < ball[1].abs() {
+            self.dash = None;
+        }
+    }
+
+    /// After its own shot toward `target` (`dash`: a net player's volley or smash, a baseliner's smash; `deep`: the
+    /// AI picked shot choice 10, which dashes only a third of the way in). A net player with no dash on picks its spot from the shot's zone against the
+    /// opponent's: back at its own depth (no deeper than 10) on a middle shot or one at the opponent, else two
+    /// thirds of the way back from the reach depth (no deeper than the opponent) and in to the net when either
+    /// stands near it. Then the walk back is rolled again.
+    #[allow(clippy::too_many_arguments)]
+    pub fn after_hit(&mut self, c: &Court, dash: bool, deep: bool, target: [f32; 2], opp: [f32; 2], me: [f32; 2], roll: &mut dyn FnMut() -> u32) {
+        if dash {
+            self.dash.get_or_insert(self.net_spot(c, false));
+        }
+        if self.net {
+            if self.dash.is_none() {
+                let shot = zone(target, None);
+                let them = zone(opp, Some(roll));
+                let mine = zone(me, None);
+                self.spot[0] = 0.0;
+                if shot.0 == 1 || shot == them {
+                    self.spot[1] = if me[1].abs() > 10.0 { ps2::mul(c.side, -10.0) } else { me[1] };
+                } else {
+                    let back = ps2::add(ps2::div(ps2::mul(ps2::sub(11.885, c.reach), 2.0), 3.0), c.reach);
+                    let back = if opp[1].abs() < back { opp[1].abs() } else { back };
+                    self.spot[1] = ps2::mul(c.side, -back);
+                    if mine.1 < 2 || them.1 < 2 {
+                        self.dash = Some([0.0, 0.0]);
+                    }
+                }
+            }
+            if self.dash.is_some() {
+                let x = target[0].clamp(-DASH_X, DASH_X);
+                self.dash = Some([x, self.net_spot(c, deep)[1]]);
+            }
+        }
+        self.back = Return::new(c.rate, &mut || roll());
+    }
+
+    /// One waiting frame: where to walk, if anywhere (a baseliner dashes to the middle at the reach depth).
+    pub fn step(&mut self, c: &Court, me: [f32; 2], roll: &mut impl FnMut() -> u32) -> Option<[f32; 2]> {
+        if let Some(d) = self.dash {
+            return Some(if self.net { d } else { self.net_spot(c, false) });
+        }
+        self.back.step(c.rate, c.radius, self.spot, me, roll).then_some(self.spot)
+    }
+}

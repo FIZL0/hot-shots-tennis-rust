@@ -139,6 +139,10 @@ struct Player {
     /// holds before reading the ball: the guess's move frames, or the stuck frames after a wrong guess.
     ai_guess: Option<(hst_sim::ai::Guess, [f32; 2])>,
     ai_hold: i32,
+    /// A singles bot's centre spot, net dash and walk back (`hst_sim::position::Single`), placed afresh every point,
+    /// and the branch of the swing it last had on (its after-hit reads it).
+    ai_single: Option<hst_sim::position::Single>,
+    ai_branch: Option<swing::Branch>,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -2493,6 +2497,9 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
 /// nearer to it; the other goes home), and presses the shot button around the sweet frame with a random timing
 /// error, through the same contact search as a human.
 fn bot(g: &mut Game, i: usize) {
+    if let Some(c) = &g.players[i].contact {
+        g.players[i].ai_branch = Some(c.swing.branch);
+    }
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         return bot_serve(g, i);
     }
@@ -2534,6 +2541,7 @@ fn bot(g: &mut Game, i: usize) {
         let guessing = ai_guessing(g, i, plan.is_some(), mine.map(|(b, _)| b));
         let mine = if guessing.is_some() { None } else { mine };
         let wait = if mine.is_none() { guessing.or_else(|| ai_wait(g, i)) } else { None };
+        let wait = if mine.is_none() { ai_wait(g, i).or_else(|| ai_wait_singles(g, i)) } else { None };
         let p = g.players[i];
         let goal = mine.map_or(wait.unwrap_or(p.home), |(b, _)| {
             [
@@ -2632,6 +2640,65 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
     let spot = pl.ai_form.spot;
     let go = pl.ai_back.step(rate, radius, spot, at(&p), &mut roll);
     Some(if go { [spot[0], 0.0, spot[1]] } else { p.pos })
+}
+
+/// A singles bot's goal while the ball isn't its own (`hst_sim::position::Single`): its centre (10 back for a net
+/// player, 11 otherwise), walked to once the centre roll passes and until it's inside the centre radius, or its dash
+/// spot in at the net. After each of its shots a net player picks the centre from the shot's zone and may dash; a
+/// volley or smash (a baseliner: a smash) dashes, so does a net player seeing a smash and a net-dash roll on its
+/// serve. The dash is off once the ball passes it on its own side. None in doubles and before the serve is hit.
+/// ponytail: the original also dashes off a wide serve aim (P11's serve aim isn't ported), its serve-dash x is the
+/// serve's own target (the middle here), the ALL style's coin is drawn once a point (the game re-draws it every few
+/// shots) and shot choice 10's deeper dash spot waits for P11's shot choice.
+fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
+    use hst_sim::position::{Court, Single};
+    if g.players.len() != 2 || g.phase != Phase::Rally {
+        return None;
+    }
+    let (p, o) = (g.players[i], g.players[1 - i]);
+    let at = |q: &Player| [q.pos[0], q.pos[2]];
+    // the app's AI is always level 3
+    let reach = hst_sim::ai::Choice::new(0, 0, false).reach;
+    let c = Court { side: p.end, reach, rate: p.ai.singles_center_rate, radius: p.ai.singles_center_radius };
+    let (target, ball) = (g.marks.red.unwrap_or(at(&o)), [g.flight.ball.pos[0], g.flight.ball.pos[2]]);
+    let rng = &mut g.rng;
+    let mut roll = || {
+        rand(rng);
+        *rng
+    };
+    let pl = &mut g.players[i];
+    let mut s = match pl.ai_single {
+        Some(s) => s,
+        None => {
+            // from no shots seen: the first look takes in the serve (or its own return)
+            pl.ai_shot = 0;
+            let net = p.ai.style == 1 || p.ai.style == 3 && (roll() >> 16 & 0x7fff) % 100 < 50;
+            Single::start(&c, net, &mut roll)
+        }
+    };
+    if std::mem::replace(&mut pl.ai_shot, g.shots) != g.shots {
+        let net_row = p.ai.style != 2;
+        if g.last_hitter != i as i32 {
+            if net_row && p.ai_seen[0].is_some_and(|x| x.kind == 3) {
+                s.go_in(&c);
+            }
+        } else if g.shots == 1 {
+            if (roll() >> 16 & 0x7fff) % 100 < p.ai.net_dash_rate.max(0) as u32 {
+                s.go_in(&c);
+            }
+        } else {
+            let dash = match p.ai_branch {
+                Some(swing::Branch::Smash) => true,
+                Some(swing::Branch::Volley) => s.net,
+                _ => false,
+            };
+            s.after_hit(&c, dash, false, target, at(&o), at(&p), &mut roll);
+        }
+    }
+    s.passed(at(&p), ball);
+    let go = s.step(&c, at(&p), &mut roll);
+    g.players[i].ai_single = Some(s);
+    Some(go.map_or(p.pos, |d| [d[0], 0.0, d[1]]))
 }
 
 /// The stand-in AI's serve: strong toss, swing timed by the AI's serve error (a badly timed

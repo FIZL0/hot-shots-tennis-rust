@@ -53,6 +53,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 - P17g: court shadows — sun direction bit-close to RAM on courts 04/10, strength 1 − (⌊0.xx·255⌋·255>>8)/128 multiplied on the hole ground (measured on the PS2 shot), casters = players + plant records with code byte 3 ≠ `'0'` (shadow.rs, gs.rs, gs_prepass.wgsl).
 - P12b1: point score pop-up — player plates, score roll (old value squashed, new grows) + white flash, Deuce! banner with × count, from flow's score show; layout checked on screen against the original (play/popups.rs).
+- P11e2: singles centre walk + net dash — `hst_sim::position::{zone, Single, Court}`, `play.rs` ai_wait_singles; test tests/singles.rs on context/fixtures/ai_pos_singles.bin.
 - P11e1: doubles formation — each bot's lane, front flag and waiting spot (point start, re-pick on hits / every 30 frames, hold) and the centre-rate/radius walk back, exact on every change in ai_pos_s05 (position.rs, play.rs ai_wait).
 - N4: landing markers — the game's `chakudan_p` (red, at the aim, from the serve return) and `smash_p` (yellow, smash-point search) models; red checked on screen against the original; N4a: yellow's placement frame and point bit-exact on a forced-lob rally (no path growth on the launch frame), fade-in and look match on screen (effects.rs, play.rs).
 - N5a: △ smash (kind 1) — contact search, launch (smsh1, 5° spin) and flight to the first bounce exact on lob_smash_s05; one locked swing per team (swing.rs, shot_tables.rs).
