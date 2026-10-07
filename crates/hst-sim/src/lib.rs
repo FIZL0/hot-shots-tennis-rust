@@ -26,3 +26,4 @@ pub mod effect;
 pub mod cutaway;
 pub mod sound;
 pub mod umpire;
+pub mod npc;

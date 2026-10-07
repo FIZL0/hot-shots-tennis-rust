@@ -111,6 +111,10 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
 - [x] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
+- [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs
+- [x] **P14b** Walking spectators (wander/react, animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c** (split into P14c1–5) Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
+- [ ] **P14c2** Ambient sound emitters (timers, RNG, positions) → `hst-sim/src/npc.rs` | t: npc.rs
 - [x] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
 ### Presentation
@@ -149,6 +153,15 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **M6** Recreated font for text art: rebuild the game's lettering (set/game/match banners, pop-up words and the like) as a font and redraw those textures from it, crisp at any size, instead of upscales with artefacts. Match the original's letter shapes, colours, outlines and layout → `replacements/` · `play.rs` balloons/hud (P10, P12b, P19)
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
+
+### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
+
+- [ ] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
+- [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 
