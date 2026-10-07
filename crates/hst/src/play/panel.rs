@@ -514,7 +514,7 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
             for i in 0..POOL {
                 p.spawn((
                     Slot(i),
-                    ImageNode::default(),
+                    ImageNode { image_mode: NodeImageMode::Stretch, ..default() },
                     Node {
                         position_type: PositionType::Absolute,
                         ..default()
