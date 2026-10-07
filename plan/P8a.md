@@ -7,3 +7,7 @@
   can't move or swing again after whiffing, plus any slowed recovery. Also whether a ball arriving during the
   whiff can still be hit. Verify with recorded whiffs (pad + player position/state over PINE): lockout start/end
   and positions frame-exact through P0's harness.
+
+**Note (user, 2026-10-07): input is disabled between points.** From the point ending until the next serve, a
+player can't swing (and pressing does nothing: no whiff, no shout). Match the original's window (when input
+turns off after the dead ball and back on for the serve; P12a owns the post-point sequence) and gate `press()`.
