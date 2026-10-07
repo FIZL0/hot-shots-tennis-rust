@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Minimal PCSX2 PINE client. Usage: pine.py [hexaddr ...]  -> prints game id/status, then u32 at each addr."""
-import fcntl, os, socket, struct, sys, time
+import fcntl, os, signal, socket, struct, sys, time
 
 VSYNC, VSYNC_STALL = 0x1d5780, 10  # the game's vsync counter (every recorder's frame clock)
 SLOT = 28011  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
@@ -25,6 +25,9 @@ def _take_lock():
     except BlockingIOError:
         print("waiting for PCSX2 (another agent is using it)", file=sys.stderr, flush=True)
         fcntl.flock(_lock, fcntl.LOCK_EX)
+    if hold := int(os.environ.get("HST_PCSX2_MAX_HOLD", 0)):  # as tools/pcsx2.sh: a hung run can't starve the others
+        signal.signal(signal.SIGALRM, lambda *_: sys.exit(f"pine: held PCSX2 for {hold}s (the parallel-run cap); stopping"))
+        signal.alarm(hold)
 
 class Pine:
     def __init__(self):
@@ -71,6 +74,16 @@ class Pine:
     def read_regions(self, regions):
         """Read several (addr, n) blocks (n multiple of 8) in one PINE batch; returns their bytes concatenated."""
         return self._call_raw(b"".join(struct.pack("<BI", 3, a + i) for a, n in regions for i in range(0, n, 8)))
+
+    def settle(self, regions, v):
+        """read_regions until two reads agree within frame v (the EE runs while PINE reads); None if the frame
+        ticks first (at full speed it can tick on every try: waiting for v again would spin forever)."""
+        a = self.read_regions(regions)
+        while True:
+            b = self.read_regions(regions)
+            if self.read32(VSYNC) != v: return None
+            if a == b: return a
+            a = b
 
     def _call_raw(self, ops):
         self.s.sendall(struct.pack("<I", 4 + len(ops)) + ops)
