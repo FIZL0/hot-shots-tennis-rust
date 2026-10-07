@@ -114,6 +114,13 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ### Next (user priorities, 2026-10-06 — do these first, in order)
 
+- [ ] **F0 — Uncapped frame rate, game logic unchanged.** The sim stays a fixed 60 Hz `FixedUpdate` tick (the
+  original advances exactly one tick per vsync, no delta time); only drawing runs at display rate. Present mode
+  without vsync cap (`AutoNoVsync`/`Mailbox`, keep a vsync option). Interpolate every tick-driven visual between
+  the last two ticks with `overstep_fraction()`, render-side only: motion time in `character::animate` (+ N1e
+  crossfade weights once ported), facing (slerp; keep the 22.5° snaps as the tick targets), camera, balloons,
+  HUD/score fades. Players and ball already lerp (`play.rs` `draw`). Done when: `hst-sim` untouched and its tests
+  still pass, and a run at 144+ fps shows no 60 Hz stepping in poses, turns or camera.
 - [ ] **N1 — Accurate, functional animations & also original movement speed.** Replace the motion picking in `play.rs` (`motions`) with the
   game's own: the motion setter `0x350280` (motion number, speed, loop/hold flags) and its callers per player
   state (ready `ad00`/`ad01`, turns `tb_f`/`tb_b`, runs/dash by the stick and speed, receive, strokes and their
@@ -159,6 +166,11 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
       weighted: lerp/slerp, root handling) and replace the app's hard switches. Verify blend start, length and the
       mixed bone transforms per frame against a recording of the motion object (+0x44..+0x74) through
       stand→run→stroke→ready transitions.
+  - [ ] **N1f — Full follow-through after contact (bug, user report 2026-10-06).** In the app the stroke's
+    follow-through after hitting the ball doesn't play out in full: the player leaves the swing early. Find what
+    cuts it (`play.rs` `motions` / `hst_sim::motion` switching back to stand/run or ready before the clip ends,
+    hold flag, motion time) and match the original: compare motion number + time per frame after each contact
+    against `match_s05.bin` (player +0x54 motion object) until the stroke→ready hand-off frame is exact.
 - [ ] **N2 — The original ball when serving.** The ball sits in the server's hand and follows the serve motion's
   ball track (`sh_pcNN_serve_ad00_ball`, `*_serve_t_dummy`) until the toss leaves the hand bone; drawn with the
   game's ball model (`CMN/GAME.XB` `ball1.mdl`) and shadow instead of the toon sphere. Verify the ball position
@@ -457,8 +469,12 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   framing offset, smoothed dolly-back for the near team (`36a4a0`), bottom fit (`36acc0`), sideways slide + widen
   (`36a840`), 10 % easing, ball top fit, cut on each new point, turned round behind a human on the +z half.
   `tests/camera.rs`: all 4883 serve/rally frames of `camera_s05.bin` within 4 mm (f32, not the PS2 sequence).
-  Shown fov: game horizontal half-angle of 4:3, vertical ×0.75, never less than 4:3 in any window. Open: other
-  modes (table 0x3fcd4c rows 1+), point-over/replay/cut-away cameras (+0x60/+0x64), two-human behaviour. Original text: Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
+  Shown fov: game horizontal half-angle of 4:3, vertical ×0.75, never less than 4:3 in any window. Post-point cut-away
+  shots (`hst_sim::cutaway`: shot records + scripts from GAME.BIN, keyed channels with the game's easing, orbit/
+  framing/second-subject turn from the aim point/ground clearance/band/head fit): `tests/cutaway.rs` 1202 frames of
+  `cutaway_s05.bin` within 0.9 mm. Open: the court views 0x0c/0x0d/0x11 (several players framed), the shot pick
+  (`cutaway::pick`, unverified), wiring into `play.rs`, other modes (table 0x3fcd4c rows 1+), replay cameras,
+  two-human behaviour. Original text: Port the original in-match cameras exactly: broadcast/follow angles, FOV, smoothing,
   serve/replay/point-end cameras (`camed/cam_cNN_*.dat`, `.CAM`), per court. Keep our free camera as an extra. Verify camera position/target/FOV every frame against the game's
   camera state recorded over PINE (rally, serve, point end, replay) — bit-exact where the math is ported.
 - [ ] **P17 — Court rendering fidelity.** Material blend modes and flags (MTL header), vertex colour/lighting,
@@ -486,6 +502,11 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - [ ] **P22 — Widescreen, high frame rate, input polish.** Render-side improvements that never change the 60 Hz
   simulation; rebindable controls; controller hot-plug. Verify P0's full replay suite still passes unchanged with every
   option on.
+- [ ] **P23 — Graphics settings menu (GUI, after P21).** An in-game settings screen, saved between runs: a master
+  switch for enhancements (off = look as close to the original as possible), resolution / window mode, fps cap
+  (vsync, 30/60/120/144/…, uncapped; builds on F0), shadow quality, anti-aliasing (off/FXAA/MSAA/TAA),
+  upscaled textures on/off (P18's pack and mod folder). Settings are render-only: verify P0's replay suite passes
+  unchanged with every combination.
 
 ## Known gaps / caveats
 

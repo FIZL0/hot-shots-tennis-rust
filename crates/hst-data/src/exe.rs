@@ -79,6 +79,32 @@ impl<'a> Game<'a> {
         self.f32(0x40_3bd0)
     }
 
+    /// The match's scripted camera shots (cut-aways after a point, court views): per shot number its 0xbc-byte
+    /// record and its script of (op, value) pairs up to the end op 0x1a. The scripts are stored back to back.
+    pub fn camera_shots(&self) -> Vec<CameraShot> {
+        let mut at = 0x40_1d30;
+        (0..CAMERA_SHOTS)
+            .map(|n| {
+                let mut script = Vec::new();
+                loop {
+                    let e = self.at(at, 8);
+                    at += 8;
+                    if e[0] == 0x1a {
+                        break;
+                    }
+                    script.push((e[0], f32::from_le_bytes(e[4..8].try_into().unwrap())));
+                }
+                CameraShot { record: self.at(0x3f_cde0 + n as u32 * 0xbc, 0xbc).to_vec(), script }
+            })
+            .collect()
+    }
+
+    /// The shot numbers the post-point cut-away cycles through: a point, a game-ending point, a doubles team
+    /// reaction.
+    pub fn cutaway_lists(&self) -> [Vec<u8>; 3] {
+        [self.at(0x3f_cce0, 6).to_vec(), self.at(0x3f_cce8, 4).to_vec(), self.at(0x3f_ccf0, 7).to_vec()]
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
@@ -127,4 +153,14 @@ pub struct Surface {
     pub restitution: f32,
     /// Share of spin lost per bounce (and how fast spin relaxes) off the court surface.
     pub spin_loss: f32,
+}
+
+/// Number of scripted camera shots.
+pub const CAMERA_SHOTS: usize = 108;
+
+/// One scripted camera shot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CameraShot {
+    pub record: Vec<u8>,
+    pub script: Vec<(u8, f32)>,
 }

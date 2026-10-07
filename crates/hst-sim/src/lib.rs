@@ -21,3 +21,4 @@ pub mod court;
 pub mod player;
 pub mod pose;
 pub mod motion;
+pub mod cutaway;
