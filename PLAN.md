@@ -51,6 +51,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **N3** Audio working (IOP driver note→tone) → `hst-data/src/xb.rs` (banks), new audio module | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
 - [ ] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)
+- [ ] **N6** Diving for the ball (P4's open dive branch) → `swing.rs` · `motion.rs` · `player.rs` · `play.rs` find_contact/advance_stroke/locomote | t: swing.rs, motion.rs, player.rs (fixture new_recording.bin)
 
 ### Match basics
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
