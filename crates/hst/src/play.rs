@@ -753,6 +753,8 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
 /// `target`, along the game's trajectory tables.
 /// `branch`, `grade` and `offset` are the swing's (branch code, timing grade and offset) for the hit sounds.
 fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, grade, offset): (u8, u8, i32)) {
+    // one hit per team per ball, as the original: only the other team's ball can be struck (see `theirs`)
+    debug_assert!(class == 0 || g.last_hitter < 0 || g.last_hitter & 1 != who as i32 & 1, "player {who} struck its own team's ball");
     let at = g.flight.ball.pos;
     let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data)) as usize;
     let (vel, frames) = if class == 0 {
