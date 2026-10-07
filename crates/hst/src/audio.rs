@@ -1,6 +1,7 @@
 //! The game's sound: SPU2 voices (`snd::Voice`) mixed into one 48 kHz stereo stream, playing bank sequences the
 //! way the sound driver does — one sequence step a frame (800 samples), each key-on resolved to its tone, pitch and
-//! L/R volume. `--sound <archive> <bank.hd> <program> <key>` auditions one sound.
+//! L/R volume. `--sound <archive> <bank.hd> <program> <key>` auditions one sound. The music is a MIDI file on its
+//! own bank, stepped a frame at a time by `snd::Sequencer`, each note-on resolved through the bank's programs.
 
 use crate::Args;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
@@ -26,6 +27,30 @@ impl SoundBank {
         let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name))?).ok();
         Some(Self { hd: read(hd)?, bd: read(&hd.replace(".hd", ".bd"))? })
     }
+
+    /// A BGM: bank `data/sound/BGM/<dir>/<name>.hd` and the MIDI file beside it in `SND/BGM/<NAME>.XB`.
+    pub fn music(iso: &mut Iso, dir: &str, name: &str) -> Option<(Self, Vec<u8>)> {
+        let xb = format!("SND/BGM/{}.XB", name.to_uppercase());
+        Some((Self::load(iso, &xb, &format!("data/sound/BGM/{dir}/{name}.hd"))?, midi(iso, &xb)?))
+    }
+}
+
+/// The MIDI file in archive `xb`.
+fn midi(iso: &mut Iso, xb: &str) -> Option<Vec<u8>> {
+    let data = iso.read(xb).ok()?;
+    let arc = Archive::parse(&data).ok()?;
+    arc.read(arc.entries.iter().find(|e| e.name.ends_with(".mid"))?).ok()
+}
+
+/// The BGM playing: its bank, track, and per MIDI channel the program, volume (CC7), pan (CC10) and expression (CC11).
+struct Music {
+    bank: Arc<SoundBank>,
+    seq: snd::Sequencer,
+    channels: [[u8; 4]; 16],
+    /// The sequence volume (the game's BGM volume, 55 at full).
+    volume: u32,
+    /// Channel `c`'s voices carry play id `id + c`.
+    id: u64,
 }
 
 struct Playing {
@@ -49,6 +74,7 @@ struct Mix {
     /// Each voice with its bank, play id, note, pitch word and level (for `Sound::update`).
     voices: Vec<(Voice, Arc<SoundBank>, u64, u8, u32, Level)>,
     playing: Vec<Playing>,
+    music: Option<Music>,
     ids: u64,
 }
 
@@ -72,6 +98,12 @@ impl Mix {
         }
         playing.retain(|p| p.next < p.events.len());
         self.playing = playing;
+        if let Some(mut m) = self.music.take() {
+            for e in m.seq.frame() {
+                self.midi(&mut m, e);
+            }
+            self.music = Some(m);
+        }
         for _ in 0..FRAME {
             let mut s = [0; 2];
             for (v, b, ..) in &mut self.voices {
@@ -82,6 +114,40 @@ impl Mix {
             out.extend(s.map(|x| x.clamp(-0x8000, 0x7fff) as f32 / 32768.0));
         }
         self.voices.retain(|v| v.0.phase != 0);
+    }
+
+    /// One MIDI message of the BGM, as the sound driver takes it.
+    // ponytail: controller changes apply to later notes only; the driver also re-levels the channel's sounding voices
+    fn midi(&mut self, m: &mut Music, [status, a, b]: [u8; 3]) {
+        let c = (status & 0xf) as usize;
+        let id = m.id + c as u64;
+        let ch = &mut m.channels[c];
+        match status & 0xf0 {
+            0x90 if b > 0 => {
+                let Ok(bank) = Bank::parse(&m.bank.hd) else { return };
+                let (tones, program_volume) = bank.program(ch[0] as usize, a);
+                if ch[1] == 0 || ch[3] == 0 {
+                    return;
+                }
+                for t in tones {
+                    let mut level = Level { seq: [m.volume; 2], bank: 127, velocity: b as u32, pan: [0x40, ch[2].clamp(1, 127) as u32, 0], ..default() };
+                    level.program(ch[1], ch[3], program_volume, t, &self.gain);
+                    let word = (t.root() as u32) << 24 | (a as u32) << 16 | (t.fine() as u8 as u32) << 8 | 0x40;
+                    let pitch = snd::pitch(&self.pitch, word, 0x0100_1000);
+                    let voice = Voice::key_on(t.sample() as u32 / 2, t.adsr(), pitch, level.volume(&self.pan));
+                    self.voices.push((voice, m.bank.clone(), id, a, word, level));
+                }
+            }
+            0x80 | 0x90 => self.voices.iter_mut().filter(|v| v.2 == id && v.3 == a).for_each(|v| v.0.key_off()),
+            0xb0 => match a {
+                7 => ch[1] = b,
+                10 => ch[2] = b,
+                11 => ch[3] = b,
+                _ => {} // ponytail: bank select and data entry (the reverb's parameters) do nothing here
+            },
+            0xc0 => ch[0] = a,
+            _ => {}
+        }
     }
 
     fn key_on(&mut self, p: &Playing, e: KeyOn) {
@@ -116,6 +182,30 @@ impl Sound {
         let id = m.ids;
         m.playing.push(Playing { id, bank: bank.clone(), events, next: 0, frame: 0, level, scale });
         id
+    }
+
+    /// Starts a BGM from the top at `volume` (the game's 55), replacing the one playing.
+    pub fn music(&self, bank: &Arc<SoundBank>, mid: &[u8], volume: u32) {
+        let mut m = self.0.lock().unwrap();
+        if let Some(old) = m.music.take() {
+            m.voices.iter_mut().filter(|v| (old.id..old.id + 16).contains(&v.2)).for_each(|v| v.0.key_off());
+        }
+        let Some(seq) = snd::Sequencer::new(mid) else { return };
+        let id = m.ids + 1;
+        m.ids += 16;
+        m.music = Some(Music { bank: bank.clone(), seq, channels: [[0, 100, 0x40, 127]; 16], volume, id });
+    }
+
+    /// The BGM's sequence volume, its sounding notes included.
+    pub fn music_volume(&self, volume: u32) {
+        let mut m = self.0.lock().unwrap();
+        let m = &mut *m;
+        let Some(music) = &mut m.music else { return };
+        music.volume = volume;
+        for (v, .., level) in m.voices.iter_mut().filter(|v| (music.id..music.id + 16).contains(&v.2)) {
+            level.seq = [volume; 2];
+            v.volume = level.volume(&m.pan);
+        }
     }
 
     /// The play `id` moved to `pos` at play speed `speed`: its voices re-placed (volume `p.volume`) and re-pitched.
@@ -227,6 +317,9 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     commands.spawn(AudioPlayer(streams.add(Stream(sound.0.clone()))));
     if let Some((xb, hd, program, key)) = &args.sound {
         let bank = Arc::new(SoundBank::load(&mut iso, xb, hd).expect("sound bank on disc"));
+        if let Some(mid) = midi(&mut iso, xb) {
+            sound.music(&bank, &mid, 55);
+        }
         sound.play(&bank, *program, *key, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000);
     }
     // the court's sound effects (bank slot 0); court 0 has no bank of its own
@@ -264,6 +357,13 @@ pub fn umpire_bank(iso: &mut Iso, n: u8, v: u8) -> Option<SoundBank> {
     SoundBank::load(iso, &format!("SND/UMP/UV{n:02}{big}.XB0"), &format!("data/sound/UMPIRE/gag_vc{n:02}{small}.hd"))
 }
 
+/// The jingle bank (slot 8) and the BGM's bank and MIDI file.
+#[derive(Resource)]
+pub struct MusicBanks {
+    pub jingles: Option<Arc<SoundBank>>,
+    pub bgm: Option<(Arc<SoundBank>, Vec<u8>)>,
+}
+
 /// The court's sound-effect bank.
 #[derive(Resource)]
 pub struct CourtBank(pub Option<Arc<SoundBank>>);
@@ -274,7 +374,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), ids: 0 }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
 }
 
 #[cfg(test)]
@@ -292,6 +392,37 @@ mod tests {
             .filter(|&(c, players, b)| voice_bank(&mut iso, c, players, b).is_none())
             .collect();
         assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    /// The court BGM and the jingles load and play: the music sounds, a jingle sounds and ends.
+    #[test]
+    fn plays_music_and_jingles() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        for n in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14] {
+            assert!(SoundBank::music(&mut iso, "Court", &format!("bgmg_{n:02}")).is_some(), "bgmg_{n:02}");
+        }
+        let (bank, mid) = SoundBank::music(&mut iso, "Court", "bgmg_01").unwrap();
+        sound.music(&Arc::new(bank), &mid, 55);
+        let peak = |out: &[f32]| out.iter().fold(0f32, |a, x| a.max(x.abs()));
+        let mut out = Vec::new();
+        for _ in 0..600 {
+            sound.0.lock().unwrap().render(&mut out);
+        }
+        eprintln!("music peak {}, voices {}", peak(&out), sound.0.lock().unwrap().voices.len());
+        assert!(peak(&out) > 0.01);
+        sound.music_volume(0);
+        let jingles = Arc::new(SoundBank::load(&mut iso, "SND/JGL/JIG_00.XB", "data/sound/JINGLE/jig_00.hd").unwrap());
+        let id = sound.play_centre(&jingles, sound::Play { slot: 8, program: 0, key: 1, volume: 0x80, speed: 1.0 });
+        let mut frames = 0;
+        while sound.playing(id) && frames < 3600 {
+            sound.0.lock().unwrap().render(&mut out);
+            frames += 1;
+        }
+        eprintln!("jingle 1: {frames} frames");
+        assert!(frames > 30 && frames < 3600);
     }
 
     /// The first system sound renders: the voice keys on, sounds, and ends.
