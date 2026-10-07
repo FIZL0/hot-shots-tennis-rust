@@ -173,6 +173,8 @@ struct Game {
     tables: Vec<Table>,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     serve_tables: Vec<Table>,
+    /// Smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
+    smash_tables: Vec<Table>,
     serve_data: ServeData,
     /// The serve in progress (server's toss and swing).
     serving: Serving,
@@ -318,27 +320,14 @@ pub fn plugin(app: &mut App) {
         .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
 }
 
-/// Character 0's stroke tables (kinds 0..4) straight from the disc.
-fn tables(iso: &mut Iso) -> Vec<Table> {
-    let data = iso.read("TRAJ/TRAJ00A.XB").expect("trajectory archive on disc");
+/// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
+fn tables(iso: &mut Iso, archive: &str, name: &str, n: usize) -> Vec<Table> {
+    let data = iso.read(&format!("TRAJ/{archive}")).expect("trajectory archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
-    (0..5)
+    (0..n)
         .map(|k| {
-            let name = format!("tr_pc00_strk{k}.dat");
-            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&name)).expect("stroke table");
-            Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
-        })
-        .collect()
-}
-
-/// Character 0's serve tables (`serv0..3`).
-fn serve_tables(iso: &mut Iso) -> Vec<Table> {
-    let data = iso.read("TRAJ/TRAJ00A.XB").expect("trajectory archive on disc");
-    let arc = Archive::parse(&data).expect("xb archive");
-    (0..4)
-        .map(|k| {
-            let name = format!("tr_pc00_serv{k}.dat");
-            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&name)).expect("serve table");
+            let file = format!("tr_pc00_{name}{k}.dat");
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&file)).expect("trajectory table");
             Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
         })
         .collect()
@@ -491,8 +480,9 @@ fn setup(
     let rules = if args.singles { SINGLES } else { DOUBLES };
     let mut game = Game {
         rules,
-        tables: tables(&mut iso),
-        serve_tables: serve_tables(&mut iso),
+        tables: tables(&mut iso, "TRAJ00A.XB", "strk", 5),
+        serve_tables: tables(&mut iso, "TRAJ00A.XB", "serv", 4),
+        smash_tables: tables(&mut iso, "TRAJ00B.XB", "smsh", 2),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
         reach: reach(&mut iso),
@@ -663,13 +653,15 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     cs.turn = turn * time.delta_secs() * 1.5;
 }
 
-/// Launch a stroke (class 1) or serve (class 0) of `kind` by player `who` from the ball's position toward
+/// Launch a serve (class 0), stroke (class 1) or smash (class 3) of `kind` by player `who` from the ball's position toward
 /// `target`, along the game's trajectory tables.
 /// `branch`, `grade` and `offset` are the swing's (branch code, timing grade and offset) for the hit sounds.
 fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, grade, offset): (u8, u8, i32)) {
     let at = g.flight.ball.pos;
     let l = if class == 0 {
         lookup(&g.serve_tables[kind as usize], &Bounds::serve(kind == 3, hst_sim::ball::Params::default().radius), at, target)
+    } else if class == 3 {
+        lookup(&g.smash_tables[kind as usize], &Bounds::smash(kind), at, target)
     } else {
         lookup(&g.tables[kind as usize], &Bounds::stroke(kind, at[2]), at, target)
     };
@@ -695,7 +687,12 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     g.sounds.extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
     g.smashed = branch == 4 && g.rules.players > 1;
     g.whistle = if kind == 3 { (true, g.whistle.1 + 1) } else { (false, g.whistle.1) };
-    let spin = if class == 0 { KIND_SPIN[[0, 1, 2, 3][kind as usize]] } else { KIND_SPIN[kind as usize] };
+    // every recorded smash (kind 0) spins 5°; ponytail: kind 1's own spin waits for the per-character records
+    let spin = match class {
+        0 => KIND_SPIN[[0, 1, 2, 3][kind as usize]],
+        3 => 5f32.to_radians(),
+        _ => KIND_SPIN[kind as usize],
+    };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
@@ -1062,9 +1059,12 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         }
         if c.frames == 0 {
             let (stick, end) = (aim(g), g.players[i].end);
-            let kind = hst_sim::shot::stick_kind(branch_code(c.swing.branch), g.players[i].kind, [stick.x, stick.y], end);
+            let branch = branch_code(c.swing.branch);
+            let kind = hst_sim::shot::stick_kind(branch, g.players[i].kind, [stick.x, stick.y], end);
             let target = aim_target(g, stick, end);
-            strike(g, i, 1, kind, target, (branch_code(c.swing.branch), c.grade, c.offset));
+            // a smash has its own class and kinds: △ (the lob button) smashes kind 1, the others kind 0
+            let (class, kind) = if branch == 4 { (3, (kind == 3) as i32) } else { (1, kind) };
+            strike(g, i, class, kind, target, (branch_code(c.swing.branch), c.grade, c.offset));
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
             let rally = g.phase == Phase::Rally && g.players.len() > 1;
             let v = g.flight.ball.vel;

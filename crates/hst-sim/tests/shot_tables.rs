@@ -72,3 +72,48 @@ fn stick_turns_topspin_flat_and_slice_drop() {
     }
     assert_eq!((n, changed), (42, 8));
 }
+
+/// Every smash of the slot-5 doubles match (`match_s05.bin`, all smash kind 0) against character 0's `smsh0` table:
+/// the lookup runs from the hit to the ball's stored target (+0x70, +0x80), both shifted back by the hitter's timing
+/// scatter (1.5 × the swing's late/early offset +0x3ecc along the shot, scaled by +0x3ee0 less +0x3edc); speed,
+/// elevation and flight frames must match the launch. Four smashes with a late offset of 4 are still off (by
+/// 1e-3–4e-2 rad), so this asserts the five that are exact.
+#[test]
+fn smashes_launch_like_the_game() {
+    use hst_sim::replay::frames_live;
+    let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
+    let (Ok(data), Ok(table)) = (std::fs::read(format!("{ctx}/fixtures/match_s05.bin")), std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ00B.XB/data/hatsuyama/traj/tr_pc00_smsh0.dat"))) else {
+        return eprintln!("fixture missing, skipped");
+    };
+    let table = Table::parse(&table).unwrap();
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
+    let frames = frames_live(&data);
+    let (mut exact, mut smashes) = (0, 0);
+    for w in frames.windows(2) {
+        let (a, b) = (w[0].live_ball(), w[1].live_ball());
+        let launched = |x: &[u8]| x[0x58] == 3 && i32::from_le_bytes(x[0xac..0xb0].try_into().unwrap()) == 0;
+        let vel = v3(b, 0x130);
+        let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
+        // class 3 also marks the held and tossed serve ball
+        if !launched(b) || launched(a) || speed < 0.3 {
+            continue;
+        }
+        let (hit, target) = (v3(b, 0x70), v3(b, 0x80));
+        let Some(p) = (0..4).find(|&p| w[1].player_f32(p, 0x3ec0).to_bits().to_le_bytes()[1] == 4) else { continue };
+        let late = w[1].player_f32(p, 0x3ecc).to_bits() as i32 as f32 / 10.0;
+        let scatter = 1.5 * (if late < 0.0 { 2.0 * late } else { late } * w[1].player_f32(p, 0x3ee0) - w[1].player_f32(p, 0x3edc));
+        let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
+        let n = (dx * dx + dz * dz).sqrt();
+        let s = [scatter * dx / n, scatter * dz / n];
+        let l = lookup(&table, &Bounds::smash(0), [hit[0] - s[0], hit[1], hit[2] - s[1]], [target[0] - s[0], 0.0, target[2] - s[1]]);
+        let v = launch(hit, target, l.elevation, l.speed);
+        let err = (0..3).map(|j| (v[j] - vel[j]).abs()).fold(0.0, f32::max);
+        let frames_ok = l.frames + 1 == i32::from_le_bytes(b[0x260..0x264].try_into().unwrap());
+        eprintln!("vsync {} p{p}: velocity off by {err:.1e}, frames {}", w[1].vsync(), if frames_ok { "ok" } else { "off" });
+        smashes += 1;
+        exact += (err < 2e-5 && frames_ok) as usize;
+    }
+    assert_eq!(smashes, 9);
+    assert!(exact >= 5, "{exact} of {smashes} smashes exact");
+}

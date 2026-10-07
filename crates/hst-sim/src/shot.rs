@@ -74,6 +74,13 @@ impl Bounds {
     }
 }
 
+impl Bounds {
+    /// Smashes (class 3) by smash kind (0 ✕/○, 1 △): kind 0 starts the target axis deeper.
+    pub fn smash(kind: i32) -> Self {
+        Self { near: -0.5, far: -18.17, low: -1.7, high: -3.05, short: if kind == 0 { 6.9425 } else { 3.0 }, long: 16.17 }
+    }
+}
+
 pub struct Lookup {
     pub elevation: f32,
     pub speed: f32,
