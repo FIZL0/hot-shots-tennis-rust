@@ -9,7 +9,7 @@ use hst_data::{exe, layout, mdl, mtl};
 
 /// The game's collision material table as ball responses, by material id.
 pub fn materials(game: &exe::Game) -> Vec<Material> {
-    game.surfaces().iter().map(|s| Material { court: s.court, special: s.special, restitution: s.restitution, spin_loss: s.spin_loss }).collect()
+    game.surfaces().iter().zip(0..=255).map(|(s, id)| Material { court: s.court, special: s.special, restitution: s.restitution, spin_loss: s.spin_loss, id, effect: s.effect, sound: s.sound }).collect()
 }
 
 /// Every node's drawing matrix: the root's `root`, each child its own placement through its parent's.

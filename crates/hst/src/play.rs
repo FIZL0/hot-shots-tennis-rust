@@ -202,6 +202,9 @@ struct Game {
     sounds: Vec<(sound::Play, V3)>,
     /// Swing whooshes waiting to play: ticks left and the swinger (played at the player's position).
     whooshes: Vec<(u32, usize)>,
+    /// The ball's bounce sounds, and whether the last shot was a smash in a game of more than one player.
+    bounces: sound::Bounces,
+    smashed: bool,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
@@ -510,6 +513,8 @@ fn setup(
         rng: 0x2468_ace1,
         sounds: Vec::new(),
         whooshes: Vec::new(),
+        bounces: default(),
+        smashed: false,
         cam: Camera::new(),
         prev_view: Camera::new().view,
         cam_cut: false,
@@ -685,6 +690,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         ..default()
     };
     g.sounds.extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
+    g.smashed = branch == 4 && g.rules.players > 1;
     let spin = if class == 0 { KIND_SPIN[[0, 1, 2, 3][kind as usize]] } else { KIND_SPIN[kind as usize] };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     let hitter_far = g.players[who].end < 0.0;
@@ -1364,10 +1370,16 @@ fn simulate(mut g: ResMut<Game>) {
     g.prev_ball = g.flight.ball.pos;
     let (shot, surface) = (g.shot, &COURTS[g.court]);
     g.flight.in_play = g.shots > 0;
+    let before = g.flight.bounces;
     match &g.world {
         Some((world, materials)) => g.flight.step_world(&shot, surface, world, materials),
         None => g.flight.step(&shot, surface),
     }
+    // bounce sounds stop once the point is decided (the deciding bounce still plays)
+    let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
+    let bounce = (n != before && n > 0 && g.phase == Phase::Rally).then_some((n, &material));
+    let smash = g.smashed.then(|| sound::kmh(g.flight.ball.vel));
+    g.sounds.extend(g.bounces.frame(bounce, smash).into_iter().map(|p| (p, at)));
     g.since_hit += 1;
     if g.phase != Phase::Rally || g.shots == 0 {
         return;

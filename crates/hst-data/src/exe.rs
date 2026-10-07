@@ -70,6 +70,8 @@ impl<'a> Game<'a> {
                 special: r[1] != 0,
                 restitution: f32::from_le_bytes(r[4..8].try_into().unwrap()),
                 spin_loss: f32::from_le_bytes(r[8..12].try_into().unwrap()),
+                effect: r[12],
+                sound: r[13],
             })
             .collect()
     }
@@ -200,6 +202,10 @@ pub struct Surface {
     pub restitution: f32,
     /// Share of spin lost per bounce (and how fast spin relaxes) off the court surface.
     pub spin_loss: f32,
+    /// Bounce effect kind (0 none; 2 a soft surface heard once in a row; 5 silent).
+    pub effect: u8,
+    /// Court program 2 key a bounce plays (0 none).
+    pub sound: u8,
 }
 
 /// Number of scripted camera shots.

@@ -5,7 +5,7 @@
 //! (resolved from the key-on's ADSR and sample address) and `Level::volume`. Skips without the recording or disc.
 
 use hst_data::{exe, iso::Iso, snd::{Bank, Level}, xb::Archive};
-use hst_sim::sound;
+use hst_sim::sound::{self, Bounces};
 
 const CONTACTS: usize = 4 + 0x290 * 2 + 0x40;
 const FIX: usize = CONTACTS + 6 * 0x50;
@@ -259,4 +259,62 @@ fn swing_sounds_match_the_game() {
     }
     eprintln!("{expected} whooshes");
     assert!(expected >= 6 && expected == whooshes.len());
+}
+
+/// The bounce sounds of the same match: every bounce `sound::Bounces` gives sounds for (court bounces, the ground
+/// beyond, the net) keyed its program 2 plays at the contact record's point, this frame or the next. Bounce sounds
+/// stop once the point is decided: the double bounce still plays, the dead ball after it does not (until the next
+/// serve). Program 2 key 0 keyed only for those, bar two plays well away from the ball a moment after a point.
+#[test]
+fn bounce_sounds_match_the_game() {
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let s = samples(&data, 0x330);
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    let materials = hst_sim::court::materials(&exe::Game::new(&iso.read("SYSTEM.CNF").unwrap(), &iso.read("ZZBIN/GAME.BIN").unwrap()).unwrap());
+    let bank = Bank::parse(&court.hd).unwrap();
+    let i = |b: &[u8], o: usize| u(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+    // court bounce tones (program 2 key 0) keyed, at any volume
+    let tone = |k: usize| {
+        s[k].cmds.iter().filter(|c| c[0] == 2 && c[3] != 8).filter(|c2| {
+            let Some(c3) = s[k].cmds.iter().find(|c| c[0] == 3 && c[1] == c2[1]) else { return false };
+            bank.key_ons(2, 0).into_iter().flatten().any(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && BASE + t.sample() as u32 == c3[2]))
+        }).count()
+    };
+    let heard: usize = (0..s.len()).map(tone).sum();
+    let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
+    let mut bounces = Bounces::default();
+    let (mut plays, mut zeros, mut superseded, mut dead) = (0, 0, 0, false);
+    for k in 1..s.len() - 2 {
+        let n = i(s[k].ball, 0x224);
+        // ponytail: the point is decided by the double bounce here (no bounce in this match lands out)
+        dead &= n != 0;
+        let bounce = (n != i(s[k - 1].ball, 0x224) && n > 0 && !dead).then(|| (n, &materials[s[k].contacts[(n as usize - 1) * 0x50 + 0x40] as usize]));
+        dead |= n >= 2;
+        let h = s[k].hit;
+        let hitter = i(h, rally + 0x18);
+        let smash = (hitter >= 0 && h[fx(0xd8 + 8 * hitter as usize) + 5] == 4).then(|| sound::kmh(std::array::from_fn(|j| f(s[k].ball, 0x140 + 4 * j))));
+        for pl in bounces.frame(bounce, smash) {
+            let (n, _) = bounce.unwrap();
+            let pos = std::array::from_fn(|j| f(s[k].contacts, (n as usize - 1) * 0x50 + 0x10 + 4 * j));
+            let (angle, dist) = sound::place(pos);
+            let play = [angle, dist, sound::falloff(pl.volume, dist)];
+            let window: Vec<Key> = (k..=k + 1).flat_map(|j| court.keyed(&s[j], Some(&s[j + 1]))).collect();
+            let found = |play| window.iter().any(|w| court.gives(w, play, [(2, pl.key as usize)]));
+            if !found(play) {
+                // a later play of the same key that frame took the voice over (one recorded play a frame)
+                assert!((k..=k + 1).any(|j| s[j].play != play && found(s[j].play)), "bounce {n} at frame {k} {pos:?}: {pl:?} {play:?}");
+                superseded += 1;
+            }
+            if pl.speed != 1.0 {
+                let word = sound::speed_word(pl.speed);
+                assert!(s[k..k + 3].iter().flat_map(|x| &x.cmds).any(|c| c[0] == 4 && c[3] & 0xffff == word), "bounce {n} at {k}: scale {word:#x}");
+            }
+            plays += 1;
+            zeros += (pl.key == 0) as usize;
+        }
+    }
+    eprintln!("{plays} bounce plays ({zeros} key 0, {superseded} superseded), {heard} bounce tones keyed");
+    assert!(plays >= 20 && superseded <= 1 && zeros + 2 == heard);
 }

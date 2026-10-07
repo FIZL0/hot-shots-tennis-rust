@@ -164,3 +164,54 @@ pub const SWING: Play = play(0, 4, 0, 0x80);
 pub fn speed_word(speed: f32) -> u32 {
     (crate::ps2::mul(speed.clamp(0.0, 2.0), 4096.0) as i32) as u32
 }
+
+/// The bounce sounds of one ball in play, all on the court bank (slot 0) program 2 at the bounce's contact point:
+/// the ball object's key 0 for each of the first three bounces on a playing surface (the first slowed to 0.5 after a
+/// smash still at 85 km/h or more), and the ball effects' sound key of the bounced material (the net's key 2 not
+/// again until the ball meets a playing surface), plus key 0 for materials 0x0d, 0x17 and 0x30. An effect-spawning
+/// material holds the next 4 frames' material sounds off.
+/// ponytail: the rolling scrape (key 3) needs a ball flag (+0x264) never set in the recordings; the menu option
+/// that swaps key 0 for 0xd and the 10-effect cap (effects expire too fast to reach it) are left out.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Bounces {
+    /// Frames the material sounds are held off (+0x840).
+    cooldown: i32,
+    /// The last material sound was a soft obstacle's (effect kind 2, +0x849).
+    soft: bool,
+}
+
+impl Bounces {
+    /// One frame: `bounce` is the ball's new bounce count and its contact's material, if the count changed;
+    /// `smash_kmh` the ball's speed when the shot was a smash with more than one player. Returns the plays.
+    pub fn frame(&mut self, bounce: Option<(i32, &crate::ball::Material)>, smash_kmh: Option<f32>) -> Vec<Play> {
+        let mut out = Vec::new();
+        if let Some((n, m)) = bounce {
+            if (1..4).contains(&n) && m.court {
+                let fast = n == 1 && smash_kmh.is_some_and(|v| v >= 85.0);
+                out.push(Play { speed: if fast { 0.5 } else { 1.0 }, ..play(0, 2, 0, 0x80) });
+            }
+            if n < 6 && self.cooldown < 1 {
+                self.soft &= !m.court;
+                if !(self.soft && m.effect == 2) && m.effect != 5 {
+                    if m.effect != 0 {
+                        self.cooldown = 4;
+                    }
+                    if m.sound != 0 {
+                        out.push(play(0, 2, m.sound, 0x80));
+                    }
+                    if matches!(m.id, 0x0d | 0x17 | 0x30) {
+                        out.push(play(0, 2, 0, 0x80));
+                    }
+                    self.soft = m.effect == 2;
+                }
+            }
+        }
+        self.cooldown -= (self.cooldown != 0) as i32;
+        out
+    }
+}
+
+/// The ball's speed as the game shows it: metres per frame to km/h.
+pub fn kmh(vel: [f32; 3]) -> f32 {
+    div(mul(mul(sqrt(madd(madd(mul(vel[2], vel[2]), vel[0], vel[0]), vel[1], vel[1])), 60.0), 3600.0), 1000.0)
+}
