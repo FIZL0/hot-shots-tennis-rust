@@ -122,6 +122,10 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P11c** Reaction delay (in P11) → `ai.rs` · `play.rs` bot
 - [x] **P11d** Timing error (in P11) → `ai.rs` · `play.rs` bot/bot_serve
 - [ ] **P11e** Positioning (in P11) → `ai.rs` · `play.rs` bot/intercept
+- [x] **P11e1** Doubles formation and the walk back to it (in P11e) → `hst-sim/src/position.rs` · `play.rs` ai_wait | t: position.rs | j: 2026-10-07-p11-ai
+- [ ] **P11e2** Singles return to centre and net dash (in P11e) → `position.rs` · `play.rs` ai_wait | t: singles bot recording
+- [ ] **P11e3** Guessing (ヤマ張り) (in P11e; after P11c/P11g/P11h's draws) → `ai.rs` · `play.rs` bot
+- [ ] **P11e4** Strong-side run-round (in P11e) → `ai.rs` · `play.rs` intercept
 - [ ] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
 - [ ] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve
 - [ ] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5
