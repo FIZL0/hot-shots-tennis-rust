@@ -57,6 +57,7 @@ pub fn first_frame(sk: &Skeleton, anim: &Anim) -> Vec<M4> {
 
 /// A motion bound to a skeleton as the game's ANI player holds it: per keyed track its node, position scale and
 /// key lists with the interpolation tangents worked out at load.
+#[derive(Clone)]
 pub struct Clip {
     pub ticks_per_frame: f32,
     /// Length in game frames: the last key over all tracks.
@@ -64,6 +65,7 @@ pub struct Clip {
     pub tracks: Vec<ClipTrack>,
 }
 
+#[derive(Clone)]
 pub struct ClipTrack {
     pub node: usize,
     /// Position keys × this: the skeleton's bone length over the motion's (1 for the pelvis and unknown lengths).
@@ -74,7 +76,7 @@ pub struct ClipTrack {
 
 /// Keys of one list: tick, value and tangents (rotation: squad control quaternion in `[0]`; position: incoming
 /// tangent `[0]`, outgoing `[1]`).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Keys {
     tick: Vec<i32>,
     value: Vec<[f32; 4]>,
@@ -632,4 +634,75 @@ pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], s
 /// The swing's IK frames from the frames left to contact: (ramp length, start offset).
 pub fn ik_frames(to_contact: i32) -> (i32, i32) {
     if to_contact < 9 { (to_contact, 0) } else { (8, 8 - to_contact) }
+}
+
+/// The contact IK as the play state runs it each frame after the solve: `n` counts toward the contact frame
+/// `frames` (negative: still waiting), the arm weight ramps up n/frames, then back down to 0 over half as many
+/// frames, when the IK ends (from the contact frame on, the ramp is 8 frames long). While ramping up the body is moved to the solve position plus step·weight, until
+/// something else moves it or the mover clamps it.
+#[derive(Clone, Copy, Debug)]
+pub struct ArmIk {
+    pub solve: ArmSolve,
+    pub frames: i32,
+    pub n: i32,
+    pub on: bool,
+    /// the body may still be moved by the step
+    pub free: bool,
+    /// the position at the solve
+    pub pos0: [f32; 4],
+    /// the position after the last step move
+    pub seen: [f32; 4],
+}
+
+impl ArmIk {
+    pub fn new(solve: ArmSolve, to_contact: i32, pos: [f32; 4]) -> Self {
+        let (frames, n) = ik_frames(to_contact);
+        ArmIk { solve, frames, n, on: true, free: true, pos0: pos, seen: pos }
+    }
+
+    /// One frame: the arm weight, with `pos` moved through `mover(pos, delta) -> (pos, unclamped)`, and whether the
+    /// motion's speed goes back to 1 now (the frame before contact).
+    pub fn tick(&mut self, pos: &mut [f32; 4], mover: impl FnOnce([f32; 4], [f32; 4]) -> ([f32; 4], bool)) -> (f32, bool) {
+        use ps2::{add, div, mul, sub};
+        if !self.on {
+            return (0.0, false);
+        }
+        let (n, f) = (self.n, self.frames as f32);
+        let mut unit = false;
+        let mut w = 0.0;
+        if n > self.frames {
+            w = sub(1.0, div(mul(2.0, sub(add(n as f32, 0.0), f)), f));
+            if w <= 0.0 {
+                self.on = false;
+                return (0.0, false);
+            }
+        } else if n >= 0 {
+            w = div(add(n as f32, 0.0), f);
+            if self.free {
+                if self.seen[0] == pos[0] && self.seen[2] == pos[2] {
+                    let s = self.solve.step;
+                    let d = std::array::from_fn(|k| sub(add(self.pos0[k], mul(s[k], w)), pos[k]));
+                    let (p, free) = mover(*pos, d);
+                    (*pos, self.free, self.seen) = (p, free, p);
+                } else {
+                    self.free = false;
+                }
+            }
+            // at the contact frame the ramp down restarts from 8 of 8 (4 frames)
+            if w >= 1.0 {
+                (self.frames, self.n) = (8, 8);
+            } else {
+                unit = n + 1 >= self.frames;
+            }
+        }
+        self.n += 1;
+        (w, unit)
+    }
+
+    /// Joint `j`'s local (right hand, right forearm, right upper arm, left upper arm) turned by weight `w` of its
+    /// solved rotation, keeping its translation.
+    pub fn apply(&self, j: usize, w: f32, local: &M4) -> M4 {
+        let q = crate::quat::slerp([0.0, 0.0, 0.0, 1.0], self.solve.quats[j], w);
+        keep_row3(vmul(local, &crate::quat::to_matrix(q)), local)
+    }
 }

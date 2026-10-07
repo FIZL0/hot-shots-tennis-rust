@@ -22,6 +22,7 @@ use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
 use hst_sim::motion;
+use hst_sim::pose::{ArmIk, contact_solve};
 use hst_sim::player::{self as loco, Stats};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
@@ -103,6 +104,10 @@ struct Player {
     body: loco::Body,
     /// The post-point reaction carrying the player along its root path, if any.
     root: Option<Root>,
+    /// The contact IK after a stroke's solve (the body's step into the shot, the arm's turn toward the ball),
+    /// and this frame's arm turn and weight for drawing.
+    ik: Option<ArmIk>,
+    arm: Option<([[f32; 4]; 4], f32)>,
 }
 
 /// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
@@ -141,8 +146,6 @@ struct Contact {
     swing: swing::Swing,
     grade: u8,
     offset: i32,
-    step: f32,
-    step_frames: u32,
 }
 
 #[derive(PartialEq)]
@@ -815,17 +818,7 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
     let p = &g.players[i];
     let path = predicted_path(g, g.reach.grades.len());
     let s = swing::search(&g.reach, &path, p.pos, p.end, p.kind)?;
-    // ponytail: the body's sideways step comes from the original's arm IK on the character skeleton (0.04–0.29 m
-    // toward the ball in recordings); a fixed 0.1 m stands in until the skeleton is read (P8)
-    let step = if s.body { 0.0 } else { 0.1 * (s.ball[0] - p.pos[0]).signum() };
-    Some(Contact {
-        frames: s.frame as u32,
-        swing: s,
-        grade: g.reach.grades[s.frame],
-        offset: s.frame as i32 - SWEET_FRAME,
-        step,
-        step_frames: swing::step_frames(s.frame) as u32,
-    })
+    Some(Contact { frames: s.frame as u32, swing: s, grade: g.reach.grades[s.frame], offset: s.frame as i32 - SWEET_FRAME })
 }
 
 /// The game's contact-search branch number (+0x3ec1).
@@ -942,6 +935,16 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.swung = false;
             p.vel = Vec2::ZERO;
             square_up(p);
+            // the arm reaches for the ball: ground strokes 0x10–0x19 (volleys 0x1a/0x1b have their own solve, N1d3d)
+            let a = c.swing.anim as usize;
+            if let (Some(t), true) = (g.data.get(i).and_then(|d| d.arm.clone()), (0x10..0x1a).contains(&a)) {
+                let p = &mut g.players[i];
+                let b = c.swing.ball;
+                let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+                // the side scale is +1 on the −z end (`end`); the second size factor is 1 in normal play
+                let solve = contact_solve(&t, a - 0x10, [b[0], -b[1], b[2], 1.0], pos, [p.end, 1.0]);
+                p.ik = Some(ArmIk::new(solve, c.frames as i32, pos));
+            }
         } else {
             g.players[i].pending = left.checked_sub(1);
             if left == 0 {
@@ -949,11 +952,34 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             }
         }
     }
+    // the contact IK's frame: the body steps into the shot through the mover, the arm turns by its weight
+    let mate = (g.players.len() == 4).then(|| g.players[i ^ 2].pos);
+    let p = &mut g.players[i];
+    p.arm = None;
+    if let Some(ik) = p.ik.as_mut() {
+        let mut pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+        let end = p.end;
+        // ponytail: the mover's partner check is skipped for the server in the original (game +0x1fc); kept here
+        let (w, unit) = ik.tick(&mut pos, |at, d| {
+            let to = loco::mover([at[0], at[1], at[2]], [d[0], d[1], d[2]], end, mate, false);
+            let free = to[0] == hst_sim::ps2::add(at[0], d[0]) && to[2] == hst_sim::ps2::add(at[2], d[2]);
+            ([to[0], to[1], to[2], at[3]], free)
+        });
+        p.arm = Some((ik.solve.quats, w));
+        if !ik.on {
+            p.ik = None;
+        }
+        // the swing reaches its contact pose at speed 1
+        if unit {
+            p.cmd.speed = 1.0;
+        }
+        p.prev = p.pos;
+        p.pos = [pos[0], pos[1], pos[2]];
+    }
     if let Some(c) = g.players[i].contact {
         let p = &mut g.players[i];
-        p.prev = p.pos;
-        if c.frames < c.step_frames {
-            p.pos[0] += c.step / c.step_frames as f32;
+        if p.ik.is_none() {
+            p.prev = p.pos;
         }
         if c.frames == 0 {
             let (stick, end) = (aim(g), g.players[i].end);
@@ -1405,6 +1431,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
     for (f, mut m) in &mut q {
         let i = f.0;
         let p = &g.players[i];
+        m.arm = p.arm;
         let serving = g.phase == Phase::Serve && g.score.server == i as i32;
         if serving {
             let s = g.serving;
@@ -1431,6 +1458,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         if c.serial != m.serial {
             m.set(c.id, c.speed, c.looping, c.hold, c.serial);
         }
+        m.clock.speed = c.speed;
     }
 }
 

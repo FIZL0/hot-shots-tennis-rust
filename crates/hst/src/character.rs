@@ -12,7 +12,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mtl, xb::Archive};
-use hst_sim::pose::{Clip, Path, Skeleton};
+use hst_sim::pose::{arm_table, ArmTable, Clip, Path, Skeleton};
 use hst_sim::motion::Clock;
 
 /// One joint of the skeleton.
@@ -41,6 +41,8 @@ pub struct CharacterData {
     /// Per motion number (0..48): the forward row (x, z) of `Bip01Pelvis`'s model matrix at the motion's first
     /// frame — what the game's body turn compares (`hst_sim::player::turn`).
     pub pelvis: Vec<[f32; 2]>,
+    /// The stroke arm table (motions 0x10–0x19 at frame 8) the contact solve reaches from.
+    pub arm: Option<Arc<ArmTable>>,
 }
 
 impl CharacterData {
@@ -65,18 +67,20 @@ pub struct Motion {
     pub prev: f32,
     /// Bumped by whoever restarts the motion (lets a driver restart the same motion).
     pub serial: u32,
+    /// The contact IK's turn of right hand, right forearm, right upper arm and left upper arm, and its weight.
+    pub arm: Option<([[f32; 4]; 4], f32)>,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0 }
+        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0, arm: None }
     }
 }
 
 impl Motion {
     /// The game's motion setter: restart motion `id` at its start.
     pub fn set(&mut self, id: usize, speed: f32, looping: bool, hold: Option<i32>, serial: u32) {
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial };
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
@@ -274,8 +278,10 @@ pub fn load_disc(
             paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
         }
     }
+    let strokes: Option<Vec<Clip>> = (0x10..0x1a).map(|m| motions.get(&m).cloned()).collect();
+    let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm })
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
@@ -324,6 +330,15 @@ pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints:
             }
             if let Some(p) = pos {
                 tf.translation = Vec3::from(p);
+            }
+        }
+        // the contact IK turns the arm joints in their parents' frames (the game's local·Q, rows; translation kept)
+        if let Some((quats, w)) = motion.arm {
+            for (name, q) in ["Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"].iter().zip(quats) {
+                let Some(j) = rig.data.joint(name) else { continue };
+                let Ok(mut tf) = joints.get_mut(rig.joints[j]) else { continue };
+                let [x, y, z, w] = hst_sim::quat::slerp([0.0, 0.0, 0.0, 1.0], q, w);
+                tf.rotation = (Quat::from_xyzw(-x, -y, -z, w).normalize() * tf.rotation).normalize();
             }
         }
     }

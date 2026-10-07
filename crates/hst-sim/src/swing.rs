@@ -126,8 +126,3 @@ pub fn search(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, kind: i
         swing(Branch::Ground, k, body, base)
     })
 }
-
-/// Frames before contact over which the body slides by its swing step (the rest of the wind-up stands still).
-pub fn step_frames(frame: usize) -> usize {
-    frame.min(8)
-}

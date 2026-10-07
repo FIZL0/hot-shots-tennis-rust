@@ -450,3 +450,50 @@ fn contact_solve_anim() {
     eprintln!("{tried} contact solves bit-exact ({other} outside strokes 0x10-0x19)");
     assert!(tried > 30);
 }
+
+/// The contact IK's frames after each recorded solve of the slot-5 match: the counter +0x3fc4, the flag +0x3fc8
+/// and the body stepped to the solve position plus step·weight (+0x3d70), bit-exact (mover taken as unclamped);
+/// the motion speed back at 1 from the frame before contact.
+#[test]
+fn arm_ik_anim() {
+    use hst_sim::pose::{ArmIk, ArmSolve};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(anim) = std::fs::read(format!("{root}context/fixtures/anim_s05.bin")) else { return eprintln!("anim_s05 absent, skipped") };
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    let blk = |k: usize, p: usize| &anim[k * S + 0x104 + p * 0x484..][..0x400];
+    let v4 = |b: &[u8], o: usize| [0, 4, 8, 12].map(|j| f(b, o - 0x3c00 + j));
+    let i32_at = |b: &[u8], o: usize| f(b, o - 0x3c00).to_bits() as i32;
+    let (mut runs, mut frames, mut units) = (0, 0, 0);
+    for k in 1..anim.len() / S {
+        for p in 0..4 {
+            let b = blk(k, p);
+            if !(b[0x3c8] == 1 && blk(k - 1, p)[0x3c8] == 0) {
+                continue;
+            }
+            let solve = ArmSolve { step: v4(b, 0x3fd0), quats: [[0.0; 4]; 4] };
+            let mut ik = ArmIk { solve, frames: i32_at(b, 0x3fc0), n: i32_at(b, 0x3fc4), on: true, free: true, pos0: v4(b, 0x3fe0), seen: v4(b, 0x3d70) };
+            for j in k + 1..anim.len() / S {
+                let b = blk(j, p);
+                let mut pos = v4(blk(j - 1, p), 0x3d70);
+                let (_, unit) = ik.tick(&mut pos, |p, d| (std::array::from_fn(|i| hst_sim::ps2::add(p[i], d[i])), true));
+                let ctx = format!("solve {k} p{p} frame {j}");
+                // the motion speed (anim +0x34) set to 1 the frame before contact
+                let speed = |b: &[u8]| f(&b[0x400..], 0x34);
+                let anim_of = |j: usize| &anim[j * S + 0x104 + p * 0x484..][..0x484];
+                if unit {
+                    assert_eq!(speed(anim_of(j)), 1.0, "{ctx} speed");
+                    units += (speed(anim_of(j - 1)) != 1.0) as i32;
+                }
+                assert_eq!((ik.on, ik.n), (b[0x3c8] == 1, i32_at(b, 0x3fc4)), "{ctx}");
+                assert_eq!([pos[0], pos[2]].map(f32::to_bits), [0, 8].map(|o| f(b, 0x170 + o).to_bits()), "{ctx}");
+                frames += 1;
+                if !ik.on {
+                    break;
+                }
+            }
+            runs += 1;
+        }
+    }
+    eprintln!("{runs} contact IK runs, {frames} frames bit-exact, {units} speed resets");
+    assert!(runs > 40);
+}

@@ -1,0 +1,11 @@
+# N1d3c — The contact IK per frame (FINAL)
+- Code: `ArmIk` in `pose.rs` ports the per-frame part of the play state (0x34ec70); wired into `play.rs` (`advance_stroke`) and `character.rs` (`animate`).
+- Play state per frame while flag +0x3fc8 is set (sim ticks, interpolation param 0, volley flag +0x4001 clear): counter n = +0x3fc4, F = +0x3fc0.
+  - n < 0: waiting, weight 0, n += 1.
+  - 0 ≤ n ≤ F: w = n/F; if movable flag +0x4000 and the position still equals the cache +0x3ff0 (x and z), the body goes through the mover by (pos0 +0x3fe0 + step·w − pos); +0x4000 = mover's "unclamped" return, cache = new pos; otherwise +0x4000 cleared. If w ≥ 1 (n == F): F = n = 8. Else if (n+1)/F ≥ 1 (the frame before contact): the motion speed (anim +0x34, +0x40 and per-track speeds) set to 1.
+  - n > F: w = 1 − 2(n−F)/F; at w ≤ 0 the flag clears (n not incremented that frame). So after contact the arm unwinds over 4 frames.
+  - Joints RHand/RForearm/RUpperArm/LUpperArm: local = local·to_matrix(slerp(identity, q, w)), translation row kept; then n += 1.
+  - The mover's third arg is (game +0x1fc != player +0x12b8), i.e. partner check off for one player (likely the server); the app keeps the partner check (ponytail).
+- Validation: test `arm_ik_anim` (motion.rs): every solve in anim_s05 (54) followed to the end of its IK: counter, flag and +0x3d70 x/z bit-exact with an unclamped mover, 544 frames; 33 speed resets seen at the frame before contact.
+- App: character.rs builds `ArmTable` per character at load (stroke clips 0x10–0x19) and `animate` applies conj(slerp(id,q,w))·rotation to the four joints (row-matrix local·Q ≡ Bevy pre-multiply by the conjugate). play.rs: contact_solve at stroke lock for motions 0x10–0x19 (contact point = swing ball with y negated, pos w=1, scale [end, 1]); ArmIk ticks each frame in advance_stroke through hst_sim::player::mover; motion speed set to 1 via cmd.speed (motions() now syncs clock speed without restart). The 0.1 m stand-in and swing::step_frames are removed.
+- Not covered: volleys 0x1a/0x1b (N1d3d), the volley path's racket yaw (+0x4008/+0x400c), sub-frame interpolation of the weight, left-handed mirroring of the quats. The app was not visually checked (PCSX2 recorder running; no headless mode).
