@@ -158,7 +158,7 @@ pub fn texture_image(t: &mtl::Texture) -> Image {
 
 /// Materials of an MTL with their textures uploaded.
 fn materials_of(mats: &mtl::Mtl, images: &mut Assets<Image>, materials: &mut Assets<StandardMaterial>) -> Vec<Handle<StandardMaterial>> {
-    let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| images.add(texture_image(t))).collect();
+    let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| crate::textures::add_mtl(images, texture_image(t), t)).collect();
     mats.materials
         .iter()
         .map(|m| {

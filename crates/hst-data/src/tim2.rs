@@ -9,6 +9,18 @@ pub struct Picture {
     pub rgba: Vec<u8>,
     /// Raw GS TEX0 register as authored; the renderer needs its wrap/function bits later.
     pub gs_tex0: u64,
+    /// Raw texels (linear rows, 4-bit low nibble first).
+    pub texels: Vec<u8>,
+    /// Logical palette as the GS expands it (RGBA32, raw PS2 alpha; 16-bit entries with TA0 = 0, TA1 = 0x80).
+    pub clut: Vec<[u8; 4]>,
+}
+
+impl Picture {
+    /// The texture as the GS holds it, by its TEX0 (PCSX2 replacement names, content key).
+    pub fn gs(&self) -> crate::texhash::GsTex<'_> {
+        let t = self.gs_tex0;
+        crate::texhash::GsTex { psm: (t >> 20 & 0x3f) as u8, tw: (t >> 26 & 15) as u32, th: (t >> 30 & 15) as u32, levels: vec![&self.texels], clut: &self.clut }
+    }
 }
 
 fn rd<const N: usize>(d: &[u8], o: usize) -> Result<[u8; N], Error> {
@@ -62,7 +74,22 @@ fn decode_with(d: &[u8], expand: bool) -> Result<Vec<Picture>, Error> {
             }
             t => return Err(Error(format!("tim2 image type {t}"))),
         };
-        pics.push(Picture { width: w, height: ht, rgba: rgba.concat(), gs_tex0 });
+        let mut raw_clut = if matches!(image_type, 4 | 5) { palette(clut, clut_type, image_type, false)? } else { vec![] };
+        if clut_type & 0x3f == 1 {
+            // 16-bit entries: the GS widens 5 bits to 8 by shifting, alpha from TEXA
+            let n = raw_clut.len();
+            raw_clut = clut.chunks_exact(2).take(n).map(|c| u16::from_le_bytes([c[0], c[1]])).map(|v| {
+                [((v & 31) << 3) as u8, ((v >> 5 & 31) << 3) as u8, ((v >> 10 & 31) << 3) as u8, if v & 0x8000 != 0 { 0x80 } else { 0 }]
+            }).collect();
+            if clut_type & 0x80 == 0 && image_type == 5 {
+                for block in raw_clut.chunks_mut(32).filter(|c| c.len() == 32) {
+                    for j in 8..16 {
+                        block.swap(j, j + 8);
+                    }
+                }
+            }
+        }
+        pics.push(Picture { width: w, height: ht, rgba: rgba.concat(), gs_tex0, texels: img.to_vec(), clut: raw_clut });
         p += total;
     }
     Ok(pics)

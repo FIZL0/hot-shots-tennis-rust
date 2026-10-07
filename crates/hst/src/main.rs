@@ -8,6 +8,8 @@
 //! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs); a BGM archive
 //! (`--sound SND/BGM/BGMM_05.XB data/sound/BGM/Menu/bgmm_05.hd`) plays its music. `--music` turns on the court's
 //! BGM in a `--play` match (off by default).
+//! Textures come from `mods/textures/` over a PCSX2 pack in `replacements/` over the disc (both beside the ISO;
+//! see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures/` to edit.
 
 mod audio;
 mod character;
@@ -17,6 +19,7 @@ mod gs;
 mod play;
 mod sandbox;
 mod shadow;
+mod textures;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -87,14 +90,21 @@ fn main() {
                 let (xb, hd, program, key) = (n(), n(), n(), n());
                 sound = Some((xb, hd, program.parse().unwrap_or(0), key.parse().unwrap_or(0)));
             }
+            "--dump-textures" => {
+                let mut iso_ = Iso::open(&iso).expect("open iso");
+                let o = hst_data::texhash::Overrides::scan(std::path::Path::new(&iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()));
+                let (n, packed) = o.dump(&mut iso_);
+                return println!("wrote {n} textures ({packed} from the PCSX2 pack) to {}", o.root.join("mods/textures").display());
+            }
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
     }
+    textures::init(&iso);
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -349,7 +359,7 @@ fn load(
 fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, StandardMaterial)>)> {
     let mut out = Vec::new();
     for_models(data, keep, |model_stem, model, mats| {
-        let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| images.add(image(t))).collect();
+        let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| textures::add_mtl(images, image(t), t)).collect();
         let mut parts = Vec::new();
         {
             for (mi, packets) in model.materials.iter().enumerate() {
@@ -478,7 +488,7 @@ fn gs_models_anim(
                     address_mode_v: mode(wrap[1]),
                     ..ImageSamplerDescriptor::linear()
                 });
-                images.add(img)
+                textures::add_mtl(images, img, t)
             });
             let key = |pi: usize| (packets[pi].prim & 0x70, anim.uv_track(mi, pi), packets[pi].uv_swap);
             let mut keys: Vec<_> = (0..packets.len()).map(|pi| (key(pi), pi)).collect();

@@ -21,6 +21,20 @@ pub struct Texture {
     pub rgba: Vec<u8>,
     /// Mip levels 1.. the GS may use (TEX1 MXL, at most the levels stored), each RGBA8 at half the previous size.
     pub mips: Vec<Vec<u8>>,
+    /// GS PSM of the stored texels.
+    pub psm: u8,
+    /// Every stored level's raw texels (linear rows), for [`Texture::gs`].
+    pub levels: Vec<Vec<u8>>,
+    /// Logical palette, raw PS2 alpha (0x80 = opaque).
+    pub clut: Vec<[u8; 4]>,
+}
+
+impl Texture {
+    /// The texture as the GS holds it (PCSX2 replacement names, content key).
+    pub fn gs(&self) -> crate::texhash::GsTex<'_> {
+        use crate::texhash::log2_size;
+        crate::texhash::GsTex { psm: self.psm, tw: log2_size(self.width), th: log2_size(self.height), levels: self.levels.iter().map(|l| &l[..]).collect(), clut: &self.clut }
+    }
 }
 
 pub struct Material {
@@ -80,15 +94,16 @@ fn texture(h: &[u8], src: &mut Cursor) -> Result<Texture, Error> {
         }
     }
     let entries = i16::from_le_bytes([h[0], h[1]]).max(0) as usize;
-    let mut pal: Vec<[u8; 4]> = src.take(entries * 4)?.chunks_exact(4).map(|c| rgba32(c)).collect();
+    let mut clut: Vec<[u8; 4]> = src.take(entries * 4)?.chunks_exact(4).map(|c| c.try_into().unwrap()).collect();
     if entries == 256 {
         // CSM1 layout: entries 8..15 and 16..23 of every 32 are swapped
-        for block in pal.chunks_mut(32) {
+        for block in clut.chunks_mut(32) {
             for j in 8..16 {
                 block.swap(j, j + 8);
             }
         }
     }
+    let pal: Vec<[u8; 4]> = clut.iter().map(|c| rgba32(c)).collect();
     let decode = |px: &[u8], n: usize| -> Vec<u8> {
         let get = |i: usize| -> [u8; 4] {
             let idx = match psm {
@@ -107,7 +122,8 @@ fn texture(h: &[u8], src: &mut Cursor) -> Result<Texture, Error> {
         .take_while(|&k| w >> k > 0 && ht >> k > 0)
         .map(|k| decode(levels[k], ((w >> k) * (ht >> k)) as usize))
         .collect();
-    Ok(Texture { width: w, height: ht, rgba: decode(levels.first().copied().unwrap_or(&[]), (w * ht) as usize), mips })
+    let rgba = decode(levels.first().copied().unwrap_or(&[]), (w * ht) as usize);
+    Ok(Texture { width: w, height: ht, rgba, mips, psm, levels: levels.iter().map(|l| l.to_vec()).collect(), clut })
 }
 
 fn rgba32(c: &[u8]) -> [u8; 4] {

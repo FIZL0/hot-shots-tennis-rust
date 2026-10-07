@@ -7,5 +7,6 @@ pub mod mdl;
 pub mod mor;
 pub mod mtl;
 pub mod snd;
+pub mod texhash;
 pub mod tim2;
 pub mod xb;
