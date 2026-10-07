@@ -120,7 +120,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Confirmations
 
 - [ ] **P1** Shot parameters in play → `play.rs` strike/tables · `hst-sim/src/params.rs` `shot.rs` | t: shot_tables.rs, hst/tests/shot_params.rs | j: 2026-10-05-ball-physics/5-SHOT-PARAMS-READY.md
-- [ ] **P2** Aim exactly → `play.rs` aim_target/screen · `shot.rs`
+- [ ] **P2** Aim exactly (user 2026-10-07: a sweet-spot shot can't quite reach the exact corner as in the original; singles and doubles aim differently, their court lines differ) → `play.rs` aim_target/screen · `shot.rs`
 - [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
