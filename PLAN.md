@@ -42,6 +42,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 `new_recording.bin` dives/smashes/collisions).
 
 ### Next (user priorities, in order)
+- [x] **N2b** Ball regressed (bug, user 2026-10-07): it is tiny now. It must be big with the game's outline like it was before → `play.rs` ball draw · `character.rs` · N2's ball1.mdl/shadow swap (e06fa6a) | t: serve.rs
 - [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
 - [x] **N1d1** Exact ANI sampler (in N1d) → `hst-sim/src/pose.rs` · `character.rs` animate | t: motion.rs clip_sampler_ram | j: 2026-10-06-n1-animations
 - [x] **P5a** Verify hit types (user 2026-10-07): the original has only ✕ normal, ○ cut, △ lob; we have flat and drive extra. Match the button set and how each is used → `play.rs` read_input/press/strike · `shot.rs` `params.rs` | t: shot_tables.rs | j: 2026-10-07-p5a-hit-types
