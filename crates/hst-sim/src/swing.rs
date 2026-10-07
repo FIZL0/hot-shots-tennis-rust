@@ -271,3 +271,10 @@ impl Dive {
         Some(now)
     }
 }
+
+/// A press whose search found nothing swings a smash at nothing (0x1f) when the ball is within 2 m across the
+/// ground of `pos` and the path rises above `middle` (the smash window's middle height) before its 2nd bounce.
+pub fn smash_whiff(path: &[PathPoint], ball: [f32; 3], pos: [f32; 3], middle: f32) -> bool {
+    let (dx, dz) = (ball[0] - pos[0], ball[2] - pos[2]);
+    dx * dx + dz * dz < 4.0 && path.iter().take_while(|p| p.bounces <= 1).any(|p| middle < -p.pos[1])
+}

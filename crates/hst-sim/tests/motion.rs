@@ -681,3 +681,74 @@ fn anim_s05_follow_through() {
     eprintln!("{ends} played out, {cuts} broken off ({earliest} on the first frame allowed)");
     assert!(ends > 10 && cuts > 10);
 }
+
+/// Every recorded whiff, frame by frame through `motion::Whiff`: the swing's countdown (−3 with a miss motion to
+/// come, −2 without) until the pose, then the miss motion, the frames since the pose and the re-press lock; a
+/// new press only where `press()` takes one (quiet as recorded), and the player freed only past the recovery.
+#[test]
+fn recorded_whiffs() {
+    use hst_sim::motion::{WHIFF_RECOVERY, Whiff};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (mut whiffs, mut repress, mut freed) = (0, 0, 0);
+    for name in ["new_recording.bin", "round1.bin", "match_s05.bin", "lob_smash_s05.bin"] {
+        let Ok(data) = std::fs::read(format!("{dir}/{name}")) else {
+            eprintln!("{name} absent, skipped");
+            continue;
+        };
+        let frames = if data.len() % hst_sim::replay::SAMPLE_LIVE == 0 { frames_live(&data) } else { hst_sim::replay::frames(&data) };
+        let (cd, state, sub) = (|fr, p| p_i32(fr, p, 0x3ec4), |fr, p| p_u8(fr, p, 0x3fa4), |fr, p| p_u8(fr, p, 0x3fa5));
+        let started = |fr, p, before| {
+            let c = cd(fr, p);
+            sub(fr, p) == 2 && (c == -3 || c == -2) && c != before && matches!(p_i32(fr, p, 0x3df0), 0x10..=0x19 | 0x1f)
+        };
+        for p in 0..4 {
+            let mut k = 1;
+            while k < frames.len() {
+                let fr = frames[k];
+                if !started(fr, p, cd(frames[k - 1], p)) {
+                    k += 1;
+                    continue;
+                }
+                let mut w = Whiff::new(p_i32(fr, p, 0x3df0), cd(fr, p) == -3, p_u8(fr, p, 0x3f04) != 0);
+                whiffs += 1;
+                let k0 = k;
+                let at = |j: usize| format!("{name} p{p} press {k0} frame {j}");
+                k += 1;
+                while k < frames.len() {
+                    let fr = frames[k];
+                    if state(fr, p) != state(frames[k - 1], p) || fr.gm()[0x58..0x5c] == frames[k - 1].gm()[0x58..0x5c] {
+                        break; // the point's reactions or the next serve, or the players' logic stopped (a fault)
+                    }
+                    let miss = w.step();
+                    if sub(fr, p) != 2 {
+                        assert!(w.since().is_some_and(|s| s >= WHIFF_RECOVERY), "freed early: {}", at(k));
+                        freed += 1;
+                        break;
+                    }
+                    if cd(fr, p) != -1 && w.since().is_some() {
+                        // a new press: the next whiff starts here, or a contact
+                        assert_eq!(w.press(), Some(p_u8(fr, p, 0x3f04) != 0), "re-press: {}", at(k));
+                        repress += 1;
+                        break;
+                    }
+                    let Some(s) = w.since() else {
+                        assert_eq!(cd(fr, p), if w.miss { -3 } else { -2 }, "before the pose: {}", at(k));
+                        k += 1;
+                        continue;
+                    };
+                    assert_eq!(cd(fr, p), -1, "{}", at(k));
+                    assert_eq!(p_i32(fr, p, 0x3f00), s as i32, "since the pose: {}", at(k));
+                    assert_eq!(p_i32(fr, p, 0x3e54), w.lock().map_or(-1, |l| l as i32), "re-press lock: {}", at(k));
+                    if s == 0 {
+                        assert_eq!(miss, w.miss.then(|| whiff(w.anim)).flatten(), "{}", at(k));
+                        if let Some(m) = miss {
+                            assert_eq!(p_i32(fr, p, 0x3df0), m, "miss motion: {}", at(k));
+                        }
+                    }
+                    k += 1;
+                }
+            }
+        }
+    }
+    eprintln!("{whiffs} whiffs, {repress} re-presses, {freed} freed");
+}
