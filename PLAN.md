@@ -7,8 +7,9 @@ other sessions change them.
 ## Continue
 
 "continue" = take the first `- [ ]` line under **Tasks**, read `plan/<ID>.md` + its journal, carry it out
-completely, then tick it here (and in its plan file), commit, stop and report. One task per iteration; don't merge
-or skip ahead. Too big → split it into sub-tasks (new `plan/<ID>.md` files + lines here) first.
+completely, then hand the wrap-up to the `chore` subagent (tick it here and in its plan file, write the journal
+entry from your notes, run `tools/check.sh`, commit with the message you give it), stop and report. One task per
+iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `plan/<ID>.md` files + lines here) first.
 
 - **Match the original exactly** — no approximations or placeholders. Find it in the decompile (`context/decomp/`,
   `research/fn.sh <addr>`), port it, prove it against the real game: a test compares the port to a PINE recording
@@ -29,7 +30,7 @@ or skip ahead. Too big → split it into sub-tasks (new `plan/<ID>.md` files + l
 ## When blocked
 
 Stalled (tool hangs, PCSX2 won't cooperate, same fix fails twice, ~20 min on one obstacle, needs the human):
-commit what's solid (stash experiments), write details in the journal, mark the line
+have `chore` commit what's solid (stash experiments), write details in the journal and mark the line
 `- [~] **ID** … BLOCKED: <why + what unblocks>`, move to the next `- [ ]` — preferably another section. Never end a
 run while `- [ ]` lines remain; at the end list blockers. Human-only items go under **Needs the human**, never into
 code as guesses. Don't touch PCSX2 while `pgrep -f record_p2m2` runs.

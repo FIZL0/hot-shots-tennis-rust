@@ -33,7 +33,9 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
   blocks reading the 16 MB dumps whole.
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
-- Mechanical jobs (journal write-up from your notes, ticking PLAN.md, checking a capture) → `chore` subagent.
+- Hand anything mechanical to the `chore` subagent instead of doing it yourself: journal write-ups from your notes,
+  ticking/blocking lines in PLAN.md, checking a capture, the final test run + commit. Keep porting, the test loop,
+  decompile reading and gameplay decisions.
 
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and

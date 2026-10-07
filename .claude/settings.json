@@ -2,6 +2,12 @@
   "hooks": {
     "PreToolUse": [
       { "matcher": "Read|Bash", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/tools/guard_decomp.py" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/tools/inbox.py" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/tools/inbox.py" }] }
     ]
   }
 }
