@@ -171,6 +171,17 @@ impl<'a> Game<'a> {
         std::array::from_fn(|k| [t[3 * k], t[3 * k + 1], t[3 * k + 2]])
     }
 
+    /// Court `court`'s wind (1..11): the directions it may blow from (degrees, the game picks one at random; none
+    /// allowed = 180) and its speed (0 = calm).
+    pub fn wind(&self, court: u32) -> (Vec<f32>, f32) {
+        let row = self.at(0x41_cf90 + (court - 1) * 0x14, 0x14);
+        let i32_at = |o: usize| i32::from_le_bytes(row[o..o + 4].try_into().unwrap());
+        let degrees = self.at(0x41_d070, 32).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32);
+        let allowed: Vec<f32> = degrees.zip(&row[8..16]).filter(|(_, f)| **f != 0).map(|(d, _)| d).collect();
+        let speed = if i32_at(0) > 0 { i32_at(0x10) as f32 } else { 0.0 };
+        (if allowed.is_empty() { vec![180.0] } else { allowed }, speed)
+    }
+
     /// Trigger creature type `ty`'s (0..53) sound (program 7 key, −1 none) and, for the types that play it now and
     /// then, the mean gap between plays in ticks and the gap's jitter.
     pub fn emitter(&self, ty: u8) -> EmitterRow {

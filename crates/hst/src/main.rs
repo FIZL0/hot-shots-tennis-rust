@@ -104,7 +104,7 @@ fn main() {
     app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
-        .add_systems(Update, (orbit, auto_shot))
+        .add_systems(Update, (orbit, auto_shot, clouds))
         .run();
 }
 
@@ -176,8 +176,6 @@ fn load(
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
-        // ponytail: clouds are positioned by special-category records (14?) not yet mapped; left out
-        // instead of piling them on the court at the origin
         // the hole's ground model is the one shadow receiver
         let sun = shadow::Sun::read(&mut iso, n as usize);
         for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole) {
@@ -202,6 +200,44 @@ fn load(
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
+            }
+        }
+        // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
+        if args.singles {
+            let read = |iso: &mut Iso, xb: &str, suffix: &str| {
+                let data = iso.read(&format!("{dir}/{xb}")).ok()?;
+                let arc = Archive::parse(&data).ok()?;
+                arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix))?).ok()
+            };
+            let envir = read(&mut iso, "CMN.XB", &format!("envir_c{n:02}.dat"));
+            let hole = read(&mut iso, "GRD01.XB", &format!("envir_c{n:02}_h01.dat"));
+            let count = envir.zip(hole).and_then(|(e, h)| layout::cloud_count(&e, &h, 1)).unwrap_or(20);
+            let models: Vec<_> = list.iter().filter(|e| e.dir == "cloud").filter_map(|e| library.get(&e.stem)).collect();
+            if !models.is_empty() {
+                let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
+                let (directions, speed) = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").wind(n);
+                let mut rng = 0x2545_f491u32 ^ n;
+                let mut r = || {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    (rng >> 8) as f32 / (1 << 24) as f32
+                };
+                let degrees = directions[((r() * directions.len() as f32) as usize).min(directions.len() - 1)];
+                let list = hst_sim::clouds::spawn(count, models.len(), &mut r);
+                for (i, k) in list.iter().enumerate() {
+                    let rot = Quat::from_rotation_x(std::f32::consts::PI) * Quat::from_rotation_y(k.yaw);
+                    let bases = models[k.model].iter().map(|(_, m)| gs_materials.get(m).map_or(1.0, |m| m.uniform.color.w)).collect();
+                    let e = commands.spawn((CloudView(i, bases), Transform::from_rotation(rot).with_scale(Vec3::splat(40.0)), Visibility::default())).id();
+                    for (m, mat) in models[k.model] {
+                        // its own material: the fade scales its alpha
+                        let mut mat = gs_materials.get(mat).expect("cloud material").clone();
+                        mat.key.modulate = true;
+                        commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(gs_materials.add(mat))));
+                    }
+                    commands.entity(root).add_child(e);
+                }
+                commands.insert_resource(Clouds { list, degrees, speed, ticks: 0.0 });
             }
         }
         // background figures where the game makes them; stand-in capsules (walkers grey, trigger creatures
@@ -413,6 +449,52 @@ fn orbit(
         o.radius *= 1.0 - scroll.delta.y * 0.1;
         let rot = Quat::from_euler(EulerRot::YXZ, o.yaw, o.pitch, 0.0);
         *t = Transform::from_translation(o.focus + rot * Vec3::Z * o.radius).looking_at(o.focus, Vec3::Y);
+    }
+}
+
+/// The sky's clouds and the wind they drift on (`--stage` in singles).
+#[derive(Resource)]
+struct Clouds {
+    list: Vec<hst_sim::clouds::Cloud>,
+    degrees: f32,
+    speed: f32,
+    /// 60 Hz ticks owed.
+    ticks: f32,
+}
+
+#[derive(Component)]
+/// Index into `Clouds::list` and each part's own material alpha.
+struct CloudView(usize, Vec<f32>);
+
+/// Drifts the clouds at 60 Hz; each stands at its place relative to the camera and fades out near the edge.
+fn clouds(
+    time: Res<Time>,
+    mut sky: Option<ResMut<Clouds>>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut views: Query<(&CloudView, &mut Transform, &Children)>,
+    parts: Query<&MeshMaterial3d<gs::GsMaterial>>,
+    mut materials: ResMut<Assets<gs::GsMaterial>>,
+) {
+    let (Some(sky), Ok(camera)) = (sky.as_mut(), camera.single()) else { return };
+    sky.ticks += time.delta_secs() * 60.0;
+    while sky.ticks >= 1.0 {
+        sky.ticks -= 1.0;
+        let (d, s) = (sky.degrees, sky.speed);
+        hst_sim::clouds::tick(&mut sky.list, d, s);
+    }
+    // game space is Bevy's turned a half-turn about X
+    let eye = camera.translation() * Vec3::new(1.0, -1.0, -1.0);
+    for (v, mut t, children) in &mut views {
+        let k = &sky.list[v.0];
+        t.translation = Vec3::from(k.pos) + eye;
+        let fade = hst_sim::clouds::fade(k);
+        for (c, base) in children.iter().zip(&v.1) {
+            // ponytail: the fade scales the material alpha; the game writes it to the model (+0x5c) whose exact use
+            // in the draw is unconfirmed
+            if let Some(mut m) = parts.get(c).ok().and_then(|m| materials.get_mut(&m.0)) {
+                m.uniform.color.w = base * fade;
+            }
+        }
     }
 }
 
