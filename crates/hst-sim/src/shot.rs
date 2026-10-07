@@ -6,6 +6,7 @@
 //! the net crossing to the target. The game interpolates trilinearly in f32; this keeps its order.
 
 use crate::ball::V3;
+use crate::libm::cosf;
 
 const N: usize = 16;
 const ANGLE_UNIT: f32 = 0.0007669904; // π / 4096
@@ -37,6 +38,15 @@ fn axis(num: f32, den: f32) -> (usize, f32) {
     (i, if i == N - 1 { 1.0 } else { s - i as f32 })
 }
 
+const RADIUS: f32 = 0.064;
+
+/// The low end of the height axis for strokes and volleys: from 0.2 m below the ground at the baseline up to the
+/// ground at the net, but never above the ball's radius below it.
+fn low_bound(hit_z: f32) -> f32 {
+    let u = ((11.385 - (hit_z.abs() - 0.5)) / 11.385).clamp(0.0, 1.0);
+    (u * (0.0 - -0.2) + -0.2 + 0.0).min(-RADIUS)
+}
+
 /// Axis bounds for a stroke kind (class 1).
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {
@@ -56,14 +66,23 @@ impl Bounds {
     /// only kind 2 starts the target axis deeper. (The decompiled range function has extra branches for
     /// kinds 1 and 4, but recorded shots match these bounds — its index is not the ball's stored kind.)
     pub fn stroke(kind: i32, hit_z: f32) -> Self {
-        let u = ((11.385 - (hit_z.abs() - 0.5)) / 11.385).clamp(0.0, 1.0);
         Self {
             near: -0.5,
             far: -18.17,
-            low: u * (0.0 - -0.2) + -0.2,
+            low: low_bound(hit_z),
             high: ((-1.1638 + 0.0) - 1.3 * 1.3) - 0.5,
             short: if kind == 2 { 6.4 } else { 3.0 },
             long: 16.17,
+        }
+    }
+
+    /// Volleys (class 2, the `voly` tables) by kind: the stroke ranges with a lower top (1.6 m × 1.3 + 0.5); a
+    /// slice (kind 1) starts the height axis at the ground.
+    pub fn volley(kind: i32, hit_z: f32) -> Self {
+        Self {
+            low: if kind == 1 { -RADIUS } else { low_bound(hit_z) },
+            high: -1.6 * 1.3 - 0.5,
+            ..Self::stroke(kind, hit_z)
         }
     }
 
@@ -89,7 +108,8 @@ pub struct Lookup {
 
 /// Table lookup for a hit at `hit` aimed at `target` (both game space, Y-down; target height ignored).
 pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
-    let (mut hit, mut tgt) = (hit, target);
+    // the hit never sits lower than the ball's radius above the ground
+    let (mut hit, mut tgt) = ([hit[0], hit[1].min(-RADIUS), hit[2]], target);
     if hit[2] > 0.0 {
         // tables are authored for the near side; mirror the far side through the court centre
         hit = [-hit[0], hit[1], -hit[2]];
@@ -120,11 +140,31 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
         (fy * (b - a) as f32 + a as f32 + 0.0) as i32
     };
     let (f0, f1) = (frames_plane(iz), frames_plane(iz + 1));
-    Lookup {
-        elevation: tri(|c| c.0),
-        speed: tri(|c| c.1),
-        frames: (fz * (f1 - f0) as f32 + f0 as f32 + 0.0) as i32,
+    let (elevation, mut speed) = (tri(|c| c.0), tri(|c| c.1));
+    // Near the net (hitter 0.5–6 m from the net crossing) and up to 1.3 m high, a cell straddling a steep rise in
+    // elevation would interpolate a ball that flies long: the speed is pulled toward the cell's slowest corner,
+    // the more the closer to the net, the higher the hit and the further the elevation sits above the lowest
+    // corner (full past 7°, easing off again toward 1.05 rad). As the game, only the far target plane's corners
+    // count.
+    let (to_net, height) = ((dist - past_net).abs(), hit[1].abs());
+    if (0.5..=6.0).contains(&to_net) && (0.0..=1.3).contains(&height) {
+        let least = |k: fn((f32, f32, i32)) -> f32| {
+            [at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1)]
+                .map(k)
+                .into_iter()
+                .fold(f32::MAX, f32::min)
+        };
+        let (lowest, slowest) = (least(|c| c.0), least(|c| c.1));
+        let near = cosf((1.0 - (1.0 - ((to_net - 0.5) / (6.0 - 0.5)).clamp(0.0, 1.0))) * 1.5707964);
+        let high = cosf((1.0 - (height / 1.3).clamp(0.0, 1.0)) * 1.5707964);
+        let rise = elevation - lowest;
+        let w = if rise >= 0.0 { (rise / (7.0 * 0.017453292)).min(1.0) } else { 0.0 };
+        if w != 0.0 {
+            let k = w * (1.0 - (rise.abs() / 1.05).min(1.0));
+            speed = k * high * near * (slowest - speed) + speed + 0.0;
+        }
     }
+    Lookup { elevation, speed, frames: (fz * (f1 - f0) as f32 + f0 as f32 + 0.0) as i32 }
 }
 
 /// Launch velocity: head for the target horizontally, pitched up by `elevation`, at `speed` per frame.

@@ -212,13 +212,14 @@ enum Phase {
 #[derive(Resource)]
 struct Game {
     rules: Rules,
-    tables: Vec<Table>,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
     serve_tables: Vec<[Vec<(Table, f32)>; 2]>,
     /// Smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
     smash_tables: Vec<Table>,
+    /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
+    rally_tables: Vec<[Vec<Table>; 2]>,
     serve_data: ServeData,
     /// The serve in progress (server's toss and swing).
     serving: Serving,
@@ -481,6 +482,26 @@ fn character_tables(
             Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
         })
         .collect()
+}
+
+/// Character `c`'s base stroke tables (`strk` 0..5) and volley tables (`voly` 0..5; 0 and 1 sit in the A
+/// archive, 2..4 in B).
+// ponytail: only the base tables; the up1/dw1/dw2 variants come with the timing/mode pick (P3)
+fn rally_tables(iso: &mut Iso, c: usize) -> [Vec<Table>; 2] {
+    let mut volleys = character_tables(iso, c, "A", "voly", "", 2);
+    volleys.extend(character_tables(iso, c, "B", "voly", "", 5).into_iter().skip(2));
+    [character_tables(iso, c, "A", "strk", "", 5), volleys]
+}
+
+/// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from the hitter's own character tables.
+fn rally_lookup(g: &Game, who: usize, class: u8, kind: i32, at: V3, target: V3) -> hst_sim::shot::Lookup {
+    let (volley, k) = (class == 2, kind as usize);
+    let bounds = if volley {
+        Bounds::volley(kind, at[2])
+    } else {
+        Bounds::stroke(kind, at[2])
+    };
+    lookup(&g.rally_tables[who][volley as usize][k], &bounds, at, target)
 }
 
 /// TParam.csv's row for character 0 as cells (header cells hold quoted line breaks; character rows are plain).
@@ -851,9 +872,9 @@ fn setup(
     let reach = reach(&mut iso);
     let mut game = Game {
         rules,
-        tables: tables(&mut iso, "A", "strk", 5),
         serve_tables: Vec::new(),
         smash_tables: tables(&mut iso, "B", "smsh", 2),
+        rally_tables: Vec::new(),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
         reach,
@@ -964,6 +985,7 @@ fn setup(
         game.smash_heights.push(smash_heights(&mut iso, c));
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
+        game.rally_tables.push(rally_tables(&mut iso, c));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
@@ -1314,12 +1336,7 @@ fn strike(
                 target,
             )
         } else {
-            lookup(
-                &g.tables[kind as usize],
-                &Bounds::stroke(kind, at[2]),
-                at,
-                target,
-            )
+            rally_lookup(g, who, class, kind, at, target)
         };
         (launch(at, target, l.elevation, l.speed), l.frames)
     };
@@ -2010,7 +2027,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             let (class, kind) = if branch == 4 {
                 (3, (kind == 3) as i32)
             } else {
-                (1, kind)
+                (if branch == 2 { 2 } else { 1 }, kind)
             };
             strike(
                 g,
