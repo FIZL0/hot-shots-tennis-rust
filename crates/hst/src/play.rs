@@ -200,6 +200,8 @@ struct Game {
     rng: u32,
     /// Sounds due this tick, at a game-space position.
     sounds: Vec<(sound::Play, V3)>,
+    /// Swing whooshes waiting to play: ticks left and the swinger (played at the player's position).
+    whooshes: Vec<(u32, usize)>,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
@@ -507,6 +509,7 @@ fn setup(
         message: String::new(),
         rng: 0x2468_ace1,
         sounds: Vec::new(),
+        whooshes: Vec::new(),
         cam: Camera::new(),
         prev_view: Camera::new().view,
         cam_cut: false,
@@ -755,6 +758,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                     Some(k) => {
                         let kind = if toss == Toss::Under { 3 } else { press.unwrap_or(0) };
                         s.swing = Some(ServeSwing { left: k as u32, frames: k as u32, offset: k as i32 - SWEET_FRAME, grade: grades[k], kind });
+                        whoosh(g, i, 0, kind);
                     }
                     None => s.whiffed = true,
                 }
@@ -997,6 +1001,8 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.swung = false;
             p.vel = Vec2::ZERO;
             square_up(p);
+            let kind = p.kind;
+            whoosh(g, i, branch_code(c.swing.branch), kind);
             // the arm reaches for the ball: strokes 0x10–0x19 and volleys 0x1a/0x1b (higher motions: the game indexes
             // past its table; serves step 0, so no IK)
             let a = c.swing.anim as usize;
@@ -1622,8 +1628,24 @@ fn score_line(s: &Score, team: usize) -> String {
     format!("{} | {pts}", s.games[team])
 }
 
+/// A swing starts: its whoosh, if the original plays one (`sound::swing_sound`), now or a few ticks on.
+fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
+    if let Some(wait) = sound::swing_sound(branch, kind, g.rally.faults) {
+        g.whooshes.push((wait, i));
+    }
+}
+
 /// Plays the sounds due on the court's bank.
 fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>) {
+    let g = &mut *g;
+    for w in &mut g.whooshes {
+        w.0 = w.0.saturating_sub(1);
+        if w.0 == 0 {
+            debug!("player {} swing whoosh", w.1);
+            g.sounds.push((sound::SWING, g.players[w.1].pos));
+        }
+    }
+    g.whooshes.retain(|w| w.0 > 0);
     let due = std::mem::take(&mut g.sounds);
     let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else { return };
     // ponytail: slot 9 (framed hits) is the character's bank, not loaded yet — N3d

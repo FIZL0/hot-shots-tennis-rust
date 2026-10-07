@@ -16,6 +16,8 @@ fn u(b: &[u8], o: usize) -> u32 {
 
 struct Sample<'a> {
     ball: &'a [u8],
+    /// The rally block from 0x3165f0 (serve faults at +0x18).
+    rally: &'a [u8],
     /// The live ball's first 6 contact records, 0x50 bytes each: position at +0x10, material at +0x40.
     contacts: &'a [u8],
     /// The library's last positional play: bearing, distance, volume after falloff.
@@ -37,7 +39,7 @@ fn samples(d: &[u8], extra: usize) -> Vec<Sample<'_>> {
             break;
         }
         let cmds = (0..n).map(|i| std::array::from_fn(|k| u(d, c + 16 * i + 4 * k))).collect();
-        out.push(Sample { ball: &d[o + 4..o + 4 + 0x290], contacts: &d[o + CONTACTS..o + FIX], play: std::array::from_fn(|k| u(d, o + FIX + 4 * k) as i32), hit: &d[o + FIX + 12..c - 4], cmds });
+        out.push(Sample { ball: &d[o + 4..o + 4 + 0x290], rally: &d[o + 4 + 0x520..CONTACTS + o], contacts: &d[o + CONTACTS..o + FIX], play: std::array::from_fn(|k| u(d, o + FIX + 4 * k) as i32), hit: &d[o + FIX + 12..c - 4], cmds });
         o = c + 16 * n;
     }
     out
@@ -209,4 +211,52 @@ fn hit_sounds_match_the_game() {
     }
     eprintln!("{hits} hits, {keys} key-ons");
     assert!(hits >= 25);
+}
+
+/// The swing whooshes of the same match: every hit whose swing `sound::swing_sound` gives a whoosh (first serves,
+/// smashes) had program 4 key 0 keyed shortly before it, and no other swing did; a serve's plays at the recorded
+/// bearing (the whoosh is that frame's last play).
+#[test]
+fn swing_sounds_match_the_game() {
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let s = samples(&data, 0x330);
+    let i = |b: &[u8], o: usize| u(b, o) as i32;
+    let bank = Bank::parse(&court.hd).unwrap();
+    let sw = sound::SWING;
+    // frames where a whoosh tone keys on (any volume)
+    let whooshes: Vec<usize> = (0..s.len())
+        .filter(|&k| {
+            s[k].cmds.iter().filter(|c| c[0] == 2 && c[3] != 8).any(|c2| {
+                let Some(c3) = s[k].cmds.iter().find(|c| c[0] == 3 && c[1] == c2[1]) else { return false };
+                bank.key_ons(sw.program as usize, sw.key as usize).into_iter().flatten().any(|e| {
+                    bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && BASE + t.sample() as u32 == c3[2])
+                })
+            })
+        })
+        .collect();
+    let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
+    let mut expected = 0;
+    for k in 8..s.len() {
+        let (a, h) = (s[k - 1].hit, s[k].hit);
+        let (n, hitter) = (i(h, rally + 0x20), i(h, rally + 0x18));
+        if n == i(a, rally + 0x20) || n == 0 {
+            continue;
+        }
+        let rec = fx(0xd8 + 8 * hitter as usize);
+        let (branch, kind) = (h[rec + 5], i(h, fx(0xd0)));
+        let faults = i(s[k].rally, 0x18);
+        let want = sound::swing_sound(branch, kind, faults).is_some();
+        let near: Vec<usize> = whooshes.iter().copied().filter(|&w| (k - 8..=k).contains(&w)).collect();
+        assert_eq!(!near.is_empty(), want, "hit {n} at frame {k}: branch {branch} kind {kind} faults {faults}, whooshes {near:?}");
+        if want {
+            expected += 1;
+        }
+        if want && branch == 0 {
+            let w = near[0];
+            let play = [s[w].play[0], s[w].play[1], sound::falloff(sw.volume, s[w].play[1])];
+            assert!(court.keyed(&s[w], None).iter().any(|key| court.gives(key, play, [(4, 0)])), "serve whoosh at {w}: {play:?}");
+        }
+    }
+    eprintln!("{expected} whooshes");
+    assert!(expected >= 6 && expected == whooshes.len());
 }

@@ -42,6 +42,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 `new_recording.bin` dives/smashes/collisions).
 
 ### Next (user priorities, in order)
+- [ ] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)
+- [ ] **N6** Diving for the ball (P4's open dive branch) → `swing.rs` · `motion.rs` · `player.rs` · `play.rs` find_contact/advance_stroke/locomote | t: swing.rs, motion.rs, player.rs (fixture new_recording.bin)
 - [x] **N2b** Ball regressed (bug, user 2026-10-07): it is tiny now. It must be big with the game's outline like it was before → `play.rs` ball draw · `character.rs` · N2's ball1.mdl/shadow swap (e06fa6a) | t: serve.rs
 - [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
 - [x] **N1d1** Exact ANI sampler (in N1d) → `hst-sim/src/pose.rs` · `character.rs` animate | t: motion.rs clip_sampler_ram | j: 2026-10-06-n1-animations
@@ -61,17 +63,13 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **N3c** (split into N3c1–4) Hit, bounce, serve sounds at their frames (in N3) → `play.rs` strike/bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c1** Positional play: bearing/distance, falloff, stereo split, bank volume (in N3c) → new `hst-sim/src/sound.rs` · `exe.rs` stereo_tables/bank_volumes · `tools/record_sound.py` | t: hst-sim sound.rs | j: 2026-10-07-n3-audio
 - [x] **N3c2** Racket hit sounds at contact: program 6 keys, volumes, pitch factors (in N3c) → `play.rs` strike · audio.rs | j: 2026-10-07-n3-audio
-- [ ] **N3c3** Swing whoosh at the hand, 4-frame delay case (in N3c) → `play.rs` · audio.rs | j: 2026-10-07-n3-audio
+- [x] **N3c3** Swing whoosh at the hand, 4-frame delay case (in N3c) → `play.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3c4** Bounce, net, roll and serve sounds by surface (in N3c) → `play.rs` bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
-- [ ] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)
-- [ ] **N6** Diving for the ball (P4's open dive branch) → `swing.rs` · `motion.rs` · `player.rs` · `play.rs` find_contact/advance_stroke/locomote | t: swing.rs, motion.rs, player.rs (fixture new_recording.bin)
 
 ### Match basics
-- [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
-- [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 - [~] **P0c** Up to 4 players (formations, who-takes-the-ball open) → `play.rs` reset_positions/bot/read_input/control · `flow.rs` serve_placement | t: score.rs
 
 ### Shots
@@ -118,6 +116,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Stretch
 - [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
+- [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
+- [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 

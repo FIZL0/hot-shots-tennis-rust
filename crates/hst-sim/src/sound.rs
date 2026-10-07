@@ -145,6 +145,21 @@ pub fn hit_sounds(h: &Hit) -> Vec<Play> {
     out
 }
 
+/// The swing whoosh (court bank program 4 key 0 at 0x80, played at the swinger's model origin) for a swing of
+/// `branch` (as `Hit::branch`) and shot `kind`, with `faults` serve faults this point: the frames it waits after
+/// the swing starts, or `None`. Only a first serve (4 frames late) and a smash that is not a lob (at once) whoosh.
+/// ponytail: the other strokes' path needs a game flag that normal play never sets, so it is left out.
+pub fn swing_sound(branch: u8, kind: i32, faults: i32) -> Option<u32> {
+    match branch {
+        0 if faults == 0 => Some(4),
+        4 if kind != 3 => Some(0),
+        _ => None,
+    }
+}
+
+/// The whoosh `swing_sound` plays.
+pub const SWING: Play = play(0, 4, 0, 0x80);
+
 /// The play-speed scale word the driver multiplies the pitch by: the speed clamped to 0..2, in 1/4096ths.
 pub fn speed_word(speed: f32) -> u32 {
     (crate::ps2::mul(speed.clamp(0.0, 2.0), 4096.0) as i32) as u32
