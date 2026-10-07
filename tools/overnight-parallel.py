@@ -159,6 +159,8 @@ def main():
             if n in procs and not alive(procs[n][0]):
                 (p, sid, since), task = procs.pop(n), running.pop(n)
                 log(f'slot {n}: {task[0]} exited')
+                # backstop for the prompt's 'close PCSX2 when done': waits its turn, so it never cuts a capture short
+                sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), 'pkill', '-x', 'pcsx2-qt'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
                 if reset := limit_only(n, sid, since):
                     free_at[n] = reset + timedelta(seconds=PAUSE)
                     log(f'slot {n}: {task[0]} only hit the limit; transcript discarded, slot sleeps until {reset:%H:%M}')

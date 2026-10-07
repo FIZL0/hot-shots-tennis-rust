@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Minimal PCSX2 PINE client. Usage: pine.py [hexaddr ...]  -> prints game id/status, then u32 at each addr."""
-import fcntl, os, socket, struct, sys
+import fcntl, os, socket, struct, sys, time
 
+VSYNC, VSYNC_STALL = 0x1d5780, 10  # the game's vsync counter (every recorder's frame clock)
 SLOT = 28011  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
 OK = 0
 
@@ -49,7 +50,17 @@ class Pine:
     def _str(self, op): return self._call(op)[4:].rstrip(b"\0").decode()
     def read8(self, a):  return self._call(0, struct.pack("<I", a))[0]
     def read16(self, a): return struct.unpack("<H", self._call(1, struct.pack("<I", a)))[0]
-    def read32(self, a): return struct.unpack("<I", self._call(2, struct.pack("<I", a)))[0]
+    def read32(self, a):
+        v = struct.unpack("<I", self._call(2, struct.pack("<I", a)))[0]
+        if a == VSYNC: self._watch(v)
+        return v
+
+    def _watch(self, v):
+        # ponytail: every recorder polls VSYNC until it ticks; when the match ends (or PCSX2 pauses) it never does,
+        # and the recorder would spin forever holding the PCSX2 lock. Stop it instead; the output file is flushed.
+        if v != getattr(self, "_vs", None): self._vs, self._vs_t = v, time.monotonic()
+        elif time.monotonic() - self._vs_t > VSYNC_STALL:
+            sys.exit(f"pine: vsync stuck at {v} for {VSYNC_STALL}s (match over or PCSX2 paused); stopping")
     def read64(self, a): return struct.unpack("<Q", self._call(3, struct.pack("<I", a)))[0]
     def write32(self, a, v): self._call(6, struct.pack("<II", a, v))
     def read_block(self, a, n):
