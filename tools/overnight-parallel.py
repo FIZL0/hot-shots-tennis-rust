@@ -31,7 +31,8 @@ PLAN.md's rules and AGENT.md. Other agents are working on other tasks at the sam
 git worktree on branch task/{id}: commit here only; never touch the main checkout, merge, rebase or push — the runner \
 merges your branch into main. PCSX2 is shared: run anything that drives the real game in several steps as one \
 command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Each hold is cut off \
-after {hold} min so a hung run can't block the others: keep every run shorter (record less, split it). Never close PCSX2 (the other agents may still need it); the runner closes \
+after {hold} min so a hung run can't block the others: keep every run shorter (record less, split it). Save slot 5 is the only bot-only game; 3 and 4 have P1 human \
+and sit waiting for input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Never close PCSX2 (the other agents may still need it); the runner closes \
 it once no agent is left. When done, tick \
 {id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop."""
 
