@@ -12,6 +12,7 @@
 mod audio;
 mod character;
 mod effects;
+mod gs;
 mod play;
 mod sandbox;
 
@@ -91,7 +92,7 @@ fn main() {
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins(audio::plugin);
+    app.add_plugins((audio::plugin, gs::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -129,6 +130,7 @@ fn load(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
@@ -144,23 +146,28 @@ fn load(
             || only.as_deref().is_some_and(|o| !n.contains(o))
             || not.as_deref().is_some_and(|o| n.contains(o))
     };
-    let spawn = |commands: &mut Commands, parts: &[(Handle<Mesh>, Handle<StandardMaterial>)], t: Transform| {
+    let spawn = |commands: &mut Commands, parts: &[(Handle<Mesh>, Handle<gs::GsMaterial>)], t: Transform| {
         let e = commands.spawn((t, Visibility::default())).id();
         for (m, mat) in parts {
             commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(mat.clone())));
         }
         commands.entity(root).add_child(e);
     };
-    let add = |parts: Vec<(Mesh, StandardMaterial)>, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>| {
-        parts.into_iter().map(|(m, mat)| (meshes.add(m), materials.add(mat))).collect::<Vec<_>>()
+    let add = |parts: Vec<(Mesh, Vec<gs::GsMaterial>)>, meshes: &mut Assets<Mesh>, materials: &mut Assets<gs::GsMaterial>| {
+        let mut out = Vec::new();
+        for (m, mats) in parts {
+            let m = meshes.add(m);
+            out.extend(mats.into_iter().map(|mat| (m.clone(), materials.add(mat))));
+        }
+        out
     };
     if let Some(n) = args.stage {
         let dir = format!("COURT/{n:02}");
         let mut library = std::collections::HashMap::new();
         for name in ["CMN.XB", "GRD01.XB", "HOL01.XB"] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
-            for (stem, parts) in models(&data, |n| !skip(n), &mut images) {
-                library.insert(stem, add(parts, &mut meshes, &mut materials));
+            for (stem, parts) in gs_models(&data, |n| !skip(n), &mut images) {
+                library.insert(stem, add(parts, &mut meshes, &mut gs_materials));
             }
         }
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
@@ -200,13 +207,14 @@ fn load(
             let [x, y, z, _] = npc.world[3];
             // game space is Y-down: the capsule's centre sits 0.8 m above the feet
             let t = Transform::from_matrix(Mat4::from_cols_array_2d(&npc.world)).with_translation(Vec3::new(x, y - 0.8, z));
-            spawn(&mut commands, &[(figure.clone(), materials.add(colour))], t);
+            let e = commands.spawn((t, Visibility::default(), Mesh3d(figure.clone()), MeshMaterial3d(materials.add(colour)))).id();
+            commands.entity(root).add_child(e);
         }
         bounds = (Vec3::splat(-20.0), Vec3::splat(20.0));
     }
     for path in &args.archives {
         let data = iso.read(path).expect("archive on disc");
-        for (_, parts) in models(&data, |n| !skip(n), &mut images) {
+        for (_, parts) in gs_models(&data, |n| !skip(n), &mut images) {
             for (mesh, _) in &parts {
                 if let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
                     for v in p {
@@ -215,7 +223,7 @@ fn load(
                     }
                 }
             }
-            let parts = add(parts, &mut meshes, &mut materials);
+            let parts = add(parts, &mut meshes, &mut gs_materials);
             spawn(&mut commands, &parts, Transform::default());
         }
     }
@@ -241,6 +249,8 @@ fn load(
     let (focus, radius) = args.radius.map_or((focus, radius), |r| (Vec3::ZERO, r));
     commands.spawn((
         Camera3d::default(),
+        // the PS2 writes its colours as they are
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
         Projection::Perspective(PerspectiveProjection { far: 20_000.0, ..default() }),
         Transform::default(),
         // play mode: broadcast view from behind the near (your) baseline
@@ -252,41 +262,12 @@ fn load(
 /// lower-case file stem, as one Bevy mesh + material per original material.
 fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, StandardMaterial)>)> {
     let mut out = Vec::new();
-    let arc = Archive::parse(data).expect("xb archive");
-    {
-        for e in arc.entries.iter().filter(|e| { let n = e.name.to_ascii_lowercase(); n.ends_with(".mdl") && keep(&n) }) {
-            let stem = &e.name[..e.name.len() - 4];
-            let sib = |ext: &str| arc.find(&format!("{stem}.{ext}")).and_then(|x| arc.read(x).ok());
-            let (Ok(model), Some(mtl_bytes)) = (mdl::parse(&arc.read(e).unwrap()), sib("MTL")) else {
-                warn!("skipping {}", e.name);
-                continue;
-            };
-            let mats = match mtl::parse(&mtl_bytes, sib("MTI").as_deref()) {
-                Ok(m) => m,
-                Err(err) => { warn!("{}: {err}", e.name); continue }
-            };
-            let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| images.add(image(t))).collect();
-            let model_stem = stem.rsplit(['\\', '/']).next().unwrap_or(stem).to_ascii_lowercase();
-            let mut parts = Vec::new();
+    for_models(data, keep, |model_stem, model, mats| {
+        let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| images.add(image(t))).collect();
+        let mut parts = Vec::new();
+        {
             for (mi, packets) in model.materials.iter().enumerate() {
-                let (mut pos, mut nrm, mut uv, mut col, mut idx) = (vec![], vec![], vec![], vec![], vec![]);
-                for pk in packets {
-                    let base = pos.len() as u32;
-                    for v in &pk.vertices {
-                        pos.push(v.pos);
-                        nrm.push(v.normal);
-                        uv.push(v.uv);
-                        col.push(v.color.map(|c| c as f32 / 128.0)); // PS2 modulate: 0x80 = 1.0
-                    }
-                    idx.extend(pk.triangles.iter().flatten().map(|i| i + base));
-                }
-                if idx.is_empty() { continue }
-                let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
-                    .with_inserted_indices(Indices::U32(idx));
+                let Some(mesh) = mesh(packets.iter()) else { continue };
                 let mat = mats.materials.get(mi);
                 let texture = mat.and_then(|m| m.texture).map(|t| tex[t].clone());
                 let [r, g, b, a] = mat.map_or([1.0; 4], |m| m.color);
@@ -303,9 +284,88 @@ fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) 
                     },
                 ));
             }
-            out.push((model_stem, parts));
         }
+        out.push((model_stem, parts));
+    });
+    out
+}
+
+/// Every model in an archive whose lower-cased name ends in `.mdl` and passes `keep`, with its lower-case file
+/// stem and parsed MTL.
+fn for_models(data: &[u8], keep: impl Fn(&str) -> bool, mut f: impl FnMut(String, mdl::Model, mtl::Mtl)) {
+    let arc = Archive::parse(data).expect("xb archive");
+    for e in arc.entries.iter().filter(|e| { let n = e.name.to_ascii_lowercase(); n.ends_with(".mdl") && keep(&n) }) {
+        let stem = &e.name[..e.name.len() - 4];
+        let sib = |ext: &str| arc.find(&format!("{stem}.{ext}")).and_then(|x| arc.read(x).ok());
+        let (Ok(model), Some(mtl_bytes)) = (mdl::parse(&arc.read(e).unwrap()), sib("MTL")) else {
+            warn!("skipping {}", e.name);
+            continue;
+        };
+        let mats = match mtl::parse(&mtl_bytes, sib("MTI").as_deref()) {
+            Ok(m) => m,
+            Err(err) => { warn!("{}: {err}", e.name); continue }
+        };
+        f(stem.rsplit(['\\', '/']).next().unwrap_or(stem).to_ascii_lowercase(), model, mats);
     }
+}
+
+/// One triangle-list mesh of these packets; vertex colours stay in PS2 units (0x80 = 1.0).
+fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>) -> Option<Mesh> {
+    let (mut pos, mut nrm, mut uv, mut col, mut idx) = (vec![], vec![], vec![], vec![], vec![]);
+    for pk in packets {
+        let base = pos.len() as u32;
+        for v in &pk.vertices {
+            pos.push(v.pos);
+            nrm.push(v.normal);
+            uv.push(v.uv);
+            col.push(v.color.map(|c| c as f32 / 128.0)); // PS2 modulate: 0x80 = 1.0
+        }
+        idx.extend(pk.triangles.iter().flatten().map(|i| i + base));
+    }
+    if idx.is_empty() {
+        return None;
+    }
+    Some(
+        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+            .with_inserted_indices(Indices::U32(idx)),
+    )
+}
+
+/// Like [`models`], drawn as the GS draws them ([`gs`]): one mesh per material and batch PRIM, its texture raw and
+/// wrapped per the MDL's material header.
+fn gs_models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, Vec<gs::GsMaterial>)>)> {
+    let mut out = Vec::new();
+    for_models(data, keep, |stem, model, mats| {
+        let mut parts = Vec::new();
+        for (mi, packets) in model.materials.iter().enumerate() {
+            let Some(mat) = mats.materials.get(mi) else { continue };
+            let wrap = model.wrap.get(mi).copied().unwrap_or([0, 0]);
+            let texture = mat.texture.map(|t| {
+                let mut img = image(&mats.textures[t]);
+                img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
+                // GS CLAMP: 0 repeat; 1 clamp; 2 region clamp over the whole texture (as the game sets it) = clamp
+                let mode = |w: u8| if w == 0 { ImageAddressMode::Repeat } else { ImageAddressMode::ClampToEdge };
+                img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: mode(wrap[0]),
+                    address_mode_v: mode(wrap[1]),
+                    ..ImageSamplerDescriptor::linear()
+                });
+                images.add(img)
+            });
+            let mut prims: Vec<u8> = packets.iter().map(|p| p.prim & 0x50).collect();
+            prims.sort();
+            prims.dedup();
+            for prim in prims {
+                let Some(mesh) = mesh(packets.iter().filter(|p| p.prim & 0x50 == prim)) else { continue };
+                parts.push((mesh, gs::GsMaterial::for_batch(mat, prim, texture.clone())));
+            }
+        }
+        out.push((stem, parts));
+    });
     out
 }
 

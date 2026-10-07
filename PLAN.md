@@ -127,7 +127,15 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Presentation
 
 - [~] **P16** Camera (court views, pick, wiring, other modes open) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
-- [ ] **P17** Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
+- [ ] **P17** (split into P17a–h) Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
+- [x] **P17a** Court material GS state: blend, alpha test, Z write, TFX, PRIM, wrap (in P17) → new `hst/src/gs.rs` gs.wgsl · `main.rs` gs_models · `mdl.rs` Packet.prim | t: gs.rs | j: 2026-10-07-p17-court-rendering
+- [ ] **P17b** Fog (FGE) (in P17) → `gs.rs` gs.wgsl
+- [ ] **P17c** VU1 lighting + HIGHLIGHT2 term (in P17) → `gs.rs` gs.wgsl · `main.rs` gs_models
+- [ ] **P17d** Clouds: category-14 records (in P17) → `main.rs` load · `layout.rs`
+- [ ] **P17e** Sky time of day + seasons `_sXXXX`/SSN1 (in P17) → `main.rs` load
+- [ ] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
+- [ ] **P17g** Shadows: player/ball blobs, shadow models (in P17) → new
+- [ ] **P17h** Mipmaps + LOD (TEX1) (in P17) → `main.rs` gs_models
 - [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`
 - [ ] **P19** HUD as the original (user 2026-10-07): replace our player/score HUD with the game's own, from its assets: who is COM and who is a player, hidden during the rally; plus each player's marker above the head before the rally → `play.rs` hud/score_line · `hst-data` (AZUMA/INPANE)
 - [~] **P20** Audio (see N3) → `hst-data/src/xb.rs` | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
