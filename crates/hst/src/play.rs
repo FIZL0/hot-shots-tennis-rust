@@ -3337,7 +3337,7 @@ fn balloons(
     g: Res<Game>,
     art: Res<BalloonArt>,
     time: Res<Time<Fixed>>,
-    cam: Query<&Transform, (With<Camera3d>, Without<BalloonView>)>,
+    cam: Query<&Transform, (With<crate::Orbit>, Without<BalloonView>)>,
     mut q: Query<(&BalloonView, &mut Transform, &mut Visibility)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {

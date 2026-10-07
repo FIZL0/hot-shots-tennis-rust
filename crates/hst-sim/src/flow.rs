@@ -54,9 +54,15 @@ enum Board {
     Done,
 }
 
-/// The umpire's call sprite: up until its voice line ends (or its countdown runs out), held, faded out.
+/// The umpire's call model: up once its animation has ended and its voice line ends (or its countdown runs out),
+/// held, faded out.
 #[derive(Clone, Copy, Debug)]
 struct CallShow {
+    /// The judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out after net).
+    call: u8,
+    /// Frames the model has played, and its animation's length (0: no animation).
+    frames: i32,
+    anim_end: f32,
     /// Out, out after net or double fault: the score show follows after a one-tick pause.
     chain: bool,
     countdown: i32,
@@ -92,7 +98,7 @@ impl PostPoint {
         let mut p = PostPoint { tick: 0, event, board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None };
         if (1..=5).contains(&call) {
             let chain = matches!(call, 1 | 3 | 5);
-            p.board = Board::Call(CallShow { chain, countdown: t.call_wait[call as usize], settled: false, held: 0, fade: -1 });
+            p.board = Board::Call(CallShow { call, frames: 0, anim_end: 0.0, chain, countdown: t.call_wait[call as usize], settled: false, held: 0, fade: -1 });
         }
         p
     }
@@ -150,9 +156,9 @@ impl PostPoint {
                     c.fade -= 1;
                 } else {
                     if !c.settled {
-                        // ponytail: the sprite's own animation is assumed shorter than the voice line
                         c.countdown -= 1;
-                        c.settled = voice_idle || c.countdown < 1;
+                        c.frames += 1;
+                        c.settled = c.anim_end <= c.frames as f32 && (voice_idle || c.countdown < 1);
                     }
                     if c.settled {
                         c.held += 1;
@@ -218,7 +224,30 @@ pub struct ShowState {
     pub fading_out: bool,
 }
 
+/// What the umpire's call model is drawing this tick (after `PostPoint::step`): the call and the model's alpha.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallState {
+    pub call: u8,
+    pub alpha: f32,
+}
+
 impl PostPoint {
+    /// The call model's animation is `frames` long (from its `.ANI`; set before the first step): it settles no
+    /// earlier.
+    pub fn set_call_anim(&mut self, frames: f32) {
+        if let Board::Call(c) = &mut self.board {
+            c.anim_end = frames;
+        }
+    }
+
+    /// The call model showing, if any: alpha 1 until the fade, then 128·t/5 (in 128ths) down to 0.
+    pub fn call(&self) -> Option<CallState> {
+        match self.board {
+            Board::Call(c) => Some(CallState { call: c.call, alpha: if c.fade < 0 { 1.0 } else { (128 * c.fade / CALL_FADE) as f32 / 128.0 } }),
+            _ => None,
+        }
+    }
+
     /// The running score show, if any.
     pub fn show(&self) -> Option<ShowState> {
         match self.board {
