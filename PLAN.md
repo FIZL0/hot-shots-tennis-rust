@@ -145,6 +145,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **M2** Online play: matches over the network (the sim is deterministic and tick-based, so input-only lockstep/rollback fits) → `hst-sim` · `play.rs` input
 - [ ] **M3** In-browser version (wasm build) with online multiplayer (builds on M2) → `hst` app · `audio.rs`
 - [ ] **M4** Music support (BGM is off by default; `--music` plays the court's): verify the BGM sequencer's note-on timing against the ring recording `context/recordings/bgm_s01.bin` (menu `bgmm_05` from save slot 1), live controller changes on sounding voices, the director's BGM restart and fade cues (messages 6/0xe/0xc), the menu BGM in a menu, jingle key 0 → `hst-data/src/snd.rs` · `audio.rs` `play.rs` | j: 2026-10-07-n3-audio/13-MUSIC-FINAL.md
+- [ ] **M5** Our own upscaled textures: extract every texture unscaled from the disc (TIM2 in the archives, as loaded) and upscale them with the user's existing chaiNNer workflow (needs the human: where the chain lives and how to run it), then use them in place of `replacements/` (PCSX2 dumps) → `hst-data/src/tim2.rs` · `main.rs` image · `replacements/` (P18)
+- [ ] **M6** Recreated font for text art: rebuild the game's lettering (set/game/match banners, pop-up words and the like) as a font and redraw those textures from it, crisp at any size, instead of upscales with artefacts. Match the original's letter shapes, colours, outlines and layout → `replacements/` · `play.rs` balloons/hud (P10, P12b, P19)
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 
@@ -189,5 +191,6 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
 
 ## Needs the human
 
+- M5 (stretch): where the chaiNNer upscaling chain is and how to run it.
 - **Record a tiebreak (for P12)**: no save state or fixture reaches one. Play/record a bot match to 4-4 and through the tiebreak (incl. its 6-point end change and the set/match end) with `tools/record_p2m2.py <slot> context/fixtures/tiebreak.bin <frames>`, ideally from a save made at 4-3 or 3-4. Agents' RAM-poked attempts from slot 5 failed (PINE op errors mid-capture).
 - P13 umpire: record a long match (let, deuce again, set/tiebreak/match announcements) — j: 2026-10-07-p13-umpire/2-RECORDING-READY.md
