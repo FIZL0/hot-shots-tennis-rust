@@ -151,7 +151,7 @@ pub fn parse(mtl: &[u8], mti: Option<&[u8]>) -> Result<Mtl, Error> {
 }
 
 /// How a material blends with the frame buffer (GS ALPHA), chosen by a tag in its name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Blend {
     /// `(Cs - Cd) * As + Cd`
     Normal,

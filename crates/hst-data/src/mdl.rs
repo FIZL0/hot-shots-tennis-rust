@@ -6,7 +6,7 @@
 //!                  group = 0x40 header, extra, 3 × mat4, u32 n, n × node
 //! u32 material count (== MTL material count)
 //!   per material : 0xc header (+0 batch count, +8/+0xa texture wrap u/v)
-//!     per batch  : 0x34 header (+0x1c packet count)
+//!     per batch  : 0x34 header (+0x1c packet count, +0x31 GS PRIM bits)
 //!       per packet: 0x60 header, VIF stream (+0x34 qwords), bone list (+0x3c + 1 bytes),
 //!                   +0x38 bytes, +0x38 × 32 bytes, [+0x57 qwords if +0x56], +0x54 × morph blocks,
 //!                   [4 bytes if +0x4c < 0]
@@ -51,6 +51,8 @@ pub struct Packet {
     pub colors: Vec<[u8; 4]>,
     /// Nodes this packet's batch is bound to (bone slots).
     pub palette: Vec<usize>,
+    /// The batch's GS PRIM bits (batch header +0x31): 0x10 TME (textured), 0x20 FGE (fogged), 0x40 ABE (blended).
+    pub prim: u8,
     /// Per morph target ([`Model::morph_names`]): (position entry, offset) — the entry moves by weight × offset.
     pub morphs: Vec<Vec<(usize, [f32; 3])>>,
 }
@@ -294,6 +296,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 let mut pk = decode_vif(vif)?;
                 pk.bones = bones;
                 pk.palette = palette.clone();
+                pk.prim = bh[0x31];
                 pk.morphs = morphs;
                 packets.push(pk);
             }
