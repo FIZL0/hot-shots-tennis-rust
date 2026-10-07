@@ -78,6 +78,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **N3f** Whiff voice (bug, user 2026-10-07): the miss voice line plays on every swing that doesn't reach the ball; the original only voices some whiffs. Find its rule (chance, cooldown, which swings) and match it → `sound.rs` · `play.rs` whiff | t: sound.rs | j: 2026-10-07-n3-audio
 - [ ] **N3g** Change-ends music (bug, user 2026-10-07): no music plays while the players change sides; the original plays its change-ends tune. Play it when and as the original does. N3e (music, jingles; branch task/N3e, done but not merged: conflict) plays BGM only with `--music` and has no change-ends cue; check what the original plays then → audio.rs · `play.rs` ChangeEnds | j: 2026-10-07-n3-audio
 - [ ] **B1** Render errors (bug, user 2026-10-07): the app floods the log with `ERROR bevy_render::slab_allocator: Use-after-free: attempted to copy element data for an unallocated key`. Find which meshes are freed while still queued (likely something spawned/despawned or mesh-replaced every frame; P9's effects came in just before) and fix so no errors print in play → `play.rs` · `character.rs` · `main.rs`
+- [ ] **N4b** Missing lob indicator (bug, user 2026-10-07): the lob landing marker sometimes doesn't show where the original shows one. Find which lobs lose it and match the original's rule → `effects.rs` LandingMarks · `play.rs` strike | j: 2026-10-07-n4-landing-markers
+- [ ] **N7** Racket transparency (bug, user 2026-10-07): rackets are drawn opaque where the original's are see-through. Match its blending for the racket model → `character.rs` · `hst-data/src/mtl.rs` `tim2.rs` · `main.rs`
 
 ### Match basics
 

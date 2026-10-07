@@ -4,8 +4,9 @@ sessions going, each on its own PLAN.md task in its own git worktree, and merges
 
     tmux new -s hst tools/overnight-parallel.py      # (tools/overnight-parallel-5.sh: 5 at once) progress: context/notes/overnight.log, slot logs beside it
 
-Each session is the normal TUI in its own tmux window (s1..sN) of the runner's session: switch to one to watch or
-type to it. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
+Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
+runner's session (the master has its own window): watch or type to any of them. Panes are found by their @hst option, so
+join/break/swap them freely. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
 into a finished session cancels that, so /exit it yourself or the runner never merges it.
 
 Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split parents, `(after X)` while X is open,
@@ -18,7 +19,9 @@ tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
 
 Merging is the master's job: one long-lived session in window "master" (main checkout) that every finished task
 reports to; it merges task/<ID> into main, fixes conflicts, runs the tests and keeps context/notes/master.md for you.
-Restarting the runner adopts the master and the sessions still running in windows s1..sN instead of resetting them. A run that only
+Reports queue in context/notes/master.outbox; each waits until the master is idle, then goes in after a /clear with
+the master's instructions, so the session lives on across runs without its context growing. Nothing ends the master:
+it outlives a done or stopped run, and the next run adopts it. Restarting the runner adopts the master and the sessions still running in panes s1..sN instead of resetting them. A run that only
 hit the usage limit is discarded and its slot sleeps until the reset.
 """
 import glob, json, os, re, shlex, subprocess as sp, time, uuid
@@ -100,6 +103,34 @@ def slot(n):
     return d
 
 
+def pane(name, cwd, cmd, env=()):
+    """Open cmd in a new pane of window "agents" (the master: its own window "master"; made on first use), tagged
+    @hst=name; returns its pid."""
+    envs, w = [a for e in env for a in ('-e', e)], 'master' if name == 'master' else 'agents'
+    where = ['split-window', '-t', w] if w in sp.run(['tmux', 'list-windows', '-F', '#{window_name}'],
+                                                     capture_output=True, text=True).stdout.split() else ['new-window', '-n', w]
+    pane_id, pid = sp.run(['tmux', *where, '-d', '-c', cwd, *envs, '-P', '-F', '#{pane_id} #{pane_pid}', cmd],
+                       capture_output=True, text=True, check=True).stdout.split()
+    sp.run(['tmux', 'set-option', '-p', '-t', pane_id, '@hst', name])
+    sp.run(['tmux', 'set-option', '-w', '-t', w, 'pane-border-status', 'top'])
+    sp.run(['tmux', 'set-option', '-w', '-t', w, 'pane-border-format', ' #{@hst} '])
+    sp.run(['tmux', 'select-layout', '-t', w, 'tiled'])
+    return int(pid)
+
+
+def panes():
+    """{name: (pane id, pid)} of the master and slot panes in the runner's session."""
+    out = {}
+    for l in sp.run(['tmux', 'list-panes', '-s', '-F', '#{pane_id}\t#{pane_pid}\t#{@hst}\t#{window_name}\t#{pane_current_path}'],
+                    capture_output=True, text=True).stdout.splitlines():
+        pane_id, pid, name, window, path = l.split('\t')
+        # ponytail: panes from before @hst were windows; drop these two fallbacks once no such run is left going
+        name = name or ('s' + path[len(WT) + 2:] if path.startswith(WT + '/s') else 'master' if window == 'master' else '')
+        if name:
+            out[name] = (pane_id, int(pid))
+    return out
+
+
 def start(n, task):
     tid = task[0]
     d = slot(n)
@@ -113,16 +144,16 @@ def start(n, task):
     stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/overnight-stop.sh')}]}]
     cmd = shlex.join(['claude', PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', d, '-e', f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', '-e', f'HST_PCSX2={n}', '-P', '-F', '#{pane_pid}', cmd],
-                   capture_output=True, text=True, check=True).stdout)
+    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}'])
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since
 
 
 MASTER = """You are the master of a parallel unattended run (tools/overnight-parallel.py): nobody will answer \
 questions. Up to {slots} agents work on PLAN.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
-runner messages you here as each one ends: `REPORT <ID> slot <n>: <session, its commits>`. Handle reports one at a time, \
-in order, in this main checkout:
+runner clears your context and sends you these instructions with one message at a time: `REPORT <ID> slot <n>: \
+<session, its commits>` as each one ends. Earlier reports' outcomes are at the end of context/notes/master.md. Handle the \
+report in this main checkout:
 1. If main has uncommitted changes that aren't yours (the user edits PLAN.md), `git stash` them and pop them back after.
 2. `git merge --no-edit task/<ID>` (no commits on it: just note that). Resolve every conflict keeping both sides' \
 intent (read both sides' commits and journal; tasks run in parallel, so PLAN.md ticks and new struct fields from both \
@@ -135,27 +166,45 @@ master.md with a short summary for the human at the top."""
 
 
 def master():
-    """The master's tmux window; started once, adopted by a restarted runner."""
-    names = sp.run(['tmux', 'list-windows', '-F', '#{window_name}'], capture_output=True, text=True).stdout.split()
-    if 'master' not in names:
-        cmd = shlex.join(['claude', MASTER.format(slots=SLOTS), '--permission-mode', 'bypassPermissions',
-                          '--disallowedTools', 'AskUserQuestion'])
-        sp.run(['tmux', 'new-window', '-d', '-n', 'master', '-c', ROOT, cmd], check=True)
+    """The master's tmux pane; started once, adopted by a restarted runner."""
+    if 'master' not in panes():
+        cmd = shlex.join(['claude', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion'])
+        pane('master', ROOT, cmd)
         log('master session started (window master)')
         time.sleep(20)  # let the TUI come up before the first report is typed into it
 
 
+OUTBOX = os.path.join(NOTES, 'master.outbox')
+
+
 def report(msg):
-    """Type a line into the master's session; queued by the TUI if it's busy."""
-    sp.run(['tmux', 'send-keys', '-t', 'master', '-l', msg])
-    sp.run(['tmux', 'send-keys', '-t', 'master', 'Enter'])
+    """Queue a line for the master; on disk, so a restarted runner still delivers it."""
+    open(OUTBOX, 'a').write(msg + '\n')
+
+
+def queued():
+    return open(OUTBOX).read().splitlines() if os.path.exists(OUTBOX) else []
+
+
+def flush():
+    """Once the master is idle: /clear it, then type its instructions and the next queued line."""
+    if not (q := queued()):
+        return
+    m = panes().get('master', ['master'])[0]  # master gone: send-keys fails quietly, as it always did
+    screen = sp.run(['tmux', 'capture-pane', '-p', '-t', m], capture_output=True, text=True).stdout
+    if re.search(r'…\s\(\d|esc to interrupt', screen):
+        return  # ponytail: busy = the TUI's spinner line ("✽ Working… (2m 3s"); breaks if Claude Code redraws it
+    for keys in ['/clear', ' '.join(MASTER.format(slots=SLOTS).split('\n')) + ' ' + q[0]]:
+        sp.run(['tmux', 'send-keys', '-t', m, '-l', keys])
+        sp.run(['tmux', 'send-keys', '-t', m, 'Enter'])
+        time.sleep(5)  # /clear finishes, the spinner shows before the next look
+    open(OUTBOX, 'w').write(''.join(l + '\n' for l in q[1:]))
 
 
 def adopt():
-    """Sessions a previous runner left going in windows s1..sN: {n: ((pid, sid, since), task)}."""
+    """Sessions a previous runner left going in panes s1..sN: {n: ((pid, sid, since), task)}."""
     out, known = {}, {t[0]: t for t in tasks()}
-    panes = sp.run(['tmux', 'list-panes', '-s', '-F', '#{window_name} #{pane_pid}'], capture_output=True, text=True).stdout
-    for name, pid in (l.split() for l in panes.splitlines()):
+    for name, (_, pid) in panes().items():
         if not re.fullmatch(r's\d+', name) or int(name[1:]) > SLOTS:
             continue
         n, args = int(name[1:]), open(f'/proc/{pid}/cmdline').read().split('\0')
@@ -199,7 +248,7 @@ def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
     os.makedirs(NOTES, exist_ok=True)
-    running, procs, tried, free_at = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}
+    running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
     log(f'parallel run, {SLOTS} slots')
     master()
     for n, (proc, task) in adopt().items():
@@ -224,9 +273,13 @@ def main():
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
             if n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 procs[n], running[n] = start(n, task), task
-        if not procs and not pick(running, tried) and all(datetime.now() >= t for t in free_at.values()):
+        if not done and not procs and not pick(running, tried) and all(datetime.now() >= t for t in free_at.values()):
+            done = True
             report('RUN DONE')
-            return log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
+            log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
+        flush()
+        if done and not queued():
+            return  # the master stays up for the next run
         time.sleep(10)
 
 
