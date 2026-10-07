@@ -159,4 +159,4 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
 
 ## Needs the human
 
-- (none yet)
+- P13 umpire: record a long match (let, deuce again, set/tiebreak/match announcements) — j: 2026-10-07-p13-umpire/2-RECORDING-READY.md
