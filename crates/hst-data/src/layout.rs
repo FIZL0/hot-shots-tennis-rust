@@ -136,3 +136,11 @@ mod tests {
         assert_eq!(resolve(&list, p, 1).unwrap().stem, "net_s0100");
     }
 }
+
+/// How many clouds a court makes: `envir_cNN.dat`'s i16 per environment at 0x4d0 scaled by the hole file's
+/// `envir_cNN_h01.dat` percent at 0x50; 0 means 20. Environment 1 is singles, 0 doubles.
+pub fn cloud_count(envir: &[u8], hole_envir: &[u8], env: usize) -> Option<usize> {
+    let base = i16::from_le_bytes(envir.get(0x4d0 + 2 * env..0x4d2 + 2 * env)?.try_into().ok()?) as i32;
+    let n = base * *hole_envir.get(0x50 + env)? as i32 / 100;
+    Some(if n == 0 { 20 } else { n.max(0) as usize })
+}

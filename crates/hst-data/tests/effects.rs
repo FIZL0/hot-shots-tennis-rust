@@ -39,3 +39,20 @@ fn every_effect_parses() {
     let m = mtl::parse(&get("yumoto/impact_top_a.MTL").unwrap(), get("yumoto/impact_top_a.MTI").as_deref()).unwrap();
     assert!(m.materials.iter().any(|m| m.blend() == mtl::Blend::Add));
 }
+
+/// Court 10's wind (slot 5 blew from 315° at 2) and cloud count (9 in doubles as in RAM, 11 in singles).
+#[test]
+fn court10_wind_and_clouds() {
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    assert_eq!(game.wind(10), (vec![315.0, 0.0, 45.0], 2.0));
+    let mut find = |xb: &str, suffix: &str| {
+        let data = iso.read(xb).unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).unwrap()).unwrap()
+    };
+    let (envir, hole) = (find("COURT/10/CMN.XB", "envir_c10.dat"), find("COURT/10/GRD01.XB", "envir_c10_h01.dat"));
+    assert_eq!(hst_data::layout::cloud_count(&envir, &hole, 0), Some(9));
+    assert_eq!(hst_data::layout::cloud_count(&envir, &hole, 1), Some(11));
+}
