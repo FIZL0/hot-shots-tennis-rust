@@ -132,6 +132,9 @@ struct Player {
     /// A swing at nothing (`motion::Whiff`), and a pending press's whiff to come is a re-press (no shout).
     whiff: Option<motion::Whiff>,
     whiff_quiet: bool,
+    /// The player's last swing ended in its miss motion and no swing has started since: the next whiff is quiet.
+    /// Cleared by a stroke press or a serve swing, not by the point's end (the game's re-press window outlives it).
+    missed: bool,
     /// Movement stats from TParam.csv.
     stats: Stats,
     /// Run, stamina, stand/run motion and facing as the game's play state (`hst_sim::player::Body`).
@@ -1446,6 +1449,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                 _ => false,
             };
             if allowed {
+                g.players[i].missed = false;
                 let grades = g.serve_data.grades(toss).to_vec();
                 match serve::search(&g.serve_data, toss, &predicted_path(g, grades.len())) {
                     Some(k) => {
@@ -1463,7 +1467,13 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                         });
                         whoosh(g, i, 0, kind);
                     }
-                    None => s.whiffed = true,
+                    None => {
+                        // a missed serve swing shouts with its miss motion, never muted by an earlier whiff
+                        s.whiffed = true;
+                        let r = (rand(&mut g.rng) * 32768.0) as u32;
+                        let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
+                        g.whooshes.push((0, i, shout));
+                    }
                 }
             }
         }
@@ -2120,6 +2130,8 @@ fn press(g: &mut Game, i: usize, kind: i32) {
         return;
     };
     if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && p.dive.is_none() {
+        let quiet = quiet || p.missed;
+        p.missed = false;
         p.whiff = None;
         p.kind = kind;
         p.whiff_quiet = quiet;
@@ -2178,6 +2190,7 @@ fn whiff_frame(g: &mut Game, i: usize, stick: bool) {
     p.prev = p.pos;
     if let Some(m) = w.step() {
         set_motion(p, m, 1.0, false, None);
+        p.missed = true;
         if !w.quiet {
             let r = (rand(&mut g.rng) * 32768.0) as u32;
             let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);

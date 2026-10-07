@@ -195,7 +195,10 @@ pub fn stroke_shout(h: &Hit, character: i32, players: u32, mut roll: impl FnMut(
 
 /// The dive's shout program, played as the dive starts.
 pub const DIVE_SHOUT: u8 = 3;
-/// A missed swing's shout program, at the contact pose where the stroke turns into its miss motion.
+/// A missed swing's shout program, at the contact pose where the stroke turns into its miss motion. It is muted
+/// when the player's previous swing also ended in its miss motion with no swing start between (the re-press window
+/// a miss opens stays open, even across points, until a stroke press or a serve swing starts): of a run of
+/// whiffs only the first shouts. A missed serve swing always shouts.
 pub const WHIFF_SHOUT: u8 = 4;
 
 /// A doubles CPU player's call (program 6 key 3 or 4 by a random bit, 0x80 at the player) as it leaves an incoming
