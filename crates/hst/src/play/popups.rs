@@ -430,9 +430,11 @@ const CALL_MODEL: [usize; 6] = [0, 1, 3, 4, 0, 2];
 const CHANGE_SIDES: usize = 5;
 /// The overlay camera's render layer: it sees only the call models.
 const CALL_LAYER: usize = 7;
-/// The overlay camera's horizontal half-angle (its 50° field of view), and the model's distance in front of it.
+/// The overlay camera's horizontal half-angle (its 50° field of view), the model's distance in front of it and the
+/// uniform scale the scoreboard gives each call model when it loads them.
 const CALL_FOV_DEG: f32 = 25.0;
 const CALL_DISTANCE: f32 = 10.0;
+const CALL_SCALE: f32 = 5.7;
 
 /// The camera drawing the call models over the match.
 #[derive(Component)]
@@ -464,7 +466,7 @@ fn setup_calls(
         let (mut effect, shown) = crate::effects::model(&arc, &format!("azuma/inpane/mdl/{name}"), &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         effect.hold = true;
-        commands.entity(shown.root).insert(Transform::from_xyz(0.0, 0.0, CALL_DISTANCE).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)));
+        commands.entity(shown.root).insert(Transform::from_xyz(0.0, 0.0, CALL_DISTANCE).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)).with_scale(Vec3::splat(CALL_SCALE)));
         (effect, shown)
     });
     commands.entity(root).insert_recursive::<Children>(layer.clone());
@@ -490,15 +492,6 @@ fn tick_calls(mut g: ResMut<Game>, calls: Option<ResMut<Calls>>) {
         _ => (None, false, 1.0),
     };
     calls.alpha = alpha;
-    // TEMP-CALLSHOT
-    if let Ok(v) = std::env::var("HST_CALL_SHOT") {
-        let (k, f): (usize, f32) = v.split_once(',').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())).unwrap();
-        let p = calls.playing;
-        let e = &mut calls.models[k].0;
-        if p != Some(k) { e.start(); } else if e.times()[2] < f { e.tick(); }
-        calls.playing = Some(k);
-        return;
-    }
     let Some(k) = model else { return calls.playing = None };
     let restart = start || calls.playing != Some(k);
     let effect = &mut calls.models[k].0;

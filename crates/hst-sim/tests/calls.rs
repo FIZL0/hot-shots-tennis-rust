@@ -57,13 +57,3 @@ fn call_settles_after_animation() {
     assert_eq!(alphas.len(), 1 + 14 + 29 + 6);
     assert_eq!(alphas[alphas.len() - 6..], [1.0, 102.0 / 128.0, 76.0 / 128.0, 51.0 / 128.0, 25.0 / 128.0, 0.0]);
 }
-#[test]
-fn tmp_nodes() {
-    let mut iso = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")).unwrap();
-    let data = iso.read("AZUMA/INPANE/INPANE.XB0").unwrap();
-    let arc = Archive::parse(&data).unwrap();
-    for e in &arc.entries { if e.name.to_ascii_lowercase().ends_with("_00.mdl") {
-        let m = mdl::parse(&arc.read(e).unwrap()).unwrap();
-        for (mat, v, _, mo) in m.skinned() { println!("mat {mat} pos {:?}", v.iter().map(|v| v.pos).collect::<Vec<_>>()); for t in mo { println!("  morph {:?}", t); } }
-    }}
-}
