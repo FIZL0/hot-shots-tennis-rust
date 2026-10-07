@@ -27,6 +27,14 @@ tick it in PLAN.md, commit. Don't grep the repo for where things live — the co
 control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md) ·
 `"when blocked"` (a section) · `-f FILE <name>` (any markdown).
 
+## Cheap context
+- Decompile: `research/fn.sh <addr>` (one function), `research/xref.py <addr>` (callers/callees),
+  `research/xref.py <addr> --similar` (look-alike functions; `ported` ones have Rust to copy the shape of). A hook
+  blocks reading the 16 MB dumps whole.
+- Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
+- `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
+- Mechanical jobs (journal write-up from your notes, ticking PLAN.md, checking a capture) → `chore` subagent.
+
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
 `PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.

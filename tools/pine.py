@@ -5,10 +5,17 @@ import os, socket, struct, sys
 SLOT = 28011  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
 OK = 0
 
+def _loud(kind, err, tb):
+    # any script using PINE: a crash says so in one line instead of a traceback that reads like partial success
+    if issubclass(kind, KeyboardInterrupt): return sys.__excepthook__(kind, err, tb)
+    sys.exit(f"CAPTURE FAILED: {kind.__name__}: {err}. Anything this run wrote is incomplete; don't use it. "
+             "Is PCSX2 running with PINE on (tools/pcsx2-hst.sh) and responding?")
+sys.excepthook = _loud
+
 class Pine:
     def __init__(self):
         path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "pcsx2.sock" if SLOT == 28011 else f"pcsx2.sock.{SLOT}")
-        self.s = socket.socket(socket.AF_UNIX); self.s.connect(path)
+        self.s = socket.socket(socket.AF_UNIX); self.s.settimeout(10); self.s.connect(path)  # a frozen PCSX2 fails, not hangs
 
     def _call(self, op, args=b""):
         self.s.sendall(struct.pack("<IB", 5 + len(args), op) + args)
