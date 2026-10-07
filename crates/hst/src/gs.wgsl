@@ -4,6 +4,8 @@
 
 struct Gs {
     color: vec4<f32>,
+    shininess: f32,
+    highlight: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -22,17 +24,27 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #else
     var f = gs.color;
 #endif
-    f = min(f, vec4(255.0 / 128.0));
-    var rgb = f.rgb;
-    var a = f.a;
+    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient 0.5 + 0.49 × the light from
+    // (1, 2, 1)/√6, and a specular term on the fixed half vector, Schlick's t/(k − (k − 1)t) for t^k
+    let n = normalize(in.world_normal) * vec3(1.0, -1.0, -1.0);
+    let diffuse = max(-dot(n, vec3(0.408248, 0.816497, 0.408248)), 0.0);
+    let h = max(-dot(n, vec3(0.243259, 0.486519, 0.839121)), 0.0);
+    let spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
+    f = vec4(f.rgb * (0.5 + 0.49 * diffuse), f.a);
+    var rgb = min(f.rgb, vec3(255.0 / 128.0));
+    var a = min(f.a, 255.0 / 128.0);
 #ifdef GS_TEXTURED
     let t = textureSample(gs_texture, gs_sampler, in.uv);
-    rgb = t.rgb * f.rgb;
+    rgb = t.rgb * rgb;
 #ifdef GS_MODULATE
-    a = t.a * f.a;
+    a = t.a * a;
 #else
+    // HIGHLIGHT2: + vertex alpha (0..0xff), which carries the highlight
     a = t.a;
+    rgb += min(spec, 1.0);
 #endif
+#else
+    rgb = min(rgb + spec * 255.0 / 128.0, vec3(255.0 / 128.0));
 #endif
     // alpha test on the 8-bit value
     let a8 = floor(a * 128.0);

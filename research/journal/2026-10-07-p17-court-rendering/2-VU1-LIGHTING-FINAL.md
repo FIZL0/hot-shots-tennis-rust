@@ -1,0 +1,14 @@
+# P17c — court VU1 lighting and the HIGHLIGHT2 term
+
+- Scope: port the court VU1 lighting and the HIGHLIGHT2 highlight term into gs.rs / gs.wgsl. New tool research/tools/vu1dis.py (VU1 microcode disassembler) was used to read the microcode.
+- Material setup 0x143160 uploads per material to VU1 quadwords 97–108:
+  - 97.x flags: bit0 (header+0x24 ≠ 0) selects the lit loop without back-face culling, else the culling variant; bit2 TEST 20..29; bit4 header+0x18 ≠ 0; bit3 textured.
+  - 106 = header colour/128. 107.z = k = max(1, 128·pow(header+0x10, 1.65)) (pow = fdlibm pow 0x10fb70, then soft-float multiply 0x118470). 107.y = 1−k. 107.w = header+0x14 (h14).
+- Per draw VU1 builds: 109 = light colour (0.49) × 106; 110 = light 2 colour (0) × 106; 112 = ambient (0.5) × 106. 111 = (0,0,0,255)·h14 when textured (112.w stays 0), else (255,255,255,0)·h14 with 112.w = 1. A fade bit (unused on courts) replaces this.
+- Lit loop (0x6ac / 0x6e4, same maths; the second also culls): N' = max(Mlight·n, 0), Mlight = light block (RAM 0x1ea310, identical in save states 1,2,3,4,6,7, so global, world space, not camera) × model rotation. colour = clamp255(vc·(109·N'.x + 110·N'.y + 112) + 111·q), q = N'.z/(k − (k−1)·N'.z) (Schlick's approximation of N'.z^k).
+- Light block: diffuse direction (1,2,1)/√6 (lit side faces game up and −x, −z; game space is y-down); half vector (0.243259, 0.486519, 0.839121) = normalize(L + (0,0,1)).
+- Result: textured HIGHLIGHT2 draws: colour = tex × vc × matcol × (0.5 + 0.49·diffuse) + h14·q. Untextured draws get h14·q·255 added to the vertex colour.
+- Port: GsUniform gains shininess (k) and highlight (h14). gs.wgsl lights per pixel from the world normal mapped back to game space (x, −y, −z, since GameSpace is rotated 180° about X). Debug render confirmed the floor's game normal is (0,−1,0).
+- Ponytails: lit per pixel, not per vertex. Textured MODULATE draws keep vertex×material alpha (on VU1 their vertex alpha is the highlight, 0 for h14 = 0; unexplained, maybe another path). Untextured alpha still × material alpha (VU1 sets 112.w = 1, so it would be the vertex alpha alone); left as P17a had it.
+- Verification: court 10 vs PCSX2 slot 5 screenshot. Vertical surfaces (pillar) are closer to PS2 relative to the grass (pillar/grass ratio: PS2 1.24, unlit port 1.58, lit port 1.39). The PS2 frame has compressed contrast overall (whites darker, grass brighter than the unlit port), likely a full-screen effect not yet ported, so absolute levels do not compare. Court 1 renders sane.
+- Open (outside P17c): net tape (znet model, material netcover) has normal +z in the data, so it gets no diffuse and draws dark, while the PS2 draws it bright. Suspect the game places the net turned 180° (identical geometry, flipped normals) and the port does not apply that rotation.
