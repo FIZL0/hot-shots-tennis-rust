@@ -240,15 +240,17 @@ fn mix(iso: &mut Iso) -> Mix {
 mod tests {
     use super::*;
 
-    /// Every character's voice banks load from the disc.
+    /// Every character's voice banks (0..13, singles and doubles, variants a and b) load from the disc.
     #[test]
     fn loads_voice_banks() {
         let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
             return eprintln!("no ISO, skipped");
         };
-        for (c, players, b) in [(0, 2, false), (6, 2, true), (5, 4, true), (0, 4, false)] {
-            assert!(voice_bank(&mut iso, c, players, b).is_some(), "character {c}, {players} players, b {b}");
-        }
+        let missing: Vec<_> = (0..14)
+            .flat_map(|c| [(c, 2, false), (c, 2, true), (c, 4, false), (c, 4, true)])
+            .filter(|&(c, players, b)| voice_bank(&mut iso, c, players, b).is_none())
+            .collect();
+        assert!(missing.is_empty(), "{missing:?}");
     }
 
     /// The first system sound renders: the voice keys on, sounds, and ends.

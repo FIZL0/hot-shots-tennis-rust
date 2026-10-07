@@ -10,3 +10,7 @@ doubles) at its start; `0x3552c0` (2 players, +0x3b98 == 0) shouts per stroke: s
 other strokes program 1 key % 6, none for dives. Other callers: `0x3467b0`, `0x355350`.
 
 Split: [x] N3d1 stroke and dive shouts · [ ] N3d2 whiff and reaction voices · [ ] N3d3 umpire · [ ] N3d4 gallery.
+
+Note (user): make sure the voices work for every character, not just player 1 — each player's own character bank
+(slot 1 + player, `PC{char}VCE{k}`), in singles and doubles, a and b variants; check against a recording with other
+characters than hits_s05's 0/1/2/5 before ticking N3d.
