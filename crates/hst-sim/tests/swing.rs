@@ -56,9 +56,20 @@ fn p_i32(fr: Frame, p: usize, off: usize) -> i32 {
 
 #[test]
 fn match_s05_contact_search() {
+    contact_search("match_s05.bin");
+}
+
+/// The slot-5 bot game again with every smash turned into a △ smash (`tools/record_lob_smash.py`): the returns
+/// of those lob smashes, and the △ smash off a lob, are searched like any other ball.
+#[test]
+fn lob_smash_contact_search() {
+    contact_search("lob_smash_s05.bin");
+}
+
+fn contact_search(name: &str) {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
-        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
+        return eprintln!("{name} or slot5_ee.bin absent, skipped");
     };
     let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
     let gm = ru(0x422f80);
@@ -107,7 +118,18 @@ fn match_s05_contact_search() {
                 let flags = if s.branch == Branch::Smash { 3 } else { (if s.forehand { 1 } else { 2 }) | (if s.body { 4 } else { 0 }) };
                 (s.frame as i32, match s.branch { Branch::Ground => 1u8, Branch::Volley => 2, Branch::Smash => 4 }, flags)
             });
-            let ok = g == Some(want) && got.is_some_and(|s| (s.ball[0], s.ball[2]) == (want_ball[0], want_ball[2]) || ((s.ball[0] - want_ball[0]).abs() < 1e-5 && (s.ball[2] - want_ball[2]).abs() < 1e-5));
+            // the game's own prediction (+0x3f40) can drift ~1e-5 from its flight; the ball where the swing meets it
+            // (lob_smash vsync 9309) is then matched exactly instead
+            let real = frames.get(k + idx as usize).map(|h| {
+                let b = h.live_ball();
+                [0x120, 0x128].map(|o| f32::from_le_bytes(b[o..o + 4].try_into().unwrap()))
+            });
+            let ok = g == Some(want)
+                && got.is_some_and(|s| {
+                    (s.ball[0], s.ball[2]) == (want_ball[0], want_ball[2])
+                        || ((s.ball[0] - want_ball[0]).abs() < 1e-5 && (s.ball[2] - want_ball[2]).abs() < 1e-5)
+                        || real == Some([s.ball[0], s.ball[2]])
+                });
             if !ok {
                 eprintln!("vsync {} p{p}: want {want:?} ball {want_ball:?} got {g:?} {:?}", fr.vsync(), got.map(|s| s.ball));
             }
@@ -205,4 +227,36 @@ fn new_recording_dives() {
     }
     eprintln!("{dives} dives, {steps} dive frames");
     assert!(dives == 8 || frames.is_empty());
+}
+
+/// Each △ smash of `lob_smash_s05.bin` flies as the game's ball from its launch to its first bounce (bounces
+/// in these live recordings all land ~1e-6 off, strokes too: see research/journal/2026-10-07-n5a-lob-off-lob).
+#[test]
+fn lob_smash_flights() {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/lob_smash_s05.bin")) else {
+        return eprintln!("lob_smash_s05.bin absent, skipped");
+    };
+    let frames = frames_live(&data);
+    let mut flown = vec![];
+    for k in 0..frames.len() {
+        let b = frames[k].live_ball();
+        if b[0x58] != 3 || i(b, 0x5c) != 1 || i(b, 0xac) != 0 {
+            continue;
+        }
+        let (mut fl, shot) = load(b);
+        let mut j = k + 1;
+        while j < frames.len() && i(frames[j].live_ball(), 0xac) != 0 {
+            fl.step(&shot, &COURTS[10]);
+            if fl.bounces != 0 {
+                break;
+            }
+            let want = frames[j].live_ball();
+            assert_eq!((fl.ball.pos, fl.ball.vel), (v3(want, 0xe0), v3(want, 0x130)), "vsync {} (launched {})", frames[j].vsync(), frames[k].vsync());
+            j += 1;
+        }
+        flown.push(j - k - 1);
+    }
+    // the first is volleyed before it bounces
+    assert_eq!(flown, [44, 67, 73]);
 }

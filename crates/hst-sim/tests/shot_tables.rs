@@ -80,10 +80,26 @@ fn stick_turns_topspin_flat_and_slice_drop() {
 /// 1e-3–4e-2 rad), so this asserts the five that are exact.
 #[test]
 fn smashes_launch_like_the_game() {
+    let Some((smashes, exact)) = smashes("match_s05.bin", 0) else { return };
+    assert_eq!(smashes, 9);
+    assert!(exact >= 5, "{exact} of {smashes} smashes exact");
+}
+
+/// The same bot match with every smash turned into a △ smash (`tools/record_lob_smash.py`, +0x3ee4 = 4 once the
+/// search locks a smash): kind 1 from character 0's `smsh1` table, one of them off a lob.
+#[test]
+fn lob_smashes_launch_like_the_game() {
+    let Some((smashes, exact)) = smashes("lob_smash_s05.bin", 1) else { return };
+    assert_eq!((smashes, exact), (3, 3));
+}
+
+/// (smashes of `kind` launched in `fixture`, how many exactly), None when absent.
+fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
     use hst_sim::replay::frames_live;
     let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
-    let (Ok(data), Ok(table)) = (std::fs::read(format!("{ctx}/fixtures/match_s05.bin")), std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ00B.XB/data/hatsuyama/traj/tr_pc00_smsh0.dat"))) else {
-        return eprintln!("fixture missing, skipped");
+    let (Ok(data), Ok(table)) = (std::fs::read(format!("{ctx}/fixtures/{fixture}")), std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ00B.XB/data/hatsuyama/traj/tr_pc00_smsh{kind}.dat"))) else {
+        eprintln!("fixture missing, skipped");
+        return None;
     };
     let table = Table::parse(&table).unwrap();
     let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
@@ -96,7 +112,7 @@ fn smashes_launch_like_the_game() {
         let vel = v3(b, 0x130);
         let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
         // class 3 also marks the held and tossed serve ball
-        if !launched(b) || launched(a) || speed < 0.3 {
+        if !launched(b) || launched(a) || speed < 0.1 || i32::from_le_bytes(b[0x5c..0x60].try_into().unwrap()) != kind {
             continue;
         }
         let (hit, target) = (v3(b, 0x70), v3(b, 0x80));
@@ -106,14 +122,13 @@ fn smashes_launch_like_the_game() {
         let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
         let n = (dx * dx + dz * dz).sqrt();
         let s = [scatter * dx / n, scatter * dz / n];
-        let l = lookup(&table, &Bounds::smash(0), [hit[0] - s[0], hit[1], hit[2] - s[1]], [target[0] - s[0], 0.0, target[2] - s[1]]);
+        let l = lookup(&table, &Bounds::smash(kind), [hit[0] - s[0], hit[1], hit[2] - s[1]], [target[0] - s[0], 0.0, target[2] - s[1]]);
         let v = launch(hit, target, l.elevation, l.speed);
         let err = (0..3).map(|j| (v[j] - vel[j]).abs()).fold(0.0, f32::max);
         let frames_ok = l.frames + 1 == i32::from_le_bytes(b[0x260..0x264].try_into().unwrap());
-        eprintln!("vsync {} p{p}: velocity off by {err:.1e}, frames {}", w[1].vsync(), if frames_ok { "ok" } else { "off" });
+        eprintln!("vsync {} p{p}: velocity off by {err:.1e}, frames {}, spin {}", w[1].vsync(), if frames_ok { "ok" } else { "off" }, f(b, 0x1a4).to_degrees());
         smashes += 1;
         exact += (err < 2e-5 && frames_ok) as usize;
     }
-    assert_eq!(smashes, 9);
-    assert!(exact >= 5, "{exact} of {smashes} smashes exact");
+    Some((smashes, exact))
 }

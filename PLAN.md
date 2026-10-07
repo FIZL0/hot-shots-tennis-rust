@@ -84,7 +84,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Shots
 
-- [ ] **N5a** Hitting a lob off a lob isn't accurate (bug, user 2026-10-07): mid-rally, returning the opponent's lob smash, the contact search gave an illegal hit point, though anyone should be able to hit that ball. Record such a rally and match the contact search and lob response to it → `swing.rs` find_contact · `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs
+- [x] **N5a** Hitting a lob off a lob isn't accurate (bug, user 2026-10-07): mid-rally, returning the opponent's lob smash, the contact search gave an illegal hit point, though anyone should be able to hit that ball. Record such a rally and match the contact search and lob response to it → `swing.rs` find_contact · `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs | j: 2026-10-07-n5a-lob-off-lob
 
 ### Players
 
@@ -193,4 +193,5 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
 
 - M5 (stretch): where the chaiNNer upscaling chain is and how to run it.
 - **Record a tiebreak (for P12)**: no save state or fixture reaches one. Play/record a bot match to 4-4 and through the tiebreak (incl. its 6-point end change and the set/match end) with `tools/record_p2m2.py <slot> context/fixtures/tiebreak.bin <frames>`, ideally from a save made at 4-3 or 3-4. Agents' RAM-poked attempts from slot 5 failed (PINE op errors mid-capture).
+- **Doubles: who of two teammates gets the ball (for N5a)**: the port lets only one teammate hit (the first to lock a swing; the other's press whiffs, `play.rs theirs()`), from the recordings never having two teammates locked at once, but the original's code for this wasn't found. Record a doubles rally from slot 3 (P1 human + bot partner) where you and your partner both go for the same ball, pressing early and late, with `tools/record_p2m2.py 3 context/fixtures/partner_s03.bin <frames>`, so the rule (first lock, nearer player, or the human first) can be checked — j: 2026-10-07-n5a-lob-off-lob
 - P13 umpire: record a long match (let, deuce again, set/tiebreak/match announcements) — j: 2026-10-07-p13-umpire/2-RECORDING-READY.md
