@@ -72,6 +72,17 @@ pub fn toss_points(d: &ServeData, toss: Toss, pos: [f32; 3], facing: f32) -> ([f
     (h, at(hand[0] + drift[0], top, hand[2] + drift[1]))
 }
 
+/// The held ball on the walk and in the toss until release: this point of the left hand's `Bip01 LFinger21`.
+pub const HAND_BALL: [f32; 4] = [-0.05, 0.03, -0.05, 1.0];
+
+/// The ball in the server's stance before the toss (game space): the point of the stance's ball track
+/// (`*_serve_ad00_ball`) at the motion's sampled time, turned by the server's rows and moved to their spot.
+pub fn stance_ball(point: [f32; 4], rows: [[f32; 4]; 3], pos: [f32; 3]) -> [f32; 3] {
+    use crate::ps2::add;
+    let v = crate::vu0::transform(&[rows[0], rows[1], rows[2], [0.0, 0.0, 0.0, 1.0]], point);
+    [add(v[0], pos[0]), add(v[1], pos[1]), add(v[2], pos[2])]
+}
+
 /// The serve's contact search when the swing is pressed: over the path before the first bounce, the frame
 /// whose height is closest to the ideal within the window (earliest on ties) where the timing table allows a
 /// hit. `None` is a whiff.

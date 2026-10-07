@@ -35,7 +35,7 @@ pub struct CharacterData {
     /// Motions by the game's motion number, bound to the skeleton (the game's sampler, `hst_sim::pose`).
     pub motions: HashMap<usize, Clip>,
     /// Root paths of the post-point reactions that carry the player, by reaction motion number (`gu_set` from
-    /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies).
+    /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies)).
     pub paths: HashMap<usize, Path>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
@@ -48,6 +48,10 @@ pub struct CharacterData {
     pub morph_targets: usize,
     /// Faces by motion number (`.MOR`, `hst_sim::face`).
     pub faces: HashMap<usize, Face>,
+    /// The ball's track through the serve stance (0x20; `*_serve_ad00_ball`).
+    pub stance_ball: Option<Path>,
+    /// The model's skeleton in the game's terms (bone-attached points such as the held serve ball).
+    pub skeleton: Skeleton,
 }
 
 /// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
@@ -296,6 +300,7 @@ pub fn load_disc(
     let mut pelvis = vec![[0.0, 1.0]; 48];
     let mut paths = HashMap::new();
     let mut faces = HashMap::new();
+    let mut stance_ball = None;
     for id in 0..ani::MOTIONS.len() {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         if let Some(t) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.mor"))).and_then(|e| mor::parse(&aarc.read(e).ok()?, 1).ok()) {
@@ -318,6 +323,9 @@ pub fn load_disc(
         if id == 0x35 {
             paths.extend(Path::new(&a).map(|p| (0x2e, p)));
         }
+        if id == 52 {
+            stance_ball = Path::new(&a);
+        }
     }
     // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
     if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
@@ -336,7 +344,7 @@ pub fn load_disc(
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton })
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).

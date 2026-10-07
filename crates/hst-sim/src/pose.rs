@@ -319,6 +319,17 @@ pub fn model(sk: &Skeleton, local: &[M4]) -> Vec<M4> {
     out
 }
 
+/// A node's world matrix as the game builds it to attach things to a bone (the held serve ball): its local
+/// matrix times each ancestor's, leaf upward, then the player's matrix (VU0 products).
+pub fn node_world(sk: &Skeleton, local: &[M4], mut n: usize, player: &M4) -> M4 {
+    let mut m = local[n];
+    while let Some(p) = sk.parent[n] {
+        m = vmul(&m, &local[p]);
+        n = p;
+    }
+    vmul(&m, player)
+}
+
 /// The sampler's quaternion → rotation rows (no re-orthonormalisation; the w column and row 3 are left alone).
 pub fn q_matrix([x, y, z, w]: [f32; 4]) -> M4 {
     use ps2::{add, mul, sub};

@@ -117,3 +117,107 @@ fn match_s05_serves() {
     assert_eq!(misses, 0);
     assert!(tosses >= 30 && swings >= 30, "{tosses} tosses, {swings} swings");
 }
+
+/// The ball in the serve stance (serve mode 0, motion 0x20) in the save states that caught one: the character's
+/// `*_serve_ad00_ball` track at the motion's sampled time, turned by the server's rows and moved to their spot,
+/// is the ball model's matrix translation, bit-exact.
+#[test]
+fn stance_ball_ram() {
+    use hst_data::{ani, iso::Iso, xb::Archive};
+    use hst_sim::pose::Path;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let mut seen = 0;
+    for s in ["s03", "s04", "s05", "s08", "s09"] {
+        let Ok(ram) = std::fs::read(format!("{root}context/ram/{s}.bin")) else { return eprintln!("{s}.bin absent, skipped") };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let fr = |a: usize| f32::from_bits(u(a) as u32);
+        let gm = u(0x422f80);
+        for p in 0..4 {
+            let pl = u(gm + 0xa8 + 4 * p);
+            let an = u(pl + 0x54);
+            if ram[(pl + 0x3fa4) & 0x1ff_ffff] != 1 || ram[(pl + 0x3fa6) & 0x1ff_ffff] != 0 || u(an + 0x20) != 0x20 {
+                continue;
+            }
+            let rows: [[f32; 4]; 3] = std::array::from_fn(|r| std::array::from_fn(|k| fr(pl + 0x3d40 + 16 * r + 4 * k)));
+            let pos = [0, 4, 8].map(|o| fr(pl + 0x3d70 + o));
+            let want = [0, 4, 8].map(|o| u(u(pl + 0x13fc) + 0xb0 + 0x30 + o) as u32);
+            let t = fr(an + 0x38);
+            // the track's character: whichever one's ball track lands on the ball
+            let hit = (0..16).find(|&c| {
+                let Ok(data) = iso.read(&format!("PCANI/PC{c:02}ANI.XB")) else { return false };
+                let arc = Archive::parse(&data).unwrap();
+                let stem = ani::motion_name(52, c).unwrap();
+                let Some(e) = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { return false };
+                let path = Path::new(&ani::parse(&arc.read(e).unwrap()).unwrap()).unwrap();
+                serve::stance_ball(path.at(t), rows, pos).map(f32::to_bits) == want
+            });
+            assert!(hit.is_some(), "{s} p{p} t {t}: no character's ball track gives {:?}", want.map(f32::from_bits));
+            eprintln!("{s} p{p}: character {} at t {t}", hit.unwrap());
+            seen += 1;
+        }
+    }
+    assert!(seen >= 2);
+}
+
+/// The held ball through the slot-5 match's serves: `anim_s05.bin` (each player's motion and sampled time) beside
+/// `match_s05.bin` one vsync later (the server's rows and spot, the live ball). Stance (mode 0): the stance ball
+/// track, bit-exact. Walk and toss before release (mode 1, 2): the left hand's `Bip01 LFinger21` × (−0.05, 0.03, −0.05), bit-exact
+/// (the bone's world built leaf upward). Fading frames are left out.
+#[test]
+fn anim_s05_held_ball() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{Clip, Path, Skeleton, node_world};
+    use hst_sim::vu0::transform;
+    const CHARS: [usize; 4] = [0, 2, 1, 5];
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let (Ok(anim), Ok(mdata)) = (std::fs::read(format!("{dir}context/fixtures/anim_s05.bin")), std::fs::read(format!("{dir}context/fixtures/match_s05.bin"))) else {
+        return eprintln!("fixtures absent, skipped");
+    };
+    let Ok(mut iso) = Iso::open(format!("{dir}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    struct Char { sk: Skeleton, clips: std::collections::HashMap<usize, Clip>, ball: Path, finger: usize }
+    let chars: Vec<Char> = CHARS.iter().map(|&c| {
+        let arc_data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+        let arc = Archive::parse(&arc_data).unwrap();
+        let get = |m: usize| { let stem = ani::motion_name(m, c).unwrap(); ani::parse(&arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap()).unwrap()).unwrap() };
+        let md = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+        let marc = Archive::parse(&md).unwrap();
+        let m = mdl::parse(&marc.read(marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")).unwrap()).unwrap()).unwrap();
+        let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+        let clips = (0x20..=0x24).map(|k| (k, Clip::new(&sk, &get(k)))).collect();
+        let finger = sk.names.iter().position(|n| n.contains("LFinger21")).unwrap();
+        Char { ball: Path::new(&get(52)).unwrap(), clips, finger, sk }
+    }).collect();
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    let frames = frames_live(&mdata);
+    let (mut stance, mut hand) = (0, 0);
+    for k in 0..(anim.len() / S).min(frames.len() - 1) {
+        let fr = frames[k + 1];
+        for p in 0..4 {
+            let blk = &anim[k * S + 0x104 + p * 0x484..][..0x484];
+            let pos = fr.player_pos(p);
+            // a serve's first frame still has the ball where the point ended
+            let first = k == 0 || anim[(k - 1) * S + 0x104 + p * 0x484 + 0x3a4] != 1;
+            if first || blk[0x3a4] != 1 || v3(blk, 0x170).map(f32::to_bits) != pos.map(f32::to_bits) {
+                continue;
+            }
+            let (mode, motion, t, old) = (blk[0x3a6], i(blk, 0x420) as usize, f(blk, 0x438), i(blk, 0x444));
+            let fading = i(blk, 0x448) != 0;
+            let rows: [[f32; 4]; 4] = std::array::from_fn(|r| std::array::from_fn(|c| fr.player_f32(p, 0x3d40 + 16 * r + 4 * c)));
+            let want = v3(fr.live_ball(), 0xe0);
+            let ch = &chars[p];
+            if mode == 0 && motion == 0x20 && !(fading && (old == 0x23 || old == 0x24)) {
+                let got = serve::stance_ball(ch.ball.at(t), [rows[0], rows[1], rows[2]], pos);
+                assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "k={k} p={p} t={t}");
+                stance += 1;
+            } else if (mode == 1 || (mode == 2 && blk[0x2c0] == 0 && blk[0x248] == 0)) && !fading && ch.clips.contains_key(&motion) {
+                let local = ch.clips[&motion].locals(&ch.sk, t);
+                let got = transform(&node_world(&ch.sk, &local, ch.finger, &rows), serve::HAND_BALL);
+                assert_eq!(got[..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), want.map(f32::to_bits), "k={k} p={p} motion {motion:#x} t={t}");
+                hand += 1;
+            }
+        }
+    }
+    eprintln!("{stance} stance frames bit-exact; {hand} hand frames bit-exact");
+    assert!(stance > 500 && hand > 50);
+}

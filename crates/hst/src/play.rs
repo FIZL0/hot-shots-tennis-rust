@@ -37,8 +37,6 @@ const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_gam
 const DOUBLES: Rules = Rules { players: 4, ..SINGLES };
 /// The umpire's calls by verdict code.
 const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out", "Illegal hit"];
-/// Ball drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
-const BALL_DRAW_SCALE: f32 = 2.4;
 /// Typical recorded spin per shot kind (rad/frame); the real per-character records are not ported yet.
 const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
@@ -281,8 +279,9 @@ struct CamState {
 
 #[derive(Component)]
 struct Figure(usize);
+/// The ball model, or (`true`) its shadow.
 #[derive(Component)]
-struct BallView;
+struct BallView(bool);
 /// Red dot on the court where the ball in flight will first bounce.
 #[derive(Component)]
 struct LandingMark;
@@ -302,7 +301,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
         .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out).chain());
+        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -536,16 +535,19 @@ fn setup(
         commands.entity(f).insert(Figure(i));
     }
     commands.insert_resource(game);
-    // toon ball: flat yellow core plus an inverted hull (front faces culled) for the black outline
-    let r = 0.033 * BALL_DRAW_SCALE;
-    let core = materials.add(StandardMaterial { base_color: Color::srgb(0.95, 1.0, 0.25), unlit: true, ..default() });
-    let ink = materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, cull_mode: Some(bevy::render::render_resource::Face::Front), ..default() });
-    let b = commands
-        .spawn((BallView, Transform::default(), Visibility::default()))
-        .with_child((Mesh3d(meshes.add(Sphere::new(r).mesh().ico(4).unwrap())), MeshMaterial3d(core)))
-        .with_child((Mesh3d(meshes.add(Sphere::new(r * 1.22).mesh().ico(4).unwrap())), MeshMaterial3d(ink)))
-        .id();
-    commands.entity(root).add_child(b);
+    // the game's ball (`ball1.mdl`) and its shadow (`ballshadow.mdl`)
+    let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
+    let mut part = |name: &str, view| {
+        let e = commands.spawn((view, Transform::default(), Visibility::default())).id();
+        for (_, parts) in crate::models(&game_xb, |n| n.ends_with(name), &mut images) {
+            for (mesh, material) in parts {
+                commands.entity(e).with_child((Mesh3d(meshes.add(mesh)), MeshMaterial3d(materials.add(material))));
+            }
+        }
+        commands.entity(root).add_child(e);
+    };
+    part("ball1.mdl", BallView(false));
+    part("ballshadow.mdl", BallView(true));
     let mark = materials.add(StandardMaterial { base_color: Color::srgb(0.9, 0.05, 0.05), unlit: true, ..default() });
     let m = commands
         .spawn((LandingMark, Mesh3d(meshes.add(Cylinder::new(0.14, 0.004))), MeshMaterial3d(mark), Transform::default(), Visibility::Hidden))
@@ -695,7 +697,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         }
         s.t += 1;
         g.serving = s;
-        hold_ball(g, i, Toss::Strong);
+        hold_ball(g);
         g.players[i].serve_anim = Some(0.0);
         return;
     };
@@ -703,7 +705,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     if !s.tossed {
         g.serving = s;
         if s.t < serve::TOSS_RELEASE {
-            hold_ball(g, i, toss);
+            hold_ball(g);
         } else {
             let (hand, apex) = serve::toss_points(&g.serve_data, toss, pos, end);
             g.flight = Flight::new(Ball { pos: hand, vel: serve::toss_velocity(hand, apex), spin: 0.1 }, rows4([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), rows4([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
@@ -763,7 +765,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     // a toss that comes down untouched (or after a whiff) is tossed again
     if g.flight.bounces > 0 {
         g.serving = Serving { t: 0, ..Serving::default() };
-        hold_ball(g, i, Toss::Strong);
+        hold_ball(g);
     }
 }
 
@@ -778,12 +780,41 @@ fn pads_aim(g: &Game, i: usize) -> bool {
     g.serving.bot_due.is_none() || i != g.score.server as usize
 }
 
-/// The ball rests in the server's tossing hand.
-fn hold_ball(g: &mut Game, i: usize, toss: Toss) {
-    let (pos, end) = (g.players[i].pos, g.players[i].end);
-    let (hand, _) = serve::toss_points(&g.serve_data, toss, pos, end);
-    g.flight = Flight::new(Ball { pos: hand, vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
-    g.prev_ball = hand;
+/// The ball is held: still, and placed on the server's motion each tick (`held_ball`).
+fn hold_ball(g: &mut Game) {
+    g.flight = Flight::new(Ball { pos: g.flight.ball.pos, vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]);
+}
+
+/// Where the server holds the ball before the toss leaves the hand, as the original: in the stance (0x20) on
+/// the stance's ball track (`*_serve_ad00_ball`), on the walk and through the toss at the left hand's
+/// `Bip01LFinger21`, both at the motion's sampled time.
+/// ponytail: posed from the motion's own clip; the original's pose mid-crossfade is the mixed one.
+fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
+    if g.phase != Phase::Serve || g.serving.tossed {
+        return;
+    }
+    let i = g.score.server as usize;
+    let Some((_, m)) = q.iter().find(|(f, _)| f.0 == i) else { return };
+    let (p, data) = (&g.players[i], &g.data[i]);
+    // the player's matrix: a turn, never mirrored (left-handers too)
+    let [fx, _, fz, _] = p.body.face.dir;
+    let rows = [[fz, 0.0, -fx, 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0]];
+    let t = m.clock.sampled;
+    let sk = &data.skeleton;
+    let at = if m.id == 0x20 {
+        data.stance_ball.as_ref().map(|b| serve::stance_ball(b.at(t), rows, p.pos))
+    } else {
+        let finger = sk.names.iter().position(|n| n == "Bip01LFinger21");
+        data.motions.get(&m.id).zip(finger).map(|(c, f)| {
+            let player = [rows[0], rows[1], rows[2], [p.pos[0], p.pos[1], p.pos[2], 1.0]];
+            let [x, y, z, _] = hst_sim::vu0::transform(&hst_sim::pose::node_world(sk, &c.locals(sk, t), f, &player), serve::HAND_BALL);
+            [x, y, z]
+        })
+    };
+    if let Some(at) = at {
+        g.prev_ball = g.flight.ball.pos;
+        g.flight.ball.pos = at;
+    }
 }
 
 /// A stick direction on screen as a direction on the court (x, z): right along the camera's right, up along its
@@ -1439,7 +1470,7 @@ fn mark_landing(g: Res<Game>, mut q: Query<(&mut Transform, &mut Visibility), Wi
     }
 }
 
-fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut Transform)>, mut ball: Query<&mut Transform, (With<BallView>, Without<Figure>)>) {
+fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut Transform)>, mut ball: Query<(&BallView, &mut Transform), Without<Figure>>) {
     let a = time.overstep_fraction();
     for (f, mut t) in &mut figures {
         let p = g.players[f.0];
@@ -1449,8 +1480,12 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
         t.rotation = turn(p.prev_facing).slerp(turn(p.facing), a);
         t.scale = Vec3::new(p.hand, 1.0, 1.0);
     }
-    for mut t in &mut ball {
+    for (v, mut t) in &mut ball {
         t.translation = Vec3::from(g.prev_ball).lerp(Vec3::from(g.flight.ball.pos), a);
+        // ponytail: the shadow lies on the flat court (y 0); the stage's floor height under the ball if it shows
+        if v.0 {
+            t.translation.y = 0.0;
+        }
     }
 }
 
