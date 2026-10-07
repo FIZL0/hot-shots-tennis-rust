@@ -102,15 +102,9 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs
-- [ ] **P14b** Walking spectators (wander/react, animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [x] **P14b** Walking spectators (wander/react, animation) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14c** (split into P14c1–5) Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
-- [ ] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
 - [ ] **P14c2** Ambient sound emitters (timers, RNG, positions) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
 ### Presentation
@@ -142,6 +136,15 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
+
+### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
+
+- [ ] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
+- [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 

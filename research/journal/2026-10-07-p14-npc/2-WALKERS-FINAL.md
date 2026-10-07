@@ -1,4 +1,4 @@
-# P14b — walking spectators' animation
+# P14b — walking spectators' animation (FINAL)
 
 Recorder: `tools/record_npc.py <slot> <frames> <out>` (walkers found by vtable 0x1d1de0 in the slot's .p2s RAM;
 per frame the globals, the shared MT, gallery manager +0x680..+0x900 / +0x1b60..+0x1b80, judge, and each walker's
@@ -37,8 +37,11 @@ four players (else 1.0), loops for 3/5, +0xcc = (anim != 4); anim 4 advances onc
 ## Proof
 `walkers_animate_like_the_game` (tests/npc.rs): every walker tick from the recorded state of the tick before
 reproduces anim, frame, next, speed, mode and counter bit for bit; draws must be consecutive outputs of the game's
-MT within that tick. Court 10: 9008 walker ticks, 67 with draws, 8 reactions. Courts 1, 2, 4: pending capture
-(PCSX2 busy with another agent's recording).
+MT within that tick. Pairs with a missed frame between them are skipped. Court 10 (slot 5): 9008 walker ticks, 67
+with draws, 8 reactions; court 1 (slot 7): 14396, 88, 0; court 2 (slot 10): 14024, 95, 16; court 4 (slot 3):
+14368, 91, 0 (slots 3 and 7 wait for the human P1 to serve: idle loops and their draws only; points come
+from slots 5 and 10). The second recorder version reads through `Pine.settle` (a frame that ticks mid-read is skipped):
+the first gave up on slots 7/10 because PCSX2 at full speed ticked during every re-read.
 
 ## Not here
 Movement (dodge, avoidance, collision, ground height, facing while reacting, reset facing) → P14e: no recording
