@@ -4,7 +4,7 @@
 
 use crate::{ps2, sound};
 use crate::world::{self, M4};
-use hst_data::exe::{EmitterRow, NpcEntry};
+use hst_data::exe::{EmitterRow, NpcEntry, TriggerRow};
 use hst_data::layout::{self, Entry, Placement};
 
 /// What a creature record becomes.
@@ -263,5 +263,432 @@ impl Emitter {
             None => {}
         }
         self.sweep = 0;
+    }
+}
+
+/// A trigger creature's state for the generic engine (`step`), driven by its type's [`TriggerRow`].
+/// ponytail: steering (row `steer`), the turn eased through a pause, spline legs, random points about the area,
+/// randomised waypoints (rows without `exact`), ground snapping and start modes 2–3 are not ported: no recorded
+/// idle creature uses them (they are taken as the plain node / left alone). Add with P14c3–5's recordings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trigger {
+    pub ty: u8,
+    /// The last message the figures were sent (6: a reset skips the pause).
+    pub msg: u32,
+    /// Its layout record's position (start point, circle centre) and its path's nodes.
+    pub anchor: [f32; 4],
+    pub path: Vec<[f32; 4]>,
+    /// The path node a reset starts from.
+    pub start: i16,
+    /// Matrix set by a reset (its layout placement).
+    pub home: M4,
+    pub world: M4,
+    pub active: bool,
+    /// Runs its motion and animation (else only the sound countdown and callback).
+    pub on: bool,
+    pub moving: bool,
+    /// Node counter (taken modulo the path length), the one before, and walking the path backwards.
+    pub node: i16,
+    pub prev: i16,
+    pub reverse: bool,
+    /// Ticks left of the leg (−1 for none), the leg's length, its unit, the pause between parts, the pause left.
+    pub left: i16,
+    pub total: i16,
+    pub every: i16,
+    pub pause: i16,
+    pub wait: i16,
+    pub vel: [f32; 4],
+    pub target: [f32; 4],
+    /// The leg's start and end points when they are the path's ends (where the animation slows).
+    pub from: [f32; 4],
+    pub to: [f32; 4],
+    pub snap: i16,
+    /// Turn to face the direction of travel on the next move.
+    pub orient: bool,
+    /// Circling clockwise (seen from above), its angle and radius.
+    pub clockwise: bool,
+    pub angle: f32,
+    pub radius: f32,
+    /// Ticks to the idle animation's restart.
+    pub repeat: i16,
+    /// Pausing at a loop's end.
+    pub paused: bool,
+    pub animating: bool,
+    /// Animation speed (also its sounds' gate).
+    pub speed: f32,
+    pub stage: i16,
+    /// Its animation controller: frame shown, the next, and the animation's length.
+    pub frame: f32,
+    pub next: f32,
+    pub len: f32,
+    /// Sound countdown (+ pan sweep, as [`Emitter`]).
+    pub timer: i32,
+    pub sweep: i16,
+    pub pan: f32,
+    pub down: bool,
+    /// The type's own counters: idle (34, 44) or sound (37) counter, and 44's call countdown and voice.
+    pub counter: i32,
+    pub gap: i32,
+    pub voice: (i32, i32),
+}
+
+/// `n` ticks scaled by `1 − jitter·random` (no draw without jitter).
+fn jitter((n, j): (i16, f32), roll: &mut impl FnMut() -> u32) -> i16 {
+    if j == 0.0 {
+        return n;
+    }
+    ps2::mul(n as f32, ps2::msub(1.0, j, ps2::mul(2.3283064e-10, ps2::utof(roll())))) as i32 as i16
+}
+
+fn dist2([x, y, z, _]: [f32; 4]) -> f32 {
+    ps2::madd(ps2::madd(ps2::add(0.0, ps2::mul(y, y)), x, x), z, z)
+}
+
+fn minus(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    std::array::from_fn(|c| ps2::sub(a[c], b[c]))
+}
+
+impl Trigger {
+    fn pos(&self) -> [f32; 4] {
+        self.world[3]
+    }
+
+    /// Face along `dir`, keeping the position.
+    fn face(&mut self, dir: [f32; 4]) {
+        let pos = self.world[3];
+        self.world = crate::effect::impact_matrix(dir, [pos[0], pos[1], pos[2]]);
+        self.world[3] = pos;
+    }
+
+    fn restart_anim(&mut self) {
+        (self.frame, self.next) = (0.0, 0.0);
+    }
+
+    /// The motion reset (a new point, or a loop's end): back to the start, a direction bit with `reverse_roll`,
+    /// the first leg and the pause before it.
+    pub fn reset(&mut self, row: &TriggerRow, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        // ponytail: types whose row keeps them off after their first reset (row byte +0x6c), and those whose model
+        // starts animating, are not modelled
+        let o = std::mem::take(self);
+        *self = Trigger {
+            ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
+            frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
+            counter: o.counter, gap: o.gap, voice: o.voice, ..Trigger::default()
+        };
+        self.stage = row.stage;
+        (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
+        if self.moving && row.reverse_roll && roll() >> 16 & 1 != 0 {
+            self.reverse = true;
+        }
+        self.world[3] = match row.start {
+            1 => self.anchor,
+            _ => self.home[3], // ponytail: start modes 2–3 (random point, on the circle)
+        };
+        if self.moving {
+            self.waypoint(row, true, roll);
+            if row.reset_wait.0 != 0 {
+                self.pause = jitter(row.reset_wait, roll);
+            }
+            self.wait = if self.msg == 6 { 0 } else { self.pause };
+        }
+        self.speed = 1.0;
+        self.callback(row, 4, roll)
+    }
+
+    /// Next waypoint: the leg's target, pause, velocity; `first` (from a reset) also turns to face it.
+    fn waypoint(&mut self, row: &TriggerRow, first: bool, roll: &mut impl FnMut() -> u32) {
+        self.every = jitter(row.every, roll);
+        self.pause = jitter(row.pause, roll);
+        let mut face = first && row.orient != 0;
+        let n = self.path.len().max(1) as i16;
+        if self.node % n == 0 || self.node % n == n - 1 {
+            self.from = self.pos();
+        }
+        let target = match row.mode {
+            0 => self.path[((roll() >> 16 & 0x7fff) % n as u32) as usize], // ponytail: area points (rows without `exact`)
+            1..=3 | 5 => {
+                self.prev = self.node;
+                self.node += 1;
+                let mut i = self.node % n;
+                if row.mode == 5 && i == 0 {
+                    self.stage = 1;
+                    return;
+                }
+                if row.mode == 1 && i == 0 {
+                    self.reset(row, roll);
+                    if row.end_wait.0 != 0 {
+                        self.paused = true;
+                        self.pause = jitter(row.end_wait, roll);
+                        self.wait = self.pause;
+                    }
+                    return;
+                }
+                if row.mode == 2 {
+                    if i == 0 {
+                        self.node += 1;
+                        i = self.node % n;
+                        if row.end_wait.0 != 0 {
+                            self.paused = true;
+                            self.pause = jitter(row.end_wait, roll);
+                            self.wait = self.pause;
+                        }
+                        face = true;
+                    }
+                    if self.node / n & 1 != 0 {
+                        i = n - 1 - i;
+                    }
+                }
+                if self.reverse {
+                    i = n - 1 - i;
+                }
+                self.path[i as usize]
+            }
+            6 => self.anchor,
+            _ => self.target, // ponytail: spline legs (mode 4)
+        };
+        self.target = target;
+        if self.node % n == 0 || self.node % n == n - 1 {
+            self.to = target;
+        }
+        if face {
+            let d = minus(target, self.pos());
+            let [x, y, z, _] = d;
+            let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
+            self.face(d.map(|c| ps2::mul(c, q)));
+        }
+        self.left = -1;
+        self.orient = row.orient != 0;
+        if row.mode != 6 && row.speed != 0.0 && row.steer == 0.0 {
+            let d = minus(target, self.pos());
+            let s = dist2(d);
+            let dist = ps2::sqrt(s);
+            let unit = if self.every == 0 { 1 } else { self.every };
+            let f = ps2::mul(row.speed, unit as f32);
+            let ticks = unit.wrapping_mul(ps2::div(ps2::add(dist, ps2::sub(f, 1.0)), f) as i32 as i16).max(unit);
+            (self.total, self.left) = (ticks, ticks);
+            let (inv, step) = (ps2::div(1.0, ps2::sqrt(s)), ps2::div(dist, ticks as f32));
+            self.vel = d.map(|c| ps2::mul(ps2::mul(c, inv), step));
+        }
+    }
+
+    /// One tick; the sounds started.
+    pub fn step(&mut self, row: &TriggerRow, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        if !self.active {
+            return Vec::new();
+        }
+        let mut sounds = Vec::new();
+        if self.on {
+            if self.moving && self.wait == 0 {
+                if self.left > 0 {
+                    self.left -= 1;
+                }
+                if row.mode == 6 {
+                    let dir = if self.clockwise { -1.0 } else { 1.0 };
+                    let mut a = ps2::madd(self.angle, ps2::mul(0.017453292, row.speed), dir);
+                    if world::PI < a {
+                        a = ps2::sub(a, world::TWO_PI);
+                    } else if a < -world::PI {
+                        a = ps2::add(world::TWO_PI, a);
+                    }
+                    self.angle = a;
+                    let m = world::mat_mul(&world::IDENTITY, &world::rot_y(a));
+                    self.world[3] = std::array::from_fn(|c| ps2::madd(self.target[c], m[2][c], self.radius));
+                    if self.orient {
+                        let pos = self.world[3];
+                        let turn = world::mat_mul(&world::IDENTITY, &world::rot_y(ps2::mul(dir, world::HALF_PI)));
+                        self.world = world::mat_mul(&m, &turn);
+                        self.world[3] = pos;
+                    }
+                } else {
+                    // ponytail: steering creatures (row `steer`) move like the rest
+                    self.world[3] = std::array::from_fn(|c| ps2::add(self.world[3][c], self.vel[c]));
+                    if self.orient {
+                        let v = self.vel;
+                        self.face(if row.orient == 2 { [v[0], 0.0, v[2], 0.0] } else { v });
+                        self.orient = false;
+                    }
+                }
+                if self.snap != 0 {
+                    self.snap -= 1;
+                    if self.snap == 0 {
+                        self.snap = row.snap as i16; // ponytail: the ground snap itself (collision) not ported
+                    }
+                }
+                let pause = self.every != 0 && self.left % self.every == 0;
+                let mut next = false;
+                if pause && row.retarget && self.left != 0 {
+                    next = true;
+                    self.node = self.prev;
+                }
+                if row.speed != 0.0 && self.left == 0 {
+                    next = true;
+                }
+                if next {
+                    self.waypoint(row, false, roll);
+                }
+                if pause {
+                    self.wait = self.pause;
+                }
+            } else if self.moving {
+                self.wait -= 1;
+                if row.steer == 0.0 && self.wait == 0 && row.wake {
+                    self.repeat = 1;
+                }
+                if self.paused && self.wait == 0 {
+                    self.paused = false;
+                }
+            }
+            if row.near != [0.0; 2] || row.stages != 0 {
+                let (mut speed, mut changed) = (self.speed, false);
+                if self.moving {
+                    for (p, r) in [(self.from, row.near[0]), (self.to, row.near[1])] {
+                        let d = ps2::sqrt(dist2(minus(p, self.pos())));
+                        if r != 0.0 && d < r {
+                            (speed, changed) = (ps2::div(d, r), true);
+                        }
+                    }
+                }
+                if row.stages != 0 && self.stage < row.stages {
+                    (speed, changed) = (ps2::div(self.stage as f32, row.stages as f32), true);
+                }
+                if !changed && self.speed != 1.0 {
+                    (speed, changed) = (1.0, true);
+                }
+                if changed {
+                    self.speed = speed;
+                }
+            }
+            if self.animating {
+                if self.repeat != 0 {
+                    self.repeat -= 1;
+                    if self.repeat == 0 {
+                        self.restart_anim();
+                    }
+                }
+                if row.repeat.0 >= 1 && self.repeat == 0 && self.len <= self.frame {
+                    self.repeat = jitter(row.repeat, roll);
+                }
+                // the controller: show the next frame (held at the ends), step on by one
+                self.frame = self.next.clamp(0.0, self.len);
+                self.next = ps2::add(self.frame, 1.0);
+            }
+        }
+        if self.timer != 0 {
+            self.timer -= 1;
+            if self.timer == 0 && row.sound != -1 {
+                sounds.push(row.sound);
+                (self.pan, self.sweep) = (sound::place([self.world[3][0], self.world[3][1], self.world[3][2]]).0 as f32, 240);
+                self.down = roll() >> 16 & 1 != 0;
+            }
+        }
+        sounds.extend(self.callback(row, 2, roll));
+        sounds
+    }
+
+    /// The type's own behaviour on message `msg` (2 each tick, 4 at a reset); the sounds started.
+    fn callback(&mut self, row: &TriggerRow, msg: u8, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        let mut sounds = Vec::new();
+        let u = |r: u32| ps2::mul(2.3283064e-10, ps2::utof(r));
+        match (self.ty, msg) {
+            (34, 2) if !self.animating => {
+                self.counter -= 1;
+                if self.counter < 0 {
+                    self.animating = true;
+                    self.restart_anim();
+                    sounds.push(row.sound);
+                }
+            }
+            (34, 2) if self.len <= self.frame => {
+                self.counter = ps2::madd(300.0, 300.0, u(roll())) as i32;
+                self.animating = false;
+            }
+            (34, 4) => {
+                // ponytail: the facing angles it also sets are not kept
+                (self.world, self.on, self.moving, self.animating) = (self.home, true, false, false);
+                self.counter = ps2::madd(300.0, 300.0, u(roll())) as i32;
+            }
+            (37, 2) if self.speed == 0.0 => self.counter = 0,
+            (37, 2) => {
+                let r = roll();
+                // ponytail: with a game flag clear the first call always plays (not found set otherwise)
+                if self.counter == 0 && (r >> 16 & 0x7fff) % 100 + 1 < 41 {
+                    sounds.push(0x28);
+                }
+                if self.counter % 25 == 0 {
+                    sounds.push(row.sound);
+                }
+                self.counter = self.counter.wrapping_add(1);
+            }
+            (37, 4) => self.counter = 0,
+            (44, 2) if self.on => {
+                // ponytail: unrecorded (deciding set only); ported from the game's code
+                self.gap -= 1;
+                if self.gap < 0 && self.voice.0 != -1 {
+                    sounds.push(row.sound);
+                    self.gap = ps2::mul(self.voice.1 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                }
+                if !self.animating {
+                    self.counter -= 1;
+                    if self.counter < 0 {
+                        self.animating = true;
+                        self.restart_anim();
+                    }
+                } else if self.len <= self.frame {
+                    self.counter = jitter(row.idle, roll) as i32;
+                    self.animating = false;
+                }
+            }
+            _ => {}
+        }
+        sounds
+    }
+}
+
+impl Default for Trigger {
+    fn default() -> Trigger {
+        Trigger {
+            ty: 0,
+            msg: 0,
+            anchor: [0.0; 4],
+            path: Vec::new(),
+            start: 0,
+            home: world::IDENTITY,
+            world: world::IDENTITY,
+            active: false,
+            on: false,
+            moving: false,
+            node: 0,
+            prev: 0,
+            reverse: false,
+            left: 0,
+            total: 0,
+            every: 0,
+            pause: 0,
+            wait: 0,
+            vel: [0.0; 4],
+            target: [0.0; 4],
+            from: [0.0; 4],
+            to: [0.0; 4],
+            snap: 0,
+            orient: false,
+            clockwise: false,
+            angle: 0.0,
+            radius: 0.0,
+            repeat: 0,
+            paused: false,
+            animating: false,
+            speed: 0.0,
+            stage: 0,
+            frame: 0.0,
+            next: 0.0,
+            len: 0.0,
+            timer: 0,
+            sweep: 0,
+            pan: 0.0,
+            down: false,
+            counter: 0,
+            gap: 0,
+            voice: (-1, 0),
+        }
     }
 }

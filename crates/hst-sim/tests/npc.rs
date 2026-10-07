@@ -327,3 +327,133 @@ fn emitters_count_down_like_the_game() {
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
 }
+
+/// The trigger creature engine against `context/fixtures/trig_cNN.bin` (tools/record_npc.py with `trig`; not in
+/// git, skipped when absent): courts 5 (type 18, circling), 8 (type 34, idle animation repeat) and 9 (type 37,
+/// a loop with pauses and resets). Every tick from the recorded state before must give the game's object state
+/// (matrix, path counters, leg, velocity, pause, speed, animation frames, sound countdown) bit for bit, its draws
+/// consecutive outputs among those the game drew that tick. The types' own counters live off the object: carried
+/// from the engine's previous tick (34's taken from the recording until its first draw). Ticks where the figures
+/// were sent a message (a reset at a new point) are skipped. Path nodes come from the recording (the start point
+/// and the leg's target), since the path manager is not ported.
+#[test]
+fn trigger_engine_matches_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let mut courts = Vec::new();
+    for (court, k) in [(5, 0), (8, 10), (9, 0)] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/trig_c{court:02}.bin")) else {
+            eprintln!("trig_c{court:02}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let n = u(&d, 0) as usize;
+        let mt = 4 + 0x180;
+        let wo = |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300;
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(wo(n)).collect();
+        let o = wo(k);
+        let ty = samples[0][o + 0x50];
+        let row = game.trigger(ty);
+        let f = |s: &[u8], a: usize| f32::from_bits(u(s, o + a));
+        let h = |s: &[u8], a: usize| i16::from_le_bytes([s[o + a], s[o + a + 1]]);
+        let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, a + 4 * c)) };
+        let m = |s: &[u8], a: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| v(s, a + 16 * r)) };
+        let (anchor, target) = (v(samples[0], 0x160), v(samples[0], 0x150));
+        let state = |s: &[u8], counter: i32| npc::Trigger {
+            ty,
+            msg: u(s, o + 0xc0),
+            anchor: if row.mode == 6 { target } else { anchor },
+            path: if s[o + 0x135] != 0 { vec![anchor, target] } else { vec![] },
+            start: 0,
+            home: m(s, 0x70),
+            world: m(s, 0x1b0),
+            active: s[o + 0x12c] != 0,
+            on: s[o + 0x281] != 0,
+            moving: s[o + 0x135] != 0,
+            node: h(s, 0x130),
+            prev: h(s, 0x132),
+            reverse: s[o + 0x134] != 0,
+            left: h(s, 0x136),
+            total: h(s, 0x138),
+            every: h(s, 0x13a),
+            pause: h(s, 0x13c),
+            wait: h(s, 0x13e),
+            vel: v(s, 0x140),
+            target: v(s, 0x150),
+            from: v(s, 0x160),
+            to: v(s, 0x170),
+            snap: h(s, 0x180),
+            orient: s[o + 0x182] != 0,
+            clockwise: s[o + 0x194] != 0,
+            angle: f(s, 0x198),
+            radius: f(s, 0x19c),
+            repeat: h(s, 0x1a0),
+            paused: s[o + 0x270] != 0,
+            animating: s[o + 0x271] != 0,
+            speed: f(s, 0x274),
+            stage: h(s, 0x27a),
+            frame: f(s, 0x290 + 0x38),
+            next: f(s, 0x290 + 0x3c),
+            len: if u(s, o + 0x5c) == 0 { 0.0 } else { f(s, 0x2d0 + 0x2c) },
+            timer: u(s, o + 200) as i32,
+            sweep: h(s, 0xd0),
+            pan: f(s, 0xd4),
+            down: s[o + 0xd8] != 0,
+            counter,
+            gap: 0,
+            voice: (-1, 0),
+        };
+        let still = |i: usize| i > 0 && samples[i][4..] == samples[i - 1][4..];
+        let (mut ticks, mut draws, mut resets, mut late, mut counter) = (0, 0, 0, 0, None);
+        for i in 1..samples.len() {
+            let (a, b) = (samples[i - 1], samples[i]);
+            if u(b, 0) != u(a, 0) + 1 || (i.saturating_sub(2)..(i + 2).min(samples.len())).any(still) || u(a, o + 0xc0) != u(b, o + 0xc0) {
+                counter = None;
+                continue;
+            }
+            let mut rng = Mt::of(&a[mt..]);
+            let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+            while rng != end && out.len() < 2000 {
+                out.push(rng.next());
+            }
+            if rng != end {
+                let mut fresh = Mt(end.0, 0);
+                out = (0..end.1).map(|_| fresh.next()).collect();
+            }
+            // 34's idle countdown before its first draw: runs out exactly when the recording starts animating
+            let c = counter.unwrap_or(if ty == 34 && b[o + 0x271] != 0 && a[o + 0x271] == 0 { 0 } else { i32::MAX });
+            let before = state(a, c);
+            // the sample is sometimes read a tick late (two ticks, then none): one tick, else none or two
+            let found = [1, 0, 2].into_iter().find_map(|steps| {
+                (0..=out.len()).find_map(|j| {
+                    let (mut t, mut it, mut used) = (before.clone(), out[j..].iter(), 0);
+                    for _ in 0..steps {
+                        t.step(&row, &mut || {
+                            used += 1;
+                            *it.next().unwrap_or(&0)
+                        });
+                    }
+                    let want = npc::Trigger { counter: t.counter, ..state(b, 0) };
+                    (t == want && j + used <= out.len()).then_some((t, used, steps))
+                })
+            });
+            let Some((t, used, steps)) = found else {
+                let mut t = before.clone();
+                t.step(&row, &mut || out[0]);
+                panic!("court {court} vsync {} type {ty}:\n from {before:?}\n want {:?}\n  got {t:?}", u(b, 0), state(b, 0))
+            };
+            late += (steps != 1) as usize;
+            resets += (before.left == 1 && t.wait > 0) as usize;
+            counter = (counter.is_some() || used > 0 || ty != 34).then_some(t.counter);
+            (ticks, draws) = (ticks + 1, draws + used);
+        }
+        eprintln!("court {court} type {ty}: {ticks} ticks, {draws} draws, {resets} loop resets, {late} read late");
+        assert!(late * 50 < ticks, "court {court}: too many samples off by a tick ({late})");
+        courts.push(court);
+    }
+    assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}

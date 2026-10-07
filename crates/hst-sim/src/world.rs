@@ -9,9 +9,9 @@ use crate::vu0::{self, V4};
 pub type M4 = [V4; 4];
 
 pub const IDENTITY: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-const HALF_PI: f32 = f32::from_bits(0x3fc9_0fdb);
-const PI: f32 = f32::from_bits(0x4049_0fdb);
-const TWO_PI: f32 = f32::from_bits(0x40c9_0fdb);
+pub const HALF_PI: f32 = f32::from_bits(0x3fc9_0fdb);
+pub const PI: f32 = f32::from_bits(0x4049_0fdb);
+pub const TWO_PI: f32 = f32::from_bits(0x40c9_0fdb);
 /// The sine polynomial's coefficients of x⁹, x⁷, x⁵, x³.
 const SIN: V4 = [f32::from_bits(0x362e_9c14), f32::from_bits(0xb94f_b21f), f32::from_bits(0x3c08_873e), f32::from_bits(0xbe2a_aaa4)];
 /// Grid cell size in metres.

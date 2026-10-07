@@ -7,11 +7,15 @@ Header: u32 count, then count × u32 walker address. Sample = u32 vsync, 0x422f8
 +0x1b60..+0x1b80, the judge *(0x42d6c0) +0x420 (8 bytes), then per walker its object (0x310), its animation
 controller *(+0x60) (0x40) and that controller's animation header *(ctrl+0x24) (0x30). Stops when the match ends
 (the match object or a walker goes away); a frame that ticks mid-read is skipped (missed)."""
-import struct, sys, time, zipfile
+import os, subprocess, struct, sys, time, zipfile
 from pine import Pine
 
 VSYNC, GM_PTR, WALKER = 0x1d5780, 0x422f80, 0x1d1de0
 STATES = "/home/ryha/Emulation/saves/ps2/states/SCUS-97610 (72326E67).%02d.p2s"
+if os.environ.get("HST_PCSX2"):  # parallel runs: copy N's own states (tools/pcsx2-hst.sh)
+    common = subprocess.check_output(["git", "-C", os.path.dirname(__file__), "rev-parse", "--path-format=absolute",
+                                      "--git-common-dir"], text=True).strip()
+    STATES = f"{os.path.dirname(common)}-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/sstates/" + os.path.basename(STATES)
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), open(sys.argv[3], "wb")
 if sys.argv[4:] == ["trig"]:
     WALKER, SIZE, CTRL = 0x1d2180, 0x290, 0x5c
