@@ -29,8 +29,8 @@ PROMPT = """Parallel unattended run: nobody will answer questions. Do task {id} 
 PLAN.md's rules and AGENT.md. Other agents are working on other tasks at the same time in other worktrees. You are in a \
 git worktree on branch task/{id}: commit here only; never touch the main checkout, merge, rebase or push — the runner \
 merges your branch into main. PCSX2 is shared: run anything that drives the real game in several steps as one \
-command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Once you no longer need the game, close it: \
-`tools/pcsx2.sh pkill -x pcsx2-qt`. When done, tick \
+command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Never close PCSX2 (the other agents may still need it); the runner closes \
+it once no agent is left. When done, tick \
 {id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop."""
 
 
@@ -160,8 +160,9 @@ def main():
             if n in procs and not alive(procs[n][0]):
                 (p, sid, since), task = procs.pop(n), running.pop(n)
                 log(f'slot {n}: {task[0]} exited')
-                # backstop for the prompt's 'close PCSX2 when done': waits its turn, so it never cuts a capture short
-                sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), 'pkill', '-x', 'pcsx2-qt'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+                # the last session out closes PCSX2; waits its turn, so it never cuts a capture short
+                if not procs:
+                    sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), 'pkill', '-x', 'pcsx2-qt'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
                 if reset := limit_only(n, sid, since):
                     free_at[n] = reset + timedelta(seconds=PAUSE)
                     log(f'slot {n}: {task[0]} only hit the limit; transcript discarded, slot sleeps until {reset:%H:%M}')
