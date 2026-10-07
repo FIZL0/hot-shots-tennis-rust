@@ -21,15 +21,18 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 dumps, save states, recordings) and lists the tool pitfalls.
 
 ## Plan
-`TODO.md` is the ordered plan; "continue" means: take the first open item there, consult its journal entry in
-`research/journal/`, port + verify, update TODO.md, commit.
+`PLAN.md` is the index: rules, the ordered task list (each line names the files to open) and a code map. "continue"
+means: take the first `- [ ]` line there, read only `plan/<ID>.md`, its listed files and journal, port + verify,
+tick it in PLAN.md, commit. Don't grep the repo for where things live — the code map says. Background (game
+control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md) ·
+`"when blocked"` (a section) · `-f FILE <name>` (any markdown).
 
 ## Controlling the game
-`TODO.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
-*When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.
+`plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
+`PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.
 
 ## If you get stuck, move on
 Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something
 needs the human, or ~20 minutes go by without progress: write what happened and what you tried in the prompt's
-journal, mark it `- [~] … BLOCKED: <one-line reason>` in TODO.md, commit what's solid, and start the next open
+journal, mark it `- [~] … BLOCKED: <one-line reason>` in PLAN.md, commit what's solid, and start the next open
 prompt. Don't touch PCSX2 while a capture (`pgrep -f record_p2m2`) is running.

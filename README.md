@@ -5,7 +5,7 @@ in Europe and **Minna no Tennis** (みんなのテニス) in Japan, in Rust with
 The goal is the same game: the same ball physics, rules, timing and AI, ported from the original and checked
 frame by frame against the real game, with better rendering on top.
 
-Work in progress. `TODO.md` is the plan and shows what is done.
+Work in progress. `PLAN.md` is the plan; `plan/REFERENCE.md` lists what is done.
 
 ## You must provide the game disc
 

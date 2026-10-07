@@ -1,0 +1,65 @@
+# Reference
+
+## Controlling the real game (for recordings and checks)
+
+- `tools/pcsx2-hst.sh` launches PCSX2 with PINE on; `tools/pine.py` reads/writes RAM and loads/saves states.
+- **Save states (the user's — load only, scratch saves go to 8/9):** 3 = start of a game, P1 human + 3 bots;
+  4 = mid-rally right after the serve; 5 = full bot game. Slot 5 has no human input — use it for ball/AI
+  captures only. Controller-input recordings (P0 and anything gameplay-from-input) start from slot 3 or 4 with
+  P1 driven by `tools/vpad.py`.
+- `tools/vpad.py serve` creates a virtual Xbox-360 pad (uinput, no root); PCSX2 binds it as `SDL-0` when no
+  real controller is connected. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
+  Never press Select (PCSX2 hotkeys are Select + shoulder combos). Timing is wall-clock; frame-exact replays
+  should use PCSX2 input recording (`.p2m2`) — P0 decides.
+- `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it.
+- Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
+- `tools/overnight.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
+
+## Play it now
+
+```
+cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
+```
+
+Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
+when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
+J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
+C/Select camera (original/free) · arrows/right stick turn the free camera.
+`HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface.
+Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
+`third_party/gilrs-core` (read-only fallback, no rumble).
+
+## Done (ported and verified against the original)
+
+- Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
+- Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — 4524 recorded frames.
+- Shot tables (TRAJ): lookup + launch speed/elevation/frames — 11 recorded strokes.
+- Per-character shot parameter records (17 per class/kind, record = character + 3) built from GAME.BIN —
+  bit-identical to the game's runtime table, using the PS2 FPU model.
+- `hst_sim::ps2` — PCSX2's EE FPU model: chop rounding, add/sub alignment with one guard bit, **div and sqrt
+  round to nearest** (the emulator's divider mode), DAZ. Proven on 2912 table values and the ball integrator.
+- Ball flight **and bounces** on PS2 arithmetic in the original's instruction order: all 4524 frames of 39
+  recorded shots (flight, curve/bend, every bounce, rolling) bit-exact in position and velocity. Pieces:
+  `hst_sim::vu0` (VU0 chop model), `contact` (plane sweep, contact point — the original lerps to the raw hit
+  fraction; its 0.005·r back-off only gates the ≤ 0 test), `quat` (matrix↔quat, VU0 slerp microprogram),
+  `libm::sinf` (the game's fdlibm sinf, incl. its pio2_2 = 0x373543ff).
+- Net contact (flat net from the game's predictor), material-based bounce response.
+- Collision world placement: props from plant records (VU0 sin/cos, rotations, inverse) and the 20 m prop grid —
+  117 props and every grid cell bit-exact on court 10.
+- Live ball against the world mesh (court model, walls, net, props via the 20 m grid), ground material from attribute
+  maps, material table response — 12498 recorded frames of a bot match bit-exact, all contacts included.
+- First-bounce turn of serves (`+0x1b0`, game's atan2f) — round1's turned serves bit-exact; `--stage` play on
+  the world mesh.
+- Live-ball point verdicts (`hst_sim::judge::Rally`) — every decision of a recorded bot match frame-exact, rally
+  block equal every frame (faults and net points included).
+- Post-point scoreboard timeline (`hst_sim::flow`): pause, wait, score shows, change ends — every call-free
+  point-over phase of a recorded bot match tick-exact.
+- Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
+
+## Known gaps / caveats
+
+- Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
+- Stored-path fixtures can't verify net hits (the game records paths against the court plane only); the net
+  response shares the exact code path but its sweep is our flat net, not the court mesh (→ P15).
+- `libm::sinf` ports only |x| ≤ 2^7·π/2 (asserts beyond); the game's callers stay in [0, π].
+- Disc court folder ↔ physics court index mapping is unverified (slot 5 = court index 10).
