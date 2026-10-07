@@ -261,7 +261,7 @@ struct Serving {
     /// Stand-in AI: the contact frame it aims its press at, and its aim.
     bot_due: Option<usize>,
     bot_aim: Vec2,
-    /// The serve's error off its aim (a mistimed strong toss), set at contact.
+    /// The serve's error off its aim (mistimed swing, contact off the ideal height), set at contact.
     scatter: V3,
 }
 
@@ -407,10 +407,12 @@ fn serve_data(iso: &mut Iso) -> ServeData {
         let v: Vec<f32> = row[i].split('/').map(|v| v.parse::<f32>().expect("TParam height") / 100.0).collect();
         [v[0], v[1], v[2]]
     };
-    // ponytail: timing tables (+0x1644/+0x1774), toss hand/apex drift (toss animation), mistiming error
-    // (0x3fc760, skill level 0) and the serve angle (+0x130c) are character 0's measured values; their sources
-    // are the motion data and the character tables (P3/P8)
+    let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
+    // ponytail: timing and depth-bias tables (+0x1644/+0x1774, +0x1554/+0x1684), toss hand/apex drift (toss
+    // animation), mistiming error (0x3fc760, skill level 0) and the serve angle (+0x130c) are character 0's
+    // measured values; their sources are the motion data and the character tables (P3/P8)
     let grades = vec![0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4];
+    let bias = vec![-8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16];
     ServeData {
         over: cm(65),
         under: cm(66),
@@ -421,6 +423,12 @@ fn serve_data(iso: &mut Iso) -> ServeData {
         apex_drift_over: [-0.133, 0.15],
         apex_drift_under: [0.184, 0.033],
         miss: [50, 30, 100],
+        strong_bias: bias.clone(),
+        weak_bias: bias,
+        reach: [cell(34), cell(35)],
+        short_miss: row[54].parse().expect("TParam serve short-miss factor"),
+        power: cell(12),
+        low_power: cell(50),
         max_angle: 22.0,
     }
 }
@@ -722,7 +730,7 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
 /// `branch`, `grade` and `offset` are the swing's (branch code, timing grade and offset) for the hit sounds.
 fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, grade, offset): (u8, u8, i32)) {
     let at = g.flight.ball.pos;
-    let weak = (g.serving.toss == Some(Toss::Weak)) as usize;
+    let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data)) as usize;
     let (vel, frames) = if class == 0 {
         let (table, _) = &g.serve_tables[who][weak][kind as usize];
         serve::launch(table, kind == 3, hst_sim::ball::Params::default().radius, at, target, g.serving.scatter)
@@ -856,10 +864,12 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     });
     if let Some(sw) = s.swing.filter(|sw| sw.left == 0) {
         let aim = if pads_aim(g, i) { stick } else { g.serving.bot_aim };
-        let rand_bit = rand(&mut g.rng) < 0.5;
+        let coins = [(); 3].map(|_| rand(&mut g.rng) < 0.5);
         let d = &g.serve_data;
-        let (target, scatter) = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], rand_bit);
-        g.serving.scatter = scatter;
+        let (target, miss) = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], coins);
+        let hit = g.flight.ball.pos;
+        let error = serve::depth_error(d, toss, (sw.offset + SWEET_FRAME) as usize, sw.grade, -hit[1]);
+        g.serving.scatter = serve::scatter(d, toss, miss, error, hit, target);
         // the stick toward the net turns a topspin serve flat
         let sw = ServeSwing { kind: hst_sim::shot::stick_kind(0, sw.kind, [aim.x, aim.y], end), ..sw };
         debug!("player {i} serve {toss:?} kind {}: offset {} grade {} -> {target:?}", sw.kind, sw.offset, sw.grade);

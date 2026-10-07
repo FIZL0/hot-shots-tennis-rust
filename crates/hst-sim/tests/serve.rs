@@ -45,31 +45,42 @@ fn toss_of(kind: i32) -> Toss {
     }
 }
 
+/// Player `p`'s serve data in the slot-5 match: heights as recorded in `fr`, timing and depth tables and the
+/// stats from the save state's RAM (`slot5_ee.bin`).
+fn ram_data(ram: &[u8], p: usize, fr: Frame) -> ServeData {
+    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
+    let obj = ru(ru(0x422f80) + 0xa8 + 4 * p);
+    let ri = |o: usize| ru(obj + o) as i32;
+    let grades = |o: usize, n: usize| ram[obj + o..obj + o + ru(obj + n)].to_vec();
+    let bias = |o: usize, n: usize| (0..ru(obj + n)).map(|k| ri(o + 4 * k)).collect();
+    ServeData {
+        over: [0x13cc, 0x13d0, 0x13d4].map(|o| fr.player_f32(p, o)),
+        under: [0x13d8, 0x13dc, 0x13e0].map(|o| fr.player_f32(p, o)),
+        strong_grades: grades(0x1644, 0x1680),
+        weak_grades: grades(0x1774, 0x17b0),
+        hand_over: [0.144, -1.546, 0.12],
+        hand_under: [0.016, -0.774, 0.271],
+        apex_drift_over: [-0.133, 0.15],
+        apex_drift_under: [0.184, 0.033],
+        miss: [50, 30, 100],
+        strong_bias: bias(0x1554, 0x1680),
+        weak_bias: bias(0x1684, 0x17b0),
+        reach: [ri(0x1364), ri(0x1368)],
+        short_miss: fr.player_f32(p, 0x13a8),
+        power: ri(0x12e4),
+        low_power: ri(0x1398),
+        max_angle: 22.0,
+    }
+}
+
 #[test]
 fn match_s05_serves() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
         return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
     };
-    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
-    let gm = ru(0x422f80);
     let frames = frames_live(&data);
-    let data_for = |p: usize, fr: Frame| {
-        let obj = ru(gm + 0xa8 + 4 * p);
-        let grades = |o: usize, n: usize| ram[obj + o..obj + o + ru(obj + n)].to_vec();
-        ServeData {
-            over: [0x13cc, 0x13d0, 0x13d4].map(|o| fr.player_f32(p, o)),
-            under: [0x13d8, 0x13dc, 0x13e0].map(|o| fr.player_f32(p, o)),
-            strong_grades: grades(0x1644, 0x1680),
-            weak_grades: grades(0x1774, 0x17b0),
-            hand_over: [0.144, -1.546, 0.12],
-            hand_under: [0.016, -0.774, 0.271],
-            apex_drift_over: [-0.133, 0.15],
-            apex_drift_under: [0.184, 0.033],
-            miss: [50, 30, 100],
-            max_angle: 22.0,
-        }
-    };
+    let data_for = |p: usize, fr: Frame| ram_data(&ram, p, fr);
     let (mut tosses, mut swings, mut misses) = (0, 0, 0);
     for k in 1..frames.len() {
         let (a, fr) = (frames[k - 1], frames[k]);
@@ -273,4 +284,44 @@ fn serves_launch_like_the_game() {
     }
     eprintln!("strong/weak/underhand serves: {checked:?}");
     assert!(checked.iter().all(|&n| n > 0), "{checked:?}");
+}
+
+/// Every serve's error off its aim against the game's, bit-exact: the depth error from the timing table's bias
+/// and the contact height (+0x3ecc), and where the ball is sent (aim + scatter, the ball's +0x80); the weak
+/// toss's `dw1` choice from the stats.
+#[test]
+fn serves_scatter_like_the_game() {
+    use hst_sim::ps2;
+    use hst_sim::serve::Miss;
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures");
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
+        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    };
+    let launched = |x: &[u8]| x[0x58] == 0 && i(x, 0xac) == 0 && f(x, 0x130).abs() + f(x, 0x138).abs() > 0.05;
+    let (mut serves, mut off) = (0, 0);
+    for w in frames_live(&data).windows(2) {
+        let (fr, b) = (w[1], w[1].live_ball());
+        if !launched(b) || launched(w[0].live_ball()) {
+            continue;
+        }
+        let p = (0..4).find(|&p| pu8(fr, p, 0x3ec1) == 0 && pu8(fr, p, 0x3fa6) == 3).unwrap_or_else(|| panic!("server at vsync {}", fr.vsync()));
+        let d = ram_data(&ram, p, fr);
+        let toss = toss_of(pi(fr, p, 0x3ea0));
+        let (k, grade) = ((pi(fr, p, 0x3fa0) + serve::SWEET_FRAME) as usize, pu8(fr, p, 0x3ee8));
+        let (hit, aim) = (v3(b, 0x70), [0x3e90, 0x3e94, 0x3e98].map(|o| fr.player_f32(p, o)));
+        let at = format!("vsync {} player {p} {toss:?}", fr.vsync());
+        assert_eq!(d.bias(toss)[k], pi(fr, p, 0x3f98), "{at}");
+        assert_eq!(ps2::sub(-hit[1], d.window(toss)[1]).to_bits(), fr.player_f32(p, 0x3f9c).to_bits(), "{at}");
+        let error = serve::depth_error(&d, toss, k, grade, -hit[1]);
+        assert_eq!(error, pi(fr, p, 0x3ecc), "{at}");
+        assert_eq!(pi(fr, p, 0x3ed8), if toss == Toss::Weak { -5 } else { 0 }, "{at}");
+        assert!(toss != Toss::Weak || serve::dw1(&d), "{at}");
+        let miss = Miss { side: fr.player_f32(p, 0x3f10), depth: fr.player_f32(p, 0x3f18), nudge: pi(fr, p, 0x3ed0) };
+        let s = serve::scatter(&d, toss, miss, error, hit, aim);
+        assert_eq!([ps2::add(aim[0], s[0]).to_bits(), ps2::add(aim[2], s[2]).to_bits()], [f(b, 0x80).to_bits(), f(b, 0x88).to_bits()], "{at}: {s:?}");
+        serves += 1;
+        off += (s != [0.0; 3]) as usize;
+    }
+    eprintln!("{serves} serves, {off} off their aim");
+    assert!(serves > 30 && off > 10);
 }
