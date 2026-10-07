@@ -41,6 +41,7 @@ use crate::character::{self, CharacterData, Motion};
 use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
+mod markers;
 mod panel;
 mod popups;
 
@@ -436,6 +437,7 @@ struct BalloonView(usize, Handle<StandardMaterial>);
 struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
+    app.add_plugins(markers::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -3392,31 +3394,17 @@ fn balloons(
     }
 }
 
+/// Debug lines under the original's panel (`panel`): the match message, controllers and controls; the score and who
+/// plays are the panel's.
 fn hud(
     g: Res<Game>,
     pads: Res<Pads>,
     mode: Res<CamMode>,
     mut q: Query<&mut Text, With<ScoreText>>,
 ) {
-    let who = |i: usize| {
-        pads.slot_of(i, g.players.len())
-            .map_or("CPU".to_string(), |s| format!("P{}", s + 1))
-    };
-    let team = |t: usize| {
-        (t..g.players.len())
-            .step_by(2)
-            .map(who)
-            .collect::<Vec<_>>()
-            .join("+")
-    };
-    let board = board_score(&g);
     for mut t in &mut q {
         t.0 = format!(
-            "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · L/Y lob · stick forward: flat, back + slice: drop",
-            team(0),
-            score_line(board, 0),
-            score_line(board, 1),
-            team(1),
+            "{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · L/Y lob · stick forward: flat, back + slice: drop",
             g.message,
             pads.connected,
             if *mode == CamMode::Original {
@@ -3426,20 +3414,6 @@ fn hud(
             }
         );
     }
-}
-
-/// Games and points for one team, tennis style (points 0/15/30/40/Ad; tiebreak points as numbers).
-fn score_line(s: &Score, team: usize) -> String {
-    let p = s.points[team];
-    let pts = if s.tiebreak {
-        p.to_string()
-    } else {
-        ["0", "15", "30", "40", "Ad"]
-            .get(p as usize)
-            .unwrap_or(&"Ad")
-            .to_string()
-    };
-    format!("{} | {pts}", s.games[team])
 }
 
 /// A swing starts: its whoosh, if the original plays one (`sound::swing_sound`), now or a few ticks on.
@@ -3604,13 +3578,4 @@ fn play_sounds(
 /// A human's face-button press while the point is over: it ends the phase once the new score has settled.
 fn post_press(g: &mut Game, pressed: bool) {
     g.post_press |= pressed && g.phase == Phase::Post;
-}
-
-/// The score the scoreboard shows: the one before the point until the score show brings in the new one.
-fn board_score(g: &Game) -> &Score {
-    g.post
-        .as_ref()
-        .filter(|p| !p.shown)
-        .and_then(|p| p.before.as_ref())
-        .unwrap_or(&g.score)
 }
