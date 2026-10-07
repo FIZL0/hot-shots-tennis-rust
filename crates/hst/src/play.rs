@@ -52,11 +52,6 @@ const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// A press stays live this many frames looking for a contact.
 const PRESS_FRAMES: u32 = 28;
-/// A whiff: the stroke motion reaches its contact pose on this frame and turns into the whiff motion; a new
-/// press is taken from 2 frames after that, and the player is free again 30 frames after it, as the original.
-const WHIFF_POSE: u32 = 8;
-const WHIFF_REPRESS: u32 = WHIFF_POSE + 2;
-const WHIFF_FRAMES: u32 = WHIFF_POSE + 30;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
 /// of it (measured on the court lines against the real game).
 const SHOWN_ASPECT: f32 = 0.75;
@@ -110,8 +105,9 @@ struct Player {
     /// A swing waiting for 8 frames before contact while the body turns, and a soft follow-through due next frame.
     wait_swing: Option<i32>,
     follow: Option<i32>,
-    /// A swing at nothing: its stroke motion and frames since the press.
-    whiff: Option<(usize, u32)>,
+    /// A swing at nothing (`motion::Whiff`), and a pending press's whiff to come is a re-press (no shout).
+    whiff: Option<motion::Whiff>,
+    whiff_quiet: bool,
     /// Movement stats from TParam.csv.
     stats: Stats,
     /// Run, stamina, stand/run motion and facing as the game's play state (`hst_sim::player::Body`).
@@ -1214,7 +1210,8 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         } else {
             g.players[i].pending = left.checked_sub(1);
             if left == 0 {
-                whiff(g, i);
+                let quiet = g.players[i].whiff_quiet;
+                whiff(g, i, true, quiet);
             }
         }
     }
@@ -1285,20 +1282,6 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
     }
     // animation clock: contact at 45% of the swing, follow-through over the remaining frames
     let p = &mut g.players[i];
-    if let Some((anim, f)) = p.whiff {
-        p.prev = p.pos;
-        p.whiff = (f + 1 < WHIFF_FRAMES).then_some((anim, f + 1));
-        // the stroke turns into its miss motion at the contact pose
-        if f + 1 == WHIFF_POSE {
-            if let Some(w) = motion::whiff(anim as i32) {
-                set_motion(p, w, 1.0, false, None);
-            }
-            let r = (rand(&mut g.rng) * 32768.0) as u32;
-            let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
-            g.whooshes.push((0, i, shout));
-        }
-    }
-    let p = &mut g.players[i];
     if let Some(f) = p.swing {
         p.swing = Some(f + 1);
     }
@@ -1362,24 +1345,40 @@ fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>
 /// ball for this player to hit (or none found in time) the player swings at nothing, as the original.
 /// ponytail: the original holds an early press only while its auto-approach (P7) finds a reachable ball ahead;
 /// the fixed PRESS_FRAMES window stands in, so an early whiff comes up to 28 frames late.
+/// A whiffing player takes a new press only past its re-press lock (quietly) or its recovery; nobody's press counts
+/// from the point's reactions until the next serve. A press after the dead ball but before the reactions still
+/// searches the last hitter's ball, so it whiffs with its miss motion.
 fn press(g: &mut Game, i: usize, kind: i32) {
+    if input_off(g) {
+        return;
+    }
     let p = &mut g.players[i];
-    let free = p.whiff.is_none_or(|(_, f)| f >= WHIFF_REPRESS);
-    if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && p.dive.is_none() && free {
+    let Some(quiet) = p.whiff.map_or(Some(false), |w| w.press()) else { return };
+    if p.contact.is_none() && p.swing.is_none() && p.pending.is_none() && p.dive.is_none() {
         p.whiff = None;
         p.kind = kind;
-        let theirs = g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
-        if theirs {
+        p.whiff_quiet = quiet;
+        let theirs = g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
+        if theirs && g.phase == Phase::Rally {
             g.players[i].pending = Some(PRESS_FRAMES);
         } else {
-            whiff(g, i);
+            whiff(g, i, theirs, quiet);
         }
     }
 }
 
-/// Swing at nothing: the ground stroke of the pressed shot type, on the side the ball passes (the side of the
-/// ball's line the player stands on), at full speed.
-fn whiff(g: &mut Game, i: usize) {
+/// Whether presses are off: from the point's reactions until the next serve.
+fn input_off(g: &Game) -> bool {
+    matches!(g.phase, Phase::ChangeEnds(_)) || g.post.as_ref().is_some_and(|p| p.reacted)
+}
+
+/// Swing at nothing. With no ball for the player (`!miss`) it is the pressed shot type's ground stroke; else a
+/// smash when the ball is close and rises over the smash window's middle, or the ground stroke on the side the
+/// ball passes (the side of the ball's line the player stands on). At full speed, squared up to the net.
+fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
+    let path = if miss { predicted_path(g, g.reach.grades.len()) } else { Vec::new() };
+    // ponytail: the middle height is TParam's middle smash cell, the window's midpoint for every character seen
+    let middle = (g.reach.smash_top + g.reach.smash_bottom) / 2.0;
     let (b, p) = (g.flight.ball, &mut g.players[i]);
     let base = match p.kind {
         1 => 0x12,
@@ -1389,10 +1388,35 @@ fn whiff(g: &mut Game, i: usize) {
     let d = [p.pos[0] - b.pos[0], p.pos[2] - b.pos[2]];
     let right = d[1] * b.vel[0] - d[0] * b.vel[2] > 0.0;
     let other = if right { p.hand >= 0.0 } else { p.hand < 0.0 };
-    p.whiff = Some((base + other as usize, 0));
-    set_motion(p, (base + other as usize) as i32, 1.0, false, None);
+    let anim = if !miss {
+        base
+    } else if swing::smash_whiff(&path, b.pos, p.pos, middle) {
+        0x1f
+    } else {
+        base + other as i32
+    };
+    p.whiff = Some(motion::Whiff::new(anim, miss, quiet));
+    set_motion(p, anim, 1.0, false, None);
     p.vel = Vec2::ZERO;
     p.facing = base_yaw(p.end);
+}
+
+/// One frame of a whiff, before this frame's press: at the contact pose the swing turns into its miss motion
+/// with a shout, and once recovered a stick (`stick`) or the motion's end frees the player.
+fn whiff_frame(g: &mut Game, i: usize, stick: bool) {
+    let p = &mut g.players[i];
+    let Some(mut w) = p.whiff else { return };
+    p.prev = p.pos;
+    if let Some(m) = w.step() {
+        set_motion(p, m, 1.0, false, None);
+        if !w.quiet {
+            let r = (rand(&mut g.rng) * 32768.0) as u32;
+            let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
+            g.whooshes.push((0, i, shout));
+        }
+    }
+    let p = &mut g.players[i];
+    p.whiff = (!w.over(stick, p.played)).then_some(w);
 }
 
 /// Every player's turn this frame: humans from their controller slot, the rest from the stand-in AI.
@@ -1428,6 +1452,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         return;
     }
     follow_through(&mut g.players[i], shot.is_some() || pad.stick != Vec2::ZERO);
+    whiff_frame(g, i, pad.stick != Vec2::ZERO);
     if let Some(kind) = shot {
         press(g, i, kind);
     }
@@ -1490,6 +1515,7 @@ fn bot(g: &mut Game, i: usize) {
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
     follow_through(&mut g.players[i], true);
+    whiff_frame(g, i, true);
     let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some() || g.players[i].whiff.is_some() || g.players[i].dive.is_some();
     if !busy {
         let plan = match g.phase {
@@ -1723,6 +1749,7 @@ fn react(g: &mut Game, event: Event) {
         };
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
+        (p.whiff, p.pending) = (None, None);
         set_motion(p, id, 1.0, false, None);
         let spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         p.root = Some(Root { motion: id as usize, base: spot, acc: spot, t: 0.0 });

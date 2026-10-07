@@ -180,6 +180,63 @@ pub fn whiff(anim: i32) -> Option<i32> {
     }
 }
 
+/// A whiff reaches its contact pose this many frames after the press (the swing's 8th motion frame).
+pub const WHIFF_POSE: u32 = 9;
+/// Frames after the pose before a stick, a press or the motion's end frees the player.
+pub const WHIFF_RECOVERY: u32 = 30;
+
+/// A swing at nothing, counted from the press. `miss`: there was a ball to hit, so at the pose the swing turns
+/// into its miss motion (with a shout unless `quiet`) and a new press is taken from a short lock after it (2
+/// frames, 30 after a smash 0x1f); with no ball for the player (`!miss`) the swing just plays on until its
+/// recovery is over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Whiff {
+    pub anim: i32,
+    pub miss: bool,
+    pub quiet: bool,
+    /// Frames since the press.
+    pub tick: u32,
+}
+
+impl Whiff {
+    pub fn new(anim: i32, miss: bool, quiet: bool) -> Self {
+        Whiff { anim, miss, quiet, tick: 0 }
+    }
+
+    /// Frames since the contact pose, 0 on the pose frame.
+    pub fn since(&self) -> Option<u32> {
+        self.tick.checked_sub(WHIFF_POSE)
+    }
+
+    /// One frame on: the miss motion to switch to, on the pose frame.
+    pub fn step(&mut self) -> Option<i32> {
+        self.tick += 1;
+        if self.tick == WHIFF_POSE && self.miss { whiff(self.anim) } else { None }
+    }
+
+    /// The re-press lock after the miss motion (`None`: no miss motion, so none).
+    pub fn lock(&self) -> Option<u32> {
+        (self.miss && whiff(self.anim).is_some()).then_some(if self.anim == 0x1f { 30 } else { 2 })
+    }
+
+    /// Whether a press this frame swings again, and if so whether quietly: through the re-press lock (no shout),
+    /// else once the recovery is over.
+    pub fn press(&self) -> Option<bool> {
+        let s = self.since()?;
+        if self.lock().is_some_and(|l| s >= l) {
+            Some(true)
+        } else {
+            (s >= WHIFF_RECOVERY).then_some(false)
+        }
+    }
+
+    /// Whether the whiff is over this frame without a press: recovered, and the stick moves or the motion has
+    /// played out.
+    pub fn over(&self, stick: bool, played: bool) -> bool {
+        self.since().is_some_and(|s| s >= WHIFF_RECOVERY) && (stick || played)
+    }
+}
+
 /// After a ground stroke's contact (branch 1, swings 0x10..0x15) a slow ball (|v|² < 0.2143347) switches the
 /// next frame to the soft follow-through, `f_w` 0x1c or `b_w` 0x1d (crossfaded in, `SOFT_FOLLOW_HOLD`). `side` is the contact's
 /// side bits (+0x3f50; bit 1 the left side), mirrored for left-handers.
