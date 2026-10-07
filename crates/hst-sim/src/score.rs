@@ -58,6 +58,10 @@ pub struct Score {
     pub second_serve: bool,
     /// The point was a let: replay it, no rotation.
     pub let_: bool,
+    /// The set being played, 0-based (counts on past the last set won; the scoreboard's result board reads it).
+    pub set: i32,
+    /// Each team's games in each set, as the result board shows them (a tiebreak set as 7-6).
+    pub set_games: [[i32; 5]; 2],
 }
 
 impl Score {
@@ -108,7 +112,9 @@ impl Score {
             self.game_changed = true;
             if self.sets[winner] < r.sets {
                 self.tiebreak = false;
-                return Some(self.win_set(r, winner));
+                let e = self.win_set(r, winner);
+                self.set_games[winner][(self.set - 1).min(4) as usize] += 1;
+                return Some(e);
             }
         }
         if !r.one_point_games {
@@ -147,6 +153,7 @@ impl Score {
         self.games_played += 1;
         self.deuce_count = 0;
         self.games[winner] += 1;
+        self.set_games[winner][self.set.min(4) as usize] = self.games[winner];
         let (g, o) = (self.games[winner], self.games[loser]);
         if g < r.games {
             return Some(Event::Game);
@@ -168,6 +175,7 @@ impl Score {
 
     fn win_set(&mut self, r: &Rules, winner: usize) -> Event {
         self.sets[winner] += 1;
+        self.set = (self.set + 1).min(5);
         self.deuce_count = 0;
         if self.sets[winner] == r.sets {
             self.match_over = true;

@@ -16,6 +16,15 @@ fn rd<const N: usize>(d: &[u8], o: usize) -> Result<[u8; N], Error> {
 }
 
 pub fn decode(d: &[u8]) -> Result<Vec<Picture>, Error> {
+    decode_with(d, true)
+}
+
+/// For the standalone sheets (INPANE, menus) whose alpha is authored 0–255 (0x80 is half): kept as is.
+pub fn decode_alpha8(d: &[u8]) -> Result<Vec<Picture>, Error> {
+    decode_with(d, false)
+}
+
+fn decode_with(d: &[u8], expand: bool) -> Result<Vec<Picture>, Error> {
     if d.get(..4) != Some(b"TIM2") {
         return Err(Error("not TIM2".into()));
     }
@@ -36,9 +45,9 @@ pub fn decode(d: &[u8]) -> Result<Vec<Picture>, Error> {
             .ok_or_else(|| Error("tim2 clut truncated".into()))?;
         let n = (w * ht) as usize;
         let rgba = match image_type {
-            1..=3 => (0..n).map(|i| color(img, i, image_type)).collect::<Result<Vec<_>, _>>()?,
+            1..=3 => (0..n).map(|i| color(img, i, image_type, expand)).collect::<Result<Vec<_>, _>>()?,
             4 | 5 => {
-                let palette = palette(clut, clut_type, image_type)?;
+                let palette = palette(clut, clut_type, image_type, expand)?;
                 (0..n)
                     .map(|i| {
                         let idx = if image_type == 5 {
@@ -60,8 +69,8 @@ pub fn decode(d: &[u8]) -> Result<Vec<Picture>, Error> {
 }
 
 /// Pixel `i` of a direct-color buffer; `kind` 1 = RGBA5551, 2 = RGB888, 3 = RGBA8888.
-fn color(b: &[u8], i: usize, kind: u8) -> Result<[u8; 4], Error> {
-    let a = |x: u8| (x as u16 * 255 / 128).min(255) as u8;
+fn color(b: &[u8], i: usize, kind: u8, expand: bool) -> Result<[u8; 4], Error> {
+    let a = |x: u8| if expand { (x as u16 * 255 / 128).min(255) as u8 } else { x };
     let e = || Error("tim2 pixel out of range".into());
     Ok(match kind {
         1 => {
@@ -80,10 +89,10 @@ fn color(b: &[u8], i: usize, kind: u8) -> Result<[u8; 4], Error> {
     })
 }
 
-fn palette(clut: &[u8], clut_type: u8, image_type: u8) -> Result<Vec<[u8; 4]>, Error> {
+fn palette(clut: &[u8], clut_type: u8, image_type: u8, expand: bool) -> Result<Vec<[u8; 4]>, Error> {
     let kind = clut_type & 0x3f;
     let size = [0, 2, 3, 4][kind.min(3) as usize];
-    let mut pal = (0..clut.len() / size.max(1)).map(|i| color(clut, i, kind)).collect::<Result<Vec<_>, _>>()?;
+    let mut pal = (0..clut.len() / size.max(1)).map(|i| color(clut, i, kind, expand)).collect::<Result<Vec<_>, _>>()?;
     // CSM1 8-bit CLUTs are stored with entries 8..15 and 16..23 of every 32 swapped.
     if clut_type & 0x80 == 0 && image_type == 5 {
         for block in pal.chunks_mut(32).filter(|c| c.len() == 32) {
