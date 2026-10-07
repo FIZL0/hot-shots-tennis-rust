@@ -73,8 +73,6 @@ const BALL_DRAW_SCALE: f32 = 2.4;
 const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
-/// A press stays live this many frames looking for a contact.
-const PRESS_FRAMES: u32 = 28;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
 /// of it (measured on the court lines against the real game).
 const SHOWN_ASPECT: f32 = 0.75;
@@ -106,6 +104,8 @@ struct Player {
     aim: Vec2,
     /// A shot press still looking for its contact (frames it stays live).
     pending: Option<u32>,
+    /// The auto-approach's run direction (game x, z) while `pending` counts down to its one search.
+    approach: Option<Vec2>,
     contact: Option<Contact>,
     /// Frames of wind-up before contact (sets the animation clock).
     wind: u32,
@@ -236,8 +236,8 @@ struct Game {
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
     serve_tables: Vec<[Vec<(Table, f32)>; 2]>,
-    /// Smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
-    smash_tables: Vec<Table>,
+    /// Per player: the character's smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
+    smash_tables: Vec<Vec<Table>>,
     /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
     rally_tables: Vec<[Vec<Table>; 2]>,
     serve_data: ServeData,
@@ -479,11 +479,6 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
-fn tables(iso: &mut Iso, archive: &str, name: &str, n: usize) -> Vec<Table> {
-    character_tables(iso, 0, archive, name, "", n)
-}
-
 /// Character `c`'s trajectory tables `tr_pc<c>_<name><k><suffix>.dat`, k in 0..n, from its archive `TRAJ<c><ab>.XB`.
 fn character_tables(
     iso: &mut Iso,
@@ -549,8 +544,8 @@ mod every_character_tables {
             return;
         };
         let params = disc(&mut iso, None).3;
-        tables(&mut iso, "B", "smsh", 2);
         for c in 0..14 {
+            character_tables(&mut iso, c, "B", "smsh", "", 2);
             serve_tables(&mut iso, &params, c);
             rally_tables(&mut iso, c);
         }
@@ -957,7 +952,7 @@ fn setup(
     let mut game = Game {
         rules,
         serve_tables: Vec::new(),
-        smash_tables: tables(&mut iso, "B", "smsh", 2),
+        smash_tables: Vec::new(),
         rally_tables: Vec::new(),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
@@ -1074,6 +1069,7 @@ fn setup(
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
+        game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
@@ -1423,7 +1419,7 @@ fn strike(
     } else {
         let l = if class == 3 {
             lookup(
-                &g.smash_tables[kind as usize],
+                &g.smash_tables[who][kind as usize],
                 &Bounds::smash(kind),
                 at,
                 target,
@@ -1857,6 +1853,28 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
     })
 }
 
+/// The auto-approach a press runs first (`swing::approach`): frames to run and the direction, None when nothing
+/// comes within reach in 20 frames of running or the mover blocks the run.
+/// ponytail: the app's one reach (character 0's) for everyone, as `find_contact`
+fn approach(g: &Game, i: usize) -> Option<(usize, Vec2)> {
+    let p = &g.players[i];
+    let path = predicted_path(g, g.reach.grades.len() + 20);
+    let mate = (g.players.len() == 4).then(|| g.players[i ^ 2].pos);
+    let (s, n) = (p.stats, g.players.len() as i32);
+    let (mut run, mut stamina, mut tick) = (if p.body.running { p.body.run } else { 0 }, p.body.stamina, p.body.stamina_tick);
+    let (end, y) = (p.end, p.pos[1]);
+    swing::approach(&g.reach, &path, p.pos, p.end, |at, d| {
+        let speed = loco::run_speed(&s, run, stamina, 100);
+        let delta = [hst_sim::ps2::mul(d[0], speed), 0.0, hst_sim::ps2::mul(d[1], speed)];
+        let to = loco::mover([at[0], y, at[1]], delta, end, mate, false);
+        run += 1;
+        (stamina, tick) = loco::drain(&s, stamina, tick, n, true, 0);
+        let free = to[0] == hst_sim::ps2::add(at[0], delta[0]) && to[2] == hst_sim::ps2::add(at[1], delta[2]);
+        free.then_some([to[0], to[2]])
+    })
+    .map(|(f, d)| (f, Vec2::new(d[0], d[1])))
+}
+
 /// The search's last branch: a running player whose press finds no stroke dives toward the ball.
 fn find_dive(g: &Game, i: usize) -> Option<swing::Dive> {
     let p = &g.players[i];
@@ -2006,7 +2024,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         );
     }
     if let Some(left) = g.players[i].pending {
-        if let Some(c) = find_contact(g, i) {
+        if left > 0 {
+            g.players[i].pending = Some(left - 1);
+        } else if let Some(c) = find_contact(g, i) {
             let p = &mut g.players[i];
             p.pending = None;
             p.contact = Some(c);
@@ -2075,11 +2095,12 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.vel = Vec2::ZERO;
             set_motion(p, 0x1e, 1.0, false, None);
         } else {
-            g.players[i].pending = left.checked_sub(1);
-            if left == 0 {
-                let quiet = g.players[i].whiff_quiet;
-                whiff(g, i, true, quiet);
-            }
+            g.players[i].pending = None;
+            let quiet = g.players[i].whiff_quiet;
+            whiff(g, i, true, quiet);
+        }
+        if g.players[i].pending.is_none() {
+            g.players[i].approach = None;
         }
     }
     dive_frame(g, i, &aim);
@@ -2274,10 +2295,9 @@ fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>
     }
 }
 
-/// A shot button press: remembered for a while and checked every frame until a contact is found. With no
-/// ball for this player to hit (or none found in time) the player swings at nothing, as the original.
-/// ponytail: the original holds an early press only while its auto-approach (P7) finds a reachable ball ahead;
-/// the fixed PRESS_FRAMES window stands in, so an early whiff comes up to 28 frames late.
+/// A shot button press: the auto-approach (`approach`) may first run the player toward the ball's line for a few
+/// frames, then the contact is searched once; nothing found dives or swings at nothing, as the original. With no
+/// ball for this player to hit the player swings at nothing at once.
 /// A whiffing player takes a new press only past its re-press lock (quietly) or its recovery; nobody's press counts
 /// from the point's reactions until the next serve. A press after the dead ball but before the reactions still
 /// searches the last hitter's ball, so it whiffs with its miss motion.
@@ -2297,7 +2317,9 @@ fn press(g: &mut Game, i: usize, kind: i32) {
         p.whiff_quiet = quiet;
         let theirs = g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
         if theirs && g.phase == Phase::Rally {
-            g.players[i].pending = Some(PRESS_FRAMES);
+            let (frames, dir) = approach(g, i).map_or((0, None), |(n, d)| (n as u32, Some(d)));
+            g.players[i].pending = Some(frames);
+            g.players[i].approach = dir.filter(|_| frames > 0);
         } else {
             whiff(g, i, theirs, quiet);
         }
@@ -2408,7 +2430,7 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     // player (or sets its motion) through the swing
     let p = &g.players[i];
     if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
-        let dir = pad_run(g, pad.stick);
+        let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick));
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot
@@ -2547,6 +2569,10 @@ fn bot(g: &mut Game, i: usize) {
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
     follow_through(&mut g.players[i], true);
     whiff_frame(g, i, true);
+    // the press's approach run (set on an earlier frame; the bot's own walk waits while it's pending)
+    if let Some(dir) = g.players[i].approach {
+        locomote(g, i, dir);
+    }
     let busy = g.players[i].contact.is_some()
         || g.players[i].pending.is_some()
         || g.players[i].swing.is_some()
@@ -3082,7 +3108,7 @@ fn react(g: &mut Game, event: Event) {
         };
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
-        (p.whiff, p.pending) = (None, None);
+        (p.whiff, p.pending, p.approach) = (None, None, None);
         set_motion(p, id, 1.0, false, None);
         let spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         p.root = Some(Root {
