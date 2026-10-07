@@ -204,7 +204,6 @@ def main():
     master()
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
-        tried.add(task[0])
     while True:
         for n in free_at:
             if n in procs and not alive(procs[n][0]):
