@@ -184,6 +184,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
 - [x] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
+- [ ] **P17b** Court fog (FGE): far court and props haze toward the court's fog colour as in the original (compare court 10, slot 5, against PCSX2) → `gs.rs` gs.wgsl · `main.rs` load | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering/4-FOG-FINAL.md
 
 ### Stretch
 
