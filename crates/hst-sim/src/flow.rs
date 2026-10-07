@@ -156,9 +156,10 @@ impl PostPoint {
                     c.fade -= 1;
                 } else {
                     if !c.settled {
-                        c.countdown -= 1;
                         c.frames += 1;
+                        // the game tests the countdown before it counts down
                         c.settled = c.anim_end <= c.frames as f32 && (voice_idle || c.countdown < 1);
+                        c.countdown -= 1;
                     }
                     if c.settled {
                         c.held += 1;

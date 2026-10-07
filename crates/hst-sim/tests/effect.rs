@@ -179,3 +179,51 @@ fn smash_mark_holds() {
     }
     assert!(fx.live && alpha(&fx) == 0.0, "held, faded out: {:?} {:?}", fx.times(), fx.alphas);
 }
+
+/// The yellow smash marker in the doubles match with one human (Carol, P0) and three CPUs on court 11
+/// (`1p3goodcpus.bin` with `tools/play_p2m2.py`'s `.mark` and `.path`): for each placement the game made, the
+/// search fed the game's predicted path a frame (15 entries) at a time with Carol's smash heights places the point
+/// on the same frame and at the same spot, and the marker holds until the live ball's next bounce or hit.
+#[test]
+fn smash_mark_goodcpus() {
+    use hst_sim::effect::{PathEntry, SmashSearch};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(live), Ok(paths), Ok(marks), Ok(ram)) = (
+        std::fs::read(format!("{dir}/1p3goodcpus.bin")),
+        std::fs::read(format!("{dir}/1p3goodcpus.bin.path")),
+        std::fs::read(format!("{dir}/1p3goodcpus.bin.mark")),
+        std::fs::read(format!("{dir}/1p3goodcpus_ee.bin")),
+    ) else {
+        return eprintln!("1p3goodcpus .bin/.path/.mark/_ee absent, skipped");
+    };
+    let frames = hst_sim::replay::frames_live(&live);
+    // Carol's (character 6) TParam record in RAM: smash top and window middle
+    let rec = 0x2f0880 + 6 * 0x118;
+    let heights = [f(&ram, rec + 0xe8), f(&ram, rec + 0xec)];
+    // .mark: u32 vsync + the marker object's bytes +0x50..+0x1b0 (count +0x144, point x/z +0x150/+0x158)
+    let mark = |v: u32| marks.chunks(4 + 0x160).find(|c| u(c, 0) == v).map(|c| &c[4..]).unwrap();
+    let (mut at, mut placed) = (0, 0);
+    while at < paths.len() {
+        let (v, len) = (u(&paths, at), u(&paths, at + 4) as usize);
+        let path: Vec<PathEntry> = paths[at + 8..at + 8 + 0x30 * len]
+            .chunks(0x30)
+            .map(|e| PathEntry { pos: [f(e, 0), f(e, 4), f(e, 8)], vel: [f(e, 0x10), f(e, 0x14), f(e, 0x18)], bounces: u(e, 0x20) as i32 })
+            .collect();
+        at += 8 + 0x30 * len;
+        let mut s = SmashSearch::new(&[heights]);
+        let first: Vec<usize> = (0..len / 15).filter(|k| s.search(&path[..15 * (k + 1)])).collect();
+        assert_eq!(first, [len / 15 - 1], "vsync {v}: path of {len}");
+        let m = mark(v);
+        assert_eq!(s.at().map(|p| p.map(f32::to_bits)), Some([f(m, 0x100).to_bits(), f(m, 0x108).to_bits()]), "vsync {v}");
+        // held until the live ball's next bounce (+0x224) or hit (its flight frame +0xac restarts): the count
+        // (+0x144) is cleared that frame
+        let k = frames.iter().position(|fr| fr.vsync() == v).unwrap();
+        let ball = |j: usize, o: usize| u(frames[j].live_ball(), o);
+        let bounce = (k + 1..frames.len()).find(|&j| ball(j, 0x224) > ball(k, 0x224) || ball(j, 0xac) < ball(j - 1, 0xac)).map(|j| frames[j].vsync());
+        let cleared = marks.chunks(4 + 0x160).map(|c| (u(c, 0), u(c, 4 + 0xf4))).find(|&(w, n)| w > v && n == 0).map(|c| c.0);
+        assert_eq!(cleared, bounce, "vsync {v}: marker cleared, ball bounced or hit");
+        placed += 1;
+    }
+    eprintln!("{placed} smash points placed");
+    assert!(placed >= 1);
+}

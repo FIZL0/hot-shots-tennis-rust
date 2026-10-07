@@ -193,3 +193,123 @@ pub fn stick_kind(branch: u8, kind: i32, stick: [f32; 2], facing: f32) -> i32 {
         _ => kind,
     }
 }
+
+/// The court margins `inside` pulls a rally shot's aim by (`hst_data::exe::Game::court_margins`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Margins {
+    /// Per class (0 serve .. 3 smash) and kind: (across, along) for a shot mode ≥ 0, then for one < 0.
+    pub lines: [[[f32; 4]; 5]; 4],
+    /// Per character: the widest margin across a short angled topspin stroke gets.
+    pub angle: [f32; 14],
+}
+
+impl Margins {
+    /// A stroke's, volley's or smash's (`class` 1..3) aim pulled inside the court, as the original before the
+    /// timing scatter: the sidelines (doubles' with three or more players) and the baselines (11.885), less the
+    /// kind's margins (`low`: the smash's mode is negative, its wider pair). When the shot heads for the far
+    /// sideline, the margins are scaled by the share of the hit→aim direction along each (unless it is a
+    /// `special` shot, not modelled yet), and a topspin stroke's across margin grows to the character's
+    /// `angle` × the angle's tangent for a short cross-court ball (aim under 6 m deep, crossing the net 9–19 m
+    /// from the hit). A topspin from outside a sideline aiming further out is instead judged where it is
+    /// 18 m along the shot, its unscaled margins moving the aim by as much.
+    #[allow(clippy::too_many_arguments)]
+    pub fn inside(&self, class: u8, kind: i32, low: bool, doubles: bool, character: usize, special: bool, hit: V3, aim: V3) -> V3 {
+        use crate::ps2::{add, div, madd, mul, sqrt, sub};
+        let abs = |v: f32| if v < 0.0 { -v } else { v };
+        let hi = if doubles { 5.485 } else { 4.115 };
+        let lo = -hi;
+        let row = self.lines[class as usize][kind as usize];
+        let (mut mx, mut mz) = if low { (row[2], row[3]) } else { (row[0], row[1]) };
+        let topspin = class == 1 && kind == 0;
+        let (dx, dz) = (sub(aim[0], hit[0]), sub(aim[2], hit[2]));
+        let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
+        let step = [madd(add(0.0, hit[0]), mul(dx, inv), 18.0), madd(add(0.0, hit[2]), mul(dz, inv), 18.0)];
+        let outward = topspin && ((step[0] < sub(lo, mx) && hit[0] < lo) || (add(hi, mx) < step[0] && hi < hit[0]));
+        let p = if outward {
+            step
+        } else {
+            let across = (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi);
+            if across && !special {
+                mx = mul(mx, abs(mul(dx, inv)));
+                mz = mul(mz, abs(mul(dz, inv)));
+            }
+            let extra = if topspin && across { self.angled(lo, hi, character, hit, aim) } else { 0.0 };
+            if mx <= extra {
+                mx = extra;
+            }
+            [aim[0], aim[2]]
+        };
+        let (x0, x1) = (add(lo, mx), sub(hi, mx));
+        let x = if p[0] < x0 { x0 } else if p[0] <= x1 { p[0] } else { x1 };
+        let z1 = sub(11.885, mz);
+        let z = if p[1] < -z1 { -z1 } else if p[1] <= z1 { p[1] } else { z1 };
+        [add(aim[0], sub(x, p[0])), aim[1], add(aim[2], sub(z, p[1]))]
+    }
+
+    /// The topspin's widened sideline margin for a short angled ball (0 when it isn't one).
+    fn angled(&self, lo: f32, hi: f32, character: usize, hit: V3, aim: V3) -> f32 {
+        use crate::libm::{atanf, tanf};
+        use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
+        let abs = |v: f32| if v < 0.0 { -v } else { v };
+        let cx = if aim[0] < lo { lo } else if aim[0] <= hi { aim[0] } else { hi };
+        let (dx, dz) = (sub(cx, hit[0]), sub(aim[2], hit[2]));
+        let len = sqrt(madd(madd(0.0, dx, dx), dz, dz));
+        // from the hit to where the shot crosses the net
+        let net = sub(len, div(mul(len, aim[2]), dz));
+        let deep = abs(aim[2]);
+        let far = add(3.0, 3.0);
+        if net <= 9.0 || !(deep < far) {
+            return 0.0;
+        }
+        let width = mul(self.angle[character], tanf(atanf(div(abs(dx), abs(dz)))));
+        let mut short = div(sub(deep, 3.0), sub(far, 3.0));
+        if short < 0.0 {
+            short = 0.0;
+        }
+        let short = sub(1.0, short);
+        // the path length of the shot's last 3 m of depth: 3 m straight, longer the more it angles
+        let off = msub(add(0.0, aim[2]), 3.0, if aim[2] < 0.0 { -1.0 } else { 1.0 });
+        let (hz, az) = (sub(hit[2], off), sub(aim[2], off));
+        let (ex, ez) = (sub(cx, hit[0]), sub(az, hz));
+        let run = abs(div(mul(sqrt(madd(madd(0.0, ex, ex), ez, ez)), az), ez));
+        let straight = if run <= 3.0 {
+            1.0
+        } else {
+            let q = div(sub(run, 3.0), sub(5.0, 3.0));
+            sub(1.0, if q <= 1.0 { q } else { 1.0 })
+        };
+        let ramp = if net < 15.0 {
+            let q = div(sub(net, 9.0), sub(15.0, 9.0));
+            if q <= 1.0 { q } else { 1.0 }
+        } else {
+            let q = div(sub(net, 15.0), sub(19.0, 15.0));
+            sub(1.0, if q <= 1.0 { q } else { 1.0 })
+        };
+        mul(width, mul(ramp, mul(short, straight)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Margins;
+
+    /// Hand-worked cases for the branches no recording reaches (the live recordings cover the plain, scaled and
+    /// angled pulls bit for bit in `tests/shot_tables.rs`).
+    #[test]
+    fn inside_pulls_smashes_and_outward_topspin() {
+        let mut m = Margins::default();
+        m.lines[1][0] = [0.15, 0.0, 0.15, 0.0];
+        m.lines[3][0] = [0.15, 0.15, 0.9, 0.75];
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 2e-6);
+        // a low smash straight down the middle: the deep column's 0.75 from the baseline, unscaled (not across)
+        let got = m.inside(3, 0, true, false, 0, false, [0.0, 1.0, -10.0], [0.0, 0.0, 11.8]);
+        assert!(near(got, [0.0, 0.0, 11.135]), "{got:?}");
+        // a high smash angled 3 m: the 0.15 depth margin scaled by |uz| = 21.8 / sqrt(484.24)
+        let got = m.inside(3, 0, false, false, 0, false, [0.0, 1.0, -10.0], [3.0, 0.0, 11.8]);
+        assert!(near(got, [3.0, 0.0, 11.885 - 0.15 * 21.8 / 484.24f32.sqrt()]), "{got:?}");
+        // a topspin hit from outside the singles sideline and running further out: its point 18 m along the shot
+        // (x = 5 + 18 / sqrt(401)) is pulled to the sideline less the unscaled 0.15, the aim moved by as much
+        let got = m.inside(1, 0, false, false, 0, false, [5.0, 1.0, -10.0], [6.0, 0.0, 10.0]);
+        assert!(near(got, [6.0 + 3.965 - (5.0 + 18.0 / 401f32.sqrt()), 0.0, 10.0]), "{got:?}");
+    }
+}

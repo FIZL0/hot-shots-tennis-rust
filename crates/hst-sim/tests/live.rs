@@ -59,25 +59,28 @@ struct Replay {
     failures: Vec<String>,
 }
 
-/// Steps every recorded frame pair of a `record_live.py` file once against court 10 and compares the next frame.
+/// A `record_live.py` file as (vsync, live ball) samples.
+fn samples(data: &[u8]) -> Vec<(i32, &[u8])> {
+    data.chunks_exact(SAMPLE).map(|w| (i(w, 0), &w[4..4 + 0x290])).collect()
+}
+
+/// Steps every recorded frame pair once against `court` and compares the next frame.
 /// `poked`: vsyncs after which the recorder rewrote the ball's velocity (`--aim`); the two frames after are skipped.
-fn replay(data: &[u8], poked: &[i32], world: &hst_sim::mesh::World, materials: &[Material]) -> Replay {
-    let s: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+fn replay(s: &[(i32, &[u8])], poked: &[i32], court: usize, world: &hst_sim::mesh::World, materials: &[Material]) -> Replay {
     let mut r = Replay { exact: 0, touches: Default::default(), failures: Vec::new() };
     for w in s.windows(2) {
-        let (a, b) = (&w[0][4..4 + 0x290], &w[1][4..4 + 0x290]);
-        let vsync = i(w[1], 0);
+        let ((va, a), (vsync, b)) = (w[0], w[1]);
         // only frames the ball physically flies: consecutive vsyncs, same shot, in play (+0xa4 0 or 1)
         // and not carried (the server's toss/bounce moves it with zero velocity)
         let carried = |o: &[u8]| v3(o, 0x130) == [0.0; 3];
-        if vsync != i(w[0], 0) + 1 || i(b, 0xac) != i(a, 0xac) + 1 || a[0xa4] > 1 || b[0xa4] > 1 || carried(a) || carried(b) {
+        if vsync != va + 1 || i(b, 0xac) != i(a, 0xac) + 1 || a[0xa4] > 1 || b[0xa4] > 1 || carried(a) || carried(b) {
             continue;
         }
         if poked.iter().any(|&v| vsync == v + 1 || vsync == v + 2) {
             continue;
         }
         let (mut fl, shot) = load(a);
-        fl.step_world(&shot, &COURTS[COURT], world, materials);
+        fl.step_world(&shot, &COURTS[court], world, materials);
         let want = [v3(b, 0xe0), v3(b, 0x130)].concat();
         let got = [fl.ball.pos, fl.ball.vel].concat();
         let same = (0..6).all(|k| got[k].to_bits() == want[k].to_bits());
@@ -94,7 +97,7 @@ fn replay(data: &[u8], poked: &[i32], world: &hst_sim::mesh::World, materials: &
     r
 }
 
-fn disc() -> Option<(hst_sim::mesh::World, Vec<Material>)> {
+fn disc(court: u32) -> Option<(hst_sim::mesh::World, Vec<Material>)> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let (Ok(mut iso), Ok(cnf), Ok(bin)) = (
         Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")),
@@ -103,17 +106,17 @@ fn disc() -> Option<(hst_sim::mesh::World, Vec<Material>)> {
     ) else {
         return None;
     };
-    Some((court::world(&mut iso, COURT as u32), court::materials(&exe::Game::new(&cnf, &bin).unwrap())))
+    Some((court::world(&mut iso, court), court::materials(&exe::Game::new(&cnf, &bin).unwrap())))
 }
 
 #[test]
 fn live_ball_frames_match_the_game() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let (Ok(data), Some((world, materials))) = (std::fs::read(format!("{root}/context/live/net_s05.bin")), disc()) else {
+    let (Ok(data), Some((world, materials))) = (std::fs::read(format!("{root}/context/live/net_s05.bin")), disc(COURT as u32)) else {
         eprintln!("recording or disc missing, skipped");
         return;
     };
-    let r = replay(&data, &[], &world, &materials);
+    let r = replay(&samples(&data), &[], COURT, &world, &materials);
     eprintln!("{} frames bit-exact; contact frames by material: {:?}", r.exact, r.touches);
     assert!(r.failures.is_empty(), "{} frames diverged:\n{}", r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
     assert!(r.exact > 12000);
@@ -124,7 +127,7 @@ fn live_ball_frames_match_the_game() {
 #[test]
 fn aimed_net_cord_and_post_hits_match_the_game() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let (Ok(dir), Some((world, materials))) = (std::fs::read_dir(format!("{root}/context/live/p15")), disc()) else {
+    let (Ok(dir), Some((world, materials))) = (std::fs::read_dir(format!("{root}/context/live/p15")), disc(COURT as u32)) else {
         eprintln!("recordings or disc missing, skipped");
         return;
     };
@@ -135,7 +138,7 @@ fn aimed_net_cord_and_post_hits_match_the_game() {
         let data = std::fs::read(&path).unwrap();
         let poke = std::fs::read_to_string(path.with_extension("bin.poke")).unwrap_or_default();
         let poked: Vec<i32> = poke.lines().filter_map(|l| l.trim().parse().ok()).collect();
-        let r = replay(&data, &poked, &world, &materials);
+        let r = replay(&samples(&data), &poked, COURT, &world, &materials);
         eprintln!("{}: {} frames bit-exact; contact frames by material: {:?}", path.display(), r.exact, r.touches);
         assert!(r.failures.is_empty(), "{}: {} frames diverged:\n{}", path.display(), r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
         for (m, n) in r.touches {
@@ -145,6 +148,25 @@ fn aimed_net_cord_and_post_hits_match_the_game() {
     for m in [2, 22, 26] {
         assert!(touches.contains_key(&m), "no contact with material {m} recorded: {touches:?}");
     }
+}
+
+/// The live ball of `1p3goodcpus` (`context/fixtures/1p3goodcpus.bin`, tools/play_p2m2.py; a doubles match on court
+/// 11 with one human): every flying frame bit-exact against court 11's world, including two net-cord balls that
+/// drop over the net (vsyncs 19805, 20193) and one that falls back (21615).
+#[test]
+fn goodcpus_live_ball_matches_the_game() {
+    use hst_sim::replay::frames_live;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(data), Some((world, materials))) = (std::fs::read(format!("{root}/context/fixtures/1p3goodcpus.bin")), disc(11)) else {
+        return eprintln!("1p3goodcpus.bin or disc missing, skipped");
+    };
+    let frames = frames_live(&data);
+    assert_eq!(frames[0].global(0x422f90), 11, "court");
+    let s: Vec<(i32, &[u8])> = frames.iter().map(|f| (f.vsync() as i32, f.live_ball())).collect();
+    let r = replay(&s, &[], 11, &world, &materials);
+    eprintln!("{} frames bit-exact; contact frames by material: {:?}", r.exact, r.touches);
+    assert!(r.failures.is_empty(), "{} frames diverged:\n{}", r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
+    assert!(r.exact > 2000 && r.touches.get(&2).is_some_and(|&n| n >= 5), "{:?}", r.touches);
 }
 
 #[test]

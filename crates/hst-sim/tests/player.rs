@@ -1,6 +1,7 @@
-//! Locomotion of every player through the slot-5 doubles match (`context/fixtures/match_s05.bin`): run velocity
-//! bit-exact and the motion the game sets for standing and running players, frame by frame. Characters 0, 2, 1, 5
-//! (TParam.csv SPE/Agili/STA), all right-handed.
+//! Locomotion of every player through two doubles matches, frame by frame: run velocity bit-exact and the motion the
+//! game sets for standing and running players. Slot 5 (`context/fixtures/match_s05.bin`, court 10): characters 0, 2,
+//! 1, 5, all right-handed CPUs. `1p3goodcpus.bin` (court 11): human Carol (6) and CPUs Will (11), 2
+//! and 10; Carol and Will left-handed. Each line-up from its save state's RAM.
 
 use hst_sim::player::{Body, Facing, Scene, Stats, pad_dir, mover, stroke_stamina, turn, StanceInput, angle, base_motion, dashing, run_motion, run_speed, run_velocity, stance, stand_motion, with_tiredness};
 use hst_sim::replay::{Frame, frames_live};
@@ -18,203 +19,224 @@ fn f(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
 
-const STATS: [(i32, i32, i32, [i32; 3]); 4] = [(10, 40, 40, [8, 4, 7]), (11, 40, 40, [8, 4, 7]), (9, 40, 40, [6, 3, 7]), (12, 10, 40, [8, 6, 6])];
+/// The match recordings and their save states' RAM.
+const MATCHES: [(&str, &str); 2] = [("match_s05.bin", "slot5_ee.bin"), ("1p3goodcpus.bin", "1p3goodcpus_ee.bin")];
+
+/// A player as its save state's RAM has it: TParam's stats as the game copied them (+0x1374 speed, +0x1378 stamina,
+/// +0x137c.. dive/backhand/smash costs, +0x1388 agility, already ×1.5 in weather 2 and 3), hand +0x12b4 and the
+/// turn's per-motion pelvis rows (+0x6b0 + motion·0x40).
+struct Player {
+    s: Stats,
+    hand: f32,
+    pelvis: Vec<[f32; 2]>,
+}
+
+/// Every match present: its name, recording and line-up.
+fn matches() -> Vec<(&'static str, Vec<u8>, Vec<Player>)> {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    MATCHES
+        .iter()
+        .filter_map(|&(name, ram)| {
+            let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/{ram}"))) else {
+                eprintln!("{name} or {ram} absent, skipped");
+                return None;
+            };
+            let ru = |a: usize| u32::from_le_bytes(ram[a & 0x1ff_ffff..][..4].try_into().unwrap()) as usize;
+            let i = |a: usize| ru(a) as i32;
+            let players = (0..4)
+                .map(|p| {
+                    let pl = ru(ru(0x422f80) + 0xa8 + 4 * p);
+                    let s = Stats { speed: f(&ram, pl + 0x1374), agility: i(pl + 0x1388), stamina: i(pl + 0x1378), dive: i(pl + 0x137c), backhand: i(pl + 0x1380), smash: i(pl + 0x1384) };
+                    let pelvis = (0..48).map(|m| [f(&ram, pl + 0x6b0 + m * 0x40 + 0x20), f(&ram, pl + 0x6b0 + m * 0x40 + 0x28)]).collect();
+                    Player { s, hand: f(&ram, pl + 0x12b4), pelvis }
+                })
+                .collect();
+            Some((name, data, players))
+        })
+        .collect()
+}
 
 #[test]
-fn match_s05_locomotion() {
-    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else {
-        return eprintln!("match_s05.bin absent, skipped");
-    };
-    let frames = frames_live(&data);
-    let (mut speeds, mut motions, mut bad_speed, mut bad_motion, mut moves, mut bad_move, mut pushes) = (0, 0, 0, 0, 0, 0, 0);
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        // the recording's tail (frame 26108 on) runs the game several ticks per sample (phase timer gm+0x58)
-        if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
-            break;
-        }
-        for p in 0..4 {
-            let (spe, agi, sta, costs) = STATS[p];
-            let s = Stats::new(spe, agi, sta, costs, 0);
-            let mode = p_u8(fr, p, 0x3fa5);
-            if mode > 1 || p_u8(a, p, 0x3fa5) > 1 {
-                continue;
+fn match_locomotion() {
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let (mut speeds, mut motions, mut bad_speed, mut bad_motion, mut moves, mut bad_move, mut pushes) = (0, 0, 0, 0, 0, 0, 0);
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            // the recording's tail (frame 26108 on) runs the game several ticks per sample (phase timer gm+0x58)
+            if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
+                break;
             }
-            // the player's own half is behind its forward
-            let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
-            let (run, stamina) = (p_i32(fr, p, 0x3dfc), p_i32(fr, p, 0x3df4));
-            let target = p_v3(fr, p, 0x3dc0);
-            // the turn toward the run direction ends (flag cleared) after the motion is chosen
-            let turned = p_u8(fr, p, 0x3dd1) != 0 || p_u8(a, p, 0x3dd1) != 0;
-            if mode == 1 && target != [0.0, 0.0, fwd] && target != [-0.0, -0.0, -fwd] {
-                let v = run_velocity(target, run_speed(&s, run, stamina, 100));
-                let got = p_v3(fr, p, 0x3e00);
-                speeds += 1;
-                if v.map(f32::to_bits) != got.map(f32::to_bits) {
-                    bad_speed += 1;
-                    if bad_speed <= 10 {
-                        eprintln!("speed k={k} p={p} run={run} st={stamina}: {v:?} vs {got:?}");
+            for p in 0..4 {
+                let (s, hand) = (&lineup[p].s, lineup[p].hand);
+                let mode = p_u8(fr, p, 0x3fa5);
+                if mode > 1 || p_u8(a, p, 0x3fa5) > 1 {
+                    continue;
+                }
+                // the player's own half is behind its forward
+                let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
+                let (run, stamina) = (p_i32(fr, p, 0x3dfc), p_i32(fr, p, 0x3df4));
+                let target = p_v3(fr, p, 0x3dc0);
+                // the turn toward the run direction ends (flag cleared) after the motion is chosen
+                let turned = p_u8(fr, p, 0x3dd1) != 0 || p_u8(a, p, 0x3dd1) != 0;
+                if mode == 1 && target != [0.0, 0.0, fwd] && target != [-0.0, -0.0, -fwd] {
+                    let v = run_velocity(target, run_speed(s, run, stamina, 100));
+                    let got = p_v3(fr, p, 0x3e00);
+                    speeds += 1;
+                    if v.map(f32::to_bits) != got.map(f32::to_bits) {
+                        bad_speed += 1;
+                        if bad_speed <= 10 {
+                            eprintln!("{name} speed k={k} p={p} run={run} st={stamina}: {v:?} vs {got:?}");
+                        }
+                    }
+                }
+                let current = base_motion(p_i32(a, p, 0x3df0));
+                let want = p_i32(fr, p, 0x3df0);
+                // only frames where the game set a stand/run motion (when it does is the player state machine's call)
+                if want >= 16 {
+                    continue;
+                }
+                // the mover: partner push, step, bounds (the partner has moved already if it updates first)
+                let mate = p ^ 2;
+                let mate_pos = if mate < p { fr.player_pos(mate) } else { a.player_pos(mate) };
+                let ticked = f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) == 1 && fr.gm()[0x55] == a.gm()[0x55];
+                let delta = if mode == 1 { p_v3(fr, p, 0x3e00) } else { [0.0; 3] };
+                let moved = mover(a.player_pos(p), delta, fwd, Some(mate_pos), false);
+                moves += ticked as i32;
+                pushes += (ticked && mover(a.player_pos(p), delta, fwd, None, false) != moved) as i32;
+                if ticked && [moved[0], moved[2]].map(f32::to_bits) != [fr.player_pos(p)[0], fr.player_pos(p)[2]].map(f32::to_bits) {
+                    bad_move += 1;
+                    if bad_move <= 20 {
+                        eprintln!("{name} move k={k} p={p} mode={mode}: {moved:?} vs {:?} from {:?} mate {mate_pos:?}", fr.player_pos(p), a.player_pos(p));
+                    }
+                }
+                let m = if mode == 1 {
+                    let d = if turned { p_v3(a, p, 0x3d60) } else { target };
+                    run_motion(current, angle(d, fwd, hand), dashing(s, run))
+                } else {
+                    let d = if turned { p_v3(a, p, 0x3d60) } else { [0.0, 0.0, fwd] };
+                    // the hitter changes the ball during its own update: players before it still see the old one
+                    let (old, new) = (a.global(0x423058), fr.global(0x423058));
+                    let before = old != new && (p as i32) < new;
+                    let ball = if before { a.live_ball() } else { fr.live_ball() };
+                    stand_motion(angle(d, fwd, hand), || {
+                        stance(&StanceInput {
+                            players: 4,
+                            phase: fr.gm()[0x55],
+                            // players update in index order: the hitter sets it during its own update
+                            last_hitter: if before { old } else { new },
+                            team: p as i32,
+                            current,
+                            watching: true,
+                            pos: fr.player_pos(p),
+                            ball: [f(ball, 0xe0), f(ball, 0xe4), f(ball, 0xe8)],
+                            ball_dir: [f(ball, 0x140), f(ball, 0x144), f(ball, 0x148)],
+                            hand,
+                        })
+                    })
+                };
+                motions += 1;
+                if with_tiredness(m, stamina) != want {
+                    bad_motion += 1;
+                    if bad_motion <= 10 {
+                        eprintln!("{name} motion k={k} p={p} mode={mode} current={current} turned={turned}: {m} vs {want}");
                     }
                 }
             }
-            let current = base_motion(p_i32(a, p, 0x3df0));
-            let want = p_i32(fr, p, 0x3df0);
-            // only frames where the game set a stand/run motion (when it does is the player state machine's call)
-            if want >= 16 {
-                continue;
-            }
-            // the mover: partner push, step, bounds (the partner has moved already if it updates first)
-            let mate = p ^ 2;
-            let mate_pos = if mate < p { fr.player_pos(mate) } else { a.player_pos(mate) };
-            let ticked = f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) == 1 && fr.gm()[0x55] == a.gm()[0x55];
-            let delta = if mode == 1 { p_v3(fr, p, 0x3e00) } else { [0.0; 3] };
-            let moved = mover(a.player_pos(p), delta, fwd, Some(mate_pos), false);
-            moves += ticked as i32;
-            pushes += (ticked && mover(a.player_pos(p), delta, fwd, None, false) != moved) as i32;
-            if ticked && [moved[0], moved[2]].map(f32::to_bits) != [fr.player_pos(p)[0], fr.player_pos(p)[2]].map(f32::to_bits) {
-                bad_move += 1;
-                if bad_move <= 20 {
-                    eprintln!("move k={k} p={p} mode={mode}: {moved:?} vs {:?} from {:?} mate {mate_pos:?}", fr.player_pos(p), a.player_pos(p));
-                }
-            }
-            let m = if mode == 1 {
-                let d = if turned { p_v3(a, p, 0x3d60) } else { target };
-                run_motion(current, angle(d, fwd, 1.0), dashing(&s, run))
-            } else {
-                let d = if turned { p_v3(a, p, 0x3d60) } else { [0.0, 0.0, fwd] };
-                // the hitter changes the ball during its own update: players before it still see the old one
-                let (old, new) = (a.global(0x423058), fr.global(0x423058));
-                let before = old != new && (p as i32) < new;
-                let ball = if before { a.live_ball() } else { fr.live_ball() };
-                stand_motion(angle(d, fwd, 1.0), || {
-                    stance(&StanceInput {
-                        players: 4,
-                        phase: fr.gm()[0x55],
-                        // players update in index order: the hitter sets it during its own update
-                        last_hitter: if before { old } else { new },
-                        team: p as i32,
-                        current,
-                        watching: true,
-                        pos: fr.player_pos(p),
-                        ball: [f(ball, 0xe0), f(ball, 0xe4), f(ball, 0xe8)],
-                        ball_dir: [f(ball, 0x140), f(ball, 0x144), f(ball, 0x148)],
-                        hand: 1.0,
-                    })
-                })
-            };
-            motions += 1;
-            if with_tiredness(m, stamina) != want {
-                bad_motion += 1;
-                if bad_motion <= 10 {
-                    eprintln!("motion k={k} p={p} mode={mode} current={current} turned={turned}: {m} vs {want}");
-                }
-            }
         }
+        eprintln!("{name}: speed {speeds} checked, {bad_speed} off; motion {motions} checked, {bad_motion} off; moves {moves} checked ({pushes} partner pushes), {bad_move} off");
+        assert!(speeds > 300 && motions > 3000 && moves > 3000, "{name}");
+        assert_eq!((bad_speed, bad_motion, bad_move), (0, 0, 0), "{name}");
     }
-    eprintln!("speed {speeds} checked, {bad_speed} off; motion {motions} checked, {bad_motion} off; moves {moves} checked ({pushes} partner pushes: none in this match), {bad_move} off");
-    assert!(speeds > 1000 && motions > 10000 && moves > 10000);
-    assert_eq!((bad_speed, bad_motion, bad_move), (0, 0, 0));
 }
 
 /// Every stamina drop at a stroke's contact (all but the running drain) is the stroke's cost.
 #[test]
-fn match_s05_stroke_stamina() {
-    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else {
-        return eprintln!("match_s05.bin absent, skipped");
-    };
-    let frames = frames_live(&data);
-    let mut n = 0;
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        for p in 0..4 {
-            let (spe, agi, sta, costs) = STATS[p];
-            let s = Stats::new(spe, agi, sta, costs, 0);
-            let (before, after) = (p_i32(a, p, 0x3df4), p_i32(fr, p, 0x3df4));
-            let drained = before - after == 1 && p_i32(fr, p, 0x3df8) == 0;
-            if after >= before || drained {
-                continue;
+fn match_stroke_stamina() {
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let mut n = 0;
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            for p in 0..4 {
+                let (s, hand) = (&lineup[p].s, lineup[p].hand);
+                let (before, after) = (p_i32(a, p, 0x3df4), p_i32(fr, p, 0x3df4));
+                let drained = before - after == 1 && p_i32(fr, p, 0x3df8) == 0;
+                if after >= before || drained {
+                    continue;
+                }
+                // +0x3f50 bit 0: the ball on the right-hander's forehand side, bit 1 the left-hander's
+                let forehand = p_i32(fr, p, 0x3f50) & (if hand < 0.0 { 2 } else { 1 }) != 0;
+                assert_eq!(stroke_stamina(s, before, p_u8(fr, p, 0x3ec1), forehand, 0), after, "{name} k={k} p={p}");
+                n += 1;
             }
-            // +0x3f50 bit 0: the ball on the right-hander's forehand side
-            let forehand = p_i32(fr, p, 0x3f50) & 1 != 0;
-            assert_eq!(stroke_stamina(&s, before, p_u8(fr, p, 0x3ec1), forehand, 0), after, "k={k} p={p}");
-            n += 1;
         }
+        eprintln!("{name}: {n} stroke costs");
+        assert!(n > 10, "{name} {n}");
     }
-    assert!(n > 60, "{n}");
 }
 
 /// The body's facing every frame: snap within 22.5°, else a 22.5° step the way the game decides. The per-motion
-/// pelvis rows are the game's own (slot-5 RAM, player + 0x6b0 + motion·0x40).
+/// pelvis rows are the game's own (save-state RAM, player + 0x6b0 + motion·0x40).
 #[test]
-fn match_s05_facing() {
-    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
-        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
-    };
-    let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
-    let gm = ru(0x422f80);
-    let pelvis: Vec<Vec<[f32; 2]>> = (0..4)
-        .map(|p| {
-            let obj = ru(gm + 0xa8 + 4 * p);
-            (0..48).map(|m| [f(&ram, obj + 0x6b0 + m * 0x40 + 0x20), f(&ram, obj + 0x6b0 + m * 0x40 + 0x28)]).collect()
-        })
-        .collect();
-    let frames = frames_live(&data);
-    let p_v4 = |fr: Frame, p: usize, off: usize| [0, 4, 8, 12].map(|o| fr.player_f32(p, off + o));
-    let (mut n, mut steps, mut bad) = (0, 0, 0);
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
-            break;
-        }
-        if f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 || fr.gm()[0x55] != a.gm()[0x55] {
-            continue;
-        }
-        for p in 0..4 {
-            // the turn runs in the play state (+0x3fa4 = 0), not while serving or after the point
-            if p_u8(fr, p, 0x3fa4) != 0 {
+fn match_facing() {
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let p_v4 = |fr: Frame, p: usize, off: usize| [0, 4, 8, 12].map(|o| fr.player_f32(p, off + o));
+        let (mut n, mut steps, mut bad) = (0, 0, 0);
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
+                break;
+            }
+            if f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 || fr.gm()[0x55] != a.gm()[0x55] {
                 continue;
             }
-            let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
-            let mut face = Facing {
-                dir: p_v4(a, p, 0x3d60),
-                turned: p_u8(fr, p, 0x3dd1) != 0,
-                reversed: p_u8(fr, p, 0x3dd0) != 0,
-                way: p_i32(a, p, 0x3dd4),
-                cross: p_v4(a, p, 0x3de0),
-            };
-            let (start, now) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
-            if !(0..48).contains(&start) || !(0..48).contains(&now) {
-                continue;
-            }
-            let target = p_v4(fr, p, 0x3dc0);
-            // a stroke or dive starting this frame squares the body up first (its target is set alike)
-            let mode = p_u8(fr, p, 0x3fa5);
-            if mode >= 2 && mode != p_u8(a, p, 0x3fa5) {
-                face.dir = target;
-            }
-            let stepping = target.map(f32::to_bits) != face.dir.map(f32::to_bits);
-            turn(&mut face, target, fwd, 1.0, start as usize, base_motion(start), now as usize, &pelvis[p]);
-            n += 1;
-            steps += stepping as i32;
-            let want = (p_v4(fr, p, 0x3d60), p_i32(fr, p, 0x3dd4), p_v4(fr, p, 0x3de0));
-            if (face.dir.map(f32::to_bits), face.way, face.cross.map(f32::to_bits)) != (want.0.map(f32::to_bits), want.1, want.2.map(f32::to_bits)) {
-                bad += 1;
-                if bad <= 10 {
-                    eprintln!("facing k={k} p={p} start={start:#x} now={now:#x}: {:?} way {} vs {:?} way {} (cross {:?} vs {:?})", face.dir, face.way, want.0, want.1, face.cross, want.2);
+            for p in 0..4 {
+                // the turn runs in the play state (+0x3fa4 = 0), not while serving or after the point
+                if p_u8(fr, p, 0x3fa4) != 0 {
+                    continue;
+                }
+                let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
+                let mut face = Facing {
+                    dir: p_v4(a, p, 0x3d60),
+                    turned: p_u8(fr, p, 0x3dd1) != 0,
+                    reversed: p_u8(fr, p, 0x3dd0) != 0,
+                    way: p_i32(a, p, 0x3dd4),
+                    cross: p_v4(a, p, 0x3de0),
+                };
+                let (start, now) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
+                if !(0..48).contains(&start) || !(0..48).contains(&now) {
+                    continue;
+                }
+                let target = p_v4(fr, p, 0x3dc0);
+                // a stroke or dive starting this frame squares the body up first (its target is set alike)
+                let mode = p_u8(fr, p, 0x3fa5);
+                if mode >= 2 && mode != p_u8(a, p, 0x3fa5) {
+                    face.dir = target;
+                }
+                let stepping = target.map(f32::to_bits) != face.dir.map(f32::to_bits);
+                turn(&mut face, target, fwd, lineup[p].hand, start as usize, base_motion(start), now as usize, &lineup[p].pelvis);
+                n += 1;
+                steps += stepping as i32;
+                let want = (p_v4(fr, p, 0x3d60), p_i32(fr, p, 0x3dd4), p_v4(fr, p, 0x3de0));
+                if (face.dir.map(f32::to_bits), face.way, face.cross.map(f32::to_bits)) != (want.0.map(f32::to_bits), want.1, want.2.map(f32::to_bits)) {
+                    bad += 1;
+                    if bad <= 10 {
+                        eprintln!("{name} facing k={k} p={p} start={start:#x} now={now:#x}: {:?} way {} vs {:?} way {} (cross {:?} vs {:?})", face.dir, face.way, want.0, want.1, face.cross, want.2);
+                    }
                 }
             }
         }
+        eprintln!("{name}: facing {n} checked ({steps} turning), {bad} off");
+        assert!(steps > 100, "{name}");
+        assert_eq!(bad, 0, "{name}");
     }
-    eprintln!("facing {n} checked ({steps} turning), {bad} off");
-    assert!(steps > 100);
-    assert_eq!(bad, 0);
 }
 
 /// The turn's per-motion pelvis rows computed from the disc (skeleton + each motion's first keys) agree with
-/// the game's table in slot-5 RAM, and in P7b's per-character dumps (`p7b_cNN_pelvis.bin`) for all 14.
+/// the game's table in slot-5 RAM and `1p3goodcpus_ee.bin` (characters 6, 11, 2, 10), and in P7b's per-character
+/// dumps (`p7b_cNN_pelvis.bin`) for all 14.
 #[test]
 fn pelvis_table_from_disc() {
     use hst_data::{ani, iso::Iso, mdl, xb::Archive};
@@ -227,6 +249,10 @@ fn pelvis_table_from_disc() {
     let gm = ru(0x422f80);
     let mut worst = 0.0f32;
     let mut tables: Vec<(usize, Vec<u8>)> = [(0, 0), (1, 2), (2, 1), (3, 5)].map(|(p, c)| (c, ram[ru(gm + 0xa8 + 4 * p) + 0x6b0..][..48 * 0x40].to_vec())).into();
+    if let Ok(ram) = std::fs::read(format!("{dir}/1p3goodcpus_ee.bin")) {
+        let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
+        tables.extend((0..4).map(|p| ru(ru(0x422f80) + 0xa8 + 4 * p)).map(|pl| (ru(pl + 0x12bc), ram[pl + 0x6b0..][..48 * 0x40].to_vec())));
+    }
     tables.extend((0..14).filter_map(|c| Some((c, std::fs::read(format!("{dir}/p7b_c{c:02}_pelvis.bin")).ok()?))));
     for (c, table) in tables {
         let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
@@ -258,6 +284,7 @@ fn pelvis_table_from_disc() {
 /// only when the play state starts), position, velocity, motion and facing bit-exact. Then all 14 characters as P1
 /// with their own bodies (`research/p7b_record.py`: picked on the doubles character select, whose P1 has the
 /// "switch hand" toggle on, so each plays with the hand opposite to TParam's), each with its own dumped pelvis rows.
+/// Last the human player 0 of `1p3goodcpus.bin`: Carol left-handed, against three CPUs, pelvis rows from its RAM.
 #[test]
 fn human_pad_replay() {
     use hst_data::{iso::Iso, xb::Archive};
@@ -286,6 +313,9 @@ fn human_pad_replay() {
             runs.push((format!("p7b_c{ch:02}.bin"), ch, rows(&pel), -hand(ch)));
         }
     }
+    for (name, _, lineup) in matches().into_iter().filter(|m| m.0 == "1p3goodcpus.bin") {
+        runs.push((name.into(), 6, lineup[0].pelvis.clone(), lineup[0].hand));
+    }
     for (file, ch, pelvis, hand) in runs {
         let Ok(rec) = std::fs::read(format!("{dir}/{file}")) else {
             eprintln!("{file} absent, skipped");
@@ -299,8 +329,9 @@ fn human_pad_replay() {
         for k in 1..frames.len() {
             let (a, fr) = (frames[k - 1], frames[k]);
             let live = |x: Frame| p_u8(x, 0, 0x3fa4) == 0 && p_u8(x, 0, 0x3fa5) <= 1;
-            // a face button in play starts a swing (P5), not running: skip it and resync after
-            let swing = fr.pad(0).buttons & 0xf000 != 0;
+            // a face button in play starts a swing (P5), not running: skip it and resync after (a held button steers
+            // the approach until the frame after its release, when the stroke starts)
+            let swing = (a.pad(0).buttons | fr.pad(0).buttons) & 0xf000 != 0;
             if !live(a) || !live(fr) || swing || f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 {
                 body = None;
                 continue;
@@ -504,12 +535,15 @@ fn reach_stats_from_tparam() {
 
 /// The server's baseline walk before the toss (play state 1): Carol in slot 4's next serve, walked by a vpad
 /// script (far and centre-mark limits, partial stick, dead square, diagonals, d-pad), and the same with her hand
-/// poked to −1 (`research/p7d_record.py`). Position and motion bit-exact every frame.
+/// poked to −1 (`research/p7d_record.py`); then the left-handed human Carol's serves in `1p3goodcpus.bin`. Position and
+/// motion bit-exact every frame.
 #[test]
 fn serve_walk_replay() {
     use hst_sim::player::serve_walk;
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    for (file, hand) in [("p7d_s04.bin", 1.0), ("p7d_s04_lefty.bin", -1.0)] {
+    let mut runs = vec![("p7d_s04.bin", 1.0, 300), ("p7d_s04_lefty.bin", -1.0, 300)];
+    runs.extend(matches().into_iter().filter(|m| m.0 == "1p3goodcpus.bin").map(|(name, _, lineup)| (name, lineup[0].hand, 0)));
+    for (file, hand, least) in runs {
         let Ok(rec) = std::fs::read(format!("{dir}/{file}")) else {
             eprintln!("{file} absent, skipped");
             continue;
@@ -538,7 +572,7 @@ fn serve_walk_replay() {
             }
         }
         eprintln!("{file}: {n} frames, {walked} walked, {bad} off");
-        assert!(walked > 300);
+        assert!(walked >= least, "{file}");
         assert_eq!(bad, 0, "{file}");
     }
 }

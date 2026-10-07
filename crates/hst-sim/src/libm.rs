@@ -1,4 +1,4 @@
-//! The game's `sinf`, `cosf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
+//! The game's `sinf`, `cosf`, `tanf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
 //! rounding of the constants), on PS2 float arithmetic.
 
 use crate::ps2::{add, div, mul, sub};
@@ -132,6 +132,58 @@ pub fn cosf(x: f32) -> f32 {
         2 => -k_cos(y0, y1),
         _ => k_sin(y0, y1, true),
     }
+}
+
+const TAN_T: [u32; 13] = [
+    0x3eaaaaab, 0x3e088889, 0x3d5d0dd1, 0x3cb327a3, 0x3c11371e, 0x3b6b6916, 0x3abede47, 0x3a1a26c7, 0x398137b8, 0x38a3f445,
+    0x3895c07a, 0xb79bae5e, 0x37d95384,
+];
+
+/// __kernel_tanf(x, y, iy): tan(x + y) for iy 1, −1/tan for iy −1.
+fn k_tan(x: f32, y: f32, iy: i32) -> f32 {
+    let hx = x.to_bits() as i32;
+    let ix = hx & 0x7fff_ffff;
+    if ix <= 0x317f_ffff && trunc_i(x) == 0 {
+        return if ix | (iy + 1) == 0 { div(1.0, x.abs()) } else if iy == 1 { x } else { div(-1.0, x) };
+    }
+    let big = ix > 0x3f2c_a13f;
+    let (x, y) = if big {
+        let (x, y) = if hx < 0 { (-x, -y) } else { (x, y) };
+        (add(sub(f(0x3f49_0fda), x), sub(f(0x3322_2167), y)), 0.0)
+    } else {
+        (x, y)
+    };
+    let t = TAN_T.map(f);
+    let z = mul(x, x);
+    let w = mul(z, z);
+    let s = mul(z, x);
+    let r = add(t[1], mul(w, add(t[3], mul(w, add(t[5], mul(w, add(t[7], mul(w, add(t[9], mul(w, t[11]))))))))));
+    let v = mul(z, add(t[2], mul(w, add(t[4], mul(w, add(t[6], mul(w, add(t[8], mul(w, add(t[10], mul(w, t[12])))))))))));
+    let r = add(add(y, mul(z, add(mul(s, add(r, v)), y))), mul(t[0], s));
+    let w = add(x, r);
+    if big {
+        let v = iy as f32;
+        let sign = (1 - ((hx >> 30) & 2)) as f32;
+        return mul(sign, sub(v, { let d = sub(x, sub(div(mul(w, w), add(w, v)), r)); add(d, d) }));
+    }
+    if iy == 1 {
+        return w;
+    }
+    // −1/w, the reciprocal refined from its high half
+    let chop = |a: f32| f(a.to_bits() & 0xffff_f000);
+    let z = chop(w);
+    let v = sub(r, sub(z, x));
+    let a = div(-1.0, w);
+    let t = chop(a);
+    add(t, mul(a, add(add(mul(t, z), 1.0), mul(t, v))))
+}
+
+pub fn tanf(x: f32) -> f32 {
+    if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fda {
+        return k_tan(x, 0.0, 1);
+    }
+    let (n, y0, y1) = rem_pio2(x);
+    k_tan(y0, y1, 1 - ((n & 1) << 1))
 }
 
 const ATAN_HI: [u32; 4] = [0x3eed6338, 0x3f490fda, 0x3f7b985d, 0x3fc90fda];

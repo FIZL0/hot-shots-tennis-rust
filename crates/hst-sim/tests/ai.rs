@@ -32,23 +32,32 @@ fn table_equals_ram() {
     assert_eq!(table.len(), ROWS);
 }
 
+/// The rows the game gave each player: slot 5's bots in outfit 0, and `1p3goodcpus` (EE RAM of its save state,
+/// `context/fixtures/1p3goodcpus_ee.bin`): Carol, Will, 2 and 10 in outfits 9, 9, 4, 9, the hardest block.
 #[test]
 fn bots_get_their_rows() {
-    let Some((ram, _)) = load() else { return eprintln!("RAM dump or disc missing, skipped") };
-    let gm = word(&ram, 0x422f80);
-    for i in 0..4 {
-        // the menu's player slot: character, outfit, …, setup word at +8
-        let slot = 0x2ef7f4 + 12 * i;
-        let (character, outfit) = (ram[slot], ram[slot + 1]);
-        let setup = word(&ram, slot + 8) as u32;
-        assert_eq!(setup & 0xff, menu_row(character, outfit) as u32, "player {i} setup row");
-        // the AI object (player +0x80): row pointer, level, strategy byte, reach
-        let ai = word(&ram, word(&ram, gm + 0xa8 + 4 * i) + 0x80);
-        let c = Choice::new(setup, character, true);
-        assert_eq!(TABLE + c.row * RECORD, word(&ram, ai + 12), "player {i} row");
-        assert_eq!(c.level, ram[ai + 16], "player {i} level");
-        assert_eq!(c.strategy, ram[ai + 17], "player {i} strategy");
-        assert_eq!(c.reach.to_bits(), word(&ram, ai + 20) as u32, "player {i} reach");
+    let Some((s05, _)) = load() else { return eprintln!("RAM dump or disc missing, skipped") };
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let good = std::fs::read(format!("{root}/context/fixtures/1p3goodcpus_ee.bin"));
+    if good.is_err() {
+        eprintln!("1p3goodcpus_ee.bin absent, only slot 5");
+    }
+    for ram in [Some(s05), good.ok()].into_iter().flatten() {
+        let gm = word(&ram, 0x422f80);
+        for i in 0..4 {
+            // the menu's player slot: character, outfit, …, setup word at +8
+            let slot = 0x2ef7f4 + 12 * i;
+            let (character, outfit) = (ram[slot], ram[slot + 1]);
+            let setup = word(&ram, slot + 8) as u32;
+            assert_eq!(setup & 0xff, menu_row(character, outfit) as u32, "player {i} setup row");
+            // the AI object (player +0x80): row pointer, level, strategy byte, reach
+            let ai = word(&ram, word(&ram, gm + 0xa8 + 4 * i) + 0x80);
+            let c = Choice::new(setup, character, true);
+            assert_eq!(TABLE + c.row * RECORD, word(&ram, ai + 12), "player {i} row");
+            assert_eq!(c.level, ram[ai + 16], "player {i} level");
+            assert_eq!(c.strategy, ram[ai + 17], "player {i} strategy");
+            assert_eq!(c.reach.to_bits(), word(&ram, ai + 20) as u32, "player {i} reach");
+        }
     }
 }
 

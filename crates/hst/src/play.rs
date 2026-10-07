@@ -241,7 +241,8 @@ struct Game {
     rally_tables: Vec<[Vec<Table>; 2]>,
     /// Per player: the character's stroke and volley shot records (classes 1, 2) by kind, for their spins.
     rally_records: Vec<[[[f32; 13]; 5]; 2]>,
-    serve_data: ServeData,
+    /// Per player: the serve (see `serve_data`).
+    serve_data: Vec<ServeData>,
     /// The serve in progress (server's toss and swing).
     serving: Serving,
     reach: Reach,
@@ -263,6 +264,8 @@ struct Game {
     shots: i32,
     /// Line tolerance from the game program.
     line_margin: f32,
+    /// How far inside the lines a rally shot's aim is pulled, from the game program.
+    margins: hst_sim::shot::Margins,
     post: Option<PostPoint>,
     /// A human pressed a face button while the point is over (`post_press`), for the next simulation tick.
     post_press: bool,
@@ -566,7 +569,8 @@ fn rally_spin(g: &mut Game, who: usize, class: u8, kind: i32, at: V3, target: V3
     spin
 }
 
-/// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from the hitter's own character tables.
+/// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from player `who`'s character tables (the
+/// hitter's own, or on a counter the incoming hitter's).
 fn rally_lookup(g: &Game, who: usize, class: u8, kind: i32, at: V3, target: V3) -> hst_sim::shot::Lookup {
     let (volley, k) = (class == 2, kind as usize);
     let bounds = if volley {
@@ -622,8 +626,9 @@ fn character_stats(iso: &mut Iso, n: usize) -> Stats {
     )
 }
 
-/// A computer player's AIParam.csv row: character `n` in outfit 0, as an exhibition match picks it.
-fn ai_params(iso: &mut Iso, n: usize, doubles: bool) -> hst_sim::ai::AiParams {
+/// A computer player's AIParam.csv row: character `n` in `outfit`, as an exhibition match picks it (outfits 4 and 9
+/// take the hardest block).
+fn ai_params(iso: &mut Iso, n: usize, outfit: usize, doubles: bool) -> hst_sim::ai::AiParams {
     let data = iso
         .read("PCDATA/PCDATA.XB")
         .expect("character archive on disc");
@@ -634,7 +639,7 @@ fn ai_params(iso: &mut Iso, n: usize, doubles: bool) -> hst_sim::ai::AiParams {
         .find(|e| e.name.to_ascii_lowercase().ends_with("aiparam.csv"))
         .expect("AIParam.csv");
     let row =
-        hst_sim::ai::Choice::new(hst_sim::ai::menu_row(n as u8, 0) as u32, n as u8, doubles).row;
+        hst_sim::ai::Choice::new(hst_sim::ai::menu_row(n as u8, outfit as u8) as u32, n as u8, doubles).row;
     hst_sim::ai::AiParams::table(&arc.read(e).expect("AIParam.csv bytes"))[row]
 }
 
@@ -668,8 +673,9 @@ fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     }
 }
 
-/// Character 0's serve: heights from TParam.csv, the rest measured on character 0 (see `ServeData`).
-fn serve_data(iso: &mut Iso) -> ServeData {
+/// A player's serve: the toss hand and racket from the character's motions, heights from TParam.csv, the rest
+/// measured on character 0 (see `ServeData`).
+fn serve_data(iso: &mut Iso, data: &CharacterData) -> ServeData {
     let row = tparam_row(iso);
     let cm = |i: usize| -> [f32; 3] {
         let v: Vec<f32> = row[i]
@@ -679,24 +685,28 @@ fn serve_data(iso: &mut Iso) -> ServeData {
         [v[0], v[1], v[2]]
     };
     let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
-    // ponytail: timing and depth-bias tables (+0x1644/+0x1774, +0x1554/+0x1684), toss hand/apex drift (toss
-    // animation), mistiming error (0x3fc760, skill level 0) and the serve angle (+0x130c) are character 0's
-    // measured values; their sources are the motion data and the character tables (P3/P8)
+    // ponytail: timing and depth-bias tables (+0x1644/+0x1774, +0x1554/+0x1684), mistiming error (by
+    // skill level 0) and the serve angle (+0x130c) are character 0's measured values; their sources are the
+    // character tables (P3/P8)
     let grades = vec![
         0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4,
     ];
     let bias = vec![
         -8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16,
     ];
+    let toss = |k: usize| {
+        serve::toss_setup(&data.skeleton, &data.motions[&k], &data.motions[&(k + 2)])
+    };
+    let ((hand_over, racket_over), (hand_under, racket_under)) = (toss(0x23), toss(0x24));
     ServeData {
         over: cm(65),
         under: cm(66),
         strong_grades: grades.clone(),
         weak_grades: grades,
-        hand_over: [0.144, -1.546, 0.12],
-        hand_under: [0.016, -0.774, 0.271],
-        apex_drift_over: [-0.133, 0.15],
-        apex_drift_under: [0.184, 0.033],
+        hand_over,
+        hand_under,
+        racket_over,
+        racket_under,
         miss: [50, 30, 100],
         strong_bias: bias.clone(),
         weak_bias: bias,
@@ -861,14 +871,14 @@ fn smash_heights(iso: &mut Iso, n: usize) -> [f32; 2] {
     [v[0], v[1]]
 }
 
-/// Line margin, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
+/// Line margin, rally aim margins, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
 /// and the umpire.
 #[allow(clippy::type_complexity)]
 fn disc(
     iso: &mut Iso,
     stage: Option<u32>,
 ) -> (
-    f32,
+    (f32, hst_sim::shot::Margins),
     ScoreboardTiming,
     (World, Vec<Material>),
     ShotParams,
@@ -892,8 +902,9 @@ fn disc(
         game.umpire_words(0, 4, 0),
         [0.0; 3],
     );
+    let (lines, angle) = game.court_margins();
     (
-        game.line_margin(),
+        (game.line_margin(), hst_sim::shot::Margins { lines, angle }),
         game.scoreboard_timing(0, 4),
         (court::world(iso, n), court::materials(&game)),
         params,
@@ -960,7 +971,7 @@ fn setup(
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
-    let (line_margin, board, world, shot_params, umpire) = disc(&mut iso, args.stage);
+    let ((line_margin, margins), board, world, shot_params, umpire) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
     let reach = reach(&mut iso);
     let mut game = Game {
@@ -969,7 +980,7 @@ fn setup(
         smash_tables: Vec::new(),
         rally_tables: Vec::new(),
         rally_records: Vec::new(),
-        serve_data: serve_data(&mut iso),
+        serve_data: Vec::new(),
         serving: Serving::default(),
         reach,
         flight: Flight::new(
@@ -1000,6 +1011,7 @@ fn setup(
         rally: Rally::default(),
         shots: 0,
         line_margin,
+        margins,
         post: None,
         post_press: false,
         board,
@@ -1051,19 +1063,20 @@ fn setup(
     let Ok(root) = root.single() else { return };
     // the characters on court, from the disc (each loaded once)
     let mut voices = Vec::new();
-    let mut loaded: std::collections::HashMap<usize, std::sync::Arc<CharacterData>> =
+    let mut loaded: std::collections::HashMap<(usize, usize), std::sync::Arc<CharacterData>> =
         Default::default();
     for i in 0..n {
         // default line-up: player 1 is Carol (character 6), then characters 1, 2, 3
         let c = args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]);
-        let data = match loaded.get(&c) {
+        let outfit = args.outfits.get(i).copied().unwrap_or(0);
+        let data = match loaded.get(&(c, outfit)) {
             Some(d) => d.clone(),
             None => {
                 let d = std::sync::Arc::new(
                     character::load_disc(
                         &mut iso,
                         c,
-                        0,
+                        outfit,
                         &mut meshes,
                         &mut materials,
                         &mut images,
@@ -1071,13 +1084,13 @@ fn setup(
                     )
                     .unwrap_or_else(|e| panic!("character {c}: {e}")),
                 );
-                loaded.insert(c, d.clone());
+                loaded.insert((c, outfit), d.clone());
                 d
             }
         };
         game.players[i].hand = character_hand(&mut iso, c);
         game.players[i].stats = character_stats(&mut iso, c);
-        game.players[i].ai = ai_params(&mut iso, c, n == 4);
+        game.players[i].ai = ai_params(&mut iso, c, outfit, n == 4);
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
@@ -1093,6 +1106,7 @@ fn setup(
         game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
+        game.serve_data.push(serve_data(&mut iso, &data));
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
         commands
@@ -1426,7 +1440,23 @@ fn strike(
         "player {who} struck its own team's ball"
     );
     let at = g.flight.ball.pos;
-    let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data)) as usize;
+    let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data[who])) as usize;
+    // ponytail: framed/dull mis-hits are not modelled (P3); the counter's swing-start z is taken at the strike
+    let inside_high = kind < 2 && g.players[who].pos[2].abs() < 6.4 && at[1] >= 0.6;
+    let power_gap = g.finish.strike(who, branch, kind, offset, g.players.len(), inside_high);
+    // a counter launches from the incoming hitter's tables and shot record, as the original
+    let src = match power_gap {
+        Some(_) if g.last_hitter >= 0 => g.last_hitter as usize,
+        _ => who,
+    };
+    // a rally shot's aim is pulled inside the lines before anything uses it (the timing scatter comes after);
+    // ponytail: the smash's deep mode and the powered shots' unscaled margins are not modelled (low, special false)
+    let target = if class == 0 {
+        target
+    } else {
+        let doubles = g.rules.players > 2;
+        g.margins.inside(class, kind, false, doubles, g.chars[src] as usize, false, at, target)
+    };
     let (vel, frames) = if class == 0 {
         let (table, _) = &g.serve_tables[who][weak][kind as usize];
         serve::launch(
@@ -1446,7 +1476,7 @@ fn strike(
                 target,
             )
         } else {
-            rally_lookup(g, who, class, kind, at, target)
+            rally_lookup(g, src, class, kind, at, target)
         };
         (launch(at, target, l.elevation, l.speed), l.frames)
     };
@@ -1471,9 +1501,6 @@ fn strike(
         g.score.receiver,
         g.flight.contacts,
     );
-    // ponytail: framed/dull mis-hits are not modelled (P3); the counter's swing-start z is taken at the strike
-    let inside_high = kind < 2 && g.players[who].pos[2].abs() < 6.4 && at[1] >= 0.6;
-    let power_gap = g.finish.strike(who, branch, kind, offset, g.players.len(), inside_high);
     let hit = sound::Hit {
         power_gap,
         branch,
@@ -1506,7 +1533,7 @@ fn strike(
     let spin = match class {
         0 => g.serve_tables[who][weak][kind as usize].1,
         3 => 5f32.to_radians(),
-        _ => rally_spin(g, who, class, kind, at, target),
+        _ => rally_spin(g, src, class, kind, at, target),
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     ai_heard_hit(g, who, branch, vel);
@@ -1597,7 +1624,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         if s.t < serve::TOSS_RELEASE {
             hold_ball(g);
         } else {
-            let (hand, apex) = serve::toss_points(&g.serve_data, toss, pos, end);
+            let (hand, apex) = serve::toss_points(&g.serve_data[i], toss, &player_matrix(&g.players[i]));
             g.flight = Flight::new(
                 Ball {
                     pos: hand,
@@ -1623,8 +1650,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             };
             if allowed {
                 g.players[i].missed = false;
-                let grades = g.serve_data.grades(toss).to_vec();
-                match serve::search(&g.serve_data, toss, &predicted_path(g, grades.len())) {
+                let grades = g.serve_data[i].grades(toss).to_vec();
+                match serve::search(&g.serve_data[i], toss, &predicted_path(g, grades.len())) {
                     Some(k) => {
                         let kind = if toss == Toss::Under {
                             3
@@ -1671,7 +1698,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             g.serving.bot_aim
         };
         let coins = [(); 3].map(|_| rand(&mut g.rng) < 0.5);
-        let d = &g.serve_data;
+        let d = &g.serve_data[i];
         let (target, miss) = serve::target(
             d,
             toss,
@@ -1685,6 +1712,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             coins,
         );
         let hit = g.flight.ball.pos;
+        let target = serve::inside(pos[0], hit, target);
         let error = serve::depth_error(
             d,
             toss,
@@ -1747,6 +1775,17 @@ fn hold_ball(g: &mut Game) {
 /// the stance's ball track (`*_serve_ad00_ball`), on the walk and through the toss at the left hand's
 /// `Bip01LFinger21`, both at the motion's sampled time.
 /// ponytail: posed from the motion's own clip; the original's pose mid-crossfade is the mixed one.
+/// The player's matrix (rows, the spot in row 3): turned to face, mirrored across for a left-hander.
+fn player_matrix(p: &Player) -> [[f32; 4]; 4] {
+    let [fx, _, fz, _] = p.body.face.dir;
+    [
+        [p.hand * fz, 0.0, -(p.hand * fx), 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [fx, 0.0, fz, 0.0],
+        [p.pos[0], p.pos[1], p.pos[2], 1.0],
+    ]
+}
+
 fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
     if g.phase != Phase::Serve || g.serving.tossed {
         return;
@@ -1756,13 +1795,8 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
         return;
     };
     let (p, data) = (&g.players[i], &g.data[i]);
-    // the player's matrix: a turn, never mirrored (left-handers too)
-    let [fx, _, fz, _] = p.body.face.dir;
-    let rows = [
-        [fz, 0.0, -fx, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [fx, 0.0, fz, 0.0],
-    ];
+    let player = player_matrix(p);
+    let rows = [player[0], player[1], player[2]];
     let t = m.clock.sampled;
     let sk = &data.skeleton;
     let at = if m.id == 0x20 {
@@ -1772,12 +1806,6 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
     } else {
         let finger = sk.names.iter().position(|n| n == "Bip01LFinger21");
         data.motions.get(&m.id).zip(finger).map(|(c, f)| {
-            let player = [
-                rows[0],
-                rows[1],
-                rows[2],
-                [p.pos[0], p.pos[1], p.pos[2], 1.0],
-            ];
             let [x, y, z, _] = hst_sim::vu0::transform(
                 &hst_sim::pose::node_world(sk, &c.locals(sk, t), f, &player),
                 serve::HAND_BALL,
@@ -2841,9 +2869,9 @@ fn bot_serve(g: &mut Game, i: usize) {
             Some(0)
         }
     } else if s.tossed && s.swing.is_none() && !s.whiffed {
-        let horizon = g.serve_data.grades(Toss::Strong).len();
+        let horizon = g.serve_data[i].grades(Toss::Strong).len();
         let due = s.bot_due.unwrap_or(SWEET_FRAME as usize);
-        serve::search(&g.serve_data, Toss::Strong, &predicted_path(g, horizon))
+        serve::search(&g.serve_data[i], Toss::Strong, &predicted_path(g, horizon))
             .filter(|&k| k <= due)
             .map(|_| 0)
     } else {

@@ -2,6 +2,7 @@
 //! the aim inside the service box (and how a mistimed strong toss throws it off), and the timing balloon shown
 //! over a hitter's head (strokes too).
 
+use crate::pose::{Clip, M4, Skeleton, node_world};
 use crate::swing::PathPoint;
 use crate::shot::{self, Bounds, Table};
 
@@ -35,12 +36,12 @@ pub struct ServeData {
     /// Timing grade by frames from the swing press (strong toss / weak and underhand); length = horizon.
     pub strong_grades: Vec<u8>,
     pub weak_grades: Vec<u8>,
-    /// Hand at the toss and the toss's apex drift, in the player's frame (x toward the racket side mirrored
-    /// by facing, y down, z forward), from the toss animation.
-    pub hand_over: [f32; 3],
-    pub hand_under: [f32; 3],
-    pub apex_drift_over: [f32; 2],
-    pub apex_drift_under: [f32; 2],
+    /// The ball in the hand at the toss's release and the racket's matrix at contact, in the player's own frame
+    /// (overhand / underhand; see `toss_setup`).
+    pub hand_over: [f32; 4],
+    pub hand_under: [f32; 4],
+    pub racket_over: M4,
+    pub racket_under: M4,
     /// Strong-toss mistiming error (cm): depth, along the stick, random sideways (per skill level).
     pub miss: [i32; 3],
     /// Depth bias (tenths of a metre, + deep) by frames from the swing press, beside the timing tables.
@@ -79,13 +80,50 @@ pub fn toss_velocity(hand: [f32; 3], apex: [f32; 3]) -> [f32; 3] {
     [(apex[0] - hand[0]) / t, -up, (apex[2] - hand[2]) / t]
 }
 
-/// Where the hand releases the ball and where the toss peaks, for a server at `pos` facing `facing`.
-pub fn toss_points(d: &ServeData, toss: Toss, pos: [f32; 3], facing: f32) -> ([f32; 3], [f32; 3]) {
-    let (hand, drift) = if toss == Toss::Under { (d.hand_under, d.apex_drift_under) } else { (d.hand_over, d.apex_drift_over) };
-    let at = |x: f32, y: f32, z: f32| [pos[0] + x * facing, y, pos[2] + z * facing];
-    let h = at(hand[0], hand[1], hand[2]);
-    let top = -d.window(toss)[0];
-    (h, at(hand[0] + drift[0], top, hand[2] + drift[1]))
+/// Where the hand releases the ball and where the toss peaks, for a server with matrix `player` (rows, the
+/// spot in row 3; mirrored for a left-hander): the hand's point turned into place, and the apex at the window's
+/// top, drifted from the hand toward a point 0.7 m up the racket by 1 / (1 + √(drop to the ideal height / rise)).
+pub fn toss_points(d: &ServeData, toss: Toss, player: &M4) -> ([f32; 3], [f32; 3]) {
+    use crate::ps2::{add, div, sqrt, sub};
+    use crate::vu0::transform;
+    let (hand, racket) = if toss == Toss::Under { (d.hand_under, &d.racket_under) } else { (d.hand_over, &d.racket_over) };
+    let h = transform(player, hand);
+    let q = transform(&crate::pose::vmul(racket, player), [0.0, 0.7, 0.0, 1.0]);
+    let [top, ideal, _] = d.window(toss);
+    let y = -top;
+    let k = add(1.0, sqrt(div(sub(-ideal, y), sub(h[1], y))));
+    ([h[0], h[1], h[2]], [add(h[0], div(sub(q[0], h[0]), k)), y, add(h[2], div(sub(q[2], h[2]), k))])
+}
+
+/// A character's toss hand and racket (`ServeData`), sampled once from its motions with the player at the
+/// origin: `HAND_BALL` on the left hand at the toss's frame 45 (`toss`: motion 0x23 overhand, 0x24 underhand)
+/// and the `Racket` node's matrix at the swing's contact frame (`swing`: 0x25, 0x26).
+pub fn toss_setup(sk: &Skeleton, toss: &Clip, swing: &Clip) -> ([f32; 4], M4) {
+    const ID: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let node = |n: &str| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no {n} node"));
+    let hand = crate::vu0::transform(&node_world(sk, &toss.locals(sk, TOSS_RELEASE as f32), node("Bip01LFinger21"), &ID), HAND_BALL);
+    (hand, node_world(sk, &swing.locals(sk, SWEET_FRAME as f32), node("Racket"), &ID))
+}
+
+/// A serve's aim pulled inside the receiving service box, as the original before the scatter: the box's
+/// sidelines (singles, the centre line on the server's own half; `server_x` the serve spot's x) and service line,
+/// less a margin of 0.15 m across and 0.1 m along, each scaled by the share of the contact→aim direction along it.
+pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
+    use crate::ps2::{add, div, madd, mul, sqrt, sub};
+    let (mut lo, mut hi) = (-4.115, 4.115);
+    if server_x < 0.0 { lo = 0.0 } else { hi = 0.0 }
+    let (mut mx, mut mz) = (0.15, 0.1);
+    // ponytail: the special serves (characters 10–12, 37e240) keep the margins unscaled; not ported (aim pull only)
+    if (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi) {
+        let (dz, dx) = (sub(aim[2], hit[2]), sub(aim[0], hit[0]));
+        let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
+        mx = mul(mx, mul(dx, inv).abs());
+        mz = mul(mz, mul(dz, inv).abs());
+    }
+    let (x0, x1, z1) = (add(lo, mx), sub(hi, mx), sub(6.4, mz));
+    let x = if aim[0] < x0 { x0 } else if x1 < aim[0] { x1 } else { aim[0] };
+    let z = if aim[2] < -z1 { -z1 } else if z1 < aim[2] { z1 } else { aim[2] };
+    [add(aim[0], sub(x, aim[0])), aim[1], add(aim[2], sub(z, aim[2]))]
 }
 
 /// The held ball on the walk and in the toss until release: this point of the left hand's `Bip01 LFinger21`.
@@ -325,10 +363,10 @@ mod tests {
             under: [1.0, 0.5, 0.0],
             strong_grades: vec![0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4],
             weak_grades: vec![0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4],
-            hand_over: [0.144, -1.546, 0.12],
-            hand_under: [0.016, -0.774, 0.271],
-            apex_drift_over: [-0.133, 0.15],
-            apex_drift_under: [0.184, 0.033],
+            hand_over: [0.1442, -1.5461, 0.1196, 1.0],
+            hand_under: [0.0156, -0.7736, 0.2711, 1.0],
+            racket_over: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [-0.0206, -1.5629, 0.1513, 1.0]],
+            racket_under: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -0.5, 0.3, 1.0]],
             miss: [50, 30, 100],
             strong_bias: vec![-8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16],
             weak_bias: vec![-8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16],

@@ -57,17 +57,26 @@ fn p_i32(fr: Frame, p: usize, off: usize) -> i32 {
 
 #[test]
 fn match_s05_contact_search() {
-    contact_search("match_s05.bin");
+    contact_search("match_s05.bin", "slot5_ee.bin");
+}
+
+/// The doubles match with one human (Carol, left-handed) and three CPUs on court 11 (`1p3goodcpus.bin`), with its
+/// own save state's RAM: lobs, the smashes off them and the human's swings included.
+#[test]
+fn goodcpus_contact_search() {
+    let n = contact_search("1p3goodcpus.bin", "1p3goodcpus_ee.bin");
+    // 12 of them the human's, and the four smashes off the lobs (vsync 19649 p0, 20767, 21200, 21340 p3)
+    assert!(n == 0 || n == 38, "{n} decisions");
 }
 
 /// The slot-5 bot game again with every smash turned into a △ smash (`tools/record_lob_smash.py`): the returns
 /// of those lob smashes, and the △ smash off a lob, are searched like any other ball.
 #[test]
 fn lob_smash_contact_search() {
-    contact_search("lob_smash_s05.bin");
+    contact_search("lob_smash_s05.bin", "slot5_ee.bin");
 }
 
-/// The recorded reach of player `p` (as the game holds it at frame `fr`); `obj` its object in the slot-5 RAM.
+/// The recorded reach of player `p` (as the game holds it at frame `fr`); `obj` its object in the save state's RAM.
 fn reach_of(fr: Frame, p: usize, ram: &[u8], obj: usize) -> Reach {
     let rf = |o: usize| f32::from_le_bytes(ram[obj + o..obj + o + 4].try_into().unwrap());
     let look = p_i32(fr, p, 0x154c) as usize;
@@ -89,20 +98,39 @@ fn reach_of(fr: Frame, p: usize, ram: &[u8], obj: usize) -> Reach {
     }
 }
 
-/// The slot-5 players' TParam movement stats (as in tests/player.rs).
-const STATS: [(i32, i32, i32, [i32; 3]); 4] = [(10, 40, 40, [8, 4, 7]), (11, 40, 40, [8, 4, 7]), (9, 40, 40, [6, 3, 7]), (12, 10, 40, [8, 6, 6])];
+/// A player's movement stats as the game parsed them from TParam.csv into its object (`obj` in `ram`): speed
+/// +0x1374 (SPE / 10), stamina +0x1378, dive/backhand/smash costs +0x137c.., agility +0x1388.
+fn stats_of(ram: &[u8], obj: usize) -> Stats {
+    let ri = |o: usize| i32::from_le_bytes(ram[obj + o..obj + o + 4].try_into().unwrap());
+    Stats { speed: f32::from_bits(ri(0x1374) as u32), agility: ri(0x1388), stamina: ri(0x1378), dive: ri(0x137c), backhand: ri(0x1380), smash: ri(0x1384) }
+}
 
 /// Every approach run of the slot-5 match (a press with the ball out of reach: the player runs square to the
 /// ball's line first, +0x3f24 set): same frame count as the game and the same direction (3 of 4 bit-exact).
 #[test]
 fn match_s05_approaches() {
+    let Some(seen) = approaches("match_s05.bin", "slot5_ee.bin") else { return };
+    assert!(seen >= 4);
+}
+
+/// The same in the doubles match with one human and three CPUs on court 11 (`1p3goodcpus.bin`).
+#[test]
+fn goodcpus_approaches() {
+    let Some(seen) = approaches("1p3goodcpus.bin", "1p3goodcpus_ee.bin") else { return };
+    assert_eq!(seen, 4);
+}
+
+/// How many approach runs `name` holds (None when it or `ram_name` is absent); panics unless all match.
+fn approaches(name: &str, ram_name: &str) -> Option<usize> {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
-        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/{ram_name}"))) else {
+        eprintln!("{name} or {ram_name} absent, skipped");
+        return None;
     };
     let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
     let gm = ru(0x422f80);
     let frames = frames_live(&data);
+    let court = &COURTS[frames[0].global(0x422f90) as usize];
     let (mut seen, mut bad) = (0, 0);
     for k in 1..frames.len() {
         let (a, fr) = (frames[k - 1], frames[k]);
@@ -117,10 +145,9 @@ fn match_s05_approaches() {
             let mut path = vec![];
             for _ in 0..reach.grades.len() + 20 {
                 path.push(PathPoint { pos: fl.ball.pos, bounces: fl.bounces });
-                fl.step(&shot, &COURTS[10]);
+                fl.step(&shot, court);
             }
-            let (spe, agi, sta, costs) = STATS[p];
-            let s = Stats::new(spe, agi, sta, costs, 0);
+            let s = stats_of(&ram, ru(gm + 0xa8 + 4 * p));
             let running = p_u8(a, p, 0x3fa5) == 1;
             let (mut stamina, mut tick, mut run) = (p_i32(a, p, 0x3df4), p_i32(a, p, 0x3df8), if running { p_i32(a, p, 0x3dfc) } else { 0 });
             let mate = a.player_pos(p ^ 2);
@@ -143,18 +170,21 @@ fn match_s05_approaches() {
         }
     }
     eprintln!("{seen} approaches, {bad} off");
-    assert!(seen >= 4);
     assert_eq!(bad, 0);
+    Some(seen)
 }
 
-fn contact_search(name: &str) {
+/// Every stroke decision of `name` through the contact search, with the reach from its save state's RAM (`ram_name`).
+fn contact_search(name: &str, ram_name: &str) -> usize {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
-        return eprintln!("{name} or slot5_ee.bin absent, skipped");
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/{ram_name}"))) else {
+        eprintln!("{name} or {ram_name} absent, skipped");
+        return 0;
     };
     let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
     let gm = ru(0x422f80);
     let frames = frames_live(&data);
+    let court = &COURTS[frames[0].global(0x422f90) as usize];
     let (mut checked, mut misses) = (0, 0);
     for k in 1..frames.len() {
         let (a, fr) = (frames[k - 1], frames[k]);
@@ -189,7 +219,7 @@ fn contact_search(name: &str) {
             let mut path = vec![];
             for _ in 0..look + 1 {
                 path.push(PathPoint { pos: fl.ball.pos, bounces: fl.bounces });
-                fl.step(&shot, &COURTS[10]);
+                fl.step(&shot, court);
             }
             let got = search(&reach, &path, pos, facing, 0);
             let want_ball = [fr.player_f32(p, 0x3f40), fr.player_f32(p, 0x3f44), fr.player_f32(p, 0x3f48)];
@@ -220,10 +250,11 @@ fn contact_search(name: &str) {
     }
     eprintln!("{checked} decisions, {misses} misses");
     assert_eq!(misses, 0);
+    checked
 }
 
 /// Every dive of the live recordings (new_recording.bin, match_s05.bin, lob_smash_s05.bin, human_smash_s04.bin
-/// P7b's p7b_cNN.bin runs and P7e's p7e_c03/07.bin): the dive search picks the game's frame, kind and slide, and the body's slide and
+/// P7b's p7b_cNN.bin runs, P7e's p7e_c03/07.bin and 1p3goodcpus.bin): the dive search picks the game's frame, kind and slide, and the body's slide and
 /// recovery follow each player's own character's receive motion root path bit-exact. Characters aren't recorded:
 /// each player's is found from its TParam record copy (+0x13a8..), and where several characters share the record
 /// the test needs them to share the root path too.
@@ -260,6 +291,8 @@ fn recorded_dives() {
     files.extend((0..14).map(|c| format!("p7b_c{c:02}.bin")));
     // Kaito and Bull, whose root paths are their own, by research/p7e_dive_record.py (P1 dives on purpose)
     files.extend(["p7e_c03.bin", "p7e_c07.bin"].map(String::from));
+    // the doubles match with one human (Carol, left-handed) and three CPUs on court 11
+    files.push("1p3goodcpus.bin".into());
     let (mut dives, mut steps, mut skipped, mut chars) = (0, 0, 0, std::collections::BTreeSet::new());
     for file in &files {
         let Ok(data) = std::fs::read(format!("{dir}/{file}")) else {
@@ -364,21 +397,40 @@ fn recorded_dives() {
 /// in these live recordings all land ~1e-6 off, strokes too: see research/journal/2026-10-07-n5a-lob-off-lob).
 #[test]
 fn lob_smash_flights() {
+    let Some(flown) = smash_flights("lob_smash_s05.bin") else { return };
+    // the first is volleyed before it bounces
+    assert_eq!(flown, [44, 67, 73]);
+}
+
+/// The four smashes off lobs in the doubles match with one human and three CPUs on court 11 (`1p3goodcpus.bin`):
+/// Carol's ✕ smash and character 10's three △ smashes.
+#[test]
+fn goodcpus_smash_flights() {
+    let Some(flown) = smash_flights("1p3goodcpus.bin") else { return };
+    // the first is volleyed before it bounces
+    assert_eq!(flown, [24, 75, 68, 62]);
+}
+
+/// Frames each smash launched in `name` flies as the game's ball before its first bounce (None when absent).
+fn smash_flights(name: &str) -> Option<Vec<usize>> {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/lob_smash_s05.bin")) else {
-        return eprintln!("lob_smash_s05.bin absent, skipped");
+    let Ok(data) = std::fs::read(format!("{dir}/{name}")) else {
+        eprintln!("{name} absent, skipped");
+        return None;
     };
     let frames = frames_live(&data);
+    let court = &COURTS[frames[0].global(0x422f90) as usize];
     let mut flown = vec![];
     for k in 0..frames.len() {
         let b = frames[k].live_ball();
-        if b[0x58] != 3 || i(b, 0x5c) != 1 || i(b, 0xac) != 0 {
+        // class 3 also marks the held and tossed serve ball
+        if b[0x58] != 3 || i(b, 0xac) != 0 || i(b, 0x260) == 0 {
             continue;
         }
         let (mut fl, shot) = load(b);
         let mut j = k + 1;
         while j < frames.len() && i(frames[j].live_ball(), 0xac) != 0 {
-            fl.step(&shot, &COURTS[10]);
+            fl.step(&shot, court);
             if fl.bounces != 0 {
                 break;
             }
@@ -388,6 +440,5 @@ fn lob_smash_flights() {
         }
         flown.push(j - k - 1);
     }
-    // the first is volleyed before it bounces
-    assert_eq!(flown, [44, 67, 73]);
+    Some(flown)
 }

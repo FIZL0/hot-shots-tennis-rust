@@ -277,12 +277,18 @@ fn rally_block(f: Frame) -> hst_sim::judge::Rally {
 /// the recording after every frame. The point-start resets (`new_point`, `next_point`, faults cleared by a scored
 /// point) are applied where the recording shows them — their timing is the post-point flow (P0b4). Each decision's
 /// verdict must match the outcome: no point when the game marks one, else the team whose score moved.
+/// Same for the one-human doubles match `1p3goodcpus.bin` (court 11, Carol on port 0 with three CPUs).
 #[test]
 fn match_s05_rally_block() {
+    rally_block_replay("match_s05", 30);
+    rally_block_replay("1p3goodcpus", 5);
+}
+
+fn rally_block_replay(name: &str, min: usize) {
     use hst_sim::judge::{BallState, Call};
     use hst_sim::replay::frames_live;
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else { return eprintln!("match_s05.bin absent, skipped") };
+    let Ok(data) = std::fs::read(format!("{dir}/{name}.bin")) else { return eprintln!("{name}.bin absent, skipped") };
     let frames = frames_live(&data);
     let ball = |s: Frame| -> BallState {
         let b = s.live_ball();
@@ -358,8 +364,8 @@ fn match_s05_rally_block() {
             resets += 1;
         }
     }
-    eprintln!("match_s05: {} frames, {decisions} decisions (by call {calls:?}), {resets} resets, {replays} replays", frames.len());
-    assert!(decisions > 0);
+    eprintln!("{name}: {} frames, {decisions} decisions (by call {calls:?}), {resets} resets, {replays} replays", frames.len());
+    assert!(decisions >= min);
 }
 
 fn score_at(f: Frame) -> Score {
@@ -439,7 +445,7 @@ fn post_point(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming, settle: Opt
 
 /// Every point-over phase of a recording (from the phase's entry; the match-over point and its instant replay
 /// left out, P0b4c/P0b4d): those without a call must match as recorded; a called one must match for one tick
-/// where her call line ends (not recorded: searched from 1 to the call's countdown). Returns (phases, called
+/// where her call line ends (not recorded: searched from 1 to the call's countdown), or on the countdown alone (0). Returns (phases, called
 /// phases' line ends by call).
 fn post_points(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming) -> (usize, Vec<(u8, u32)>) {
     let (mut checked, mut lines) = (0, Vec::new());
@@ -452,7 +458,9 @@ fn post_points(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming) -> (usize,
         if call == 0 || call == 6 {
             post_point(&frames[k..], t, None).unwrap_or_else(|e| panic!("vsync {}: {e}", f.vsync()));
         } else {
+            // a line that outlasts the countdown: the call runs on its countdown (pushed as line end 0)
             let line = (1..=t.call_wait[call as usize] as u32).find(|&v| post_point(&frames[k..], t, Some(v)).is_ok());
+            let line = line.or_else(|| post_point(&frames[k..], t, None).is_ok().then_some(0));
             let line = line.unwrap_or_else(|| panic!("vsync {}: call {call}: {}", f.vsync(), post_point(&frames[k..], t, None).unwrap_err()));
             lines.push((call, line));
         }
@@ -461,25 +469,35 @@ fn post_points(frames: &[Frame], t: &hst_data::exe::ScoreboardTiming) -> (usize,
     (checked, lines)
 }
 
-fn disc_timing() -> Option<hst_data::exe::ScoreboardTiming> {
+/// The scoreboard timing for the region's language and the match's umpire; `ee`: a save state's EE RAM to read them
+/// from (the language at 0x2ef110, the menu's umpire at 0x2ef7de), else 0 and 4 (English, umpire 4: slots 3 and 5).
+fn disc_timing(ee: Option<&[u8]>) -> Option<hst_data::exe::ScoreboardTiming> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let cnf = std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")).ok()?;
     let bin = std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")).ok()?;
-    Some(hst_data::exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing(0, 4))
+    let (language, umpire) = ee.map_or((0, 4), |ram| (ram[0x2ef110], ram[0x2ef7de]));
+    Some(hst_data::exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing(language, umpire))
 }
 
 /// The point-over phase of every point of the slot-5 bot match (P0b4, P12a): scored points, the umpire's
 /// calls (fault, double fault, out after net) chained or not into the score show, faults cleared, the score reset
 /// for a new game and the next phase (serve or change ends) asked on the game's own ticks (gm+0x58); every
-/// change-ends phase lasts `CHANGE_ENDS`.
+/// change-ends phase lasts `CHANGE_ENDS`. Same for `1p3goodcpus.bin` (umpire 2), where a human's press ends the
+/// phase once the score has settled. The umpire (her call countdowns) comes from each match's save-state RAM.
 #[test]
 fn match_s05_post_point() {
+    post_point_replay("match_s05", "slot5_ee", 30, 1);
+    post_point_replay("1p3goodcpus", "1p3goodcpus_ee", 4, 0);
+}
+
+fn post_point_replay(name: &str, ee: &str, min: usize, min_changes: usize) {
     use hst_sim::flow::CHANGE_ENDS;
     use hst_sim::replay::frames_live;
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Some(timing)) = (std::fs::read(format!("{dir}/match_s05.bin")), disc_timing()) else {
-        return eprintln!("match_s05.bin or disc files absent, skipped");
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}.bin")), std::fs::read(format!("{dir}/{ee}.bin"))) else {
+        return eprintln!("{name}.bin or {ee}.bin absent, skipped");
     };
+    let Some(timing) = disc_timing(Some(&ram)) else { return eprintln!("disc files absent, skipped") };
     let frames = frames_live(&data);
     let mut changes = 0;
     for k in 1..frames.len() {
@@ -491,8 +509,8 @@ fn match_s05_post_point() {
         }
     }
     let (checked, lines) = post_points(&frames, &timing);
-    eprintln!("match_s05: {checked} point-over phases (call line ends {lines:?}), {changes} change-ends phases");
-    assert!(checked > 30 && !lines.is_empty() && changes > 0);
+    eprintln!("{name}: {checked} point-over phases (call line ends {lines:?}), {changes} change-ends phases");
+    assert!(checked > min && !lines.is_empty() && changes >= min_changes);
 }
 
 /// The point-over phases of a match with a human (`new_recording.bin`, slot 3): a face-button press ends the
@@ -501,7 +519,7 @@ fn match_s05_post_point() {
 fn human_post_point() {
     use hst_sim::replay::frames_live;
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let (Ok(data), Some(timing)) = (std::fs::read(format!("{dir}/new_recording.bin")), disc_timing()) else {
+    let (Ok(data), Some(timing)) = (std::fs::read(format!("{dir}/new_recording.bin")), disc_timing(None)) else {
         return eprintln!("new_recording.bin or disc files absent, skipped");
     };
     let (checked, lines) = post_points(&frames_live(&data), &timing);
@@ -511,14 +529,19 @@ fn human_post_point() {
 
 /// Every serve set-up of the slot-5 doubles match: all four players placed exactly where the game put them
 /// (position and facing) on entering the serve or change-ends phase. A serve entry right after change ends
-/// keeps the change-ends placement.
+/// keeps the change-ends placement. Same for `1p3goodcpus.bin`.
 #[test]
 fn match_s05_serve_placement() {
+    serve_placement_replay("match_s05", 37);
+    serve_placement_replay("1p3goodcpus", 5);
+}
+
+fn serve_placement_replay(name: &str, setups: usize) {
     use hst_sim::flow::serve_placement;
     use hst_sim::replay::frames_live;
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    let Ok(data) = std::fs::read(format!("{dir}/match_s05.bin")) else {
-        return eprintln!("match_s05.bin absent, skipped");
+    let Ok(data) = std::fs::read(format!("{dir}/{name}.bin")) else {
+        return eprintln!("{name}.bin absent, skipped");
     };
     let frames = frames_live(&data);
     let mut placed = 0;
@@ -528,6 +551,9 @@ fn match_s05_serve_placement() {
         if phase == a.gm()[0x55] || !(phase == 1 || phase == 2 && a.gm()[0x55] != 1) {
             continue;
         }
+        // a serve entry that loads can be sampled mid-frame (1p3goodcpus: gm+0x58 still 0, nobody placed, then
+        // 2): the set-up is checked on the first sample past the entry tick
+        let f = frames[k..].iter().copied().find(|&s| tick(s) > 0).unwrap();
         let s = Score { server: rd(f, 0x42304c), side: rd(f, 0x423050), receiver: rd(f, 0x423054), ..Score::new() };
         let first_point = f.global_u8(0x423040) != 0;
         let swapped = (f.global_u8(0x4230b4) != 0) != (f.global_u8(0x422f99) != 0 && rd(f, 0x422fa4) != 1);
@@ -540,5 +566,5 @@ fn match_s05_serve_placement() {
         }
         placed += 1;
     }
-    assert_eq!(placed, 37, "serve set-ups in the match");
+    assert_eq!(placed, setups, "{name}: serve set-ups in the match");
 }

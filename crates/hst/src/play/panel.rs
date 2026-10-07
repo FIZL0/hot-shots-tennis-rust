@@ -519,12 +519,10 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         .iter()
         .map(|t| get(format!("/{}.tm2", t.to_ascii_lowercase())))
         .collect();
-    // ponytail: costume 0 for everyone (the remaster has no costumes yet)
-    art.extend(
-        g.chars
-            .iter()
-            .map(|&c| get(format!("face/face_{c:02}_00.tm2"))),
-    );
+    art.extend(g.chars.iter().enumerate().map(|(i, &c)| {
+        let o = args.outfits.get(i).copied().unwrap_or(0);
+        get(format!("face/face_{c:02}_{o:02}.tm2"))
+    }));
     commands.insert_resource(Art(art));
     let (cnf, bin) = (
         iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),

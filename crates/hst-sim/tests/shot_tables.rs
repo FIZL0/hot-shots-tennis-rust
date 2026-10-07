@@ -108,6 +108,15 @@ fn lob_smashes_launch_like_the_game() {
     assert_eq!((smashes, exact), (3, 3));
 }
 
+/// The smashes off the four lobs of the doubles match with one human and three CPUs on court 11
+/// (`1p3goodcpus.bin`): the human Carol's ✕ smash (kind 0, vsync 19655) off Will's lob and character 10's three △
+/// smashes (kind 1).
+#[test]
+fn goodcpus_lob_smashes_launch_like_the_game() {
+    let (Some(k0), Some(k1)) = (smashes("1p3goodcpus.bin", 0), smashes("1p3goodcpus.bin", 1)) else { return };
+    assert_eq!((k0, k1), ((1, 1), (3, 3)));
+}
+
 /// (smashes of `kind` launched in `fixture`, how many exactly), None when absent.
 fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
     use hst_sim::replay::frames_live;
@@ -116,7 +125,8 @@ fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
         ["A", "B"].iter().find_map(|ab| std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ{c:02}{ab}.XB/data/hatsuyama/traj/tr_pc{c:02}_smsh{kind}.dat")).ok())
             .and_then(|b| Table::parse(&b))
     };
-    let (Ok(data), Some(_)) = (std::fs::read(format!("{ctx}/fixtures/{fixture}")), table(0)) else {
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{ctx}/fixtures"));
+    let (Ok(data), Some(_)) = (std::fs::read(format!("{dir}/{fixture}")), table(0)) else {
         eprintln!("fixture missing, skipped");
         return None;
     };
@@ -158,11 +168,38 @@ fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
 }
 
 /// Every unscattered volley (class 2) launch in the live-ball recordings against the hitter's own `voly` table
-/// (base, or the dw1/dw2 the game's mode pick took) with the volley bounds and the near-net speed correction.
+/// (base, or the up1/dw1/dw2 the game's mode pick took) with the volley bounds and the near-net speed correction.
 #[test]
 fn volleys_launch_like_the_game() {
+    let (seen, exact) = launches(&["match_s05.bin", "new_recording.bin", "1p3goodcpus.bin"], 2, None);
+    if seen == 0 {
+        return eprintln!("fixtures missing, skipped");
+    }
+    eprintln!("{exact} of {seen} volleys exact");
+    assert!(exact == seen && seen >= 9, "only {exact} of {seen} volleys exact");
+}
+
+/// The lobs (kind 3) of the doubles match with one human and three CPUs on court 11 (`1p3goodcpus.bin`): Will's
+/// stroke (vsync 19585, his `strk3`) and character 2's volley (20682); Carol's two (21143, 21279) carry timing
+/// scatter and are left out like any other. Ground strokes are only reported: as in the other recordings, slices
+/// miss and a few strokes land 2–4e-6 off the speed.
+#[test]
+fn goodcpus_lobs_launch_like_the_game() {
+    let lobs = [1, 2].map(|class| launches(&["1p3goodcpus.bin"], class, Some(3)));
+    if lobs[1].0 == 0 {
+        return eprintln!("1p3goodcpus.bin absent, skipped");
+    }
+    eprintln!("strokes (seen, exact) {:?}", launches(&["1p3goodcpus.bin"], 1, None));
+    assert_eq!(lobs, [(1, 1), (1, 1)]);
+}
+
+/// (unscattered launches of `class` (1 stroke, 2 volley; of `only` kind if given) in `fixtures`, how many exact
+/// against the hitter's `strk`/`voly` table (base, or the up1/dw1/dw2 the game's mode pick took)). A counter
+/// (+0x3f07: perfect timing against a stronger hitter's topspin or flat) launches from the incoming hitter's tables.
+fn launches(fixtures: &[&str], class: u8, only: Option<i32>) -> (usize, usize) {
     use hst_sim::replay::{frames_live, SAMPLE_LIVE};
     let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{ctx}/fixtures"));
     let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
@@ -173,16 +210,19 @@ fn volleys_launch_like_the_game() {
         .and_then(|b| Table::parse(&b))
     };
     let (mut seen, mut exact) = (0, 0);
-    for fx in ["match_s05.bin", "new_recording.bin"] {
-        let Ok(data) = std::fs::read(format!("{ctx}/fixtures/{fx}")) else { continue };
+    for fx in fixtures {
+        let Ok(data) = std::fs::read(format!("{dir}/{fx}")) else { continue };
         assert_eq!(data.len() % SAMPLE_LIVE, 0, "{fx}: not a live-ball recording");
         for w in frames_live(&data).windows(2) {
             let (a, b) = (w[0].live_ball(), w[1].live_ball());
-            // the launch frame: class 2, flight frame 0, a new hit point, a table's flight time (0 off the table)
-            if b[0x58] != 2 || i(b, 0xac) != 0 || i(b, 0x260) == 0 || (i(a, 0xac) == 0 && v3(a, 0x70) == v3(b, 0x70)) {
+            // the launch frame: the class, flight frame 0, a new hit point, a table's flight time (0 off the table)
+            if b[0x58] != class || i(b, 0xac) != 0 || i(b, 0x260) == 0 || (i(a, 0xac) == 0 && v3(a, 0x70) == v3(b, 0x70)) {
                 continue;
             }
             let (hit, target, vel, kind) = (v3(b, 0x70), v3(b, 0x80), v3(b, 0x130), i(b, 0x5c));
+            if only.is_some_and(|k| k != kind) {
+                continue;
+            }
             let d2 = |p: usize| {
                 let q = w[1].player_pos(p);
                 (q[0] - hit[0]).powi(2) + (q[2] - hit[2]).powi(2)
@@ -193,23 +233,24 @@ fn volleys_launch_like_the_game() {
                 continue;
             }
             seen += 1;
-            let ch = w[1].global(0x422fa8 + 4 * p);
+            let counter = w[1].player_f32(p, 0x3f04).to_bits().to_le_bytes()[3] == 1;
+            let ch = w[1].global(0x422fa8 + 4 * if counter { w[0].global(0x423058) as usize } else { p });
             let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
-            exact += ["", "_dw1", "_dw2"].iter().any(|suf| {
-                let Some(t) = table(ch, &format!("voly{kind}{suf}")) else { return false };
-                let l = lookup(&t, &Bounds::volley(kind, hit[2]), hit, target);
+            let (stem, bounds) = if class == 1 { ("strk", Bounds::stroke(kind, hit[2])) } else { ("voly", Bounds::volley(kind, hit[2])) };
+            let ok = ["", "_up1", "_dw1", "_dw2"].iter().any(|suf| {
+                let Some(t) = table(ch, &format!("{stem}{kind}{suf}")) else { return false };
+                let l = lookup(&t, &bounds, hit, target);
                 let v = launch(hit, target, l.elevation, l.speed);
                 let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
                 (len - speed).abs() < 2e-6 && (v[1] - vel[1]).abs() < 4e-6 && l.frames + 1 == i(b, 0x260)
-            }) as usize;
+            });
+            if !ok {
+                eprintln!("{fx} vsync {} p{p} (character {ch}): class {class} kind {kind} off its tables", w[1].vsync());
+            }
+            exact += ok as usize;
         }
     }
-    if seen == 0 {
-        eprintln!("fixtures missing, skipped");
-        return;
-    }
-    eprintln!("{exact} of {seen} volleys exact");
-    assert!(exact == seen && seen >= 9, "only {exact} of {seen} volleys exact");
+    (seen, exact)
 }
 
 /// Every recorded stroke and volley leaves with the spin, first-bounce spin and first-bounce restitution
@@ -221,6 +262,7 @@ fn rally_spins_like_the_game() {
     use hst_sim::params::{ShotParams, rally_spin, record_of};
     use hst_sim::replay::frames_live;
     let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{ctx}/fixtures"));
     let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")), std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN"))) else {
         return eprintln!("extracted disc absent, skipped");
     };
@@ -231,8 +273,8 @@ fn rally_spins_like_the_game() {
     let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
     let (mut base, mut all, mut kinds) = (0, 0, [[0; 5]; 2]);
-    for name in ["match_s05.bin", "new_recording.bin", "lob_smash_s05.bin", "human_smash_s04.bin"] {
-        let Ok(data) = std::fs::read(format!("{ctx}/fixtures/{name}")) else { continue };
+    for name in ["match_s05.bin", "new_recording.bin", "lob_smash_s05.bin", "human_smash_s04.bin", "1p3goodcpus.bin"] {
+        let Ok(data) = std::fs::read(format!("{dir}/{name}")) else { continue };
         for w in frames_live(&data).windows(2) {
             let (a, b) = (w[0].live_ball(), w[1].live_ball());
             let class = b[0x58] as usize;
@@ -258,4 +300,68 @@ fn rally_spins_like_the_game() {
     }
     eprintln!("{all} strokes/volleys, {base} on the base record; by class/kind {kinds:?}");
     assert!(all > 100 && base > 50, "{all} launches, {base} on base records");
+}
+
+/// Every unscattered stroke, volley and smash launch of the live-ball recordings against the hitter's aim (+0x3e90)
+/// pulled inside the court by `Margins::inside`, bit for bit: the ball's stored target (+0x80) is that aim plus
+/// the timing scatter, added after the pull (a launch counts as unscattered when the swing's late, side and
+/// smash depth offsets +0x3ecc/+0x3ed0/+0x3edc are all zero). 1p3goodcpus (doubles) has character 10's two
+/// short angled topspins pulled in by the angle margin (vsync 19076) or onto the doubles sideline (19143), and
+/// human_smash_s04 a volley pulled in from the baseline (11267). No recorded smash reaches a line; they are
+/// covered by the hand-worked `shot::tests::inside_pulls_smashes_and_outward_topspin`.
+#[test]
+fn rally_aims_pulled_inside_like_the_game() {
+    use hst_sim::replay::frames_live;
+    use hst_sim::shot::Margins;
+    let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
+    let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")), std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN"))) else {
+        return eprintln!("the extracted disc absent, skipped");
+    };
+    let (lines, angle) = hst_data::exe::Game::new(&cnf, &bin).unwrap().court_margins();
+    let m = Margins { lines, angle };
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{ctx}/fixtures"));
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
+    for (fx, want_n, want_moved) in [("match_s05.bin", 57, 0), ("new_recording.bin", 15, 0), ("1p3goodcpus.bin", 18, 2), ("human_smash_s04.bin", 7, 1), ("lob_smash_s05.bin", 18, 0)] {
+        let Ok(data) = std::fs::read(format!("{dir}/{fx}")) else {
+            eprintln!("{fx} absent, skipped");
+            continue;
+        };
+        let (mut n, mut moved) = (0, 0);
+        for w in frames_live(&data).windows(2) {
+            let (a, b) = (w[0].live_ball(), w[1].live_ball());
+            let class = b[0x58];
+            // a launch: a stroke, volley or smash on its flight frame 0 with a new hit point and a table's flight time
+            if !(1..=3).contains(&class) || i(b, 0xac) != 0 || i(b, 0x260) == 0 || (i(a, 0xac) == 0 && v3(a, 0x70) == v3(b, 0x70)) {
+                continue;
+            }
+            let (hit, target, kind) = (v3(b, 0x70), v3(b, 0x80), i(b, 0x5c));
+            let d2 = |p: usize| {
+                let q = w[1].player_pos(p);
+                (q[0] - hit[0]).powi(2) + (q[2] - hit[2]).powi(2)
+            };
+            let p = if class == 3 {
+                (0..4).find(|&p| w[1].player_f32(p, 0x3ec0).to_bits().to_le_bytes()[1] == 4).expect("smasher")
+            } else {
+                (0..4).min_by(|&x, &y| d2(x).total_cmp(&d2(y))).unwrap()
+            };
+            if [0x3ecc, 0x3ed0, 0x3edc].iter().any(|&o| w[1].player_f32(p, o) != 0.0) {
+                continue;
+            }
+            let aim = [0x3e90, 0x3e94, 0x3e98].map(|o| w[1].player_f32(p, o));
+            // a counter is judged with the incoming hitter's character, as its tables
+            let counter = w[1].player_f32(p, 0x3f04).to_bits().to_le_bytes()[3] == 1;
+            let ch = w[1].global(0x422fa8 + 4 * if counter { w[0].global(0x423058) as usize } else { p }) as usize;
+            // the smash's shot mode (+0x3ed8 tenths, its sign kept by the scaling)
+            let low = class == 3 && (w[1].player_f32(p, 0x3ed8).to_bits() as i32) < 0;
+            let got = m.inside(class, kind, low, w[1].global(0x422fa4) >= 3, ch, false, hit, aim);
+            let at = format!("{fx} vsync {} player {p} (character {ch}) class {class} kind {kind}: hit {hit:?} aim {aim:?}", w[1].vsync());
+            assert_eq!([got[0].to_bits(), got[2].to_bits()], [target[0].to_bits(), target[2].to_bits()], "{at}: {got:?} vs {target:?}");
+            n += 1;
+            moved += (aim != target) as usize;
+        }
+        eprintln!("{fx}: {n} unscattered launches, {moved} pulled inside");
+        assert_eq!((n, moved), (want_n, want_moved), "{fx}");
+    }
 }

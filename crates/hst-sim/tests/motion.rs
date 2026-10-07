@@ -1,5 +1,6 @@
-//! The motion numbers of strokes, serves and post-point reactions through the slot-5 doubles match
-//! (`context/fixtures/match_s05.bin`), from the recorded contact-search results and point outcomes.
+//! The motion numbers of strokes, serves and post-point reactions through two doubles matches (slot 5's
+//! `context/fixtures/match_s05.bin`, right-handed characters 0, 2, 1, 5; `1p3goodcpus.bin`, characters 6, 11, 2, 10,
+//! the first two left-handed), from the recorded contact-search results and point outcomes.
 
 use hst_sim::motion::{reaction, serve_walk, soft_follow, stroke_start, team_reactions, whiff, SWING_LEAD};
 use hst_sim::replay::{Frame, frames_live};
@@ -13,124 +14,144 @@ fn p_i32(fr: Frame, p: usize, off: usize) -> i32 {
 fn f(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
-const CHARS: [i32; 4] = [0, 2, 1, 5];
+/// The match recordings and their save states' RAM.
+const MATCHES: [(&str, &str); 2] = [("match_s05.bin", "slot5_ee.bin"), ("1p3goodcpus.bin", "1p3goodcpus_ee.bin")];
 
-fn load() -> Option<Vec<u8>> {
+/// Every match present: its name, recording and per player the character (+0x12bc) and hand (+0x12b4) in its RAM.
+fn matches() -> Vec<(&'static str, Vec<u8>, [(i32, f32); 4])> {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
-    std::fs::read(format!("{dir}/match_s05.bin")).ok()
+    MATCHES
+        .iter()
+        .filter_map(|&(name, ram)| {
+            let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/{name}")), std::fs::read(format!("{dir}/{ram}"))) else {
+                eprintln!("{name} or {ram} absent, skipped");
+                return None;
+            };
+            let ru = |a: usize| u32::from_le_bytes(ram[a & 0x1ff_ffff..][..4].try_into().unwrap()) as usize;
+            let lineup = [0, 1, 2, 3].map(|p| ru(ru(0x422f80) + 0xa8 + 4 * p)).map(|pl| (ru(pl + 0x12bc) as i32, f(&ram, pl + 0x12b4)));
+            Some((name, data, lineup))
+        })
+        .collect()
 }
 
 #[test]
-fn match_s05_stroke_motions() {
-    let Some(data) = load() else { return eprintln!("match_s05.bin absent, skipped") };
-    let frames = frames_live(&data);
-    let (mut starts, mut switches, mut whiffs, mut softs) = (0, 0, 0, 0);
-    for k in 1..frames.len() - 1 {
-        let (a, fr, next) = (frames[k - 1], frames[k], frames[k + 1]);
-        if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
-            break;
-        }
-        for p in 0..4 {
-            if p_u8(fr, p, 0x3fa4) != 0 {
-                continue;
+fn match_stroke_motions() {
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let (mut starts, mut switches, mut whiffs, mut softs) = (0, 0, 0, 0);
+        for k in 1..frames.len() - 1 {
+            let (a, fr, next) = (frames[k - 1], frames[k], frames[k + 1]);
+            if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
+                break;
             }
-            let (was, now) = (p_u8(a, p, 0x3fa5), p_u8(fr, p, 0x3fa5));
-            let (m0, m1) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
-            let (branch, left) = (p_u8(fr, p, 0x3ec1), p_i32(fr, p, 0x3ec4));
-            if now == 2 && was != 2 {
-                // the swing is +0x3e40 while it waits, +0x3e44 once playing
-                let pending = p_i32(fr, p, 0x3e40);
-                let anim = if pending >= 0 { pending } else { p_i32(fr, p, 0x3e44) };
-                let (m, _, wait) = stroke_start(branch, left, anim);
-                assert_eq!((m, wait.is_some()), (m1, pending >= 0), "start k={k} p={p}");
-                starts += 1;
-            } else if now == 2 && was == 2 && m1 != m0 {
-                if left == SWING_LEAD && p_i32(a, p, 0x3e40) >= 0 {
-                    assert_eq!(m1, p_i32(a, p, 0x3e40), "switch k={k} p={p}");
-                    switches += 1;
-                } else if (0x27..=0x2a).contains(&m1) {
-                    assert_eq!(whiff(m0), Some(m1), "whiff k={k} p={p}");
-                    whiffs += 1;
+            for p in 0..4 {
+                if p_u8(fr, p, 0x3fa4) != 0 {
+                    continue;
+                }
+                let (was, now) = (p_u8(a, p, 0x3fa5), p_u8(fr, p, 0x3fa5));
+                let (m0, m1) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
+                let (branch, left) = (p_u8(fr, p, 0x3ec1), p_i32(fr, p, 0x3ec4));
+                if now == 2 && was != 2 {
+                    // the swing is +0x3e40 while it waits, +0x3e44 once playing
+                    let pending = p_i32(fr, p, 0x3e40);
+                    let anim = if pending >= 0 { pending } else { p_i32(fr, p, 0x3e44) };
+                    let (m, _, wait) = stroke_start(branch, left, anim);
+                    assert_eq!((m, wait.is_some()), (m1, pending >= 0), "{name} start k={k} p={p}");
+                    starts += 1;
+                } else if now == 2 && was == 2 && m1 != m0 {
+                    if left == SWING_LEAD && p_i32(a, p, 0x3e40) >= 0 {
+                        assert_eq!(m1, p_i32(a, p, 0x3e40), "{name} switch k={k} p={p}");
+                        switches += 1;
+                    } else if (0x27..=0x2a).contains(&m1) {
+                        assert_eq!(whiff(m0), Some(m1), "{name} whiff k={k} p={p}");
+                        whiffs += 1;
+                    }
+                }
+                // the contact: countdown 1 → −1 and this player the last hitter
+                if p_i32(a, p, 0x3ec4) == 1 && left == -1 && fr.global(0x423058) == p as i32 {
+                    let b = fr.live_ball();
+                    let v = [f(b, 0x140), f(b, 0x144), f(b, 0x148)];
+                    let soft = soft_follow(branch, p_i32(fr, p, 0x3e44), v, p_i32(fr, p, 0x3f50) as u32, lineup[p].1);
+                    let m = p_i32(next, p, 0x3df0);
+                    match soft {
+                        Some(s) => assert_eq!(m, s, "{name} soft k={k} p={p}"),
+                        None => assert!(!(0x1c..=0x1d).contains(&m), "{name} no soft k={k} p={p}"),
+                    }
+                    softs += 1;
                 }
             }
-            // the contact: countdown 1 → −1 and this player the last hitter
-            if p_i32(a, p, 0x3ec4) == 1 && left == -1 && fr.global(0x423058) == p as i32 {
-                let b = fr.live_ball();
-                let v = [f(b, 0x140), f(b, 0x144), f(b, 0x148)];
-                let soft = soft_follow(branch, p_i32(fr, p, 0x3e44), v, p_i32(fr, p, 0x3f50) as u32, 1.0);
-                let m = p_i32(next, p, 0x3df0);
-                match soft {
-                    Some(s) => assert_eq!(m, s, "soft k={k} p={p}"),
-                    None => assert!(!(0x1c..=0x1d).contains(&m), "no soft k={k} p={p}"),
-                }
-                softs += 1;
-            }
         }
+        eprintln!("{name}: {starts} starts, {switches} switches, {whiffs} whiffs, {softs} contacts");
+        assert!(starts > 30 && switches > 5 && whiffs > 0 && softs > 30, "{name}");
     }
-    eprintln!("{starts} starts, {switches} switches, {whiffs} whiffs, {softs} contacts");
-    assert!(starts > 100 && switches > 20 && whiffs > 3 && softs > 100);
 }
 
 #[test]
-fn match_s05_serve_walk() {
-    let Some(data) = load() else { return eprintln!("match_s05.bin absent, skipped") };
-    let frames = frames_live(&data);
-    let mut n = 0;
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        for p in 0..4 {
-            let m = p_i32(fr, p, 0x3df0);
-            if p_u8(fr, p, 0x3fa4) != 1 || !(0x21..=0x22).contains(&m) {
-                continue;
+fn match_serve_walk() {
+    // only Carol serves in 1p3goodcpus.bin, and she doesn't walk
+    let mut total = 0;
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let mut n = 0;
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            for p in 0..4 {
+                let m = p_i32(fr, p, 0x3df0);
+                if p_u8(fr, p, 0x3fa4) != 1 || !(0x21..=0x22).contains(&m) {
+                    continue;
+                }
+                let dx = fr.player_pos(p)[0] - a.player_pos(p)[0];
+                if dx == 0.0 {
+                    continue;
+                }
+                let fwd = if fr.player_pos(p)[2] < 0.0 { 1.0 } else { -1.0 };
+                assert_eq!(serve_walk(dx, fwd, lineup[p].1), m, "{name} k={k} p={p}");
+                n += 1;
             }
-            let dx = fr.player_pos(p)[0] - a.player_pos(p)[0];
-            if dx == 0.0 {
-                continue;
-            }
-            let fwd = if fr.player_pos(p)[2] < 0.0 { 1.0 } else { -1.0 };
-            assert_eq!(serve_walk(dx, fwd, 1.0), m, "k={k} p={p}");
-            n += 1;
         }
+        eprintln!("{name}: {n} serve walk frames");
+        total += n;
     }
-    assert!(n > 1000, "{n}");
+    assert!(total > 1000, "{total}");
 }
 
 /// Every post-point reaction: the outcome's base reaction or a team reaction of the character's set not taken
 /// by a player updated before it (the draw itself is the game's random number).
 #[test]
-fn match_s05_reactions() {
-    let Some(data) = load() else { return eprintln!("match_s05.bin absent, skipped") };
-    let frames = frames_live(&data);
-    let (mut n, mut team) = (0, 0);
-    let mut taken: Vec<i32> = vec![];
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
-            break;
+fn match_reactions() {
+    for (name, data, lineup) in matches() {
+        let frames = frames_live(&data);
+        let (mut n, mut team) = (0, 0);
+        let mut taken: Vec<i32> = vec![];
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
+                break;
+            }
+            for p in 0..4 {
+                if p_u8(fr, p, 0x3fa4) != 2 || p_u8(a, p, 0x3fa4) == 2 {
+                    continue;
+                }
+                if p == 0 || (0..p).all(|q| p_u8(a, q, 0x3fa4) == 2 || p_u8(fr, q, 0x3fa4) != 2) {
+                    taken.clear();
+                }
+                let won = (p as i32 & 1) == fr.global(0x4230a8);
+                let base = reaction(p_u8(a, p, 0x3fa5) == 3, 4, won, fr.global(0x4230b8) != 0, false);
+                let got = p_i32(fr, p, 0x3db0);
+                if got >= 0x30 {
+                    let c = got - 0x30;
+                    assert!((0x2c..=0x2d).contains(&base) && team_reactions(lineup[p].0).contains(&c) && !taken.contains(&c), "{name} k={k} p={p} {got:#x}");
+                    taken.push(c);
+                    team += 1;
+                } else {
+                    assert_eq!(got, base, "{name} k={k} p={p}");
+                }
+                n += 1;
+            }
         }
-        for p in 0..4 {
-            if p_u8(fr, p, 0x3fa4) != 2 || p_u8(a, p, 0x3fa4) == 2 {
-                continue;
-            }
-            if p == 0 || (0..p).all(|q| p_u8(a, q, 0x3fa4) == 2 || p_u8(fr, q, 0x3fa4) != 2) {
-                taken.clear();
-            }
-            let won = (p as i32 & 1) == fr.global(0x4230a8);
-            let base = reaction(p_u8(a, p, 0x3fa5) == 3, 4, won, fr.global(0x4230b8) != 0, false);
-            let got = p_i32(fr, p, 0x3db0);
-            if got >= 0x30 {
-                let c = got - 0x30;
-                assert!((0x2c..=0x2d).contains(&base) && team_reactions(CHARS[p]).contains(&c) && !taken.contains(&c), "k={k} p={p} {got:#x}");
-                taken.push(c);
-                team += 1;
-            } else {
-                assert_eq!(got, base, "k={k} p={p}");
-            }
-            n += 1;
-        }
+        eprintln!("{name}: {n} reactions ({team} team)");
+        assert!(n > 10 && team > 5, "{name}");
     }
-    eprintln!("{n} reactions ({team} team)");
-    assert!(n > 100 && team > 30);
 }
 
 /// The ANI sampler (squad rotations, Hermite positions, bone-length scale) against the players' skeletons in
@@ -192,14 +213,13 @@ fn clip_sampler_ram() {
 
 /// Post-point reactions carry the player along their `*_dummy` path (team reactions co03–co05 forward only,
 /// ×0.55 for character 5; `gu_set` the whole path of the character's own dummy): the accumulated spot +0x3da0
-/// of every reacting frame of the slot-5 match, bit-exact, with the motion time = frames since the reaction began
-/// (held at the motion's length). The phase's last frames don't run the reaction (spot unchanged).
+/// of every reacting frame of each match, bit-exact, with the motion time = frames since the reaction began
+/// (held at the motion's length), counted in game frames (gm+0x50): a sample can catch two or none (spot unchanged).
 #[test]
-fn match_s05_reaction_root() {
+fn match_reaction_root() {
     use hst_data::{ani, iso::Iso, xb::Archive};
     use hst_sim::motion::reaction_root;
     use hst_sim::pose::Path;
-    let Some(data) = load() else { return eprintln!("match_s05.bin absent, skipped") };
     let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
     let cg = iso.read("PCDATA/PCCG0.XB").unwrap();
     let carc = Archive::parse(&cg).unwrap();
@@ -211,50 +231,60 @@ fn match_s05_reaction_root() {
     let lens: Vec<f32> = co.iter().map(|n| { let a = file(format!("re_pc00_{n}")).unwrap(); a.end_tick() as f32 / a.ticks_per_frame as f32 }).collect();
     // gu_set (0x2e) and its root path (motion 0x35) per character
     let mut gu_set = std::collections::HashMap::new();
-    for c in CHARS {
+    let matches = matches();
+    for c in matches.iter().flat_map(|m| m.2.map(|p| p.0)) {
         let arc_data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
         let arc = Archive::parse(&arc_data).unwrap();
         let get = |m: usize| { let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase(); arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).map(|e| ani::parse(&arc.read(e).unwrap()).unwrap()) };
         let a = get(0x2e).unwrap();
         gu_set.insert(c, (get(0x35).and_then(|d| Path::new(&d)), a.end_tick() as f32 / a.ticks_per_frame as f32));
     }
-    let frames = frames_live(&data);
-    let (mut exact, mut held, mut gu, mut t) = (0, 0, 0, [0f32; 4]);
-    for k in 1..frames.len() {
-        let (a, fr) = (frames[k - 1], frames[k]);
-        for p in 0..4 {
-            if p_u8(fr, p, 0x3fa4) != 2 || p_u8(fr, p, 0x3fa7) != 1 {
+    for (name, data, lineup) in &matches {
+        let frames = frames_live(&data);
+        let (mut exact, mut held, mut gu, mut t) = (0, 0, 0, [0f32; 4]);
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            // game frames (gm+0x50) since the last sample: now and then a sample catches two and the next none
+            let ticks = f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits());
+            if ticks == 0 {
                 continue;
             }
-            if p_u8(a, p, 0x3fa7) != 1 {
-                t[p] = 0.0;
-            }
-            let m = p_i32(fr, p, 0x3db0);
-            let v = |f: Frame, o: usize| [0, 4, 8, 12].map(|d| f.player_f32(p, o + d));
-            let (pt, team) = if m >= 0x30 {
-                let k = (m - 0x30) as usize;
-                (paths[k].as_ref().map_or([0.0; 4], |c| c.at(t[p].min(lens[k]))), true)
-            } else if m == 0x2e {
-                let (path, len) = &gu_set[&CHARS[p]];
-                let Some(path) = path else { continue };
-                gu += 1;
-                (path.at(t[p].min(*len)), false)
-            } else {
-                continue;
-            };
-            t[p] += 1.0;
-            let got = reaction_root(pt, team, CHARS[p], [v(fr, 0x3d40), v(fr, 0x3d50), v(fr, 0x3d60)], v(fr, 0x3d90), v(a, 0x3da0));
-            let want = v(fr, 0x3da0);
-            if got.map(f32::to_bits) == want.map(f32::to_bits) {
-                exact += 1;
-            } else {
-                assert_eq!(want, v(a, 0x3da0), "k={k} p={p} motion {m:#x} t={}: {got:?}", t[p] - 1.0);
-                held += 1;
+            for p in 0..4 {
+                if p_u8(fr, p, 0x3fa4) != 2 || p_u8(fr, p, 0x3fa7) != 1 {
+                    continue;
+                }
+                if p_u8(a, p, 0x3fa7) != 1 {
+                    t[p] = 0.0;
+                } else {
+                    t[p] += (ticks - 1) as f32;
+                }
+                let m = p_i32(fr, p, 0x3db0);
+                let v = |f: Frame, o: usize| [0, 4, 8, 12].map(|d| f.player_f32(p, o + d));
+                let (pt, team) = if m >= 0x30 {
+                    let k = (m - 0x30) as usize;
+                    (paths[k].as_ref().map_or([0.0; 4], |c| c.at(t[p].min(lens[k]))), true)
+                } else if m == 0x2e {
+                    let (path, len) = &gu_set[&lineup[p].0];
+                    let Some(path) = path else { continue };
+                    gu += 1;
+                    (path.at(t[p].min(*len)), false)
+                } else {
+                    continue;
+                };
+                t[p] += 1.0;
+                let got = reaction_root(pt, team, lineup[p].0, [v(fr, 0x3d40), v(fr, 0x3d50), v(fr, 0x3d60)], v(fr, 0x3d90), v(a, 0x3da0));
+                let want = v(fr, 0x3da0);
+                if got.map(f32::to_bits) == want.map(f32::to_bits) {
+                    exact += 1;
+                } else {
+                    assert_eq!(want, v(a, 0x3da0), "{name} k={k} p={p} motion {m:#x} t={}: {got:?}", t[p] - 1.0);
+                    held += 1;
+                }
             }
         }
+        eprintln!("{name}: {exact} reacting frames bit-exact ({gu} gu_set), {held} held at the phase's end");
+        assert!(exact > 500 && held < 50, "{name}");
     }
-    eprintln!("{exact} reacting frames bit-exact ({gu} gu_set), {held} held at the phase's end");
-    assert!(exact > 7000 && held < 50);
 }
 
 /// Each player's motion clock through 9000 frames of the slot-5 match (`context/fixtures/anim_s05.bin`,
@@ -690,7 +720,7 @@ fn recorded_whiffs() {
     use hst_sim::motion::{WHIFF_RECOVERY, Whiff};
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let (mut whiffs, mut repress, mut freed) = (0, 0, 0);
-    for name in ["new_recording.bin", "round1.bin", "match_s05.bin", "lob_smash_s05.bin"] {
+    for name in ["new_recording.bin", "round1.bin", "match_s05.bin", "lob_smash_s05.bin", "1p3goodcpus.bin"] {
         let Ok(data) = std::fs::read(format!("{dir}/{name}")) else {
             eprintln!("{name} absent, skipped");
             continue;

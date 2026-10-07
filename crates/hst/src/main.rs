@@ -42,6 +42,8 @@ pub struct Args {
     pub singles: bool,
     /// Characters on court (player order), `--chars 0,2,1,5`.
     pub chars: Vec<usize>,
+    /// Their outfits (costumes 0..9), `--outfits 9,9,4,9`: the model, the panel face and the computer players' AI row.
+    pub outfits: Vec<usize>,
     /// Character viewer: `--character N [--motion M]`.
     pub viewer: Option<(usize, usize)>,
     /// Sound audition: archive, bank header, program, key.
@@ -68,6 +70,7 @@ fn main() {
     let mut music = false;
     let mut shot_at = 0.5;
     let mut sound = None;
+    let mut outfits = Vec::new();
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -88,6 +91,7 @@ fn main() {
                 sound = Some((xb, hd, program.parse().unwrap_or(0), key.parse().unwrap_or(0)));
             }
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
+            "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
     }
@@ -102,7 +106,7 @@ fn main() {
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music })
+    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot, clouds))

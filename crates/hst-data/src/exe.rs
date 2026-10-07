@@ -99,6 +99,15 @@ impl<'a> Game<'a> {
         self.at(0x41_5000, 13 * 0x90).chunks_exact(0x90).map(|r| BounceLook { dust: rgb(r, 0), mark: rgb(r, 0x60), puffs: r[0x80] != 0 }).collect()
     }
 
+    /// How far inside the court lines shots are pulled: per shot class (serve, stroke, volley, smash) and kind
+    /// (0..4) the margins (across, along) for a shot mode ≥ 0 then < 0; and per character (0..13) the widest
+    /// sideline margin a short angled topspin stroke can get.
+    pub fn court_margins(&self) -> ([[[f32; 4]; 5]; 4], [f32; 14]) {
+        let m = self.f32s(0x40_8d20, 80);
+        let lines = std::array::from_fn(|c| std::array::from_fn(|k| std::array::from_fn(|j| m[c * 20 + k * 4 + j])));
+        (lines, self.f32s(0x41_09c4, 14).try_into().unwrap())
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)
