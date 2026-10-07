@@ -195,6 +195,16 @@ pub fn stroke_shout(h: &Hit, character: i32, players: u32, mut roll: impl FnMut(
 
 /// The dive's shout program, played as the dive starts.
 pub const DIVE_SHOUT: u8 = 3;
+/// A missed swing's shout program, at the contact pose where the stroke turns into its miss motion.
+pub const WHIFF_SHOUT: u8 = 4;
+
+/// A doubles CPU player's call (program 6 key 3 or 4 by a random bit, 0x80 at the player) as it leaves an incoming
+/// ball to its partner, one time in four.
+/// ponytail: the reaction voices after a point (programs 7–10 by reaction motion) only play for a player the
+/// post-point camera has in close view; left out with that check.
+pub fn call_out(player: usize, bit: bool) -> Play {
+    play(1 + player as u8, 6, 3 + bit as u8, 0x80)
+}
 
 /// One player's voice: the last key of programs 1 and 2 (no shout repeats its program's last key).
 #[derive(Clone, Copy, Debug)]
@@ -209,9 +219,9 @@ impl Default for Voice {
 impl Voice {
     /// Player `player`'s shout of `program` (bank slot 1 + player, 0x80 at the player): a random key, `r` a random
     /// draw, from 0..=hi other than the program's last — hi 4 for program 1 and 2 for the others with up to two
-    /// players, else 1.
+    /// players, else 1; the whiff's hi is 1 with exactly two players, else 0.
     pub fn shout(&mut self, player: usize, program: u8, players: u32, r: u32) -> Play {
-        let hi = if players > 2 { 1 } else if program == 1 { 4 } else { 2 };
+        let hi = if program == WHIFF_SHOUT { (players == 2) as i32 } else if players > 2 { 1 } else if program == 1 { 4 } else { 2 };
         let last = match program {
             1 | 2 => Some(&mut self.0[program as usize - 1]),
             _ => None,

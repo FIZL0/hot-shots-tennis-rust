@@ -97,6 +97,8 @@ struct Player {
     balloon: Option<(Balloon, u32)>,
     /// Stand-in AI: the contact frame it waits for before pressing.
     bot_due: Option<usize>,
+    /// Stand-in AI: the shot it last decided to leave to its partner.
+    bot_left: i32,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -1153,8 +1155,12 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             if let Some(w) = motion::whiff(anim as i32) {
                 set_motion(p, w, 1.0, false, None);
             }
+            let r = (rand(&mut g.rng) * 32768.0) as u32;
+            let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
+            g.whooshes.push((0, i, shout));
         }
     }
+    let p = &mut g.players[i];
     if let Some(f) = p.swing {
         p.swing = Some(f + 1);
     }
@@ -1358,6 +1364,14 @@ fn bot(g: &mut Game, i: usize) {
             let mate = i ^ 2;
             mate >= g.players.len() || d(i) < d(mate) || (d(i) == d(mate) && i < mate)
         });
+        // ponytail: the original decides a few frames into the shot (its AI, P11); this calls at once
+        if plan.is_some() && mine.is_none() && g.players.len() == 4 && g.players[i].bot_left != g.shots {
+            g.players[i].bot_left = g.shots;
+            if rand(&mut g.rng) < 0.25 {
+                let call = sound::call_out(i, rand(&mut g.rng) < 0.5);
+                g.whooshes.push((0, i, call));
+            }
+        }
         let p = g.players[i];
         let goal = mine.map_or(p.home, |(b, _)| [b[0] - 1.1 * (b[0] - p.pos[0]).signum(), 0.0, b[2] - p.end * g.reach.ahead]);
         let d = Vec2::new(goal[0] - p.pos[0], goal[2] - p.pos[2]);

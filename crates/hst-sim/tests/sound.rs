@@ -431,6 +431,7 @@ fn shouts_match_the_game() {
     let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
     let (mut bank_of, mut last) = ([None; 4], [[None; 2]; 4]);
     let (mut sure, mut chance, mut dives, mut quiet) = (0, 0, 0, 0);
+    let (mut launches, mut whiffs) = (Vec::new(), Vec::new());
     let mut check = |k: usize, p: usize, want: Option<u8>, may: Option<u8>| {
         let got: Vec<_> = (k..=k + 1).flat_map(|j| heard(j)).filter(|v| v.1 < 6).collect();
         assert!(got.len() <= 1, "frame {k}: {got:?}");
@@ -454,6 +455,8 @@ fn shouts_match_the_game() {
         for p in 0..4 {
             if h[fx(0xd4) + p] != 0 && h[fx(0xd8) + 8 * p + 5] == 3 {
                 check(k, p, Some(sound::DIVE_SHOUT), Some(sound::DIVE_SHOUT));
+            } else if h[fx(0xd4) + p] != 0 && i(h, fx(0xd8) + 8 * p) == 999 {
+                whiffs.push((k, p));
             }
         }
         let n = i(h, rally + 0x20);
@@ -461,6 +464,7 @@ fn shouts_match_the_game() {
             continue;
         }
         let p = i(h, rally + 0x18) as usize;
+        launches.push((k, p));
         let rec = fx(0xd8 + 8 * p);
         let hit = sound::Hit {
             branch: h[rec + 5],
@@ -479,5 +483,25 @@ fn shouts_match_the_game() {
     }
     eprintln!("{sure} certain shouts, {chance} by chance, {dives} dives, {quiet} quiet strokes; banks {bank_of:?}");
     assert!(sure >= 10 && dives == 2);
-    // ponytail: programs 4 (a missed swing) and 6–10 (reactions after the point) are N3d2
+    // a missed swing shouts program 4 at its contact pose, 8–10 frames after the miss
+    for &(k, p) in &whiffs {
+        let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).collect();
+        assert!(got.len() == 1 && got[0].1 == sound::WHIFF_SHOUT && Some(got[0].0) == bank_of[p], "whiff at {k}: {got:?}");
+    }
+    // every call (program 6 key 3/4) is by a player whose partner takes the incoming ball the other side hit
+    let mut calls = Vec::new();
+    for k in 0..s.len() {
+        for (b, prog, key) in heard(k).into_iter().filter(|v| v.1 == 6) {
+            let p = bank_of.iter().position(|&x| x == Some(b)).unwrap();
+            let call = sound::call_out(p, key == 4);
+            assert_eq!((prog, key), (call.program, call.key), "frame {k}");
+            let before = launches.iter().rev().find(|l| l.0 < k).unwrap();
+            let next = launches.iter().map(|l| (l.0, l.1)).chain(whiffs.iter().copied()).filter(|l| l.0 > k).min().unwrap();
+            assert!(before.1 & 1 != p & 1 && next.1 == p ^ 2, "call at {k} by {p}: after {before:?}, before {next:?}");
+            calls.push(k);
+        }
+    }
+    eprintln!("{} whiffs, calls at {calls:?}", whiffs.len());
+    assert!(whiffs.len() == 1 && calls.len() == 3);
+    // ponytail: the reaction voices after points (programs 7–10, frame 1029) are left out (see sound::call_out)
 }
