@@ -6,7 +6,11 @@
 //!   other value passes everything. `@add`/`@sub` never pass the test and write colour without Z.
 //! - TEX0 TFX: HIGHLIGHT2 (alpha = texture alpha) when the material colour's alpha is 0x80 and the name has no
 //!   `@vert`, else MODULATE (alpha = texture × vertex alpha).
-//! - PRIM (batch header +0x31): TME textured, ABE blended; FGE (fog) is not drawn yet.
+//! - PRIM (batch header +0x31): TME textured, ABE blended, FGE fogged (every court batch, sky included).
+//! - Fog: `envir_cNN.dat` (CMN.XB) row k (time of day) at 0x290 + k·0x60: byte 0 set turns it off, FOGCOL RGB at
+//!   +0x18, F at the near/far end +0x28/+0x2c, view depths +0x38/+0x3c. VU1 gives each vertex F = the depth (clip
+//!   w) mapped linearly from near to far and clamped between the two values; the GS takes ⌊F⌋ and draws
+//!   (F·C + (255 − F)·FOGCOL) >> 8. With the eye higher than 30 m both ends move 2 %/m (up to 70 %) towards 255.
 //! - Colour = texture × vertex colour × material colour × light in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma
 //!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl); its specular term,
 //!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
@@ -57,6 +61,8 @@ pub struct GsKey {
     pub test: Test,
     /// ABE: `None` replaces the frame buffer.
     pub blend: Option<mtl::Blend>,
+    /// PRIM FGE.
+    pub fog: bool,
 }
 
 #[derive(ShaderType, Clone, Copy, Debug)]
@@ -71,6 +77,26 @@ pub struct GsUniform {
     pub shadow: f32,
     /// Texture coordinate offset (a court `.UVA`).
     pub uv_offset: Vec2,
+    /// F at the near and far depth, the near and far view depth (m); `NO_FOG` draws as without FGE.
+    pub fog: Vec4,
+    /// FOGCOL, 1.0 = 0xff.
+    pub fog_color: Vec4,
+}
+
+/// Fog parameters that leave every pixel as it is.
+pub const NO_FOG: Vec4 = Vec4::new(255.0, 255.0, 0.0, 1.0);
+
+/// A court's fog for time of day `k` from its `envir_cNN.dat`: (`GsUniform::fog`, `fog_color`).
+pub fn court_fog(envir: &[u8], k: usize) -> Option<(Vec4, Vec4)> {
+    let row = envir.get(0x290 + k * 0x60..0x2f0 + k * 0x60)?;
+    let f = |o: usize| f32::from_le_bytes(row[o..o + 4].try_into().unwrap());
+    let colour = Vec4::new(row[0x18] as f32, row[0x19] as f32, row[0x1a] as f32, 255.0) / 255.0;
+    // off: the game sets (255, 255, 0, 0.001)
+    let (near, far, z0, mut z1) = if row[0] != 0 { (255.0, 255.0, 0.0, 0.001) } else { (f(0x28), f(0x2c), f(0x38), f(0x3c)) };
+    if z1 <= z0 {
+        z1 = z0 + 1.0;
+    }
+    Some((Vec4::new(near, far, z0, z1), colour))
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -110,13 +136,13 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE };
         tests
             .into_iter()
             .map(|test| GsMaterial {
                 uniform,
                 texture: texture.clone().filter(|_| textured),
-                key: GsKey { textured, modulate, test, blend },
+                key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0 },
             })
             .collect()
     }
@@ -174,6 +200,9 @@ impl Material for GsMaterial {
             Test::Lt70 => defs.push("GS_LT70".into()),
             Test::Always | Test::Never => {}
         }
+        if k.fog {
+            defs.push("GS_FOG".into());
+        }
         if matches!(k.test, Test::Lt70 | Test::Never) {
             defs.push("GS_NO_Z".into());
         }
@@ -211,15 +240,15 @@ mod tests {
         let keys = |m: &mtl::Material, prim| GsMaterial::for_batch(m, prim, tex.clone()).iter().map(|g| g.key).collect::<Vec<_>>();
         // opaque material, textured unblended batch: HIGHLIGHT2, no test
         let k = keys(&material("grass", 5, 1.0), 0x30);
-        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None, fog: true }]);
         // mode 15 cut-out, translucent colour → MODULATE
         let k = keys(&material("leaf", 15, 0.5), 0x70);
-        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal) }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal), fog: true }]);
         // mode 25: two draws
         assert_eq!(keys(&material("fence@vert", 25, 1.0), 0x70).iter().map(|k| k.test).collect::<Vec<_>>(), [Test::Ge70, Test::Lt70]);
         // court lines: @add without ABE still adds, no Z; @sub wins over @add; untextured batch
         let k = keys(&material("line@add@sub", 15, 0.4), 0x20);
-        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub) }]);
+        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub), fog: true }]);
         // specular exponent 128·(+0x10)^1.65, at least 1; highlight +0x14
         let mut m = material("crayline", 5, 1.0);
         m.header[0x10..0x14].copy_from_slice(&0.49f32.to_le_bytes());
@@ -227,5 +256,21 @@ mod tests {
         let u = GsMaterial::for_batch(&m, 0x30, tex.clone())[0].uniform;
         assert!((u.shininess - 39.46).abs() < 0.05 && u.highlight == 0.9, "{u:?}");
         assert_eq!(GsMaterial::for_batch(&material("x", 5, 1.0), 0x30, tex.clone())[0].uniform.shininess, 1.0);
+        assert!(!keys(&material("x", 5, 1.0), 0x10)[0].fog);
+    }
+
+    #[test]
+    fn court_fog_row() {
+        // court 10's row 0 as the game holds it in RAM during a match (slot 5): FOGCOL 0xdcd1b5, (255, 224.4, 40, 190)
+        let mut envir = vec![0; 0x550];
+        envir[0x2a8..0x2ab].copy_from_slice(&[0xb5, 0xd1, 0xdc]);
+        for (o, v) in [(0x2b8, 255.0f32), (0x2bc, 224.4), (0x2c8, 40.0), (0x2cc, 190.0)] {
+            envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let (fog, colour) = court_fog(&envir, 0).unwrap();
+        assert_eq!(fog, Vec4::new(255.0, 224.4, 40.0, 190.0));
+        assert_eq!((colour * 255.0).round(), Vec4::new(181.0, 209.0, 220.0, 255.0));
+        envir[0x290] = 1;
+        assert_eq!(court_fog(&envir, 0).unwrap().0, Vec4::new(255.0, 255.0, 0.0, 0.001));
     }
 }

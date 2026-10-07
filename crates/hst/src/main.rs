@@ -177,6 +177,16 @@ fn load(
                 library.insert(stem, parts);
             }
         }
+        // fog for time of day 0 on every court material (FGE batches use it); ponytail: P17e picks the time of day
+        let envir = iso.read(&format!("{dir}/CMN.XB")).ok().and_then(|d| {
+            let arc = Archive::parse(&d).ok()?;
+            arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}.dat")))?).ok()
+        });
+        if let Some((fog, colour)) = envir.and_then(|e| gs::court_fog(&e, 0)) {
+            for (_, m) in gs_materials.iter_mut() {
+                (m.uniform.fog, m.uniform.fog_color) = (fog, colour);
+            }
+        }
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
@@ -432,7 +442,7 @@ fn gs_models_anim(
                 });
                 images.add(img)
             });
-            let key = |pi: usize| (packets[pi].prim & 0x50, anim.uv_track(mi, pi), packets[pi].uv_swap);
+            let key = |pi: usize| (packets[pi].prim & 0x70, anim.uv_track(mi, pi), packets[pi].uv_swap);
             let mut keys: Vec<_> = (0..packets.len()).map(|pi| (key(pi), pi)).collect();
             keys.sort();
             keys.dedup_by_key(|k| k.0);

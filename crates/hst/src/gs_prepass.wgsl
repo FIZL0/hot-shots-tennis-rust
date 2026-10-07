@@ -10,6 +10,8 @@ struct Gs {
     highlight: f32,
     shadow: f32,
     uv_offset: vec2<f32>,
+    fog: vec4<f32>,
+    fog_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;

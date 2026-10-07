@@ -154,7 +154,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P16** Camera (court views, pick, wiring, other modes open) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
 - [ ] **P17** (split into P17a–h) Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [x] **P17a** Court material GS state: blend, alpha test, Z write, TFX, PRIM, wrap (in P17) → new `hst/src/gs.rs` gs.wgsl · `main.rs` gs_models · `mdl.rs` Packet.prim | t: gs.rs | j: 2026-10-07-p17-court-rendering
-- [ ] **P17b** Fog (FGE) (in P17) → `gs.rs` gs.wgsl
+- [x] **P17b** Fog (FGE) (in P17) → `gs.rs` gs.wgsl · `main.rs` load/gs_models_anim | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering
 - [x] **P17c** VU1 lighting + HIGHLIGHT2 term (in P17) → `gs.rs` gs.wgsl · `main.rs` gs_models
 - [x] **P17d** Clouds: category-6 `cloud` models scattered by the cloud system, singles only (not category 14) (in P17) → `main.rs` load · `layout.rs` cloud_count · `exe.rs` wind · new `hst-sim/src/clouds.rs` | t: clouds.rs, effects.rs | j: 2026-10-07-p17-court-rendering
 - [ ] **P17e** Sky time of day + seasons `_sXXXX`/SSN1; also the sky dome's open top: looking straight up shows the grey background colour (not the clouds) (in P17) → `main.rs` load
