@@ -13,7 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl, xb::Archive};
 use hst_sim::pose::{arm_table, ArmTable, Clip, Path, Skeleton};
-use hst_sim::motion::Clock;
+use hst_sim::motion::{Clock, Fade};
 
 /// One joint of the skeleton.
 pub struct Joint {
@@ -83,11 +83,16 @@ pub struct Motion {
     /// The face playing (`CharacterData::faces`) and its clock.
     pub face: usize,
     pub face_clock: Clock,
+    /// The crossfade from the outgoing motion, and this frame's mix weight (`true`: the held fade, the new motion's
+    /// frame 0 over the frozen outgoing pose; else the outgoing pose over the new one).
+    pub fade: Fade,
+    pub mix: Option<(f32, bool)>,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0, arm: None, face: 0, face_clock: Clock::start(1.0, true, None) }
+        let clock = Clock::start(1.0, true, None);
+        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, fade: Fade::default(), mix: None }
     }
 }
 
@@ -97,9 +102,17 @@ impl Motion {
         // the soft follow-throughs 0x1c/0x1d keep the stroke's face; the face clock restarts with the motion
         // ponytail: the face clock ignores the crossfade hold; team reactions (0x30..) use their own clip's face, not the co offset
         let face = if id == 0x1c || id == 0x1d { self.face } else { id };
-        let mut face_clock = Clock::start(speed, looping, None);
-        face_clock.speed = speed;
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock };
+        // crossfade length: the held count's frames, 8 for looping motions and whiffs, else a cut
+        // ponytail: stand↔ready's track 6 (the game's longest-arc slerp) mixes like the others
+        let frames = match hold {
+            Some(n) => n + 1,
+            None if looping || id == 0x27 || id == 0x28 => 8,
+            None => 0,
+        };
+        let mut fade = self.fade;
+        fade.start(frames, id as i32, hold.is_some(), self.id as i32, true, &self.clock);
+        let face_clock = Clock::start(speed, looping, None);
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, fade, mix: None };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
@@ -357,6 +370,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
 /// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
 pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights)>, mut joints: Query<&mut Transform>) {
     for (rig, motion, mut weights) in &mut rigs {
+        let fading = rig.data.motions.get(&(motion.fade.id as usize)).filter(|_| motion.fade.clip);
         // the face: each bound track's weight at the face clock's last sampled time (unbound targets 0)
         // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
         let w = weights.weights_mut();
@@ -367,11 +381,17 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
                 w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
             }
         }
-        let Some(clip) = rig.data.motions.get(&motion.id) else { continue };
+        let Some(new) = rig.data.motions.get(&motion.id) else { continue };
         // between the last two ticks' sampled times (across a loop's wrap)
         let (a, b) = (motion.prev, motion.clock.sampled);
-        let b = if b < a && motion.clock.looping { b + clip.length } else { b };
-        let t = clip.wrap(a + (b - a) * time.overstep_fraction(), motion.clock.looping);
+        let b = if b < a && motion.clock.looping { b + new.length } else { b };
+        let t = new.wrap(a + (b - a) * time.overstep_fraction(), motion.clock.looping);
+        // the base pose, and the pose mixed over its first 23 tracks (the player's blend count) by the fade
+        let (clip, t, over) = match (motion.mix, fading) {
+            (Some((w, true)), Some(old)) => (old, motion.fade.sampled, Some((new, 0.0, w))),
+            (Some((w, false)), Some(old)) => (new, t, Some((old, motion.fade.sampled, w))),
+            _ => (new, t, None),
+        };
         for (j, joint) in rig.data.joints.iter().enumerate() {
             if let Ok(mut tf) = joints.get_mut(rig.joints[j]) {
                 *tf = joint.rest;
@@ -386,6 +406,21 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
             }
             if let Some(p) = pos {
                 tf.translation = Vec3::from(p);
+            }
+        }
+        // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
+        if let Some((other, t, w)) = over {
+            for (k, track) in other.tracks.iter().enumerate().take(23) {
+                let Ok(mut tf) = joints.get_mut(rig.joints[track.node]) else { continue };
+                let (rot, pos) = other.sample(k, t);
+                let r = tf.rotation;
+                let (q, p) = hst_sim::motion::mix(([-r.x, -r.y, -r.z, r.w], tf.translation.into()), (rot.unwrap_or([-r.x, -r.y, -r.z, r.w]), pos.unwrap_or(tf.translation.into())), w);
+                if rot.is_some() {
+                    tf.rotation = Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize();
+                }
+                if pos.is_some() {
+                    tf.translation = Vec3::from(p);
+                }
             }
         }
         // the contact IK turns the arm joints in their parents' frames (the game's local·Q, rows; translation kept)
@@ -404,8 +439,13 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
 pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
     for (rig, mut m) in &mut q {
         let length = rig.data.motions.get(&m.id).map_or(0.0, |c| c.length);
+        let old = rig.data.motions.get(&(m.fade.id as usize)).map_or(0.0, |c| c.length);
         m.prev = m.clock.sampled;
+        m.mix = m.fade.tick(old).map(|w| (w, false));
         m.clock.tick(length);
+        if let Some(w) = m.fade.tick_hold() {
+            m.mix = Some((w, true));
+        }
         let face = rig.data.faces.get(&m.face).map_or(0.0, |f| f.length);
         m.face_clock.tick(face);
     }

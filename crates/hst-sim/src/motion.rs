@@ -42,6 +42,118 @@ impl Clock {
     }
 }
 
+/// The motion player's crossfade from the outgoing motion. The motion setter starts it with a length in frames
+/// (8 for looping motions and the whiffs 0x27/0x28, the soft follow-through's own count with `hold`, a cut below
+/// 2). Each frame, without `hold`, the outgoing motion keeps playing on its own clock and is mixed over the new pose
+/// with `weight`, from (n−1)/n down to 0; with `hold`, its pose stays frozen at the last sampled time while the new
+/// motion, held at frame 0, is mixed in with `weight` rising to 1 (the new clock's `hold` counts the same frames).
+/// A switch mid-fade keeps whichever pose is more than half in and rescales the countdown to the new length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fade {
+    /// The outgoing motion (−1 none) and whether it has a clip to sample.
+    pub id: i32,
+    pub clip: bool,
+    pub sampled: f32,
+    pub time: f32,
+    pub speed: f32,
+    pub looping: bool,
+    pub frames: i32,
+    pub count: i32,
+    pub weight: f32,
+    pub hold: bool,
+}
+
+impl Default for Fade {
+    fn default() -> Fade {
+        Fade { id: -1, clip: false, sampled: 0.0, time: 0.0, speed: 0.0, looping: false, frames: 0, count: 0, weight: 0.0, hold: false }
+    }
+}
+
+impl Fade {
+    /// The setter switching from motion `cur_id` (clock `cur`, `cur_clip` whether it has a clip) to `id`.
+    pub fn start(&mut self, frames: i32, id: i32, hold: bool, cur_id: i32, cur_clip: bool, cur: &Clock) {
+        use crate::ps2::{div, madd, sub};
+        let ratio = |a: i32, b: i32| div(a as f32, b as f32);
+        let cut = |f: &mut Fade| (f.id, f.clip) = (-1, false);
+        let take = |f: &mut Fade| (f.id, f.clip, f.time, f.speed, f.looping) = (cur_id, cur_clip, cur.time, cur.speed, cur.looping);
+        if frames < 2 {
+            cut(self);
+            self.hold = false;
+            return;
+        }
+        if !self.clip {
+            take(self);
+            (self.frames, self.count) = (frames, frames - 1);
+        } else {
+            let f = ratio(self.count, self.frames);
+            self.frames = frames;
+            if 0.5 < f && self.id != id {
+                cut(self);
+            } else {
+                take(self);
+                // truncated toward zero, as cvt.w.s
+                self.count = madd(0.5, if 0.5 <= f { f } else { sub(1.0, f) }, frames as f32) as i32;
+            }
+            self.count -= 1;
+        }
+        self.hold = hold;
+        self.weight = ratio(self.count, self.frames);
+        if hold {
+            self.time = sub(self.time, self.speed);
+            self.weight = sub(1.0, self.weight);
+        }
+        self.sampled = self.time;
+    }
+
+    /// The outgoing motion's part of a frame (before the player's update): its sampled time and the weight its
+    /// pose is mixed with this frame (`None`: no fade). `length` is the outgoing clip's.
+    pub fn tick(&mut self, length: f32) -> Option<f32> {
+        if self.hold {
+            if self.clip {
+                self.time = crate::pose::wrap(self.time, length, self.looping);
+                self.sampled = self.time;
+            }
+            return None;
+        }
+        let w = self.clip.then_some(self.weight);
+        if self.clip {
+            self.time = crate::pose::wrap(self.time, length, self.looping);
+            self.sampled = self.time;
+        }
+        self.time = crate::ps2::add(self.time, self.speed);
+        self.count -= 1;
+        if self.count < 0 {
+            (self.id, self.clip) = (-1, false);
+        } else {
+            self.weight = crate::ps2::div(self.count as f32, self.frames as f32);
+        }
+        w
+    }
+
+    /// The held fade's part of a frame (after the player's update): the weight the new motion's frame 0 is mixed
+    /// over the frozen pose with (`None`: not holding).
+    pub fn tick_hold(&mut self) -> Option<f32> {
+        if !self.hold {
+            return None;
+        }
+        let w = self.weight;
+        self.count -= 1;
+        if self.count < 0 {
+            (self.id, self.clip, self.hold) = (-1, false, false);
+        } else {
+            self.weight = crate::ps2::sub(1.0, crate::ps2::div(self.count as f32, self.frames as f32));
+        }
+        Some(w)
+    }
+}
+
+/// One track of the fade's mix: the current rotation and position toward the other pose's by `w` (shortest-arc
+/// slerp; `old` positions taken from `cur` by madd).
+pub fn mix(cur: ([f32; 4], [f32; 3]), other: ([f32; 4], [f32; 3]), w: f32) -> ([f32; 4], [f32; 3]) {
+    use crate::ps2::{add, madd, sub};
+    (crate::quat::slerp(cur.0, other.0, w), std::array::from_fn(|i| madd(add(0.0, cur.1[i]), sub(other.1[i], cur.1[i]), w)))
+}
+
 /// A stroke starting with `frames` to contact (+0x3ec4) on contact-search branch `branch` (+0x3ec1: 1 ground,
 /// 2 volley, 3 dive, 4 smash) with swing motion `anim`. Returns the motion to play now, its speed, and the swing
 /// still to come (played at speed 1 from 8 frames before contact) when the body first turns: a ground stroke or

@@ -139,8 +139,8 @@ fn match_s05_reactions() {
 /// the skeleton's rest bones.
 #[test]
 fn clip_sampler_ram() {
-    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
-    use hst_sim::pose::{Clip, Skeleton, q_matrix};
+    use hst_data::iso::Iso;
+    use hst_sim::pose::{Clip, q_matrix};
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
     let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
     let (mut tracks, mut players) = (0, 0);
@@ -157,38 +157,9 @@ fn clip_sampler_ram() {
             let (motion, t, clip) = (u(an + 0x20), fr(an + 0x38), u(an + 0x24));
             let track = |k: usize| u(u(clip + 0x10) + 4 * k);
             let list_n = |l: usize| if l == 0 { 0 } else { u(u(l + 0xc)) };
-            // the character whose motion file has this clip's first rotation keys
-            let first_rot = |k: usize| { let l = u(track(k) + 0xc); (0..list_n(l)).map(|j| [0, 4, 8, 12].map(|o| u(u(l + 0x18) + 16 * j + o) as u32)).collect::<Vec<_>>() };
-            let want0 = first_rot(0);
             let nodes = u(u(u(u(an)) + 0xc) + 0x64);
             let node_of = |k: usize| nodes + ((u(u(clip + 0x1c) + 2 * (k & !1)) >> (16 * (k & 1))) as u16 as usize) * 0x120;
-            let names: Vec<String> = (0..u(clip + 0xc)).map(|k| cstr(u(track(k) + 8))).collect();
-            let rests: Vec<[u32; 3]> = (0..names.len()).map(|k| [0, 4, 8].map(|o| u(u(u(node_of(k) + 0x108) + 0x10) + 0x70 + o) as u32)).collect();
-            let mut found = None;
-            'search: for c in 0..16 {
-                let Ok(data) = iso.read(&format!("PCANI/PC{c:02}ANI.XB")) else { continue };
-                let arc = Archive::parse(&data).unwrap();
-                let stem = ani::motion_name(motion, c).unwrap().to_ascii_lowercase();
-                let Some(e) = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
-                let a = ani::parse(&arc.read(e).unwrap()).unwrap();
-                let keys: Vec<[u32; 4]> = a.tracks.iter().find(|t| t.name == names[0]).map(|t| t.rotation.iter().map(|k| k.1.map(f32::to_bits)).collect()).unwrap_or_default();
-                if keys != want0 {
-                    continue;
-                }
-                for costume in 0..10 {
-                    let Ok(mdata) = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")) else { continue };
-                    let marc = Archive::parse(&mdata).unwrap();
-                    let Some(e) = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) else { continue };
-                    let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
-                    let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
-                    let rest = |n: &String| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits()));
-                    if names.iter().zip(&rests).all(|(n, r)| rest(n) == Some(*r)) {
-                        found = Some((c, a, sk));
-                        break 'search;
-                    }
-                }
-            }
-            let (c, a, sk) = found.unwrap_or_else(|| panic!("{s} p{p}: no character's motion {motion:#x} matches"));
+            let (a, sk) = ram_clip(&mut iso, &ram, an, clip, motion);
             let ours = Clip::new(&sk, &a);
             assert_eq!(ours.tracks.len(), u(clip + 0xc), "{s} p{p} track count");
             assert_eq!(ours.length.to_bits(), fr(clip + 0x2c).to_bits(), "{s} p{p} length");
@@ -199,7 +170,7 @@ fn clip_sampler_ram() {
                 let node = node_of(k);
                 let cache = u(clip + 0x18) + 0x40 * k;
                 let (rot, pos) = ours.sample(k, t);
-                let ctx = format!("{s} p{p} char {c} motion {motion:#x} t {t} {name}");
+                let ctx = format!("{s} p{p} motion {motion:#x} t {t} {name}");
                 if list_n(u(track(k) + 0xc)) > 1 {
                     let q = rot.unwrap();
                     assert_eq!(q.map(f32::to_bits), [0, 4, 8, 12].map(|o| u(node + 0xe0 + o) as u32), "{ctx} quat");
@@ -503,4 +474,171 @@ fn arm_ik_anim() {
     }
     eprintln!("{runs} contact IK runs, {frames} frames bit-exact, {units} speed resets");
     assert!(runs > 40);
+}
+
+/// The motion player's crossfade through 9000 frames of the slot-5 match (`context/fixtures/anim_s05.bin`, motion
+/// object +0x44..+0x6c): outgoing motion, its sampled time and clock, length, countdown, weight and hold flag
+/// bit-exact after every frame, from the setter's length rule (8 for looping motions and whiffs 0x27/0x28, the
+/// recorded count for the held soft follow-through, else a cut) and the per-frame steps. The outgoing clip's
+/// length is the one recorded while it played.
+#[test]
+fn anim_s05_fade() {
+    use hst_sim::motion::{Clock, Fade};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/anim_s05.bin")) else { return eprintln!("anim_s05.bin absent, skipped") };
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    // (motion, clip, clock, fade, old clip, length)
+    let read = |k: usize, p: usize| {
+        let b = &data[k * S + 0x104 + p * 0x484..];
+        let (an, i) = (&b[0x400..], |o: usize| i32::from_le_bytes(b[0x400 + o..0x404 + o].try_into().unwrap()));
+        let clock = Clock { time: f(an, 0x3c), sampled: f(an, 0x38), speed: f(an, 0x40), looping: an[0x78] != 0, hold: None };
+        let fade = Fade {
+            id: i(0x44),
+            clip: i(0x48) != 0,
+            sampled: f(an, 0x4c),
+            time: f(an, 0x50),
+            speed: f(an, 0x54),
+            looping: an[0x58] != 0,
+            frames: i(0x5c),
+            count: i(0x60),
+            weight: f(an, 0x64),
+            hold: an[0x6c] != 0,
+        };
+        (i(0x20), i(0x24), clock, fade, i(0x48), f(b, 0x480))
+    };
+    let bits = |f: &Fade| (f.id, f.clip, f.sampled.to_bits(), f.time.to_bits(), f.speed.to_bits(), f.looping, f.frames, f.count, f.weight.to_bits(), f.hold);
+    let mut lengths = std::collections::HashMap::new();
+    let (mut frames, mut sets, mut fading, mut miss, mut held, mut switched) = (0, 0, 0, Vec::new(), 0, 0);
+    for k in 1..data.len() / S {
+        for p in 0..4 {
+            let (a, b) = (read(k - 1, p), read(k, p));
+            lengths.insert(a.1, a.5);
+            let run = |mut f: Fade, n: usize, clip: i32| {
+                let len = lengths.get(&clip).copied().unwrap_or(0.0);
+                for _ in 0..n {
+                    f.tick(len);
+                    f.tick_hold();
+                }
+                f
+            };
+            let want = bits(&b.3);
+            if (0..=2).any(|n| bits(&run(a.3, n, a.4)) == want) && a.0 == b.0 && a.1 == b.1 {
+                frames += 1;
+                fading += a.3.clip as i32;
+                continue;
+            }
+            // the setter, then up to two frames
+            let (id, looping, hold) = (b.0, b.2.looping, b.3.hold);
+            let n = if hold { b.3.frames } else if looping || id == 0x27 || id == 0x28 { 8 } else { 0 };
+            let mut f = a.3;
+            f.start(n, id, hold, a.0, a.1 != 0, &a.2);
+            // at a point's end the player is reset first (no motion, no clip, a cut), then set
+            let mut r = a.3;
+            r.start(0, -1, false, -1, false, &a.2);
+            r.start(n, id, hold, -1, false, &a.2);
+            if (0..=2).any(|j| bits(&run(f, j, b.4)) == want || bits(&run(r, j, b.4)) == want) {
+                sets += 1;
+                held += hold as i32;
+                switched += (a.3.clip && n >= 2) as i32;
+            } else {
+                miss.push(format!("k={k} p={p} {:?} {:?} -> {:?}", (a.0, a.2), a.3, (b.0, b.3)));
+            }
+        }
+    }
+    eprintln!("{frames} frames ({fading} fading), {sets} sets ({held} held, {switched} mid-fade), {} missed", miss.len());
+    for m in miss.iter().take(10) {
+        eprintln!("{m}");
+    }
+    assert!(miss.is_empty() && sets > 100 && fading > 500 && held > 5 && switched > 5);
+}
+
+/// The character, motion file and skeleton of the clip at `clip` (motion `motion`) of player anim object `an`:
+/// the character whose motion file has the clip's first rotation keys, the costume whose rest bones match.
+fn ram_clip(iso: &mut hst_data::iso::Iso, ram: &[u8], an: usize, clip: usize, motion: usize) -> (hst_data::ani::Anim, hst_sim::pose::Skeleton) {
+    use hst_data::{ani, mdl, xb::Archive};
+    use hst_sim::pose::Skeleton;
+    let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+    let cstr = |a: usize| { let a = a & 0x1ff_ffff; String::from_utf8_lossy(&ram[a..a + ram[a..].iter().position(|&b| b == 0).unwrap()]).into_owned() };
+    let track = |k: usize| u(u(clip + 0x10) + 4 * k);
+    let list_n = |l: usize| if l == 0 { 0 } else { u(u(l + 0xc)) };
+    let first_rot = |k: usize| { let l = u(track(k) + 0xc); (0..list_n(l)).map(|j| [0, 4, 8, 12].map(|o| u(u(l + 0x18) + 16 * j + o) as u32)).collect::<Vec<_>>() };
+    let want0 = first_rot(0);
+    let nodes = u(u(u(u(an)) + 0xc) + 0x64);
+    let node_of = |k: usize| nodes + ((u(u(clip + 0x1c) + 2 * (k & !1)) >> (16 * (k & 1))) as u16 as usize) * 0x120;
+    let names: Vec<String> = (0..u(clip + 0xc)).map(|k| cstr(u(track(k) + 8))).collect();
+    let rests: Vec<[u32; 3]> = (0..names.len()).map(|k| [0, 4, 8].map(|o| u(u(u(node_of(k) + 0x108) + 0x10) + 0x70 + o) as u32)).collect();
+    for c in 0..16 {
+        let Ok(data) = iso.read(&format!("PCANI/PC{c:02}ANI.XB")) else { continue };
+        let arc = Archive::parse(&data).unwrap();
+        let stem = ani::motion_name(motion, c).unwrap().to_ascii_lowercase();
+        let Some(e) = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
+        let a = ani::parse(&arc.read(e).unwrap()).unwrap();
+        let keys: Vec<[u32; 4]> = a.tracks.iter().find(|t| t.name == names[0]).map(|t| t.rotation.iter().map(|k| k.1.map(f32::to_bits)).collect()).unwrap_or_default();
+        if keys != want0 {
+            continue;
+        }
+        for costume in 0..10 {
+            let Ok(mdata) = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")) else { continue };
+            let marc = Archive::parse(&mdata).unwrap();
+            let Some(e) = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) else { continue };
+            let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
+            let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+            let rest = |n: &String| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits()));
+            if names.iter().zip(&rests).all(|(n, r)| rest(n) == Some(*r)) {
+                return (a, sk);
+            }
+        }
+    }
+    panic!("no character's motion {motion:#x} matches the clip at {clip:#x}");
+}
+
+/// The crossfade's mix in the save states caught mid-fade: the first 23 tracks of the outgoing clip (the player's
+/// blend count) hold, in its cache, the rotation rows of slerp(new pose, outgoing pose at its sampled time, w) and
+/// the position new + (outgoing − new)·w, with w the weight before this frame's step, bit-exact.
+#[test]
+fn fade_mix_ram() {
+    use hst_data::iso::Iso;
+    use hst_sim::{motion::mix, pose::{Clip, q_matrix}};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let (mut tracks, mut players) = (0, 0);
+    for s in ["s03", "s04", "s05", "s08", "s09"] {
+        let Ok(ram) = std::fs::read(format!("{root}context/ram/{s}.bin")) else { return eprintln!("{s}.bin absent, skipped") };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let fr = |a: usize| f32::from_bits(u(a) as u32);
+        let gm = u(0x422f80);
+        for p in 0..4 {
+            let an = u(u(gm + 0xa8 + 4 * p) + 0x54);
+            let (old, clip, count) = (u(an + 0x44), u(an + 0x48), u(an + 0x60) as i32);
+            if clip == 0 || ram[(an + 0x6c) & 0x1ff_ffff] != 0 {
+                continue;
+            }
+            assert_eq!((u(an + 0x70), u(an + 0x74) as i32), (23, -1), "{s} p{p} blend count, special track");
+            let (a, sk) = ram_clip(&mut iso, &ram, an, clip, old);
+            let ours = Clip::new(&sk, &a);
+            let (t, w) = (fr(an + 0x4c), hst_sim::ps2::div((count + 1) as f32, u(an + 0x5c) as f32));
+            let nodes = u(u(u(u(an)) + 0xc) + 0x64);
+            for k in 0..23.min(ours.tracks.len()) {
+                let node = nodes + ((u(u(clip + 0x1c) + 2 * (k & !1)) >> (16 * (k & 1))) as u16 as usize) * 0x120;
+                let cache = u(clip + 0x18) + 0x40 * k;
+                let cur = ([0, 4, 8, 12].map(|o| fr(node + 0xe0 + o)), [0, 4, 8].map(|o| fr(node + 0xf0 + o)));
+                let (rot, pos) = ours.sample(k, t);
+                let (q, x) = mix(cur, (rot.unwrap_or(cur.0), pos.unwrap_or(cur.1)), w);
+                let ctx = format!("{s} p{p} motion {old:#x} t {t} w {w} track {k}");
+                if rot.is_some() {
+                    let m = q_matrix(q);
+                    for r in 0..3 {
+                        assert_eq!(m[r][..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
+                    }
+                }
+                if pos.is_some() {
+                    assert_eq!(x.map(f32::to_bits), [0, 4, 8].map(|o| u(cache + 0x30 + o) as u32), "{ctx} position");
+                }
+                tracks += 1;
+            }
+            players += 1;
+        }
+    }
+    eprintln!("{players} players mid-fade, {tracks} tracks bit-exact");
+    assert!(players >= 3);
 }
