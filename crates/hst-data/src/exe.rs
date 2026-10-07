@@ -107,6 +107,24 @@ impl<'a> Game<'a> {
         [self.at(0x3f_cce0, 6).to_vec(), self.at(0x3f_cce8, 4).to_vec(), self.at(0x3f_ccf0, 7).to_vec()]
     }
 
+    /// The umpire's word countdowns in ticks (after this long her next word plays even if the last still
+    /// sounds): score words (program 0, 14 keys) and announcements (program 2, 5 keys), for the game's language
+    /// setting `language`, umpire `umpire` (0..5) and her voice set `set` (0..2).
+    pub fn umpire_words(&self, language: u8, umpire: u8, set: u8) -> ([i32; 14], [i32; 5]) {
+        let l = if language == 0xb { 5 } else { language as u32 };
+        let (u, v) = (umpire as u32, set as u32);
+        let i = |a, k: u32| i32::from_le_bytes(self.at(a + 4 * k, 4).try_into().unwrap());
+        (
+            std::array::from_fn(|k| i(0x41_3e20 + l * 0x230 + u * 0x70 + v * 0x38, k as u32)),
+            std::array::from_fn(|k| i(0x41_4b40 + l * 0xc8 + u * 0x28 + v * 0x14, k as u32)),
+        )
+    }
+
+    /// Per court (0..12): the umpire's chair is on the side that mirrors her turns.
+    pub fn umpire_side(&self, court: usize) -> bool {
+        self.at(0x41_3e08 + court as u32, 1)[0] != 0
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());

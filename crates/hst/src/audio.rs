@@ -134,6 +134,20 @@ impl Sound {
         }
     }
 
+    /// A non-positional play (the umpire's voice): centred, sequence volume `p.volume`.
+    /// ponytail: the library's non-positional level is taken as the positional one straight ahead with no falloff
+    pub fn play_centre(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u64 {
+        let bank_volume = self.0.lock().unwrap().bank_volumes[p.slot as usize];
+        let level = Level { seq: [p.volume as u32; 2], bank: bank_volume, pan: [0x40; 3], ..default() };
+        self.play(bank, p.program as usize, p.key as usize, level, 0x1000)
+    }
+
+    /// The play `id` still has key-ons to come or voices sounding.
+    pub fn playing(&self, id: u64) -> bool {
+        let m = self.0.lock().unwrap();
+        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id)
+    }
+
     /// Ends the play `id`: no more key-ons, its voices released.
     pub fn stop(&self, id: u64) {
         let mut m = self.0.lock().unwrap();
@@ -221,6 +235,12 @@ pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<So
     let (n, set, tag) = if players < 3 { (0, "SGL", "sgv") } else { (4, "DBL", "dvv") };
     let v = if b { 'b' } else { 'a' };
     SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + b as usize), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
+}
+
+/// The umpire's voice bank (slot 5): umpire `n`'s set `v` (0..3 = a..d).
+pub fn umpire_bank(iso: &mut Iso, n: u8, v: u8) -> Option<SoundBank> {
+    let (big, small) = ((b'A' + v) as char, (b'a' + v) as char);
+    SoundBank::load(iso, &format!("SND/UMP/UV{n:02}{big}.XB0"), &format!("data/sound/UMPIRE/gag_vc{n:02}{small}.hd"))
 }
 
 /// The court's sound-effect bank.

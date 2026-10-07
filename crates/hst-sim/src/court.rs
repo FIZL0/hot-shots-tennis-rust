@@ -57,6 +57,14 @@ fn collision_model(m: &mdl::Model, mt: &mtl::Mtl) -> mesh::Model {
     }
 }
 
+/// The umpire's chair on disc court `n` (1..11): her plant record (creature `npc15`), hole 1.
+pub fn umpire_chair(iso: &mut Iso, n: u32) -> Option<[f32; 3]> {
+    let data = iso.read(&format!("COURT/{n:02}/HOL01.XB")).ok()?;
+    let a = Archive::parse(&data).ok()?;
+    let e = a.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("plant_c{n:02}_h01_0.dat")))?;
+    layout::plants(&a.read(e).ok()?).ok()?.into_iter().find(|p| p.category == 23 && p.index == 15).map(|p| p.pos)
+}
+
 /// Disc court `n` (1..11), hole 1: the court model at the origin and the colliding props in the game's list order
 /// and grid.
 pub fn world(iso: &mut Iso, n: u32) -> World {
