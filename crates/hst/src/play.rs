@@ -99,6 +99,8 @@ struct Player {
     bot_due: Option<usize>,
     /// Stand-in AI: the shot it last decided to leave to its partner.
     bot_left: i32,
+    /// This player's AIParam.csv row when the computer plays it (`hst_sim::ai`).
+    ai: hst_sim::ai::AiParams,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -414,6 +416,15 @@ fn character_stats(iso: &mut Iso, n: usize) -> Stats {
     Stats::new(cell(40), cell(43), cell(41), [costs[0], costs[1], costs[2]], 0)
 }
 
+/// A computer player's AIParam.csv row: character `n` in outfit 0, as an exhibition match picks it.
+fn ai_params(iso: &mut Iso, n: usize, doubles: bool) -> hst_sim::ai::AiParams {
+    let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("aiparam.csv")).expect("AIParam.csv");
+    let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(n as u8, 0) as u32, n as u8, doubles).row;
+    hst_sim::ai::AiParams::table(&arc.read(e).expect("AIParam.csv bytes"))[row]
+}
+
 /// A character's hand from TParam.csv (+1 right, −1 left).
 fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
@@ -664,6 +675,7 @@ fn setup(
         };
         game.players[i].hand = character_hand(&mut iso, c);
         game.players[i].stats = character_stats(&mut iso, c);
+        game.players[i].ai = ai_params(&mut iso, c, n == 4);
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
@@ -1576,7 +1588,7 @@ fn bot(g: &mut Game, i: usize) {
             mate >= g.players.len() || d(i) < d(mate) || (d(i) == d(mate) && i < mate)
         });
         // ponytail: the original decides a few frames into the shot (its AI, P11); this calls at once
-        if plan.is_some() && mine.is_none() && g.players.len() == 4 && g.players[i].bot_left != g.shots {
+        if plan.is_some() && mine.is_none() && g.players.len() == 4 && g.shots >= 2 && g.players[i].bot_left != g.shots {
             g.players[i].bot_left = g.shots;
             if rand(&mut g.rng) < 0.25 {
                 let call = sound::call_out(i, rand(&mut g.rng) < 0.5);

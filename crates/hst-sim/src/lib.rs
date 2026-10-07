@@ -27,3 +27,4 @@ pub mod cutaway;
 pub mod sound;
 pub mod umpire;
 pub mod npc;
+pub mod ai;
