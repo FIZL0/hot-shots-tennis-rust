@@ -149,3 +149,28 @@ fn smash_mark_s04() {
     assert_eq!(placed, [4]);
     assert_eq!(s.at().map(|p| p.map(f32::to_bits)), Some([head[2].to_bits(), head[3].to_bits()]));
 }
+
+/// The yellow smash marker (`taguchi/other/smash_p`) doesn't end: the game clamps its clocks at the last frame and
+/// draws it until the live ball bounces. Its morph track is 105 frames but the blob's alpha fades out over 120, so
+/// a plain one-shot would cut the blob off at about half alpha.
+#[test]
+fn smash_mark_holds() {
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+    let data = iso.read("PCDATA/PCCG0.XB").unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    let get = |ext: &str| arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&format!("taguchi/other/smash_p.{ext}"))).map(|e| arc.read(e).unwrap());
+    let m = mdl::parse(&get("mdl").unwrap()).unwrap();
+    let mats = mtl::parse(&get("mtl").unwrap(), get("mti").as_deref()).unwrap().materials;
+    let mut fx = Effect::new(&m, &ani::Anim { ticks_per_frame: 1, tracks: vec![] }, &mor::parse(&get("mor").unwrap(), 1).unwrap(), &mor::parse(&get("mta").unwrap(), 1).unwrap(), &mats);
+    fx.hold = true;
+    fx.start();
+    let alpha = |fx: &Effect| fx.alphas.iter().cloned().fold(0.0, f32::max);
+    for _ in 0..110 {
+        fx.tick();
+    }
+    assert!(fx.live && alpha(&fx) > 0.2, "fading at 110: {:?}", fx.alphas);
+    for _ in 0..200 {
+        fx.tick();
+    }
+    assert!(fx.live && alpha(&fx) == 0.0, "held, faded out: {:?} {:?}", fx.times(), fx.alphas);
+}

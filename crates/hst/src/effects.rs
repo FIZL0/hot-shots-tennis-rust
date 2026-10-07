@@ -583,7 +583,7 @@ pub fn draw_bounce(
 }
 
 /// The landing markers: `chakudan_p` (red, a looping pulse) at the shot's aim and `smash_p` (yellow, one 120-frame
-/// play) at the smash point; each placed on the court at (x, z) or hidden.
+/// play, then held) at the smash point; each placed on the court at (x, z) or hidden.
 #[derive(Resource)]
 pub struct LandingMarks {
     red: (Effect, Shown),
@@ -608,7 +608,9 @@ pub fn load_marks(
     // never restarted: the pulse runs on from wherever it was, ticked only while shown
     red.0.looping = true;
     red.0.start();
-    let smash = model(&arc, "taguchi/other/smash_p", commands, parent, meshes, materials, images, bindposes)?;
+    let mut smash = model(&arc, "taguchi/other/smash_p", commands, parent, meshes, materials, images, bindposes)?;
+    // held on its last frame, as the game: the blob fades out over 120 frames, past the 105-frame morph
+    smash.0.hold = true;
     Ok(LandingMarks { red, smash, red_at: None, smash_at: None })
 }
 

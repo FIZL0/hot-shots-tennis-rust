@@ -278,8 +278,8 @@ struct Game {
     humans: Vec<bool>,
     /// The racket impact a shot started this tick.
     hit_effect: Option<effects::Hit>,
-    /// Character 0's smash window middle (TParam, m) and the landing markers' state.
-    smash_mid: f32,
+    /// Per player its character's smash top and window middle (TParam, m) and the landing markers' state.
+    smash_heights: Vec<[f32; 2]>,
     marks: Marks,
     /// The jingle due (slot 8 key: 0 change ends, 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
@@ -646,7 +646,7 @@ fn balloon_index(b: Balloon) -> usize {
 /// Character 0's reach for the contact search: TParam.csv from the disc (reach base, reach, ideal stroke and
 /// volley heights, smash window, handedness).
 /// …and the middle of its smash window (m).
-fn reach(iso: &mut Iso) -> (Reach, f32) {
+fn reach(iso: &mut Iso) -> Reach {
     let data = iso
         .read("PCDATA/PCDATA.XB")
         .expect("character archive on disc");
@@ -700,7 +700,33 @@ fn reach(iso: &mut Iso) -> (Reach, f32) {
         shoulder: [0.08548, -0.83622, 0.20118],
         tip: [0.006694, -0.646701, 1.220628],
     };
-    (reach, pair(64, 1) / 100.0)
+    reach
+}
+
+/// Character `n`'s smash top and the middle of its smash window (TParam column 64, m): the smash marker's heights.
+fn smash_heights(iso: &mut Iso, n: usize) -> [f32; 2] {
+    let data = iso
+        .read("PCDATA/PCDATA.XB")
+        .expect("character archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc
+        .entries
+        .iter()
+        .find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv"))
+        .expect("TParam.csv");
+    let csv = arc.read(e).expect("TParam.csv bytes");
+    let tag = format!("{n},");
+    let row = csv
+        .split(|&b| b == b'\n')
+        .find(|l| l.starts_with(tag.as_bytes()))
+        .expect("character row");
+    let cell = row.split(|&b| b == b',').nth(64).expect("TParam smash cell");
+    let v: Vec<f32> = std::str::from_utf8(cell)
+        .expect("TParam cell")
+        .split('/')
+        .map(|v| v.trim().parse::<f32>().expect("TParam number") / 100.0)
+        .collect();
+    [v[0], v[1]]
 }
 
 /// Line margin, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
@@ -804,7 +830,7 @@ fn setup(
     let art = balloon_art(&mut iso, &mut images);
     let (line_margin, board, world, shot_params, umpire) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
-    let (reach, smash_mid) = reach(&mut iso);
+    let reach = reach(&mut iso);
     let mut game = Game {
         rules,
         tables: tables(&mut iso, "A", "strk", 5),
@@ -871,7 +897,7 @@ fn setup(
         music_hold: false,
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
         hit_effect: None,
-        smash_mid,
+        smash_heights: Vec::new(),
         marks: Marks::default(),
     };
     reset_positions(&mut game);
@@ -916,6 +942,7 @@ fn setup(
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
+        game.smash_heights.push(smash_heights(&mut iso, c));
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
@@ -1335,11 +1362,13 @@ fn strike(
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);
+    // each receiving human with its own character's heights; not on the serve (the game sets the search up from
+    // the serve return on, or in practice)
     let heights: Vec<[f32; 2]> = (0..g.players.len())
         .filter(|&i| i & 1 != who & 1 && g.humans.get(i) == Some(&true))
-        .map(|_| [g.reach.smash_top, g.smash_mid])
+        .map(|i| g.smash_heights[i])
         .collect();
-    g.marks.smash = (!heights.is_empty()).then(|| {
+    g.marks.smash = (!heights.is_empty() && (g.rules.players == 1 || g.shots > 1)).then(|| {
         let mut f = g.flight;
         let mut path = vec![path_entry(&f)];
         for _ in 0..14 {
