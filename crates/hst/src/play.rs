@@ -42,6 +42,7 @@ use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
 mod panel;
+mod popups;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -401,6 +402,7 @@ struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
     app.add_plugins(panel::plugin);
+    app.add_plugins(popups::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .init_resource::<CamMode>()
