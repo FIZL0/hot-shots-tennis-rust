@@ -193,8 +193,15 @@ fn guesses_match_the_game() {
                     let mut n = draws[j..].iter().copied();
                     let mut roll = || n.next().unwrap();
                     let t = row.timing(Some(&shots), receiver, ob[0x230] != 0, int(ob, 0x28) != 0, &mut roll);
-                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob))
-                        .then(|| row.guess(&t, shots.last.kind == 0, ob[0x13d] != 0, true, &mut roll))
+                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then(|| {
+                        for _ in 0..hst_sim::ai::CHOICE_DRAWS {
+                            roll();
+                        }
+                        // the reaction's own draws (its value is checked in reactions_match_the_game)
+                        let lob = ob[0x138] == 3;
+                        row.reaction(&t, &shots.last, lob, ob[0x13d] != 0, false, false, &mut roll);
+                        row.guess(&t, shots.last.kind == 0, true, &mut roll)
+                    })
                 })
                 .unwrap_or_else(|| panic!("vsync {} AI {k}: timing draw not found", word(b, 0)));
             let want = match ob[0x24f] {
@@ -372,4 +379,74 @@ fn minds_match_the_game() {
     }
     eprintln!("{n:?}: first updates, rate steps, own hits, picks, counts, point-over stops, serve spots");
     assert!(n.iter().all(|&c| c > 0), "{n:?}");
+}
+
+/// Every reaction the slot-5 bots draw on an opponent's hit (`ai_pos_s05.bin`, tools/record_ai_pos.py, which has
+/// the players' positions): right after the timing draw and the shot-choice draws, the frames the AI waits (+0x248)
+/// must be the game's, from its row, the shot it saw (after a smash, a lob), the fast-ball part and how near the net
+/// it stands. A guess replaces it (checked in guesses_match_the_game). The rally state may already have counted one
+/// frame off by the sample.
+#[test]
+fn reactions_match_the_game() {
+    use hst_sim::ai::{CHOICE_DRAWS, Seen, Shots};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_pos_s05.bin"))) else {
+        return eprintln!("disc or ai_pos_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    const AI: usize = 0x280;
+    let (glob, mt, players) = (4, 4 + 0x18, 4 + 0x18 + 0x9d0 + 0x40 + 0xc0);
+    let size = players + 4 * (0x10 + AI);
+    let samples: Vec<&[u8]> = d[4 + 32 * 4 + 8..].chunks_exact(size).collect();
+    let int = |b: &[u8], o: usize| word(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let (mut checked, mut kinds, mut near) = (0, [0; 5], 0);
+    for w in samples.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if word(b, 0) != word(a, 0) + 1 {
+            continue;
+        }
+        for k in 0..4 {
+            let at = players + k * (0x10 + AI);
+            let (oa, ob) = (&a[at + 0x10..][..AI], &b[at + 0x10..][..AI]);
+            let hitter = int(ob, 0x130);
+            if oa[0x130..0x170] == ob[0x130..0x170] || hitter < 0 || hitter & 1 == k as i32 & 1 || ob[0x24f] != 0 {
+                continue;
+            }
+            let row = &table[(word(ob, 12) - TABLE) / RECORD];
+            let seen = |r: usize| Seen { kind: int(ob, r + 4), vel: [f(ob, r + 0x30), f(ob, r + 0x34), f(ob, r + 0x38)] };
+            let shots = Shots {
+                last: seen(0x130),
+                before: (int(ob, 0x170) >= 0).then(|| seen(0x170)),
+                serve_before: (int(ob, 0x1f0) >= 0).then(|| seen(0x1f0).vel),
+            };
+            let receiver = int(b, glob + 0xc) == k as i32;
+            let errs = |o: &[u8]| [0x234, 0x238, 0x23c, 0x240].map(|x| int(o, x));
+            // where it stood when the hit came
+            let z = f(a, at + 8);
+            let mut g = Mt::of(&a[mt..]);
+            let draws: Vec<u32> = (0..200).map(|_| g.next()).collect();
+            let got = (0..150)
+                .find_map(|j| {
+                    let mut n = draws[j..].iter().copied();
+                    let mut roll = || n.next().unwrap();
+                    let t = row.timing(Some(&shots), receiver, ob[0x230] != 0, int(ob, 0x28) != 0, &mut roll);
+                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then(|| {
+                        for _ in 0..CHOICE_DRAWS {
+                            roll();
+                        }
+                        let human = int(ob, 0x28) == 1;
+                        row.reaction(&t, &shots.last, ob[0x138] == 3, ob[0x13d] != 0, human, z.abs() <= 6.4, &mut roll)
+                    })
+                })
+                .unwrap_or_else(|| panic!("vsync {} AI {k}: timing draw not found", word(b, 0)));
+            let left = int(ob, 0x248);
+            assert!((got - 1..=got).contains(&left), "vsync {} AI {k}: reaction {left}, drawn {got} ({shots:?})", word(b, 0));
+            checked += 1;
+            kinds[shots.last.kind as usize] += 1;
+            near += (z.abs() <= 6.4) as u32;
+        }
+    }
+    eprintln!("{checked} reactions checked, by shot kind {kinds:?}, {near} near the net");
+    assert!(checked >= 50 && kinds[4] > 0 && near > 0, "{checked} reactions, kinds {kinds:?}, {near} near the net");
 }

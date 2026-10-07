@@ -303,7 +303,7 @@ pub struct Timing {
     pub serve: i32,
     /// Change of pace: + the ball came faster than the one before (late), − slower (early); 0 none.
     pub pace: i32,
-    /// Extra reaction for a fast ball (frames; reaction itself is P11c's).
+    /// Extra reaction for a fast ball (frames; added by `AiParams::reaction`).
     pub fast_ball: i32,
     /// A change of pace or the fast-ball reaction took hold (even a pace of 0 frames); the AI then doesn't guess.
     pub reacted: bool,
@@ -413,23 +413,55 @@ pub enum Verdict {
     Neither,
 }
 
+/// Draws between `timing` and `reaction` on an opponent's hit: quick serve, body shot, low shot, the four level picks.
+/// ponytail: taken and dropped until P11g ports them.
+pub const CHOICE_DRAWS: usize = 7;
+
+impl AiParams {
+    /// The reaction (frames the AI stands before going for the ball) drawn after an opponent's hit, after the
+    /// timing errors and the shot-choice draws: after a smash (`last.kind` 4) the after-smash frames, else the base
+    /// one (the net value within 6.4 m of the net, `near_net`; the doubles columns beside a human partner, else the
+    /// singles ones) plus the fast-ball frames; then a random part up to the row's, and a lob (`lob`: a △ ground
+    /// stroke, volley or dive) or special serve adds half its frames plus up to half again.
+    pub fn reaction(
+        &self,
+        t: &Timing,
+        last: &Seen,
+        lob: bool,
+        special_serve: bool,
+        beside_human: bool,
+        near_net: bool,
+        roll: &mut impl FnMut() -> u32,
+    ) -> i32 {
+        let mut upto = |n: i32| (roll() >> 16 & 0x7fff) as i32 % (n + 1);
+        let r = if last.kind == 4 {
+            self.react_after_smash + upto(self.react_random)
+        } else {
+            let base = match (beside_human, near_net) {
+                (true, true) => self.react_doubles_net,
+                (true, false) => self.react_doubles_base,
+                (false, true) => self.react_singles_net,
+                (false, false) => self.react_singles_base,
+            };
+            t.fast_ball + upto(self.react_random) + base
+        };
+        let half = |n: i32, upto: &mut dyn FnMut(i32) -> i32| n / 2 + upto(n / 2);
+        r + if (1..=3).contains(&last.kind) && lob {
+            half(self.react_lob, &mut upto)
+        } else if last.kind == 0 && special_serve {
+            half(self.react_special_serve, &mut upto)
+        } else {
+            0
+        }
+    }
+}
+
 impl AiParams {
     /// The guess drawn at the tail of a hit-message draw, when an opponent has just served: never if a change of
     /// pace or the fast-ball reaction took hold (`t.reacted`), beside a human partner, or for any shot but the serve.
-    /// `partner_bot`: true in singles. `special_serve`: the serve was a special one. `roll`: the generator right after `timing`'s draws.
-    /// ponytail: the draws in between (quick serve, body/low shot, the four level picks, the reaction and its
-    /// special-serve part) belong to P11c/P11g/P11h; they are taken and dropped here until those land.
-    pub fn guess(
-        &self,
-        t: &Timing,
-        serve: bool,
-        special_serve: bool,
-        partner_bot: bool,
-        roll: &mut impl FnMut() -> u32,
-    ) -> Option<Guess> {
-        for _ in 0..8 + special_serve as usize {
-            roll();
-        }
+    /// `partner_bot`: true in singles. `roll`: the generator right after `reaction`'s draws. A guess replaces the
+    /// reaction with the move frames (`guess[1]`).
+    pub fn guess(&self, t: &Timing, serve: bool, partner_bot: bool, roll: &mut impl FnMut() -> u32) -> Option<Guess> {
         if t.reacted || !serve || !partner_bot || !chance(roll, self.guess[0]) {
             return None;
         }

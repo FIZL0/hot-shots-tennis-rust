@@ -2470,13 +2470,18 @@ fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
         rand(rng);
         *rng
     });
+    if shots.is_none() {
+        // no opponent's hit to react to: no reaction, no guess
+        (g.players[i].ai_hold, g.players[i].ai_guess) = (0, None);
+    }
 }
 
 /// The AI's hit message: every computer player remembers an opponent's shot (or notes its own team's hit) and
 /// redraws its timing errors. `branch` is the hitter's swing branch code.
 fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
-    // the AI's shot kinds: 0 serve, 1 ground stroke, 2 volley, 3 smash, 4 dive
-    let kind = [0, 1, 2, 4, 3][branch as usize];
+    // the AI's shot kinds are the hitter's branch: 0 serve, 1 ground stroke, 2 volley, 3 dive, 4 smash
+    let kind = branch as i32;
+    let lob = branch != 0 && g.players[who].kind == 3;
     for i in 0..g.players.len() {
         if g.humans.get(i) == Some(&true) {
             continue;
@@ -2496,28 +2501,35 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
         };
         ai_draw(g, i, shots);
         if shots.is_some() {
-            ai_draw_guess(g, i, kind);
+            ai_draw_guess(g, i, kind, lob);
         }
     }
 }
 
-/// A computer player's guess (ヤマ張り) after an opponent's hit, drawn right after its timing errors.
-/// ponytail: the app has no special serves yet, so the special-serve draw never comes in.
-fn ai_draw_guess(g: &mut Game, i: usize, kind: i32) {
-    let partner_bot = g.players.len() == 2 || g.humans.get(i ^ 2) != Some(&true);
+/// A computer player's reaction and guess (ヤマ張り) after an opponent's hit, drawn after its timing errors and
+/// shot-choice draws: it stands for the reaction frames (a guess runs for its move frames instead).
+/// ponytail: the app has no special serves yet, so the special-serve part never comes in.
+fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
+    let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
     let rng = &mut g.rng;
-    let p = &mut g.players[i];
-    let guess = p.ai.guess(&p.ai_timing, kind == 0, false, partner_bot, &mut || {
+    let mut roll = || {
         rand(rng);
         *rng
-    });
+    };
+    let p = &mut g.players[i];
+    for _ in 0..hst_sim::ai::CHOICE_DRAWS {
+        roll();
+    }
+    let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
+    p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, false, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
+    let guess = p.ai.guess(&p.ai_timing, kind == 0, !beside_human, &mut roll);
     p.ai_guess = guess.map(|q| (q, [p.pos[0], p.pos[2]]));
     if guess.is_some() {
         p.ai_hold = p.ai.guess[1];
     }
 }
 
-/// While the ball comes to its team, a guessing AI first runs sideways toward the guessed half for the move frames
+/// After an opponent's hit the AI stands for its reaction frames (`ai_hold` without a guess). A guessing AI first runs sideways toward the guessed half for the move frames
 /// (stopping once there), then judges the guess against its contact point: right, it times the hit within a frame;
 /// wrong, it stands still for the stuck frames before it goes for the ball. Some(goal) while it holds.
 /// ponytail: the original's run boost after a right guess (×2, ×1.5 with the body-shot roll) is left out until the
@@ -2578,6 +2590,11 @@ fn bot(g: &mut Game, i: usize) {
         || g.players[i].swing.is_some()
         || g.players[i].whiff.is_some()
         || g.players[i].dive.is_some();
+    // the reaction runs down after an opponent's hit, through its own follow-through too
+    let opp_hit = g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
+    if busy && opp_hit && g.players[i].ai_hold > 0 {
+        g.players[i].ai_hold -= 1;
+    }
     if !busy {
         let plan = match g.phase {
             Phase::Rally if g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1 => {
@@ -2605,10 +2622,13 @@ fn bot(g: &mut Game, i: usize) {
                 g.whooshes.push((0, i, call));
             }
         }
-        let guessing = ai_guessing(g, i, plan.is_some(), mine.map(|(b, _)| b));
+        let guessing = ai_guessing(g, i, opp_hit, mine.map(|(b, _)| b));
         let mine = if guessing.is_some() { None } else { mine };
-        let wait = if mine.is_none() { guessing.or_else(|| ai_wait(g, i)) } else { None };
-        let wait = if mine.is_none() { ai_wait(g, i).or_else(|| ai_wait_singles(g, i)) } else { None };
+        let wait = if mine.is_none() {
+            guessing.or_else(|| ai_wait(g, i)).or_else(|| ai_wait_singles(g, i))
+        } else {
+            None
+        };
         let p = g.players[i];
         let goal = mine.map_or(wait.unwrap_or(p.home), |(b, _)| {
             [
