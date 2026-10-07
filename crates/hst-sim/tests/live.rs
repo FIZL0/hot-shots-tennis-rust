@@ -158,3 +158,37 @@ fn every_court_builds_its_world() {
         assert!(!w.models[0].tris.is_empty(), "court {n} has no collision triangles");
     }
 }
+
+#[test]
+fn net_touch_keeps_the_predicted_contacts() {
+    // On a net touch the game re-seeds its predicted path (`*(gm+0x98)`, the second ball object of each sample)
+    // from the live ball but keeps the court contacts the old prediction had reached: in a rally those are 2,
+    // past every contact search, so a net cord that drops over goes unplayed and wins the point for the hitter.
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(data) = std::fs::read(format!("{root}/context/live/net_s05.bin")) else {
+        return eprintln!("recording missing, skipped");
+    };
+    let s: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    fn live(w: &[u8]) -> &[u8] {
+        &w[4..4 + 0x290]
+    }
+    fn pred(w: &[u8]) -> &[u8] {
+        &w[4 + 0x290..4 + 0x520]
+    }
+    let mut seen = 0;
+    for k in 1..s.len() {
+        let (a, b) = (live(s[k - 1]), live(s[k]));
+        if i(a, 0x22c) != 0 || i(b, 0x22c) == 0 || i(s[k], 0) != i(s[k - 1], 0) + 1 {
+            continue;
+        }
+        // the hit: the last sample before the touch whose shot frame is 0
+        let Some(h) = (0..k).rev().find(|&h| i(live(s[h]), 0xac) == 0) else { continue };
+        let (hit, shot) = load(live(s[h]));
+        let t = i(a, 0xac) as u32;
+        let want = i(pred(s[k]), 0x228);
+        eprintln!("vsync {} t {t}: predictor contacts {want}, live {}", i(s[k], 0), i(b, 0x228));
+        assert_eq!(hit.predicted_contacts(&shot, &COURTS[COURT], t), want, "vsync {}", i(s[k], 0));
+        seen += 1;
+    }
+    assert!(seen >= 8);
+}

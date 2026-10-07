@@ -263,6 +263,21 @@ impl Flight {
         Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, landing: ([0.0; 3], COURT), spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0, in_play: true }
     }
 
+    /// Court contacts the original's predicted path holds `t` frames after this (just struck) ball left the
+    /// racket: the path is stepped against the court only, 14 steps on the hit and 15 more each frame, and stops
+    /// filling once it reaches two contacts. A net touch re-seeds the path from the ball but keeps this count.
+    pub fn predicted_contacts(&self, shot: &Shot, surface: &Surface, t: u32) -> i32 {
+        let mut f = *self;
+        f.net = false;
+        for _ in 0..15 * (t + 1) - 1 {
+            if f.contacts >= 2 {
+                break;
+            }
+            f.step(shot, surface);
+        }
+        f.contacts
+    }
+
     /// Advance one 60 Hz frame on `surface`, in the original's order: accelerate, add wind and the curve
     /// profile (first flight only), then sweep the step against the court (and the net when live), placing
     /// the ball at each contact and responding, for up to 30 sub-steps while more than 10% of the frame remains.

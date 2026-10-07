@@ -141,6 +141,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P12b2** Game/set shows (`3876c0`/`387ac0`, start `387910`/`387d10`) and tiebreak point show (`388ec0`/`3891d0`, inpane_tiebreak00–02) (in P12b) → `play/popups.rs` | j: 2026-10-07-p12b-popups
 - [ ] **P12b3** Call pop-ups Let/Out/Net/Fault/Double Fault/Change Sides: 3D models `azuma/inpane/mdl` with ANI/MOR/MTA players (`38e870`, `38eeb0`, update `388190`, countdown 0x410f0c) (in P12b) → `hst-data` · `play/popups.rs` | j: 2026-10-07-p12b-popups
 - [ ] **P12b4** Finish banners (Untouchable Service/Return/Smash Ace, On the Line, Counter) and Set/Match Point: triggers and draw (in P12b) → `play/popups.rs` | j: 2026-10-07-p12b-popups
+- [x] **P12c** Net-cord bug: ball clips the net, drops over, and the point goes to the hitter's side. May need new recordings of net-cord rallies → `judge.rs` · `ball.rs` · `mesh.rs` (net) | t: score.rs, live.rs | j: 2026-10-07-p12c-net-cord
 - [x] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs
