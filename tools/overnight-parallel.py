@@ -4,7 +4,8 @@ sessions going, each on its own PLAN.md task in its own git worktree, and merges
 
     tmux new -s hst tools/overnight-parallel.py      # (tools/overnight-parallel-5.sh: 5 at once) progress: context/notes/overnight.log, slot logs beside it
 
-Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
+Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
+`s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
 runner's session (the master has its own window): watch or type to any of them. Panes are found by their @hst option, so
 join/break/swap them freely. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
 into a finished session cancels that, so /exit it yourself or the runner never merges it.
@@ -25,7 +26,7 @@ it outlives a done or stopped run, and the next run adopts it. Restarting the ru
 hit the usage limit is discarded and its slot sleeps until the reset; one that hit it partway waits in its pane (the stop
 hook spares it) and Claude Code continues it at the reset.
 """
-import glob, json, os, re, shlex, subprocess as sp, threading, time, uuid
+import glob, json, os, re, select, shlex, subprocess as sp, sys, threading, time, uuid
 from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -306,6 +307,7 @@ def main():
     os.makedirs(NOTES, exist_ok=True)
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
     watched = {}  # slot -> time of its last match-over check
+    stopping = False  # `s` typed: start nothing new
     log(f'parallel run, {SLOTS} slots')
     master()
     for n, (proc, task) in adopt().items():
@@ -328,9 +330,9 @@ def main():
                     report(f'REPORT {task[0]} slot {n}: session {sid} ended; {len(commits)} commits: {" / ".join(commits)[:600]}')
                     log(f'{task[0]}: reported to the master')
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
-            if n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
+            if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 procs[n], running[n] = start(n, task), task
-        if not done and not procs and not pick(running, tried) and all(datetime.now() >= t for t in free_at.values()):
+        if not done and not procs and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
             done = True
             report('RUN DONE')
             log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
@@ -341,7 +343,12 @@ def main():
         flush()
         if done and not queued():
             return  # the master stays up for the next run
-        time.sleep(10)
+        line = sys.stdin.readline() if select.select([sys.stdin], [], [], 10)[0] else None
+        if line == '':
+            time.sleep(10)  # stdin closed: no typing, just wait
+        elif line and line.strip().lower() == 's':
+            stopping = not stopping
+            log('stopping: no new tasks; the running ones finish' if stopping else 'stop taken back: starting tasks again')
 
 
 if __name__ == '__main__':
