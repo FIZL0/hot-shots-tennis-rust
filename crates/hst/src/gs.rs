@@ -12,6 +12,9 @@
 //!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
 //!   the colour directly). The specular exponent is max(1, 128·(header +0x10)^1.65).
 //!
+//! - Shadows (see shadow.rs): caster draws go into the sun's shadow map through `gs_prepass.wgsl`, which keeps the
+//!   alpha test; receiver draws (`shadow` > 0) multiply their colour by 1 − `shadow` where the sun is blocked.
+//!
 //! ponytail: lit per pixel, not per vertex as VU1 does; the same where the light is flat across a triangle.
 //! ponytail: textured MODULATE draws keep vertex × material alpha; on VU1 their vertex alpha is the highlight too.
 
@@ -27,6 +30,7 @@ use hst_data::mtl;
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "gs.wgsl");
+    bevy::asset::embedded_asset!(app, "gs_prepass.wgsl");
     app.add_plugins(MaterialPlugin::<GsMaterial>::default());
 }
 
@@ -63,6 +67,8 @@ pub struct GsUniform {
     pub shininess: f32,
     /// Highlight strength, header +0x14.
     pub highlight: f32,
+    /// Shadow receiver: how much a shadow takes off the colour (0 = not a receiver).
+    pub shadow: f32,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -102,7 +108,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14) };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0 };
         tests
             .into_iter()
             .map(|test| GsMaterial {
@@ -119,17 +125,24 @@ impl Material for GsMaterial {
         "embedded://hst/gs.wgsl".into()
     }
 
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://hst/gs_prepass.wgsl".into()
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         // blended draws and those that write no Z (e.g. the unblended `line@add` court lines) go after the opaque
-        // ones, back to front, as the PS2 draws them after the ground they lie on; specialize sets the real blend
-        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Never) { AlphaMode::Blend } else { AlphaMode::Opaque }
+        // ones, back to front, as the PS2 draws them after the ground they lie on; specialize sets the real blend.
+        // Alpha-tested ones are Mask so the shadow pass runs the test too.
+        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Never) {
+            AlphaMode::Blend
+        } else if self.key.test == Test::Always {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Mask(0.5)
+        }
     }
 
     fn enable_prepass() -> bool {
-        false
-    }
-
-    fn enable_shadows() -> bool {
         false
     }
 
@@ -144,7 +157,8 @@ impl Material for GsMaterial {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt70 | Test::Never));
         }
-        let fragment = descriptor.fragment.as_mut().unwrap();
+        // the shadow pass has no fragment stage for draws that cannot discard
+        let Some(fragment) = descriptor.fragment.as_mut() else { return Ok(()) };
         let defs = &mut fragment.shader_defs;
         if k.textured {
             defs.push("GS_TEXTURED".into());
@@ -157,6 +171,9 @@ impl Material for GsMaterial {
             Test::Ge70 => defs.push("GS_GE70".into()),
             Test::Lt70 => defs.push("GS_LT70".into()),
             Test::Always | Test::Never => {}
+        }
+        if matches!(k.test, Test::Lt70 | Test::Never) {
+            defs.push("GS_NO_Z".into());
         }
         let keep_alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add };
         let color = |dst_factor, operation| BlendComponent { src_factor: BlendFactor::SrcAlpha, dst_factor, operation };

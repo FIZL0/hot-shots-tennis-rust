@@ -15,6 +15,7 @@ mod effects;
 mod gs;
 mod play;
 mod sandbox;
+mod shadow;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -92,7 +93,7 @@ fn main() {
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins((audio::plugin, gs::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -152,6 +153,7 @@ fn load(
             commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(mat.clone())));
         }
         commands.entity(root).add_child(e);
+        e
     };
     let add = |parts: Vec<(Mesh, Vec<gs::GsMaterial>)>, meshes: &mut Assets<Mesh>, materials: &mut Assets<gs::GsMaterial>| {
         let mut out = Vec::new();
@@ -176,10 +178,18 @@ fn load(
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
         // ponytail: clouds are positioned by special-category records (14?) not yet mapped; left out
         // instead of piling them on the court at the origin
+        // the hole's ground model is the one shadow receiver
+        let sun = shadow::Sun::read(&mut iso, n as usize);
         for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole) {
             if let Some(parts) = library.get(&e.stem) {
                 spawn(&mut commands, parts, Transform::default());
+                for (_, m) in parts.iter().filter(|_| e.dir == "hole") {
+                    gs_materials.get_mut(m).unwrap().uniform.shadow = sun.map_or(0.0, |s| s.darken);
+                }
             }
+        }
+        if let Some(sun) = sun {
+            commands.insert_resource(sun);
         }
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, 0) else { continue };
@@ -189,7 +199,10 @@ fn load(
             let Some(parts) = library.get(&e.stem) else { continue };
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
             let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
-            spawn(&mut commands, parts, t);
+            let e = spawn(&mut commands, parts, t);
+            if p.code[3] != b'0' && (17..=19).contains(&p.category) {
+                commands.entity(e).insert(shadow::Caster);
+            }
         }
         // background figures where the game makes them; stand-in capsules (walkers grey, trigger creatures
         // green, court 5's own blue) until their models and motion are ported. The umpire is P13's.
