@@ -1,0 +1,16 @@
+# N1d3a — The stroke arm table (FINAL)
+- What it is: at player load the game builds an arm table (0x355650). For each stroke motion 0x10..0x19 it samples the skeleton at frame 8 (clamped) and stores per stroke:
+  - the locals of Racket, RHand, RForearm, RUpperArm and LUpperArm;
+  - the model matrix of each upper arm's parent chain: the product of ancestor locals walking up the tree from identity, `acc = acc·local`, with VU0 products;
+  - the racket point (0, 0.7, 0, 1) carried through Racket·RHand·RForearm·RUpperArm·chain; its z is the stroke's "reach";
+  - the shoulder, row 3 of RUpperArm·chain;
+  - a yaw about y that turns the racket point onto ±z from the shoulder (+ for even strokes, − for odd);
+  - the "aimed" upper arm = upper·yaw·rotZ(±3π/4, bits 0x4016cbe4)·transpose3(chain), translation zeroed;
+  - an elbow straightening about z and the resulting racket-point radius sqrt(x²+y²).
+- Averages: mean reach /10; side = (Σ|shoulder.x| over the even strokes except 6)/4 + (|RHand translation of stroke 0| + 0.3); hand_x = RHand model x in stroke 6, +0.1 for character 5.
+- Both acos arguments are clamped to [−1, 1]. Axis-angle matrix: sinf, then cosf, with the axis negated; exact op order is `pose::axis_rotation`.
+- Finding: position keys keep the Hermite-interpolated w of the key (unscaled), which can be 0.99999994 rather than 1. `Clip::locals` used to force w = 1; that cost 1 ulp in the left upper-arm chain of stroke 2 for character 6 (s03 p0). Fixed in `Clip::locals`.
+- Tested and not needed: carrying untracked nodes' pose over from the previous stroke; sampling from rest matches.
+- Verification: `arm_table_ram` in crates/hst-sim/tests/motion.rs. 20 players across s03/s04/s05/s08/s09: all 8 matrices, yaw, shoulder, reach and radius per stroke, plus the three averages at +0x3050, are bit-exact against the player struct.
+- Code: `hst_sim::pose::{arm_table, ArmTable, ArmPose, vmul, axis_angle, axis_rotation}`.
+- Next: N1d3b, the contact solve that uses this table.

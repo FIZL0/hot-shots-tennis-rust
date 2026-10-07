@@ -274,7 +274,9 @@ impl Clip {
                 local[n][..3].copy_from_slice(&m[..3]);
             }
             if let Some([x, y, z]) = pos {
-                local[n][3] = [x, y, z, 1.0];
+                // w is the interpolated key w (unscaled), not always exactly 1
+                let w = self.tracks[k].pos.hermite(ps2::mul(t, self.ticks_per_frame))[3];
+                local[n][3] = [x, y, z, w];
             }
         }
         local
@@ -343,4 +345,158 @@ pub fn wrap(t: f32, len: f32, looping: bool) -> f32 {
         t = ps2::add(t, len);
     }
     t
+}
+
+/// The game's VU0 matrix product a·b (row i of the result is row i of `a` transformed by `b`).
+pub fn vmul(a: &M4, b: &M4) -> M4 {
+    std::array::from_fn(|i| crate::vu0::transform(b, a[i]))
+}
+
+/// Row 3 of `m`: the translation.
+fn row3(m: &M4) -> [f32; 4] {
+    m[3]
+}
+
+/// The 3×3 transpose of `m` (row 3 and column 3 of the identity): the inverse of a pure rotation.
+fn transpose3(m: &M4) -> M4 {
+    [[m[0][0], m[1][0], m[2][0], 0.0], [m[0][1], m[1][1], m[2][1], 0.0], [m[0][2], m[1][2], m[2][2], 0.0], [0.0, 0.0, 0.0, 1.0]]
+}
+
+/// Rotation by `angle` about `axis` on the FPU (sine first, then cosine; the axis enters negated).
+pub fn axis_angle(angle: f32, axis: [f32; 3]) -> M4 {
+    let s = libm::sinf(angle);
+    let c = libm::cosf(angle);
+    axis_rotation(c, s, axis)
+}
+
+/// The rotation matrix from cos, sin and the axis, operation for operation.
+pub fn axis_rotation(c: f32, s: f32, axis: [f32; 3]) -> M4 {
+    use ps2::{add, madd, msub, mul, sub};
+    let k = sub(1.0, c);
+    let [ax, ay, az] = axis.map(|v| mul(v, -1.0));
+    let (xy, zx, yz) = (mul(ax, ay), mul(az, ax), mul(ay, az));
+    [
+        [madd(add(0.0, c), k, mul(ax, ax)), msub(mul(k, xy), az, s), madd(mul(ay, s), k, zx), 0.0],
+        [madd(mul(az, s), k, xy), madd(add(0.0, c), k, mul(ay, ay)), msub(mul(k, yz), ax, s), 0.0],
+        [msub(mul(k, zx), ay, s), madd(mul(ax, s), k, yz), madd(add(0.0, c), k, mul(az, az)), 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
+/// One stroke's entry of the arm table (motions 0x10–0x19 posed at frame 8).
+#[derive(Clone, Debug)]
+pub struct ArmPose {
+    /// Racket, right hand, right forearm, right upper arm (translation zeroed), left upper arm locals.
+    pub racket: M4,
+    pub r_hand: M4,
+    pub r_forearm: M4,
+    pub r_upper: M4,
+    pub l_upper: M4,
+    /// Model matrices of the upper arms' parents (the right one's translation zeroed).
+    pub r_chain: M4,
+    pub l_chain: M4,
+    /// The right upper arm turned so the racket points along ±z in the body's frame (translation zeroed).
+    pub r_upper_aimed: M4,
+    /// That turn about y.
+    pub yaw: M4,
+    /// The shoulder (right upper arm's model translation).
+    pub shoulder: [f32; 4],
+    /// The racket point's forward reach (model z).
+    pub reach: f32,
+    /// The racket point's distance off the vertical axis with the elbow straightened.
+    pub radius: f32,
+}
+
+/// The arm table the game builds at player load: per stroke motion, the pose at frame 8 and the arm's geometry.
+pub struct ArmTable {
+    pub poses: Vec<ArmPose>,
+    /// Mean forward reach of the racket point.
+    pub reach: f32,
+    /// Mean |shoulder x| over the even strokes but 6, plus the hand's offset and 0.3.
+    pub side: f32,
+    /// The racket hand's model x in stroke 6 (+0.1 for character 5).
+    pub hand_x: f32,
+}
+
+/// The node names the table reads.
+const ARM_NODES: [&str; 5] = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
+
+/// The arm table from the skeleton and the ten stroke motions (0x10 … 0x19) of `character`.
+pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
+    use ps2::{add, div, madd, msub, mul, sqrt, sub};
+    use crate::vu0::transform;
+    let idx = ARM_NODES.map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
+    let chain = |local: &[M4], n: usize| {
+        let mut acc: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let mut p = sk.parent[n];
+        while let Some(i) = p {
+            acc = vmul(&acc, &local[i]);
+            p = sk.parent[i];
+        }
+        acc
+    };
+    let tip = [0.0, 0.7, 0.0, 1.0];
+    let zero_t = [0.0, 0.0, 0.0, 1.0];
+    let (mut reach, mut side, mut hand_x, mut hand_len) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let mut poses = Vec::with_capacity(clips.len());
+    for (i, clip) in clips.iter().enumerate() {
+        let local = clip.locals(sk, clip.wrap(8.0, false));
+        let [racket, r_hand, r_forearm, mut r_upper, l_upper] = idx.map(|n| local[n]);
+        let mut r_chain = chain(&local, idx[3]);
+        let l_chain = chain(&local, idx[4]);
+        let sign = if i % 2 == 1 { -1.0 } else { 1.0 };
+        let p = [racket, r_hand, r_forearm, r_upper, r_chain].iter().fold(tip, |v, m| transform(m, v));
+        reach = add(reach, p[2]);
+        if i == 0 {
+            let t = r_hand[3];
+            hand_len = sqrt(madd(madd(mul(t[1], t[1]), t[0], t[0]), t[2], t[2]));
+        }
+        if i == 6 {
+            hand_x = row3(&vmul(&vmul(&vmul(&r_hand, &r_forearm), &r_upper), &r_chain))[0];
+        }
+        let upper = vmul(&r_upper, &r_chain);
+        let sh = row3(&upper);
+        if i % 2 == 0 && i != 6 {
+            side = add(side, sh[0].abs());
+        }
+        // turn about y so the racket point lies along ±z from the shoulder
+        let (dx, dz) = (sub(p[0], sh[0]), sub(p[2], sh[2]));
+        let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
+        let (nx, nz) = (mul(dx, inv), mul(dz, inv));
+        let dot = madd(madd(mul(0.0, 0.0), nx, sign), nz, 0.0);
+        let mut angle = libm::acosf(dot.clamp(-1.0, 1.0));
+        if msub(mul(nz, sign), nx, 0.0) < 0.0 {
+            angle = mul(angle, -1.0);
+        }
+        let yaw = axis_angle(angle, [0.0, 1.0, 0.0]);
+        let mut aimed = vmul(&vmul(&vmul(&upper, &yaw), &axis_angle(f32::from_bits(0x4016_cbe4), [0.0, 0.0, sign])), &transpose3(&r_chain));
+        aimed[3] = zero_t;
+        r_upper[3] = zero_t;
+        r_chain[3] = zero_t;
+        // straighten the elbow: turn the forearm about z so the hand lies along the shoulder→elbow line
+        let elbow_m = vmul(&vmul(&r_forearm, &aimed), &r_chain);
+        let h = row3(&vmul(&vmul(&vmul(&r_hand, &r_forearm), &aimed), &r_chain));
+        let e = row3(&elbow_m);
+        let d: [f32; 4] = std::array::from_fn(|k| sub(h[k], e[k]));
+        let unit = |v: [f32; 4]| {
+            let inv = div(1.0, sqrt(madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2])));
+            v.map(|c| mul(c, inv))
+        };
+        let (n1, n2) = (unit(d), unit(e));
+        let dot = madd(madd(mul(n1[1], n2[1]), n1[0], n2[0]), n1[2], n2[2]);
+        let mut angle = libm::acosf(dot.clamp(-1.0, 1.0));
+        if msub(mul(n1[0], n2[1]), n1[1], n2[0]) < 0.0 {
+            angle = mul(angle, -1.0);
+        }
+        let bend = axis_angle(angle, [0.0, 0.0, 1.0]);
+        let frame = vmul(&aimed, &r_chain);
+        let forearm = vmul(&vmul(&elbow_m, &bend), &transpose3(&frame));
+        let q = [racket, r_hand, forearm, aimed, r_chain].iter().fold(tip, |v, m| transform(m, v));
+        let radius = sqrt(madd(mul(q[1], q[1]), q[0], q[0]));
+        poses.push(ArmPose { racket, r_hand, r_forearm, r_upper, l_upper, r_chain, l_chain, r_upper_aimed: aimed, yaw, shoulder: sh, reach: p[2], radius });
+    }
+    let reach = div(reach, 10.0);
+    let side = add(div(side, 4.0), add(0.3, hand_len));
+    let hand_x = if character == 5 { add(hand_x, 0.1) } else { hand_x };
+    ArmTable { poses, reach, side, hand_x }
 }

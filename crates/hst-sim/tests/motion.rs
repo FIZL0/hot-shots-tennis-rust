@@ -332,3 +332,64 @@ fn anim_s05_clock() {
     eprintln!("{ticks} ticks ({held} held), {sets} sets");
     assert!(ticks > 30000 && sets > 100 && held > 5);
 }
+
+/// The arm table each player builds at load (stroke motions 0x10–0x19 at frame 8: arm locals, the upper arms'
+/// parent chains, the aimed upper arm, its yaw, the shoulder, reach and radius per stroke, and the three
+/// averages), bit-exact against the player structs of every RAM image.
+#[test]
+fn arm_table_ram() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{arm_table, Clip, Skeleton, M4};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let mut players = 0;
+    for s in ["s03", "s04", "s05", "s08", "s09"] {
+        let Ok(ram) = std::fs::read(format!("{root}context/ram/{s}.bin")) else { return eprintln!("{s}.bin absent, skipped") };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let gm = u(0x422f80);
+        for p in 0..4 {
+            let pl = u(gm + 0xa8 + 4 * p);
+            let c = u(pl + 0x12bc) as i32;
+            // the costume whose arm nodes have these rest translations
+            let rest_of = |k: usize| [0, 4, 8].map(|o| u(u(u(u(pl + 0x17f0 + 4 * k) + 0x108) + 0x10) + 0x70 + o) as u32);
+            let want: Vec<[u32; 3]> = [0, 9, 11, 12, 13].map(rest_of).to_vec();
+            let names = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
+            let sk = (0..10)
+                .filter_map(|costume| {
+                    let mdata = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")).ok()?;
+                    let marc = Archive::parse(&mdata).unwrap();
+                    let e = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl"))?;
+                    let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
+                    Some(Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() })
+                })
+                .find(|sk| names.iter().zip(&want).all(|(n, w)| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits())) == Some(*w)))
+                .unwrap_or_else(|| panic!("{s} p{p}: no costume of character {c} matches"));
+            let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            let clips: Vec<Clip> = (0x10..0x1a)
+                .map(|m| {
+                    let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase();
+                    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
+                    Clip::new(&sk, &ani::parse(&arc.read(e).unwrap()).unwrap())
+                })
+                .collect();
+            let t = arm_table(&sk, &clips, c);
+            let ctx = format!("{s} p{p} char {c}");
+            let bits = |a: usize, n: usize| (0..n).map(|k| u(a + 4 * k) as u32).collect::<Vec<_>>();
+            let mbits = |m: &M4| m.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
+            for (i, a) in t.poses.iter().enumerate() {
+                let b = pl + 0x200 * i;
+                for (name, m, off) in [("racket", &a.racket, 0x18e0), ("r_hand", &a.r_hand, 0x1920), ("r_forearm", &a.r_forearm, 0x1960), ("r_upper", &a.r_upper, 0x19a0), ("l_upper", &a.l_upper, 0x19e0), ("r_chain", &a.r_chain, 0x1a20), ("l_chain", &a.l_chain, 0x1a60), ("aimed", &a.r_upper_aimed, 0x1aa0)] {
+                    assert_eq!(mbits(m), bits(b + off, 16), "{ctx} stroke {i} {name}");
+                }
+                assert_eq!(mbits(&a.yaw), bits(pl + 0x2ce0 + 0x40 * i, 16), "{ctx} stroke {i} yaw");
+                assert_eq!(a.shoulder.map(f32::to_bits).to_vec(), bits(pl + 0x2f60 + 0x10 * i, 4), "{ctx} stroke {i} shoulder");
+                assert_eq!(a.reach.to_bits(), u(pl + 0x3000 + 4 * i) as u32, "{ctx} stroke {i} reach");
+                assert_eq!(a.radius.to_bits(), u(pl + 0x3028 + 4 * i) as u32, "{ctx} stroke {i} radius");
+            }
+            assert_eq!([t.reach, t.side, t.hand_x].map(f32::to_bits).to_vec(), bits(pl + 0x3050, 3), "{ctx} averages");
+            players += 1;
+        }
+    }
+    eprintln!("{players} players' arm tables bit-exact");
+}
