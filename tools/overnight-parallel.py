@@ -285,6 +285,7 @@ def watch(n):
         sp.run(['tmux', 'send-keys', '-t', pane_id, 'Enter'])
 
 
+def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
     os.makedirs(NOTES, exist_ok=True)
