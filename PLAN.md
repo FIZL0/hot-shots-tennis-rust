@@ -115,6 +115,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
 - [ ] **P23** Graphics settings menu (after P21) → `main.rs`
 - [ ] **P21a** Controller assignment screen (after P21): P1 picks which connected controller drives which player. The original shakes a controller's selector when that controller moves its right stick → `main.rs` · `play.rs` read_input/Pads
+- [ ] **P24** Surprise pop-ups (user 2026-10-07): the "!" and sweat drop over an AI player caught off guard (AI only), and the sweat drop over a player who hits a serve that wasn't served to them; drawn in the same place and the same way as the original (sprite, position over the head, scale, timing, fade), checked against frame-stepped screenshots → `play.rs` balloons · `hst-sim` AI · `plan/P24.md`
 - [ ] **P16a** Post-point cut-aways in play (low priority, user 2026-10-06) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
 
 ### Confirmations
