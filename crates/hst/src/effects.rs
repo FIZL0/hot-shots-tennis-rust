@@ -1,13 +1,14 @@
 //! Hit effects from `AZUMA/C_EFF/EFFCT.XB0`, played by `hst_sim::effect`: the racket impact (one model per shot
 //! kind, the smash its own), started as a shot leaves the racket, at the ball, along its velocity; and the hit
 //! sparks thrown off the ball with it (camera-facing quads, `*tubu00` by shot kind); and each player's swing trail
-//! (a `zanzou` ribbon behind the racket).
+//! (a `zanzou` ribbon behind the racket); the ball's flight ribbon (`ballrolling`, coloured by shot kind) and the
+//! glow spinning about it after a stroke (`impactef_*`).
 
 use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
-use hst_sim::effect::{Effect, Roll, SPARK_FADE, SPARKS, Sparks, Trail, impact_matrix, impact_scale};
+use hst_sim::effect::{Effect, Roll, SPARK_FADE, SPARKS, Sparks, Trail, impact_matrix, impact_scale, FLIGHT_POINTS, Flight, GLOW_FRAMES, Glow};
 
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
@@ -174,20 +175,26 @@ fn roll(rng: &mut u32) -> Roll {
     Roll::new(rand(rng) * std::f32::consts::PI, [rand(rng), rand(rng), rand(rng)])
 }
 
-pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
+/// `yumoto/<name>.tm2` from the effect archive as an unlit, alpha-blended, two-sided material.
+fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Handle<StandardMaterial>, String> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    // ponytail: re-reads the archive per texture; a handful at load
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let path = format!("yumoto/{name}.tm2");
+    let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&path)).ok_or(format!("{path} missing"))?;
+    let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
+    let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+    Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }))
+}
+
+pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
     let mut looks = Vec::new();
     for k in IMPACTS {
-        let name = format!("yumoto/{k}tubu00.tm2");
-        let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&name)).ok_or(format!("{name} missing"))?;
-        let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
-        let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
-        looks.push(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }));
+        looks.push(look(iso, &format!("{k}tubu00"), materials, images)?);
     }
-    let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default()));
+    let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling)).id();
     commands.entity(parent).add_child(view);
     let mut rng = 0x5eed_5a4c;
@@ -255,16 +262,8 @@ pub struct Trails {
 }
 
 pub fn load_trails(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Trails, String> {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
-    let arc = Archive::parse(&data).map_err(|e| e.0)?;
-    let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with("yumoto/zanzou.tm2")).ok_or("zanzou.tm2 missing")?;
-    let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
-    let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
-    let look = materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() });
-    let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default()));
-    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(look), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+    let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
+    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(look(iso, "zanzou", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
     commands.entity(parent).add_child(view);
     Ok(Trails { mesh })
 }
@@ -307,6 +306,115 @@ pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<As
             colour.extend([[1.0, 1.0, 1.0, (alpha / 128.0).min(1.0)]; 2]);
             if i > 0 {
                 index.extend([n - 2, n - 1, n, n, n - 1, n + 1]);
+            }
+        }
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+    mesh.insert_indices(Indices::U32(index));
+}
+
+/// The ball's flight ribbon and glow, each one mesh.
+#[derive(Resource)]
+pub struct BallFlight {
+    flight: Flight,
+    glow: Glow,
+    ribbon: Handle<Mesh>,
+    disc: Entity,
+    /// The ball at the last frame.
+    pos: Vec3,
+    vel: Vec3,
+    /// `impactef_*` for top … drop.
+    looks: [Handle<StandardMaterial>; 5],
+}
+
+pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<BallFlight, String> {
+    let ribbon = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
+    let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+    let mut looks = Vec::new();
+    for k in &IMPACTS[..5] {
+        looks.push(look(iso, &format!("impactef_{k}"), materials, images)?);
+    }
+    let disc = commands.spawn((Mesh3d(meshes.add(Rectangle::new(2.0 * GLOW_SIZE, 2.0 * GLOW_SIZE))), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden)).id();
+    commands.entity(parent).add_children(&[view, disc]);
+    Ok(BallFlight { flight: Flight::default(), glow: Glow::default(), ribbon, disc, pos: Vec3::ZERO, vel: Vec3::ZERO, looks: looks.try_into().unwrap() })
+}
+
+/// The glow's half-size and turn over its life.
+const GLOW_SIZE: f32 = 0.4;
+const GLOW_TURN: f32 = std::f32::consts::FRAC_PI_2;
+
+impl BallFlight {
+    /// One game frame: a hit restarts the ribbon (and, bar a smash, the glow); a dead ball ends both.
+    pub fn frame(&mut self, hit: Option<Hit>, dead: bool, pos: [f32; 3], vel: [f32; 3], commands: &mut Commands) {
+        if let Some(h) = hit {
+            self.flight.start(h.kind, h.smash);
+            if !h.smash {
+                self.glow.start(h.kind);
+                commands.entity(self.disc).insert(MeshMaterial3d(self.looks[self.glow.texture].clone()));
+            }
+        }
+        if dead {
+            self.flight.live = false;
+            self.glow.life = 0;
+        }
+        self.flight.tick([pos[0], pos[1], pos[2], 1.0], [vel[0], vel[1], vel[2], 0.0]);
+        (self.pos, self.vel) = (Vec3::from(pos), Vec3::from(vel));
+        self.glow.tick();
+    }
+}
+
+/// The ribbon from the ball back along its samples, facing the camera, `speed`·20 long, fading to its end; the glow
+/// a disc across the flight at the ball, spinning a quarter turn and fading over its last 15 frames.
+// ponytail: the game's tilt of a disc flying along the court, its texture flip by facing and its halved ribbon
+// length under one of its mode counts are left out
+pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<Camera3d>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), Without<Camera3d>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    use bevy::mesh::Indices;
+    let Ok((cam, proj)) = cam.single() else { return };
+    let fov = if let Projection::Perspective(p) = proj { p.fov } else { 0.8 };
+    // world → game space: (x, −y, −z)
+    let eye = Vec3::new(cam.translation.x, -cam.translation.y, -cam.translation.z);
+    if let Ok((mut t, mut v, look)) = disc.get_mut(fx.disc) {
+        *v = if fx.glow.life > 0 { Visibility::Visible } else { Visibility::Hidden };
+        let turn = GLOW_TURN * fx.glow.life as f32 / GLOW_FRAMES as f32;
+        *t = Transform::from_translation(fx.pos).looking_to(fx.vel.try_normalize().unwrap_or(Vec3::Z), Vec3::Y) * Transform::from_rotation(Quat::from_rotation_z(turn));
+        if let Some(mut m) = materials.get_mut(&look.0) {
+            m.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
+        }
+    }
+    let Some(mut mesh) = meshes.get_mut(&fx.ribbon) else { return };
+    let f = &fx.flight;
+    let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+    if f.live && f.count >= 2 {
+        let p: Vec<Vec3> = (0..f.count).map(|k| Vec3::from_slice(&f.points[(f.head + 2 * FLIGHT_POINTS - 1 - k) % FLIGHT_POINTS][..3])).collect();
+        let c = f.colour.to_be_bytes().map(|b| b as f32 / 128.0);
+        let (len, tan) = (f.speed * 20.0, (fov / 2.0).tan());
+        let mut run = 0.0;
+        for i in 0..p.len() {
+            let mut at = p[i];
+            let mut last = i == p.len() - 1;
+            if i > 0 {
+                let d = at.distance(p[i - 1]);
+                if run + d >= len {
+                    at = p[i - 1].lerp(at, (len - run) / d.max(1e-6));
+                    (run, last) = (len, true);
+                } else {
+                    run += d;
+                }
+            }
+            let along = p[(i + 1).min(p.len() - 1)] - p[i.saturating_sub(1)];
+            let side = along.cross(eye - at).normalize_or_zero() * (tan * at.distance(eye) * 0.005).max(0.08);
+            let n = pos.len() as u32;
+            let a = if last { 0.0 } else { c[3] * (1.0 - run / len.max(1e-6)).max(0.0) };
+            pos.extend([(at - side).to_array(), (at + side).to_array()]);
+            uv.extend([[0.0, 1.0 - run / len.max(1e-6)], [1.0, 1.0 - run / len.max(1e-6)]]);
+            colour.extend([[c[0], c[1], c[2], a]; 2]);
+            if i > 0 {
+                index.extend([n - 2, n - 1, n, n, n - 1, n + 1]);
+            }
+            if last {
+                break;
             }
         }
     }

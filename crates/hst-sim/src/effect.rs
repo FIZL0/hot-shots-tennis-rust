@@ -397,3 +397,101 @@ fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
     let q = [p[i.saturating_sub(1)], p[i], p[(i + 1).min(last)], p[(i + 2).min(last)]];
     std::array::from_fn(|e| std::array::from_fn(|k| w0 * q[0][e][k] + w1 * q[1][e][k] + w2 * q[2][e][k] + w3 * q[3][e][k]))
 }
+
+/// The ball's flight ribbon: the ball's positions since the last hit (a ring of 50; a sample in line with the two
+/// before it, or within 0.01 of the last kept one, moves the last instead), drawn in the shot kind's colour.
+pub const FLIGHT_POINTS: usize = 50;
+
+/// The ribbon colour (RGBA, 128 = full) by shot kind (top, slice, flat, lob, drop), then the smash.
+// ponytail: the game also has a second smash colour (128, 116, 34, 128) for a mode flag the port doesn't have
+pub const FLIGHT_COLOURS: [u32; 6] = [0x3e0e7f46, 0x80300846, 0x33338046, 0x27802746, 0x800c8046, 0x757d4146];
+
+#[derive(Clone)]
+pub struct Flight {
+    pub points: [[f32; 4]; FLIGHT_POINTS],
+    /// Samples held, the oldest and the next slot to write.
+    pub count: usize,
+    pub tail: usize,
+    pub head: usize,
+    pub live: bool,
+    /// `FLIGHT_COLOURS` entry.
+    pub colour: u32,
+    /// The ball's speed (per frame) at the last sample.
+    pub speed: f32,
+}
+
+impl Default for Flight {
+    fn default() -> Self {
+        Flight { points: [[0.0; 4]; FLIGHT_POINTS], count: 0, tail: 0, head: 0, live: false, colour: 0, speed: 0.0 }
+    }
+}
+
+impl Flight {
+    /// A hit: the ribbon starts afresh in the shot's colour.
+    pub fn start(&mut self, kind: i32, smash: bool) {
+        *self = Flight { points: self.points, live: true, colour: FLIGHT_COLOURS[if smash { 5 } else { kind.clamp(0, 4) as usize }], ..Default::default() };
+    }
+
+    /// One frame of the ball at `pos` moving at `vel`.
+    pub fn tick(&mut self, pos: [f32; 4], vel: [f32; 4]) {
+        use ps2::{add, div, madd, mul, sub};
+        if !self.live {
+            return;
+        }
+        let n = FLIGHT_POINTS;
+        let back = |i: usize, by: usize| (i + n - by) % n;
+        let mut keep = true;
+        if self.count > 1 {
+            let j = back(self.head, 2);
+            if self.count > 2 {
+                let (a, b) = (self.points[j], self.points[back(j, 1)]);
+                let d: [f32; 3] = std::array::from_fn(|k| sub(pos[k], a[k]));
+                let e: [f32; 3] = std::array::from_fn(|k| sub(a[k], b[k]));
+                let r = div(1.0, ps2::sqrt(add(add(mul(e[2], e[2]), mul(e[0], e[0])), mul(e[1], e[1]))));
+                let e = e.map(|v| mul(v, r));
+                let c = [sub(mul(d[0], e[1]), mul(d[1], e[0])), sub(mul(d[2], e[0]), mul(d[0], e[2])), sub(mul(d[1], e[2]), mul(d[2], e[1]))];
+                if ps2::sqrt(add(add(mul(c[0], c[0]), mul(c[2], c[2])), mul(c[1], c[1]))) < 0.05 {
+                    keep = false;
+                }
+            }
+            let a = self.points[j];
+            let d: [f32; 3] = std::array::from_fn(|k| sub(pos[k], a[k]));
+            if keep && ps2::sqrt(add(add(mul(d[2], d[2]), mul(d[0], d[0])), mul(d[1], d[1]))) < 0.01 {
+                keep = false;
+            }
+        }
+        if keep {
+            self.points[self.head] = pos;
+            self.head = (self.head + 1) % n;
+            if self.count < n {
+                self.count += 1;
+            } else {
+                self.tail = (self.tail + 1) % n;
+            }
+        } else {
+            self.points[back(self.head, 1)] = pos;
+        }
+        self.speed = ps2::sqrt(madd(madd(mul(vel[0], vel[0]), vel[1], vel[1]), vel[2], vel[2]));
+    }
+}
+
+/// The glow at the ball after a stroke (not a smash): `impactef_*` spinning about the flight, 30 frames, fading
+/// out over the last 15.
+pub const GLOW_FRAMES: i32 = 30;
+
+#[derive(Clone, Copy, Default)]
+pub struct Glow {
+    pub life: i32,
+    /// `impactef_*` by shot kind: flat shows top's and drop shows slice's.
+    pub texture: usize,
+}
+
+impl Glow {
+    pub fn start(&mut self, kind: i32) {
+        *self = Glow { life: GLOW_FRAMES, texture: match kind { 2 => 0, 4 => 1, k => k.clamp(0, 4) as usize } };
+    }
+
+    pub fn tick(&mut self) {
+        self.life = (self.life - 1).max(0);
+    }
+}
