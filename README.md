@@ -49,11 +49,9 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 |---|---|---|
 | Move (aim while swinging) | WASD | Left stick / d-pad |
 | Topspin | J | A |
-| Slice | K | B |
-| Flat | I | X |
+| Slice / Serve | K | B |
 | Lob | L | Y |
 | Drive | U | RB |
-| Serve (toss, then hit) | J / Space | A / Start |
 | Camera (original / free) | C | Select |
 | Turn free camera | Arrow keys | Right stick |
 
