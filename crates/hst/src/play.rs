@@ -495,8 +495,46 @@ fn character_tables(
 // ponytail: only the base tables; the up1/dw1/dw2 variants come with the timing/mode pick (P3)
 fn rally_tables(iso: &mut Iso, c: usize) -> [Vec<Table>; 2] {
     let mut volleys = character_tables(iso, c, "A", "voly", "", 2);
-    volleys.extend(character_tables(iso, c, "B", "voly", "", 5).into_iter().skip(2));
+    volleys.extend((2..5).map(|k| character_table(iso, c, "B", "voly", "", k)));
     [character_tables(iso, c, "A", "strk", "", 5), volleys]
+}
+
+/// Character `c`'s one trajectory table `tr_pc<c>_<name><k><suffix>.dat` from `TRAJ<c><ab>.XB`, naming the file
+/// when the archive lacks it.
+fn character_table(iso: &mut Iso, c: usize, ab: &str, name: &str, suffix: &str, k: usize) -> Table {
+    let data = iso
+        .read(&format!("TRAJ/TRAJ{c:02}{ab}.XB"))
+        .expect("trajectory archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let file = format!("tr_pc{c:02}_{name}{k}{suffix}.dat");
+    let e = arc
+        .entries
+        .iter()
+        .find(|e| e.name.to_ascii_lowercase().ends_with(&file))
+        .unwrap_or_else(|| panic!("trajectory table {file} not in TRAJ{c:02}{ab}.XB"));
+    Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table")
+}
+
+/// Every character's start-up tables (serve, smash, stroke, volley) load from the disc (needs the ISO at the
+/// repository root; skipped without it).
+#[cfg(test)]
+mod every_character_tables {
+    use super::*;
+
+    #[test]
+    fn load() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+        let Ok(mut iso) = Iso::open(path) else {
+            eprintln!("no ISO, skipped");
+            return;
+        };
+        let params = disc(&mut iso, None).3;
+        tables(&mut iso, "B", "smsh", 2);
+        for c in 0..14 {
+            serve_tables(&mut iso, &params, c);
+            rally_tables(&mut iso, c);
+        }
+    }
 }
 
 /// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from the hitter's own character tables.
