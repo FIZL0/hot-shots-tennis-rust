@@ -2,6 +2,7 @@
 # Launch Hot Shots Tennis in PCSX2 with PINE (memory IPC) on, so tools/pine.py can read live game state.
 #   tools/pcsx2-hst.sh [pcsx2 args]   start (a no-op if this instance is up)
 #   tools/pcsx2-hst.sh stop           close this instance only
+#   tools/pcsx2-hst.sh status         is this instance up (pid); the game's own state: tools/pine.py
 # HST_PCSX2=N (parallel runs, set by tools/overnight-parallel.py): copy N of the user's PCSX2 config,
 # ../<repo>-slots/pcsx2/sN (own PINE slot 28011+N, save states, memory cards), seeing only virtual pad N.
 # Unset: the user's own PCSX2 config, which never sees the parallel pads.
@@ -11,6 +12,9 @@ N=${HST_PCSX2:-}
 PID=${XDG_RUNTIME_DIR:-/tmp}/hst-pcsx2$N.pid  # pcsx2-qt hides its environment (file caps), so track it by pid
 mine() { p=$(cat "$PID" 2>/dev/null) && [ "$(ps -o comm= -p "$p")" = pcsx2-qt ] && echo "$p"; true; }
 if [ "$1" = stop ]; then p=$(mine); [ -n "$p" ] && kill $p; exit 0; fi
+if [ "$1" = status ]; then p=$(mine); echo "PCSX2 ${N:+copy $N }${p:+running (pid $p)}${p:-not running}"; exit 0; fi
+# anything else that isn't a pcsx2-qt flag would be opened as a file (an error dialog that blocks the copy)
+case $1 in ''|-*) ;; *) echo "usage: pcsx2-hst.sh [stop | status | -pcsx2-qt-flags]" >&2; exit 2;; esac
 [ -n "$(mine)" ] && { echo "PCSX2 ${N:+copy $N }already running"; exit 0; }
 if [ -n "$N" ]; then
     export XDG_CONFIG_HOME="$(dirname "$(git -C "$T" rev-parse --path-format=absolute --git-common-dir)")-slots/pcsx2/s$N"

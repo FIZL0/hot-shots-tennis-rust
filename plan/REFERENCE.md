@@ -3,6 +3,13 @@
 ## Controlling the real game (for recordings and checks)
 
 - `tools/pcsx2-hst.sh` launches PCSX2 with PINE on; `tools/pine.py` reads/writes RAM and loads/saves states.
+- What you can do with your PCSX2: `tools/pcsx2-hst.sh` start · `stop` · `status` (is it up); `tools/pine.py` (no args)
+  prints the game id and running/paused, `tools/pine.py <hexaddr>...` reads RAM; pine tools resume a paused copy
+  themselves; `tools/screenshot.sh out.png` takes a screenshot (a copy's own F8 hotkey); `tools/vpad.py` presses
+  buttons. pcsx2-hst.sh takes no other words (they'd be opened as a file and block the copy with an error dialog).
+- **Matches end.** A match finishes on "Game, Set, Match!" with "✕ Continue" and stays there; nothing after it is
+  gameplay. Long captures (slot 5 runs a whole bot match) can run past it: before trusting a long capture, take a
+  screenshot at its end, and cut or re-record what came after the match ended.
 - **Save states (the user's — load only, scratch saves go to 8/9):** 3 = start of a game, P1 human + 3 bots;
   4 = mid-rally right after the serve; 5 = full bot game. Slot 5 has no human input — use it for ball/AI
   captures only. Controller-input recordings (P0 and anything gameplay-from-input) start from slot 3 or 4 with
