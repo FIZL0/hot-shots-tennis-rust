@@ -30,6 +30,104 @@ impl Stats {
     }
 }
 
+/// A character's reach and contact heights (m) and body-shot adjustments, as the game's TParam.csv parser leaves
+/// them in the character record (copied to player +0x1310.. and +0x13a0..+0x13ec).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReachStats {
+    /// Body ADJ, Vbdy ADJ, Rizing ADJ (percent; Back ADJ and Run CON aren't read).
+    pub body_adj: i32,
+    pub vbody_adj: i32,
+    pub rising_adj: i32,
+    /// SM LOW POW, Strk HI POW.
+    pub smash_low_pow: i32,
+    pub stroke_high_pow: i32,
+    /// Serve near-miss scatter factor.
+    pub serve_scatter: f32,
+    /// Height of the reach centre.
+    pub base: f32,
+    /// Horizontal reach: the reach "clog" plus the reach cell.
+    pub reach: f32,
+    /// Lowest underhand (scoop) contact.
+    pub under_min: f32,
+    /// Ideal contact height: ground strokes, volleys.
+    pub stroke_height: f32,
+    pub volley_height: f32,
+    /// Smash, overhand serve and underhand serve windows: highest, ideal, lowest.
+    pub smash: [f32; 3],
+    pub serve: [f32; 3],
+    pub under_serve: [f32; 3],
+    /// Distance a far dive starts at, and the dive's limit.
+    pub dive_start: f32,
+    pub dive_limit: f32,
+    /// Sideways body-collision size (the second half of the collision cell).
+    pub collision: f32,
+}
+
+impl ReachStats {
+    /// From a character's TParam.csv row. The game splits it with strtok (empty cells vanish, so the disc's empty
+    /// Special POW cell shifts every later column down one token) and '/' inside a cell; centimetre cells are
+    /// int ÷ 100, the scatter factor and the reach centre go through its own decimal reader.
+    pub fn from_tparam(row: &str) -> Self {
+        let t: Vec<&str> = row.split(',').filter(|c| !c.is_empty()).map(str::trim).collect();
+        let part = |k: usize, i: usize| t[k].split('/').nth(i).unwrap_or("");
+        let int = |s: &str| atoi(s);
+        let m = |s: &str| div(atoi(s) as f32, 100.0);
+        let three = |k: usize| [0, 1, 2].map(|i| m(part(k, i)));
+        ReachStats {
+            body_adj: int(t[22]),
+            vbody_adj: int(t[23]),
+            rising_adj: int(t[25]),
+            smash_low_pow: int(t[51]),
+            stroke_high_pow: int(t[52]),
+            serve_scatter: atof(t[53]),
+            base: atof(t[54]),
+            reach: add(m(t[55]), m(t[56])),
+            dive_start: m(t[57]),
+            dive_limit: m(t[58]),
+            collision: m(part(60, 1)),
+            under_min: m(t[61]),
+            stroke_height: m(part(62, 0)),
+            volley_height: m(part(62, 1)),
+            smash: three(63),
+            serve: three(64),
+            under_serve: three(65),
+        }
+    }
+}
+
+/// C atoi: optional sign, then digits up to the first other character.
+fn atoi(s: &str) -> i32 {
+    let s = s.trim_start();
+    let (neg, s) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let n = s.bytes().take_while(u8::is_ascii_digit).fold(0i32, |n, d| n.wrapping_mul(10).wrapping_add((d - b'0') as i32));
+    if neg { n.wrapping_neg() } else { n }
+}
+
+/// The game's decimal reader: fraction digits after the '.' at 0.1, 0.01… (each weight the last ÷ 10), then the
+/// integer digits right to left at 1, 10…, each added as acc + digit·weight. No sign.
+fn atof(s: &str) -> f32 {
+    let b = s.as_bytes();
+    let dot = b.iter().position(|&c| c == b'.');
+    let mut v = 0.0f32;
+    if let Some(d) = dot {
+        let mut w = 0.1f32;
+        for &c in b[d + 1..].iter().take_while(|c| c.is_ascii_digit()) {
+            v = madd(add(v, 0.0), (c - b'0') as f32, w);
+            w = div(w, 10.0);
+        }
+    }
+    let mut w = 1.0f32;
+    for &c in b[..dot.unwrap_or(b.len())].iter().rev().take_while(|c| c.is_ascii_digit()) {
+        v = madd(add(v, 0.0), (c - b'0') as f32, w);
+        w = mul(w, 10.0);
+    }
+    v
+}
+
 /// Stamina after a stroke's contact (during the rally of a game with more than one player): ground strokes
 /// (branch 1) cost the backhand value on the backhand side, dives (3) and smashes (4) theirs, volleys nothing.
 pub fn stroke_stamina(s: &Stats, stamina: i32, branch: u8, forehand: bool, floor: i32) -> i32 {

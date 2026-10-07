@@ -458,3 +458,46 @@ fn lefty_s04() {
     eprintln!("lefty: motion {motions} checked, {bad_motion} off; facing {faces} checked, {bad_face} off");
     assert_eq!((bad_motion, bad_face), (0, 0));
 }
+
+/// Every character's reach and contact heights from the disc's TParam.csv against the game's parsed records in RAM
+/// (`p7c_tparam_s0N.bin`: the 14 records of 0x118 bytes as the parser left them, then per player its character and
+/// its copy at +0x12d8), from save slots 5 and 3; and each player's copy equals its character's record.
+#[test]
+fn reach_stats_from_tparam() {
+    use hst_data::{iso::Iso, xb::Archive};
+    use hst_sim::player::ReachStats;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc absent, skipped");
+    };
+    let data = iso.read("PCDATA/PCDATA.XB").unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).unwrap();
+    let csv = String::from_utf8_lossy(&arc.read(e).unwrap()).into_owned();
+    let stats: Vec<ReachStats> = (0..14)
+        .map(|n| ReachStats::from_tparam(csv.lines().find(|l| l.starts_with(&format!("{n},"))).unwrap()))
+        .collect();
+    for slot in [5, 3] {
+        let Ok(ram) = std::fs::read(format!("{dir}/p7c_tparam_s0{slot}.bin")) else {
+            return eprintln!("p7c_tparam_s0{slot}.bin absent, skipped");
+        };
+        for (n, s) in stats.iter().enumerate() {
+            let rec = &ram[n * 0x118..(n + 1) * 0x118];
+            let i = |o: usize| i32::from_le_bytes(rec[o - 0x12d8..o - 0x12d4].try_into().unwrap());
+            let fl = |o: usize| f(rec, o - 0x12d8).to_bits();
+            assert_eq!([s.body_adj, s.vbody_adj, s.rising_adj, s.smash_low_pow, s.stroke_high_pow], [0x1310, 0x1314, 0x1318, 0x13a0, 0x13a4].map(i), "character {n}");
+            let mine = [
+                [s.serve_scatter, s.base, s.reach, s.under_min, s.stroke_height, s.volley_height].as_slice(),
+                &s.smash, &s.serve, &s.under_serve, &[s.dive_start, s.dive_limit, s.collision],
+            ]
+            .concat();
+            assert_eq!(mine.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0x13a8..0x13f0).step_by(4).map(fl).collect::<Vec<_>>(), "character {n}");
+        }
+        for p in ram[14 * 0x118..].chunks(0x11c) {
+            let c = u32::from_le_bytes(p[..4].try_into().unwrap()) as usize;
+            let (copy, rec) = (&p[4..], &ram[c * 0x118..(c + 1) * 0x118]);
+            // +0x12e0 is a byte: the three after it belong to something else
+            assert!(copy[..9] == rec[..9] && copy[12..] == rec[12..], "slot {slot} player with character {c}");
+        }
+    }
+}

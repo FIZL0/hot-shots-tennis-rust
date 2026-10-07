@@ -309,6 +309,8 @@ struct Game {
     hit_effect: Option<effects::Hit>,
     /// Per player its character's smash top and window middle (TParam, m) and the landing markers' state.
     smash_heights: Vec<[f32; 2]>,
+    /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
+    reaches: Vec<Reach>,
     marks: Marks,
     /// The jingle due (slot 8 key: 0 change ends, 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
@@ -801,6 +803,23 @@ fn reach(iso: &mut Iso) -> Reach {
     reach
 }
 
+/// Character `n`'s reach for the contact search: `base` (character 0's measured contact offsets, body-shot widths,
+/// grades and dive arm) with the character's own TParam reach centre, reach, ideal heights and smash window as the
+/// game parses them, and the player's hand.
+fn character_reach(base: &Reach, iso: &mut Iso, n: usize, hand: f32) -> Reach {
+    let s = loco::ReachStats::from_tparam(&tparam(iso, n).join(","));
+    Reach {
+        base: s.base,
+        reach: s.reach,
+        stroke_height: s.stroke_height,
+        volley_height: s.volley_height,
+        smash_top: s.smash[0],
+        smash_bottom: s.smash[2],
+        hand,
+        ..base.clone()
+    }
+}
+
 /// Character `n`'s smash top and the middle of its smash window (TParam column 64, m): the smash marker's heights.
 fn smash_heights(iso: &mut Iso, n: usize) -> [f32; 2] {
     let data = iso
@@ -999,6 +1018,7 @@ fn setup(
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
         hit_effect: None,
         smash_heights: Vec::new(),
+        reaches: Vec::new(),
         marks: Marks::default(),
     };
     reset_positions(&mut game);
@@ -1044,6 +1064,7 @@ fn setup(
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
         game.smash_heights.push(smash_heights(&mut iso, c));
+        game.reaches.push(character_reach(&game.reach, &mut iso, c, game.players[i].hand));
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
@@ -1819,7 +1840,7 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
     }
     let p = &g.players[i];
     let path = predicted_path(g, g.reach.grades.len());
-    let s = swing::search(&g.reach, &path, p.pos, p.end, p.kind)?;
+    let s = swing::search(&g.reaches[i], &path, p.pos, p.end, p.kind)?;
     Some(Contact {
         frames: s.frame as u32,
         swing: s,
@@ -1838,7 +1859,7 @@ fn find_dive(g: &Game, i: usize) -> Option<swing::Dive> {
     let path = predicted_path(g, swing::DIVE_HORIZON);
     let f = p.body.face.dir;
     swing::dive(
-        &g.reach,
+        &g.reaches[i],
         &path,
         p.pos,
         p.end,
@@ -2290,7 +2311,7 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
         Vec::new()
     };
     // ponytail: the middle height is TParam's middle smash cell, the window's midpoint for every character seen
-    let middle = (g.reach.smash_top + g.reach.smash_bottom) / 2.0;
+    let middle = (g.reaches[i].smash_top + g.reaches[i].smash_bottom) / 2.0;
     let (b, p) = (g.flight.ball, &mut g.players[i]);
     let base = match p.kind {
         1 => 0x12,
