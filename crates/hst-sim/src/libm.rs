@@ -1,4 +1,4 @@
-//! The game's `sinf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
+//! The game's `sinf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
 //! rounding of the constants), on PS2 float arithmetic.
 
 use crate::ps2::{add, div, mul, sub};
@@ -218,53 +218,4 @@ mod tests {
             assert!((super::atan2f(y, x) - y.atan2(x)).abs() < 2e-6, "{t}");
         }
     }
-}
-
-/// acosf(x): fdlibm's float version as the original compiled it (its sqrtf is the exact bit-by-bit one).
-pub fn acosf(x: f32) -> f32 {
-    const PI: f32 = f(0x4049_0fda);
-    const PIO2_HI: f32 = f(0x3fc9_0fda);
-    const PIO2_LO: f32 = f(0x33a2_2168);
-    // p(z)/q(z) with the game's constant order: p = z·(pS0 + z·(pS1 + … z·pS5)), q = 1 + z·(qS1 + … z·qS4)
-    let pq = |z: f32| {
-        let mut p = add(mul(z, f(0x3811_ef08)), f(0x3a4f_7f04));
-        for c in [0xbd24_1146, 0x3e4e_0aa8, 0xbea6_b08f, 0x3e2a_aaaa] {
-            p = add(mul(z, p), f(c));
-        }
-        let mut q = add(mul(z, f(0x3d9d_c62d)), f(0xbf30_3360));
-        for c in [0x4001_572c, 0xc019_d138] {
-            q = add(mul(z, q), f(c));
-        }
-        div(mul(z, p), add(mul(z, q), 1.0))
-    };
-    let hx = x.to_bits() as i32;
-    let ix = hx & 0x7fff_ffff;
-    if ix == 0x3f80_0000 {
-        return if hx > 0 { 0.0 } else { PI };
-    }
-    if ix > 0x3f80_0000 {
-        return f32::NAN;
-    }
-    if ix < 0x3f00_0000 {
-        if ix <= 0x2300_0000 {
-            return PIO2_HI;
-        }
-        let r = pq(mul(x, x));
-        return sub(PIO2_HI, sub(x, sub(PIO2_LO, mul(x, r))));
-    }
-    if hx < 0 {
-        let z = mul(add(x, 1.0), 0.5);
-        let r = pq(z);
-        let s = z.sqrt();
-        let w = sub(mul(r, s), PIO2_LO);
-        let t = add(s, w);
-        return sub(PI, add(t, t));
-    }
-    let z = mul(sub(1.0, x), 0.5);
-    let s = z.sqrt();
-    let df = f(s.to_bits() & 0xffff_f000);
-    let c = div(sub(z, mul(df, df)), add(s, df));
-    let r = pq(z);
-    let t = add(df, add(mul(r, s), c));
-    add(t, t)
 }
