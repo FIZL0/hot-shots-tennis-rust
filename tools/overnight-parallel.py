@@ -105,16 +105,23 @@ def slot(n):
 
 def pane(name, cwd, cmd, env=()):
     """Open cmd in a new pane of window "agents" (the master: its own window "master"; made on first use), tagged
-    @hst=name; returns its pid."""
+    @hst=name; returns its pid. Slots sit side by side, full height, s1..sN from the left."""
     envs, w = [a for e in env for a in ('-e', e)], 'master' if name == 'master' else 'agents'
-    where = ['split-window', '-t', w] if w in sp.run(['tmux', 'list-windows', '-F', '#{window_name}'],
-                                                     capture_output=True, text=True).stdout.split() else ['new-window', '-n', w]
+    where = ['new-window', '-n', w]
+    if w in sp.run(['tmux', 'list-windows', '-F', '#{window_name}'], capture_output=True, text=True).stdout.split():
+        here = sorted((int(h[1:]), p) for p, h in (l.split('\t') for l in sp.run(
+            ['tmux', 'list-panes', '-t', w, '-F', '#{pane_id}\t#{@hst}'], capture_output=True, text=True).stdout.splitlines())
+                      if re.fullmatch(r's\d+', h))
+        n = int(name[1:]) if re.fullmatch(r's\d+', name) else 0
+        lower = [p for k, p in here if k < n]
+        # after the nearest lower slot, else before the lowest one, so the order holds as slots come and go
+        where = ['split-window', '-h', '-t', lower[-1]] if lower else ['split-window', '-h', '-b', '-t', here[0][1] if here else w]
     pane_id, pid = sp.run(['tmux', *where, '-d', '-c', cwd, *envs, '-P', '-F', '#{pane_id} #{pane_pid}', cmd],
                        capture_output=True, text=True, check=True).stdout.split()
     sp.run(['tmux', 'set-option', '-p', '-t', pane_id, '@hst', name])
     sp.run(['tmux', 'set-option', '-w', '-t', w, 'pane-border-status', 'top'])
     sp.run(['tmux', 'set-option', '-w', '-t', w, 'pane-border-format', ' #{@hst} '])
-    sp.run(['tmux', 'select-layout', '-t', w, 'tiled'])
+    sp.run(['tmux', 'select-layout', '-t', w, 'even-horizontal'])
     return int(pid)
 
 
