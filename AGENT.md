@@ -40,10 +40,10 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
 `PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`
-(one task at a time) or `tools/overnight-parallel.py` (3 at once in worktrees). PCSX2 is shared: multi-step game
-drives go under `tools/pcsx2.sh <cmd>`; pine.py tools wait their turn by themselves. When you're done with the game
-for your task, close PCSX2: `tools/pcsx2.sh pkill -x pcsx2-qt` (waits for anyone mid-use), except in a parallel run:
-there other agents may still need it, and the runner closes it once no agent is left.
+(one task at a time) or `tools/overnight-parallel.py` (3 at once in worktrees, `-5.sh` for 5). Multi-step game drives
+go under `tools/pcsx2.sh <cmd>`; pine.py tools take the same lock by themselves. In a parallel run `HST_PCSX2=N` gives
+each agent its own PCSX2 copy (tools, pad, PINE and lock all follow it). When you're done with the game for your task,
+close yours: `tools/pcsx2.sh tools/pcsx2-hst.sh stop` (waits for anything mid-use). Never `pkill pcsx2-qt`.
 
 ## If you get stuck, move on
 Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something

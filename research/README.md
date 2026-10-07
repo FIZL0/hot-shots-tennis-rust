@@ -104,7 +104,7 @@ Each recorder says which in its header.
   values during a capture, read them from the save state (`7z e -so <p2s> eeMemory.bin`) instead.
 - **Don't touch PCSX2 during a capture** (`pgrep -f record_p2m2`).
 - **`pkill -f <pattern>` kills your own shell** when the pattern is in its command line. Use
-  `pgrep -x pcsx2-qt` and kill by PID.
+  `pgrep -x pcsx2-qt` and kill by PID; close PCSX2 itself with `tools/pcsx2-hst.sh stop` (only your instance).
 - **Never press Select on the virtual pad.** PCSX2's hotkeys are Select + shoulder combinations.
 - **`tools/vpad.py` timing is wall-clock.** For frame-exact input, use PCSX2 input recordings (`.p2m2`).
 - **Gamepads with a read-only device node** (udev rules that block rumble writes) work in the remaster through the

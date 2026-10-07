@@ -3,7 +3,8 @@
 import fcntl, os, signal, socket, struct, sys, time
 
 VSYNC, VSYNC_STALL = 0x1d5780, 10  # the game's vsync counter (every recorder's frame clock)
-SLOT = 28011  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
+INST = os.environ.get("HST_PCSX2", "")  # parallel runs: this agent's own PCSX2 copy N (tools/pcsx2-hst.sh)
+SLOT = 28011 + int(INST or 0)  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
 OK = 0
 
 def _loud(kind, err, tb):
@@ -13,7 +14,7 @@ def _loud(kind, err, tb):
              "Is PCSX2 running with PINE on (tools/pcsx2-hst.sh) and responding?")
 sys.excepthook = _loud
 
-LOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hst-pcsx2.lock")
+LOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), f"hst-pcsx2{INST}.lock")
 
 def _take_lock():
     # parallel agents share one PCSX2: one PINE user at a time, held until this process exits.

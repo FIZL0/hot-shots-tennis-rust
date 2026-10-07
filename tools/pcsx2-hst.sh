@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 # Launch Hot Shots Tennis in PCSX2 with PINE (memory IPC) on, so tools/pine.py can read live game state.
+#   tools/pcsx2-hst.sh [pcsx2 args]   start (a no-op if this instance is up)
+#   tools/pcsx2-hst.sh stop           close this instance only
+# HST_PCSX2=N (parallel runs, set by tools/overnight-parallel.py): copy N of the user's PCSX2 config,
+# ../<repo>-slots/pcsx2/sN (own PINE slot 28011+N, save states, memory cards), seeing only virtual pad N.
+# Unset: the user's own PCSX2 config, which never sees the parallel pads.
 set -e
-# parallel agents share one PCSX2: a second launch is a no-op
-pgrep -x pcsx2-qt >/dev/null && { echo "PCSX2 already running"; exit 0; }
-INI=~/.config/PCSX2/inis/PCSX2.ini
+T=$(dirname "$(realpath "$0")")
+N=${HST_PCSX2:-}
+PID=${XDG_RUNTIME_DIR:-/tmp}/hst-pcsx2$N.pid  # pcsx2-qt hides its environment (file caps), so track it by pid
+mine() { p=$(cat "$PID" 2>/dev/null) && [ "$(ps -o comm= -p "$p")" = pcsx2-qt ] && echo "$p"; true; }
+if [ "$1" = stop ]; then p=$(mine); [ -n "$p" ] && kill $p; exit 0; fi
+[ -n "$(mine)" ] && { echo "PCSX2 ${N:+copy $N }already running"; exit 0; }
+if [ -n "$N" ]; then
+    export XDG_CONFIG_HOME="$(dirname "$(git -C "$T" rev-parse --path-format=absolute --git-common-dir)")-slots/pcsx2/s$N"
+    [ -d "$XDG_CONFIG_HOME/PCSX2" ] || { echo "no PCSX2 copy at $XDG_CONFIG_HOME"; exit 1; }
+    export SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=$(printf '0x1209/0x%04x' $((0x5000 + N)))
+    setsid "$T/vpad.py" serve >>"$XDG_CONFIG_HOME/PCSX2/logs/vpad.log" 2>&1 &  # exits by itself if pad N is up
+    sleep 0.5
+else
+    export SDL_GAMECONTROLLER_IGNORE_DEVICES=$(for n in 1 2 3 4 5 6 7 8; do printf '0x1209/0x%04x,' $((0x5000 + n)); done)
+fi
+INI=${XDG_CONFIG_HOME:-$HOME/.config}/PCSX2/inis/PCSX2.ini
 sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the ini on exit; keep PINE on
-ISO="$(dirname "$(realpath "$0")")/../Hot Shots Tennis (USA).iso"
-exec pcsx2-qt "$@" -- "$ISO"
+echo $$ >"$PID"  # exec keeps the pid
+exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"

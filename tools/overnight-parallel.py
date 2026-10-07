@@ -12,7 +12,9 @@ Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split pare
 Stretch, and anything tried already tonight. Two running tasks never share a PLAN section or a file named on their
 lines (most tasks touch play.rs, so that rule is what keeps merges clean). The first open "Next" task always
 leads. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
-context/, replacements/ and the ISO are symlinked in. PCSX2 is shared: pine.py and tools/pcsx2.sh take turns.
+context/, replacements/ and the ISO are symlinked in. Each slot N has its own PCSX2 (HST_PCSX2=N: copy
+N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
+tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
 
 A merge that conflicts (or a dirty main checkout) leaves branch task/<ID> for you; the log says so. A run that only
 hit the usage limit is discarded and its slot sleeps until the reset.
@@ -29,11 +31,12 @@ TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
 PROMPT = """Parallel unattended run: nobody will answer questions. Do task {id} only — `tools/ctx.py {id}` — following \
 PLAN.md's rules and AGENT.md. Other agents are working on other tasks at the same time in other worktrees. You are in a \
 git worktree on branch task/{id}: commit here only; never touch the main checkout, merge, rebase or push — the runner \
-merges your branch into main. PCSX2 is shared: run anything that drives the real game in several steps as one \
-command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Each hold is cut off \
-after {hold} min so a hung run can't block the others: keep every run shorter (record less, split it). Save slot 5 is the only bot-only game; 3 and 4 have P1 human \
-and sit waiting for input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Never close PCSX2 (the other agents may still need it); the runner closes \
-it once no agent is left. When done, tick \
+merges your branch into main. You have your own PCSX2 (HST_PCSX2={n} is set: tools/pcsx2-hst.sh starts copy {n}, \
+pine.py and tools/vpad.py talk to it; its save states are a copy, so scratch saves to 8/9 are yours). Run anything that \
+drives the game in several steps as one command under `tools/pcsx2.sh <cmd>`; each is cut off after {hold} min, so keep \
+runs short (record less, split it). Save slot 5 is the only bot-only game; 3 and 4 have P1 human and sit waiting for \
+input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Close it with `tools/pcsx2-hst.sh stop` \
+(never pkill pcsx2-qt: the other agents' copies are running too). When done, tick \
 {id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop."""
 
 
@@ -100,9 +103,9 @@ def start(n, task):
     out.write(f'\n=== {datetime.now().isoformat(timespec="seconds")} {tid} session {sid}\n')
     out.close()
     stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/overnight-stop.sh')}]}]
-    cmd = shlex.join(['claude', PROMPT.format(id=tid, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
+    cmd = shlex.join(['claude', PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', d, '-e', f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', '-P', '-F', '#{pane_pid}', cmd],
+    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', d, '-e', f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', '-e', f'HST_PCSX2={n}', '-P', '-F', '#{pane_pid}', cmd],
                    capture_output=True, text=True, check=True).stdout)
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since
@@ -154,8 +157,6 @@ def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
     os.makedirs(NOTES, exist_ok=True)
-    if not sp.run(['pgrep', '-f', 'vpad.py serve'], capture_output=True).stdout:
-        sp.Popen([os.path.join(ROOT, 'tools/vpad.py'), 'serve'], stdout=open(os.path.join(NOTES, 'overnight.log'), 'a'), stderr=sp.STDOUT)
     running, procs, tried, free_at = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}
     log(f'parallel run, {SLOTS} slots')
     while True:
@@ -163,9 +164,9 @@ def main():
             if n in procs and not alive(procs[n][0]):
                 (p, sid, since), task = procs.pop(n), running.pop(n)
                 log(f'slot {n}: {task[0]} exited')
-                # the last session out closes PCSX2; waits its turn, so it never cuts a capture short
-                if not procs:
-                    sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), 'pkill', '-x', 'pcsx2-qt'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+                # close the slot's PCSX2 copy; waits for its lock, so it never cuts a leftover capture short
+                sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), os.path.join(ROOT, 'tools/pcsx2-hst.sh'), 'stop'],
+                         env={**os.environ, 'HST_PCSX2': str(n)}, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
                 if reset := limit_only(n, sid, since):
                     free_at[n] = reset + timedelta(seconds=PAUSE)
                     log(f'slot {n}: {task[0]} only hit the limit; transcript discarded, slot sleeps until {reset:%H:%M}')

@@ -15,9 +15,17 @@ Timing is wall-clock, not frame-exact — use PCSX2 input recording for frame-ex
 """
 import os, sys, time
 
-FIFO = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hst-vpad.fifo")
+# HST_PCSX2=N (parallel runs): pad N for PCSX2 copy N, its own fifo and USB id; tools/pcsx2-hst.sh makes copy N
+# see only this pad (and the user's own PCSX2 none of them)
+INST = os.environ.get("HST_PCSX2", "")
+FIFO = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), f"hst-vpad{INST}.fifo")
 
 def serve():
+    import fcntl
+    global _lock
+    _lock = open(FIFO + ".lock", "w")
+    try: fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(f"vpad: pad {INST or 0} is already being served")
     from evdev import UInput, AbsInfo, ecodes as e
     buttons = {
         # evdev's BTN_NORTH is BTN_X (the west face button) and BTN_WEST is BTN_Y (north): name them by Xbox letter
@@ -25,6 +33,8 @@ def serve():
         "start": e.BTN_START, "l1": e.BTN_TL, "r1": e.BTN_TR, "l3": e.BTN_THUMBL, "r3": e.BTN_THUMBR,
         "guide": e.BTN_MODE, "select": e.BTN_SELECT,
     }
+    if INST:  # SDL's guessed layout for pad N (an unknown USB id) swaps the bottom and right face buttons
+        buttons["cross"], buttons["circle"] = e.BTN_B, e.BTN_A
     stick = AbsInfo(0, -32768, 32767, 16, 128, 0)
     trig = AbsInfo(0, 0, 255, 0, 0, 0)
     hat = AbsInfo(0, -1, 1, 0, 0, 0)
@@ -33,8 +43,10 @@ def serve():
         e.EV_ABS: [(e.ABS_X, stick), (e.ABS_Y, stick), (e.ABS_RX, stick), (e.ABS_RY, stick),
                    (e.ABS_Z, trig), (e.ABS_RZ, trig), (e.ABS_HAT0X, hat), (e.ABS_HAT0Y, hat)],
     }
-    # identify as an Xbox 360 pad so SDL applies its standard mapping
-    ui = UInput(caps, name="Microsoft X-Box 360 pad", vendor=0x045E, product=0x028E, version=0x110, bustype=e.BUS_USB)
+    # identify as an Xbox 360 pad so SDL applies its standard mapping; pad N gets the pid.codes test id 1209:500N
+    # (SDL guesses an Xbox layout from the BTN_SOUTH.. evdev codes)
+    ui = UInput(caps, name=f"HST vpad {INST}" if INST else "Microsoft X-Box 360 pad", vendor=0x1209 if INST else 0x045E,
+                product=0x5000 + int(INST) if INST else 0x028E, version=0x110, bustype=e.BUS_USB)
     dpad = {"up": (e.ABS_HAT0Y, -1), "down": (e.ABS_HAT0Y, 1), "left": (e.ABS_HAT0X, -1), "right": (e.ABS_HAT0X, 1)}
     trigs = {"l2": e.ABS_Z, "r2": e.ABS_RZ}
 

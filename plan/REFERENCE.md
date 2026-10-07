@@ -8,7 +8,7 @@
   captures only. Controller-input recordings (P0 and anything gameplay-from-input) start from slot 3 or 4 with
   P1 driven by `tools/vpad.py`.
 - `tools/vpad.py serve` creates a virtual Xbox-360 pad (uinput, no root); PCSX2 binds it as `SDL-0` when no
-  real controller is connected. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
+  real controller is connected. With `HST_PCSX2=N` (parallel runs) it is pad N, the only pad PCSX2 copy N sees. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
   Never press Select (PCSX2 hotkeys are Select + shoulder combos). Timing is wall-clock; frame-exact replays
   should use PCSX2 input recording (`.p2m2`) — P0 decides.
 - `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it.
