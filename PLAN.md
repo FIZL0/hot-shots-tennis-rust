@@ -118,7 +118,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P16** Camera (court views, pick, wiring, other modes open) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
 - [ ] **P17** Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`
-- [ ] **P19** HUD → `play.rs` hud/score_line
+- [ ] **P19** HUD as the original (user 2026-10-07): replace our player/score HUD with the game's own, from its assets: who is COM and who is a player, hidden during the rally; plus each player's marker above the head before the rally → `play.rs` hud/score_line · `hst-data` (AZUMA/INPANE)
 - [~] **P20** Audio (see N3) → `hst-data/src/xb.rs` | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
 - [ ] **P21** Menus and modes → `main.rs`
 - [ ] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
