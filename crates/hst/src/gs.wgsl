@@ -1,9 +1,11 @@
 // PS2 GS colour path for court models (see gs.rs). Values are in PS2 units: 1.0 = 0x80 for vertex/material colour
 // and alpha, texel colour 1.0 = 0xff, texel alpha 1.0 = 0x80 (mtl.rs expands it to 0xff).
 #import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows}
 
 struct Gs {
     color: vec4<f32>,
+    shadow: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -12,6 +14,19 @@ struct Gs {
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
+}
+
+// 1 lit, 0 in shadow: the first directional light that casts shadows (the match's sun)
+fn sun_visibility(in: VertexOutput) -> f32 {
+    for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
+        if (view_bindings::lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+            let v = view_bindings::view.view_from_world;
+            let view_z = dot(vec4(v[0].z, v[1].z, v[2].z, v[3].z), in.world_position);
+            // receivers are the flat ground: up is its normal
+            return shadows::fetch_directional_shadow(i, in.world_position, vec3(0.0, 1.0, 0.0), view_z, in.position.xy);
+        }
+    }
+    return 1.0;
 }
 
 @fragment
@@ -45,5 +60,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_LT70
     if a8 >= 112.0 { discard; }
 #endif
-    return vec4(srgb_to_linear(clamp(rgb, vec3(0.0), vec3(1.0))), clamp(a, 0.0, 1.0));
+    rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+    // shadow: (0 − Cd)·A + Cd on the frame buffer, the same as darkening every layer drawn there
+    if gs.shadow > 0.0 {
+        rgb *= 1.0 - gs.shadow * (1.0 - sun_visibility(in));
+    }
+    return vec4(srgb_to_linear(rgb), clamp(a, 0.0, 1.0));
 }

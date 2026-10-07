@@ -9,6 +9,9 @@
 //! - PRIM (batch header +0x31): TME textured, ABE blended; FGE (fog) is not drawn yet.
 //! - Colour = texture × vertex colour × material colour in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma space.
 //!
+//! - Shadows (see shadow.rs): caster draws go into the sun's shadow map through `gs_prepass.wgsl`, which keeps the
+//!   alpha test; receiver draws (`shadow` > 0) multiply their colour by 1 − `shadow` where the sun is blocked.
+//!
 //! ponytail: HIGHLIGHT2 adds the vertex alpha (the VU1 lighting's highlight term) to the colour; it is taken as 0,
 //! which it is for every material whose header +0x14 is 0 (nearly all court ones). Port the VU1 lighting to add it.
 
@@ -24,6 +27,7 @@ use hst_data::mtl;
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "gs.wgsl");
+    bevy::asset::embedded_asset!(app, "gs_prepass.wgsl");
     app.add_plugins(MaterialPlugin::<GsMaterial>::default());
 }
 
@@ -56,6 +60,8 @@ pub struct GsKey {
 pub struct GsUniform {
     /// Material colour, 1.0 = 0x80.
     pub color: Vec4,
+    /// Shadow receiver: how much a shadow takes off the colour (0 = not a receiver).
+    pub shadow: f32,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -97,7 +103,7 @@ impl GsMaterial {
         tests
             .into_iter()
             .map(|test| GsMaterial {
-                uniform: GsUniform { color: Vec4::from(m.color) },
+                uniform: GsUniform { color: Vec4::from(m.color), shadow: 0.0 },
                 texture: texture.clone().filter(|_| textured),
                 key: GsKey { textured, modulate, test, blend },
             })
@@ -110,17 +116,24 @@ impl Material for GsMaterial {
         "embedded://hst/gs.wgsl".into()
     }
 
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://hst/gs_prepass.wgsl".into()
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         // blended draws and those that write no Z (e.g. the unblended `line@add` court lines) go after the opaque
-        // ones, back to front, as the PS2 draws them after the ground they lie on; specialize sets the real blend
-        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Never) { AlphaMode::Blend } else { AlphaMode::Opaque }
+        // ones, back to front, as the PS2 draws them after the ground they lie on; specialize sets the real blend.
+        // Alpha-tested ones are Mask so the shadow pass runs the test too.
+        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Never) {
+            AlphaMode::Blend
+        } else if self.key.test == Test::Always {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Mask(0.5)
+        }
     }
 
     fn enable_prepass() -> bool {
-        false
-    }
-
-    fn enable_shadows() -> bool {
         false
     }
 
@@ -135,7 +148,8 @@ impl Material for GsMaterial {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt70 | Test::Never));
         }
-        let fragment = descriptor.fragment.as_mut().unwrap();
+        // the shadow pass has no fragment stage for draws that cannot discard
+        let Some(fragment) = descriptor.fragment.as_mut() else { return Ok(()) };
         let defs = &mut fragment.shader_defs;
         if k.textured {
             defs.push("GS_TEXTURED".into());
@@ -148,6 +162,9 @@ impl Material for GsMaterial {
             Test::Ge70 => defs.push("GS_GE70".into()),
             Test::Lt70 => defs.push("GS_LT70".into()),
             Test::Always | Test::Never => {}
+        }
+        if matches!(k.test, Test::Lt70 | Test::Never) {
+            defs.push("GS_NO_Z".into());
         }
         let keep_alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add };
         let color = |dst_factor, operation| BlendComponent { src_factor: BlendFactor::SrcAlpha, dst_factor, operation };

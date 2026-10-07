@@ -31,6 +31,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- P17g: court shadows — sun direction bit-close to RAM on courts 04/10, strength 1 − (⌊0.xx·255⌋·255>>8)/128 multiplied on the hole ground (measured on the PS2 shot), casters = players + plant records with code byte 3 ≠ `'0'` (shadow.rs, gs.rs, gs_prepass.wgsl).
 - N4: landing markers — the game's `chakudan_p` (red, at the aim, from the serve return) and `smash_p` (yellow, smash-point search) models; red checked on screen against the original; N4a: yellow's placement frame and point bit-exact on a forced-lob rally (no path growth on the launch frame), fade-in and look match on screen (effects.rs, play.rs).
 - N5a: △ smash (kind 1) — contact search, launch (smsh1, 5° spin) and flight to the first bounce exact on lob_smash_s05; one locked swing per team (swing.rs, shot_tables.rs).
 - N3a: sound banks (`hst_data::snd`), note → tone and SPU pitch bit-exact vs save states (sound.rs).
