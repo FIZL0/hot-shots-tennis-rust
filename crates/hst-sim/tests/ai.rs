@@ -148,3 +148,116 @@ fn timing_errors_match_the_game() {
     assert!(checked >= 100, "only {checked} draws");
     assert!(paced > 0, "no change of pace seen");
 }
+
+/// Every guess (ヤマ張り) the slot-5 bots draw (`ai_s05.bin`): on each opponent hit, right after the timing draw that
+/// `timing_errors_match_the_game` finds, the guess must come out as the game's (none, or which side, with the move
+/// frames in place of the reaction). All four bots, so the partner is always a computer player.
+#[test]
+fn guesses_match_the_game() {
+    use hst_sim::ai::{Guess, Seen, Shots};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_s05.bin"))) else {
+        return eprintln!("disc or ai_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let (glob, mt, ai) = (4, 4 + 0x18, 4 + 0x18 + 0x9d0);
+    let size = ai + 4 * 0x250;
+    let samples: Vec<&[u8]> = d[20..].chunks_exact(size).collect();
+    let int = |b: &[u8], o: usize| word(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let (mut serves, mut guesses) = (0, 0);
+    for w in samples.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if word(b, 0) != word(a, 0) + 1 {
+            continue;
+        }
+        for k in 0..4 {
+            let (oa, ob) = (&a[ai + k * 0x250..][..0x250], &b[ai + k * 0x250..][..0x250]);
+            let hitter = int(ob, 0x130);
+            if oa[0x130..0x170] == ob[0x130..0x170] || hitter < 0 || hitter & 1 == k as i32 & 1 {
+                continue; // only an opponent's hit can bring a guess
+            }
+            let row = &table[(word(ob, 12) - TABLE) / RECORD];
+            let seen = |r: usize| Seen { kind: int(ob, r + 4), vel: [f(ob, r + 0x30), f(ob, r + 0x34), f(ob, r + 0x38)] };
+            let shots = Shots {
+                last: seen(0x130),
+                before: (int(ob, 0x170) >= 0).then(|| seen(0x170)),
+                serve_before: (int(ob, 0x1f0) >= 0).then(|| seen(0x1f0).vel),
+            };
+            let receiver = int(b, glob + 0xc) == k as i32;
+            let errs = |o: &[u8]| [0x234, 0x238, 0x23c, 0x240].map(|x| int(o, x));
+            let mut g = Mt::of(&a[mt..]);
+            let draws: Vec<u32> = (0..200).map(|_| g.next()).collect();
+            let got = (0..150)
+                .find_map(|j| {
+                    let mut n = draws[j..].iter().copied();
+                    let mut roll = || n.next().unwrap();
+                    let t = row.timing(Some(&shots), receiver, ob[0x230] != 0, int(ob, 0x28) != 0, &mut roll);
+                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob))
+                        .then(|| row.guess(&t, shots.last.kind == 0, ob[0x13d] != 0, true, &mut roll))
+                })
+                .unwrap_or_else(|| panic!("vsync {} AI {k}: timing draw not found", word(b, 0)));
+            let want = match ob[0x24f] {
+                0 => None,
+                1 => Some(Guess::Wide),
+                _ => Some(Guess::Other),
+            };
+            assert_eq!(got, want, "vsync {} AI {k}", word(b, 0));
+            if want.is_some() {
+                // the receive state may already have counted one frame off by the next sample
+                let left = int(ob, 0x248);
+                assert!((row.guess[1] - 1..=row.guess[1]).contains(&left), "vsync {} AI {k}: move frames {left}", word(b, 0));
+                guesses += 1;
+            }
+            serves += (shots.last.kind == 0) as u32;
+        }
+    }
+    eprintln!("{serves} serves seen by the receiving bots, {guesses} guesses");
+    assert!(guesses >= 3 && serves > guesses, "{serves} serves, {guesses} guesses");
+}
+
+/// Each guess the slot-5 bots judge (`ai_guess_s05.bin`: tools/record_ai.py 5 4000 … 0x260, so the spot the AI
+/// stood on at the draw, +0x250, is in it): when the guess clears as the AI finds its contact point (+0x70), the
+/// verdict from that spot must be the one the game acted on: right sets the boost flag, wrong waits again
+/// for the stuck frames, neither goes on to the hit.
+#[test]
+fn guess_verdicts_match_the_game() {
+    use hst_sim::ai::{Guess, Verdict};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_guess_s05.bin"))) else {
+        return eprintln!("disc or ai_guess_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let (size_ai, ai) = (0x260, 4 + 0x18 + 0x9d0);
+    let samples: Vec<&[u8]> = d[20..].chunks_exact(ai + 4 * size_ai).collect();
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let mut judged = 0;
+    for w in samples.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        for k in 0..4 {
+            let (oa, ob) = (&a[ai + k * size_ai..][..size_ai], &b[ai + k * size_ai..][..size_ai]);
+            if oa[0x24f] == 0 || ob[0x24f] != 0 || oa[0x70..0x80] == ob[0x70..0x80] {
+                continue; // not cleared by finding the contact point
+            }
+            let row = &table[(word(ob, 12) - TABLE) / RECORD];
+            let guess = if oa[0x24f] == 1 { Guess::Wide } else { Guess::Other };
+            let from = [f(ob, 0x250), f(ob, 0x258)];
+            // the side sign: the AI stands on −z for side +1
+            let side = if from[1] > 0.0 { -1.0 } else { 1.0 };
+            let v = guess.verdict(side, from, [f(ob, 0x70), f(ob, 0x78)]);
+            let want = if ob[0x24e] != 0 {
+                Verdict::Right
+            } else if ob[0x56] == 0 {
+                // a wrong guess sends the receive state back to waiting (+0x56 = 0) for the stuck frames
+                assert_eq!(word(ob, 0x248) as i32, row.guess[2]);
+                Verdict::Wrong
+            } else {
+                Verdict::Neither
+            };
+            assert_eq!(v, want, "vsync {} AI {k}", word(b, 0));
+            judged += 1;
+        }
+    }
+    eprintln!("{judged} guesses judged");
+    assert!(judged >= 1);
+}
