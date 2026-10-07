@@ -65,6 +65,8 @@ pub struct Effect {
     pub alphas: Vec<f32>,
     /// Started and not yet ended: drawn this frame.
     pub live: bool,
+    /// The morph and alpha clocks wrap and the effect never ends (the landing marker's pulse).
+    pub looping: bool,
 }
 
 impl Effect {
@@ -82,6 +84,7 @@ impl Effect {
             weights: vec![0.0; mdl.morph_names.len()],
             alphas: materials.iter().map(|m| m.color[3]).collect(),
             live: false,
+            looping: false,
         }
     }
 
@@ -93,8 +96,9 @@ impl Effect {
     }
 
     fn set_zero(&mut self) {
-        for c in [&mut self.model, &mut self.morph.clock, &mut self.alpha.clock] {
-            *c = Clock::start(1.0, false, None);
+        self.model = Clock::start(1.0, false, None);
+        for c in [&mut self.morph.clock, &mut self.alpha.clock] {
+            *c = Clock::start(1.0, self.looping, None);
         }
         self.morph.apply(&mut self.weights, 0.0);
         self.alpha.apply(&mut self.alphas, 1.0);
@@ -110,7 +114,7 @@ impl Effect {
         self.morph.apply(&mut self.weights, 0.0);
         self.alpha.clock.tick(self.alpha.length);
         self.alpha.apply(&mut self.alphas, 1.0);
-        if self.morph.clock.done(self.morph.length) {
+        if !self.looping && self.morph.clock.done(self.morph.length) {
             self.live = false;
             self.set_zero();
         }
@@ -124,6 +128,123 @@ impl Effect {
     /// Every node's local matrix this frame.
     pub fn locals(&self) -> Vec<M4> {
         self.clip.locals(&self.skeleton, self.model.sampled)
+    }
+}
+
+/// One entry of the landing marker's predicted ball path (y up, as the game stores it): position, velocity and
+/// bounces so far.
+#[derive(Clone, Copy)]
+pub struct PathEntry {
+    pub pos: [f32; 3],
+    pub vel: [f32; 3],
+    pub bounces: i32,
+}
+
+/// The smash-point marker's search: for each human on the receiving team (up to two), the point where the
+/// predicted ball, having risen to that player's smash top, comes back down below the middle of the smash window
+/// moving away from the net at least 1.5 m from it. Searched a frame's worth of new path entries at a time; two
+/// players' points are drawn at their midpoint.
+pub struct SmashSearch {
+    /// Per candidate: smash top, middle height, state (0 rising, 1 falling, 2 placed, −1 gave up).
+    cands: Vec<(f32, f32, i32)>,
+    pending: usize,
+    next: usize,
+    /// The points placed (x, z), in order.
+    pub marks: Vec<[f32; 2]>,
+}
+
+impl SmashSearch {
+    /// Candidates' smash `[top, middle]` heights.
+    pub fn new(heights: &[[f32; 2]]) -> SmashSearch {
+        SmashSearch { cands: heights.iter().map(|&[t, m]| (t, m, 0)).collect(), pending: heights.len(), next: 0, marks: vec![] }
+    }
+
+    /// Search `path` from where the last call stopped; true when this call placed the first point (the marker's
+    /// animation starts).
+    pub fn search(&mut self, path: &[PathEntry]) -> bool {
+        let before = self.marks.len();
+        let mut i = self.next;
+        while self.pending > 0 && i < path.len() {
+            let e = path[i];
+            for c in &mut self.cands {
+                match c.2 {
+                    0 if c.0 <= e.pos[1] => c.2 = 1,
+                    0 if e.bounces > 0 => {
+                        c.2 = -1;
+                        self.pending -= 1;
+                    }
+                    1 if e.vel[1] <= 0.0 && e.pos[1] < c.1 => {
+                        let p = path[i - 1].pos;
+                        let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
+                        if sign(e.vel[2]) == sign(p[2]) && p[2].abs() >= 1.5 {
+                            self.marks.push([p[0], p[2]]);
+                            c.2 = 2;
+                        } else {
+                            c.2 = -1;
+                        }
+                        self.pending -= 1;
+                    }
+                    _ => {}
+                }
+            }
+            if self.pending == 0 {
+                break;
+            }
+            i += 1;
+        }
+        self.next = i;
+        before == 0 && !self.marks.is_empty()
+    }
+
+    /// Where the marker stands: the first point, or the midpoint of two.
+    pub fn at(&self) -> Option<[f32; 2]> {
+        match self.marks[..] {
+            [a] => Some(a),
+            [a, b, ..] => Some([0, 1].map(|k| ps2::mul(ps2::add(a[k], b[k]), 0.5))),
+            [] => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lob from z = −10 toward +z: up at 0.1 m/frame, falling back under gravity.
+    fn lob(n: usize) -> Vec<PathEntry> {
+        (0..n)
+            .map(|i| {
+                let t = i as f32;
+                PathEntry { pos: [0.5, 1.0 + 0.1 * t - 0.001 * t * t, -10.0 + 0.2 * t], vel: [0.0, 0.1 - 0.002 * t, 0.2], bounces: 0 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn smash_point_on_the_way_down() {
+        let mut path = lob(120);
+        let mut s = SmashSearch::new(&[[3.0, 2.5], [9.0, 2.0]]);
+        // a frame's 15 entries: still rising
+        assert!(!s.search(&path[..15]));
+        assert!(s.at().is_none());
+        assert!(s.search(&path));
+        // first below 2.5 falling at t = 82; the point is the entry before (t = 81)
+        assert_eq!(s.at(), Some([0.5, path[81].pos[2]]));
+        // the second never reaches its top: it gives up at the bounce
+        path.push(PathEntry { bounces: 1, ..path[119] });
+        assert!(!s.search(&path));
+        assert_eq!((s.marks.len(), s.pending), (1, 0));
+    }
+
+    #[test]
+    fn no_point_coming_toward_the_net() {
+        // the same lob mirrored to the −z side: moving −z it is placed, moving +z (toward the net) not
+        let away: Vec<PathEntry> = lob(120).into_iter().map(|e| PathEntry { pos: [e.pos[0], e.pos[1], -e.pos[2]], vel: [0.0, e.vel[1], -0.2], ..e }).collect();
+        let toward: Vec<PathEntry> = away.iter().map(|e| PathEntry { vel: [0.0, e.vel[1], 0.2], ..*e }).collect();
+        let (mut s, mut t) = (SmashSearch::new(&[[3.0, 2.5]]), SmashSearch::new(&[[3.0, 2.5]]));
+        assert!(s.search(&away));
+        assert!(!t.search(&toward));
+        assert_eq!(t.pending, 0);
     }
 }
 
