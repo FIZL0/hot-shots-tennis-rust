@@ -35,6 +35,20 @@ class Pine:
         _take_lock()
         path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "pcsx2.sock" if SLOT == 28011 else f"pcsx2.sock.{SLOT}")
         self.s = socket.socket(socket.AF_UNIX); self.s.settimeout(10); self.s.connect(path)  # a frozen PCSX2 fails, not hangs
+        self.resume()
+
+    def resume(self):
+        """A paused copy (HST_PCSX2=N) is resumed with pad N's Guide button (TogglePause, tools/pcsx2-hst.sh);
+        True if it was paused. The user's own PCSX2 is left alone."""
+        if not INST or self.status() != "paused": return False
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from vpad import send
+        send(["press guide 100"])
+        for _ in range(30):
+            if self.status() != "paused":
+                print("pine: PCSX2 was paused; resumed it", file=sys.stderr, flush=True)
+                return True
+            time.sleep(0.1)
+        sys.exit("pine: PCSX2 is paused and pad Guide didn't resume it (is tools/vpad.py serve up for this copy?)")
 
     def _call(self, op, args=b""):
         self.s.sendall(struct.pack("<IB", 5 + len(args), op) + args)
@@ -63,6 +77,7 @@ class Pine:
         # ponytail: every recorder polls VSYNC until it ticks; when the match ends (or PCSX2 pauses) it never does,
         # and the recorder would spin forever holding the PCSX2 lock. Stop it instead; the output file is flushed.
         if v != getattr(self, "_vs", None): self._vs, self._vs_t = v, time.monotonic()
+        elif time.monotonic() - self._vs_t > VSYNC_STALL and self.resume(): self._vs_t = time.monotonic()
         elif time.monotonic() - self._vs_t > VSYNC_STALL:
             sys.exit(f"pine: vsync stuck at {v} for {VSYNC_STALL}s (match over or PCSX2 paused); stopping")
     def read64(self, a): return struct.unpack("<Q", self._call(3, struct.pack("<I", a)))[0]

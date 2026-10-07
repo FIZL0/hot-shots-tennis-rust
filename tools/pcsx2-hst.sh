@@ -23,5 +23,8 @@ else
 fi
 INI=${XDG_CONFIG_HOME:-$HOME/.config}/PCSX2/inis/PCSX2.ini
 sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the ini on exit; keep PINE on
+# copies: no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause,
+# which pine.py presses to resume a paused copy
+[ -n "$N" ] && sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' "$INI"
 echo $$ >"$PID"  # exec keeps the pid
 exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"
