@@ -35,3 +35,8 @@ Fixtures (context/fixtures, not in git): p7_carol_s04.bin (420 samples, slot 4, 
 | 13 | Suzuki スズキ | R | 11 | 35 | 8/6/8 | 25 | 125 | 100 | 90 | 0 |
 
 (Column-to-name mapping of 23/25/26/27 is from the CSV header; how they turn into numbers is P7c.)
+
+## P7b (partial)
+- Hand source: the TParam.csv parser sets right only when col 6 is exactly 右 (else left). Model flag +0x135 = left XOR the player's "switch hand" toggle on character select (byte +6 of the per-player selection record). +0x12b4 = +1 if the flag is 0, else −1. Slots 3/4 P1 has the toggle on, so Carol (左) is +1. Slot 2's menu P1 also has it on, so every pick from there plays opposite to TParam. play.rs `character_hand` now compares with 右 like the game. The toggle is always off there because there's no menu yet (ponytail comment).
+- Recording: `research/p7b_record.py <char> <dir> 1000` (under tools/pcsx2.sh). It loads slot 2, picks the character on doubles select, starts the match, saves the serve to slot 8, dumps the hand/flag/selection and pelvis rows, then records 4 cycles of serve + scripted stick/d-pad. Serving: the first circle after a load or point is ignored, then toss, then hit.
+- Results: characters 0–7 are bit-exact in `human_pad_replay` (122–190 running frames each), and the dumped pelvis rows match the disc's (`pelvis_table_from_disc`, worst 4.8e-7). Characters 8–13 aren't recorded yet. Their menu paths in p7b_record.py `PATH` are guesses; the script exits if the wrong character gets picked.

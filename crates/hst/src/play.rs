@@ -418,7 +418,10 @@ fn character_stats(iso: &mut Iso, n: usize) -> Stats {
     Stats::new(cell(40), cell(43), cell(41), [costs[0], costs[1], costs[2]], 0)
 }
 
-/// A character's hand from TParam.csv (+1 right, −1 left).
+/// A character's hand (+1 right, −1 left): right only when TParam.csv's 利き腕 column is exactly 右, as the game's
+/// parser. The game keeps it on the model as a left-hand flag, set to (left XOR the player's "switch hand" toggle on
+/// character select), and the player's hand follows that flag: Carol (左) picked with the toggle on plays right-handed.
+// ponytail: no character select yet, so the toggle is always off; XOR it in here when the menu exists.
 fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
@@ -426,8 +429,8 @@ fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     let csv = arc.read(e).expect("TParam.csv bytes");
     let tag = format!("{n},");
     let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(tag.as_bytes()));
-    // 左 (left) in Shift-JIS
-    if row.and_then(|r| r.split(|&b| b == b',').nth(6)).is_some_and(|c| c.starts_with(&[0x8d, 0xb6])) { -1.0 } else { 1.0 }
+    // 右 (right) in Shift-JIS
+    if row.and_then(|r| r.split(|&b| b == b',').nth(6)).is_some_and(|c| c.trim_ascii() == [0x89, 0x45]) { 1.0 } else { -1.0 }
 }
 
 /// Character 0's serve: heights from TParam.csv, the rest measured on character 0 (see `ServeData`).

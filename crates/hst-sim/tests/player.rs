@@ -214,7 +214,7 @@ fn match_s05_facing() {
 }
 
 /// The turn's per-motion pelvis rows computed from the disc (skeleton + each motion's first keys) agree with
-/// the game's table in slot-5 RAM.
+/// the game's table in slot-5 RAM, and in P7b's per-character dumps (`p7b_cNN_pelvis.bin`) for all 14.
 #[test]
 fn pelvis_table_from_disc() {
     use hst_data::{ani, iso::Iso, mdl, xb::Archive};
@@ -226,8 +226,9 @@ fn pelvis_table_from_disc() {
     let ru = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap()) as usize;
     let gm = ru(0x422f80);
     let mut worst = 0.0f32;
-    for (p, c) in [(0, 0), (1, 2), (2, 1), (3, 5)] {
-        let obj = ru(gm + 0xa8 + 4 * p);
+    let mut tables: Vec<(usize, Vec<u8>)> = [(0, 0), (1, 2), (2, 1), (3, 5)].map(|(p, c)| (c, ram[ru(gm + 0xa8 + 4 * p) + 0x6b0..][..48 * 0x40].to_vec())).into();
+    tables.extend((0..14).filter_map(|c| Some((c, std::fs::read(format!("{dir}/p7b_c{c:02}_pelvis.bin")).ok()?))));
+    for (c, table) in tables {
         let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
         let arc = Archive::parse(&data).unwrap();
         let e = arc.entries.iter().find(|e| { let n = e.name.to_ascii_lowercase(); n.contains(&format!("pc{c:02}_t")) && n.ends_with("_c00.mdl") }).unwrap();
@@ -241,7 +242,7 @@ fn pelvis_table_from_disc() {
             let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
             let a = ani::parse(&aarc.read(e).unwrap()).unwrap();
             let row = first_frame(&sk, &a)[pelvis][2];
-            let want = [f(&ram, obj + 0x6b0 + mo * 0x40 + 0x20), f(&ram, obj + 0x6b0 + mo * 0x40 + 0x28)];
+            let want = [f(&table, mo * 0x40 + 0x20), f(&table, mo * 0x40 + 0x28)];
             let d = (row[0] - want[0]).abs().max((row[2] - want[1]).abs());
             if d > 1e-3 { eprintln!("char {c} motion {mo:#x}: {:?} vs {want:?}", [row[0], row[2]]); }
             worst = worst.max(d);
@@ -254,7 +255,9 @@ fn pelvis_table_from_disc() {
 /// A human's movement from the pad, replayed: slot 4 with P1 (player 0) driven by a scripted stick/d-pad, as Carol
 /// (character 6) and as Kaito (character 3: his speed and agility written into player 0, Carol's body and pelvis
 /// rows kept). Stats from TParam.csv; every play-state frame stepped from the previous simulated frame (resynced
-/// only when the play state starts), position, velocity, motion and facing bit-exact.
+/// only when the play state starts), position, velocity, motion and facing bit-exact. Then all 14 characters as P1
+/// with their own bodies (`research/p7b_record.py`: picked on the doubles character select, whose P1 has the
+/// "switch hand" toggle on, so each plays with the hand opposite to TParam's), each with its own dumped pelvis rows.
 #[test]
 fn human_pad_replay() {
     use hst_data::{iso::Iso, xb::Archive};
@@ -262,7 +265,7 @@ fn human_pad_replay() {
     let (Ok(pel), Ok(mut iso)) = (std::fs::read(format!("{dir}/p7_pelvis_s04.bin")), Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"))) else {
         return eprintln!("p7_pelvis_s04.bin or ISO absent, skipped");
     };
-    let pelvis: Vec<[f32; 2]> = (0..48).map(|m| [f(&pel, m * 0x40 + 0x20), f(&pel, m * 0x40 + 0x28)]).collect();
+    let rows = |pel: &[u8]| -> Vec<[f32; 2]> { (0..48).map(|m| [f(pel, m * 0x40 + 0x20), f(pel, m * 0x40 + 0x28)]).collect() };
     let data = iso.read("PCDATA/PCDATA.XB").unwrap();
     let arc = Archive::parse(&data).unwrap();
     let csv = arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).unwrap()).unwrap();
@@ -273,7 +276,17 @@ fn human_pad_replay() {
         Stats::new(row[40].parse().unwrap(), row[43].parse().unwrap(), row[41].parse().unwrap(), [c[0], c[1], c[2]], 0)
     };
     let p_v4 = |fr: Frame, p: usize, off: usize| [0, 4, 8, 12].map(|o| fr.player_f32(p, off + o));
-    for (file, ch) in [("p7_carol_s04.bin", 6), ("p7_kaito_s04.bin", 3)] {
+    let hand = |n: usize| {
+        let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(format!("{n},").as_bytes())).unwrap();
+        if row.split(|&b| b == b',').nth(6).unwrap().trim_ascii() == [0x89, 0x45] { 1.0 } else { -1.0 } // 右
+    };
+    let mut runs = vec![("p7_carol_s04.bin".to_string(), 6, rows(&pel), 1.0), ("p7_kaito_s04.bin".into(), 3, rows(&pel), 1.0)];
+    for ch in 0..14 {
+        if let Ok(pel) = std::fs::read(format!("{dir}/p7b_c{ch:02}_pelvis.bin")) {
+            runs.push((format!("p7b_c{ch:02}.bin"), ch, rows(&pel), -hand(ch)));
+        }
+    }
+    for (file, ch, pelvis, hand) in runs {
         let Ok(rec) = std::fs::read(format!("{dir}/{file}")) else {
             eprintln!("{file} absent, skipped");
             continue;
@@ -311,7 +324,7 @@ fn human_pad_replay() {
                 last_hitter: old,
                 team: 0,
                 forward: fwd,
-                hand: 1.0,
+                hand,
                 mate: Some(a.player_pos(2)),
                 ball: [f(ball, 0xe0), f(ball, 0xe4), f(ball, 0xe8)],
                 ball_dir: [f(ball, 0x140), f(ball, 0x144), f(ball, 0x148)],
