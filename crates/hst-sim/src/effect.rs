@@ -67,6 +67,9 @@ pub struct Effect {
     pub live: bool,
     /// The morph and alpha clocks wrap and the effect never ends (the landing marker's pulse).
     pub looping: bool,
+    /// Past the end the clocks stay on the last frame and the effect stays live (the smash marker, drawn until the
+    /// ball bounces).
+    pub hold: bool,
 }
 
 impl Effect {
@@ -85,6 +88,7 @@ impl Effect {
             alphas: materials.iter().map(|m| m.color[3]).collect(),
             live: false,
             looping: false,
+            hold: false,
         }
     }
 
@@ -104,7 +108,7 @@ impl Effect {
         self.alpha.apply(&mut self.alphas, 1.0);
     }
 
-    /// One frame: advance every channel; past the morph length the effect resets to 0 and ends.
+    /// One frame: advance every channel; past the morph length the effect resets to 0 and ends (unless held).
     pub fn tick(&mut self) {
         if !self.live {
             return;
@@ -114,7 +118,7 @@ impl Effect {
         self.morph.apply(&mut self.weights, 0.0);
         self.alpha.clock.tick(self.alpha.length);
         self.alpha.apply(&mut self.alphas, 1.0);
-        if !self.looping && self.morph.clock.done(self.morph.length) {
+        if !self.looping && !self.hold && self.morph.clock.done(self.morph.length) {
             self.live = false;
             self.set_zero();
         }
