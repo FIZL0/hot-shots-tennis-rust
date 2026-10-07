@@ -121,6 +121,20 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   (`0x140360`/`0x1404c0`), the contact pose (frame 8) and the arm IK / body step at contact (`0x3561e0`, +0x3fd0/
   +0x3fd8), faces (`.MOR`/`.UVA`). Verify per frame against a PINE recording of each player's motion number and
   time (player +0x54 motion object: number +0x20, time +0x34/+0x38) in the slot-5 match and a slot-3 human game.
+  Split (journal `context/artifacts/2026-10-06-n1-animations/`):
+  - [x] **N1a — Locomotion.** `hst_sim::player`: run speed (TParam SPE/10, Agili acceleration +30 %, stamina
+    slow-down), run counter, stamina drain, stand/run motion choice (ready, turned stances to the ball, run
+    f/b/l/r with hysteresis, dash, tired +8), game `acosf`. `tests/player.rs`: run velocity bit-exact (9657 frames),
+    motion exact on all 70575 stand/run frames of `match_s05.bin`. Wired into `play.rs` (`locomote`; per-character
+    stats; mover bounds). Not ported: doubles 1 m partner push, slow-surface agility (court surface byte), stroke
+    stamina costs. Journal `1-LOCOMOTION-FINAL.md`.
+  - [ ] **N1b — Facing turn.** The rest of `349410`: turning +0x3d60 toward +0x3dc0 (turn flag +0x3dd1/+0x3dd0, the
+    motion's root matrices at player + motion·0x40 + 0x6b0); verify facing every frame of `match_s05.bin`.
+  - [ ] **N1c — Mode state machine.** When each mode/motion applies: stroke mode 2 (`3ec4` countdown, recovery
+    +0x3e50, re-press), mode 3, serve motions, receive, reactions `re_*`, `3553d0`; verify the motion number on
+    every frame of `match_s05.bin` (not only stand/run frames).
+  - [ ] **N1d — Motion playback.** Motion time/speed (+0x34/+0x38), blending (`0x140360`/`0x1404c0`), contact IK
+    and body step (`0x3561e0`), faces (`.MOR`/`.UVA`); record motion time over PINE to verify.
 - [ ] **N2 — The original ball when serving.** The ball sits in the server's hand and follows the serve motion's
   ball track (`sh_pcNN_serve_ad00_ball`, `*_serve_t_dummy`) until the toss leaves the hand bone; drawn with the
   game's ball model (`CMN/GAME.XB` `ball1.mdl`) and shadow instead of the toon sphere. Verify the ball position

@@ -20,6 +20,7 @@ use hst_sim::court;
 use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
+use hst_sim::player::{self as loco, Stats};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
@@ -33,11 +34,6 @@ const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_gam
 const DOUBLES: Rules = Rules { players: 4, ..SINGLES };
 /// The umpire's calls by verdict code.
 const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out", "Illegal hit"];
-/// Top running speed in metres per frame (≈ 6 m/s).
-const RUN: f32 = 0.1;
-/// Speed change per frame while accelerating / braking.
-const ACCEL: f32 = 0.012;
-const BRAKE: f32 = 0.025;
 /// Ball drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
 const BALL_DRAW_SCALE: f32 = 2.4;
 /// Typical recorded spin per shot kind (rad/frame); the real per-character records are not ported yet.
@@ -94,6 +90,14 @@ struct Player {
     stroke: Option<(usize, f32)>,
     /// A swing at nothing: its stroke motion and frames since the press.
     whiff: Option<(usize, u32)>,
+    /// Movement stats from TParam.csv.
+    stats: Stats,
+    /// Frames into the current run (None: standing), stamina left and the frames toward its next drain.
+    run: Option<i32>,
+    stamina: i32,
+    stamina_tick: i32,
+    /// The stand/run motion the game picks (`hst_sim::player`).
+    motion: i32,
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -278,12 +282,26 @@ fn serve_tables(iso: &mut Iso) -> Vec<Table> {
 
 /// TParam.csv's row for character 0 as cells (header cells hold quoted line breaks; character rows are plain).
 fn tparam_row(iso: &mut Iso) -> Vec<String> {
+    tparam(iso, 0)
+}
+
+/// TParam.csv's row for character `n` as cells.
+fn tparam(iso: &mut Iso, n: usize) -> Vec<String> {
     let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).expect("TParam.csv");
     let csv = arc.read(e).expect("TParam.csv bytes");
-    let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(b"0,")).expect("character 0 row");
+    let tag = format!("{n},");
+    let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(tag.as_bytes())).expect("character row");
     row.split(|&b| b == b',').map(|c| String::from_utf8_lossy(c).trim().to_string()).collect()
+}
+
+/// A character's movement stats from TParam.csv (SPE, Agili, STA).
+/// ponytail: surface 0 (no slow-surface agility ×1.5); the court's surface byte is read with P15a
+fn character_stats(iso: &mut Iso, n: usize) -> Stats {
+    let row = tparam(iso, n);
+    let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
+    Stats::new(cell(40), cell(43), cell(41), 0)
 }
 
 /// A character's hand from TParam.csv (+1 right, −1 left).
@@ -451,6 +469,8 @@ fn setup(
             }
         };
         game.players[i].hand = character_hand(&mut iso, c);
+        game.players[i].stats = character_stats(&mut iso, c);
+        game.players[i].stamina = game.players[i].stats.stamina;
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
@@ -487,10 +507,12 @@ fn setup(
 /// Put every player where the original does for the next serve (`serve_placement`) and the ball in the server's hand.
 fn reset_positions(g: &mut Game) {
     for i in 0..g.players.len() {
-        let (stance, hand) = (g.players[i].stance, g.players[i].hand);
+        let (stance, hand, stats) = (g.players[i].stance, g.players[i].hand, g.players[i].stats);
         let at = serve_placement(i as i32, &g.score, g.rally.faults, stance, 0, g.score.swapped);
         let end = at.facing;
-        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, ..Player::default() };
+        // stamina is full again every point
+        let stamina = stats.stamina;
+        g.players[i] = Player { pos: at.pos, prev: at.pos, end, facing: base_yaw(end), stance, hand, home: at.pos, stats, stamina, ..Player::default() };
     }
     g.cam.turned = g.cam_owner.is_some_and(|i| g.players[i].pos[2] > 0.0);
     g.cam.cut();
@@ -758,18 +780,59 @@ fn timing_word(c: &Contact) -> &'static str {
     }
 }
 
-/// Run toward a desired velocity with acceleration limits, staying on this player's half.
-fn locomote(p: &mut Player, want: Vec2) {
-    let rate = if want.length() > p.vel.length() { ACCEL } else { BRAKE };
-    p.vel += (want - p.vel).clamp_length_max(rate);
+/// Run in direction `dir` (game-space x, z; any length) or stand, as the original (`hst_sim::player`): full
+/// speed in the stick's direction growing by 30 % over the character's agility frames, stamina drained while
+/// running in a rally, the run motion by direction (dash past half the agility) or the ready stance, and the
+/// court bounds of the game's mover.
+/// ponytail: the turn-around for a run behind the player (facing +0x3d60 turning with the motion's root,
+/// flag +0x3dd1) and the doubles partners' 1 m separation are not ported; the body keeps facing the other end.
+fn locomote(g: &mut Game, i: usize, dir: Vec2) {
+    let players = g.players.len() as i32;
+    let phase = match g.phase {
+        Phase::ChangeEnds(_) => 1,
+        Phase::Serve => 2,
+        Phase::Rally => 3,
+        Phase::Post | Phase::Over(_) => 4,
+    };
+    let (ball, last) = (g.flight.ball, g.last_hitter);
+    let p = &mut g.players[i];
     p.prev = p.pos;
-    p.pos[0] = (p.pos[0] + p.vel.x).clamp(-9.0, 9.0);
-    p.pos[2] = p.pos[2] + p.vel.y;
-    p.pos[2] = if p.end > 0.0 { p.pos[2].clamp(-17.0, -0.4) } else { p.pos[2].clamp(0.4, 17.0) };
+    p.facing = base_yaw(p.end);
+    let current = loco::base_motion(p.motion);
+    if dir == Vec2::ZERO {
+        p.run = None;
+        p.vel = Vec2::ZERO;
+        let a = loco::angle([0.0, 0.0, p.end], p.end, p.hand);
+        let m = loco::stand_motion(a, || {
+            loco::stance(&loco::StanceInput {
+                players,
+                phase,
+                last_hitter: last,
+                team: i as i32,
+                current,
+                watching: true,
+                pos: p.pos,
+                ball: ball.pos,
+                ball_dir: ball.vel,
+                hand: p.hand,
+            })
+        });
+        p.motion = loco::with_tiredness(m, p.stamina);
+        return;
+    }
+    let d = dir.normalize();
+    let run = p.run.map_or(0, |r| r + 1);
+    p.run = Some(run);
+    (p.stamina, p.stamina_tick) = loco::drain(&p.stats, p.stamina, p.stamina_tick, players, phase == 3, 0);
+    let v = loco::run_velocity([d.x, 0.0, d.y], loco::run_speed(&p.stats, run, p.stamina, 100));
+    p.vel = Vec2::new(v[0], v[2]);
+    // the mover's bounds: |x| ≤ 8.685, own half 1.5..17.885 deep
+    p.pos[0] = (p.pos[0] + v[0]).clamp(-8.685, 8.685);
+    let z = p.pos[2] + v[2];
+    p.pos[2] = if z.abs() > 17.885 { -17.885 * p.end } else if z.abs() < 1.5 || z * p.end > 0.0 { -1.5 * p.end } else { z };
     p.stride += p.vel.length() * 9.0;
-    // face the other end, leaning toward a sideways run
-    let lean = (p.vel.x * p.end).clamp(-0.1, 0.1) * 4.0;
-    p.facing += (base_yaw(p.end) + lean - p.facing) * 0.2;
+    let a = loco::angle([d.x, 0.0, d.y], p.end, p.hand);
+    p.motion = loco::with_tiredness(loco::run_motion(current, a, loco::dashing(&p.stats, run)), p.stamina);
 }
 
 /// One frame of a player's stroke: a pending press keeps searching for a contact (pressing early grades
@@ -904,12 +967,10 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         press(g, i, kind);
     }
     if g.players[i].contact.is_none() && g.players[i].whiff.is_none() {
-        // screen-relative: stick right follows the camera's right, stick up its ground-forward
-        let mut want = screen(g, pad.stick) * RUN;
-        if g.players[i].swing.is_some() {
-            want *= 0.25;
-        }
-        locomote(&mut g.players[i], want);
+        // screen-relative: stick right follows the camera's right, stick up its ground-forward; no running
+        // through the follow-through
+        let dir = if g.players[i].swing.is_some() { Vec2::ZERO } else { screen(g, pad.stick) };
+        locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot
     let (aim, end) = (screen(g, pad.stick), g.players[i].end);
@@ -977,8 +1038,9 @@ fn bot(g: &mut Game, i: usize) {
         let p = g.players[i];
         let goal = mine.map_or(p.home, |(b, _)| [b[0] - 1.1 * (b[0] - p.pos[0]).signum(), 0.0, b[2] - p.end * g.reach.ahead]);
         let d = Vec2::new(goal[0] - p.pos[0], goal[2] - p.pos[2]);
-        let want = if d.length() < 0.05 { Vec2::ZERO } else { d.clamp_length_max(RUN) };
-        locomote(&mut g.players[i], want);
+        // ponytail: stops within one stride of the goal; the AI's own approach is P11
+        let dir = if d.length() < 0.1 { Vec2::ZERO } else { d };
+        locomote(g, i, dir);
         // press when the contact search would lock onto the drawn frame (or later, if it is already past)
         if mine.is_some() {
             if g.players[i].bot_due.is_none() {
@@ -1182,7 +1244,7 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,
 /// toss and swing; a locked stroke's swing (timed so its contact pose, frame 8, meets the ball); otherwise the
-/// ready stance or runs by direction.
+/// stand/run motion the game picks (`locomote`).
 fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
     for (f, mut m) in &mut q {
         let i = f.0;
@@ -1222,22 +1284,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         if (m.id == 0x25 || m.id == 0x26) && m.time < 30.0 {
             continue;
         }
-        let v = p.vel;
-        let speed = v.length();
-        if speed < 0.01 {
-            m.play(0x00, 1.0, true);
-            continue;
-        }
-        // direction relative to where the player faces (+z for end +1)
-        let (fwd, side) = (v.y * p.end, v.x * p.end * p.hand);
-        let id = if fwd.abs() >= side.abs() {
-            if fwd > 0.0 { 0x03 } else { 0x04 }
-        } else if side > 0.0 {
-            0x05
-        } else {
-            0x06
-        };
-        m.play(id, (speed / RUN).clamp(0.4, 1.5), true);
+        m.play(p.motion as usize, 1.0, true);
     }
 }
 
