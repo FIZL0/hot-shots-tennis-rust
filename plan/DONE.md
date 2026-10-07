@@ -60,3 +60,9 @@
     builds any court's collision world from the disc (multi-node props: local·parent); `--stage N` play steps the
     live ball through `step_world` (flat net only without a stage). `0x379ae0` (random bounce option) left for P21.
     Journal `5-LIVE-PLAY-FINAL.md`.
+
+- [x] **N1d1 — Exact ANI sampler.** `hst_sim::pose::Clip`: clip bind (`0x13d950`: keyed tracks with a node, length,
+  bone-length position scale), squad rotations with load-time control points (`0x175c00`/`0x1759f0`, VU0 slerp
+  micro 0x288), Hermite positions with interval-scaled Catmull-Rom tangents (`0x17b160`/`0x17b010`), quat → rows
+  (`0x175eb0`), time wrap/clamp (`0x1404c0`). App `character::animate` uses it. t: motion.rs `clip_sampler_ram`
+  (1061 tracks, 20 players, 5 RAM dumps, bit-exact). j: 2026-10-06-n1-animations/4-SAMPLER-FINAL.md

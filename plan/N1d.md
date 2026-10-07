@@ -1,5 +1,8 @@
 # N1d
 
-- [ ] **N1d — Motion playback.** Motion time/speed (+0x34/+0x38), contact IK and body step (`0x3561e0`), faces
-  (`.MOR`/`.UVA`); record motion time over PINE to verify. Players: node ANI `0x140360`/`0x1404c0`.
+- [ ] **N1d — Motion playback.** Split:
+  - [x] **N1d1** Exact ANI sampler → `plan/N1d1.md`
+  - [ ] **N1d2** Motion time/speed → `plan/N1d2.md`
+  - [ ] **N1d3** Contact IK and body step → `plan/N1d3.md`
+  - [ ] **N1d4** Faces → `plan/N1d4.md`
   - [ ] **N1e** → `plan/N1e.md`

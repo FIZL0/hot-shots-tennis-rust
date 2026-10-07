@@ -1,4 +1,4 @@
-//! The game's `sinf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
+//! The game's `sinf`, `cosf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
 //! rounding of the constants), on PS2 float arithmetic.
 
 use crate::ps2::{add, div, mul, sub};
@@ -118,6 +118,19 @@ pub fn sinf(x: f32) -> f32 {
         1 => k_cos(y0, y1),
         2 => -k_sin(y0, y1, true),
         _ => -k_cos(y0, y1),
+    }
+}
+
+pub fn cosf(x: f32) -> f32 {
+    if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fd8 {
+        return k_cos(x, 0.0);
+    }
+    let (n, y0, y1) = rem_pio2(x);
+    match n & 3 {
+        0 => k_cos(y0, y1),
+        1 => -k_sin(y0, y1, true),
+        2 => -k_cos(y0, y1),
+        _ => k_sin(y0, y1, true),
     }
 }
 

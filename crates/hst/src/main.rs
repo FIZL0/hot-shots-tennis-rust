@@ -305,7 +305,8 @@ fn auto_shot(mut commands: Commands, args: Res<Args>, mut frame: Local<u32>, mut
     if *frame == 30 {
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.clone()));
     }
-    if *frame == 45 {
+    // the save is asynchronous: wait for the file (uncapped frames come fast)
+    if *frame > 30 && std::path::Path::new(path).exists() || *frame == 100_000 {
         exit.write(AppExit::Success);
     }
 }

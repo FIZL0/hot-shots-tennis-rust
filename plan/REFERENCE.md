@@ -56,6 +56,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   point-over phase of a recorded bot match tick-exact.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 - F0 — uncapped frame rate: render-side blending of positions, facing, motion time, camera and balloon fades; sim unchanged.
+- N1d1 exact ANI motion sampler (squad/Hermite, bone-length scale), bit-exact vs RAM.
 
 ## Known gaps / caveats
 

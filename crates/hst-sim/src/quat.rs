@@ -82,8 +82,9 @@ pub fn slerp(a: V4, b: V4, t: f32) -> V4 {
 }
 
 /// The VU0 micro program the game calls for slerp (θ via an arctan polynomial around π/4, sines via a
-/// polynomial), with the Q-register latencies of the original instruction schedule.
-fn micro_slerp(q1: V4, q2: V4, t: f32) -> V4 {
+/// polynomial), with the Q-register latencies of the original instruction schedule. Called bare (no shortest-arc
+/// flip, no end shortcuts) by the motion sampler's squad.
+pub fn micro_slerp(q1: V4, q2: V4, t: f32) -> V4 {
     use vu0::{add, div, madd, mul, sqrt, sub};
     let p = [mul(q1[0], q2[0]), mul(q1[1], q2[1]), mul(q1[2], q2[2]), mul(q1[3], q2[3])];
     let dot = madd(madd(add(p[3], p[2]), 1.0, p[1]), 1.0, p[0]);

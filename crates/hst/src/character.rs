@@ -12,6 +12,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mtl, xb::Archive};
+use hst_sim::pose::{Clip, Skeleton};
 
 /// One joint of the skeleton.
 pub struct Joint {
@@ -23,19 +24,13 @@ pub struct Joint {
     pub inverse_bind: Mat4,
 }
 
-/// A motion: per joint, rotation and translation keys at game frames (60 Hz).
-pub struct Clip {
-    pub end: f32,
-    pub tracks: Vec<(usize, Vec<(f32, Quat)>, Vec<(f32, Vec3)>)>,
-}
-
 pub struct CharacterData {
     pub joints: Vec<Joint>,
     /// Skinned body parts.
     pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     /// Rigid parts carried by the `Racket` joint.
     pub racket: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    /// Motions by the game's motion number.
+    /// Motions by the game's motion number, bound to the skeleton (the game's sampler, `hst_sim::pose`).
     pub motions: HashMap<usize, Clip>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
@@ -235,7 +230,7 @@ pub fn load_disc(
     let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
     let aarc = Archive::parse(&anims).map_err(|e| e.0)?;
     let mut motions = HashMap::new();
-    let skeleton = hst_sim::pose::Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+    let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
     let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
     let mut pelvis = vec![[0.0, 1.0]; 48];
     for id in 0..ani::MOTIONS.len() {
@@ -248,7 +243,7 @@ pub fn load_disc(
         }
         // the motion numbers 0x30.. are the team reactions (below); the files of those names are ball paths
         if id < 0x30 {
-            motions.insert(id, clip(&a, &joints));
+            motions.insert(id, Clip::new(&skeleton, &a));
         }
     }
     // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
@@ -258,28 +253,11 @@ pub fn load_disc(
             let name = format!("mtgrl/re_pc00_{stem}.ani2");
             let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
             let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
-            motions.insert(0x30 + k, clip(&a, &joints));
+            motions.insert(0x30 + k, Clip::new(&skeleton, &a));
         }
     }
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     Ok(CharacterData { joints, parts, racket, motions, binds, pelvis })
-}
-
-/// A motion's keys per joint, in game frames.
-fn clip(a: &ani::Anim, joints: &[Joint]) -> Clip {
-    let per_frame = a.ticks_per_frame.max(1) as f32;
-    let tracks = a
-        .tracks
-        .iter()
-        .filter_map(|t| {
-            let j = joints.iter().position(|j| j.name == t.name)?;
-            // a rotation key is the conjugate of the joint's local rotation
-            let rot = t.rotation.iter().map(|&(tick, q)| (tick as f32 / per_frame, Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize())).collect();
-            let pos = t.position.iter().map(|&(tick, p)| (tick as f32 / per_frame, Vec3::new(p[0], p[1], p[2]))).collect();
-            Some((j, rot, pos))
-        })
-        .collect();
-    Clip { end: a.end_tick() as f32 / per_frame, tracks }
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
@@ -306,37 +284,29 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
     root
 }
 
-/// Sample every character's motion into its joints.
+/// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
 pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints: Query<&mut Transform>) {
     for (rig, motion) in &rigs {
         let Some(clip) = rig.data.motions.get(&motion.id) else { continue };
         // between the last two ticks: `tick` advanced it by `speed`
-        let t = motion.time - motion.speed * (1.0 - time.overstep_fraction());
-        let t = if motion.looping && clip.end > 0.0 { t.rem_euclid(clip.end) } else { t.min(clip.end) };
-        for (j, rot, pos) in &clip.tracks {
-            let Ok(mut tf) = joints.get_mut(rig.joints[*j]) else { continue };
-            if let Some(q) = sample(rot, t, |a, b, u| a.slerp(b, u)) {
-                tf.rotation = q;
+        let t = clip.wrap(motion.time - motion.speed * (1.0 - time.overstep_fraction()), motion.looping);
+        for (j, joint) in rig.data.joints.iter().enumerate() {
+            if let Ok(mut tf) = joints.get_mut(rig.joints[j]) {
+                *tf = joint.rest;
             }
-            if let Some(p) = sample(pos, t, |a, b, u| a.lerp(b, u)) {
-                tf.translation = p;
+        }
+        for (k, track) in clip.tracks.iter().enumerate() {
+            let Ok(mut tf) = joints.get_mut(rig.joints[track.node]) else { continue };
+            let (rot, pos) = clip.sample(k, t);
+            // a rotation key is the conjugate of the joint's local rotation
+            if let Some([x, y, z, w]) = rot {
+                tf.rotation = Quat::from_xyzw(-x, -y, -z, w).normalize();
+            }
+            if let Some(p) = pos {
+                tf.translation = Vec3::from(p);
             }
         }
     }
-}
-
-/// Keyed value at frame `t`, interpolated between the keys around it (held past the ends).
-fn sample<T: Copy>(keys: &[(f32, T)], t: f32, mix: impl Fn(T, T, f32) -> T) -> Option<T> {
-    let first = keys.first()?;
-    if t <= first.0 {
-        return Some(first.1);
-    }
-    let i = keys.partition_point(|k| k.0 <= t);
-    if i >= keys.len() {
-        return Some(keys[keys.len() - 1].1);
-    }
-    let (a, b) = (keys[i - 1], keys[i]);
-    Some(mix(a.1, b.1, (t - a.0) / (b.0 - a.0).max(1e-6)))
 }
 
 /// Advance every motion by one game frame.

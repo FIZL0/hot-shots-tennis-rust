@@ -132,3 +132,89 @@ fn match_s05_reactions() {
     eprintln!("{n} reactions ({team} team)");
     assert!(n > 100 && team > 30);
 }
+
+/// The ANI sampler (squad rotations, Hermite positions, bone-length scale) against the players' skeletons in
+/// five save-state RAM dumps (`context/ram/s0N.bin`): every multi-key track's quaternion, rotation rows and
+/// position at the time last sampled, bit for bit. Character and costume are found by the motion's keys and
+/// the skeleton's rest bones.
+#[test]
+fn clip_sampler_ram() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{Clip, Skeleton, q_matrix};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let (mut tracks, mut players) = (0, 0);
+    for s in ["s03", "s04", "s05", "s08", "s09"] {
+        let Ok(ram) = std::fs::read(format!("{root}context/ram/{s}.bin")) else { return eprintln!("{s}.bin absent, skipped") };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let fr = |a: usize| f32::from_bits(u(a) as u32);
+        let cstr = |a: usize| { let a = a & 0x1ff_ffff; String::from_utf8_lossy(&ram[a..a + ram[a..].iter().position(|&b| b == 0).unwrap()]).into_owned() };
+        let gm = u(0x422f80);
+        for p in 0..4 {
+            let pl = u(gm + 0xa8 + 4 * p);
+            let an = u(pl + 0x54);
+            // +0x3c is already the next frame's time; +0x38 is the time last sampled
+            let (motion, t, clip) = (u(an + 0x20), fr(an + 0x38), u(an + 0x24));
+            let track = |k: usize| u(u(clip + 0x10) + 4 * k);
+            let list_n = |l: usize| if l == 0 { 0 } else { u(u(l + 0xc)) };
+            // the character whose motion file has this clip's first rotation keys
+            let first_rot = |k: usize| { let l = u(track(k) + 0xc); (0..list_n(l)).map(|j| [0, 4, 8, 12].map(|o| u(u(l + 0x18) + 16 * j + o) as u32)).collect::<Vec<_>>() };
+            let want0 = first_rot(0);
+            let nodes = u(u(u(u(an)) + 0xc) + 0x64);
+            let node_of = |k: usize| nodes + ((u(u(clip + 0x1c) + 2 * (k & !1)) >> (16 * (k & 1))) as u16 as usize) * 0x120;
+            let names: Vec<String> = (0..u(clip + 0xc)).map(|k| cstr(u(track(k) + 8))).collect();
+            let rests: Vec<[u32; 3]> = (0..names.len()).map(|k| [0, 4, 8].map(|o| u(u(u(node_of(k) + 0x108) + 0x10) + 0x70 + o) as u32)).collect();
+            let mut found = None;
+            'search: for c in 0..16 {
+                let Ok(data) = iso.read(&format!("PCANI/PC{c:02}ANI.XB")) else { continue };
+                let arc = Archive::parse(&data).unwrap();
+                let stem = ani::motion_name(motion, c).unwrap().to_ascii_lowercase();
+                let Some(e) = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
+                let a = ani::parse(&arc.read(e).unwrap()).unwrap();
+                let keys: Vec<[u32; 4]> = a.tracks.iter().find(|t| t.name == names[0]).map(|t| t.rotation.iter().map(|k| k.1.map(f32::to_bits)).collect()).unwrap_or_default();
+                if keys != want0 {
+                    continue;
+                }
+                for costume in 0..10 {
+                    let Ok(mdata) = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")) else { continue };
+                    let marc = Archive::parse(&mdata).unwrap();
+                    let Some(e) = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) else { continue };
+                    let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
+                    let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+                    let rest = |n: &String| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits()));
+                    if names.iter().zip(&rests).all(|(n, r)| rest(n) == Some(*r)) {
+                        found = Some((c, a, sk));
+                        break 'search;
+                    }
+                }
+            }
+            let (c, a, sk) = found.unwrap_or_else(|| panic!("{s} p{p}: no character's motion {motion:#x} matches"));
+            let ours = Clip::new(&sk, &a);
+            assert_eq!(ours.tracks.len(), u(clip + 0xc), "{s} p{p} track count");
+            assert_eq!(ours.length.to_bits(), fr(clip + 0x2c).to_bits(), "{s} p{p} length");
+            for k in 0..ours.tracks.len() {
+                let name = cstr(u(track(k) + 8));
+                assert_eq!(sk.names[ours.tracks[k].node], name, "{s} p{p} track {k}");
+                assert_eq!(ours.tracks[k].scale.to_bits(), fr(u(clip + 0x14) + 4 * k).to_bits(), "{s} p{p} {name} scale");
+                let node = node_of(k);
+                let cache = u(clip + 0x18) + 0x40 * k;
+                let (rot, pos) = ours.sample(k, t);
+                let ctx = format!("{s} p{p} char {c} motion {motion:#x} t {t} {name}");
+                if list_n(u(track(k) + 0xc)) > 1 {
+                    let q = rot.unwrap();
+                    assert_eq!(q.map(f32::to_bits), [0, 4, 8, 12].map(|o| u(node + 0xe0 + o) as u32), "{ctx} quat");
+                    let mm = q_matrix(q);
+                    for r in 0..3 {
+                        assert_eq!(mm[r][..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
+                    }
+                }
+                if list_n(u(track(k) + 0x10)) > 1 {
+                    assert_eq!(pos.unwrap().map(f32::to_bits), [0, 4, 8].map(|o| u(node + 0xf0 + o) as u32), "{ctx} position");
+                }
+                tracks += 1;
+            }
+            players += 1;
+        }
+    }
+    eprintln!("{players} players, {tracks} tracks bit-exact");
+}
