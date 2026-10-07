@@ -39,7 +39,10 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
 
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
-`PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`.
+`PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/overnight.sh`
+(one task at a time) or `tools/overnight-parallel.py` (3 at once in worktrees). PCSX2 is shared: multi-step game
+drives go under `tools/pcsx2.sh <cmd>`; pine.py tools wait their turn by themselves. When you're done with the game
+for your task, close PCSX2: `tools/pcsx2.sh pkill -x pcsx2-qt` (waits for anyone mid-use).
 
 ## If you get stuck, move on
 Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something

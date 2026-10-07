@@ -42,6 +42,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 `new_recording.bin` dives/smashes/collisions).
 
 ### Next (user priorities, in order)
+
+- [ ] **P6a** Serve ball logic (bug, user 2026-10-07): lob serves don't clear the net, and sweet-spot serves don't fly the way the original's do → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
 - [x] **N5** Lob smash → `hst-sim/src/swing.rs` `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs (fixture new_recording.bin)
 - [x] **N6** Diving for the ball (P4's open dive branch) → `swing.rs` · `motion.rs` · `player.rs` · `play.rs` find_contact/advance_stroke/locomote | t: swing.rs, motion.rs, player.rs (fixture new_recording.bin)
 - [x] **N2b** Ball regressed (bug, user 2026-10-07): it is tiny now. It must be big with the game's outline like it was before → `play.rs` ball draw · `character.rs` · N2's ball1.mdl/shadow swap (e06fa6a) | t: serve.rs
@@ -70,20 +72,18 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
+- [ ] **P16b** Changing ends: with more than one human player, keep the camera on the same side; only swap it in solo games (user 2026-10-07) → `play.rs` camera/next_point · `flow.rs`
 
 ### Match basics
+
 - [~] **P0c** Up to 4 players (formations, who-takes-the-ball open) → `play.rs` reset_positions/bot/read_input/control · `flow.rs` serve_placement | t: score.rs
 
 ### Shots
-- [ ] **P1** Shot parameters in play → `play.rs` strike/tables · `hst-sim/src/params.rs` `shot.rs` | t: shot_tables.rs, hst/tests/shot_params.rs | j: 2026-10-05-ball-physics/5-SHOT-PARAMS-READY.md
-- [ ] **P2** Aim exactly → `play.rs` aim_target/screen · `shot.rs`
-- [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
-- [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
-- [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
-- [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
-- [ ] **P6a** Lob serves don't clear the net (bug, user 2026-10-07) → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
+
+- [ ] **N5a** Hitting a lob off a lob isn't accurate (bug, user 2026-10-07): mid-rally, returning the opponent's lob smash, the contact search gave an illegal hit point, though anyone should be able to hit that ball. Record such a rally and match the contact search and lob response to it → `swing.rs` find_contact · `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs
 
 ### Players
+
 - [ ] **P7** Exact character movement stats → `hst-sim/src/player.rs` · `play.rs` locomote/character_stats/tparam | t: player.rs
 - [~] **P8** Player animation timing (overlaps N1) → `motion.rs` · `character.rs` · `play.rs` motions | t: motion.rs
 - [ ] **P8a** Whiffs → `motion.rs` · `play.rs` whiff/press | t: motion.rs
@@ -91,19 +91,20 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P10** Timing pop-ups (screen size/position open) → `play.rs` balloon_art/balloons/age_balloons
 
 ### AI
+
 - [ ] **P11** Opponent AI → `play.rs` bot/bot_serve/intercept/draw_due
 
 ### Match
+
 - [ ] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs
-- [ ] **P12c** Net-cord bug: ball clips the net, drops over, and the point goes to the hitter's side. May need new recordings of net-cord rallies → `judge.rs` · `ball.rs` · `mesh.rs` (net) | t: score.rs, live.rs
 - [ ] **P12a** Post-point sequence → `flow.rs` · `motion.rs` · `play.rs` react/next_point | t: score.rs, motion.rs
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
 - [ ] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
-- [ ] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
 - [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
 ### Presentation
+
 - [~] **P16** Camera (court views, pick, wiring, other modes open) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
 - [ ] **P17** Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`
@@ -113,10 +114,21 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
 - [ ] **P23** Graphics settings menu (after P21) → `main.rs`
 - [ ] **P21a** Controller assignment screen (after P21): P1 picks which connected controller drives which player. The original shakes a controller's selector when that controller moves its right stick → `main.rs` · `play.rs` read_input/Pads
-- [ ] **P16b** Changing ends: with more than one human player, keep the camera on the same side; only swap it in solo games (user 2026-10-07) → `play.rs` camera/next_point · `flow.rs`
 - [ ] **P16a** Post-point cut-aways in play (low priority, user 2026-10-06) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
 
+### Confirmations
+
+- [ ] **P1** Shot parameters in play → `play.rs` strike/tables · `hst-sim/src/params.rs` `shot.rs` | t: shot_tables.rs, hst/tests/shot_params.rs | j: 2026-10-05-ball-physics/5-SHOT-PARAMS-READY.md
+- [ ] **P2** Aim exactly → `play.rs` aim_target/screen · `shot.rs`
+- [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
+- [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
+- [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
+- [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
+- [ ] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
+- [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
+
 ### Stretch
+
 - [ ] **M1** Mod support: custom costumes for existing characters (texture swaps, model swaps), custom umpires, and fully custom characters, with a way to build them for the game logic from simple, easy-to-edit models (pick the best format) → `character.rs` · `hst-data/src/mdl.rs` `tim2.rs` · `replacements/` (P18)
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [ ] **P0b4d** Instant replay (in P0b4) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
@@ -126,12 +138,14 @@ Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE
 ## Code map
 
 `crates/hst-data/src/` — disc formats (no game logic)
+
 - `iso.rs` ISO9660 reader · `xb.rs` XB archives · `tim2.rs` textures · `mdl.rs` models (+collision) · `mtl.rs`
   materials · `ani.rs` ANI2 motions · `layout.rs` court layout/plant records · `exe.rs` GAME.BIN data offsets
   (the only place with retail offsets) · `bin/` xbdump, tm2png, mdlstat
 - tests: `characters.rs`, `collision.rs`
 
 `crates/hst-sim/src/` — the game, bit-exact, no Bevy
+
 - arithmetic: `ps2.rs` EE FPU · `vu0.rs` VU0 · `libm.rs` game sinf/acosf/atan2f · `quat.rs` matrix↔quat, slerp
 - ball: `ball.rs` Flight, bounces, materials, COURTS · `contact.rs` plane sweep · `mesh.rs` triangle sweep, world
   query · `world.rs` prop placement, 20 m grid · `court.rs` court collision world from disc
@@ -147,6 +161,7 @@ Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE
   `camera cutaway`
 
 `crates/hst/src/` — the Bevy app
+
 - `main.rs` args, disc load, court models, orbit, auto_shot · `play.rs` (1.4k lines) the match: setup, input,
   strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
   `character.rs` disc characters, rig, animate · `sandbox.rs`

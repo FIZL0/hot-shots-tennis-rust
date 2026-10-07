@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Minimal PCSX2 PINE client. Usage: pine.py [hexaddr ...]  -> prints game id/status, then u32 at each addr."""
-import os, socket, struct, sys
+import fcntl, os, socket, struct, sys
 
 SLOT = 28011  # PCSX2 default; non-default slots use pcsx2.sock.<slot>
 OK = 0
@@ -12,8 +12,22 @@ def _loud(kind, err, tb):
              "Is PCSX2 running with PINE on (tools/pcsx2-hst.sh) and responding?")
 sys.excepthook = _loud
 
+LOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hst-pcsx2.lock")
+
+def _take_lock():
+    # parallel agents share one PCSX2: one PINE user at a time, held until this process exits.
+    # tools/pcsx2.sh holds it for a whole multi-step command and sets HST_PCSX2_LOCKED for its children.
+    if os.environ.get("HST_PCSX2_LOCKED"): return
+    global _lock
+    _lock = open(LOCK, "w")
+    try: fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("waiting for PCSX2 (another agent is using it)", file=sys.stderr, flush=True)
+        fcntl.flock(_lock, fcntl.LOCK_EX)
+
 class Pine:
     def __init__(self):
+        _take_lock()
         path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "pcsx2.sock" if SLOT == 28011 else f"pcsx2.sock.{SLOT}")
         self.s = socket.socket(socket.AF_UNIX); self.s.settimeout(10); self.s.connect(path)  # a frozen PCSX2 fails, not hangs
 
