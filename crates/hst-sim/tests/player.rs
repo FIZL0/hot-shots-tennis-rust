@@ -299,7 +299,9 @@ fn human_pad_replay() {
         for k in 1..frames.len() {
             let (a, fr) = (frames[k - 1], frames[k]);
             let live = |x: Frame| p_u8(x, 0, 0x3fa4) == 0 && p_u8(x, 0, 0x3fa5) <= 1;
-            if !live(a) || !live(fr) || f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 {
+            // a face button in play starts a swing (P5), not running: skip it and resync after
+            let swing = fr.pad(0).buttons & 0xf000 != 0;
+            if !live(a) || !live(fr) || swing || f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 {
                 body = None;
                 continue;
             }
