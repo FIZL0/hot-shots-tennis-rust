@@ -61,3 +61,90 @@ fn rows_by_outfit_and_mode() {
     assert_eq!(Choice::new(0x200 | 50, 4, false), Choice { row: 18, level: 1, strategy: 0, reach: 2.85 });
     assert_eq!(Choice::new(160, 0, true).row, 167);
 }
+
+/// The game's MT19937 as recorded: 624 words at +4, the next word's index at +0x9c4.
+struct Mt([u32; 624], usize);
+impl Mt {
+    fn of(b: &[u8]) -> Mt {
+        Mt(std::array::from_fn(|k| word(b, 4 + 4 * k) as u32), word(b, 0x9c4))
+    }
+    fn next(&mut self) -> u32 {
+        if self.1 >= 624 {
+            for k in 0..624 {
+                let y = (self.0[k] & 0x8000_0000) | (self.0[(k + 1) % 624] & 0x7fff_ffff);
+                self.0[k] = self.0[(k + 397) % 624] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908_b0df } else { 0 };
+            }
+            self.1 = 0;
+        }
+        let mut y = self.0[self.1];
+        self.1 += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^ (y >> 18)
+    }
+}
+
+/// Every timing-error draw of the slot-5 bots (`context/fixtures/ai_s05.bin`, tools/record_ai.py; skipped when
+/// absent): from the frame before, the doubles AI's four errors must come out of consecutive draws of the game's
+/// generator (other draws of that frame come first), given the opponent shot it just saw, its serve history, whether
+/// it receives and whether its team has hit yet. The change of pace must show up in some of them.
+#[test]
+fn timing_errors_match_the_game() {
+    use hst_sim::ai::{Seen, Shots};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_s05.bin"))) else {
+        return eprintln!("disc or ai_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let (glob, mt, ai) = (4, 4 + 0x18, 4 + 0x18 + 0x9d0);
+    let size = ai + 4 * 0x250;
+    let samples: Vec<&[u8]> = d[20..].chunks_exact(size).collect();
+    let int = |b: &[u8], o: usize| word(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let (mut checked, mut paced, mut fast) = (0, 0, 0);
+    for w in samples.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if word(b, 0) != word(a, 0) + 1 {
+            continue; // a missed frame
+        }
+        for k in 0..4 {
+            let (oa, ob) = (&a[ai + k * 0x250..][..0x250], &b[ai + k * 0x250..][..0x250]);
+            let errs = |o: &[u8]| [0x234, 0x238, 0x23c, 0x240].map(|x| int(o, x));
+            if errs(oa) == errs(ob) {
+                continue;
+            }
+            let row = &table[(word(ob, 12) - TABLE) / RECORD];
+            let seen = |r: usize| Seen { kind: int(ob, r + 4), vel: [f(ob, r + 0x30), f(ob, r + 0x34), f(ob, r + 0x38)] };
+            let hitter = int(ob, 0x130);
+            let shots = (oa[0x130..0x170] != ob[0x130..0x170] && hitter >= 0 && hitter & 1 != k as i32 & 1).then(|| Shots {
+                last: seen(0x130),
+                before: (int(ob, 0x170) >= 0).then(|| seen(0x170)),
+                serve_before: (int(ob, 0x1f0) >= 0).then(|| seen(0x1f0).vel),
+            });
+            let receiver = int(b, glob + 0xc) == k as i32;
+            let (first, third) = (ob[0x230] != 0, int(ob, 0x28) != 0);
+            let mut g = Mt::of(&a[mt..]);
+            let draws: Vec<u32> = (0..200).map(|_| g.next()).collect();
+            let draw = |shots: Option<&Shots>| {
+                (0..150).find_map(|j| {
+                    let mut n = draws[j..].iter().copied();
+                    let t = row.timing(shots, receiver, first, third, &mut || n.next().unwrap());
+                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then_some(t)
+                })
+            };
+            let t = draw(shots.as_ref())
+                .unwrap_or_else(|| panic!("vsync {} AI {k}: errors {:?} not drawn ({shots:?})", word(b, 0), errs(ob)));
+            checked += 1;
+            if t.pace != 0 {
+                // without the pace the same draws must not explain them
+                assert!(draw(None).is_none(), "vsync {} AI {k}: errors match without the pace", word(b, 0));
+                paced += 1;
+            }
+            fast += (t.fast_ball != 0) as u32;
+        }
+    }
+    eprintln!("{checked} draws checked, {paced} with a change of pace, {fast} fast-ball reactions");
+    assert!(checked >= 100, "only {checked} draws");
+    assert!(paced > 0, "no change of pace seen");
+}

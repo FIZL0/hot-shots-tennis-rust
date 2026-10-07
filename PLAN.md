@@ -120,7 +120,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P11a** AIParam table and row choice (in P11) → `hst-sim/src/ai.rs` · `play.rs` setup/bot | t: ai.rs | j: 2026-10-07-p11-ai
 - [ ] **P11b** AI object and update dispatch (in P11) → `hst-sim/src/ai.rs` · `play.rs` bot
 - [ ] **P11c** Reaction delay (in P11) → `ai.rs` · `play.rs` bot
-- [ ] **P11d** Timing error (in P11) → `ai.rs` · `play.rs` bot/bot_serve
+- [x] **P11d** Timing error (in P11) → `ai.rs` · `play.rs` bot/bot_serve
 - [ ] **P11e** Positioning (in P11) → `ai.rs` · `play.rs` bot/intercept
 - [ ] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
 - [ ] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve
