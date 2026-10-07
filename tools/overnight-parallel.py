@@ -16,9 +16,9 @@ context/, replacements/ and the ISO are symlinked in. Each slot N has its own PC
 N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
 tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
 
-A merge that conflicts reopens that task's own session to merge main into its branch, then merges again; a second
-failure (or a dirty main checkout) leaves branch task/<ID> for you; the log says so. Restarting the runner adopts the
-sessions still running in windows s1..sN instead of resetting their worktrees. A run that only
+Merging is the master's job: one long-lived session in window "master" (main checkout) that every finished task
+reports to; it merges task/<ID> into main, fixes conflicts, runs the tests and keeps context/notes/master.md for you.
+Restarting the runner adopts the master and the sessions still running in windows s1..sN instead of resetting them. A run that only
 hit the usage limit is discarded and its slot sleeps until the reset.
 """
 import glob, json, os, re, shlex, subprocess as sp, time, uuid
@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WT = ROOT + '-slots'
 SLOTS, PAUSE = int(os.environ.get('HST_SLOTS', 3)), int(os.environ.get('HST_PAUSE', 60))
-SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; a clash costs one resolve session
+SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
@@ -119,23 +119,36 @@ def start(n, task):
     return p, sid, since
 
 
-RESOLVE = """The runner couldn't merge your branch task/{id} into main: other agents' work landed there meanwhile. \
-Run `git merge main` here, resolve every conflict keeping both sides' intent, run tools/check.sh, commit the merge, \
-and stop. Don't redo or extend the task."""
+MASTER = """You are the master of a parallel unattended run (tools/overnight-parallel.py): nobody will answer \
+questions. Up to {slots} agents work on PLAN.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
+runner messages you here as each one ends: `REPORT <ID> slot <n>: <session, its commits>`. Handle reports one at a time, \
+in order, in this main checkout:
+1. If main has uncommitted changes that aren't yours (the user edits PLAN.md), `git stash` them and pop them back after.
+2. `git merge --no-edit task/<ID>` (no commits on it: just note that). Resolve every conflict keeping both sides' \
+intent (read both sides' commits and journal; tasks run in parallel, so PLAN.md ticks and new struct fields from both \
+belong). Then tools/check.sh; fix what the merge broke, never the task's own work; commit.
+3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, leave the branch and say why.
+4. Append one line to context/notes/master.md: <ID>: merged / conflicts fixed (what) / left (why), the task's state \
+(ticked, part, blocked) and anything the human must do.
+Never push, never touch the worktrees, never do task work yourself. When the runner says `RUN DONE`, finish \
+master.md with a short summary for the human at the top."""
 
 
-def resolve(n, task, sid):
-    """Reopen the task's own session in its worktree to merge main in; returns procs entry like start()."""
-    out = open(os.path.join(NOTES, f'slot{n}.log'), 'a')
-    since = out.tell()
-    out.close()
-    stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/overnight-stop.sh')}]}]
-    cmd = shlex.join(['claude', '--resume', sid, RESOLVE.format(id=task[0]), '--permission-mode', 'bypassPermissions',
-                      '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', slot(n), '-e', f'HST_PCSX2={n}', '-P', '-F', '#{pane_pid}', cmd],
-                   capture_output=True, text=True, check=True).stdout)
-    log(f'slot {n}: {task[0]} merge conflicted; its session is merging main in')
-    return p, sid, since
+def master():
+    """The master's tmux window; started once, adopted by a restarted runner."""
+    names = sp.run(['tmux', 'list-windows', '-F', '#{window_name}'], capture_output=True, text=True).stdout.split()
+    if 'master' not in names:
+        cmd = shlex.join(['claude', MASTER.format(slots=SLOTS), '--permission-mode', 'bypassPermissions',
+                          '--disallowedTools', 'AskUserQuestion'])
+        sp.run(['tmux', 'new-window', '-d', '-n', 'master', '-c', ROOT, cmd], check=True)
+        log('master session started (window master)')
+        time.sleep(20)  # let the TUI come up before the first report is typed into it
+
+
+def report(msg):
+    """Type a line into the master's session; queued by the TUI if it's busy."""
+    sp.run(['tmux', 'send-keys', '-t', 'master', '-l', msg])
+    sp.run(['tmux', 'send-keys', '-t', 'master', 'Enter'])
 
 
 def adopt():
@@ -182,28 +195,13 @@ def limit_only(n, sid, since):
     return max(at, now)
 
 
-def merge(n, tid):
-    branch = f'task/{tid}'
-    if git('rev-list', '--count', f'main..{branch}').stdout.strip() == '0':
-        return log(f'{tid}: no commits')
-    if git('symbolic-ref', '--short', 'HEAD').stdout.strip() != 'main':
-        return log(f'{tid}: main checkout is not on main; {branch} left for you to merge')
-    r = git('merge', '--no-edit', branch)
-    if r.returncode:
-        git('merge', '--abort')
-        log(f'{tid}: merge failed: {' '.join((r.stdout + r.stderr).split())[:200]}')
-        return 'conflict' 
-    git('checkout', '-q', '--detach', cwd=slot(n))  # a branch checked out in a worktree can't be deleted
-    git('branch', '-q', '-d', branch)
-    log(f'{tid}: merged into main')
-
-
 def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
     os.makedirs(NOTES, exist_ok=True)
-    running, procs, tried, free_at, resolving = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, set()
+    running, procs, tried, free_at = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}
     log(f'parallel run, {SLOTS} slots')
+    master()
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
         tried.add(task[0])
@@ -220,16 +218,15 @@ def main():
                     log(f'slot {n}: {task[0]} only hit the limit; transcript discarded, slot sleeps until {reset:%H:%M}')
                 else:
                     tried.add(task[0])  # one attempt per night: ticked, blocked or failed, a human looks next
-                    if merge(n, task[0]) == 'conflict':
-                        if task[0] not in resolving:
-                            resolving.add(task[0])
-                            procs[n], running[n] = resolve(n, task, sid), task  # keeps its files busy meanwhile
-                            continue
-                        log(f'{task[0]}: still conflicts after its session merged main; task/{task[0]} left for you')
+                    git('checkout', '-q', '--detach', cwd=slot(n))  # frees task/<ID> for the master to delete
+                    commits = git('log', '--format=%s', f'main..task/{task[0]}').stdout.splitlines()
+                    report(f'REPORT {task[0]} slot {n}: session {sid} ended; {len(commits)} commits: {" / ".join(commits)[:600]}')
+                    log(f'{task[0]}: reported to the master')
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
             if n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 procs[n], running[n] = start(n, task), task
         if not procs and not pick(running, tried) and all(datetime.now() >= t for t in free_at.values()):
+            report('RUN DONE')
             return log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
         time.sleep(10)
 
