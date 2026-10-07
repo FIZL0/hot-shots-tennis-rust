@@ -93,6 +93,12 @@ fn season_split(stem: &str) -> (String, [bool; 4]) {
     (stem.to_string(), [true; 4])
 }
 
+/// Whether the game loads this model in `season`: its `_sXXXX` mask has the season (no mask: always), and
+/// no `_p01` in the name (the game never loads those).
+pub fn in_season(stem: &str, season: usize) -> bool {
+    season_split(stem).1[season.min(3)] && !stem.contains("_p01")
+}
+
 /// The entry a placement refers to for `season` (0..3). Season variants of one model share an index:
 /// the index counts distinct base names in the category's directory, then the variant whose season
 /// mask includes `season` is picked (any variant if none does).
@@ -134,6 +140,7 @@ mod tests {
         let p = &plants(&rec).unwrap()[0];
         assert_eq!(resolve(&list, p, 0).unwrap().stem, "net_s1000");
         assert_eq!(resolve(&list, p, 1).unwrap().stem, "net_s0100");
+        assert!(in_season("greece00_sky_s1100", 1) && !in_season("greece00_sky_s1100", 2) && !in_season("resort_bg_s1111_p01", 0));
     }
 }
 

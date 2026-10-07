@@ -86,7 +86,7 @@ pub struct GsUniform {
 /// Fog parameters that leave every pixel as it is.
 pub const NO_FOG: Vec4 = Vec4::new(255.0, 255.0, 0.0, 1.0);
 
-/// A court's fog for time of day `k` from its `envir_cNN.dat`: (`GsUniform::fog`, `fog_color`).
+/// A court's fog for season `k` (1 in singles, 0 in doubles) from its `envir_cNN.dat`: (`GsUniform::fog`, `fog_color`).
 pub fn court_fog(envir: &[u8], k: usize) -> Option<(Vec4, Vec4)> {
     let row = envir.get(0x290 + k * 0x60..0x2f0 + k * 0x60)?;
     let f = |o: usize| f32::from_le_bytes(row[o..o + 4].try_into().unwrap());
@@ -97,6 +97,26 @@ pub fn court_fog(envir: &[u8], k: usize) -> Option<(Vec4, Vec4)> {
         z1 = z0 + 1.0;
     }
     Some((Vec4::new(near, far, z0, z1), colour))
+}
+
+/// The colour the game clears the screen to before a court frame (what shows above the sky dome's open top).
+/// `sky` is the drawn sky's top-ring vertex colour × material colour / 128 (0..255). Per season the file has a
+/// time-of-day threshold byte at 0x10 (sub-row 1 when it is below the hole, 1) and two light rows at 0xd0
+/// (RGB, intensity, ambient); the fog row's F at +0x34 mixes in FOGCOL.
+/// ponytail: clear weather (0/1); weather 2..5 grey the light and white the fog (P17i). The eye-height term that
+/// lifts F only matters off court (0 for a match camera).
+pub fn court_clear(envir: &[u8], season: usize, sky: [f32; 3]) -> Option<[u8; 3]> {
+    let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
+    let t = ((*envir.get(0x10 + season * 0x30)? as i8) < 1) as usize;
+    let light = 0xd0 + season * 0x70 + t * 0x38;
+    let (fog, k) = (0x290 + season * 0x60, f(light + 0xc)? + f(light + 0x10)?);
+    let big_f = f(fog + 0x34)?;
+    let mut out = [0; 3];
+    for i in 0..3 {
+        let v = sky[i] * f(light + 4 * i)? * k * big_f + *envir.get(fog + 0x18 + i)? as f32 * (255.0 - big_f);
+        out[i] = (v / 255.0).min(255.0) as u8;
+    }
+    Some(out)
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -272,5 +292,21 @@ mod tests {
         assert_eq!((colour * 255.0).round(), Vec4::new(181.0, 209.0, 220.0, 255.0));
         envir[0x290] = 1;
         assert_eq!(court_fog(&envir, 0).unwrap().0, Vec4::new(255.0, 255.0, 0.0, 0.001));
+    }
+
+    #[test]
+    fn court_clear_colour() {
+        // court 10 season 0 (its envir values) with greece00's sky (7, 17, 43) × 255/128: slot 5 RAM clears to 0x672811
+        let mut envir = vec![0; 0x550];
+        envir[0x10] = 18;
+        for (o, v) in [(0xd0, 0.8627451f32), (0xd4, 0.8392157), (0xd8, 0.8392157), (0xdc, 0.74), (0xe0, 0.7), (0x2c4, 255.0)] {
+            envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        envir[0x2a8..0x2ab].copy_from_slice(&[0xb5, 0xd1, 0xdc]);
+        let sky = [7.0, 17.0, 43.0].map(|c: f32| c * 255.0 / 128.0);
+        assert_eq!(court_clear(&envir, 0, sky), Some([0x11, 0x28, 0x67]));
+        // threshold 0 (court 9 season 0) picks the second light row, all zero here
+        envir[0x10] = 0;
+        assert_eq!(court_clear(&envir, 0, sky), Some([0, 0, 0]));
     }
 }
