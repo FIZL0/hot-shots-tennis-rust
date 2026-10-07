@@ -9,7 +9,9 @@
 //! slide up 3 px a tick and fade over the 4-tick swap while the new ones appear with a white flash (red "Deuce!" at
 //! deuce). A game or set brings up the result board: both teams' plates, each set's games (a losing count at half
 //! alpha), with sets the sets won; the scorer's new count grows to twice its size over 6 ticks while the old one
-//! still shows, then shrinks back over 10 under a fading white copy.
+//! still shows, then shrinks back over 10 under a fading white copy. Halfway through the wait before it (tick 45 of
+//! 90) "Game" / "Set" comes up over it with a white flash fading over 14 ticks, then "Server" / "Receiver" (who won
+//! it, in the winning team's colour: red for the first) with its own flash over 16, held until the next point.
 //!
 //! The umpire's calls (Let, Out, Net, Fault, Double fault) and Change Sides are 3D models (`azuma/inpane/mdl`), each
 //! played by its `.ANI`/`.MOR`/`.MTA` from frame 0 at speed 1, clamped at the end, as the effects are: a call from
@@ -49,6 +51,9 @@ enum Tex {
     /// The result board's sheets `result_gameset00`–`03`: frame, stripes and pill; small digits; the current set's
     /// digits (white copies below); the sets-won digits (48×48, white copies below) and "Set".
     Board(u8),
+    /// The banner's sheets `result_game`, `result_set`, `result_verBlue`, `result_verRed`: the words with their white
+    /// copies a row (64) below; Server and Receiver 64 apart.
+    Result(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -400,8 +405,8 @@ fn board(v: &View, out: &mut Vec<Quad>) {
 
 /// The sheets the panel doesn't load, in `ART` order.
 #[derive(Resource)]
-struct Art([Handle<Image>; 9]);
-const ART: [&str; 9] = [
+struct Art([Handle<Image>; 13]);
+const ART: [&str; 13] = [
     "/inpane_kihontokuten01.tm2",
     "/inpane_duce00.tm2",
     "/inpane_duce01.tm2",
@@ -411,6 +416,10 @@ const ART: [&str; 9] = [
     "/result_gameset01.tm2",
     "/result_gameset02.tm2",
     "/result_gameset03.tm2",
+    "/result_game.tm2",
+    "/result_set.tm2",
+    "/result_verblue.tm2",
+    "/result_verred.tm2",
 ];
 #[derive(Component)]
 struct Slot(usize);
@@ -421,7 +430,8 @@ pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, (setup.after(super::setup), setup_calls))
         .add_systems(PostStartup, setup_banners.after(setup))
         .add_systems(Update, (draw, draw_calls, draw_banners))
-        .add_systems(FixedUpdate, (tick_calls, tick_banners).after(super::simulate));
+        .add_systems(FixedUpdate, (tick_calls, tick_banners, tick_result).after(super::simulate))
+        .init_resource::<ResultBanner>();
 }
 
 /// The call models in the scoreboard's order, and each judge's call's model (1 out, 2 fault, 3 double fault, 4 let,
@@ -570,6 +580,7 @@ fn draw(
     colours: Option<Res<Colours>>,
     cam: Query<&Transform, With<crate::Orbit>>,
     mut first_near: Local<Option<bool>>,
+    result: Res<ResultBanner>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let (Some(art), Some(panel_art), Some(colours)) = (art, panel_art, colours) else {
@@ -581,7 +592,7 @@ fn draw(
     if matches!(g.phase, Phase::Serve) || first_near.is_none() {
         *first_near = Some(cam.single().map_or(true, |c| c.translation.z * g.players[0].end >= 0.0));
     }
-    let quads = match g.post.as_ref().and_then(|p| p.show()) {
+    let mut quads = match g.post.as_ref().and_then(|p| p.show()) {
         Some(show) => {
             let slot = |i: usize| pads.slot_of(i, n).unwrap_or(4);
             layout(&View {
@@ -609,6 +620,9 @@ fn draw(
         }
         None => Vec::new(),
     };
+    if let Some(b) = &result.0 {
+        quads.extend(b.quads());
+    }
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             *vis = Visibility::Hidden;
@@ -628,6 +642,7 @@ fn draw(
             Tex::TiebreakWhite => &art.0[3],
             Tex::TiebreakBanner => &art.0[4],
             Tex::Board(k) => &art.0[5 + k as usize],
+            Tex::Result(k) => &art.0[9 + k as usize],
         };
         let [u, v, w, h] = quad.src;
         img.image = handle.clone();
@@ -643,8 +658,105 @@ fn draw(
     }
 }
 
+/// The wait tick that brings up the "Game" / "Set" banner, and its two flashes' lengths (the second is the board's
+/// grow plus shrink, 6 + 10).
+const RESULT_AT: i32 = 45;
+const RESULT_FLASH: [i32; 2] = [14, 16];
+
+/// The "Game" / "Set" + "Server" / "Receiver" banner over the result board.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Outcome {
+    set: bool,
+    /// The receiving team won it.
+    receiver: bool,
+    winner: usize,
+    /// 0 the first word flashing, 1 the second, 2 held; `t` the flash's countdown.
+    stage: u8,
+    t: i32,
+}
+
+#[derive(Resource, Default)]
+struct ResultBanner(Option<Outcome>);
+
+impl Outcome {
+    fn new(set: bool, server: i32, winner: usize) -> Self {
+        let server_team = (server != 0 && server != 2) as usize;
+        Outcome { set, receiver: server_team != winner, winner, stage: 0, t: RESULT_FLASH[0] }
+    }
+
+    fn step(&mut self) {
+        if self.stage < 2 {
+            self.t -= 1;
+            if self.t < 0 {
+                self.t = if self.stage == 0 { RESULT_FLASH[1] } else { 0 };
+                self.stage += 1;
+            }
+        }
+    }
+
+    fn quads(&self) -> Vec<Quad> {
+        let mut out = Vec::new();
+        let r = self.receiver as i32;
+        let (x1, x2) = if self.receiver { (124.0, 276.0) } else { (148.0, 300.0) };
+        let word = Tex::Result(self.set as u8);
+        push(&mut out, word, [0.0, 0.0, 144.0, 64.0], [x1, 32.0, 144.0, 64.0], WHITE, 128);
+        if self.stage == 0 {
+            push(&mut out, word, [0.0, 64.0, 144.0, 64.0], [x1, 32.0, 144.0, 64.0], WHITE, self.t * 128 / RESULT_FLASH[0]);
+        } else {
+            let who = Tex::Result(if self.winner == 0 { 3 } else { 2 });
+            let dst = [x2, 32.0, 256.0, 64.0];
+            push(&mut out, who, [0.0, (r * 64) as f32, 256.0, 64.0], dst, WHITE, 128);
+            push(&mut out, who, [0.0, ((r + 2) * 64) as f32, 256.0, 64.0], dst, WHITE, self.t.max(0) * 128 / RESULT_FLASH[1]);
+        }
+        out
+    }
+}
+
+/// After the match's tick: bring the banner up at the game / set wait's tick 45 (not on the match's last point),
+/// step it, and drop it with the post-point phase.
+fn tick_result(g: Res<Game>, mut b: ResMut<ResultBanner>) {
+    let Some(post) = g.post.as_ref() else { return b.0 = None };
+    if post.waited() == Some(RESULT_AT)
+        && let Some(e @ (Event::Game | Event::Set)) = post.event
+        && !g.score.match_over
+    {
+        b.0 = Some(Outcome::new(e == Event::Set, g.score.server, g.post_winner.clamp(0, 1) as usize));
+    }
+    if let Some(r) = &mut b.0 {
+        r.step();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn result_banner() {
+        // server player 1 (second team) wins the set: "Set" at 148, then blue "Server" at 300
+        let mut b = super::Outcome::new(true, 1, 1);
+        b.step();
+        let q = b.quads();
+        assert_eq!((q[0].tex, q[0].dst[0], q[1].src[1], q[1].alpha), (super::Tex::Result(1), 148.0, 64.0, 118.0));
+        for _ in 0..13 {
+            b.step();
+        }
+        assert_eq!((b.stage, b.t, b.quads().len()), (0, 0, 1));
+        b.step();
+        let q = b.quads();
+        assert_eq!(q.len(), 3);
+        assert_eq!((q[1].tex, q[1].src, q[1].dst[0], q[2].src[1], q[2].alpha), (super::Tex::Result(2), [0.0, 0.0, 256.0, 64.0], 300.0, 128.0, 128.0));
+        for _ in 0..17 {
+            b.step();
+        }
+        assert_eq!((b.stage, b.quads().len()), (2, 2));
+        // the receiving first team wins a game: red "Receiver" at 276
+        let mut b = super::Outcome::new(false, 1, 0);
+        for _ in 0..15 {
+            b.step();
+        }
+        let q = b.quads();
+        assert_eq!((q[0].tex, q[0].dst[0], q[1].tex, q[1].src[1], q[1].dst[0], q[2].src[1]), (super::Tex::Result(0), 124.0, super::Tex::Result(3), 64.0, 276.0, 192.0));
+    }
+
     use super::*;
 
     fn singles(stage: u8, t: i32, n: i32, fading_out: bool) -> View {
