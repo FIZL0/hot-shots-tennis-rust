@@ -12,6 +12,7 @@ struct Gs {
     uv_offset: vec2<f32>,
     fog: vec4<f32>,
     fog_color: vec4<f32>,
+    lod_k: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -29,7 +30,8 @@ fn alpha_test(in: VertexOutput) {
 #endif
 #ifdef GS_TEXTURED
 #ifdef VERTEX_UVS_A
-    let t = textureSample(gs_texture, gs_sampler, in.uv + gs.uv_offset).a;
+    // the sun sees the top level (the GS picks levels from the camera's depth, gs.wgsl)
+    let t = textureSampleLevel(gs_texture, gs_sampler, in.uv + gs.uv_offset, 0.0).a;
 #ifdef GS_MODULATE
     a = t * a;
 #else

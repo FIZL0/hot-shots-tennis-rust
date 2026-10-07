@@ -5,7 +5,7 @@
 //! node tree      : node = 0x40 header (+0x38 extra size), extra, 3 × mat4, u32 n, n × group
 //!                  group = 0x40 header, extra, 3 × mat4, u32 n, n × node
 //! u32 material count (== MTL material count)
-//!   per material : 0xc header (+0 batch count, +8/+0xa texture wrap u/v)
+//!   per material : 0xc header (+0 batch count, +4 GS TEX1 K, +8/+0xa texture wrap u/v)
 //!     per batch  : 0x34 header (+0x1c packet count, +0x31 GS PRIM bits)
 //!       per packet: 0x60 header, VIF stream (+0x34 qwords), bone list (+0x3c + 1 bytes),
 //!                   +0x38 bytes, +0x38 × 32 bytes, [+0x57 qwords if +0x56], +0x54 × morph blocks,
@@ -108,6 +108,8 @@ pub struct Model {
     /// Per material, the texture wrap mode along u and v (GS CLAMP WMS/WMT: 0 repeat, 1 clamp, 2 region clamp,
     /// 3 region repeat; material header +8, +0xa).
     pub wrap: Vec<[u8; 2]>,
+    /// Per material, the mipmap LOD bias (GS TEX1 K: the low 12 bits of header +4, signed, 4 fraction bits).
+    pub lod_k: Vec<f32>,
     /// Material of every static batch, in file order.
     pub static_materials: Vec<usize>,
     /// Triangles of static batches, in the order the game tests them: by node, then material, then file order.
@@ -263,6 +265,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
         let mut packets = Vec::new();
         let mh = c.take(0xc)?;
         m.wrap.push([mh[8], mh[0xa]]);
+        m.lod_k.push(((i32_at(mh, 4) << 20) >> 20) as f32 / 16.0);
         for _ in 0..size_at(mh, 0)? {
             let bh = c.take(0x34)?;
             let node = size_at(bh, 4)?;

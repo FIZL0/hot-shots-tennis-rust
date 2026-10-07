@@ -51,6 +51,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- P17h: court model mipmaps — TEX1 MXL from MTL header +0xf, K from MDL material header +4, level ⌊log2(view depth)+K+½⌋ (journal 2026-10-07-p17-court-rendering/6-MIPMAPS-FINAL.md).
 - P7c: reach and contact heights — `hst_sim::player::ReachStats::from_tparam` (the game's strtok/decimal parser) bit-exact against RAM records for all 14 characters (tests/player.rs reach_stats_from_tparam); play.rs gives each player its own contact-search reach.
 - P17g: court shadows — sun direction bit-close to RAM on courts 04/10, strength 1 − (⌊0.xx·255⌋·255>>8)/128 multiplied on the hole ground (measured on the PS2 shot), casters = players + plant records with code byte 3 ≠ `'0'` (shadow.rs, gs.rs, gs_prepass.wgsl).
 - P12b1: point score pop-up — player plates, score roll (old value squashed, new grows) + white flash, Deuce! banner with × count, from flow's score show; layout checked on screen against the original (play/popups.rs).
