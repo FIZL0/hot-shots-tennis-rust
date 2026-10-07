@@ -178,7 +178,7 @@ master.md with a short summary for the human at the top."""
 def master():
     """The master's tmux pane; started once, adopted by a restarted runner."""
     if 'master' not in panes():
-        cmd = shlex.join(['claude', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion'])
+        cmd = shlex.join(['claude', '--model', 'opus', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion'])
         pane('master', ROOT, cmd)
         log('master session started (window master)')
         time.sleep(20)  # let the TUI come up before the first report is typed into it
