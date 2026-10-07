@@ -49,3 +49,25 @@ Fixtures (context/fixtures, not in git): p7_carol_s04.bin (420 samples, slot 4, 
 - Port: `hst_sim::player::ReachStats::from_tparam`. Test `reach_stats_from_tparam` (tests/player.rs): all 14 characters' fields bit-exact against the RAM records from slots 5 and 3 (fixtures p7c_tparam_s05.bin / p7c_tparam_s03.bin, dumped by `research/p7c_dump.py <slot> <out>`), plus each player's copy equal to its record.
 - Per-character values: `python3 research/p7c_tparam_map.py <(research/fn.sh 18b5e0)` prints every record field with its column and all 14 values (table in context/p7c/table.txt).
 - play.rs: `character_reach` builds each player's contact-search `Reach` (new `Game.reaches`) from its own character's record and hand; find_contact, find_dive and whiff use it. Before, every player searched with character 0's TParam reach (and an f32 sum that missed Suzuki's chopped reach). The animation-measured parts (contact offsets, body-shot widths, grades, dive arm) stay character 0's (P8/P3 ponytails, unchanged).
+
+## P7d — serve position and movement around the serve
+- States: +0x3fa4 = 1 is the server only (everyone else stays in state 0, standing: pad_dir is zero there until the
+  serve is in); +0x3fa4 = 2 is the point's reaction (354050: reaction motion and its root path, already ported and
+  checked in B3 → `motion::reaction_root`). So the open part was the server before the toss.
+- 351dd0 sub-state +0x3fa6: 0 stand / 1 walk / 2 toss / 3 swing. In 0 and 1: a press tosses (P6), else a run
+  direction (348ff0 for a human, the byte-quantised AI direction for a bot) with x ≠ 0 and |z| < |x| walks
+  (3522b0 state 1), else stands (motion 0x20).
+- Walk (3522b0, asm): x' = madd(0 + x, 0.033333, ±1); far = (K·end)·court, K 3.4149997 singles / 4.7850003
+  doubles (0x422fa4 < 3), court +1 on the deuce side (0x423050 = 0) else −1; far > 0: x' < 0.7 → 0.7 else
+  min(x', far); else x' < far → far else min(x', −0.7) (0x3fc750/58 = ±0.7). The step goes through the mover
+  (34a960), and is undone when the mover changed it (never on the baseline). Motion 0x22 when dir.x·end > 0 else
+  0x21, swapped for hand < 0 (the decompile hides the swap; the asm is a plain exchange). Held against a limit
+  the sidestep motion keeps playing.
+- Port: `hst_sim::player::serve_walk`. Test `serve_walk_replay` (tests/player.rs): fixtures p7d_s04.bin (scratch
+  slot 8 = slot 4's next serve, Carol P1 hand +1) and p7d_s04_lefty.bin (slot 9 = the same with +0x12b4 poked to
+  −1), recorded by `research/p7d_record.py` (prep, then the walk script twice): 1014 + 1011 frames, 647 + 644
+  walked, position and motion bit-exact. Only the deuce side (far > 0) branch occurs in the recordings.
+- `tools/pick.py` backed out to the main menu on copy 2 (its ○ confirm cancels there), so the recordings start
+  from slot 4 instead. Copy 2's PCSX2.ini now has NominalScalar 0.5.
+- play.rs: `serve_turn` walks by `serve_walk` (a human's direction through `pad_run`, a bot's stick) and sets the
+  walk motion; `motions` plays it from `cmd`.
