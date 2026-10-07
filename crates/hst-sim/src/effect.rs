@@ -278,3 +278,122 @@ impl Sparks {
         }
     }
 }
+
+/// A swing's trail: two points along the racket (its y axis at 0.47 and 0.93 from the grip) sampled every frame of
+/// the swing, drawn as a ribbon fading in and out, swept by a B-spline whose tail catches up with the racket.
+pub const TRAIL_POINTS: usize = 120;
+
+#[derive(Clone, Default)]
+pub struct Trail {
+    /// Inner and outer point per sample; the newest sits at `count - 1`.
+    pub points: Vec<[[f32; 4]; 2]>,
+    /// Samples kept (the last one is overwritten while the racket stays within 0.01 of it).
+    stored: usize,
+    pub live: bool,
+    /// Frames left and the trail's length in frames.
+    pub life: i32,
+    pub length: i32,
+    /// The swing's motion: the trail ends when another starts (bar the two follow-throughs).
+    motion: i32,
+    /// How far back the tail reaches (1 = the first sample), the width and the alpha at the racket (0–255 of 128).
+    pub reach: f32,
+    pub width: f32,
+    pub alpha: f32,
+    pub count: usize,
+}
+
+impl Trail {
+    /// A swing of `motion` starts with `frames` of it left to play.
+    pub fn start(&mut self, motion: i32, frames: i32) {
+        *self = Trail { points: std::mem::take(&mut self.points), live: true, life: frames, length: frames, motion, ..Default::default() };
+        self.points.clear();
+    }
+
+    /// One frame with the player playing `motion` and the racket at `racket` (rows; y and translation used).
+    pub fn tick(&mut self, motion: i32, racket: &M4) {
+        use ps2::{add, div, madd, mul, sub};
+        if !self.live {
+            return;
+        }
+        self.life -= 1;
+        // the game samples on after either end, but never draws it
+        if self.life == 0 || (motion != self.motion && !matches!(motion, 0x1c | 0x1d)) {
+            self.live = false;
+            return;
+        }
+        self.motion = motion;
+        if self.stored >= TRAIL_POINTS {
+            return;
+        }
+        let at = |c: f32| std::array::from_fn(|k| madd(add(0.0, racket[3][k]), racket[1][k], c));
+        let p = [at(0.47), at(0.93)];
+        let dist = |a: [f32; 4], b: [f32; 4]| {
+            let d: [f32; 3] = std::array::from_fn(|k| sub(a[k], b[k]));
+            ps2::sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2]))
+        };
+        let close = self.stored > 0 && dist(self.points[self.stored - 1][1], p[1]) <= 0.01;
+        self.points.truncate(self.stored);
+        self.points.push(p);
+        if !close {
+            self.stored += 1;
+        }
+        self.count = self.points.len();
+        if self.count < 2 {
+            return;
+        }
+        // fade in over the first 30% of the swing, out over the last 40%; a fast racket draws brighter
+        let (life, length) = (self.life, self.length);
+        let (rise, fall) = (mul(length as f32, 0.3) as i32, mul(length as f32, 0.4) as i32);
+        let a = if length - life < rise {
+            ((length - life) * 128 / rise) as f32
+        } else if life < fall {
+            (life * 128 / fall) as f32
+        } else {
+            128.0
+        };
+        let n = self.count;
+        let a = madd(add(0.0, a), dist(self.points[n - 1][1], self.points[n - 2][1]), 64.0);
+        self.alpha = if a <= 255.0 { a } else { 255.0 };
+        self.reach = div(life as f32, length as f32);
+        let x = mul(std::f32::consts::PI, crate::libm::powf(sub(1.0, self.reach), 0.5));
+        if (-std::f32::consts::PI..=std::f32::consts::PI).contains(&x) {
+            self.width = mul(0.5, crate::libm::table_sin(x));
+            self.reach = crate::libm::powf(self.reach, 0.5);
+        }
+    }
+
+    /// The ribbon to draw, tail to racket: per row its inner and outer edge, texture v and alpha (0–255 of 128).
+    pub fn ribbon(&self) -> Vec<([f32; 3], [f32; 3], f32, f32)> {
+        let n = self.count;
+        if !self.live || n < 2 {
+            return vec![];
+        }
+        let rows = 2 * n - 1;
+        (0..rows)
+            .map(|i| {
+                let t = i as f32 / (rows - 1) as f32;
+                let back = 1.0 - t;
+                let [a, b] = if i == rows - 1 { self.points[n - 1] } else { spline(back * self.reach * -((n - 1) as f32) + (n - 1) as f32, &self.points) };
+                let d: [f32; 3] = std::array::from_fn(|k| b[k] - a[k]);
+                let s = back * self.width / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                (std::array::from_fn(|k| a[k] - d[k] * s), std::array::from_fn(|k| b[k] + d[k] * s), 0.98 * t, self.alpha * t)
+            })
+            .collect()
+    }
+}
+
+/// The game's sample spline at `x` (in samples): a uniform cubic B-spline, its first two spans weighted to start on
+/// the first sample, ends clamped.
+fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
+    let i = x as usize;
+    let u = x - i as f32;
+    let (u2, u3, v) = (u * u, u * u * u, 1.0 - u);
+    let [w0, w1, w2, w3] = match i {
+        0 => [v * v * v, 3.0 * u + (21.0 * u3 / 12.0 - 9.0 * u2 / 2.0), -11.0 * u3 / 12.0 + 3.0 * u2 / 2.0, u3 / 6.0],
+        1 => [v * v * v * 0.25, u / 4.0 + (7.0 * u3 / 12.0 - 5.0 * u2 / 4.0) + 0.5833333, u / 2.0 - u3 / 2.0 + u2 / 2.0 + 0.1666666, u3 * 0.1666666],
+        _ => [v * v * v * 0.1666666, u3 * 0.5 - u2 + 0.6666667, (u - u3 + u2 + 0.33333334) * 0.5, u3 * 0.1666666],
+    };
+    let last = p.len() - 1;
+    let q = [p[i.saturating_sub(1)], p[i], p[(i + 1).min(last)], p[(i + 2).min(last)]];
+    std::array::from_fn(|e| std::array::from_fn(|k| w0 * q[0][e][k] + w1 * q[1][e][k] + w2 * q[2][e][k] + w3 * q[3][e][k]))
+}

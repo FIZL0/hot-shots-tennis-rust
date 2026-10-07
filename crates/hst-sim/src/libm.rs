@@ -278,6 +278,12 @@ pub fn powf(x: f32, y: f32) -> f32 {
         return x;
     }
     if y == 2.0 {
+        return crate::ps2::mul(x, x);
+    }
+    if y == 0.5 {
+        return x.sqrt(); // its sqrtf: the exact bit-by-bit one
+    }
+    if y == 2.0 {
         return mul(x, x);
     }
     let (bp, dp_h, dp_l) = ([1.0, 1.5], [0.0, f(0x3f15_c000)], [0.0, f(0x35d1_cfdc)]);
@@ -390,4 +396,31 @@ mod tests {
             assert!((super::acosf(x) - x.acos()).abs() < 1e-6, "{x}");
         }
     }
+}
+
+/// The game's table sine: a quarter turn in 256 steps (sin rounded to six decimals; nine steps a millionth off),
+/// read linearly between steps.
+pub fn table_sin(x: f32) -> f32 {
+    use crate::ps2::{add, madd, mul, sub};
+    static TABLE: std::sync::OnceLock<[f32; 258]> = std::sync::OnceLock::new();
+    let t = TABLE.get_or_init(|| {
+        std::array::from_fn(|i| {
+            if i > 256 {
+                return 0.0;
+            }
+            let off = match i {
+                59 => -1.0,
+                79 | 93 | 110 | 145 | 209 | 214 | 226 | 248 => 1.0,
+                _ => 0.0,
+            };
+            ((((i as f64 * std::f64::consts::PI / 512.0).sin() * 1e6).round() + off) / 1e6) as f32
+        })
+    });
+    let (sign, mut x) = if x < 0.0 { (-1.0, -x) } else { (1.0, x) };
+    if x > std::f32::consts::FRAC_PI_2 {
+        x = sub(std::f32::consts::PI, x);
+    }
+    let at = mul(f32::from_bits(0x4322_f983), x);
+    let i = at as i32 as usize;
+    mul(sign, madd(add(0.0, t[i]), sub(at, i as f32), sub(t[i + 1], t[i])))
 }

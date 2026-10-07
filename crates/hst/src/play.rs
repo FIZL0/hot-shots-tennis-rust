@@ -325,8 +325,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
+        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, effects::tick_trails, played_out, held_ball, play_sounds).chain());
 }
 
 /// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
@@ -559,7 +559,7 @@ fn setup(
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
-        commands.entity(f).insert(Figure(i));
+        commands.entity(f).insert((Figure(i), effects::SwingTrail::default()));
     }
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
@@ -567,6 +567,8 @@ fn setup(
     commands.insert_resource(impacts);
     let sparks = effects::load_sparks(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("hit sparks");
     commands.insert_resource(sparks);
+    let trails = effects::load_trails(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("swing trails");
+    commands.insert_resource(trails);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
