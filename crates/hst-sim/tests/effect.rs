@@ -69,6 +69,11 @@ fn impacts_s05() {
                 let ball = &s[0x164..];
                 let want = f(&s[at[k]..], 0x80 + 0x40);
                 let kind = u(e, 0xd0) as i32;
+                // the model is the button's shot kind (the smash's for a smash), whatever the stroke: a framed
+                // mis-hit pops up as a kind 3 volley but keeps its button's impact
+                let (class, ball_kind) = (u(ball, 0x58), u(ball, 0x5c) as i32);
+                assert_eq!(k, if class == 3 { 5 } else { kind as usize }, "frame {i} model");
+                assert!(kind == ball_kind || (class == 2 && ball_kind == 3), "frame {i} kind {kind} ball kind {ball_kind}");
                 let m = impact_matrix([f(ball, 0x140), f(ball, 0x144), f(ball, 0x148), f(ball, 0x14c)], [f(ball, 0xe0), f(ball, 0xe4), f(ball, 0xe8)]);
                 let want_m: Vec<u32> = (0..16).map(|j| u(&s[at[k]..], 0x80 + 4 * j)).collect();
                 assert_eq!(m.as_flattened().iter().map(|v| v.to_bits()).collect::<Vec<_>>(), want_m, "frame {i} matrix {m:?}");

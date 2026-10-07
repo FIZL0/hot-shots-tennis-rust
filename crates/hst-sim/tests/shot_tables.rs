@@ -211,3 +211,51 @@ fn volleys_launch_like_the_game() {
     eprintln!("{exact} of {seen} volleys exact");
     assert!(exact == seen && seen >= 9, "only {exact} of {seen} volleys exact");
 }
+
+/// Every recorded stroke and volley leaves with the spin, first-bounce spin and first-bounce restitution
+/// `params::rally_spin` gives for one of the hitting team's shot records (the base record, or the up1/dw1/dw2
+/// variant the game picked with the table mode, P3), bit for bit. The hitter is any player of the recording
+/// whose record fits, since the nearest one isn't always the hitter.
+#[test]
+fn rally_spins_like_the_game() {
+    use hst_sim::params::{ShotParams, rally_spin, record_of};
+    use hst_sim::replay::frames_live;
+    let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")), std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN"))) else {
+        return eprintln!("extracted disc absent, skipped");
+    };
+    let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    let src = game.shot_params();
+    let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
+    let (mut base, mut all, mut kinds) = (0, 0, [[0; 5]; 2]);
+    for name in ["match_s05.bin", "new_recording.bin", "lob_smash_s05.bin", "human_smash_s04.bin"] {
+        let Ok(data) = std::fs::read(format!("{ctx}/fixtures/{name}")) else { continue };
+        for w in frames_live(&data).windows(2) {
+            let (a, b) = (w[0].live_ball(), w[1].live_ball());
+            let class = b[0x58] as usize;
+            if !(class == 1 || class == 2) || i(b, 0xac) != 0 || i(b, 0x260) == 0 || (i(a, 0xac) == 0 && v3(a, 0x70) == v3(b, 0x70)) {
+                continue;
+            }
+            let (hit, target, kind) = (v3(b, 0x70), v3(b, 0x80), i(b, 0x5c) as usize);
+            let got = [f(b, 0x1a4), f(b, 0x1a8), f(b, 0x1ac)].map(f32::to_bits);
+            let fits = |rec: &[f32]| {
+                let (s, fb, r) = rally_spin(rec, class, kind, hit, target);
+                [s, fb, r].map(f32::to_bits) == got
+            };
+            let chars: Vec<usize> = (0..4).map(|p| w[1].global(0x422fa8 + 4 * p) as usize).collect();
+            let on_base = chars.iter().any(|&c| fits(params.record(class, kind, record_of(c))));
+            let on_variant = chars.iter().any(|&c| {
+                game.shot_variants(c).iter().filter(|v| v.class == class && v.kind == kind).any(|v| fits(&params.variant(class, kind, record_of(c), v.weight)))
+            });
+            assert!(on_base || on_variant, "{name} vsync {}: class {class} kind {kind} hit {hit:?} spins {got:x?}", w[1].vsync());
+            base += on_base as usize;
+            all += 1;
+            kinds[class - 1][kind] += 1;
+        }
+    }
+    eprintln!("{all} strokes/volleys, {base} on the base record; by class/kind {kinds:?}");
+    assert!(all > 100 && base > 50, "{all} launches, {base} on base records");
+}

@@ -102,3 +102,41 @@ pub fn spin(record: &[f32]) -> f32 {
 pub fn record_of(character: usize) -> usize {
     character + 3
 }
+
+/// Spin, first-bounce spin (radians) and first-bounce restitution of a stroke or volley launched from `hit`
+/// at `target` with `record`, as the game's launch sets them. Strokes (class 1) shape them by kind: a flat
+/// shot spins more when hit low and near the net, a short lob gets extra topspin, a drop shot near the net
+/// bites less on its first bounce. A drop's restitution slides toward its second value when hit low and deep.
+/// The records' side angle (field 10) is zero for every stroke and volley, so the side rotation and the
+/// left-hander spin flip that hang on it never apply here.
+pub fn rally_spin(record: &[f32], class: usize, kind: usize, hit: [f32; 3], target: [f32; 3]) -> (f32, f32, f32) {
+    let clamp01 = |x: f32| x.clamp(0.0, 1.0);
+    let near_net = |over: f32| clamp01(ps2::div(ps2::sub(11.885, hit[2].abs()), over));
+    let (mut spin, mut first, mut rest) = (spin(record), ps2::mul(record[9], 0.017453292), record[11]);
+    if class == 1 {
+        match kind {
+            2 => {
+                let mut low = ps2::sub(1.0, ps2::div(-hit[1], 2.0).min(1.0));
+                let mut net = near_net(8.0);
+                net = ps2::mul(net, net); // powf(net, 2), which fdlibm answers as net·net
+                if 1.0 < ps2::add(low, net) {
+                    low = ps2::div(low, ps2::add(low, net));
+                    net = ps2::div(net, ps2::add(low, net));
+                }
+                let lift = |w: f32, top: f32| ps2::madd(ps2::add(0.0, 1.0), w, ps2::sub(top, 1.0));
+                spin = ps2::mul(ps2::mul(spin, lift(low, 2.5)), lift(net, 3.0));
+            }
+            3 => {
+                let long = clamp01(ps2::div(ps2::sub(ps2::sub(target[2], hit[2]).abs(), 4.5), ps2::sub(10.0, 4.5)));
+                spin = ps2::madd(ps2::add(0.0, spin), ps2::mul(200.0, 0.017453292), ps2::sub(1.0, long));
+            }
+            4 => first = ps2::mul(first, ps2::madd(ps2::add(0.0, 1.0), near_net(8.0), ps2::sub(0.4, 1.0))),
+            _ => {}
+        }
+    }
+    if record[12] != 0.0 {
+        let low = clamp01(ps2::div(-hit[1], 1.5));
+        rest = ps2::madd(ps2::add(0.0, rest), ps2::mul(low, ps2::sub(1.0, near_net(8.0))), ps2::sub(record[12], rest));
+    }
+    (spin, first, rest)
+}
