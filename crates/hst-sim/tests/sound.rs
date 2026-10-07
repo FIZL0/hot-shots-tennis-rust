@@ -402,7 +402,7 @@ fn shouts_match_the_game() {
     assert!(sure >= 10 && banks == 4 && dives == 2 && whiffs == 1 && calls == 3);
     // slot 4: characters 3, 4, 6 and 11 (doubles, voice a)
     let Some((sure, banks, _, whiffs, _)) = shouts("hits_s04.bin", "spu_s04.csv") else { return };
-    assert!(sure >= 3 && banks == 4 && whiffs >= 5);
+    assert!(sure >= 3 && banks == 4 && whiffs == 6);
 }
 
 /// The shouts of `recording` (doubles, `tools/record_sound.py … hits`) on the voice banks `spu` lists: certain,
@@ -495,17 +495,20 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize)>
         check(k, p, sound::stroke_shout(&hit, c, 4, || 99), sound::stroke_shout(&hit, c, 4, || 0));
     }
     eprintln!("{sure} certain shouts, {chance} by chance, {dives} dives, {quiet} quiet strokes; banks {bank_of:?}");
-    // a missed swing shouts program 4 at its contact pose, 8–10 frames after the miss
-    // ponytail: a re-swing (the same player's whiff within 60 frames) is muted and a swing with no ball for the
-    // player (no shot yet, or their own side hit last) has no shout; the recordings tell them apart by timing only
+    // a missed swing shouts program 4 at its contact pose, 8–10 frames after the miss, unless the player's previous
+    // swing (no launch since) was a whiff too: of a run of whiffs only the first shouts
+    // ponytail: a swing with no ball for the player (no shot yet, or their own side hit last) has no miss motion
+    // and no shout; the recordings tell them apart by timing only
     let mut shouted = 0;
     for &(k, p) in whiffs.iter().filter(|w| w.0 + 10 < s.len()) {
         let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).filter(|v| v.1 < 7).collect();
-        let reswing = whiffs.iter().any(|&(j, q)| q == p && j < k && j + 60 > k);
+        let last = launches.iter().rev().find(|l| l.1 == p && l.0 < k).map_or(0, |l| l.0);
+        let run = whiffs.iter().any(|&(j, q)| q == p && j < k && j > last);
         let theirs = launches.iter().rev().find(|l| l.0 < k).is_some_and(|l| l.1 & 1 != p & 1);
-        if got.is_empty() && (reswing || !theirs) {
+        if got.is_empty() && (run || !theirs) {
             continue;
         }
+        assert!(!run, "whiff at {k}: {got:?} after another whiff since the launch at {last}");
         assert!(got.len() == 1 && got[0].1 == sound::WHIFF_SHOUT && got[0].0 == *bank_of[p].get_or_insert(got[0].0), "whiff at {k}: {got:?}");
         shouted += 1;
     }
