@@ -9,6 +9,8 @@ struct Gs {
     highlight: f32,
     shadow: f32,
     uv_offset: vec2<f32>,
+    fog: vec4<f32>,
+    fog_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -74,6 +76,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if a8 >= 112.0 { discard; }
 #endif
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+#ifdef GS_FOG
+    // VU1: F from the view depth (clip w), at most F near, then at least F far (VU1's MINI, MAX); both go towards 255 as the eye rises past 30 m
+    // (game y = −Bevy y). GS: (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values.
+    let v = view_bindings::view.view_from_world;
+    let depth = -dot(vec4(v[0].z, v[1].z, v[2].z, v[3].z), in.world_position);
+    let lift = clamp((view_bindings::view.world_position.y - 30.0) * 0.02, 0.0, 0.7);
+    let ends = gs.fog.xy + lift * (255.0 - gs.fog.xy);
+    let fog = floor(max(min(ends.x + (depth - gs.fog.z) * (ends.y - ends.x) / (gs.fog.w - gs.fog.z), ends.x), ends.y));
+    rgb = (floor(fog * floor(rgb * 255.0) / 256.0) + floor((255.0 - fog) * floor(gs.fog_color.rgb * 255.0 + 0.5) / 256.0)) / 255.0;
+#endif
     // shadow: (0 − Cd)·A + Cd on the frame buffer, the same as darkening every layer drawn there
     if gs.shadow > 0.0 {
         rgb *= 1.0 - gs.shadow * (1.0 - sun_visibility(in));
