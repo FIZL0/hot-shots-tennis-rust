@@ -32,11 +32,10 @@ while n < want:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
     time.sleep(0.004)
-    a = p.read_regions(r)
-    while True:
-        b = p.read_regions(r)
-        if a == b and p.read32(VSYNC) == v: break
-        a = b
+    a = p.settle(r, v)
+    if a is None:
+        print(f"missed frame {v} (it ticked mid-read)", flush=True)
+        continue
     h = struct.unpack_from("<I", a, len(a) - 8)[0] % 1024
     k = (h - head) % 1024
     cmds = p.read_regions([(RING + 16 * head, 16 * min(k, 1024 - head)), (RING, 16 * max(0, head + k - 1024))]) if k else b""

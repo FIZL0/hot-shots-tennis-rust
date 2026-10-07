@@ -25,11 +25,10 @@ while n < want:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
     time.sleep(0.004)
-    a = p.read_regions(r)
-    while True:
-        b = p.read_regions(r)
-        if a == b and p.read32(VSYNC) == v: break
-        a = b
+    a = p.settle(r, v)
+    if a is None:
+        print(f"missed frame {v} (it ticked mid-read)", flush=True)
+        continue
     out.write(struct.pack("<II", v, 0) + a)
     n += 1
     if n % 1200 == 0: print(n, flush=True)

@@ -23,13 +23,15 @@ from datetime import datetime, timedelta
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WT = ROOT + '-slots'
 SLOTS, PAUSE = int(os.environ.get('HST_SLOTS', 3)), int(os.environ.get('HST_PAUSE', 60))
+MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
 PROMPT = """Parallel unattended run: nobody will answer questions. Do task {id} only — `tools/ctx.py {id}` — following \
 PLAN.md's rules and AGENT.md. Other agents are working on other tasks at the same time in other worktrees. You are in a \
 git worktree on branch task/{id}: commit here only; never touch the main checkout, merge, rebase or push — the runner \
 merges your branch into main. PCSX2 is shared: run anything that drives the real game in several steps as one \
-command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Never close PCSX2 (the other agents may still need it); the runner closes \
+command under `tools/pcsx2.sh <cmd>` (it waits its turn); single pine.py tools wait on their own. Each hold is cut off \
+after {hold} min so a hung run can't block the others: keep every run shorter (record less, split it). Never close PCSX2 (the other agents may still need it); the runner closes \
 it once no agent is left. When done, tick \
 {id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop."""
 
@@ -97,9 +99,9 @@ def start(n, task):
     out.write(f'\n=== {datetime.now().isoformat(timespec="seconds")} {tid} session {sid}\n')
     out.close()
     stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/overnight-stop.sh')}]}]
-    cmd = shlex.join(['claude', PROMPT.format(id=tid), '--session-id', sid, '--permission-mode', 'bypassPermissions',
+    cmd = shlex.join(['claude', PROMPT.format(id=tid, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', d, '-P', '-F', '#{pane_pid}', cmd],
+    p = int(sp.run(['tmux', 'new-window', '-d', '-n', f's{n}', '-c', d, '-e', f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', '-P', '-F', '#{pane_pid}', cmd],
                    capture_output=True, text=True, check=True).stdout)
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since

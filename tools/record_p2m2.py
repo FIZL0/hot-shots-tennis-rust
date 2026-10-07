@@ -51,12 +51,11 @@ while n < want:
     last = v
     time.sleep(0.004)
     gm, r = regions(p)
-    a = p.read_regions(r)
-    while True:
-        b = p.read_regions(r)
-        if a == b and p.read32(VSYNC) == v and p.read32(GM_PTR) == gm: break
-        if p.read32(GM_PTR) != gm: sys.exit(f"match object gone at vsync {v} (match over), {n} samples")
-        a = b
+    a = p.settle(r, v)
+    if p.read32(GM_PTR) != gm: sys.exit(f"match object gone at vsync {v} (match over), {n} samples")
+    if a is None:
+        print(f"missed frame {v} (it ticked mid-read)", flush=True)
+        continue
     out.write(struct.pack("<I", v) + a)
     n += 1
     if n % 600 == 0: print(n, flush=True)
