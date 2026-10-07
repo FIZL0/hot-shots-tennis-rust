@@ -535,7 +535,7 @@ fn draw(
     clock: Res<Clock>,
     art: Option<Res<Art>>,
     colours: Option<Res<Colours>>,
-    cam: Query<&Transform, With<Camera3d>>,
+    cam: Query<&Transform, With<crate::Orbit>>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let (Some(art), Some(colours)) = (art, colours) else {

@@ -10,6 +10,12 @@
 //! deuce). A game or set brings up the result board: both teams' plates, each set's games (a losing count at half
 //! alpha), with sets the sets won; the scorer's new count grows to twice its size over 6 ticks while the old one
 //! still shows, then shrinks back over 10 under a fading white copy.
+//!
+//! The umpire's calls (Let, Out, Net, Fault, Double fault) and Change Sides are 3D models (`azuma/inpane/mdl`), each
+//! played by its `.ANI`/`.MOR`/`.MTA` from frame 0 at speed 1, clamped at the end, as the effects are: a call from
+//! the point's verdict while the flow's call show runs (faded out with its alpha), Change Sides through the
+//! change-ends phase (80 ticks: it never reaches its 30-tick hold and fade). The model stands 10 in front of an
+//! overlay camera at the origin (25° horizontal half-angle), turned π about y.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -412,7 +418,131 @@ struct Slot(usize);
 const POOL: usize = 80;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, setup.after(super::setup)).add_systems(Update, draw);
+    app.add_systems(PostStartup, (setup.after(super::setup), setup_calls))
+        .add_systems(Update, (draw, draw_calls))
+        .add_systems(FixedUpdate, tick_calls.after(super::simulate));
+}
+
+/// The call models in the scoreboard's order, and each judge's call's model (1 out, 2 fault, 3 double fault, 4 let,
+/// 5 out after net: Net).
+const CALL_MODELS: [&str; 6] = ["i_let_00", "i_out_00", "i_net_00", "i_fault_00", "i_doublefault_00", "i_coatchange_00"];
+const CALL_MODEL: [usize; 6] = [0, 1, 3, 4, 0, 2];
+const CHANGE_SIDES: usize = 5;
+/// The overlay camera's render layer: it sees only the call models.
+const CALL_LAYER: usize = 7;
+/// The overlay camera's horizontal half-angle (its 50° field of view), and the model's distance in front of it.
+const CALL_FOV_DEG: f32 = 25.0;
+const CALL_DISTANCE: f32 = 10.0;
+
+/// The camera drawing the call models over the match.
+#[derive(Component)]
+struct CallCamera;
+
+#[derive(Resource)]
+struct Calls {
+    models: Vec<(hst_sim::effect::Effect, crate::effects::Shown)>,
+    playing: Option<usize>,
+    alpha: f32,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn setup_calls(
+    mut commands: Commands,
+    args: Res<Args>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+) {
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let layer = bevy::camera::visibility::RenderLayers::layer(CALL_LAYER);
+    // game space (y down) → Bevy, as the court's root
+    let root = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default())).id();
+    let models = CALL_MODELS.map(|name| {
+        let (mut effect, shown) = crate::effects::model(&arc, &format!("azuma/inpane/mdl/{name}"), &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        effect.hold = true;
+        commands.entity(shown.root).insert(Transform::from_xyz(0.0, 0.0, CALL_DISTANCE).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)));
+        (effect, shown)
+    });
+    commands.entity(root).insert_recursive::<Children>(layer.clone());
+    commands.spawn((
+        CallCamera,
+        Camera3d::default(),
+        Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
+        Projection::Perspective(PerspectiveProjection::default()),
+        Transform::default(),
+        layer,
+    ));
+    commands.insert_resource(Calls { models: models.into(), playing: None, alpha: 1.0 });
+}
+
+/// After the match's tick: start the model of a call just made (its animation's length to the flow's settle) or of
+/// the change-ends phase just entered, else play the one on show a frame.
+fn tick_calls(mut g: ResMut<Game>, calls: Option<ResMut<Calls>>) {
+    let Some(mut calls) = calls else { return };
+    let (model, start, alpha) = match (&g.phase, g.post.as_ref().and_then(|p| p.call().map(|c| (c, p.tick == 0)))) {
+        (Phase::ChangeEnds(n), _) => (Some(CHANGE_SIDES), *n == hst_sim::flow::CHANGE_ENDS, 1.0),
+        (_, Some((c, fresh))) => (Some(CALL_MODEL[c.call as usize]), fresh, c.alpha),
+        _ => (None, false, 1.0),
+    };
+    calls.alpha = alpha;
+    // TEMP-CALLSHOT
+    if let Ok(v) = std::env::var("HST_CALL_SHOT") {
+        let (k, f): (usize, f32) = v.split_once(',').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())).unwrap();
+        let p = calls.playing;
+        let e = &mut calls.models[k].0;
+        if p != Some(k) { e.start(); } else if e.times()[2] < f { e.tick(); }
+        calls.playing = Some(k);
+        return;
+    }
+    let Some(k) = model else { return calls.playing = None };
+    let restart = start || calls.playing != Some(k);
+    let effect = &mut calls.models[k].0;
+    if restart {
+        effect.start();
+        if let Some(p) = g.post.as_mut() {
+            p.set_call_anim(effect.clip.length);
+        }
+    } else {
+        effect.tick();
+    }
+    calls.playing = Some(k);
+}
+
+/// Pose, morph and fade the model on show (hide the others); the overlay's projection follows the window as the
+/// match camera's does.
+fn draw_calls(
+    calls: Option<Res<Calls>>,
+    window: Query<&Window>,
+    mut cam: Query<&mut Projection, With<CallCamera>>,
+    mut q: Query<(&mut Visibility, &mut bevy::mesh::morph::MorphWeights)>,
+    mut joints: Query<&mut Transform>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(calls) = calls else { return };
+    if let Ok(mut proj) = cam.single_mut()
+        && let Projection::Perspective(p) = &mut *proj
+    {
+        let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+        p.fov = 2.0 * (CALL_FOV_DEG.to_radians().tan() * super::SHOWN_ASPECT.max(1.0 / aspect)).atan();
+    }
+    for (k, (effect, view)) in calls.models.iter().enumerate() {
+        if calls.playing == Some(k) {
+            crate::effects::pose(effect, view, &mut q, &mut joints, &mut materials);
+            // the scoreboard's fade scales every material's alpha
+            for (h, a) in view.materials.iter().zip(&effect.alphas) {
+                if let Some(mut m) = materials.get_mut(h) {
+                    m.base_color.set_alpha(a * calls.alpha);
+                }
+            }
+        } else if let Ok((mut v, _)) = q.get_mut(view.root) {
+            *v = Visibility::Hidden;
+        }
+    }
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
@@ -444,7 +574,7 @@ fn draw(
     art: Option<Res<Art>>,
     panel_art: Option<Res<panel::Art>>,
     colours: Option<Res<Colours>>,
-    cam: Query<&Transform, With<Camera3d>>,
+    cam: Query<&Transform, With<crate::Orbit>>,
     mut first_near: Local<Option<bool>>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {

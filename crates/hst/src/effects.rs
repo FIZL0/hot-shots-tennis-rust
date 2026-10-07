@@ -16,10 +16,10 @@ use hst_sim::effect::{Bounce, Contact, Effect, Puff, Roll, SPARK_FADE, SPARKS, S
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
 /// The entities drawing one effect model.
-struct Shown {
-    root: Entity,
+pub(crate) struct Shown {
+    pub(crate) root: Entity,
     joints: Vec<Entity>,
-    materials: Vec<Handle<StandardMaterial>>,
+    pub(crate) materials: Vec<Handle<StandardMaterial>>,
 }
 
 #[derive(Resource)]
@@ -72,7 +72,7 @@ pub fn load(
 
 /// Effect model `s` (archive path without extension): its player and its hidden entities under `parent`.
 #[allow(clippy::too_many_arguments)]
-fn model(
+pub(crate) fn model(
     arc: &Archive,
     s: &str,
     commands: &mut Commands,
@@ -90,7 +90,8 @@ fn model(
         &model,
         // the landing markers have no ANI: rest pose
         &get(&format!("{s}.ani")).map_or(Ok(ani::Anim { ticks_per_frame: 1, tracks: vec![] }), |a| ani::parse(&a)).map_err(|e| e.0)?,
-        &mor::parse(&file("mor")?, 1).map_err(|e| e.0)?,
+        // some of the umpire's call models have no MOR: no morphs
+        &get(&format!("{s}.mor")).map_or(Ok(mor::Tracks { ticks_per_frame: 1, tracks: vec![] }), |m| mor::parse(&m, 1)).map_err(|e| e.0)?,
         &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
         &mtl.materials,
     );
@@ -134,7 +135,7 @@ fn model(
 }
 
 /// Show `effect` on `view` this frame (posed, morphed, faded) when live, else hide it.
-fn pose<F: bevy::ecs::query::QueryFilter>(effect: &Effect, view: &Shown, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<StandardMaterial>) {
+pub(crate) fn pose<F: bevy::ecs::query::QueryFilter>(effect: &Effect, view: &Shown, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<StandardMaterial>) {
     let live = effect.live;
     if let Ok((mut v, mut w)) = q.get_mut(view.root) {
         *v = if live { Visibility::Visible } else { Visibility::Hidden };
@@ -260,7 +261,7 @@ impl HitSparks {
 
 /// The sparks as quads facing the camera (game space: the camera's right and screen-down axes), fading over their
 /// last frames.
-pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<Camera3d>>, mut vis: Query<&mut Visibility>, mut meshes: ResMut<Assets<Mesh>>) {
+pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<crate::Orbit>>, mut vis: Query<&mut Visibility>, mut meshes: ResMut<Assets<Mesh>>) {
     let (Ok(cam), Ok(mut v)) = (cam.single(), vis.get_mut(fx.view)) else { return };
     *v = if fx.sparks.live { Visibility::Visible } else { Visibility::Hidden };
     let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
@@ -399,7 +400,7 @@ impl BallFlight {
 /// a disc across the flight at the ball, spinning a quarter turn and fading over its last 15 frames.
 // ponytail: the game's tilt of a disc flying along the court, its texture flip by facing and its halved ribbon
 // length under one of its mode counts are left out
-pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<Camera3d>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), Without<Camera3d>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let Ok((cam, proj)) = cam.single() else { return };
     let fov = if let Projection::Perspective(p) = proj { p.fov } else { 0.8 };
     // world → game space: (x, −y, −z)
@@ -531,9 +532,9 @@ impl BallBounce {
 #[allow(clippy::type_complexity)]
 pub fn draw_bounce(
     fx: Res<BallBounce>,
-    cam: Query<&Transform, With<Camera3d>>,
+    cam: Query<&Transform, With<crate::Orbit>>,
     mut q: Query<(&mut Visibility, &mut MorphWeights)>,
-    mut joints: Query<&mut Transform, Without<Camera3d>>,
+    mut joints: Query<&mut Transform, Without<crate::Orbit>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {

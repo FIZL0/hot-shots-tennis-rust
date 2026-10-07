@@ -508,7 +508,7 @@ struct CloudView(usize, Vec<f32>);
 fn clouds(
     time: Res<Time>,
     mut sky: Option<ResMut<Clouds>>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, With<Orbit>>,
     mut views: Query<(&CloudView, &mut Transform, &Children)>,
     parts: Query<&MeshMaterial3d<gs::GsMaterial>>,
     mut materials: ResMut<Assets<gs::GsMaterial>>,
