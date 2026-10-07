@@ -59,7 +59,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N3b** Voice playback in the app: ADPCM, ADSR, volume/pan (in N3) → `hst-data/src/snd.rs` · new `hst/src/audio.rs` | t: hst-data sound.rs, hst audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3c** (split into N3c1–4) Hit, bounce, serve sounds at their frames (in N3) → `play.rs` strike/bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c1** Positional play: bearing/distance, falloff, stereo split, bank volume (in N3c) → new `hst-sim/src/sound.rs` · `exe.rs` stereo_tables/bank_volumes · `tools/record_sound.py` | t: hst-sim sound.rs | j: 2026-10-07-n3-audio
-- [ ] **N3c2** Racket hit sounds at contact: program 6 keys, volumes, pitch factors (in N3c) → `play.rs` strike · audio.rs | j: 2026-10-07-n3-audio
+- [x] **N3c2** Racket hit sounds at contact: program 6 keys, volumes, pitch factors (in N3c) → `play.rs` strike · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3c3** Swing whoosh at the hand, 4-frame delay case (in N3c) → `play.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3c4** Bounce, net, roll and serve sounds by surface (in N3c) → `play.rs` bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio

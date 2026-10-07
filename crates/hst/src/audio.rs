@@ -6,6 +6,7 @@ use crate::Args;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, snd::{self, Bank, KeyOn, Level, Voice}, xb::Archive};
+use hst_sim::sound;
 use std::sync::{Arc, Mutex};
 
 /// Output samples per 60 Hz frame.
@@ -34,12 +35,16 @@ struct Playing {
     next: usize,
     frame: u32,
     level: Level,
+    /// Play-speed scale word (0x1000 = as recorded).
+    scale: u32,
 }
 
 struct Mix {
     pitch: Vec<u16>,
     pan: Vec<u16>,
     gain: Vec<u16>,
+    stereo: [Vec<i32>; 2],
+    bank_volumes: Vec<u32>,
     // ponytail: every key-on gets its own voice; the driver's 48-voice allocation by priority is not ported
     voices: Vec<(Voice, Arc<SoundBank>, u64, u8)>,
     playing: Vec<Playing>,
@@ -82,7 +87,7 @@ impl Mix {
         level.velocity = e.velocity as u32; // ponytail: raw velocity, the driver's velocity curve is not ported
         level.tone(set, t, &self.gain);
         let word = (t.root() as u32) << 24 | (e.note as u32) << 16 | (t.fine() as u8 as u32) << 8 | 0x40;
-        let pitch = snd::pitch(&self.pitch, word, 0x0100_1000);
+        let pitch = snd::pitch(&self.pitch, word, 0x0100_0000 | p.scale);
         let voice = Voice::key_on(t.sample() as u32 / 2, t.adsr(), pitch, level.volume(&self.pan));
         self.voices.push((voice, p.bank.clone(), p.id, e.note));
     }
@@ -95,12 +100,24 @@ pub struct Sound(Arc<Mutex<Mix>>);
 impl Sound {
     /// Plays `(program, key)` of `bank`. `level` holds the play call's part: sequence volume per side, bank volume
     /// and the play and channel pans (`pan[0..2]`); the tone and velocity parts come from the sequence.
-    pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level) {
+    pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32) {
         let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return };
         let mut m = self.0.lock().unwrap();
         m.ids += 1;
         let id = m.ids;
-        m.playing.push(Playing { id, bank: bank.clone(), events, next: 0, frame: 0, level });
+        m.playing.push(Playing { id, bank: bank.clone(), events, next: 0, frame: 0, level, scale });
+    }
+
+    /// A game sound at `pos` (game space): bearing and falloff from the fixed listener, L/R from the stereo
+    /// tables, the bank volume of the play's slot and its play speed.
+    pub fn play_at(&self, bank: &Arc<SoundBank>, p: sound::Play, pos: [f32; 3]) {
+        let (angle, dist) = sound::place(pos);
+        let level = {
+            let m = self.0.lock().unwrap();
+            let seq = sound::stereo(sound::falloff(p.volume, dist), angle, &m.stereo).map(|x| x as u32);
+            Level { seq, bank: m.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
+        };
+        self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed));
     }
 }
 
@@ -154,15 +171,30 @@ pub fn plugin(app: &mut App) {
 
 fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Stream>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
-    let pitch = exe::pitch_table(&iso.read("MODULES2/SG2IOPM1.IRX").expect("sound driver")).expect("supported disc");
-    let (pan, gain) = exe::sound_tables(&iso.read("SCUS_976.10").expect("main program")).expect("supported disc");
-    let sound = Sound(Arc::new(Mutex::new(Mix { pitch, pan, gain, voices: Vec::new(), playing: Vec::new(), ids: 0 })));
+    let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
     commands.spawn(AudioPlayer(streams.add(Stream(sound.0.clone()))));
     if let Some((xb, hd, program, key)) = &args.sound {
         let bank = Arc::new(SoundBank::load(&mut iso, xb, hd).expect("sound bank on disc"));
-        sound.play(&bank, *program, *key, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() });
+        sound.play(&bank, *program, *key, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000);
     }
+    // the court's sound effects (bank slot 0); court 0 has no bank of its own
+    let n = args.stage.map_or(args.court, |s| s as usize);
+    let court = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd"));
+    commands.insert_resource(CourtBank(court.map(Arc::new)));
     commands.insert_resource(sound);
+}
+
+/// The court's sound-effect bank.
+#[derive(Resource)]
+pub struct CourtBank(pub Option<Arc<SoundBank>>);
+
+fn mix(iso: &mut Iso) -> Mix {
+    let pitch = exe::pitch_table(&iso.read("MODULES2/SG2IOPM1.IRX").expect("sound driver")).expect("supported disc");
+    let elf = iso.read("SCUS_976.10").expect("main program");
+    let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
+    let stereo = exe::stereo_tables(&elf).expect("supported disc");
+    let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), ids: 0 }
 }
 
 #[cfg(test)]
@@ -175,11 +207,9 @@ mod tests {
         let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
             return eprintln!("no ISO, skipped");
         };
-        let pitch = exe::pitch_table(&iso.read("MODULES2/SG2IOPM1.IRX").unwrap()).unwrap();
-        let (pan, gain) = exe::sound_tables(&iso.read("SCUS_976.10").unwrap()).unwrap();
         let bank = Arc::new(SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").unwrap());
-        let sound = Sound(Arc::new(Mutex::new(Mix { pitch, pan, gain, voices: Vec::new(), playing: Vec::new(), ids: 0 })));
-        sound.play(&bank, 0, 0, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() });
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        sound.play(&bank, 0, 0, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000);
         let mut out = Vec::new();
         let mut m = sound.0.lock().unwrap();
         for _ in 0..600 {

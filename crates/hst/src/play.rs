@@ -26,9 +26,11 @@ use hst_sim::pose::{ArmIk, contact_solve};
 use hst_sim::player::{self as loco, Stats};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
+use hst_sim::sound;
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 
+use crate::audio::{CourtBank, Sound};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace, Orbit};
 
@@ -37,6 +39,9 @@ const SINGLES: Rules = Rules { sets: 1, games: 4, no_deuce: false, one_point_gam
 const DOUBLES: Rules = Rules { players: 4, ..SINGLES };
 /// The umpire's calls by verdict code.
 const CALLS: [&str; 7] = ["Point", "Out", "Fault", "Double fault", "Let", "Out", "Illegal hit"];
+/// Ball (and shadow) drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
+/// ponytail: the original draws `ball1.mdl` at scale 1 (ball object matrix in s03–s05); this is the remaster's look.
+const BALL_DRAW_SCALE: f32 = 2.4;
 /// Typical recorded spin per shot kind (rad/frame); the real per-character records are not ported yet.
 const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
@@ -193,6 +198,8 @@ struct Game {
     court: usize,
     message: String,
     rng: u32,
+    /// Sounds due this tick, at a game-space position.
+    sounds: Vec<(sound::Play, V3)>,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
@@ -301,7 +308,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
         .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball).chain());
+        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -499,6 +506,7 @@ fn setup(
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
         rng: 0x2468_ace1,
+        sounds: Vec::new(),
         cam: Camera::new(),
         prev_view: Camera::new().view,
         cam_cut: false,
@@ -535,19 +543,23 @@ fn setup(
         commands.entity(f).insert(Figure(i));
     }
     commands.insert_resource(game);
-    // the game's ball (`ball1.mdl`) and its shadow (`ballshadow.mdl`)
+    // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
+    // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
     let mut part = |name: &str, view| {
-        let e = commands.spawn((view, Transform::default(), Visibility::default())).id();
+        let e = commands.spawn((view, Transform::from_scale(Vec3::splat(BALL_DRAW_SCALE)), Visibility::default())).id();
         for (_, parts) in crate::models(&game_xb, |n| n.ends_with(name), &mut images) {
             for (mesh, material) in parts {
                 commands.entity(e).with_child((Mesh3d(meshes.add(mesh)), MeshMaterial3d(materials.add(material))));
             }
         }
         commands.entity(root).add_child(e);
+        e
     };
-    part("ball1.mdl", BallView(false));
+    let ball = part("ball1.mdl", BallView(false));
     part("ballshadow.mdl", BallView(true));
+    let ink = materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, cull_mode: Some(bevy::render::render_resource::Face::Front), ..default() });
+    commands.entity(ball).with_child((Mesh3d(meshes.add(Sphere::new(0.0325 * 1.22).mesh().ico(4).unwrap())), MeshMaterial3d(ink)));
     let mark = materials.add(StandardMaterial { base_color: Color::srgb(0.9, 0.05, 0.05), unlit: true, ..default() });
     let m = commands
         .spawn((LandingMark, Mesh3d(meshes.add(Cylinder::new(0.14, 0.004))), MeshMaterial3d(mark), Transform::default(), Visibility::Hidden))
@@ -642,7 +654,8 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
 
 /// Launch a stroke (class 1) or serve (class 0) of `kind` by player `who` from the ball's position toward
 /// `target`, along the game's trajectory tables.
-fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3) {
+/// `branch`, `grade` and `offset` are the swing's (branch code, timing grade and offset) for the hit sounds.
+fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, grade, offset): (u8, u8, i32)) {
     let at = g.flight.ball.pos;
     let l = if class == 0 {
         lookup(&g.serve_tables[kind as usize], &Bounds::serve(kind == 3, hst_sim::ball::Params::default().radius), at, target)
@@ -656,6 +669,19 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3) {
     g.shot = Shot { class, kind, curve_frames: l.frames + 1, ..Shot::default() };
     g.shots += 1;
     g.rally.on_hit(g.shots, who as i32, g.score.server, g.score.receiver, g.flight.contacts);
+    // ponytail: framed/dull mis-hits and the power gap are not modelled (P3), so their sounds never play
+    let hit = sound::Hit {
+        branch,
+        grade,
+        offset,
+        kind,
+        hits: g.shots,
+        strong_toss: g.serving.toss == Some(Toss::Strong),
+        solo: g.rules.players == 1,
+        random_bit: rand(&mut g.rng) < 0.5,
+        ..default()
+    };
+    g.sounds.extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
     let spin = if class == 0 { KIND_SPIN[[0, 1, 2, 3][kind as usize]] } else { KIND_SPIN[kind as usize] };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     let hitter_far = g.players[who].end < 0.0;
@@ -758,7 +784,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         g.players[i].balloon = serve::balloon(sw.grade, sw.offset, false).map(|b| (b, 0));
         g.players[i].serve_anim = None;
         g.players[i].stance = pos[0].abs();
-        strike(g, i, 0, sw.kind, target);
+        strike(g, i, 0, sw.kind, target, (0, sw.grade, sw.offset));
         g.serving = Serving::default();
         return;
     }
@@ -1022,7 +1048,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             let (stick, end) = (aim(g), g.players[i].end);
             let kind = hst_sim::shot::stick_kind(branch_code(c.swing.branch), g.players[i].kind, [stick.x, stick.y], end);
             let target = aim_target(g, stick, end);
-            strike(g, i, 1, kind, target);
+            strike(g, i, 1, kind, target, (branch_code(c.swing.branch), c.grade, c.offset));
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
             let rally = g.phase == Phase::Rally && g.players.len() > 1;
             let v = g.flight.ball.vel;
@@ -1594,4 +1620,14 @@ fn score_line(s: &Score, team: usize) -> String {
     let p = s.points[team];
     let pts = if s.tiebreak { p.to_string() } else { ["0", "15", "30", "40", "Ad"].get(p as usize).unwrap_or(&"Ad").to_string() };
     format!("{} | {pts}", s.games[team])
+}
+
+/// Plays the sounds due on the court's bank.
+fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>) {
+    let due = std::mem::take(&mut g.sounds);
+    let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else { return };
+    // ponytail: slot 9 (framed hits) is the character's bank, not loaded yet — N3d
+    for (p, at) in due.into_iter().filter(|(p, _)| p.slot == 0) {
+        sound.play_at(&bank, p, at);
+    }
 }
