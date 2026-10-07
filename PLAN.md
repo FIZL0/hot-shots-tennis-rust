@@ -152,7 +152,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P17c** VU1 lighting + HIGHLIGHT2 term (in P17) → `gs.rs` gs.wgsl · `main.rs` gs_models
 - [ ] **P17d** Clouds: category-14 records (in P17) → `main.rs` load · `layout.rs`
 - [ ] **P17e** Sky time of day + seasons `_sXXXX`/SSN1 (in P17) → `main.rs` load
-- [ ] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
+- [x] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
 - [x] **P17g** Shadows: player/ball blobs, shadow models (in P17) → new
 - [ ] **P17h** Mipmaps + LOD (TEX1) (in P17) → `main.rs` gs_models
 - [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`

@@ -9,6 +9,7 @@ struct Gs {
     shininess: f32,
     highlight: f32,
     shadow: f32,
+    uv_offset: vec2<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -26,7 +27,7 @@ fn alpha_test(in: VertexOutput) {
 #endif
 #ifdef GS_TEXTURED
 #ifdef VERTEX_UVS_A
-    let t = textureSample(gs_texture, gs_sampler, in.uv).a;
+    let t = textureSample(gs_texture, gs_sampler, in.uv + gs.uv_offset).a;
 #ifdef GS_MODULATE
     a = t * a;
 #else

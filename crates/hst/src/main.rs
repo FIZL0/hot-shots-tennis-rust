@@ -11,6 +11,7 @@
 
 mod audio;
 mod character;
+mod court_anim;
 mod effects;
 mod gs;
 mod play;
@@ -93,7 +94,7 @@ fn main() {
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -166,10 +167,14 @@ fn load(
     if let Some(n) = args.stage {
         let dir = format!("COURT/{n:02}");
         let mut library = std::collections::HashMap::new();
+        let mut anims = std::collections::HashMap::new();
         for name in ["CMN.XB", "GRD01.XB", "HOL01.XB"] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
-            for (stem, parts) in gs_models(&data, |n| !skip(n), &mut images) {
-                library.insert(stem, add(parts, &mut meshes, &mut gs_materials));
+            for (stem, parts, anim) in gs_models_anim(&data, |n| !skip(n), &mut images) {
+                let tags: Vec<_> = parts.iter().flat_map(|(_, g, t)| std::iter::repeat_n(*t, g.len())).collect();
+                let parts = add(parts.into_iter().map(|(m, g, _)| (m, g)).collect(), &mut meshes, &mut gs_materials);
+                anims.insert(stem.clone(), (anim, tags));
+                library.insert(stem, parts);
             }
         }
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
@@ -185,6 +190,11 @@ fn load(
                 spawn(&mut commands, parts, Transform::default());
                 for (_, m) in parts.iter().filter(|_| e.dir == "hole") {
                     gs_materials.get_mut(m).unwrap().uniform.shadow = sun.map_or(0.0, |s| s.darken);
+                }
+                // the hole model's own .UVA/.MTA play from the start (water, waterfalls)
+                if let Some((anim, tags)) = anims.remove(&e.stem).filter(|(a, _)| e.dir == "hole" && !a.is_empty()) {
+                    let parts = parts.iter().zip(tags).map(|((_, m), t)| (m.clone(), t)).collect();
+                    commands.spawn(court_anim::Playing { anim, parts });
                 }
             }
         }
@@ -351,8 +361,25 @@ fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>) -> Option<Mesh> {
 /// Like [`models`], drawn as the GS draws them ([`gs`]): one mesh per material and batch PRIM, its texture raw and
 /// wrapped per the MDL's material header.
 fn gs_models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, Vec<gs::GsMaterial>)>)> {
+    gs_models_anim(data, keep, images).into_iter().map(|(stem, parts, _)| (stem, parts.into_iter().map(|(m, g, _)| (m, g)).collect())).collect()
+}
+
+/// [`gs_models`] with each model's `.UVA`/`.MTA` ([`court_anim`]): meshes are further split per UV track, and each
+/// part carries the (material, packet) its animation is read from.
+fn gs_models_anim(
+    data: &[u8],
+    keep: impl Fn(&str) -> bool,
+    images: &mut Assets<Image>,
+) -> Vec<(String, Vec<(Mesh, Vec<gs::GsMaterial>, (usize, usize))>, hst_sim::court_anim::CourtAnim)> {
+    let arc = Archive::parse(data).expect("xb archive");
+    let tracks = |stem: &str, ext: &str, width| {
+        let suffix = format!("{stem}.{ext}");
+        let e = arc.entries.iter().find(|e| e.name.rsplit(['\\', '/']).next().is_some_and(|n| n.eq_ignore_ascii_case(&suffix)))?;
+        hst_data::mor::parse(&arc.read(e).ok()?, width).ok()
+    };
     let mut out = Vec::new();
     for_models(data, keep, |stem, model, mats| {
+        let anim = hst_sim::court_anim::CourtAnim::new(&model, tracks(&stem, "uva", 4).as_ref(), tracks(&stem, "mta", 1).as_ref(), &mats.materials);
         let mut parts = Vec::new();
         for (mi, packets) in model.materials.iter().enumerate() {
             let Some(mat) = mats.materials.get(mi) else { continue };
@@ -369,15 +396,16 @@ fn gs_models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image
                 });
                 images.add(img)
             });
-            let mut prims: Vec<u8> = packets.iter().map(|p| p.prim & 0x50).collect();
-            prims.sort();
-            prims.dedup();
-            for prim in prims {
-                let Some(mesh) = mesh(packets.iter().filter(|p| p.prim & 0x50 == prim)) else { continue };
-                parts.push((mesh, gs::GsMaterial::for_batch(mat, prim, texture.clone())));
+            let key = |pi: usize| (packets[pi].prim & 0x50, anim.uv_track(mi, pi), packets[pi].uv_swap);
+            let mut keys: Vec<_> = (0..packets.len()).map(|pi| (key(pi), pi)).collect();
+            keys.sort();
+            keys.dedup_by_key(|k| k.0);
+            for (k, first) in keys {
+                let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi])) else { continue };
+                parts.push((mesh, gs::GsMaterial::for_batch(mat, k.0, texture.clone()), (mi, first)));
             }
         }
-        out.push((stem, parts));
+        out.push((stem, parts, anim));
     });
     out
 }

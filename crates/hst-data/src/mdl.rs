@@ -53,6 +53,9 @@ pub struct Packet {
     pub palette: Vec<usize>,
     /// The batch's GS PRIM bits (batch header +0x31): 0x10 TME (textured), 0x20 FGE (fogged), 0x40 ABE (blended).
     pub prim: u8,
+    /// Packet header +0x58: the packet's texture coordinates are stored as (v, u); a `.UVA` offset is swapped to
+    /// match before it is added.
+    pub uv_swap: bool,
     /// Per morph target ([`Model::morph_names`]): (position entry, offset) — the entry moves by weight × offset.
     pub morphs: Vec<Vec<(usize, [f32; 3])>>,
 }
@@ -297,6 +300,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 pk.bones = bones;
                 pk.palette = palette.clone();
                 pk.prim = bh[0x31];
+                pk.uv_swap = ph[0x58] != 0;
                 pk.morphs = morphs;
                 packets.push(pk);
             }
