@@ -318,6 +318,8 @@ struct Game {
     /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
     reaches: Vec<Reach>,
     marks: Marks,
+    /// The finish and Set / Match Point banners (`popups`).
+    finish: popups::Finish,
     /// The jingle due (slot 8 key: 0 change ends, 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
     jingle: Option<u8>,
@@ -1021,8 +1023,10 @@ fn setup(
         smash_heights: Vec::new(),
         reaches: Vec::new(),
         marks: Marks::default(),
+        finish: default(),
     };
     reset_positions(&mut game);
+    game.finish.new_point(&game.score, &game.rules);
     game.emitters = emitters(
         &mut iso,
         args.stage.map_or(args.court, |s| s as usize),
@@ -1064,6 +1068,7 @@ fn setup(
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
+        game.finish.power.push(popups::power(&mut iso, c));
         game.smash_heights.push(smash_heights(&mut iso, c));
         game.reaches.push(character_reach(&game.reach, &mut iso, c, game.players[i].hand));
         game.serve_tables
@@ -1450,8 +1455,11 @@ fn strike(
         g.score.receiver,
         g.flight.contacts,
     );
-    // ponytail: framed/dull mis-hits and the power gap are not modelled (P3), so their sounds never play
+    // ponytail: framed/dull mis-hits are not modelled (P3); the counter's swing-start z is taken at the strike
+    let inside_high = kind < 2 && g.players[who].pos[2].abs() < 6.4 && at[1] >= 0.6;
+    let power_gap = g.finish.strike(who, branch, kind, offset, g.players.len(), inside_high);
     let hit = sound::Hit {
+        power_gap,
         branch,
         grade,
         offset,
@@ -2981,6 +2989,9 @@ fn simulate(mut g: ResMut<Game>) {
     // bounce sounds stop once the point is decided (the deciding bounce still plays)
     let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
     let bounce = (n != before && n > 0 && g.phase == Phase::Rally).then_some((n, &material));
+    if n != before && n == 1 && material.court {
+        g.finish.bounce(at, g.flight.ball.vel);
+    }
     let smash = g.smashed.then(|| sound::kmh(g.flight.ball.vel));
     g.sounds
         .extend(g.bounces.frame(bounce, smash).into_iter().map(|p| (p, at)));
@@ -3004,6 +3015,7 @@ fn simulate(mut g: ResMut<Game>) {
         return;
     }
     let verdict = g.rally.judge(None);
+    g.finish.point_over(&g.rally, verdict.call, g.players.len() > 2);
     let why = CALLS[verdict.call as usize];
     let Some(team) = verdict.winner else {
         g.umpire
@@ -3132,6 +3144,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.phase = Phase::Serve;
     g.message.clear();
     reset_positions(g);
+    g.finish.new_point(&g.score, &g.rules);
 }
 
 /// Orbit rig parameters that put the eye at `eye` looking along `forward` (game space).

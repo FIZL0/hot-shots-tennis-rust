@@ -419,8 +419,9 @@ const POOL: usize = 80;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, (setup.after(super::setup), setup_calls))
-        .add_systems(Update, (draw, draw_calls))
-        .add_systems(FixedUpdate, tick_calls.after(super::simulate));
+        .add_systems(PostStartup, setup_banners.after(setup))
+        .add_systems(Update, (draw, draw_calls, draw_banners))
+        .add_systems(FixedUpdate, (tick_calls, tick_banners).after(super::simulate));
 }
 
 /// The call models in the scoreboard's order, and each judge's call's model (1 out, 2 fault, 3 double fault, 4 let,
@@ -802,5 +803,395 @@ mod tests {
                 (Tex::TiebreakBanner, [0, 0, 256, 64], [176, 32, 256, 64], 128),
             ]
         );
+    }
+}
+
+// The finish banners and Set / Match Point.
+//
+// A point won outright with no line call can earn a banner: an untouched serve "Service Ace", an untouched return
+// "Return Ace", a winning smash "Smash Ace", a winning counter "Counter" (the last of these wins), with "On the Line"
+// under it when the deciding shot's first bounce mark touches or crosses a line. It flashes in white over 5 ticks,
+// holds 45, fades over 5 (alpha 128·t/15 both ways, so it starts its fade at 42). Each new point that is a set or
+// match point for a team, after one that wasn't, brings up "Set Point" / "Match Point" for 60 ticks, shrinking to
+// 0.8 over its last 10, then growing to 1.5 as it fades over 10 more.
+
+use hst_sim::judge::{Call, Rally};
+use hst_sim::ps2::{add, div, mul, sub};
+use hst_sim::score::{Rules, Score};
+
+/// What the banners follow through the match (the original's shot record, scoreboard flags and bounce mark).
+#[derive(Default)]
+pub(super) struct Finish {
+    /// Per player: the character's TParam Strk POW and Voley POW.
+    pub power: Vec<[i32; 2]>,
+    /// The shot before: hitter, branch (0 serve, 1 ground, 2 volley, 3 dive, 4 smash) and kind.
+    prev: (usize, u8, i32),
+    /// The last shot's branch and whether it was a counter.
+    last: (u8, bool),
+    /// The first bounce mark of the last shot's flight, its two ends (x, z), recorded while a point is on.
+    mark: [[f32; 2]; 2],
+    marking: bool,
+    /// The finish banner on show: kind (0 service, 1 return, 2 smash ace, 3 counter), On the Line, stage, ticks.
+    banner: Option<(usize, bool, u8, i32)>,
+    /// Set (false) or Match (true) Point on show: stage and ticks; and whether the last new point wasn't one.
+    point: Option<(bool, u8, i32)>,
+    armed: bool,
+}
+
+/// A character's stroke and volley power from its TParam.csv row (the parser skips the empty Special POW cell).
+pub(super) fn power(iso: &mut Iso, c: usize) -> [i32; 2] {
+    let row = super::tparam(iso, c);
+    [13, 14].map(|i| row[i].parse().expect("TParam power"))
+}
+
+impl Finish {
+    /// A player strikes (`branch`, shot `kind`, `offset` frames off the sweet frame). A counter is a topspin or
+    /// flat stroke on the sweet frame answering a topspin or flat ground stroke, volley or dive from a character
+    /// with more power (Strk POW for a ground stroke, only with more than one player; Voley POW for a volley): it
+    /// returns the power gap (the hit's own sound). `inside_high`: a topspin ground stroke from inside the service
+    /// line on a ball at 0.6 or more, which the game plays as a volley and never as a counter.
+    pub fn strike(&mut self, who: usize, branch: u8, kind: i32, offset: i32, players: usize, inside_high: bool) -> Option<i32> {
+        let (prev, prev_branch, prev_kind) = std::mem::replace(&mut self.prev, (who, branch, kind));
+        let flat_or_top = |k: i32| k == 0 || k == 2;
+        let col = match branch {
+            1 if players >= 2 && !inside_high => Some(0),
+            2 => Some(1),
+            _ => None,
+        };
+        let gap = col.filter(|_| {
+            offset.abs() < 2 && flat_or_top(kind) && (1..=3).contains(&prev_branch) && flat_or_top(prev_kind)
+        });
+        let gap = gap.and_then(|c| {
+            let (mine, theirs) = (self.power.get(who)?[c], self.power.get(prev)?[c]);
+            (mine < theirs).then_some(theirs - mine)
+        });
+        self.last = (branch, gap.is_some());
+        gap
+    }
+
+    /// The ball's first bounce off the court in a flight, at `at` moving at `vel` after it: the mark runs from the
+    /// bounce along the ball's way by 0.8 of its level speed.
+    pub fn bounce(&mut self, at: [f32; 3], vel: [f32; 3]) {
+        if !self.marking {
+            return;
+        }
+        let v = [sub(add(at[0], vel[0]), at[0]), sub(add(at[2], vel[2]), at[2])];
+        let q = div(1.0, add(mul(v[0], v[0]), mul(v[1], v[1])).sqrt());
+        let k = mul(add(mul(vel[0], vel[0]), mul(vel[2], vel[2])).sqrt(), 0.8);
+        let a = [at[0], at[2]];
+        self.mark = [a, [0, 1].map(|i| add(add(mul(mul(v[i], q), k), a[i]), 0.0))];
+    }
+
+    /// The point is decided (judge `call`, the rally's snapshot): a point won outright starts its banner.
+    // ponytail: no body hits yet (an untouched ball is any ball); the start sound (slot 9) isn't loaded
+    pub fn point_over(&mut self, rally: &Rally, call: u8, doubles: bool) {
+        self.marking = false;
+        if call != 0 {
+            return;
+        }
+        let Some(kind) = finish_kind(rally.shots, rally.call, self.last) else { return };
+        let on_line = on_the_line(self.mark, rally.shots < 2, doubles);
+        self.banner = Some((kind, on_line, 1, 5));
+    }
+
+    /// A new point is set up: marks record afresh; a set or match point for either team after a point that wasn't
+    /// one starts its banner.
+    // ponytail: the jingle (slot 9) isn't loaded
+    pub fn new_point(&mut self, score: &Score, rules: &Rules) {
+        self.mark = [[0.0; 2]; 2];
+        self.marking = true;
+        match (0..2).find_map(|t| set_point(score, rules, t)) {
+            None | Some(0) => self.armed = true,
+            Some(r) => {
+                if std::mem::take(&mut self.armed) {
+                    self.point = Some((r > 1, 1, 60));
+                }
+            }
+        }
+    }
+
+    /// One tick of both banners.
+    pub fn tick(&mut self) {
+        if let Some((_, _, stage, t)) = &mut self.banner {
+            *t -= 1;
+            if *t < 0 {
+                match *stage {
+                    1 => (*stage, *t) = (2, 45),
+                    2 => (*stage, *t) = (3, 5),
+                    _ => self.banner = None,
+                }
+            }
+        }
+        if let Some((_, stage, t)) = &mut self.point {
+            *t -= 1;
+            if *t < 0 {
+                // ponytail: the game also restarts its flight sound object here (mode 1, 0x1b, 0x3c); not traced
+                if *stage == 1 {
+                    (*stage, *t) = (2, 10);
+                } else {
+                    self.point = None;
+                }
+            }
+        }
+    }
+}
+
+/// The finish banner a point won outright earns: 0 Service Ace (the serve), 1 Return Ace (the return), 2 Smash Ace
+/// (a smash), 3 Counter; none after a net cord landing in. `last`: the last shot's branch and counter flag.
+fn finish_kind(shots: i32, call: Call, last: (u8, bool)) -> Option<usize> {
+    if call == Call::NetIn {
+        return None;
+    }
+    match shots {
+        1 => Some(0),
+        2 => Some(1),
+        3.. if last.1 => Some(3),
+        3.. if last.0 == 4 => Some(2),
+        _ => None,
+    }
+}
+
+/// Whether a bounce mark from `a` to `b` (x, z) touches a line: an end within 0.1 of the nearest line across or
+/// along, or the mark crossing the side line outwards; else it is on the line unless it starts beyond the end line
+/// or ends short of it. A serve measures to the centre service line or the side line, and the service line.
+fn on_the_line([a, b]: [[f32; 2]; 2], serve: bool, doubles: bool) -> bool {
+    let d = |p: [f32; 2]| {
+        let (x, z) = (p[0].abs(), p[1].abs());
+        if serve {
+            let side = sub(x, 4.115);
+            (if x <= side.abs() { x } else { side }, sub(z, 6.4))
+        } else {
+            (sub(x, if doubles { 5.485 } else { 4.115 }), sub(z, 11.885))
+        }
+    };
+    let ((ax, az), (bx, bz)) = (d(a), d(b));
+    if [ax, bx, az, bz].iter().any(|v| v.abs() <= 0.1) {
+        return true;
+    }
+    (ax <= 0.0 && bx >= 0.0) || !(az > 0.0 || bz < 0.0)
+}
+
+/// For team `t` at a game point: 0 just a game point, 1 a set point, 2 a match point; `None` without a game point.
+fn set_point(s: &Score, r: &Rules, t: usize) -> Option<i32> {
+    if !s.game_point(r, t) {
+        return None;
+    }
+    let lead = (s.games[t] - s.games[t ^ 1] > 0) as i32;
+    if !s.tiebreak && s.games[t] < r.games - lead {
+        return Some(0);
+    }
+    // ponytail: the game's match point 3 (only the other team on a controller) differs only in the jingle's pitch
+    Some(if s.sets[t] < r.sets - 1 { 1 } else { 2 })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BannerTex {
+    /// `inpane_finish`: each finish's word in white, 64 rows apart from 24, "On the Line" at 232.
+    White,
+    /// `inpane_finish00`–`02`, `inpane_Counter`: the words from row 24.
+    Finish(usize),
+    /// `inpane_finish03`: "On the Line".
+    OnLine,
+    Match,
+    Set,
+}
+
+const BANNER_ART: [&str; 8] = [
+    "/inpane_finish.tm2",
+    "/inpane_finish00.tm2",
+    "/inpane_finish01.tm2",
+    "/inpane_finish02.tm2",
+    "/inpane_counter.tm2",
+    "/inpane_finish03.tm2",
+    "/inpane_match.tm2",
+    "/inpane_set.tm2",
+];
+
+/// The banners' quads, in the original's draw order (the finish word, On the Line, the white flash; then Set /
+/// Match Point).
+fn banners(f: &Finish) -> Vec<(BannerTex, [f32; 4], [f32; 4], i32)> {
+    let mut out = Vec::new();
+    if let Some((kind, on_line, stage, t)) = f.banner {
+        let (x, y) = (208.0, if on_line { 192.0 } else { 212.0 });
+        let a = if stage == 3 { (t << 7) / 15 } else { 128 };
+        out.push((BannerTex::Finish(kind), [0.0, 24.0, 224.0, 40.0], [x, y, 224.0, 40.0], a));
+        let under = [x + 24.0, y + 40.0, 224.0, 24.0];
+        if on_line {
+            out.push((BannerTex::OnLine, [0.0, 0.0, 224.0, 24.0], under, a));
+        }
+        if stage == 1 {
+            let flash = (t << 7) / 15;
+            out.push((BannerTex::White, [0.0, (kind * 64 + 24) as f32, 224.0, 40.0], [x, y, 224.0, 40.0], flash));
+            if on_line {
+                out.push((BannerTex::White, [0.0, 232.0, 224.0, 24.0], under, flash));
+            }
+        }
+    }
+    if let Some((is_match, stage, t)) = f.point {
+        let (s, a) = if stage == 1 {
+            (if t < 11 { (1.0 - 0.02 * (10 - t) as f64) as f32 } else { 1.0 }, 128)
+        } else {
+            (0.8 + (0.07 * (10 - t) as f64) as f32, (t << 7) / 10)
+        };
+        let (w, h) = (256.0, 48.0);
+        let dst = [192.0 + w / 2.0 - w * s / 2.0, 176.0 + h / 2.0 - h * s / 2.0, w * s, h * s];
+        out.push((if is_match { BannerTex::Match } else { BannerTex::Set }, [0.0, 0.0, w, h], dst, a));
+    }
+    out.retain(|q| q.3 > 0);
+    out
+}
+
+#[derive(Resource)]
+struct BannerArt([Handle<Image>; 8]);
+#[derive(Component)]
+struct BannerSlot(usize);
+
+fn setup_banners(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let art = BANNER_ART.map(|name| {
+        let e = arc
+            .entries
+            .iter()
+            .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
+            .unwrap_or_else(|| panic!("{name} in INPANE"));
+        panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))
+    });
+    commands.insert_resource(BannerArt(art));
+    commands
+        .spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(1)))
+        .with_children(|p| {
+            for i in 0..5 {
+                p.spawn((BannerSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+            }
+        });
+}
+
+fn tick_banners(mut g: ResMut<Game>) {
+    g.finish.tick();
+}
+
+fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&BannerSlot, &mut ImageNode, &mut Node, &mut Visibility)>) {
+    let Some(art) = art else { return };
+    let quads = banners(&g.finish);
+    for (BannerSlot(i), mut img, mut node, mut vis) in &mut q {
+        let Some(&(tex, [u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let k = match tex {
+            BannerTex::White => 0,
+            BannerTex::Finish(k) => 1 + k,
+            BannerTex::OnLine => 5,
+            BannerTex::Match => 6,
+            BannerTex::Set => 7,
+        };
+        img.image = art.0[k].clone();
+        img.rect = Some(Rect::new(u, v, u + w, v + h));
+        img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
+        node.left = Val::Percent(x / 6.4);
+        node.top = Val::Percent(y / 4.48);
+        node.width = Val::Percent(dw / 6.4);
+        node.height = Val::Percent(dh / 4.48);
+        *vis = Visibility::Inherited;
+    }
+}
+
+#[cfg(test)]
+mod banner_tests {
+    use super::*;
+
+    #[test]
+    fn kinds() {
+        assert_eq!(finish_kind(1, Call::In, (0, false)), Some(0));
+        assert_eq!(finish_kind(1, Call::NetIn, (0, false)), None);
+        assert_eq!(finish_kind(2, Call::In, (1, false)), Some(1));
+        assert_eq!(finish_kind(5, Call::In, (4, false)), Some(2));
+        assert_eq!(finish_kind(5, Call::NetIn, (4, false)), None);
+        assert_eq!(finish_kind(4, Call::In, (2, true)), Some(3));
+        assert_eq!(finish_kind(4, Call::In, (1, false)), None);
+    }
+
+    #[test]
+    fn counter() {
+        let mut f = Finish { power: vec![[4, 3], [10, 16]], ..default() };
+        // a flat ground stroke from player 1, answered by player 0's volley on the sweet frame
+        assert_eq!(f.strike(1, 1, 2, 0, 2, false), None);
+        assert_eq!(f.strike(0, 2, 0, 1, 2, false), Some(13));
+        assert_eq!(f.last, (2, true));
+        // the stronger player's answer, a slice, or off the sweet frame are no counters
+        assert_eq!(f.strike(1, 2, 0, 0, 2, false), None);
+        assert_eq!(f.strike(0, 1, 1, 0, 2, false), None);
+        f.prev = (1, 1, 0);
+        assert_eq!(f.strike(0, 1, 0, 2, 2, false), None);
+        f.prev = (1, 1, 0);
+        assert_eq!(f.strike(0, 1, 0, -1, 2, true), None);
+        f.prev = (1, 1, 0);
+        assert_eq!(f.strike(0, 1, 0, -1, 2, false), Some(6));
+        // nothing answers a serve or a smash
+        f.prev = (1, 0, 0);
+        assert_eq!(f.strike(0, 2, 0, 0, 2, false), None);
+    }
+
+    #[test]
+    fn line() {
+        // a rally ball skidding over the singles side line, one well inside, one past the base line
+        assert!(on_the_line([[4.0, 8.0], [4.3, 9.0]], false, false));
+        assert!(!on_the_line([[3.0, 8.0], [3.5, 9.0]], false, false));
+        assert!(!on_the_line([[3.0, 12.0], [3.5, 13.0]], false, false));
+        assert!(on_the_line([[3.0, 11.5], [3.2, 12.5]], false, false));
+        // doubles alley; a serve near the centre service line
+        assert!(!on_the_line([[4.0, 8.0], [4.3, 9.0]], false, true));
+        assert!(on_the_line([[0.05, 5.0], [0.5, 5.5]], true, false));
+    }
+
+    #[test]
+    fn set_points() {
+        let r = Rules { sets: 2, games: 6, no_deuce: false, one_point_games: false, players: 2 };
+        let mut s = Score::new();
+        (s.points, s.games) = ([3, 0], [5, 4]);
+        assert_eq!(set_point(&s, &r, 0), Some(1));
+        assert_eq!(set_point(&s, &r, 1), None);
+        s.games = [5, 5];
+        assert_eq!(set_point(&s, &r, 0), Some(0));
+        (s.games, s.sets) = ([5, 3], [1, 0]);
+        assert_eq!(set_point(&s, &r, 0), Some(2));
+        // shown once, on the first set point after one that wasn't
+        let mut f = Finish::default();
+        f.new_point(&Score::new(), &r);
+        f.new_point(&s, &r);
+        assert_eq!(f.point, Some((true, 1, 60)));
+        f.point = None;
+        f.new_point(&s, &r);
+        assert_eq!(f.point, None);
+    }
+
+    #[test]
+    fn timeline() {
+        let mut f = Finish { banner: Some((0, true, 1, 5)), point: Some((false, 1, 60)), ..default() };
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            f.tick();
+            let q = banners(&f);
+            let word = q.iter().find(|q| q.0 == BannerTex::Finish(0)).map(|q| q.3);
+            let flash = q.iter().find(|q| q.0 == BannerTex::White).map(|q| q.3);
+            let set = q.iter().find(|q| q.0 == BannerTex::Set).map(|q| (q.2[0], q.2[2], q.3));
+            seen.push((word, flash, set));
+        }
+        // flash 34 → 8 over the first ticks, then the 45-tick hold, then the fade from 42
+        assert_eq!(seen[0].0, Some(128));
+        assert_eq!(seen[0].1, Some(34));
+        assert_eq!(seen[3].1, Some(8));
+        assert_eq!(seen[4].1, None);
+        assert_eq!(seen[50].0, Some(128));
+        assert_eq!(seen[51].0, Some(42));
+        assert_eq!(seen[56].0, None);
+        // Set Point: full size until 10 ticks remain, 0.8 at the end of the hold, then growing as it fades
+        assert_eq!(seen[48].2, Some((192.0, 256.0, 128)));
+        assert_eq!(seen[59].2.map(|s| s.2), Some(128));
+        assert_eq!(seen[60].2, Some((217.6, 204.8, 128)));
+        assert_eq!(seen[69].2.map(|s| s.2), Some(12));
+        assert_eq!(seen[70].2, None);
     }
 }
