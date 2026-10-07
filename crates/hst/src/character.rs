@@ -275,6 +275,17 @@ pub fn load_disc(
         let rmodel = mdl::parse(&rm).map_err(|e| e.0)?;
         let rmats = mtl::parse(&rt, find(&format!("{rk}.mti")).as_deref()).map_err(|e| e.0)?;
         let rh = materials_of(&rmats, images, materials);
+        // the gut (TEST mode 25 in an ABE batch): A ≥ 0x70 writes colour and Z, the rest colour only, both blended
+        // (Cs − Cd)·As + Cd; its texels are 0 or 0x80, so the holes between the strings show what is behind
+        // ponytail: drawn without Z for the A ≥ 0x70 half too; nothing in the racket sits behind the strings but the frame
+        for ((m, h), packets) in rmats.materials.iter().zip(&rh).zip(&rmodel.materials) {
+            let mode = i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]);
+            if (20..30).contains(&mode) && packets.iter().any(|p| p.prim & 0x40 != 0) {
+                if let Some(mut mat) = materials.get_mut(h) {
+                    mat.alpha_mode = AlphaMode::Blend;
+                }
+            }
+        }
         for (mi, packets) in rmodel.materials.iter().enumerate() {
             let (mut pos, mut nrm, mut uv, mut col, mut idx) = (vec![], vec![], vec![], vec![], vec![]);
             for pk in packets {
