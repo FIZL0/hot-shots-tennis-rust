@@ -11,6 +11,9 @@
 //!   +0x18, F at the near/far end +0x28/+0x2c, view depths +0x38/+0x3c. VU1 gives each vertex F = the depth (clip
 //!   w) mapped linearly from near to far and clamped between the two values; the GS takes ⌊F⌋ and draws
 //!   (F·C + (255 − F)·FOGCOL) >> 8. With the eye higher than 30 m both ends move 2 %/m (up to 70 %) towards 255.
+//! - TEX1: MMAG linear, MMIN linear-mipmap-nearest, LCM 0, L 0, MXL from the texture header (mtl.rs), K from the
+//!   model's material header (mdl.rs). Q = 1/w (VU1), so a pixel's level is ⌊log2(view depth m) + K + ½⌋ clamped
+//!   to 0..MXL.
 //! - Colour = texture × vertex colour × material colour × light in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma
 //!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl); its specular term,
 //!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
@@ -81,6 +84,8 @@ pub struct GsUniform {
     pub fog: Vec4,
     /// FOGCOL, 1.0 = 0xff.
     pub fog_color: Vec4,
+    /// TEX1 K, the mipmap LOD bias (the model's material header, `mdl::Model::lod_k`).
+    pub lod_k: f32,
 }
 
 /// Fog parameters that leave every pixel as it is.
@@ -156,7 +161,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0 };
         tests
             .into_iter()
             .map(|test| GsMaterial {

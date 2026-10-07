@@ -465,6 +465,12 @@ fn gs_models_anim(
             let texture = mat.texture.map(|t| {
                 let mut img = image(&mats.textures[t]);
                 img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
+                // the mip levels TEX1 MXL lets the GS use; gs.wgsl picks one from the view depth
+                let t = &mats.textures[t];
+                if !t.mips.is_empty() && !t.rgba.is_empty() {
+                    img.texture_descriptor.mip_level_count = 1 + t.mips.len() as u32;
+                    img.data.as_mut().unwrap().extend(t.mips.iter().flatten());
+                }
                 // GS CLAMP: 0 repeat; 1 clamp; 2 region clamp over the whole texture (as the game sets it) = clamp
                 let mode = |w: u8| if w == 0 { ImageAddressMode::Repeat } else { ImageAddressMode::ClampToEdge };
                 img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
@@ -480,7 +486,9 @@ fn gs_models_anim(
             keys.dedup_by_key(|k| k.0);
             for (k, first) in keys {
                 let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi])) else { continue };
-                parts.push((mesh, gs::GsMaterial::for_batch(mat, k.0, texture.clone()), (mi, first)));
+                let mut draws = gs::GsMaterial::for_batch(mat, k.0, texture.clone());
+                draws.iter_mut().for_each(|g| g.uniform.lod_k = model.lod_k.get(mi).copied().unwrap_or(0.0));
+                parts.push((mesh, draws, (mi, first)));
             }
         }
         out.push((stem, parts, anim));

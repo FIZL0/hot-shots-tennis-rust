@@ -5,7 +5,7 @@
 //!      u32 n, n × texture header (0x48)          pixels/palettes for these live in the MTI
 //!      u32 n, n × { texture header, pixels, palette, 0x10 nibble-usage map }   embedded
 //!      materials × { 0x30 header, extra (+0x1c bytes) }    +0: f32 RGBA (128 = 1.0), +0x20: i16 texture index
-//! texture header: +0 i16 palette entries, +2 u16 width, +4 u16 height, +0xc u8 GS PSM,
+//! texture header: +0 i16 palette entries, +2 u16 width, +4 u16 height, +0xc u8 GS PSM, +0xf i8 GS TEX1 MXL,
 //!                 +0x10 7 × { u32 mip size, u16 w, u16 h }
 //! MTI: per MTI texture, its mip levels then palette (u32 RGBA, 0x80 = opaque), each 16-aligned.
 //! ```
@@ -19,6 +19,8 @@ pub struct Texture {
     pub height: u32,
     /// Top mip level, RGBA8 with PS2 alpha expanded.
     pub rgba: Vec<u8>,
+    /// Mip levels 1.. the GS may use (TEX1 MXL, at most the levels stored), each RGBA8 at half the previous size.
+    pub mips: Vec<Vec<u8>>,
 }
 
 pub struct Material {
@@ -70,12 +72,11 @@ impl<'a> Cursor<'a> {
 fn texture(h: &[u8], src: &mut Cursor) -> Result<Texture, Error> {
     let u16_ = |o: usize| u16::from_le_bytes([h[o], h[o + 1]]);
     let (w, ht, psm) = (u16_(2) as u32, u16_(4) as u32, h[0xc]);
-    let mut top = None;
+    let mut levels = Vec::new();
     for i in 0..7 {
         let n = i32::from_le_bytes(h[0x10 + i * 8..0x14 + i * 8].try_into().unwrap());
         if n > 0 {
-            let px = src.take(n as usize)?;
-            top.get_or_insert(px);
+            levels.push(src.take(n as usize)?);
         }
     }
     let entries = i16::from_le_bytes([h[0], h[1]]).max(0) as usize;
@@ -88,19 +89,25 @@ fn texture(h: &[u8], src: &mut Cursor) -> Result<Texture, Error> {
             }
         }
     }
-    let px = top.unwrap_or(&[]);
-    let n = (w * ht) as usize;
-    let get = |i: usize| -> [u8; 4] {
-        let idx = match psm {
-            0x13 => px.get(i).copied().unwrap_or(0) as usize,
-            0x14 => px.get(i / 2).map_or(0, |b| if i & 1 == 0 { b & 0xf } else { b >> 4 }) as usize,
-            0x00 => return px.get(i * 4..i * 4 + 4).map_or([0; 4], rgba32),
-            0x01 => return px.get(i * 3..i * 3 + 3).map_or([0; 4], |c| [c[0], c[1], c[2], 255]),
-            _ => return [255, 0, 255, 255], // unknown format: loud magenta
+    let decode = |px: &[u8], n: usize| -> Vec<u8> {
+        let get = |i: usize| -> [u8; 4] {
+            let idx = match psm {
+                0x13 => px.get(i).copied().unwrap_or(0) as usize,
+                0x14 => px.get(i / 2).map_or(0, |b| if i & 1 == 0 { b & 0xf } else { b >> 4 }) as usize,
+                0x00 => return px.get(i * 4..i * 4 + 4).map_or([0; 4], rgba32),
+                0x01 => return px.get(i * 3..i * 3 + 3).map_or([0; 4], |c| [c[0], c[1], c[2], 255]),
+                _ => return [255, 0, 255, 255], // unknown format: loud magenta
+            };
+            pal.get(idx).copied().unwrap_or([255, 0, 255, 255])
         };
-        pal.get(idx).copied().unwrap_or([255, 0, 255, 255])
+        (0..n).flat_map(get).collect()
     };
-    Ok(Texture { width: w, height: ht, rgba: (0..n).flat_map(get).collect() })
+    let mxl = (h[0xf] as i8).max(0) as usize;
+    let mips = (1..levels.len().min(mxl + 1))
+        .take_while(|&k| w >> k > 0 && ht >> k > 0)
+        .map(|k| decode(levels[k], ((w >> k) * (ht >> k)) as usize))
+        .collect();
+    Ok(Texture { width: w, height: ht, rgba: decode(levels.first().copied().unwrap_or(&[]), (w * ht) as usize), mips })
 }
 
 fn rgba32(c: &[u8]) -> [u8; 4] {
