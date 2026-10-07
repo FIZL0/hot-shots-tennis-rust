@@ -103,7 +103,12 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs
 - [ ] **P14b** Walking spectators (wander/react, animation) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14c** Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
+- [ ] **P14c** (split into P14c1–5) Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
+- [ ] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
+- [ ] **P14c2** Ambient sound emitters (timers, RNG, positions) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc

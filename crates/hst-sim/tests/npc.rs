@@ -181,6 +181,9 @@ fn walkers_animate_like_the_game() {
                 continue;
             }
             let (a, b) = (samples[i - 1], samples[i]);
+            if u(b, 0) != u(a, 0) + 1 {
+                continue; // a frame missed between them
+            }
             let mut rng = Mt::of(&a[mt..]);
             let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
             while rng != end && out.len() < 2000 {
