@@ -147,8 +147,18 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
     contacts (soft follow or not), 1555 serve-walk frames, 108 reactions (62 team) — all match. The app's serve walk
     motions were swapped (fixed). Open: the team-reaction draw uses the app's random numbers (game RNG `19f5c0`
     with P11), reactions' root motion (`355270`/`3658b0`), the state-1 serve flow itself (P0b5 has the timing).
-  - [ ] **N1d — Motion playback.** Motion time/speed (+0x34/+0x38), blending (`0x140360`/`0x1404c0`), contact IK
-    and body step (`0x3561e0`), faces (`.MOR`/`.UVA`); record motion time over PINE to verify.
+  - [ ] **N1d — Motion playback.** Motion time/speed (+0x34/+0x38), contact IK and body step (`0x3561e0`), faces
+    (`.MOR`/`.UVA`); record motion time over PINE to verify. Players: node ANI `0x140360`/`0x1404c0`.
+    - [ ] **N1e — Motion blending (crossfade).** The motion setter `0x350280` calls `0x140130(motion, frames, id,
+      flag)` before switching: `frames` < 2 cuts; otherwise the outgoing motion (id +0x44, data +0x48, time
+      +0x50/+0x54, +0x58) is kept and faded out over `frames` (+0x5c, countdown +0x60). Lengths by caller: 8 for
+      looping motions (stand/run/ready, the `param_4 != 0` path) and for the whiffs 0x27/0x28, the caller's value
+      for 0x1c/0x1d, a cut for everything else; stand↔ready (1↔2) also sets +0x74 = 6. A switch mid-blend keeps
+      whichever pose is more than half in (weight +0x60/+0x5c past 0.5) and rescales the countdown. Port the
+      per-bone mix the ANI player does with the two poses (`0x140360`/`0x1404c0`, how +0x44.. is sampled and
+      weighted: lerp/slerp, root handling) and replace the app's hard switches. Verify blend start, length and the
+      mixed bone transforms per frame against a recording of the motion object (+0x44..+0x74) through
+      stand→run→stroke→ready transitions.
 - [ ] **N2 — The original ball when serving.** The ball sits in the server's hand and follows the serve motion's
   ball track (`sh_pcNN_serve_ad00_ball`, `*_serve_t_dummy`) until the toss leaves the hand bone; drawn with the
   game's ball model (`CMN/GAME.XB` `ball1.mdl`) and shadow instead of the toon sphere. Verify the ball position
