@@ -365,3 +365,27 @@ fn flight_whistle_matches_the_game() {
     assert!(want.len() >= 5 && frames >= 200);
     assert!(want.iter().zip(&starts).all(|(&h, &k)| (h..=h + 1).contains(&k)) && want.len() == starts.len());
 }
+
+/// The dive thud (`sound::dive_thud`): every dive of `hits_s05.bin` (a hit record with branch 3, missed ones too) keys
+/// program 3 key 0 the next frame and again `dive_echo(4)` frames on, nothing else keys it, and the thud's triple
+/// carries full volume.
+#[test]
+fn dive_thuds_match_the_game() {
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let s = samples(&data, 0x330);
+    let bank = Bank::parse(&court.hd).unwrap();
+    let thud = sound::dive_thud(0);
+    let keyed = |x: &Sample| {
+        x.cmds.iter().filter(|c| c[0] == 2 && c[3] != 8).any(|c2| {
+            let Some(c3) = x.cmds.iter().find(|c| c[0] == 3 && c[1] == c2[1]) else { return false };
+            bank.key_ons(thud.program as usize, thud.key as usize).into_iter().flatten().any(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && BASE + t.sample() as u32 == c3[2]))
+        })
+    };
+    let dives: Vec<usize> = (0..s.len()).filter(|&k| (0..4).any(|p| s[k].hit[0xd4 - 0xb8 + p] != 0 && s[k].hit[0xd8 - 0xb8 + 8 * p + 5] == 3)).collect();
+    let want: Vec<usize> = dives.iter().flat_map(|&k| [k + 1, k + 1 + sound::dive_echo(4) as usize]).collect();
+    let heard: Vec<usize> = (0..s.len()).filter(|&k| keyed(&s[k])).collect();
+    eprintln!("{} dives, thuds at {heard:?}", dives.len());
+    assert_eq!(dives.len(), 2);
+    assert_eq!(heard, want);
+    assert_eq!(s[want[0]].play[2], thud.volume);
+}

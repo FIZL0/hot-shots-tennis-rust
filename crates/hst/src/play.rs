@@ -204,8 +204,8 @@ struct Game {
     rng: u32,
     /// Sounds due this tick, at a game-space position.
     sounds: Vec<(sound::Play, V3)>,
-    /// Swing whooshes waiting to play: ticks left and the swinger (played at the player's position).
-    whooshes: Vec<(u32, usize)>,
+    /// Swing whooshes and dive thuds waiting to play: ticks left, the player (played at their position) and the sound.
+    whooshes: Vec<(u32, usize, sound::Play)>,
     /// The ball's bounce sounds, and whether the last shot was a smash in a game of more than one player.
     bounces: sound::Bounces,
     smashed: bool,
@@ -1044,6 +1044,10 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             debug!("player {i} dives {} frames toward the ball ({})", d.frame, if d.contact { "reaching it" } else { "short of it" });
             p.pending = None;
             p.dive = Some(d);
+            // ponytail: clear weather (see Stats), so the thud's key is 0
+            let thud = sound::dive_thud(0);
+            g.whooshes.extend([(0, i, thud), (sound::dive_echo(g.players.len() as u32), i, thud)]);
+            let p = &mut g.players[i];
             let dir = [d.dir[0], 0.0, d.dir[1], 0.0];
             p.body.target = dir;
             p.body.face = loco::Facing { dir, ..loco::Facing::default() };
@@ -1711,7 +1715,7 @@ fn score_line(s: &Score, team: usize) -> String {
 /// A swing starts: its whoosh, if the original plays one (`sound::swing_sound`), now or a few ticks on.
 fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
     if let Some(wait) = sound::swing_sound(branch, kind, g.rally.faults) {
-        g.whooshes.push((wait, i));
+        g.whooshes.push((wait, i, sound::SWING));
     }
 }
 
@@ -1722,8 +1726,8 @@ fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<
     for w in &mut g.whooshes {
         w.0 = w.0.saturating_sub(1);
         if w.0 == 0 {
-            debug!("player {} swing whoosh", w.1);
-            g.sounds.push((sound::SWING, g.players[w.1].pos));
+            debug!("player {} sound {:?}", w.1, w.2);
+            g.sounds.push((w.2, g.players[w.1].pos));
         }
     }
     g.whooshes.retain(|w| w.0 > 0);

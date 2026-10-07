@@ -160,6 +160,19 @@ pub fn swing_sound(branch: u8, kind: i32, faults: i32) -> Option<u32> {
 /// The whoosh `swing_sound` plays.
 pub const SWING: Play = play(0, 4, 0, 0x80);
 
+/// The thud of a dive (court bank program 3 at 0x80, at the diver's model origin), played as the dive starts, whether
+/// it reaches the ball or not, and again `dive_echo` ticks later; key 3 in weather 2 and 3 (court +0x135), else 0.
+/// ponytail: the walking footstep (0x69) only sounds behind a close-up camera (mode 0x56..0x59) the match never
+/// uses, so it is left out.
+pub fn dive_thud(weather: u8) -> Play {
+    play(0, 3, if weather.wrapping_sub(2) < 2 { 3 } else { 0 }, 0x80)
+}
+
+/// Ticks between a dive's two thuds with `players` in the game: the game counts 5 down once per player per frame.
+pub fn dive_echo(players: u32) -> u32 {
+    4 / players
+}
+
 /// The play-speed scale word the driver multiplies the pitch by: the speed clamped to 0..2, in 1/4096ths.
 pub fn speed_word(speed: f32) -> u32 {
     (crate::ps2::mul(speed.clamp(0.0, 2.0), 4096.0) as i32) as u32

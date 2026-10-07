@@ -60,13 +60,13 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **N2a** Serve ball bouncing before the toss (after N2) → `play.rs` hold_ball/serve_turn/motions · `serve.rs` · `motion.rs` | t: serve.rs, motion.rs
 - [x] **N3a** Sound banks, note → tone, SPU pitch (in N3) → `hst-data/src/snd.rs` · `exe.rs` pitch_table | t: hst-data sound.rs | j: 2026-10-07-n3-audio
 - [x] **N3b** Voice playback in the app: ADPCM, ADSR, volume/pan (in N3) → `hst-data/src/snd.rs` · new `hst/src/audio.rs` | t: hst-data sound.rs, hst audio.rs | j: 2026-10-07-n3-audio
-- [ ] **N3c** (split into N3c1–6) Hit, bounce, serve sounds at their frames (in N3) → `play.rs` strike/bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
+- [x] **N3c** (split into N3c1–6) Hit, bounce, serve sounds at their frames (in N3) → `play.rs` strike/bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c1** Positional play: bearing/distance, falloff, stereo split, bank volume (in N3c) → new `hst-sim/src/sound.rs` · `exe.rs` stereo_tables/bank_volumes · `tools/record_sound.py` | t: hst-sim sound.rs | j: 2026-10-07-n3-audio
 - [x] **N3c2** Racket hit sounds at contact: program 6 keys, volumes, pitch factors (in N3c) → `play.rs` strike · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c3** Swing whoosh at the hand, 4-frame delay case (in N3c) → `play.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c4** Bounce sounds by surface, net (in N3c) → `play.rs` bounce/serve_turn · audio.rs | j: 2026-10-07-n3-audio
 - [x] **N3c5** Flight whistle (lob, framed hit) following the ball (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
-- [ ] **N3c6** Footsteps, serve bounce, rolling scrape (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
+- [x] **N3c6** Footsteps, serve bounce, rolling scrape (in N3c) → `sound.rs` · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3d** Player voices, umpire, gallery (in N3) → audio.rs · `play.rs` | j: 2026-10-07-n3-audio
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
