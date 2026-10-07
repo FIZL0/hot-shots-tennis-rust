@@ -56,6 +56,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Live-ball point verdicts (`hst_sim::judge::Rally`) — every decision of a recorded bot match frame-exact, rally
   block equal every frame (faults and net points included).
 - Post-point scoreboard timeline (`hst_sim::flow`): pause, wait, score shows, change ends — every call-free
+- Post-point umpire call show (settle on voice end/countdown, hold, fade; out/double fault chain into the score show), human press ends the phase once the score settles, HUD old score until the roll — all 35 point-over phases of a recorded bot match and 8 human phases tick-exact (P12a).
   point-over phase of a recorded bot match tick-exact.
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 - F0 — uncapped frame rate: render-side blending of positions, facing, motion time, camera and balloon fades; sim unchanged.

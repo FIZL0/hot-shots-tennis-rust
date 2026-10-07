@@ -167,10 +167,8 @@ struct Contact {
 enum Phase {
     Serve,
     Rally,
-    /// A scored point: the scoreboard's turn (`Game::post`).
+    /// The point is over (or a fault or let called): the umpire's call and the scoreboard's turn (`Game::post`).
     Post,
-    /// No point (fault or let): ticks until the serve is taken again.
-    Over(u32),
     ChangeEnds(u32),
 }
 
@@ -203,6 +201,8 @@ struct Game {
     /// Line tolerance from the game program.
     line_margin: f32,
     post: Option<PostPoint>,
+    /// A human pressed a face button while the point is over (`post_press`), for the next simulation tick.
+    post_press: bool,
     board: ScoreboardTiming,
     /// The stage's collision world (`--stage`, else court 10's) and the material table: court, net, posts, walls.
     world: (World, Vec<Material>),
@@ -554,7 +554,7 @@ fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, (World, Ve
     let n = stage.unwrap_or(10);
     let chair = court::umpire_chair(iso, n).unwrap_or([6.5156, -1.7712, -0.0109]);
     let umpire = Umpire::new(chair, game.umpire_side(n as usize), n as u8, game.umpire_words(0, 4, 0), [0.0; 3]);
-    (game.line_margin(), game.scoreboard_timing(), (court::world(iso, n), court::materials(&game)), params, umpire)
+    (game.line_margin(), game.scoreboard_timing(0, 4), (court::world(iso, n), court::materials(&game)), params, umpire)
 }
 
 /// Court `n`'s ambient sound emitters: the trigger creatures that only play sounds, each drawing its first gap.
@@ -622,6 +622,7 @@ fn setup(
         shots: 0,
         line_margin,
         post: None,
+        post_press: false,
         board,
         world,
         court: args.court.min(COURTS.len() - 1),
@@ -1156,7 +1157,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
             Phase::ChangeEnds(_) => 1,
             Phase::Serve => 2,
             Phase::Rally => 3,
-            Phase::Post | Phase::Over(_) => 4,
+            Phase::Post => 4,
         },
         last_hitter: g.last_hitter,
         team: i as i32,
@@ -1492,6 +1493,7 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
             Some(s) => {
                 let pad = &mut pads.slots[s];
                 let (shot, serve_press) = (pad.shot.take(), std::mem::take(&mut pad.serve));
+                post_press(g, shot.is_some() || serve_press);
                 human(g, i, pad, shot, serve_press);
             }
             None => bot(g, i),
@@ -1686,27 +1688,24 @@ fn simulate(mut g: ResMut<Game>) {
         Phase::Serve => {}
         Phase::ChangeEnds(0) => return next_point(&mut g, false),
         Phase::ChangeEnds(n) => return g.phase = Phase::ChangeEnds(n - 1),
-        Phase::Over(0) => {
-            g.score.second_serve = g.rally.faults == 1;
-            g.score.let_ = g.rally.let_;
-            g.score.change_ends();
-            return next_point(&mut g, true);
-        }
-        Phase::Over(n) => g.phase = Phase::Over(n - 1),
         Phase::Post => {
             let g = &mut *g;
             let mut post = g.post.take().expect("post-point state");
             let (reacted, paused, showing) = (post.reacted, post.paused(), post.showing());
-            let step = post.step(&mut g.score, &mut g.rally, &g.board);
-            // ponytail: a called point's longer scoreboard pause (P0b4c) isn't ported; she calls at the usual time
-            if paused && !post.paused() {
-                g.umpire.call_score(&g.score, Some(post.event), g.post_winner);
-            }
-            if post.showing() && !showing {
-                g.umpire.announce(&g.score, post.event, g.post_winner);
-            }
-            if post.reacted && !reacted {
-                react(g, post.event);
+            // her call line has ended (it started the tick the point was decided)
+            let idle = post.tick > 0 && g.umpire_voice == 0;
+            let press = std::mem::take(&mut g.post_press);
+            let step = post.step_with(&mut g.score, &mut g.rally, &g.board, idle, press);
+            if let Some(event) = post.event {
+                if paused && !post.paused() {
+                    g.umpire.call_score(&g.score, Some(event), g.post_winner);
+                }
+                if post.showing() && !showing {
+                    g.umpire.announce(&g.score, event, g.post_winner);
+                }
+                if post.reacted && !reacted {
+                    react(g, event);
+                }
             }
             match step {
                 None => g.post = Some(post),
@@ -1756,10 +1755,12 @@ fn simulate(mut g: ResMut<Game>) {
         g.umpire.point_over(None, 0, g.score.swapped, verdict.call as u8);
         g.message = if verdict.call == 2 { "Fault - second serve".into() } else { format!("{why} - serve again") };
         info!("no point: {why} after {} frames", g.since_hit);
-        g.phase = Phase::Over(90); // ponytail: the umpire call sets this delay (call sprite + voice line, P0b4c)
+        g.post = Some(PostPoint::called(None, verdict.call as u8, &g.board));
+        g.phase = Phase::Post;
         return;
     };
     g.post_winner = team as i32;
+    let before = g.score.clone();
     let event = g.score.point(&g.rules, team as usize);
     g.umpire.point_over(event, team as i32, g.score.swapped, verdict.call as u8);
     g.score.note_tiebreak_start();
@@ -1787,7 +1788,9 @@ fn simulate(mut g: ResMut<Game>) {
         _ => format!("{why} - point to {who}"),
     };
     info!("point: {who} ({why}) after {} frames, {event:?} {:?}", g.since_hit, g.score);
-    g.post = Some(PostPoint::new(event.expect("match in progress")));
+    let mut post = PostPoint::called(Some(event.expect("match in progress")), verdict.call as u8, &g.board);
+    post.before = Some(before);
+    g.post = Some(post);
     g.phase = Phase::Post;
 }
 
@@ -2023,12 +2026,13 @@ fn balloons(
 fn hud(g: Res<Game>, pads: Res<Pads>, mode: Res<CamMode>, mut q: Query<&mut Text, With<ScoreText>>) {
     let who = |i: usize| pads.slot_of(i, g.players.len()).map_or("CPU".to_string(), |s| format!("P{}", s + 1));
     let team = |t: usize| (t..g.players.len()).step_by(2).map(who).collect::<Vec<_>>().join("+");
+    let board = board_score(&g);
     for mut t in &mut q {
         t.0 = format!(
             "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · L/Y lob · stick forward: flat, back + slice: drop",
             team(0),
-            score_line(&g.score, 0),
-            score_line(&g.score, 1),
+            score_line(board, 0),
+            score_line(board, 1),
             team(1),
             g.message,
             pads.connected,
@@ -2154,4 +2158,14 @@ fn play_sounds(
     if g.umpire_voice != 0 && !sound.playing(g.umpire_voice) {
         g.umpire_voice = 0;
     }
+}
+
+/// A human's face-button press while the point is over: it ends the phase once the new score has settled.
+fn post_press(g: &mut Game, pressed: bool) {
+    g.post_press |= pressed && g.phase == Phase::Post;
+}
+
+/// The score the scoreboard shows: the one before the point until the score show brings in the new one.
+fn board_score(g: &Game) -> &Score {
+    g.post.as_ref().filter(|p| !p.shown).and_then(|p| p.before.as_ref()).unwrap_or(&g.score)
 }
