@@ -262,8 +262,110 @@ pub fn acosf(x: f32) -> f32 {
     add(t, t)
 }
 
+fn hi(x: f32) -> f32 {
+    f(x.to_bits() & 0xffff_f000)
+}
+
+/// __ieee754_powf(x, y) for x > 0 and y of moderate size (the game raises speeds to 1.1). It is fdlibm's,
+/// as compiled into the original: its own constant roundings and the old `t_h` seed (`+ 0x40000`, unmasked).
+pub fn powf(x: f32, y: f32) -> f32 {
+    // ponytail: x ≤ 0, |y| ≥ 2^27, |x| near 1 with huge y and over/underflow aren't ported; the game never asks
+    assert!(x > 0.0 && x.is_finite() && y.abs() < 1.0e8, "powf({x}, {y})");
+    if y.to_bits() & 0x7fff_ffff < 0x80_0000 {
+        return 1.0;
+    }
+    if y == 1.0 {
+        return x;
+    }
+    if y == 2.0 {
+        return mul(x, x);
+    }
+    let (bp, dp_h, dp_l) = ([1.0, 1.5], [0.0, f(0x3f15_c000)], [0.0, f(0x35d1_cfdc)]);
+    let ix = x.to_bits();
+    let mut n = (ix >> 23) as i32 - 0x7f;
+    let j = ix & 0x7f_ffff;
+    let mut ix = j | 0x3f80_0000;
+    let k = if j <= 0x1c_c471 {
+        0
+    } else if j < 0x5d_b3d7 {
+        1
+    } else {
+        n += 1;
+        ix -= 0x80_0000;
+        0
+    };
+    let ax = f(ix);
+    // log2(ax) as t1 + t2
+    let u = sub(ax, bp[k]);
+    let v = div(1.0, add(ax, bp[k]));
+    let ss = mul(u, v);
+    let s_h = hi(ss);
+    let t_h = f(((ix >> 1) | 0x2000_0000) + ((k as u32) << 21) + 0x4_0000);
+    let t_l = sub(ax, sub(t_h, bp[k]));
+    let s_l = mul(v, sub(sub(u, mul(s_h, t_h)), mul(s_h, t_l)));
+    let s2 = mul(ss, ss);
+    let mut r = f(0x3e53_f142);
+    for c in [0x3e6c_3254, 0x3e8b_a304, 0x3eaa_aaab, 0x3edb_6db7, 0x3f19_9999] {
+        r = add(mul(s2, r), f(c));
+    }
+    let r = add(mul(mul(s2, s2), r), mul(s_l, add(s_h, ss)));
+    let s2 = mul(s_h, s_h);
+    let t_h = hi(add(add(s2, 3.0), r));
+    let t_l = sub(r, sub(sub(t_h, 3.0), s2));
+    let u = mul(s_h, t_h);
+    let v = add(mul(s_l, t_h), mul(t_l, ss));
+    let p_h = hi(add(u, v));
+    let p_l = sub(v, sub(p_h, u));
+    let z_h = mul(p_h, f(0x3f76_3800));
+    let z_l = add(add(mul(p_h, f(0x369d_c39f)), mul(p_l, f(0x3f76_384e))), dp_l[k]);
+    let t = n as f32;
+    let t1 = hi(add(add(add(z_h, z_l), dp_h[k]), t));
+    let t2 = sub(z_l, sub(sub(sub(t1, t), dp_h[k]), z_h));
+    // y·log2(x) as p_h + p_l, then 2^that
+    let y1 = hi(y);
+    let p_l = add(mul(sub(y, y1), t1), mul(y, t2));
+    let mut p_h = mul(y1, t1);
+    let z = add(p_l, p_h);
+    let jz = z.to_bits() as i32;
+    let i = jz & 0x7fff_ffff;
+    assert!(i < 0x42fc_0000, "powf({x}, {y}) out of range");
+    let mut n = 0;
+    if i > 0x3f00_0000 {
+        let m = jz + (0x80_0000 >> ((i >> 23) - 0x7e));
+        let e = ((m >> 23) & 0xff) - 0x7f;
+        p_h = sub(p_h, f((m & !(0x7f_ffff >> e)) as u32));
+        n = ((m & 0x7f_ffff) | 0x80_0000) >> (23 - e);
+        if jz < 0 {
+            n = -n;
+        }
+    }
+    let t = hi(add(p_l, p_h));
+    let v = add(mul(sub(p_l, sub(t, p_h)), f(0x3f31_7217)), mul(t, f(0x35bf_be8c)));
+    let z = add(mul(t, f(0x3f31_7200)), v);
+    let w = sub(v, sub(z, mul(t, f(0x3f31_7200))));
+    let t = mul(z, z);
+    let mut r = f(0x3331_bb4b);
+    for c in [0xb5dd_ea0e, 0x388a_b354, 0xbb36_0b60, 0x3e2a_aaaa] {
+        r = add(mul(t, r), f(c));
+    }
+    let t1 = sub(z, mul(t, r));
+    let r = sub(div(mul(z, t1), sub(t1, 2.0)), add(w, mul(z, w)));
+    let z = sub(1.0, sub(r, z));
+    let j = z.to_bits() as i32 + (n << 23);
+    assert!(j >> 23 > 0, "powf({x}, {y}) underflows");
+    f(j as u32)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn close_to_host_pow() {
+        for i in 1..=1000 {
+            let x = i as f32 / 100.0;
+            assert!((super::powf(x, 1.1) / x.powf(1.1) - 1.0).abs() < 1e-6, "{x}");
+        }
+    }
+
     #[test]
     fn close_to_host_sin() {
         for i in 0..=1000 {

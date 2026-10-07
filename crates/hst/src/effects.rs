@@ -1,11 +1,12 @@
 //! Hit effects from `AZUMA/C_EFF/EFFCT.XB0`, played by `hst_sim::effect`: the racket impact (one model per shot
-//! kind, the smash its own), started as a shot leaves the racket, at the ball, along its velocity.
+//! kind, the smash its own), started as a shot leaves the racket, at the ball, along its velocity; and the hit
+//! sparks thrown off the ball with it (camera-facing quads, `*tubu00` by shot kind).
 
 use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
-use hst_sim::effect::{Effect, impact_matrix, impact_scale};
+use hst_sim::effect::{Effect, Roll, SPARK_FADE, SPARKS, Sparks, impact_matrix, impact_scale};
 
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
@@ -148,4 +149,93 @@ pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>
             }
         }
     }
+}
+
+#[derive(Resource)]
+pub struct HitSparks {
+    sparks: Sparks,
+    rng: u32,
+    mesh: Handle<Mesh>,
+    view: Entity,
+    /// `*tubu00` for top … drop, then smash.
+    looks: [Handle<StandardMaterial>; 6],
+}
+
+// ponytail: the port's own generator, not the game's MT19937; the rolls' ranges are the game's
+fn rand(state: &mut u32) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    (*state >> 8) as f32 / (1 << 24) as f32
+}
+
+fn roll(rng: &mut u32) -> Roll {
+    Roll::new(rand(rng) * std::f32::consts::PI, [rand(rng), rand(rng), rand(rng)])
+}
+
+pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let mut looks = Vec::new();
+    for k in IMPACTS {
+        let name = format!("yumoto/{k}tubu00.tm2");
+        let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&name)).ok_or(format!("{name} missing"))?;
+        let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
+        let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+        looks.push(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }));
+    }
+    let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default()));
+    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling)).id();
+    commands.entity(parent).add_child(view);
+    let mut rng = 0x5eed_5a4c;
+    let rolls = std::array::from_fn(|_| roll(&mut rng));
+    Ok(HitSparks { sparks: Sparks::new(rolls), rng, mesh, view, looks: looks.try_into().unwrap() })
+}
+
+impl HitSparks {
+    /// Throw a burst for this hit, then play the frame (the game moves a burst the frame it starts).
+    pub fn frame(&mut self, hit: Option<Hit>, commands: &mut Commands) {
+        if let Some(h) = hit {
+            let look = if h.smash { 5 } else { h.kind.clamp(0, 4) as usize };
+            commands.entity(self.view).insert(MeshMaterial3d(self.looks[look].clone()));
+            self.sparks.start(h.kind, h.smash, [h.pos[0], h.pos[1], h.pos[2], 1.0], [h.vel[0], h.vel[1], h.vel[2], 0.0]);
+        }
+        let rng = &mut self.rng;
+        self.sparks.tick(|rolls| {
+            // every fourth roll anew, from one of the first four
+            for r in rolls.iter_mut().skip((rand(rng) * 4.0) as usize).step_by(4) {
+                *r = roll(rng);
+            }
+        });
+    }
+}
+
+/// The sparks as quads facing the camera (game space: the camera's right and screen-down axes), fading over their
+/// last frames.
+pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<Camera3d>>, mut vis: Query<&mut Visibility>, mut meshes: ResMut<Assets<Mesh>>) {
+    use bevy::mesh::{Indices, Mesh};
+    let (Ok(cam), Ok(mut v)) = (cam.single(), vis.get_mut(fx.view)) else { return };
+    *v = if fx.sparks.live { Visibility::Visible } else { Visibility::Hidden };
+    let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
+    // world → game space: (x, −y, −z)
+    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
+    let (right, down) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::NEG_Y));
+    let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+    for s in fx.sparks.sparks.iter().filter(|s| s.life > 0) {
+        let p = Vec3::new(s.pos[0], s.pos[1], s.pos[2]);
+        let (r, d) = (right * s.size, down * s.size);
+        let a = s.life.min(SPARK_FADE) * 128 / SPARK_FADE;
+        let n = pos.len() as u32;
+        pos.extend([p - r - d, p + r - d, p - r + d, p + r + d].map(|v| v.to_array()));
+        uv.extend([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]]);
+        colour.extend([[1.0, 1.0, 1.0, a as f32 / 128.0]; 4]);
+        index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
+    }
+    debug_assert!(pos.len() <= 4 * SPARKS);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+    mesh.insert_indices(Indices::U32(index));
 }

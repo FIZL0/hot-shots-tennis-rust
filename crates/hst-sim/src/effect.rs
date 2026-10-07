@@ -156,3 +156,125 @@ pub fn impact_matrix(vel: [f32; 4], pos: [f32; 3]) -> [[f32; 4]; 4] {
     let (qa, qb) = (len(a), len(b));
     [[mul(a[0], qa), mul(a[1], qa), mul(a[2], qa), mul(qa, 0.0)], [mul(b[0], qb), mul(b[1], qb), mul(b[2], qb), mul(qb, 0.0)], [x, y, z, w], place]
 }
+
+/// Hit sparks: up to [`SPARKS`] billboards thrown off the ball as a shot leaves, each from a pre-rolled
+/// [`Roll`] (the game re-rolls a quarter of them when a burst has died out).
+pub const SPARKS: usize = 25;
+/// The frames left below which a spark fades out (alpha `life/FADE`).
+pub const SPARK_FADE: i32 = 20;
+
+/// One pre-rolled spark: a turn about the shot direction and three uniforms in [0, 1) (spread, speed, life).
+#[derive(Clone, Copy)]
+pub struct Roll {
+    pub turn: M4,
+    pub u: [f32; 3],
+}
+
+impl Roll {
+    /// A turn by `angle` about z (rows x, y) and the three uniforms.
+    pub fn new(angle: f32, u: [f32; 3]) -> Roll {
+        let (s, c) = (crate::libm::sinf(angle), crate::libm::cosf(angle));
+        Roll { turn: [[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], u }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Spark {
+    pub pos: [f32; 4],
+    pub vel: [f32; 4],
+    /// Half the billboard's side.
+    pub size: f32,
+    /// Frames left; 0 = gone.
+    pub life: i32,
+}
+
+/// Per shot kind (0 top … 4 drop): whether the burst scales with the ball's speed, then for a fixed burst its
+/// forward offset, spread, speed range, speed exponent, size range; both: life range.
+struct Burst {
+    by_speed: bool,
+    offset: f32,
+    spread: f32,
+    speed: [f32; 2],
+    exponent: f32,
+    size: [f32; 2],
+}
+
+const BURSTS: [Burst; 5] = {
+    const fn b(by_speed: bool, size_lo: f32) -> Burst {
+        Burst { by_speed, offset: 2.0, spread: 3.5, speed: [if by_speed { 0.1 } else { 0.3 }, if by_speed { 0.5 } else { 0.3 }], exponent: 1.1, size: [size_lo, if by_speed { 0.3 } else { size_lo }] }
+    }
+    [b(true, 0.1), b(false, 0.5), b(true, 0.1), b(false, 0.5), b(false, 0.4)]
+};
+const LIFE: [i32; 2] = [10, 40];
+
+pub struct Sparks {
+    pub sparks: [Spark; SPARKS],
+    pub rolls: [Roll; SPARKS],
+    /// A burst is playing (until its last spark dies).
+    pub live: bool,
+}
+
+impl Sparks {
+    pub fn new(rolls: [Roll; SPARKS]) -> Sparks {
+        Sparks { sparks: [Spark::default(); SPARKS], rolls, live: false }
+    }
+
+    /// Throw a burst for shot kind `kind` (`smash`: the hitter's smash branch) from the ball at `pos` moving
+    /// `vel`: sparks 0..n restart, any older ones past n play on.
+    pub fn start(&mut self, kind: i32, smash: bool, pos: [f32; 4], vel: [f32; 4]) {
+        use ps2::{add, div, madd, mul, sub};
+        self.live = true;
+        let b = &BURSTS[kind.clamp(0, 4) as usize];
+        let [x, y, z, _] = vel;
+        let speed = ps2::sqrt(madd(madd(mul(y, y), x, x), z, z));
+        let (n, offset, spread, lo, hi, size_lo, size_hi, base) = if smash || b.by_speed {
+            let n = madd(add(0.0, 5.0), 40.0, speed);
+            let n = if SPARKS as f32 <= n { SPARKS } else { n as usize };
+            let sp = mul(f32::from_bits(0x3e23_d70a), speed);
+            let lo = add(0.1, sp);
+            (n, add(0.5, speed), mul(6.0, speed), lo, add(0.3, sp), lo, madd(add(0.0, 0.3), 0.5, speed), speed)
+        } else {
+            (SPARKS, b.offset, b.spread, b.speed[0], b.speed[1], b.size[0], b.size[1], f32::from_bits(0x3ea8_f5c3))
+        };
+        let (range, size_range) = (sub(hi, lo), sub(size_hi, size_lo));
+        let mut m = impact_matrix(vel, [pos[0], pos[1], pos[2]]);
+        m[3] = std::array::from_fn(|k| madd(add(0.0, pos[k]), m[2][k], offset));
+        let pace = if b.exponent > 0.0 { crate::libm::powf(base, b.exponent) } else { base };
+        for (s, r) in self.sparks[..n].iter_mut().zip(&self.rolls) {
+            m = std::array::from_fn(|i| crate::vu0::transform(&m, r.turn[i]));
+            let u = r.u[0];
+            let d: [f32; 4] = std::array::from_fn(|k| sub(madd(add(0.0, m[3][k]), mul(m[0][k], u), spread), pos[k]));
+            let q = div(1.0, ps2::sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2])));
+            let v = mul(madd(add(0.0, lo), r.u[1], range), pace);
+            *s = Spark {
+                pos,
+                vel: d.map(|c| mul(mul(c, q), v)),
+                size: div(madd(add(0.0, size_lo), sub(1.0, u), size_range), 2.0),
+                life: madd(add(0.0, LIFE[0] as f32), r.u[2], (LIFE[1] - LIFE[0]) as f32) as i32,
+            };
+        }
+    }
+
+    /// One frame: every spark ages, moves and slows; when none is left the burst ends and `reroll` gets the
+    /// table to roll afresh (the game redoes every fourth roll from a random one of the first four).
+    pub fn tick(&mut self, reroll: impl FnOnce(&mut [Roll; SPARKS])) {
+        use ps2::{add, mul};
+        if !self.live {
+            return;
+        }
+        let mut any = false;
+        for s in self.sparks.iter_mut().filter(|s| s.life > 0) {
+            s.life -= 1;
+            if s.life > 0 {
+                any = true;
+                s.pos = std::array::from_fn(|k| add(s.pos[k], s.vel[k]));
+                s.vel = s.vel.map(|c| mul(c, 0.9));
+                s.size = mul(s.size, 0.95);
+            }
+        }
+        if !any {
+            self.live = false;
+            reroll(&mut self.rolls);
+        }
+    }
+}

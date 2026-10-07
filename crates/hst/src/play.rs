@@ -325,7 +325,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, effects::draw, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, balloons, mark_landing, character::animate, hud).chain())
         .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
 }
 
@@ -565,6 +565,8 @@ fn setup(
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("hit effects");
     commands.insert_resource(impacts);
+    let sparks = effects::load_sparks(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("hit sparks");
+    commands.insert_resource(sparks);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
@@ -1642,10 +1644,12 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
     }
 }
 
-fn start_effects(mut g: ResMut<Game>, mut fx: ResMut<effects::Impacts>, mut transforms: Query<&mut Transform>) {
-    if let Some(h) = g.hit_effect.take() {
+fn start_effects(mut g: ResMut<Game>, mut fx: ResMut<effects::Impacts>, mut sparks: ResMut<effects::HitSparks>, mut transforms: Query<&mut Transform>, mut commands: Commands) {
+    let hit = g.hit_effect.take();
+    if let Some(h) = hit {
         fx.start(h, &mut transforms);
     }
+    sparks.frame(hit, &mut commands);
 }
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,
