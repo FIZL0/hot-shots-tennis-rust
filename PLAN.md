@@ -157,7 +157,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
 
-- [ ] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
+- [x] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
 - [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs

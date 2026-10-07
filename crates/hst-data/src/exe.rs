@@ -182,6 +182,42 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// A trigger creature type's parameter row (the part the creature engine uses).
+    pub fn trigger(&self, ty: u8) -> TriggerRow {
+        let r = self.at(0x41_aec0 + 0x74 * ty as u32, 0x74);
+        let h = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]);
+        let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        TriggerRow {
+            start: r[0],
+            mode: r[1],
+            stage: h(8),
+            exact: r[0xa] != 0,
+            reverse_roll: r[0xc] != 0,
+            reset_wait: (h(0xe), f(0x10)),
+            end_wait: (h(0x14), f(0x18)),
+            retarget: r[0x1c] != 0,
+            speed: f(0x20),
+            steer: f(0x24),
+            every: (h(0x28), f(0x2c)),
+            pause: (h(0x30), f(0x34)),
+            snap: r[0x38] as i8,
+            wake: r[0x3a] != 0,
+            repeat: (h(0x3c), f(0x40)),
+            orient: r[0x45],
+            near: [f(0x48), f(0x4c)],
+            stages: h(0x50),
+            idle: (h(0x54), f(0x58)),
+            sound: i32::from_le_bytes(self.at(0x41_c6e4 + 0x18 * ty as u32, 4).try_into().unwrap()),
+        }
+    }
+
+    /// The deciding-set crowd voices (trigger type 44), in the order the creatures are made (later ones are
+    /// silent): (pan in degrees, ticks between calls).
+    pub fn deciding_voices(&self) -> [(i32, i32); 4] {
+        let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
+        std::array::from_fn(|k| (i(0x42_2240 + 4 * k as u32), i(0x42_2250 + 4 * k as u32)))
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
@@ -258,6 +294,47 @@ pub struct EmitterRow {
     pub sound: i32,
     pub base: i16,
     pub jitter: f32,
+}
+
+/// A trigger creature type's parameters. Pairs are (ticks, jitter): the ticks are scaled by 1 − jitter·random.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TriggerRow {
+    /// Where a reset puts it: 0 home, 1 its start node, 2 a random point, 3 circling a node.
+    pub start: u8,
+    /// Path mode: 0 random point, 1 loop, 2 ping-pong, 3 cycle, 4 spline, 5 one-shot, 6 circle, 7 none.
+    pub mode: u8,
+    pub stage: i16,
+    /// Waypoints are the nodes themselves (no random offset).
+    pub exact: bool,
+    /// A reset draws its direction along the path.
+    pub reverse_roll: bool,
+    /// Pause after a reset.
+    pub reset_wait: (i16, f32),
+    /// Pause at a loop's end.
+    pub end_wait: (i16, f32),
+    /// Retarget every `every.0` ticks of a leg.
+    pub retarget: bool,
+    /// Distance per tick (circling: degrees per tick).
+    pub speed: f32,
+    pub steer: f32,
+    /// Leg length unit, and the pause taken every that many ticks.
+    pub every: (i16, f32),
+    pub pause: (i16, f32),
+    /// Ground snap period (−1 snaps each waypoint, −2 the start).
+    pub snap: i8,
+    /// Restart the idle animation when a pause ends.
+    pub wake: bool,
+    /// Idle-animation repeat gap.
+    pub repeat: (i16, f32),
+    /// Face the direction of travel (2: level).
+    pub orient: u8,
+    /// Animation slows within these distances of the leg's start and end.
+    pub near: [f32; 2],
+    pub stages: i16,
+    /// Gap between idle animations or sounds (the emitters' and deciding-set crowd's).
+    pub idle: (i16, f32),
+    /// Its sound (−1 none).
+    pub sound: i32,
 }
 
 /// Scoreboard timing after a point (frames unless noted).
