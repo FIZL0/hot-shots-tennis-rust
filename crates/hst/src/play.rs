@@ -69,8 +69,6 @@ const CALLS: [&str; 7] = [
 /// Ball (and shadow) drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
 /// ponytail: the original draws `ball1.mdl` at scale 1 (ball object matrix in s03–s05); this is the remaster's look.
 const BALL_DRAW_SCALE: f32 = 2.4;
-/// Typical recorded spin per stroke kind (rad/frame); the real per-character records are not ported yet (serves use them).
-const KIND_SPIN: [f32; 5] = [2.9671, -2.0944, 0.0, 5.8905, 3.7088];
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
@@ -240,6 +238,8 @@ struct Game {
     smash_tables: Vec<Vec<Table>>,
     /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
     rally_tables: Vec<[Vec<Table>; 2]>,
+    /// Per player: the character's stroke and volley shot records (classes 1, 2) by kind, for their spins.
+    rally_records: Vec<[[[f32; 13]; 5]; 2]>,
     serve_data: ServeData,
     /// The serve in progress (server's toss and swing).
     serving: Serving,
@@ -552,6 +552,16 @@ mod every_character_tables {
             rally_tables(&mut iso, c);
         }
     }
+}
+
+/// A stroke's or volley's spin, first-bounce spin and restitution from the hitter's base shot record
+/// (`params::rally_spin`). ponytail: the up1/dw1/dw2 variant records go with the table mode choice (P3).
+fn rally_spin(g: &mut Game, who: usize, class: u8, kind: i32, at: V3, target: V3) -> f32 {
+    let record = &g.rally_records[who][class as usize - 1][kind as usize];
+    let (spin, first, rest) = params::rally_spin(record, class as usize, kind as usize, at, target);
+    g.shot.first_bounce_spin = first;
+    g.shot.first_bounce_restitution = rest;
+    spin
 }
 
 /// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from the hitter's own character tables.
@@ -956,6 +966,7 @@ fn setup(
         serve_tables: Vec::new(),
         smash_tables: Vec::new(),
         rally_tables: Vec::new(),
+        rally_records: Vec::new(),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
         reach,
@@ -1074,6 +1085,9 @@ fn setup(
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
+        game.rally_records.push(std::array::from_fn(|v| {
+            std::array::from_fn(|k| shot_params.record(v + 1, k, params::record_of(c)).try_into().unwrap())
+        }));
         game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
@@ -1490,7 +1504,7 @@ fn strike(
     let spin = match class {
         0 => g.serve_tables[who][weak][kind as usize].1,
         3 => 5f32.to_radians(),
-        _ => KIND_SPIN[kind as usize],
+        _ => rally_spin(g, who, class, kind, at, target),
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     ai_heard_hit(g, who, branch, vel);
