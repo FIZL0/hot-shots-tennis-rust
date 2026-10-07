@@ -57,6 +57,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Stroke contact search + timing grades (SWEET SPOT / QUICK / SLOW) — ground-stroke branch.
 - F0 — uncapped frame rate: render-side blending of positions, facing, motion time, camera and balloon fades; sim unchanged.
 - N1d1 exact ANI motion sampler (squad/Hermite, bone-length scale), bit-exact vs RAM.
+- Motion clock (N1d2): per-frame motion time as the game's motion player — sample at the wrapped/clamped time, then add the speed; soft follow-through held by its 8-frame crossfade — bit-exact on 35026 recorded ticks (anim_s05.bin).
 
 ## Known gaps / caveats
 

@@ -44,7 +44,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Next (user priorities, in order)
 - [x] **F0** Uncapped fps, 60 Hz sim unchanged → `main.rs` (present mode) · `character.rs` animate/tick · `play.rs` draw/camera/balloons/hud | t: hst-sim all untouched
 - [x] **N1d1** Exact ANI sampler (in N1d) → `hst-sim/src/pose.rs` · `character.rs` animate | t: motion.rs clip_sampler_ram | j: 2026-10-06-n1-animations
-- [ ] **N1d2** Motion time/speed per frame (in N1d) → `motion.rs` `pose.rs` · `character.rs` Motion/tick · `play.rs` motions | t: motion.rs | j: 2026-10-06-n1-animations
+- [ ] **P5a** Verify hit types (user 2026-10-07): the original has only ✕ normal, ○ cut, △ lob; we have flat and drive extra. Match the button set and how each is used → `play.rs` read_input/press/strike · `shot.rs` `params.rs` | t: shot_tables.rs
+- [x] **N1d2** Motion time/speed per frame (in N1d) → `motion.rs` `pose.rs` · `character.rs` Motion/tick · `play.rs` motions | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1d3** Contact IK + body step `0x3561e0` (in N1d) → `pose.rs` · `character.rs` animate | t: motion.rs | j: 2026-10-06-n1-animations
 - [ ] **N1d4** Faces .MOR/.UVA (in N1d) → `hst-data` new format · `character.rs` | j: 2026-10-06-n1-animations
 - [ ] **N1e** Motion crossfade `0x140130` (in N1d) → same as N1d + `play.rs` set_motion/motions | t: motion.rs | j: 2026-10-06-n1-animations
@@ -67,7 +68,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
-- [ ] **P5a** Verify hit types (user 2026-10-07): the original has only ✕ normal, ○ cut, △ lob; we have flat and drive extra. Match the button set and how each is used → `play.rs` read_input/press/strike · `shot.rs` `params.rs` | t: shot_tables.rs
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
 - [ ] **P6a** Lob serves don't clear the net (bug, user 2026-10-07) → `serve.rs` · `play.rs` serve_turn/strike · `shot.rs` | t: serve.rs
 

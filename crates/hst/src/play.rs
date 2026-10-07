@@ -114,22 +114,22 @@ struct Root {
     t: f32,
 }
 
-/// A motion set by the game's code (the motion setter): number, speed, looping, start frame.
+/// A motion set by the game's code (the motion setter): number, speed, looping, crossfade hold.
 #[derive(Clone, Copy, Default)]
 struct Cmd {
     id: usize,
     speed: f32,
     looping: bool,
-    from: f32,
+    hold: Option<i32>,
     serial: u32,
 }
 
 /// The game's motion setter: a looping motion already playing keeps going, anything else restarts.
-fn set_motion(p: &mut Player, id: i32, speed: f32, looping: bool, from: f32) {
+fn set_motion(p: &mut Player, id: i32, speed: f32, looping: bool, hold: Option<i32>) {
     if looping && p.cmd.serial > 0 && p.cmd.id == id as usize {
         return;
     }
-    p.cmd = Cmd { id: id as usize, speed, looping, from, serial: p.cmd.serial + 1 };
+    p.cmd = Cmd { id: id as usize, speed, looping, hold, serial: p.cmd.serial + 1 };
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -899,7 +899,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     p.stride += p.vel.length() * 9.0;
     p.facing = yaw(p.body.face.dir);
     let m = p.body.motion;
-    set_motion(p, m, 1.0, true, 0.0);
+    set_motion(p, m, 1.0, true, None);
 }
 
 /// Figure yaw (0 faces −z) of a game-space facing direction.
@@ -922,7 +922,7 @@ fn square_up(p: &mut Player) {
 fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Option<Contact> {
     let mut struck = None;
     if let Some(f) = g.players[i].follow.take() {
-        set_motion(&mut g.players[i], f, 1.0, false, motion::SOFT_FOLLOW_FROM);
+        set_motion(&mut g.players[i], f, 1.0, false, Some(motion::SOFT_FOLLOW_HOLD));
     }
     if let Some(left) = g.players[i].pending {
         if let Some(c) = find_contact(g, i) {
@@ -932,7 +932,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.hit_at = Some(c.swing.ball);
             p.wind = c.frames.max(1);
             let (m, speed, wait) = motion::stroke_start(branch_code(c.swing.branch), c.frames as i32, c.swing.anim as i32);
-            set_motion(p, m, speed, wait.is_some(), 0.0);
+            set_motion(p, m, speed, wait.is_some(), None);
             p.wait_swing = wait;
             p.backhand = !c.swing.forehand;
             p.swing = Some(0);
@@ -976,7 +976,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             // the swing waiting behind the body's turn starts 8 frames before contact
             if c.frames as i32 - 1 == motion::SWING_LEAD {
                 if let Some(anim) = p.wait_swing.take() {
-                    set_motion(p, anim, 1.0, false, 0.0);
+                    set_motion(p, anim, 1.0, false, None);
                 }
             }
         }
@@ -989,7 +989,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
         // the stroke turns into its miss motion at the contact pose
         if f + 1 == WHIFF_POSE {
             if let Some(w) = motion::whiff(anim as i32) {
-                set_motion(p, w, 1.0, false, 0.0);
+                set_motion(p, w, 1.0, false, None);
             }
         }
     }
@@ -1034,7 +1034,7 @@ fn whiff(g: &mut Game, i: usize) {
     let right = d[1] * b.vel[0] - d[0] * b.vel[2] > 0.0;
     let other = if right { p.hand >= 0.0 } else { p.hand < 0.0 };
     p.whiff = Some((base + other as usize, 0));
-    set_motion(p, (base + other as usize) as i32, 1.0, false, 0.0);
+    set_motion(p, (base + other as usize) as i32, 1.0, false, None);
     p.vel = Vec2::ZERO;
     p.facing = base_yaw(p.end);
 }
@@ -1304,7 +1304,7 @@ fn react(g: &mut Game, event: Event) {
         };
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
-        set_motion(p, id, 1.0, false, 0.0);
+        set_motion(p, id, 1.0, false, None);
         let spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         p.root = Some(Root { motion: id as usize, base: spot, acc: spot, t: 0.0 });
     }
@@ -1415,7 +1415,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
                 (Some(_), Some(sw)) => {
                     let (id, speed) = motion::serve_swing(under, sw.frames as i32);
                     // the speed is set once, at the swing's start
-                    let speed = if m.id == id as usize { m.speed } else { speed };
+                    let speed = if m.id == id as usize { m.clock.speed } else { speed };
                     m.play(id as usize, speed, false);
                 }
                 (Some(_), None) if s.whiffed => m.play(motion::whiff(if under { 0x26 } else { 0x25 }).unwrap_or(0x29) as usize, 1.0, false),
@@ -1424,12 +1424,12 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             continue;
         }
         // a finished serve swing plays out before running
-        if (m.id == 0x25 || m.id == 0x26) && m.time < 30.0 {
+        if (m.id == 0x25 || m.id == 0x26) && m.clock.time < 30.0 {
             continue;
         }
         let c = p.cmd;
         if c.serial != m.serial {
-            *m = Motion { id: c.id, time: c.from, speed: c.speed, looping: c.looping, serial: c.serial };
+            m.set(c.id, c.speed, c.looping, c.hold, c.serial);
         }
     }
 }

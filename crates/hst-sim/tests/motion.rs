@@ -285,3 +285,50 @@ fn match_s05_reaction_root() {
     eprintln!("{exact} reacting frames bit-exact ({gu} gu_set), {held} held at the phase's end");
     assert!(exact > 7000 && held < 50);
 }
+
+/// Each player's motion clock through 9000 frames of the slot-5 match (`context/fixtures/anim_s05.bin`,
+/// `tools/record_anim.py`): sampled time (+0x38) and time (+0x3c) bit-exact after every tick, held through the soft
+/// follow-through's crossfade. The motion player's own countdown (+0x60, one step per tick whether held or not)
+/// counts the ticks: the game skips a phase change's frame and runs two the next.
+#[test]
+fn anim_s05_clock() {
+    use hst_sim::motion::Clock;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/anim_s05.bin")) else { return eprintln!("anim_s05.bin absent, skipped") };
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    // (motion, clip, sampled, time, speed, loop, countdown, held, length)
+    let read = |k: usize, p: usize| {
+        let b = &data[k * S + 0x104 + p * 0x484..];
+        let (an, i) = (&b[0x400..], |o: usize| i32::from_le_bytes(b[0x400 + o..0x404 + o].try_into().unwrap()));
+        (i(0x20), i(0x24), f(an, 0x38), f(an, 0x3c), f(an, 0x40), an[0x78] != 0, i(0x60), an[0x6c] != 0, f(b, 0x480))
+    };
+    let (mut ticks, mut sets, mut held) = (0, 0, 0);
+    for k in 1..data.len() / S {
+        for p in 0..4 {
+            let (a, b) = (read(k - 1, p), read(k, p));
+            let n = a.6 - b.6;
+            let mut c = Clock { time: a.3, sampled: a.2, speed: a.4, looping: a.5, hold: a.7.then_some(a.6) };
+            if a.0 == b.0 && a.1 == b.1 && (0..=2).contains(&n) {
+                for _ in 0..n {
+                    c.tick(a.8);
+                }
+                ticks += n;
+                held += a.7 as i32;
+            } else {
+                // set this frame: restarted at 0 (a crossfade's countdown from 7), then up to two ticks
+                let start = Clock::start(b.4, b.5, b.7.then_some(7));
+                let fits = (0..=2).find(|&j| {
+                    c = start;
+                    (0..j).for_each(|_| c.tick(b.8));
+                    (c.sampled, c.time, c.hold.is_some()) == (b.2, b.3, b.7) && (!b.7 || c.hold == Some(b.6))
+                });
+                assert!(fits.is_some(), "set k={k} p={p} {a:?} -> {b:?}");
+                sets += 1;
+                continue;
+            }
+            assert_eq!((c.sampled.to_bits(), c.time.to_bits(), c.hold.is_some()), (b.2.to_bits(), b.3.to_bits(), b.7), "k={k} p={p} {a:?} -> {b:?}");
+        }
+    }
+    eprintln!("{ticks} ticks ({held} held), {sets} sets");
+    assert!(ticks > 30000 && sets > 100 && held > 5);
+}

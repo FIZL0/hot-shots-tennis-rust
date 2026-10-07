@@ -13,6 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mtl, xb::Archive};
 use hst_sim::pose::{Clip, Path, Skeleton};
+use hst_sim::motion::Clock;
 
 /// One joint of the skeleton.
 pub struct Joint {
@@ -55,31 +56,36 @@ pub struct Rig {
     pub joints: Vec<Entity>,
 }
 
-/// The motion a character plays: the game's motion number, time in game frames and its speed.
+/// The motion a character plays: the game's motion number and its clock (`hst_sim::motion::Clock`), with the
+/// sampled time one tick earlier (drawing blends the two).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Motion {
     pub id: usize,
-    pub time: f32,
-    pub speed: f32,
-    pub looping: bool,
+    pub clock: Clock,
+    pub prev: f32,
     /// Bumped by whoever restarts the motion (lets a driver restart the same motion).
     pub serial: u32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { id: 0, time: 0.0, speed: 1.0, looping: true, serial: 0 }
+        Motion { id: 0, clock: Clock::start(1.0, true, None), prev: 0.0, serial: 0 }
     }
 }
 
 impl Motion {
+    /// The game's motion setter: restart motion `id` at its start.
+    pub fn set(&mut self, id: usize, speed: f32, looping: bool, hold: Option<i32>, serial: u32) {
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial };
+    }
+
     /// Switch to motion `id` from its start (keeps going if it already plays).
     pub fn play(&mut self, id: usize, speed: f32, looping: bool) {
         if self.id != id {
-            *self = Motion { id, time: 0.0, speed, looping, serial: self.serial };
+            self.set(id, speed, looping, None, self.serial);
         } else {
-            self.speed = speed;
-            self.looping = looping;
+            self.clock.speed = speed;
+            self.clock.looping = looping;
         }
     }
 }
@@ -300,8 +306,10 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
 pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints: Query<&mut Transform>) {
     for (rig, motion) in &rigs {
         let Some(clip) = rig.data.motions.get(&motion.id) else { continue };
-        // between the last two ticks: `tick` advanced it by `speed`
-        let t = clip.wrap(motion.time - motion.speed * (1.0 - time.overstep_fraction()), motion.looping);
+        // between the last two ticks' sampled times (across a loop's wrap)
+        let (a, b) = (motion.prev, motion.clock.sampled);
+        let b = if b < a && motion.clock.looping { b + clip.length } else { b };
+        let t = clip.wrap(a + (b - a) * time.overstep_fraction(), motion.clock.looping);
         for (j, joint) in rig.data.joints.iter().enumerate() {
             if let Ok(mut tf) = joints.get_mut(rig.joints[j]) {
                 *tf = joint.rest;
@@ -321,10 +329,12 @@ pub fn animate(time: Res<Time<Fixed>>, rigs: Query<(&Rig, &Motion)>, mut joints:
     }
 }
 
-/// Advance every motion by one game frame.
-pub fn tick(mut q: Query<&mut Motion>) {
-    for mut m in &mut q {
-        m.time += m.speed;
+/// Advance every motion by one game frame, as the game's motion player.
+pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
+    for (rig, mut m) in &mut q {
+        let length = rig.data.motions.get(&m.id).map_or(0.0, |c| c.length);
+        m.prev = m.clock.sampled;
+        m.clock.tick(length);
     }
 }
 

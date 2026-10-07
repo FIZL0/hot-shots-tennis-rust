@@ -1,6 +1,47 @@
 //! The motion numbers the game sets outside standing and running (`player`): strokes (wind-up turn, the swing
 //! timed to contact, the soft follow-through, whiffs), the serve, and the reactions after a point.
 
+/// A player's motion clock (its motion player's time). The motion setter restarts it at 0 with the speed; each
+/// frame, after the player's update, the player samples at the time wrapped into the clip (looping) or clamped
+/// (else), keeps that as `sampled`, then adds the speed — so `time` is a frame ahead of the pose. While a
+/// crossfade holds the new motion (`hold`, the soft follow-through) the time stays put and the countdown runs;
+/// the frame it passes zero the speed is added once.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clock {
+    pub time: f32,
+    pub sampled: f32,
+    pub speed: f32,
+    pub looping: bool,
+    pub hold: Option<i32>,
+}
+
+impl Clock {
+    pub fn start(speed: f32, looping: bool, hold: Option<i32>) -> Clock {
+        Clock { time: 0.0, sampled: 0.0, speed, looping, hold }
+    }
+
+    /// One frame of a clip `length` frames long.
+    pub fn tick(&mut self, length: f32) {
+        match self.hold {
+            None => {
+                self.time = crate::pose::wrap(self.time, length, self.looping);
+                self.sampled = self.time;
+                self.time = crate::ps2::add(self.time, self.speed);
+            }
+            Some(n) if n < 1 => {
+                self.hold = None;
+                self.time = crate::ps2::add(self.time, self.speed);
+            }
+            Some(n) => self.hold = Some(n - 1),
+        }
+    }
+
+    /// The motion has played to its end (the game's end-of-motion test, on the sampled time).
+    pub fn done(&self, length: f32) -> bool {
+        length <= self.sampled
+    }
+}
+
 /// A stroke starting with `frames` to contact (+0x3ec4) on contact-search branch `branch` (+0x3ec1: 1 ground,
 /// 2 volley, 3 dive, 4 smash) with swing motion `anim`. Returns the motion to play now, its speed, and the swing
 /// still to come (played at speed 1 from 8 frames before contact) when the body first turns: a ground stroke or
@@ -28,7 +69,7 @@ pub fn whiff(anim: i32) -> Option<i32> {
 }
 
 /// After a ground stroke's contact (branch 1, swings 0x10..0x15) a slow ball (|v|² < 0.2143347) switches the
-/// next frame to the soft follow-through, `f_w` 0x1c or `b_w` 0x1d, from its frame 8. `side` is the contact's
+/// next frame to the soft follow-through, `f_w` 0x1c or `b_w` 0x1d (crossfaded in, `SOFT_FOLLOW_HOLD`). `side` is the contact's
 /// side bits (+0x3f50; bit 1 the left side), mirrored for left-handers.
 pub fn soft_follow(branch: u8, anim: i32, ball_vel: [f32; 3], side: u32, hand: f32) -> Option<i32> {
     let v2 = ball_vel[2] * ball_vel[2] + ball_vel[0] * ball_vel[0] + ball_vel[1] * ball_vel[1];
@@ -39,8 +80,8 @@ pub fn soft_follow(branch: u8, anim: i32, ball_vel: [f32; 3], side: u32, hand: f
     Some(if fore { 0x1c } else { 0x1d })
 }
 
-/// Start frame of the soft follow-through.
-pub const SOFT_FOLLOW_FROM: f32 = 8.0;
+/// The soft follow-through comes in over an 8-frame crossfade: its clock holds at 0 for this countdown.
+pub const SOFT_FOLLOW_HOLD: i32 = 7;
 
 /// Serve: stance 0x20, walking the baseline (`serve_r` 0x22 when the stick points along the player's forward ×
 /// x, `serve_l` 0x21 otherwise, swapped for left-handers), the toss (0x24 underhand, else 0x23) and the swing

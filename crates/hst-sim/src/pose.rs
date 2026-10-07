@@ -245,20 +245,9 @@ impl Clip {
         Clip { ticks_per_frame, length: ps2::div(anim.end_tick() as f32, ticks_per_frame), tracks }
     }
 
-    /// The player's time after setting it to `t` frames: wrapped into [0, length) when looping, else clamped.
+    /// The player's time after setting it to `t` frames (`wrap`).
     pub fn wrap(&self, t: f32, looping: bool) -> f32 {
-        let len = self.length;
-        if !looping || len == 0.0 {
-            return if len < t { len } else if t < 0.0 { 0.0 } else { t };
-        }
-        let mut t = t;
-        while len <= t {
-            t = ps2::sub(t, len);
-        }
-        while t < 0.0 {
-            t = ps2::add(t, len);
-        }
-        t
+        wrap(t, self.length, looping)
     }
 
     /// Track `k` at `t` frames: its rotation quaternion and its scaled position (`None` for an unkeyed list:
@@ -338,4 +327,20 @@ pub fn q_matrix([x, y, z, w]: [f32; 4]) -> M4 {
         [sub(xz, wy), add(yz, wx), sub(1.0, add(xx, yy)), 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]
+}
+
+/// A motion player's time after setting it to `t` frames of a clip `len` frames long: wrapped into [0, len) by
+/// whole lengths when looping, else clamped to [0, len].
+pub fn wrap(t: f32, len: f32, looping: bool) -> f32 {
+    if !looping || len == 0.0 {
+        return if len < t { len } else if t < 0.0 { 0.0 } else { t };
+    }
+    let mut t = t;
+    while len <= t {
+        t = ps2::sub(t, len);
+    }
+    while t < 0.0 {
+        t = ps2::add(t, len);
+    }
+    t
 }
