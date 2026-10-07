@@ -501,3 +501,44 @@ fn reach_stats_from_tparam() {
         }
     }
 }
+
+/// The server's baseline walk before the toss (play state 1): Carol in slot 4's next serve, walked by a vpad
+/// script (far and centre-mark limits, partial stick, dead square, diagonals, d-pad), and the same with her hand
+/// poked to −1 (`research/p7d_record.py`). Position and motion bit-exact every frame.
+#[test]
+fn serve_walk_replay() {
+    use hst_sim::player::serve_walk;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    for (file, hand) in [("p7d_s04.bin", 1.0), ("p7d_s04_lefty.bin", -1.0)] {
+        let Ok(rec) = std::fs::read(format!("{dir}/{file}")) else {
+            eprintln!("{file} absent, skipped");
+            continue;
+        };
+        let frames = frames_live(&rec);
+        let (mut n, mut walked, mut bad) = (0, 0, 0);
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            let pre = |x: Frame| p_u8(x, 0, 0x3fa4) == 1 && p_u8(x, 0, 0x3fa6) <= 1;
+            // a press tosses (sub-state 2): P6
+            if !pre(a) || !pre(fr) || f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 {
+                continue;
+            }
+            let pad = fr.pad(0);
+            let end = if a.player_f32(0, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
+            let x = a.player_f32(0, 0x3d70);
+            let got = serve_walk(x, pad_dir(pad.buttons, pad.lx, pad.ly, fr.gm()[0x55]), end, fr.global(0x423050), fr.global(0x422fa4) > 2, hand);
+            let want = (fr.player_f32(0, 0x3d70), p_i32(fr, 0, 0x3df0));
+            n += 1;
+            walked += (want.0 != x) as i32;
+            if (got.0.to_bits(), got.1) != (want.0.to_bits(), want.1) {
+                bad += 1;
+                if bad <= 10 {
+                    eprintln!("{file} k={k} pad {:04x} {:02x},{:02x} x {x}: {got:?} vs {want:?}", pad.buttons, pad.lx, pad.ly);
+                }
+            }
+        }
+        eprintln!("{file}: {n} frames, {walked} walked, {bad} off");
+        assert!(walked > 300);
+        assert_eq!(bad, 0, "{file}");
+    }
+}

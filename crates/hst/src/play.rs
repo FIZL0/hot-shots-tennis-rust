@@ -1547,24 +1547,19 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             });
             s.t = 0;
             g.players[i].stance = pos[0].abs();
-        } else if stick.x.abs() > stick.y.abs() {
-            // walk the baseline, between the centre mark's side and the sideline
-            let court = if g.score.side == 0 { 1.0 } else { -1.0 };
-            let far = end
-                * court
-                * if g.rules.players > 2 {
-                    serve::WALK_MAX_DOUBLES
-                } else {
-                    serve::WALK_MAX_SINGLES
-                };
-            let x = pos[0] + serve::WALK * stick.x.signum();
-            let p = &mut g.players[i];
-            p.pos[0] = if far > 0.0 {
-                x.clamp(serve::WALK_MIN, far)
+        } else {
+            // walk the baseline: a human by the pad's run direction (its dead square, camera flip), a bot by its stick
+            let walk = if g.humans.get(i) == Some(&true) {
+                pad_run(g, g.players[i].aim)
             } else {
-                x.clamp(far, -serve::WALK_MIN)
+                stick
             };
-            p.stride += serve::WALK * 9.0;
+            let doubles = g.rules.players > 2;
+            let p = &mut g.players[i];
+            let (x, m) = loco::serve_walk(pos[0], [walk.x, walk.y], end, g.score.side, doubles, p.hand);
+            p.stride += (x - pos[0]).abs() * 9.0;
+            p.pos[0] = x;
+            set_motion(p, m, 1.0, true, None);
         }
         s.t += 1;
         g.serving = s;
@@ -3286,11 +3281,8 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             let s = g.serving;
             let under = s.toss == Some(Toss::Under);
             match (s.toss, s.swing) {
-                (None, _) if p.pos != p.prev => m.play(
-                    motion::serve_walk(p.pos[0] - p.prev[0], p.end, p.hand) as usize,
-                    1.0,
-                    true,
-                ),
+                // the baseline walk's motion (`serve_turn`), standing before it
+                (None, _) if (0x20..=0x22).contains(&p.cmd.id) => m.play(p.cmd.id as usize, 1.0, true),
                 (None, _) => m.play(0x20, 1.0, true),
                 (Some(_), Some(sw)) => {
                     let (id, speed) = motion::serve_swing(under, sw.frames as i32);

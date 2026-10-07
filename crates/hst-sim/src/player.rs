@@ -560,6 +560,33 @@ pub fn pad_dir(buttons: u16, lx: u8, ly: u8, phase: u8) -> [f32; 2] {
     if (2..=4).contains(&phase) { [x + 0.0, z + 0.0] } else { [0.0, 0.0] }
 }
 
+/// One frame of the server before the toss (play state 1): `dir` is the run direction (`pad_dir`, or a bot's), and
+/// only an x-dominant one walks the baseline a fixed step that way, clamped between the centre mark's side
+/// (|x| 0.7) and the sideline (singles or doubles), on the half the score's `side` (0 deuce, 1 ad) and the
+/// player's `end` (±1) pick. Returns the new x and the motion: 0x20 standing, else `motion::serve_walk` (also
+/// while held at a limit). ponytail: the mover's collision check is skipped (a baseline server never
+/// reaches the court bounds or the partner).
+pub fn serve_walk(x: f32, dir: [f32; 2], end: f32, side: i32, doubles: bool, hand: f32) -> (f32, i32) {
+    use crate::serve::{WALK, WALK_MAX_DOUBLES, WALK_MAX_SINGLES, WALK_MIN};
+    if dir[0] == 0.0 || !(dir[1].abs() < dir[0].abs()) {
+        return (x, 0x20);
+    }
+    let step = if dir[0] < 0.0 { -1.0 } else { 1.0 };
+    let x = madd(add(0.0, x), WALK, step);
+    let court = if side == 0 { 1.0 } else { -1.0 };
+    let far = mul(mul(if doubles { WALK_MAX_DOUBLES } else { WALK_MAX_SINGLES }, end), court);
+    let x = if 0.0 < far {
+        if x < WALK_MIN { WALK_MIN } else if x <= far { x } else { far }
+    } else if x < far {
+        far
+    } else if x <= -WALK_MIN {
+        x
+    } else {
+        -WALK_MIN
+    };
+    (x, crate::motion::serve_walk(dir[0], end, hand))
+}
+
 /// What a standing or running player sees of the match this frame.
 pub struct Scene {
     pub players: i32,
