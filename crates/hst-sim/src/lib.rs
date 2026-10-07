@@ -23,3 +23,4 @@ pub mod pose;
 pub mod motion;
 pub mod face;
 pub mod cutaway;
+pub mod sound;

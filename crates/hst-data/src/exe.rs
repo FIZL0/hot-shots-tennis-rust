@@ -132,12 +132,38 @@ pub fn pitch_table(irx: &[u8]) -> Result<Vec<u16>, Error> {
 /// disc: `pan` 128 × u16 (high byte left gain, low byte right, 0x7f = full) and `gain` 129 × u16 (32767 · cos of
 /// i · 90° / 128, the centre-panned tones' L/R gains).
 pub fn sound_tables(elf: &[u8]) -> Result<(Vec<u16>, Vec<u16>), Error> {
-    // one loadable segment from file offset 0x100 to vaddr 0x100000
+    let u16s = |addr: usize, n: usize| -> Vec<u16> { boot_at(elf, addr, 2 * n).chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
+    check_boot(elf)?;
+    Ok((u16s(0x1b_b880, 128), u16s(0x1b_b988, 129)))
+}
+
+/// The sound library's positional stereo tables (`hst_sim::sound::stereo`): left and right gains, 720 × i32 each,
+/// 2048 · cos over half-degree steps, −4096 where the gain is zero. From `SCUS_976.10` of the supported disc.
+pub fn stereo_tables(elf: &[u8]) -> Result<[Vec<i32>; 2], Error> {
+    let i32s = |addr: usize| -> Vec<i32> { boot_at(elf, addr, 4 * 720).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect() };
+    check_boot(elf)?;
+    Ok([i32s(0x1b_db78), i32s(0x1b_d038)])
+}
+
+/// The volume the sound library gives each of its 24 bank slots (slot 0 the court's SE bank: 118), by the slot's
+/// category. From `SCUS_976.10` of the supported disc.
+pub fn bank_volumes(elf: &[u8]) -> Result<Vec<u32>, Error> {
+    let u32s = |addr: usize, n: usize| -> Vec<u32> { boot_at(elf, addr, 4 * n).chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() };
+    check_boot(elf)?;
+    let volume = u32s(0x1b_bf00, 5);
+    Ok(u32s(0x1c_e970, 24).into_iter().map(|c| volume[c as usize]).collect())
+}
+
+fn check_boot(elf: &[u8]) -> Result<(), Error> {
     if elf.len() != 864_720 || elf.get(..4) != Some(b"\x7fELF") || elf.get(0x3c..0x40) != Some(&0x10_0000u32.to_le_bytes()) {
         return Err(Error("SCUS_976.10 does not match the supported US 1.00 program".into()));
     }
-    let u16s = |addr: usize, n: usize| -> Vec<u16> { elf[addr - 0x10_0000 + 0x100..][..2 * n].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
-    Ok((u16s(0x1b_b880, 128), u16s(0x1b_b988, 129)))
+    Ok(())
+}
+
+/// `n` bytes of the boot program at `addr`: one loadable segment from file offset 0x100 to vaddr 0x100000.
+fn boot_at(elf: &[u8], addr: usize, n: usize) -> &[u8] {
+    &elf[addr - 0x10_0000 + 0x100..][..n]
 }
 
 /// Scoreboard timing after a point (frames unless noted).
