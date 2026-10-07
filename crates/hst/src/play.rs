@@ -30,7 +30,7 @@ use hst_sim::sound;
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 
-use crate::audio::{CourtBank, Sound, UmpireBank, VoiceBanks, voice_bank};
+use crate::audio::{CourtBank, GalleryBank, Sound, UmpireBank, VoiceBanks, voice_bank};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace, Orbit};
 
@@ -235,6 +235,14 @@ struct Game {
     umpire_gaps: [i32; 14],
     stage: u8,
     tiebreak_call: bool,
+    /// The gallery, the errors in a row it has seen, whether the last point won a game, and its plays due (with
+    /// their bearings).
+    gallery: sound::Gallery,
+    errors: u32,
+    gallery_game: bool,
+    cheers: Vec<(sound::Play, i32)>,
+    /// Which players are on a controller (the gallery favours their side).
+    humans: Vec<bool>,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -536,6 +544,11 @@ fn setup(
         post_winner: 0,
         umpire: default(),
         umpire_gaps,
+        gallery: default(),
+        errors: 0,
+        gallery_game: false,
+        cheers: Vec::new(),
+        humans: Vec::new(),
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
         tiebreak_call: false,
     };
@@ -1271,6 +1284,7 @@ fn whiff(g: &mut Game, i: usize) {
 /// Every player's turn this frame: humans from their controller slot, the rest from the stand-in AI.
 fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
     let g = &mut *g;
+    g.humans = (0..g.players.len()).map(|i| pads.slot_of(i, g.players.len()).is_some()).collect();
     for i in 0..g.players.len() {
         match pads.slot_of(i, g.players.len()) {
             Some(s) => {
@@ -1442,6 +1456,12 @@ fn simulate(mut g: ResMut<Game>) {
     if let Some(p) = g2.umpire.step(&g2.umpire_gaps) {
         g2.sounds.push((p, sound::CENTRE));
     }
+    let rng = &mut g2.rng;
+    let cheers = g2.gallery.step(g2.stage, g2.players.len() as u32, g2.gallery_game, &mut || {
+        rand(rng);
+        *rng
+    });
+    g2.cheers.extend(cheers);
     let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
     g2.cam.step(&Scene { players: &players, ball: g2.flight.ball.pos });
     if std::mem::take(&mut g2.cam_cut) {
@@ -1477,6 +1497,7 @@ fn simulate(mut g: ResMut<Game>) {
                 Some(Next::Serve) => return next_point(g),
                 Some(Next::ChangeEnds) => {
                     g.umpire.hush();
+                    g.gallery.hush();
                     g.sounds.push((sound::CHANGE_ENDS_CALL, sound::CENTRE));
                     return g.phase = Phase::ChangeEnds(CHANGE_ENDS);
                 }
@@ -1526,6 +1547,15 @@ fn simulate(mut g: ResMut<Game>) {
     g.post_winner = team as i32;
     let event = g.score.point(&g.rules, team as usize);
     g.score.note_tiebreak_start();
+    g.gallery_game = matches!(event, Some(Event::Game | Event::Set));
+    let applause = if g.gallery_game { sound::favoured(&g.humans)[team as usize] } else { g.smashed && g.last_hitter & 1 == team as i32 };
+    if let Some(r) = sound::reaction(verdict.call, g.gallery_game, applause, &mut g.errors) {
+        let rng = &mut g.rng;
+        g.gallery.point(r, &mut || {
+            rand(rng);
+            *rng
+        });
+    }
     let who = format!("team {}", team + 1);
     g.message = match event {
         Some(Event::Set) if g.score.match_over => format!("{why} - match to {who}"),
@@ -1572,6 +1602,7 @@ fn react(g: &mut Game, event: Event) {
 /// Leave the point: next server, receiver and side, and set up the serve.
 fn next_point(g: &mut Game) {
     g.umpire.hush();
+    g.gallery.hush();
     if std::mem::take(&mut g.tiebreak_call) {
         g.sounds.push((sound::TIEBREAK_CALL, sound::CENTRE));
     }
@@ -1787,6 +1818,7 @@ fn play_sounds(
     bank: Option<Res<CourtBank>>,
     voices: Option<Res<VoiceBanks>>,
     umpire: Option<Res<UmpireBank>>,
+    gallery: Option<Res<GalleryBank>>,
     mut whistle: Local<(u32, u64)>,
     mut said: Local<u64>,
 ) {
@@ -1800,6 +1832,12 @@ fn play_sounds(
     }
     g.whooshes.retain(|w| w.0 > 0);
     let due = std::mem::take(&mut g.sounds);
+    let cheers = std::mem::take(&mut g.cheers);
+    if let (Some(sound), Some(Some(b))) = (&sound, gallery.map(|b| b.0.clone())) {
+        for (p, angle) in cheers {
+            sound.play_toward(&b, p, angle);
+        }
+    }
     let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else { return };
     // slot 0 the court, 1.. the players' voices, 5 the umpire (who stops their last word for the next);
     // ponytail: slot 9 (framed hits) is a character bank not loaded yet

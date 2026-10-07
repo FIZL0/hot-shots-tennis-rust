@@ -147,6 +147,16 @@ impl Sound {
         let level = self.0.lock().unwrap().level(p, pos);
         self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed))
     }
+
+    /// A sound from the fixed `angle` (whole degrees) at its full volume, as the gallery plays its stands.
+    pub fn play_toward(&self, bank: &Arc<SoundBank>, p: sound::Play, angle: i32) -> u64 {
+        let level = {
+            let m = self.0.lock().unwrap();
+            let seq = sound::stereo(p.volume, angle, &m.stereo).map(|x| x as u32);
+            Level { seq, bank: m.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
+        };
+        self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed))
+    }
 }
 
 #[derive(Asset, TypePath)]
@@ -209,6 +219,13 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     let n = args.stage.map_or(args.court, |s| s as usize);
     let court = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd"));
     commands.insert_resource(CourtBank(court.map(Arc::new)));
+    // the gallery (slot 6): one of four per match, archive A (`galsg`) or B (`galdv`), crowd a or b
+    // ponytail: the clock picks it; the game draws without repeats until all four have played
+    let v = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() >> 10 & 3);
+    let (xb, set) = if v < 2 { ('A', "sg") } else { ('B', "dv") };
+    let crowd = if v & 1 == 0 { 'a' } else { 'b' };
+    let gallery = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}{xb}.XB0"), &format!("data/sound/VOICE/GALLERY/gal{set}{n:02}{crowd}.hd"));
+    commands.insert_resource(GalleryBank(gallery.map(Arc::new)));
     // the umpire's voice (slot 5); ponytail: umpire 4 voice a, as play.rs times it
     commands.insert_resource(UmpireBank(SoundBank::load(&mut iso, "SND/UMP/UV04A.XB0", "data/sound/UMPIRE/gag_vc04a.hd").map(Arc::new)));
     commands.insert_resource(sound);
@@ -228,6 +245,10 @@ pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<So
 /// The umpire's voice bank.
 #[derive(Resource)]
 pub struct UmpireBank(pub Option<Arc<SoundBank>>);
+
+/// The gallery's bank.
+#[derive(Resource)]
+pub struct GalleryBank(pub Option<Arc<SoundBank>>);
 
 /// The court's sound-effect bank.
 #[derive(Resource)]
