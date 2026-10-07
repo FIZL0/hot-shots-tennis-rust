@@ -333,13 +333,45 @@ fn anim_s05_clock() {
     assert!(ticks > 30000 && sets > 100 && held > 5);
 }
 
+/// The arm table of the player struct at `pl` in a RAM image: the costume whose arm nodes have the player's rest
+/// translations, the character's stroke motions 0x10–0x19.
+fn ram_arm_table(iso: &mut hst_data::iso::Iso, ram: &[u8], pl: usize) -> (hst_sim::pose::ArmTable, i32) {
+    use hst_data::{ani, mdl, xb::Archive};
+    use hst_sim::pose::{arm_table, Clip, Skeleton};
+    let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+    let c = u(pl + 0x12bc) as i32;
+    let rest_of = |k: usize| [0, 4, 8].map(|o| u(u(u(u(pl + 0x17f0 + 4 * k) + 0x108) + 0x10) + 0x70 + o) as u32);
+    let want: Vec<[u32; 3]> = [0, 9, 11, 12, 13].map(rest_of).to_vec();
+    let names = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
+    let sk = (0..10)
+        .filter_map(|costume| {
+            let mdata = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")).ok()?;
+            let marc = Archive::parse(&mdata).unwrap();
+            let e = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl"))?;
+            let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
+            Some(Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() })
+        })
+        .find(|sk| names.iter().zip(&want).all(|(n, w)| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits())) == Some(*w)))
+        .unwrap_or_else(|| panic!("no costume of character {c} matches"));
+    let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    let clips: Vec<Clip> = (0x10..0x1a)
+        .map(|m| {
+            let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
+            Clip::new(&sk, &ani::parse(&arc.read(e).unwrap()).unwrap())
+        })
+        .collect();
+    (arm_table(&sk, &clips, c), c)
+}
+
 /// The arm table each player builds at load (stroke motions 0x10–0x19 at frame 8: arm locals, the upper arms'
 /// parent chains, the aimed upper arm, its yaw, the shoulder, reach and radius per stroke, and the three
 /// averages), bit-exact against the player structs of every RAM image.
 #[test]
 fn arm_table_ram() {
-    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
-    use hst_sim::pose::{arm_table, Clip, Skeleton, M4};
+    use hst_data::iso::Iso;
+    use hst_sim::pose::M4;
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
     let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
     let mut players = 0;
@@ -349,31 +381,7 @@ fn arm_table_ram() {
         let gm = u(0x422f80);
         for p in 0..4 {
             let pl = u(gm + 0xa8 + 4 * p);
-            let c = u(pl + 0x12bc) as i32;
-            // the costume whose arm nodes have these rest translations
-            let rest_of = |k: usize| [0, 4, 8].map(|o| u(u(u(u(pl + 0x17f0 + 4 * k) + 0x108) + 0x10) + 0x70 + o) as u32);
-            let want: Vec<[u32; 3]> = [0, 9, 11, 12, 13].map(rest_of).to_vec();
-            let names = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
-            let sk = (0..10)
-                .filter_map(|costume| {
-                    let mdata = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")).ok()?;
-                    let marc = Archive::parse(&mdata).unwrap();
-                    let e = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl"))?;
-                    let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
-                    Some(Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() })
-                })
-                .find(|sk| names.iter().zip(&want).all(|(n, w)| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits())) == Some(*w)))
-                .unwrap_or_else(|| panic!("{s} p{p}: no costume of character {c} matches"));
-            let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
-            let arc = Archive::parse(&data).unwrap();
-            let clips: Vec<Clip> = (0x10..0x1a)
-                .map(|m| {
-                    let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase();
-                    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
-                    Clip::new(&sk, &ani::parse(&arc.read(e).unwrap()).unwrap())
-                })
-                .collect();
-            let t = arm_table(&sk, &clips, c);
+            let (t, c) = ram_arm_table(&mut iso, &ram, pl);
             let ctx = format!("{s} p{p} char {c}");
             let bits = |a: usize, n: usize| (0..n).map(|k| u(a + 4 * k) as u32).collect::<Vec<_>>();
             let mbits = |m: &M4| m.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
@@ -392,4 +400,53 @@ fn arm_table_ram() {
         }
     }
     eprintln!("{players} players' arm tables bit-exact");
+}
+
+/// The contact solve at every stroke of the slot-5 match (`context/fixtures/anim_s05.bin`, player +0x3c00..+0x4000
+/// per frame): on the frame the solve flag +0x3fc8 rises, the body step +0x3fd0 from the contact point +0x3fb0 and
+/// the position +0x3fe0, for the stroke whose solve reproduces it; the frames +0x3fc0/+0x3fc4 from +0x3ec4 (the
+/// second already advanced once that frame). Arm tables from `context/ram/s05.bin` (same match).
+#[test]
+fn contact_solve_anim() {
+    use hst_data::iso::Iso;
+    use hst_sim::pose::{contact_solve, ik_frames};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let (Ok(ram), Ok(anim)) = (std::fs::read(format!("{root}context/ram/s05.bin")), std::fs::read(format!("{root}context/fixtures/anim_s05.bin"))) else {
+        return eprintln!("s05 captures absent, skipped");
+    };
+    let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+    let gm = u(0x422f80);
+    let pls: Vec<usize> = (0..4).map(|p| u(gm + 0xa8 + 4 * p)).collect();
+    let tables: Vec<_> = pls.iter().map(|&pl| ram_arm_table(&mut iso, &ram, pl).0).collect();
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    let blk = |k: usize, p: usize| &anim[k * S + 0x104 + p * 0x484..][..0x400];
+    let v4 = |b: &[u8], o: usize| [0, 4, 8, 12].map(|j| f(b, o - 0x3c00 + j));
+    let i32_at = |b: &[u8], o: usize| f(b, o - 0x3c00).to_bits() as i32;
+    let (mut tried, mut other) = (0, 0);
+    for k in 1..anim.len() / S - 20 {
+        for p in 0..4 {
+            let (b, prev) = (blk(k, p), blk(k - 1, p));
+            if !(b[0x3c8] == 1 && prev[0x3c8] == 0) {
+                continue;
+            }
+            let n = i32_at(b, 0x3ec4);
+            let (f0, f1) = ik_frames(n);
+            assert_eq!((f0, f1 + 1), (i32_at(b, 0x3fc0), i32_at(b, 0x3fc4)), "frame {k} p{p} frames of {n}");
+            // the stroke the search chose: the first stroke-range motion the player starts within 20 frames
+            let m = (k..k + 20).map(|j| i32_at(&anim[j * S + 0x104 + p * 0x484..][..0x484], 0x3c00 + 0x420)).find(|&m| m >= 0x10).unwrap();
+            if !(0x10..0x1a).contains(&m) {
+                other += 1; // volleys 0x1a/0x1b take their own solve; higher motions index past the table
+                continue;
+            }
+            tried += 1;
+            let want = v4(b, 0x3fd0).map(f32::to_bits);
+            // the side scale (+0x12b0, ±1) flips at the change of ends: +1 on the near (−z) side
+            let scale = [if v4(b, 0x3fe0)[2] < 0.0 { 1.0 } else { -1.0 }, 1.0];
+            let r = contact_solve(&tables[p], m as usize - 0x10, v4(b, 0x3fb0), v4(b, 0x3fe0), scale);
+            assert_eq!(r.step.map(f32::to_bits), want, "frame {k} p{p} motion {m:#x}: {:?}", r.step);
+        }
+    }
+    eprintln!("{tried} contact solves bit-exact ({other} outside strokes 0x10-0x19)");
+    assert!(tried > 30);
 }

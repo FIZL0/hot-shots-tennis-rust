@@ -500,3 +500,136 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
     let hand_x = if character == 5 { add(hand_x, 0.1) } else { hand_x };
     ArmTable { poses, reach, side, hand_x }
 }
+
+/// Rotation about `axis` from its cosine and the sine's sign (sine = sign·√(1 − c²)).
+pub fn axis_cos(c: f32, sign: f32, axis: [f32; 3]) -> M4 {
+    use ps2::{add, msub, mul, sqrt};
+    axis_rotation(c, mul(sign, sqrt(msub(add(0.0, 1.0), c, c))), axis)
+}
+
+/// The racket point in the racket's frame.
+const TIP: [f32; 4] = [0.0, 0.7, 0.0, 1.0];
+
+/// What the contact solve leaves for the swing: the body's step (x sideways, z forward; player units) and the
+/// turn of right hand, right forearm, right upper arm and left upper arm from the stroke's frame-8 pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArmSolve {
+    pub step: [f32; 4],
+    pub quats: [[f32; 4]; 4],
+}
+
+/// Unit (x, y) of `a − b`.
+fn unit_xy(a: [f32; 4], b: [f32; 4]) -> [f32; 2] {
+    use ps2::{div, madd, mul, sqrt, sub};
+    let (x, y) = (sub(a[0], b[0]), sub(a[1], b[1]));
+    let inv = div(1.0, sqrt(madd(mul(y, y), x, x)));
+    [mul(x, inv), mul(y, inv)]
+}
+
+/// `m` with row 3 of `keep`.
+fn keep_row3(m: M4, keep: &M4) -> M4 {
+    [m[0], m[1], m[2], keep[3]]
+}
+
+/// Reach the contact point with stroke `i`'s arm: the shoulder turns about y to face it, the body steps forward
+/// or back what the arm can't reach, the forearm and upper arm bend in turn about z (up to 50 passes, CCD) to
+/// bring the racket point onto it, then the hand, with the body stepping sideways half the remaining x once.
+/// `contact` and `pos` are world points, `scale` the player's two size factors.
+pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> ArmSolve {
+    use crate::vu0::transform;
+    use ps2::{add, div, madd, msub, mul, sqrt, sub};
+    let a = &t.poses[i];
+    let sign = if i % 2 == 1 { -1.0 } else { 1.0 };
+    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
+    let s01 = mul(scale[0], scale[1]);
+    let sh = a.shoulder;
+    let mut v = [sub(mul(d[0], s01), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
+    let mut step = [0.0f32; 4];
+    if v[2] < 0.0 {
+        step[2] = v[2];
+    } else if a.reach < v[2] {
+        step[2] = sub(v[2], a.reach);
+    }
+    v[2] = sub(v[2], step[2]);
+    // face the point: turn about y taking +z (−z for odd strokes) onto it
+    let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[0], v[0])));
+    let (nx, nz) = (mul(v[0], inv), mul(v[2], inv));
+    let dot = madd(madd(mul(0.0, 0.0), nx, sign), nz, 0.0);
+    let turn = if msub(mul(nz, sign), nx, 0.0) < 0.0 { -1.0 } else { 1.0 };
+    let r0 = axis_cos(dot.clamp(-1.0, 1.0), turn, [0.0, 1.0, 0.0]);
+    let mut v = transform(&r0, v);
+    let t0 = transpose3(&r0);
+    let facing = v;
+    let len = sqrt(madd(mul(v[1], v[1]), v[0], v[0]));
+    if a.radius < len {
+        let f = div(a.radius, len);
+        v = v.map(|c| mul(c, f));
+    }
+    let (chain, mut hand, mut forearm, mut aimed) = (a.r_chain, a.r_hand, a.r_forearm, a.r_upper_aimed);
+    let at_hand = transform(&vmul(&a.racket, &hand), TIP);
+    let tip = |forearm: &M4, aimed: &M4| transform(&chain, transform(aimed, transform(forearm, at_hand)));
+    let dist = |v: [f32; 4], p: [f32; 4]| {
+        let (dx, dy) = (sub(v[0], p[0]), sub(v[1], p[1]));
+        madd(mul(dy, dy), dx, dx)
+    };
+    let mut p = tip(&forearm, &aimed);
+    let mut elbow = true;
+    for _ in 0..50 {
+        if dist(v, p) <= f32::from_bits(0x3c23_d70a) {
+            break;
+        }
+        let (m, frame) = if elbow { (vmul(&vmul(&forearm, &aimed), &chain), vmul(&aimed, &chain)) } else { (vmul(&aimed, &chain), chain) };
+        let (u, w) = (unit_xy(p, m[3]), unit_xy(v, m[3]));
+        let dot = madd(madd(mul(u[1], w[1]), u[0], w[0]), 0.0, 0.0);
+        if !(dot < f32::from_bits(0x3f7f_ff58)) {
+            break;
+        }
+        let c = if dot < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { dot };
+        let s = if dot < 0.0 {
+            -sign
+        } else if msub(add(0.0, mul(u[0], w[1])), u[1], w[0]) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        let bent = vmul(&vmul(&m, &axis_cos(c, s, [0.0, 0.0, 1.0])), &transpose3(&frame));
+        let j = if elbow { &mut forearm } else { &mut aimed };
+        *j = keep_row3(bent, j);
+        p = tip(&forearm, &aimed);
+        elbow = !elbow;
+    }
+    // the hand, then a sideways step of half what's left (twice at most)
+    v = facing;
+    let frame = vmul(&vmul(&forearm, &aimed), &chain);
+    for k in 0..2 {
+        let m = vmul(&hand, &frame);
+        let (u, w) = (unit_xy(p, m[3]), unit_xy(v, m[3]));
+        let dot = madd(madd(mul(u[1], w[1]), u[0], w[0]), 0.0, 0.0);
+        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+            let s = if msub(mul(u[0], w[1]), u[1], w[0]) < 0.0 { -1.0 } else { 1.0 };
+            let bent = vmul(&vmul(&m, &axis_cos(dot.clamp(-1.0, 1.0), s, [0.0, 0.0, 1.0])), &transpose3(&frame));
+            hand = keep_row3(bent, &hand);
+        }
+        if k == 1 {
+            break;
+        }
+        p = transform(&frame, transform(&hand, transform(&a.racket, TIP)));
+        if v[0].abs() <= p[0].abs() {
+            break;
+        }
+        step[0] = div(sub(v[0], p[0]), 2.0);
+        v[0] = sub(v[0], step[0]);
+    }
+    // back out of the facing turn
+    aimed = vmul(&vmul(&vmul(&aimed, &chain), &t0), &transpose3(&chain));
+    let l_upper = vmul(&vmul(&vmul(&vmul(&a.l_upper, &a.l_chain), &a.yaw), &t0), &transpose3(&a.l_chain));
+    step[0] = mul(step[0], s01);
+    step[2] = mul(step[2], scale[0]);
+    let q = |pose: &M4, m: &M4| crate::quat::from_matrix(&vmul(&transpose3(pose), m));
+    ArmSolve { step, quats: [q(&a.r_hand, &hand), q(&a.r_forearm, &forearm), q(&a.r_upper, &aimed), q(&a.l_upper, &l_upper)] }
+}
+
+/// The swing's IK frames from the frames left to contact: (ramp length, start offset).
+pub fn ik_frames(to_contact: i32) -> (i32, i32) {
+    if to_contact < 9 { (to_contact, 0) } else { (8, 8 - to_contact) }
+}
