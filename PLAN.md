@@ -140,7 +140,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P17** (split into P17a–h) Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [x] **P17a** Court material GS state: blend, alpha test, Z write, TFX, PRIM, wrap (in P17) → new `hst/src/gs.rs` gs.wgsl · `main.rs` gs_models · `mdl.rs` Packet.prim | t: gs.rs | j: 2026-10-07-p17-court-rendering
 - [ ] **P17b** Fog (FGE) (in P17) → `gs.rs` gs.wgsl
-- [ ] **P17c** VU1 lighting + HIGHLIGHT2 term (in P17) → `gs.rs` gs.wgsl · `main.rs` gs_models
+- [x] **P17c** VU1 lighting + HIGHLIGHT2 term (in P17) → `gs.rs` gs.wgsl · `main.rs` gs_models
 - [ ] **P17d** Clouds: category-14 records (in P17) → `main.rs` load · `layout.rs`
 - [ ] **P17e** Sky time of day + seasons `_sXXXX`/SSN1 (in P17) → `main.rs` load
 - [ ] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`

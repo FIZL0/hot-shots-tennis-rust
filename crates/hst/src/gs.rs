@@ -7,10 +7,13 @@
 //! - TEX0 TFX: HIGHLIGHT2 (alpha = texture alpha) when the material colour's alpha is 0x80 and the name has no
 //!   `@vert`, else MODULATE (alpha = texture × vertex alpha).
 //! - PRIM (batch header +0x31): TME textured, ABE blended; FGE (fog) is not drawn yet.
-//! - Colour = texture × vertex colour × material colour in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma space.
+//! - Colour = texture × vertex colour × material colour × light in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma
+//!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl); its specular term,
+//!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
+//!   the colour directly). The specular exponent is max(1, 128·(header +0x10)^1.65).
 //!
-//! ponytail: HIGHLIGHT2 adds the vertex alpha (the VU1 lighting's highlight term) to the colour; it is taken as 0,
-//! which it is for every material whose header +0x14 is 0 (nearly all court ones). Port the VU1 lighting to add it.
+//! ponytail: lit per pixel, not per vertex as VU1 does; the same where the light is flat across a triangle.
+//! ponytail: textured MODULATE draws keep vertex × material alpha; on VU1 their vertex alpha is the highlight too.
 
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
@@ -56,6 +59,10 @@ pub struct GsKey {
 pub struct GsUniform {
     /// Material colour, 1.0 = 0x80.
     pub color: Vec4,
+    /// Specular exponent, max(1, 128·(header +0x10)^1.65).
+    pub shininess: f32,
+    /// Highlight strength, header +0x14.
+    pub highlight: f32,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -94,10 +101,12 @@ impl GsMaterial {
                 _ => vec![Test::Always],
             }
         };
+        let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14) };
         tests
             .into_iter()
             .map(|test| GsMaterial {
-                uniform: GsUniform { color: Vec4::from(m.color) },
+                uniform,
                 texture: texture.clone().filter(|_| textured),
                 key: GsKey { textured, modulate, test, blend },
             })
@@ -192,5 +201,12 @@ mod tests {
         // court lines: @add without ABE still adds, no Z; @sub wins over @add; untextured batch
         let k = keys(&material("line@add@sub", 15, 0.4), 0x20);
         assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub) }]);
+        // specular exponent 128·(+0x10)^1.65, at least 1; highlight +0x14
+        let mut m = material("crayline", 5, 1.0);
+        m.header[0x10..0x14].copy_from_slice(&0.49f32.to_le_bytes());
+        m.header[0x14..0x18].copy_from_slice(&0.9f32.to_le_bytes());
+        let u = GsMaterial::for_batch(&m, 0x30, tex.clone())[0].uniform;
+        assert!((u.shininess - 39.46).abs() < 0.05 && u.highlight == 0.9, "{u:?}");
+        assert_eq!(GsMaterial::for_batch(&material("x", 5, 1.0), 0x30, tex.clone())[0].uniform.shininess, 1.0);
     }
 }
