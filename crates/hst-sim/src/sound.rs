@@ -350,7 +350,7 @@ pub fn score_call(s: &crate::score::Score, winner: usize, court: u8) -> Vec<u8> 
 const CALL_DELAY: i32 = 33;
 
 /// The umpire's queued score words: the first `CALL_DELAY` ticks after the point, each next one when the last
-/// word's gap is over. `gaps` (ticks per key, `exe::Game::umpire_gaps`) is measured from the word's call; the
+/// word's gap is over. `gaps` (ticks per key, `exe::Game::umpire_words`) is measured from the word's call; the
 /// words land 2 ticks before it.
 /// ponytail: the game also moves on once the word stops sounding; with the bank's words shorter than their gaps
 /// that never shows in the recordings, so the gap alone times them.

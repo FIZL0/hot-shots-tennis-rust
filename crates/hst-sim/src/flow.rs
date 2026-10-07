@@ -60,6 +60,16 @@ impl PostPoint {
         PostPoint { tick: 0, event, board: Board::Pause(0), reacted: false }
     }
 
+    /// The scoreboard's pause is over (the umpire calls the score then, `Umpire::call_score`).
+    pub fn paused(&self) -> bool {
+        matches!(self.board, Board::Pause(_))
+    }
+
+    /// The score show has started (a game or set: the umpire announces it then, `Umpire::announce`).
+    pub fn showing(&self) -> bool {
+        matches!(self.board, Board::Show(_) | Board::Done)
+    }
+
     /// One tick: the match checks the scoreboard, then the scoreboard runs. Returns where the match goes,
     /// on the tick it decides (the phase changes on the next one). After `Serve` or `ChangeEnds` the caller
     /// moves to the next point (`Score::next_point`, `Rally::next_point`).

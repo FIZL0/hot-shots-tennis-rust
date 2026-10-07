@@ -134,6 +134,20 @@ impl Sound {
         }
     }
 
+    /// A non-positional play (the umpire's voice): centred, sequence volume `p.volume`.
+    /// ponytail: the library's non-positional level is taken as the positional one straight ahead with no falloff
+    pub fn play_centre(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u64 {
+        let bank_volume = self.0.lock().unwrap().bank_volumes[p.slot as usize];
+        let level = Level { seq: [p.volume as u32; 2], bank: bank_volume, pan: [0x40; 3], ..default() };
+        self.play(bank, p.program as usize, p.key as usize, level, 0x1000)
+    }
+
+    /// The play `id` still has key-ons to come or voices sounding.
+    pub fn playing(&self, id: u64) -> bool {
+        let m = self.0.lock().unwrap();
+        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id)
+    }
+
     /// Ends the play `id`: no more key-ons, its voices released.
     pub fn stop(&self, id: u64) {
         let mut m = self.0.lock().unwrap();
@@ -226,8 +240,6 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     let crowd = if v & 1 == 0 { 'a' } else { 'b' };
     let gallery = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}{xb}.XB0"), &format!("data/sound/VOICE/GALLERY/gal{set}{n:02}{crowd}.hd"));
     commands.insert_resource(GalleryBank(gallery.map(Arc::new)));
-    // the umpire's voice (slot 5); ponytail: umpire 4 voice a, as play.rs times it
-    commands.insert_resource(UmpireBank(SoundBank::load(&mut iso, "SND/UMP/UV04A.XB0", "data/sound/UMPIRE/gag_vc04a.hd").map(Arc::new)));
     commands.insert_resource(sound);
 }
 
@@ -242,13 +254,15 @@ pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<So
     SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + b as usize), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
 }
 
-/// The umpire's voice bank.
-#[derive(Resource)]
-pub struct UmpireBank(pub Option<Arc<SoundBank>>);
-
 /// The gallery's bank.
 #[derive(Resource)]
 pub struct GalleryBank(pub Option<Arc<SoundBank>>);
+
+/// The umpire's voice bank (slot 5): umpire `n`'s set `v` (0..3 = a..d).
+pub fn umpire_bank(iso: &mut Iso, n: u8, v: u8) -> Option<SoundBank> {
+    let (big, small) = ((b'A' + v) as char, (b'a' + v) as char);
+    SoundBank::load(iso, &format!("SND/UMP/UV{n:02}{big}.XB0"), &format!("data/sound/UMPIRE/gag_vc{n:02}{small}.hd"))
+}
 
 /// The court's sound-effect bank.
 #[derive(Resource)]

@@ -30,8 +30,9 @@ use hst_sim::shot::{Bounds, Table, launch, lookup};
 use hst_sim::sound;
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
+use hst_sim::umpire::Umpire;
 
-use crate::audio::{CourtBank, GalleryBank, Sound, UmpireBank, VoiceBanks, voice_bank};
+use crate::audio::{CourtBank, GalleryBank, Sound, VoiceBanks, umpire_bank, voice_bank};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace, Orbit};
 
@@ -232,12 +233,11 @@ struct Game {
     data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
-    /// The umpire's score words, its gaps between them, the court number (for its deuce word) and a tiebreak call
-    /// due at the next serve.
-    umpire: sound::Umpire,
-    umpire_gaps: [i32; 14],
+    /// The chair umpire, and her last voice's play id (0 none).
+    umpire: Umpire,
+    umpire_voice: u64,
+    /// The court number (the gallery's banks and keys).
     stage: u8,
-    tiebreak_call: bool,
     /// The gallery, the errors in a row it has seen, whether the last point won a game, and its plays due (with
     /// their bearings).
     gallery: sound::Gallery,
@@ -492,17 +492,19 @@ fn reach(iso: &mut Iso) -> Reach {
     }
 }
 
-/// Line margin, scoreboard timing, the umpire's word gaps, and the stage's collision world with the material table.
-/// Line margin, scoreboard timing, the umpire's word gaps, the stage's collision world with the material table,
-/// and the shot parameter table.
+/// Line margin, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
+/// and the umpire.
 #[allow(clippy::type_complexity)]
-fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, [i32; 14], Option<(World, Vec<Material>)>, ShotParams) {
+fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, Option<(World, Vec<Material>)>, ShotParams, Umpire) {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
     let src = game.shot_params();
     let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
-    // ponytail: umpire 4, voice a (the bank audio.rs loads); the game's menu picks one of five, a or b
-    (game.line_margin(), game.scoreboard_timing(), game.umpire_gaps(4, false), stage.map(|n| (court::world(iso, n), court::materials(&game))), params)
+    // ponytail: umpire 4 (Lily), voice set a, English; off a stage her chair stands where it does on court 10
+    let n = stage.unwrap_or(10);
+    let chair = court::umpire_chair(iso, n).unwrap_or([6.5156, -1.7712, -0.0109]);
+    let umpire = Umpire::new(chair, game.umpire_side(n as usize), n as u8, game.umpire_words(0, 4, 0), [0.0; 3]);
+    (game.line_margin(), game.scoreboard_timing(), stage.map(|n| (court::world(iso, n), court::materials(&game))), params, umpire)
 }
 
 /// Character `c`'s serve tables and spins (see `Game::serve_tables`): the weak toss serves by the `dw1`
@@ -525,7 +527,7 @@ fn setup(
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
-    let (line_margin, board, umpire_gaps, world, shot_params) = disc(&mut iso, args.stage);
+    let (line_margin, board, world, shot_params, umpire) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
     let mut game = Game {
         rules,
@@ -566,15 +568,14 @@ fn setup(
         voices: vec![default(); rules.players as usize],
         data: Vec::new(),
         post_winner: 0,
-        umpire: default(),
-        umpire_gaps,
+        umpire,
+        umpire_voice: 0,
         gallery: default(),
         errors: 0,
         gallery_game: false,
         cheers: Vec::new(),
         humans: Vec::new(),
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
-        tiebreak_call: false,
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -606,6 +607,14 @@ fn setup(
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
+    // her voice bank in slot 5 (`VoiceBanks` holds slots 1..)
+    voices.resize(4, None);
+    voices.push(umpire_bank(&mut iso, 4, 0).map(std::sync::Arc::new));
+    // ponytail: a stand-in figure for her (a capsule on the chair) until the umpire model is drawn
+    let chair = game.umpire.pos;
+    let coat = materials.add(StandardMaterial { base_color: Color::srgb(0.9, 0.85, 0.7), ..default() });
+    let stand_in = commands.spawn((Mesh3d(meshes.add(Capsule3d::new(0.2, 0.8))), MeshMaterial3d(coat), Transform::from_xyz(chair[0], chair[1] - 0.6, chair[2]))).id();
+    commands.entity(root).add_child(stand_in);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
@@ -770,6 +779,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     g.last_hitter = who as i32;
     g.since_hit = 0;
     g.phase = Phase::Rally;
+    g.umpire.rally();
 }
 
 /// The server's turn while the serve is set up, as the original: before the toss the server stands or walks
@@ -1479,9 +1489,9 @@ fn remember(mut g: ResMut<Game>) {
 
 fn simulate(mut g: ResMut<Game>) {
     let g2 = &mut *g;
-    if let Some(p) = g2.umpire.step(&g2.umpire_gaps) {
-        g2.sounds.push((p, sound::CENTRE));
-    }
+    // ponytail: she steps first, so this tick's phase messages reach her a tick later than in the original
+    let playing = g2.umpire_voice != 0;
+    g2.umpire.step(playing, g2.flight.ball.pos);
     let rng = &mut g2.rng;
     let cheers = g2.gallery.step(g2.stage, g2.players.len() as u32, g2.gallery_game, &mut || {
         rand(rng);
@@ -1497,40 +1507,45 @@ fn simulate(mut g: ResMut<Game>) {
         // only the toss flies while the serve is set up
         Phase::Serve if !g.serving.tossed => return,
         Phase::Serve => {}
-        Phase::ChangeEnds(0) => return next_point(&mut g),
+        Phase::ChangeEnds(0) => return next_point(&mut g, false),
         Phase::ChangeEnds(n) => return g.phase = Phase::ChangeEnds(n - 1),
         Phase::Over(0) => {
             g.score.second_serve = g.rally.faults == 1;
             g.score.let_ = g.rally.let_;
             g.score.change_ends();
-            return next_point(&mut g);
+            return next_point(&mut g, true);
         }
         Phase::Over(n) => g.phase = Phase::Over(n - 1),
         Phase::Post => {
             let g = &mut *g;
             let mut post = g.post.take().expect("post-point state");
-            let reacted = post.reacted;
+            let (reacted, paused, showing) = (post.reacted, post.paused(), post.showing());
             let step = post.step(&mut g.score, &mut g.rally, &g.board);
+            // ponytail: a called point's longer scoreboard pause (P0b4c) isn't ported; she calls at the usual time
+            if paused && !post.paused() {
+                g.umpire.call_score(&g.score, Some(post.event), g.post_winner);
+            }
+            if post.showing() && !showing {
+                g.umpire.announce(&g.score, post.event, g.post_winner);
+            }
             if post.reacted && !reacted {
                 react(g, post.event);
-                g.tiebreak_call = matches!(post.event, Event::Game | Event::Set) && g.score.tiebreak;
-                if g.score.match_over {
-                    g.sounds.push((sound::MATCH_CALL, sound::CENTRE));
-                }
             }
             match step {
                 None => g.post = Some(post),
-                Some(Next::Serve) => return next_point(g),
+                Some(Next::Serve) => return next_point(g, true),
                 Some(Next::ChangeEnds) => {
-                    g.umpire.hush();
                     g.gallery.hush();
-                    g.sounds.push((sound::CHANGE_ENDS_CALL, sound::CENTRE));
+                    g.umpire.start(true, g.flight.ball.pos);
                     return g.phase = Phase::ChangeEnds(CHANGE_ENDS);
                 }
                 Some(Next::MatchOver) => {
+                    // ponytail: the match-over phase isn't played: she announces it as the next match starts
+                    g.umpire.call_match();
+                    g.umpire.match_over();
                     g.score = Score::new();
                     g.players.iter_mut().for_each(|p| p.stance = 3.0);
-                    return next_point(g);
+                    return next_point(g, true);
                 }
             }
         }
@@ -1563,8 +1578,8 @@ fn simulate(mut g: ResMut<Game>) {
     }
     let verdict = g.rally.judge(None);
     let why = CALLS[verdict.call as usize];
-    g.sounds.extend(sound::line_call(verdict.call).map(|p| (p, sound::CENTRE)));
     let Some(team) = verdict.winner else {
+        g.umpire.point_over(None, 0, g.score.swapped, verdict.call as u8);
         g.message = if verdict.call == 2 { "Fault - second serve".into() } else { format!("{why} - serve again") };
         info!("no point: {why} after {} frames", g.since_hit);
         g.phase = Phase::Over(90); // ponytail: the umpire call sets this delay (call sprite + voice line, P0b4c)
@@ -1572,6 +1587,7 @@ fn simulate(mut g: ResMut<Game>) {
     };
     g.post_winner = team as i32;
     let event = g.score.point(&g.rules, team as usize);
+    g.umpire.point_over(event, team as i32, g.score.swapped, verdict.call as u8);
     g.score.note_tiebreak_start();
     g.gallery_game = matches!(event, Some(Event::Game | Event::Set));
     let applause = if g.gallery_game { sound::favoured(&g.humans)[team as usize] } else { g.smashed && g.last_hitter & 1 == team as i32 };
@@ -1590,9 +1606,6 @@ fn simulate(mut g: ResMut<Game>) {
         _ => format!("{why} - point to {who}"),
     };
     info!("point: {who} ({why}) after {} frames, {event:?} {:?}", g.since_hit, g.score);
-    if let Some(Event::Point | Event::TiebreakPoint) = event {
-        g.umpire.call(sound::score_call(&g.score, team as usize, g.stage));
-    }
     g.post = Some(PostPoint::new(event.expect("match in progress")));
     g.phase = Phase::Post;
 }
@@ -1625,13 +1638,10 @@ fn react(g: &mut Game, event: Event) {
     }
 }
 
-/// Leave the point: next server, receiver and side, and set up the serve.
-fn next_point(g: &mut Game) {
-    g.umpire.hush();
+/// Leave the point: next server, receiver and side, and set up the serve. `fresh`: not after a change of ends.
+fn next_point(g: &mut Game, fresh: bool) {
+    g.umpire.serve(fresh, false, g.flight.ball.pos);
     g.gallery.hush();
-    if std::mem::take(&mut g.tiebreak_call) {
-        g.sounds.push((sound::TIEBREAK_CALL, sound::CENTRE));
-    }
     g.score.next_point(&g.rules);
     g.rally.next_point();
     g.rally.new_point();
@@ -1843,10 +1853,8 @@ fn play_sounds(
     sound: Option<Res<Sound>>,
     bank: Option<Res<CourtBank>>,
     voices: Option<Res<VoiceBanks>>,
-    umpire: Option<Res<UmpireBank>>,
     gallery: Option<Res<GalleryBank>>,
     mut whistle: Local<(u32, u64)>,
-    mut said: Local<u64>,
 ) {
     let g = &mut *g;
     for w in &mut g.whooshes {
@@ -1865,17 +1873,9 @@ fn play_sounds(
         }
     }
     let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else { return };
-    // slot 0 the court, 1.. the players' voices, 5 the umpire (who stops their last word for the next);
+    // slot 0 the court, 1.. the players' voices (the umpire's voice, slot 5, is played below);
     // ponytail: slot 9 (framed hits) is a character bank not loaded yet
-    let umpire = umpire.and_then(|u| u.0.clone());
     for (p, at) in due {
-        if p.slot == 5 {
-            if let Some(b) = &umpire {
-                sound.stop(*said);
-                *said = sound.play_at(b, p, at);
-            }
-            continue;
-        }
         let b = if p.slot == 0 { Some(&bank) } else { voices.as_ref().and_then(|v| v.0.get(p.slot as usize - 1)?.as_ref()) };
         if let Some(b) = b {
             sound.play_at(b, p, at);
@@ -1892,4 +1892,12 @@ fn play_sounds(
         sound.update(whistle.1, sound::Play { speed: sound::flight_speed(ball[1], 0.3, 10.0), ..sound::FLIGHT }, ball);
     }
     whistle.0 = g.whistle.1;
+    // her voice (slot 5, non-positional): a new word stops the last
+    if let (Some((program, key)), Some(b)) = (g.umpire.voice.take(), voices.as_ref().and_then(|v| v.0.get(4).cloned().flatten())) {
+        sound.stop(g.umpire_voice);
+        g.umpire_voice = sound.play_centre(&b, sound::Play { slot: 5, program, key: key as u8, volume: 0x80, speed: 1.0 });
+    }
+    if g.umpire_voice != 0 && !sound.playing(g.umpire_voice) {
+        g.umpire_voice = 0;
+    }
 }

@@ -541,7 +541,7 @@ fn umpire_calls_match_the_game() {
     let Some((data, court)) = Court::load("hits_s05.bin") else { return };
     let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
-    let gaps = exe::Game::new(&cnf, &bin).unwrap().umpire_gaps(4, false);
+    let gaps = exe::Game::new(&cnf, &bin).unwrap().umpire_words(0, 4, 0).0;
     let bank_volume = exe::bank_volumes(&iso.read("SCUS_976.10").unwrap()).unwrap()[5];
     let xb = iso.read("SND/UMP/UV04A.XB0").unwrap();
     let arc = Archive::parse(&xb).unwrap();

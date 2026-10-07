@@ -100,7 +100,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs — BLOCKED: no recorded tiebreak (fixtures cover deuce/adv, side changes, sets, doubles only); needs the human's tiebreak recording, see *Needs the human*
 - [ ] **P12a** Post-point sequence → `flow.rs` · `motion.rs` · `play.rs` react/next_point | t: score.rs, motion.rs
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
-- [ ] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
+- [x] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
@@ -176,3 +176,4 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
 ## Needs the human
 
 - **Record a tiebreak (for P12)**: no save state or fixture reaches one. Play/record a bot match to 4-4 and through the tiebreak (incl. its 6-point end change and the set/match end) with `tools/record_p2m2.py <slot> context/fixtures/tiebreak.bin <frames>`, ideally from a save made at 4-3 or 3-4. Agents' RAM-poked attempts from slot 5 failed (PINE op errors mid-capture).
+- P13 umpire: record a long match (let, deuce again, set/tiebreak/match announcements) — j: 2026-10-07-p13-umpire/2-RECORDING-READY.md
