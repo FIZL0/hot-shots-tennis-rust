@@ -226,8 +226,8 @@ struct Game {
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
     serve_tables: Vec<[Vec<(Table, f32)>; 2]>,
-    /// Smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
-    smash_tables: Vec<Table>,
+    /// Per player: the character's smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
+    smash_tables: Vec<Vec<Table>>,
     /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
     rally_tables: Vec<[Vec<Table>; 2]>,
     serve_data: ServeData,
@@ -463,11 +463,6 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
-fn tables(iso: &mut Iso, archive: &str, name: &str, n: usize) -> Vec<Table> {
-    character_tables(iso, 0, archive, name, "", n)
-}
-
 /// Character `c`'s trajectory tables `tr_pc<c>_<name><k><suffix>.dat`, k in 0..n, from its archive `TRAJ<c><ab>.XB`.
 fn character_tables(
     iso: &mut Iso,
@@ -533,8 +528,8 @@ mod every_character_tables {
             return;
         };
         let params = disc(&mut iso, None).3;
-        tables(&mut iso, "B", "smsh", 2);
         for c in 0..14 {
+            character_tables(&mut iso, c, "B", "smsh", "", 2);
             serve_tables(&mut iso, &params, c);
             rally_tables(&mut iso, c);
         }
@@ -924,7 +919,7 @@ fn setup(
     let mut game = Game {
         rules,
         serve_tables: Vec::new(),
-        smash_tables: tables(&mut iso, "B", "smsh", 2),
+        smash_tables: Vec::new(),
         rally_tables: Vec::new(),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
@@ -1037,6 +1032,7 @@ fn setup(
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
+        game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
@@ -1384,7 +1380,7 @@ fn strike(
     } else {
         let l = if class == 3 {
             lookup(
-                &g.smash_tables[kind as usize],
+                &g.smash_tables[who][kind as usize],
                 &Bounds::smash(kind),
                 at,
                 target,
