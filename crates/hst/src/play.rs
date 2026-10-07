@@ -271,6 +271,8 @@ struct Marks {
     smash: Option<(SmashSearch, Vec<PathEntry>, Flight)>,
     /// The search found its first point this frame (the yellow marker's play starts).
     start: bool,
+    /// The path was built by a strike this frame: the original searches it but grows it only from the next frame.
+    fresh: bool,
 }
 
 const PATH_MAX: usize = 600;
@@ -874,6 +876,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         }
         (SmashSearch::new(&heights), path, f)
     });
+    g.marks.fresh = true;
     g.hit_effect = Some(effects::Hit { kind, smash: class == 3, pos: at, vel });
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
@@ -1814,18 +1817,17 @@ fn camera(g: Res<Game>, time: Res<Time<Fixed>>, mode: Res<CamMode>, cs: Res<CamS
     }
 }
 
-/// First bounce point of the ball in flight, found by stepping a copy with the real physics.
-/// One frame of the smash search: grow the predicted path by 15 entries (until it has bounced twice) and search
-/// it; the yellow marker goes once the live ball bounces.
-// ponytail: whether the original also grows the path on the launch frame is unverified (a possible 1-frame offset)
+/// One frame of the smash search: grow the predicted path by 15 entries (until it has bounced twice; not on the
+/// launch frame, N4a) and search it; the yellow marker goes once the live ball bounces.
 fn smash_frame(g: &mut Game) {
     g.marks.start = false;
+    let fresh = std::mem::take(&mut g.marks.fresh);
     if g.flight.bounces > 0 {
         g.marks.smash = None;
     }
     let (shot, court) = (g.shot, &COURTS[g.court]);
     let Some((search, path, f)) = &mut g.marks.smash else { return };
-    if path.last().is_some_and(|e| e.bounces < 2) {
+    if !fresh && path.last().is_some_and(|e| e.bounces < 2) {
         for _ in 0..15.min(PATH_MAX - path.len()) {
             f.step(&shot, court);
             path.push(path_entry(f));

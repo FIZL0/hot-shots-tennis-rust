@@ -128,3 +128,24 @@ fn every_effect_binds() {
     eprintln!("{n} effects");
     assert!(n >= 6);
 }
+
+/// The yellow smash marker of a △ lob onto P1 (`context/fixtures/smash_mark_s04.txt`, N4a: slot 4 with the
+/// opponents' strokes forced to lobs; line 1: P1's smash top and middle, the point the game placed; then the
+/// game's predicted path, f32 bits). Fed 15 + 14 entries the launch frame and 15 a frame after, as the game grows
+/// it, the search places the game's point on the frame the game did (the 5th: path of 75).
+#[test]
+fn smash_mark_s04() {
+    use hst_sim::effect::{PathEntry, SmashSearch};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(text) = std::fs::read_to_string(format!("{dir}/smash_mark_s04.txt")) else {
+        return eprintln!("smash_mark_s04.txt absent, skipped");
+    };
+    let fl = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+    let mut lines = text.lines().map(|l| l.split(' ').collect::<Vec<_>>());
+    let head: Vec<f32> = lines.next().unwrap().iter().map(|s| fl(s)).collect();
+    let path: Vec<PathEntry> = lines.map(|w| PathEntry { pos: [fl(w[0]), fl(w[1]), fl(w[2])], vel: [fl(w[3]), fl(w[4]), fl(w[5])], bounces: w[6].parse().unwrap() }).collect();
+    let mut s = SmashSearch::new(&[[head[0], head[1]]]);
+    let placed: Vec<usize> = (0..5).filter(|k| s.search(&path[..15 * (k + 1)])).collect();
+    assert_eq!(placed, [4]);
+    assert_eq!(s.at().map(|p| p.map(f32::to_bits)), Some([head[2].to_bits(), head[3].to_bits()]));
+}
