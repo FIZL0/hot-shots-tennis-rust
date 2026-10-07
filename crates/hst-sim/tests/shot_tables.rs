@@ -33,3 +33,42 @@ fn strokes_launch_like_the_game() {
     }
     assert!(n >= 10, "only {n} strokes checked");
 }
+
+/// Every aim of the human player 1 in the doubles recording (round1.bin): the shot code before and after the
+/// aim frame (the game's 1 ✕ / 2 ○ / 4 △, 8 flat, 0x10 drop) against `stick_kind` on the recorded stick.
+/// The camera sits behind the human, so stick up is toward the other end.
+#[test]
+fn stick_turns_topspin_flat_and_slice_drop() {
+    use hst_sim::replay::frames;
+    use hst_sim::shot::stick_kind;
+    let ctx = std::env::var("HST_CONTEXT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context").into());
+    let Ok(data) = std::fs::read(format!("{ctx}/fixtures/round1.bin")) else {
+        eprintln!("fixture missing, skipped");
+        return;
+    };
+    let word = |f: hst_sim::replay::Frame, off| f.player_f32(0, off).to_bits();
+    let kind = |code| match code {
+        1 => 0,
+        2 => 1,
+        4 => 3,
+        8 => 2,
+        0x10 => 4,
+        c => panic!("shot code {c:#x}"),
+    };
+    let (mut n, mut changed) = (0, 0);
+    for w in frames(&data).windows(2) {
+        let (before, now) = (w[0], w[1]);
+        if word(before, 0x3ec4) != 1 || word(now, 0x3ec4) as i32 != -1 {
+            continue;
+        }
+        let branch = (word(now, 0x3ec0) >> 8) as u8;
+        let pad = now.pad(0);
+        let facing = if now.player_pos(0)[2] < 0.0 { 1.0 } else { -1.0 };
+        let stick = [(pad.lx as f32 - 128.0) / 127.0, (128.0 - pad.ly as f32) / 127.0 * facing];
+        let want = kind(word(now, 0x3ee4));
+        assert_eq!(stick_kind(branch, kind(word(before, 0x3ee4)), stick, facing), want, "vsync {}", now.vsync());
+        n += 1;
+        changed += (want != kind(word(before, 0x3ee4))) as i32;
+    }
+    assert_eq!((n, changed), (42, 8));
+}

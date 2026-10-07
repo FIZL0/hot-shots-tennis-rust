@@ -23,7 +23,7 @@ cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
-J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
+J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net at contact: flat; pulled back with slice: drop · J/Space/A/Start serve ·
 C/Select camera (original/free) · arrows/right stick turn the free camera.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface. Drawing runs uncapped (the simulation stays a fixed 60 Hz tick, visuals blend the last two ticks); `--vsync` caps it to the display.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
@@ -58,6 +58,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - F0 — uncapped frame rate: render-side blending of positions, facing, motion time, camera and balloon fades; sim unchanged.
 - N1d1 exact ANI motion sampler (squad/Hermite, bone-length scale), bit-exact vs RAM.
 - Motion clock (N1d2): per-frame motion time as the game's motion player — sample at the wrapped/clamped time, then add the speed; soft follow-through held by its 8-frame crossfade — bit-exact on 35026 recorded ticks (anim_s05.bin).
+- Shot buttons (P5a): ✕ topspin, ○ slice, △ lob only; the stick at contact turns topspin flat (within 60° of forward) and slice into a drop shot (within 45° of back; not on serves; smashes unchanged) — 42/42 recorded human aims in round1.bin.
 
 ## Known gaps / caveats
 

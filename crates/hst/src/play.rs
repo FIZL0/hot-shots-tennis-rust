@@ -7,10 +7,11 @@
 //! The view is the original's match camera, behind the −z baseline; the stick moves and aims screen-relative.
 //! A red dot marks where the ball will bounce.
 //!
-//! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, I flat, L lob, U drive,
-//! J/Space serve, C camera (original / free), arrow keys turn the free camera.
-//! Gamepad: left stick or d-pad move/aim, A topspin, B slice, X flat, Y lob, RB drive, A/Start serve,
-//! Select camera, right stick turns the free camera.
+//! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, L lob, J/Space serve, C camera
+//! (original / free), arrow keys turn the free camera.
+//! Gamepad: left stick or d-pad move/aim, A (✕) topspin, B (○) slice, Y (△) lob, A/Start serve, Select camera,
+//! right stick turns the free camera. As the original, there is no flat or drop button: the stick toward the
+//! net at contact makes a topspin flat, pulled back makes a slice a drop shot (`shot::stick_kind`).
 
 use bevy::prelude::*;
 use hst_data::{exe::ScoreboardTiming, iso::Iso, tim2, xb::Archive};
@@ -595,7 +596,7 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
             now[0].stick += d;
         }
     }
-    now[0].shot = [(KeyCode::KeyJ, 0), (KeyCode::KeyK, 1), (KeyCode::KeyI, 2), (KeyCode::KeyL, 3), (KeyCode::KeyU, 4)]
+    now[0].shot = [(KeyCode::KeyJ, 0), (KeyCode::KeyK, 1), (KeyCode::KeyL, 3)]
         .into_iter()
         .find(|(k, _)| keys.just_pressed(*k))
         .map(|(_, kind)| kind);
@@ -609,7 +610,7 @@ fn read_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<(Entity, &Gamepad
     for (slot, (_, g)) in list.iter().take(2).enumerate() {
         let s = &mut now[slot];
         s.stick += deadzone(g.left_stick()) + g.dpad();
-        let buttons = [(GamepadButton::South, 0), (GamepadButton::East, 1), (GamepadButton::West, 2), (GamepadButton::North, 3), (GamepadButton::RightTrigger, 4)];
+        let buttons = [(GamepadButton::South, 0), (GamepadButton::East, 1), (GamepadButton::North, 3)];
         s.shot = s.shot.or(buttons.into_iter().find(|(b, _)| g.just_pressed(*b)).map(|(_, k)| k));
         s.serve |= g.just_pressed(GamepadButton::Start);
         cycle |= g.just_pressed(GamepadButton::Select);
@@ -741,6 +742,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         let rand_bit = rand(&mut g.rng) < 0.5;
         let d = &g.serve_data;
         let target = serve::target(d, toss, sw.offset, sw.grade, pos, end, g.score.side, g.rules.players > 2, [aim.x, aim.y], rand_bit);
+        // the stick toward the net turns a topspin serve flat
+        let sw = ServeSwing { kind: hst_sim::shot::stick_kind(0, sw.kind, [aim.x, aim.y], end), ..sw };
         debug!("player {i} serve {toss:?} kind {}: offset {} grade {} -> {target:?}", sw.kind, sw.offset, sw.grade);
         g.players[i].balloon = serve::balloon(sw.grade, sw.offset, false).map(|b| (b, 0));
         g.players[i].serve_anim = None;
@@ -919,7 +922,7 @@ fn square_up(p: &mut Player) {
 /// One frame of a player's stroke: a pending press keeps searching for a contact (pressing early grades
 /// QUICK, late SLOW). Once locked the body squares up to the net and stands, taking its small step into the
 /// shot over the last frames before contact, as the original; the racket meets the ball on the chosen frame.
-fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Option<Contact> {
+fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Option<Contact> {
     let mut struck = None;
     if let Some(f) = g.players[i].follow.take() {
         set_motion(&mut g.players[i], f, 1.0, false, Some(motion::SOFT_FOLLOW_HOLD));
@@ -953,8 +956,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.pos[0] += c.step / c.step_frames as f32;
         }
         if c.frames == 0 {
-            let kind = g.players[i].kind;
-            let target = aim(g);
+            let (stick, end) = (aim(g), g.players[i].end);
+            let kind = hst_sim::shot::stick_kind(branch_code(c.swing.branch), g.players[i].kind, [stick.x, stick.y], end);
+            let target = aim_target(g, stick, end);
             strike(g, i, 1, kind, target);
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
             let rally = g.phase == Phase::Rally && g.players.len() > 1;
@@ -1080,8 +1084,8 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot
-    let (aim, end) = (screen(g, pad.stick), g.players[i].end);
-    advance_stroke(g, i, move |g| aim_target(g, aim, end));
+    let aim = screen(g, pad.stick);
+    advance_stroke(g, i, move |_| aim);
 }
 
 /// Where the ball will be hittable on player `i`'s half: step a copy of the flight until it is waist-high after
@@ -1152,7 +1156,7 @@ fn bot(g: &mut Game, i: usize) {
         if mine.is_some() {
             if g.players[i].bot_due.is_none() {
                 let r = rand(&mut g.rng);
-                g.players[i].kind = if r < 0.6 { 0 } else if r < 0.8 { 1 } else if r < 0.9 { 2 } else { 3 };
+                g.players[i].kind = if r < 0.7 { 0 } else if r < 0.9 { 1 } else { 3 };
                 g.players[i].bot_due = Some(draw_due(&mut g.rng, &BOT_STROKE_TIMING));
             }
             let due = g.players[i].bot_due.unwrap_or(SWEET_FRAME as usize);
@@ -1165,11 +1169,7 @@ fn bot(g: &mut Game, i: usize) {
             g.players[i].bot_due = None;
         }
     }
-    let end = g.players[i].end;
-    advance_stroke(g, i, move |g| {
-        let stick = Vec2::new(rand(&mut g.rng) * 1.8 - 0.9, rand(&mut g.rng) * 1.6 - 0.8);
-        aim_target(g, stick, end)
-    });
+    advance_stroke(g, i, |g| Vec2::new(rand(&mut g.rng) * 1.8 - 0.9, rand(&mut g.rng) * 1.6 - 0.8));
 }
 
 /// The stand-in AI's serve: strong toss, swing timed from the recorded bots' serve timing (a badly timed
@@ -1484,7 +1484,7 @@ fn hud(g: Res<Game>, pads: Res<Pads>, mode: Res<CamMode>, mut q: Query<&mut Text
     let team = |t: usize| (t..g.players.len()).step_by(2).map(who).collect::<Vec<_>>().join("+");
     for mut t in &mut q {
         t.0 = format!(
-            "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive",
+            "Team 1 ({}) {}  -  {} ({}) Team 2\n{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · L/Y lob · stick forward: flat, back + slice: drop",
             team(0),
             score_line(&g.score, 0),
             score_line(&g.score, 1),

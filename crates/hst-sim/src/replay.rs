@@ -17,7 +17,8 @@ pub const SAMPLE_LIVE: usize = SAMPLE + 0x290 + 0x50;
 pub const RALLY_ADDR: usize = 0x3165f0;
 
 /// Decoded pad state the game reads (stored active-high; libpad bits: 0x8 Start, 0x10 Up, 0x20 Right, 0x40 Down,
-/// 0x80 Left, 0x400 L1, 0x800 R1, 0x1000 Triangle, 0x2000 Circle, 0x4000 Cross, 0x8000 Square).
+/// 0x80 Left, 0x400 L1, 0x800 R1; the face buttons are not libpad's: 0x1000 Triangle, 0x2000 Cross, 0x4000 Circle,
+/// 0x8000 Square, checked by pressing each over the virtual pad).
 /// Sticks are 0..255 with 0x80 centre (the game's deadzone 0x51..0xae already applied).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pad {

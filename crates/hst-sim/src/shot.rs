@@ -127,3 +127,22 @@ pub fn launch(hit: V3, target: V3, elevation: f32, speed: f32) -> V3 {
     let (s, c) = elevation.sin_cos();
     [dx * inv * c * speed, -s * speed, dz * inv * c * speed]
 }
+
+/// The shot buttons give three kinds: ✕ topspin (0), ○ slice (1), △ lob (3). Flat (2) and drop (4) have no
+/// button: at contact the stick (court x, z) turns a topspin into a flat shot when it points within 60° of
+/// `facing` (the hitter's end, +1 toward +z) and a slice into a drop shot when it points within 45° of straight
+/// back. `branch` is the contact (0 serve, 1 ground, 2 volley, 3 dive, 4 smash): serves only go flat, smashes
+/// never change.
+pub fn stick_kind(branch: u8, kind: i32, stick: [f32; 2], facing: f32) -> i32 {
+    use crate::ps2::{add, div, mul, sqrt};
+    let len = sqrt(add(mul(stick[0], stick[0]), mul(stick[1], stick[1])));
+    if branch > 3 || len <= 0.0 {
+        return kind;
+    }
+    let along = mul(mul(facing, stick[1]), div(1.0, len));
+    match kind {
+        0 if along >= 0.5 => 2,
+        1 if branch > 0 && -along >= std::f32::consts::FRAC_1_SQRT_2 => 4,
+        _ => kind,
+    }
+}

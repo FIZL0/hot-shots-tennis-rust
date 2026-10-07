@@ -20,7 +20,8 @@ FIFO = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hst-vpad.fifo")
 def serve():
     from evdev import UInput, AbsInfo, ecodes as e
     buttons = {
-        "cross": e.BTN_SOUTH, "circle": e.BTN_EAST, "square": e.BTN_WEST, "triangle": e.BTN_NORTH,
+        # evdev's BTN_NORTH is BTN_X (the west face button) and BTN_WEST is BTN_Y (north): name them by Xbox letter
+        "cross": e.BTN_A, "circle": e.BTN_B, "square": e.BTN_X, "triangle": e.BTN_Y,
         "start": e.BTN_START, "l1": e.BTN_TL, "r1": e.BTN_TR, "l3": e.BTN_THUMBL, "r3": e.BTN_THUMBR,
         "guide": e.BTN_MODE, "select": e.BTN_SELECT,
     }
