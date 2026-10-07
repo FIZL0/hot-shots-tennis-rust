@@ -105,3 +105,123 @@ fn creatures_match_ram_on_four_courts() {
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
 }
+
+/// The game's shared MT19937 as recorded: 624 words at +4, the next word's index at +0x9c4.
+#[derive(Clone, PartialEq)]
+struct Mt([u32; 624], usize);
+impl Mt {
+    fn of(b: &[u8]) -> Mt {
+        let w = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        Mt(std::array::from_fn(|k| w(4 + 4 * k)), w(0x9c4) as usize)
+    }
+    fn next(&mut self) -> u32 {
+        if self.1 >= 624 {
+            for k in 0..624 {
+                let y = (self.0[k] & 0x8000_0000) | (self.0[(k + 1) % 624] & 0x7fff_ffff);
+                self.0[k] = self.0[(k + 397) % 624] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908_b0df } else { 0 };
+            }
+            self.1 = 0;
+        }
+        let mut y = self.0[self.1];
+        self.1 += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^ (y >> 18)
+    }
+}
+
+/// Walking spectators' animation against `context/fixtures/npc_sNN.bin` (tools/record_npc.py; not in git, skipped
+/// when absent): every tick of every walker, from the recorded state of the tick before, must reproduce the game's
+/// animation, frame, next frame, speed, mode and stagger counter bit for bit. Random draws come from the game's
+/// own generator (reseeded at a new point): the walker's draws must be consecutive outputs among those the game drew that tick. Points and
+/// new points are taken from the recording (mode becomes 2 / the stagger counter restarts).
+#[test]
+fn walkers_animate_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut courts = Vec::new();
+    for slot in [5, 7, 10, 3] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/npc_s{slot:02}.bin")) else {
+            eprintln!("npc_s{slot:02}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+        let n = u(&d, 0) as usize;
+        let (g, mt, mgr, mgr2) = (4, 4 + 0x180, 4 + 0x180 + 0x9d0, 4 + 0x180 + 0x9d0 + 0x280);
+        let wo = |k: usize| mgr2 + 0x20 + 8 + k * 0x380;
+        let size = wo(n);
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(size).collect();
+        let (court, players) = (u(samples[0], g + 0x10), u(samples[0], g + 0x24));
+        let state = |s: &[u8], k: usize, lens: [f32; 7]| {
+            let (o, c) = (wo(k), wo(k) + 0x310);
+            npc::Walker {
+                slot: u(s, o + 0xbc),
+                mode: u(s, o + 0x210) as u8,
+                counter: u(s, o + 0xd0) as i32,
+                anim: u(s, o + 200),
+                frame: f(s, c + 0x38),
+                next: f(s, c + 0x3c),
+                speed: f(s, c + 0x34),
+                advancing: s[o + 0xcc] != 0,
+                lens,
+            }
+        };
+        let mut lens = vec![[0f32; 7]; n];
+        for s in &samples {
+            for k in 0..n {
+                lens[k][u(s, wo(k) + 200) as usize] = f(s, wo(k) + 0x350 + 0x2c);
+            }
+        }
+        // a sample in or next to a stretch where the game stood still (a long frame) may be read mid-frame
+        let still = |i: usize| samples[i][4..] == samples[i.saturating_sub(1)][4..] && i > 0;
+        let (mut ticks, mut draws, mut reactions) = (0, 0, 0);
+        for i in 1..samples.len() {
+            if (i.saturating_sub(2)..(i + 2).min(samples.len())).any(still) {
+                continue;
+            }
+            let (a, b) = (samples[i - 1], samples[i]);
+            let mut rng = Mt::of(&a[mt..]);
+            let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+            while rng != end && out.len() < 2000 {
+                out.push(rng.next());
+            }
+            if rng != end {
+                // reseeded (a new point): the draws since are the new words up to the index
+                let mut fresh = Mt(end.0, 0);
+                out = (0..end.1).map(|_| fresh.next()).collect();
+            }
+            // a new point restarts every walker's stagger counter; the last walker's is still counting after the tick
+            let fresh = (0..n).any(|k| state(a, k, lens[k]).counter < 0 && state(b, k, lens[k]).counter >= 0);
+            for k in 0..n {
+                let want = state(b, k, lens[k]);
+                let mut before = state(a, k, lens[k]);
+                if before.mode == 0 && want.mode == 2 {
+                    before.react();
+                    reactions += 1;
+                }
+                if fresh {
+                    before.new_point(true);
+                }
+                let cheer = b[mgr + 0x8a5 - 0x680 + before.slot as usize] != 0;
+                // the gallery counts its ticks after the walkers' (and restarts at a new point, after them too); the sample at
+                // a new point is read before that frame's count
+                let tick = if fresh { u(a, mgr2 + 0x14) as i32 } else { u(b, mgr2 + 0x14) as i32 - 1 };
+                let used = (0..=out.len()).find_map(|j| {
+                    let (mut w, mut it, mut used) = (before.clone(), out[j..].iter(), 0);
+                    w.step(players, cheer, tick, &mut || {
+                        used += 1;
+                        *it.next().unwrap_or(&0)
+                    });
+                    (w == want && j + used <= out.len()).then_some(used)
+                });
+                draws += (used > Some(0)) as usize;
+                assert!(used.is_some(), "court {court} vsync {} walker {k}:\n from {before:?}\n want {want:?}", u(b, 0));
+                ticks += 1;
+            }
+        }
+        eprintln!("court {court}: {ticks} walker ticks, {draws} with random draws, {reactions} reactions");
+        courts.push(court);
+    }
+    assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}

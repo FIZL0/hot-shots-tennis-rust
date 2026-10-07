@@ -65,3 +65,126 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
         })
         .collect()
 }
+
+/// A walking spectator standing in place: its animation (the game's controller: `frame` shown, `next` the one
+/// after, advancing by `speed`), whether it is reacting to a point, and the stagger that restarts the idle loop
+/// one walker per tick after a new point. Animations: 0 idle, 1 its variant, 2 (a quiet reaction), 3/5 loop
+/// (5 the cheer), 4 shown frozen.
+/// ponytail: dodging the ball and players (wander mode's walk, collision, ground height) and facing the winner
+/// while reacting move the walker; no recording has a walker moving, so they are not ported (P14e).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Walker {
+    pub slot: u32,
+    /// 0 idle, 1 a point to react to (taken on the next tick), 2 reacted.
+    pub mode: u8,
+    /// Ticks since a new point while restarting (−1 when done): the idle loop restarts when it reaches `slot`.
+    pub counter: i32,
+    pub anim: u32,
+    pub frame: f32,
+    pub next: f32,
+    pub speed: f32,
+    /// Advances every tick (cleared by animation 4).
+    pub advancing: bool,
+    /// Length of each animation, in frames.
+    pub lens: [f32; 7],
+}
+
+impl Walker {
+    fn set_frame(&mut self, t: f32) {
+        let len = self.lens[self.anim as usize];
+        let mut t = t;
+        if matches!(self.anim, 3 | 5) && len != 0.0 {
+            while len <= t {
+                t = ps2::sub(t, len);
+            }
+            while t < 0.0 {
+                t = ps2::add(t, len);
+            }
+        } else if len < t {
+            t = len;
+        } else if t < 0.0 {
+            t = 0.0;
+        }
+        (self.next, self.frame) = (t, t);
+    }
+
+    fn advance(&mut self) {
+        self.set_frame(self.next);
+        self.next = ps2::add(self.next, self.speed);
+    }
+
+    fn set_anim(&mut self, anim: u32, players: u32) {
+        self.anim = anim;
+        self.set_frame(0.0);
+        // the idle loops play at double speed on alternate ticks with four players
+        self.speed = if players >= 3 && anim < 2 { 2.0 } else { 1.0 };
+        self.advancing = anim != 4;
+        if anim == 4 {
+            self.advance();
+        }
+    }
+
+    /// A random frame in the `k`th of `n` equal parts of `[0, span)`.
+    fn random_frame(&mut self, part: f32, roll: &mut impl FnMut() -> u32) {
+        let k = self.slot as f32;
+        let r = ps2::mul(2.3283064e-10, ps2::utof(roll()));
+        self.set_frame(ps2::lerp(ps2::mul(k, part), ps2::mul(k + 1.0, part), r));
+    }
+
+    /// A point was decided (the game skips faults and lets).
+    pub fn react(&mut self) {
+        self.mode = 1;
+    }
+
+    /// A new point: stop reacting; with `stagger` (a doubles point after the first) restart the idle loops one walker
+    /// per tick.
+    pub fn new_point(&mut self, stagger: bool) {
+        self.mode = 0;
+        if stagger {
+            self.counter = 0;
+        }
+    }
+
+    /// One tick. `cheer`: this walker cheers rather than reacting quietly (the gallery's pick); `tick` the
+    /// gallery's tick counter (with four players, walkers 0–1 advance their idle loop on even ticks, the rest on
+    /// odd); `roll` the game's random number generator.
+    /// ponytail: singles reactions and the game mode where the favoured side decides (cheer or turn away) are not
+    /// recorded; singles always cheers.
+    pub fn step(&mut self, players: u32, cheer: bool, tick: i32, roll: &mut impl FnMut() -> u32) {
+        if self.counter >= 0 {
+            if self.counter == self.slot as i32 {
+                self.set_anim(0, players);
+                self.random_frame(ps2::div(self.lens[0], 6.0), roll);
+            }
+            self.counter += 1;
+            if (self.slot as i32) < self.counter {
+                self.counter = -1;
+            }
+        }
+        if self.mode == 1 {
+            if players == 1 {
+                self.set_anim(5, players);
+            } else {
+                self.set_anim(if cheer { 5 } else { 2 }, players);
+                self.random_frame(5.0, roll);
+            }
+            self.mode = 2;
+        }
+        let ended = self.lens[self.anim as usize] <= self.frame;
+        match self.anim {
+            1..=4 if ended => self.set_anim(0, players),
+            0 if ended => {
+                if (roll() >> 16 & 0x7fff) % 100 + 1 < 21 {
+                    self.set_anim(1, players);
+                } else {
+                    self.set_frame(0.0);
+                }
+            }
+            _ => {}
+        }
+        let go = if players >= 3 && self.anim < 2 { tick % 2 == (self.slot >= 2) as i32 } else { self.advancing };
+        if go {
+            self.advance();
+        }
+    }
+}

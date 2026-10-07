@@ -68,6 +68,12 @@ pub fn div(a: f32, b: f32) -> f32 {
     daz(a / b)
 }
 
+/// An unsigned int to float as the game converts one (`cvt.s.w`, halved and doubled when the top bit is set):
+/// chopped like every other FPU result.
+pub fn utof(u: u32) -> f32 {
+    chop(u as f64)
+}
+
 /// The game's lerp idiom (`adda 0, from` ; `sub to, from` ; `madd w`): from + w·(to − from).
 pub fn lerp(from: f32, to: f32, w: f32) -> f32 {
     madd(add(0.0, from), w, sub(to, from))
