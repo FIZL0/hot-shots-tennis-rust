@@ -243,8 +243,7 @@ fn emitters_count_down_like_the_game() {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let game = Game::new(&cnf, &bin).unwrap();
     let mut courts = Vec::new();
-    // ponytail: courts 2 (slot 10) and 4 (slot 3) still to pass (journal 4-EMITTERS-PART.md)
-    for slot in [5, 7] {
+    for slot in [5, 7, 10, 3] {
         let Ok(d) = std::fs::read(format!("{root}/context/fixtures/trig_s{slot:02}.bin")) else {
             eprintln!("trig_s{slot:02}.bin missing, skipped");
             continue;
@@ -269,7 +268,8 @@ fn emitters_count_down_like_the_game() {
                 down: s[o + 0xd8] != 0,
             }
         };
-        let still = |i: usize| i > 0 && samples[i][4..] == samples[i - 1][4..];
+        // a frame read after the game ticked again shows the objects unchanged in the next sample (court 2, vsync 33655)
+        let still = |i: usize| i > 0 && samples[i][wo(0)..] == samples[i - 1][wo(0)..];
         let (mut ticks, mut plays, mut resets) = (0, 0, 0);
         for i in 1..samples.len() {
             let (a, b) = (samples[i - 1], samples[i]);
@@ -325,5 +325,5 @@ fn emitters_count_down_like_the_game() {
             courts.push(court);
         }
     }
-    assert!(courts.is_empty() || courts.len() >= 2, "fewer than two courts checked: {courts:?}");
+    assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
 }

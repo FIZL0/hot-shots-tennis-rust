@@ -22,6 +22,7 @@ use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
 use hst_sim::motion;
+use hst_sim::npc;
 use hst_sim::params::{self, ShotParams};
 use hst_sim::pose::{ArmIk, contact_solve};
 use hst_sim::player::{self as loco, Stats};
@@ -245,6 +246,8 @@ struct Game {
     errors: u32,
     gallery_game: bool,
     cheers: Vec<(sound::Play, i32)>,
+    /// The court's ambient sound emitters.
+    emitters: Vec<npc::Emitter>,
     /// Which players are on a controller (the gallery favours their side).
     humans: Vec<bool>,
     /// The racket impact a shot started this tick.
@@ -523,6 +526,28 @@ fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, (World, Ve
     (game.line_margin(), game.scoreboard_timing(), (court::world(iso, n), court::materials(&game)), params, umpire)
 }
 
+/// Court `n`'s ambient sound emitters: the trigger creatures that only play sounds, each drawing its first gap.
+// ponytail: they draw from our rng, not the game's shared MT (not ported to the app)
+fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut u32) -> Vec<npc::Emitter> {
+    let Some((list, plants)) = crate::court_layout(iso, n) else { return Vec::new() };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
+    let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
+    let mut roll = || {
+        rand(rng);
+        *rng
+    };
+    npc::spawn(&list, &plants, &game.npc_roster(n as u32), &game.walkers(n as u32), players)
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            npc::Kind::Trigger(t) if npc::EMITTERS.contains(&t) => {
+                let [x, y, z, _] = c.world[3];
+                Some(npc::Emitter::new(t, game.emitter(t), [x, y, z], &mut roll))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Character `c`'s serve tables and spins (see `Game::serve_tables`): the weak toss serves by the `dw1`
 /// variant tables and records (every character's serve variants are weighted −0.5 on disc).
 fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32)>; 2] {
@@ -590,6 +615,7 @@ fn setup(
         errors: 0,
         gallery_game: false,
         cheers: Vec::new(),
+        emitters: Vec::new(),
         humans: Vec::new(),
         jingle: None,
         music_hold: false,
@@ -597,6 +623,7 @@ fn setup(
         hit_effect: None,
     };
     reset_positions(&mut game);
+    game.emitters = emitters(&mut iso, args.stage.map_or(args.court, |s| s as usize), rules.players as u32, &mut game.rng);
     let n = game.players.len();
 
     let Ok(root) = root.single() else { return };
@@ -1549,6 +1576,15 @@ fn simulate(mut g: ResMut<Game>) {
         *rng
     });
     g2.cheers.extend(cheers);
+    for e in &mut g2.emitters {
+        if e.step(&mut || {
+            rand(rng);
+            *rng
+        }) {
+            debug!("emitter type {} sound {}", e.ty, e.row.sound);
+            g2.sounds.push((sound::Play { slot: 0, program: 7, key: e.row.sound as u8, volume: 0x40, speed: 1.0 }, e.pos));
+        }
+    }
     let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
     g2.cam.step(&Scene { players: &players, ball: g2.flight.ball.pos });
     if std::mem::take(&mut g2.cam_cut) {
@@ -1698,6 +1734,9 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.umpire.serve(fresh, false, g.flight.ball.pos);
     g.music_hold = false;
     g.gallery.hush();
+    for e in &mut g.emitters {
+        e.reset(None);
+    }
     g.score.next_point(&g.rules);
     g.rally.next_point();
     g.rally.new_point();

@@ -208,6 +208,9 @@ pub struct Emitter {
     /// Ticks left of the pan sweep after a play.
     pub sweep: i16,
     /// Pan in degrees: the sound's bearing when it starts (`sound::place`), then swept.
+    /// ponytail: the library's listener follows the camera in camera modes 7–10 (the camera's eye pulled a third of
+    /// the way toward its target, clamped to ±8.685 x / ±17.885 z), so the game's start pan differs there; only
+    /// the fixed listener is ported (only type 36 uses the pan audibly)
     pub pan: f32,
     /// Sweep direction: down (true) or up.
     pub down: bool,

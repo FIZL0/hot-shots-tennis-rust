@@ -63,6 +63,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Court collision mesh in play (P15): the ball always meets the disc court's mesh (net, cord, posts, walls, props);
   aimed live-ball recordings (post hits, cord dribble-overs in rallies and serve lets, cord/net stops) bit-exact.
 - Shot buttons (P5a): ✕ topspin, ○ slice, △ lob only; the stick at contact turns topspin flat (within 60° of forward) and slice into a drop shot (within 45° of back; not on serves; smashes unchanged) — 42/42 recorded human aims in round1.bin.
+- P14c2: ambient sound emitters (`npc::Emitter`: countdown, re-arm, pan bit, type-36 sweep) bit-exact on courts 10, 1, 2, 4; wired into play's court sounds.
 
 ## Known gaps / caveats
 
