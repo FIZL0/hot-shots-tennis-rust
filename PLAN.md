@@ -74,6 +74,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **N3e** Music and jingles, MIDI sequencer (in N3) → `snd.rs` · audio.rs | j: 2026-10-07-n3-audio
 - [ ] **N4** Landing markers as the original → `play.rs` landing/mark_landing
 - [ ] **P16b** Changing ends: with more than one human player, keep the camera on the same side; only swap it in solo games (user 2026-10-07) → `play.rs` camera/next_point · `flow.rs`
+- [ ] **N3f** Whiff voice (bug, user 2026-10-07): the miss voice line plays on every swing that doesn't reach the ball; the original only voices some whiffs. Find its rule (chance, cooldown, which swings) and match it → `sound.rs` · `play.rs` whiff | t: sound.rs | j: 2026-10-07-n3-audio
+- [ ] **B1** Render errors (bug, user 2026-10-07): the app floods the log with `ERROR bevy_render::slab_allocator: Use-after-free: attempted to copy element data for an unallocated key`. Find which meshes are freed while still queued (likely something spawned/despawned or mesh-replaced every frame; P9's effects came in just before) and fix so no errors print in play → `play.rs` · `character.rs` · `main.rs`
 
 ### Match basics
 
