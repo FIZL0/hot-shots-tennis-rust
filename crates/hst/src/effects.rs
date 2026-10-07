@@ -215,6 +215,18 @@ fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, ima
     Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }))
 }
 
+/// Write a frame's quads into a dynamic mesh. Nothing to draw still writes one invisible degenerate triangle: Bevy's
+/// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
+fn fill(mesh: &mut Mesh, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
+    if pos.is_empty() {
+        (pos, uv, colour, index) = (vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[0.0; 4]; 3], vec![0, 0, 0]);
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+    mesh.insert_indices(bevy::mesh::Indices::U32(index));
+}
+
 pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
     let mut looks = Vec::new();
     for k in IMPACTS {
@@ -249,7 +261,6 @@ impl HitSparks {
 /// The sparks as quads facing the camera (game space: the camera's right and screen-down axes), fading over their
 /// last frames.
 pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<Camera3d>>, mut vis: Query<&mut Visibility>, mut meshes: ResMut<Assets<Mesh>>) {
-    use bevy::mesh::{Indices, Mesh};
     let (Ok(cam), Ok(mut v)) = (cam.single(), vis.get_mut(fx.view)) else { return };
     *v = if fx.sparks.live { Visibility::Visible } else { Visibility::Hidden };
     let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
@@ -268,10 +279,7 @@ pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<Camera3d>>, m
         index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
     }
     debug_assert!(pos.len() <= 4 * SPARKS);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
-    mesh.insert_indices(Indices::U32(index));
+    fill(&mut mesh, pos, uv, colour, index);
 }
 
 /// A player's swing trail and the motion (id, serial) last seen, to catch a swing's start.
@@ -320,7 +328,6 @@ pub fn tick_trails(mut q: Query<(&crate::character::Rig, &crate::character::Moti
 
 /// Every live trail as one ribbon mesh: inner edge u = 1, outer u = 0, v along the swing, alpha fading to the tail.
 pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<Assets<Mesh>>) {
-    use bevy::mesh::Indices;
     let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
     let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
     for t in &q {
@@ -335,10 +342,7 @@ pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<As
             }
         }
     }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
-    mesh.insert_indices(Indices::U32(index));
+    fill(&mut mesh, pos, uv, colour, index);
 }
 
 /// The ball's flight ribbon and glow, each one mesh.
@@ -396,7 +400,6 @@ impl BallFlight {
 // ponytail: the game's tilt of a disc flying along the court, its texture flip by facing and its halved ribbon
 // length under one of its mode counts are left out
 pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<Camera3d>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), Without<Camera3d>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    use bevy::mesh::Indices;
     let Ok((cam, proj)) = cam.single() else { return };
     let fov = if let Projection::Perspective(p) = proj { p.fov } else { 0.8 };
     // world → game space: (x, −y, −z)
@@ -444,10 +447,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
             }
         }
     }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
-    mesh.insert_indices(Indices::U32(index));
+    fill(&mut mesh, pos, uv, colour, index);
 }
 
 /// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
@@ -537,7 +537,6 @@ pub fn draw_bounce(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    use bevy::mesh::Indices;
     let b = &fx.bounce;
     pose(&b.ring, &fx.ring, &mut q, &mut joints, &mut materials);
     pose(&b.crater, &fx.crater, &mut q, &mut joints, &mut materials);
@@ -553,10 +552,7 @@ pub fn draw_bounce(
             colour.extend([c; 4]);
             index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
-        mesh.insert_indices(Indices::U32(index));
+        fill(mesh, pos, uv, colour, index);
     };
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
     let mut quads = vec![];
