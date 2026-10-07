@@ -47,3 +47,8 @@ See 3-P11E3-GUESS-FINAL.md. Done: `AiParams::guess`, `Guess`, tests `guesses_mat
 
 See 4-P11B-MIND-FINAL.md. Done: `hst_sim::ai::Mind` and the serve spot/wait, test `minds_match_the_game` (fixture
 `ai_mind_s05.bin`); `play.rs` `ai_update` / `ai_heard_shot` / `bot_serve`.
+
+## P11c (reaction)
+
+See 5-P11C-REACTION-FINAL.md. Done: `AiParams::reaction`, test `reactions_match_the_game` (fixture `ai_pos_s05.bin`);
+`play.rs` `ai_draw_guess` / `ai_guessing` / `bot` hold the bot for it. The shot record's kind is the branch (3 dive, 4 smash).
