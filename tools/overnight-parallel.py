@@ -205,11 +205,27 @@ def flush():
     screen = sp.run(['tmux', 'capture-pane', '-p', '-t', m], capture_output=True, text=True).stdout
     if re.search(r'…\s\(\d|esc to interrupt', screen):
         return  # ponytail: busy = the TUI's spinner line ("✽ Working… (2m 3s"); breaks if Claude Code redraws it
-    for keys in ['/clear', ' '.join(MASTER.format(slots=SLOTS).split('\n')) + ' ' + q[0]]:
-        sp.run(['tmux', 'send-keys', '-t', m, '-l', keys])
-        sp.run(['tmux', 'send-keys', '-t', m, 'Enter'])
-        time.sleep(5)  # /clear finishes, the spinner shows before the next look
+    if not (enter(m, '/clear') and enter(m, ' '.join(MASTER.format(slots=SLOTS).split('\n')) + ' ' + q[0])):
+        return  # not taken: the line stays queued for the next look
     open(OUTBOX, 'w').write(''.join(l + '\n' for l in q[1:]))
+
+
+def enter(pane_id, text):
+    """Type text into a Claude Code pane and submit it; True once its input box is empty again. Keys sent straight
+    after each other got mixed up (a leftover "s" before /clear, a report that came out as /resume), so: clear the
+    box (Ctrl-U), paste the text in one bracketed paste, let the TUI take it, then Enter until the box empties."""
+    sp.run(['tmux', 'send-keys', '-t', pane_id, 'C-u'])
+    sp.run(['tmux', 'set-buffer', '-b', 'hst', text])
+    sp.run(['tmux', 'paste-buffer', '-p', '-d', '-b', 'hst', '-t', pane_id])
+    for _ in range(5):
+        time.sleep(2)
+        sp.run(['tmux', 'send-keys', '-t', pane_id, 'Enter'])
+        time.sleep(3)
+        screen = sp.run(['tmux', 'capture-pane', '-p', '-t', pane_id], capture_output=True, text=True).stdout
+        box = [l for l in screen.splitlines() if l.startswith('❯')]
+        if box and box[-1].strip() == '❯':
+            return True
+    return False
 
 
 def adopt():
@@ -281,8 +297,7 @@ def watch(n):
         msg = (f'From the runner: your PCSX2 (copy {n}) is on the match-over screen ("Game, Set, Match!"; screenshot '
                f'{png}) while something drives it. Anything a capture recorded after the match ended is not gameplay: '
                'stop or cut it, and re-record from a save state if you need more.')
-        sp.run(['tmux', 'send-keys', '-t', pane_id, '-l', msg])
-        sp.run(['tmux', 'send-keys', '-t', pane_id, 'Enter'])
+        enter(pane_id, msg)
 
 
 def main():
