@@ -389,3 +389,95 @@ fn dive_thuds_match_the_game() {
     assert_eq!(heard, want);
     assert_eq!(s[want[0]].play[2], thud.volume);
 }
+
+/// The players' shouts in the same match (doubles, voice banks of `spu_s05.csv`): every launch keys
+/// `sound::stroke_shout`'s program on the hitter's own bank that frame or the next — always where the shout is
+/// certain, never where it cannot be, by chance otherwise — and every dive program 3 as it starts (that frame or the next); each
+/// key is in its range and programs 1 and 2 never repeat a player's last key. No other stroke or dive shouts.
+#[test]
+fn shouts_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(csv) = std::fs::read_to_string(format!("{root}/context/fixtures/spu_s05.csv")) else { return };
+    let Some((data, _)) = Court::load("hits_s05.bin") else { return };
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    // the four players' banks: name, header, SPU address, sample size
+    let mut banks = Vec::new();
+    let rows: Vec<Vec<&str>> = csv.lines().map(|l| l.split(',').collect()).collect();
+    for v in rows.iter().filter(|v| v[0] == "bank" && v[2].contains("/DBL/")) {
+        let xb = iso.read(v[1]).unwrap();
+        let arc = Archive::parse(&xb).unwrap();
+        let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
+        banks.push((v[2], read(v[2]), v[3].parse::<u32>().unwrap(), read(&v[2].replace(".hd", ".bd")).len() as u32));
+    }
+    assert_eq!(banks.len(), 4);
+    let s = samples(&data, 0x330);
+    // voice key-ons of frame k: bank index, program, key
+    let heard = |k: usize| -> Vec<(usize, u8, u8)> {
+        let x = &s[k];
+        let mut out = Vec::new();
+        for c2 in x.cmds.iter().filter(|c| c[0] == 2 && c[3] != 8) {
+            let Some(c3) = x.cmds.iter().find(|c| c[0] == 3 && c[1] == c2[1]) else { continue };
+            for (b, (_, hd, base, _)) in banks.iter().enumerate().filter(|(_, b)| (b.2..b.2 + b.3).contains(&c3[2])) {
+                let bank = Bank::parse(hd).unwrap();
+                let pk = (0..16).flat_map(|p| (0..16).map(move |k| (p, k))).find(|&(p, k)| {
+                    bank.key_ons(p, k).into_iter().flatten().any(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && base + t.sample() as u32 == c3[2]))
+                });
+                out.push((b, pk.unwrap().0 as u8, pk.unwrap().1 as u8));
+            }
+        }
+        out
+    };
+    let i = |b: &[u8], o: usize| u(b, o) as i32;
+    let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
+    let (mut bank_of, mut last) = ([None; 4], [[None; 2]; 4]);
+    let (mut sure, mut chance, mut dives, mut quiet) = (0, 0, 0, 0);
+    let mut check = |k: usize, p: usize, want: Option<u8>, may: Option<u8>| {
+        let got: Vec<_> = (k..=k + 1).flat_map(|j| heard(j)).filter(|v| v.1 < 6).collect();
+        assert!(got.len() <= 1, "frame {k}: {got:?}");
+        match (got.first(), want, may) {
+            (None, None, _) => quiet += (may.is_none()) as i32,
+            (Some(&(b, prog, key)), _, Some(m)) if prog == m && want.is_none_or(|w| w == m) => {
+                assert_eq!(*bank_of[p].get_or_insert(b), b, "player {p} on two banks");
+                assert!(key <= 1, "frame {k}: key {key}");
+                if let 1 | 2 = prog {
+                    let l = &mut last[p][prog as usize - 1];
+                    assert_ne!(*l, Some(key), "frame {k}: player {p} repeats program {prog} key {key}");
+                    *l = Some(key);
+                }
+                if prog == sound::DIVE_SHOUT { dives += 1 } else if want.is_some() { sure += 1 } else { chance += 1 }
+            }
+            (got, _, _) => panic!("frame {k} player {p}: heard {got:?}, want {want:?} / may {may:?}"),
+        }
+    };
+    for k in 1..s.len() - 2 {
+        let (a, h) = (s[k - 1].hit, s[k].hit);
+        for p in 0..4 {
+            if h[fx(0xd4) + p] != 0 && h[fx(0xd8) + 8 * p + 5] == 3 {
+                check(k, p, Some(sound::DIVE_SHOUT), Some(sound::DIVE_SHOUT));
+            }
+        }
+        let n = i(h, rally + 0x20);
+        if n == i(a, rally + 0x20) || n == 0 {
+            continue;
+        }
+        let p = i(h, rally + 0x18) as usize;
+        let rec = fx(0xd8 + 8 * p);
+        let hit = sound::Hit {
+            branch: h[rec + 5],
+            grade: h[rec + 4],
+            offset: i(h, rec),
+            kind: i(h, fx(0xd0)),
+            framed: h[fx(0xbc)] != 0,
+            dull: h[fx(0xbd)] != 0,
+            strong_toss: i(h, 0xf0 + 0x3ea0 - 0x3e90) == 1,
+            ..Default::default()
+        };
+        if hit.branch == 3 {
+            continue;
+        }
+        check(k, p, sound::stroke_shout(&hit, 0, 4, || 99), sound::stroke_shout(&hit, 0, 4, || 0));
+    }
+    eprintln!("{sure} certain shouts, {chance} by chance, {dives} dives, {quiet} quiet strokes; banks {bank_of:?}");
+    assert!(sure >= 10 && dives == 2);
+    // ponytail: programs 4 (a missed swing) and 6–10 (reactions after the point) are N3d2
+}

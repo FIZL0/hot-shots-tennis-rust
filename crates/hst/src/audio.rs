@@ -212,6 +212,17 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     commands.insert_resource(sound);
 }
 
+/// The players' voice banks (slots 1 and up), from `play.rs`'s line-up.
+#[derive(Resource)]
+pub struct VoiceBanks(pub Vec<Option<Arc<SoundBank>>>);
+
+/// Character `c`'s voice bank for a game of `players`: the singles (`sgv`) or doubles (`dvv`) set, variant a or b.
+pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<SoundBank> {
+    let (n, set, tag) = if players < 3 { (0, "SGL", "sgv") } else { (4, "DBL", "dvv") };
+    let v = if b { 'b' } else { 'a' };
+    SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + b as usize), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
+}
+
 /// The court's sound-effect bank.
 #[derive(Resource)]
 pub struct CourtBank(pub Option<Arc<SoundBank>>);
@@ -228,6 +239,17 @@ fn mix(iso: &mut Iso) -> Mix {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every character's voice banks load from the disc.
+    #[test]
+    fn loads_voice_banks() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        for (c, players, b) in [(0, 2, false), (6, 2, true), (5, 4, true), (0, 4, false)] {
+            assert!(voice_bank(&mut iso, c, players, b).is_some(), "character {c}, {players} players, b {b}");
+        }
+    }
 
     /// The first system sound renders: the voice keys on, sounds, and ends.
     #[test]

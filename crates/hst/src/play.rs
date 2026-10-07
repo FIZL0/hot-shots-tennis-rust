@@ -30,7 +30,7 @@ use hst_sim::sound;
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
 use hst_sim::swing::{self, PathPoint, Reach};
 
-use crate::audio::{CourtBank, Sound};
+use crate::audio::{CourtBank, Sound, VoiceBanks, voice_bank};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace, Orbit};
 
@@ -222,6 +222,8 @@ struct Game {
     pelvis: Vec<Vec<[f32; 2]>>,
     /// Each player's character number and data.
     chars: Vec<i32>,
+    /// Each player's last shouts.
+    voices: Vec<sound::Voice>,
     data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
@@ -520,6 +522,7 @@ fn setup(
         cam_owner: Some(0),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
         chars: vec![0; rules.players as usize],
+        voices: vec![default(); rules.players as usize],
         data: Vec::new(),
         post_winner: 0,
     };
@@ -528,6 +531,7 @@ fn setup(
 
     let Ok(root) = root.single() else { return };
     // the characters on court, from the disc (each loaded once)
+    let mut voices = Vec::new();
     let mut loaded: std::collections::HashMap<usize, std::sync::Arc<CharacterData>> = Default::default();
     for i in 0..n {
         // default line-up: player 1 is Carol (character 6), then characters 1, 2, 3
@@ -545,11 +549,14 @@ fn setup(
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
+        // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
+        voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
     commands.insert_resource(game);
+    commands.insert_resource(VoiceBanks(voices));
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
@@ -691,6 +698,12 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         ..default()
     };
     g.sounds.extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
+    let n = g.players.len() as u32;
+    if let Some(program) = sound::stroke_shout(&hit, g.chars[who], n, || (rand(&mut g.rng) * 100.0) as u32) {
+        let r = (rand(&mut g.rng) * 32768.0) as u32;
+        let shout = g.voices[who].shout(who, program, n, r);
+        g.whooshes.push((0, who, shout));
+    }
     g.smashed = branch == 4 && g.rules.players > 1;
     g.whistle = if kind == 3 { (true, g.whistle.1 + 1) } else { (false, g.whistle.1) };
     // every recorded smash (kind 0) spins 5°; ponytail: kind 1's own spin waits for the per-character records
@@ -1047,6 +1060,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             // ponytail: clear weather (see Stats), so the thud's key is 0
             let thud = sound::dive_thud(0);
             g.whooshes.extend([(0, i, thud), (sound::dive_echo(g.players.len() as u32), i, thud)]);
+            let r = (rand(&mut g.rng) * 32768.0) as u32;
+            let shout = g.voices[i].shout(i, sound::DIVE_SHOUT, g.players.len() as u32, r);
+            g.whooshes.push((0, i, shout));
             let p = &mut g.players[i];
             let dir = [d.dir[0], 0.0, d.dir[1], 0.0];
             p.body.target = dir;
@@ -1721,7 +1737,7 @@ fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
 
 /// Plays the sounds due on the court's bank.
 /// The flight whistle follows the ball: started at the hit, re-placed and re-pitched each tick, stopped at the bounce.
-fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>, mut whistle: Local<(u32, u64)>) {
+fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<CourtBank>>, voices: Option<Res<VoiceBanks>>, mut whistle: Local<(u32, u64)>) {
     let g = &mut *g;
     for w in &mut g.whooshes {
         w.0 = w.0.saturating_sub(1);
@@ -1733,9 +1749,12 @@ fn play_sounds(mut g: ResMut<Game>, sound: Option<Res<Sound>>, bank: Option<Res<
     g.whooshes.retain(|w| w.0 > 0);
     let due = std::mem::take(&mut g.sounds);
     let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else { return };
-    // ponytail: slot 9 (framed hits) is the character's bank, not loaded yet — N3d
-    for (p, at) in due.into_iter().filter(|(p, _)| p.slot == 0) {
-        sound.play_at(&bank, p, at);
+    // slot 0 the court, 1.. the players' voices; ponytail: slot 9 (framed hits) is a character bank not loaded yet
+    for (p, at) in due {
+        let b = if p.slot == 0 { Some(&bank) } else { voices.as_ref().and_then(|v| v.0.get(p.slot as usize - 1)?.as_ref()) };
+        if let Some(b) = b {
+            sound.play_at(b, p, at);
+        }
     }
     let ball = g.flight.ball.pos;
     if whistle.0 != g.whistle.1 || !g.whistle.0 {

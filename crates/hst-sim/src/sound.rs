@@ -173,6 +173,58 @@ pub fn dive_echo(players: u32) -> u32 {
     4 / players
 }
 
+/// The shout a stroke's launch plays on the hitter's voice bank (`Voice::shout`), by program: 0 for a serve off a
+/// strong toss with grade 1 or 2 and for every smash; 2 (a strain) for a mis-hit; for a ground stroke or volley 1 on
+/// the sweet frame or by chance at grade 2, else 2 by chance at grade 3 or 4. The chance is 40% (20% with more than
+/// two players; halved for characters 9 and 10 at grades 3/4); `roll` draws 0..99. Dives shout at their start
+/// (`DIVE_SHOUT`), the other strokes stay quiet.
+/// ponytail: the singles close-up camera's own shout (program 0/1 when the stroke stayed quiet) is left out with the
+/// camera.
+pub fn stroke_shout(h: &Hit, character: i32, players: u32, mut roll: impl FnMut() -> u32) -> Option<u8> {
+    let chance = if players < 3 { 40 } else { 20 };
+    match h.branch {
+        3 => None,
+        _ if h.framed || h.dull => Some(2),
+        0 => (h.strong_toss && matches!(h.grade, 1 | 2)).then_some(0),
+        4 => Some(0),
+        _ if h.offset.abs() < 2 || (h.grade == 2 && roll() < chance) => Some(1),
+        _ if matches!(h.grade, 3 | 4) && roll() < if matches!(character, 9 | 10) { chance / 2 } else { chance } => Some(2),
+        _ => None,
+    }
+}
+
+/// The dive's shout program, played as the dive starts.
+pub const DIVE_SHOUT: u8 = 3;
+
+/// One player's voice: the last key of programs 1 and 2 (no shout repeats its program's last key).
+#[derive(Clone, Copy, Debug)]
+pub struct Voice([i32; 2]);
+
+impl Default for Voice {
+    fn default() -> Self {
+        Self([-1; 2])
+    }
+}
+
+impl Voice {
+    /// Player `player`'s shout of `program` (bank slot 1 + player, 0x80 at the player): a random key, `r` a random
+    /// draw, from 0..=hi other than the program's last — hi 4 for program 1 and 2 for the others with up to two
+    /// players, else 1.
+    pub fn shout(&mut self, player: usize, program: u8, players: u32, r: u32) -> Play {
+        let hi = if players > 2 { 1 } else if program == 1 { 4 } else { 2 };
+        let last = match program {
+            1 | 2 => Some(&mut self.0[program as usize - 1]),
+            _ => None,
+        };
+        let keys: Vec<i32> = (0..=hi).filter(|&k| last.as_ref().is_none_or(|l| **l != k)).collect();
+        let key = keys[r as usize % keys.len()];
+        if let Some(l) = last {
+            *l = key;
+        }
+        play(1 + player as u8, program, key as u8, 0x80)
+    }
+}
+
 /// The play-speed scale word the driver multiplies the pitch by: the speed clamped to 0..2, in 1/4096ths.
 pub fn speed_word(speed: f32) -> u32 {
     (crate::ps2::mul(speed.clamp(0.0, 2.0), 4096.0) as i32) as u32
