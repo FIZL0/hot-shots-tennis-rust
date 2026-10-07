@@ -191,6 +191,10 @@ struct Game {
     /// Player who hit last (−1: none yet).
     last_hitter: i32,
     since_hit: u32,
+    /// The ball as it was struck, for the prediction the original held when the ball touched the net.
+    hit_flight: Flight,
+    /// Court contacts the original's predicted path keeps after the ball touches the net (0 before).
+    path_base: i32,
     score: Score,
     rally: Rally,
     /// Shots this rally (1 = the serve).
@@ -503,6 +507,8 @@ fn setup(
         phase: Phase::Serve,
         last_hitter: -1,
         since_hit: 0,
+        hit_flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
+        path_base: 0,
         score: Score::new(),
         rally: Rally::default(),
         shots: 0,
@@ -720,6 +726,8 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     g.prev_ball = at;
     g.last_hitter = who as i32;
     g.since_hit = 0;
+    g.hit_flight = g.flight;
+    g.path_base = 0;
     g.phase = Phase::Rally;
 }
 
@@ -892,12 +900,16 @@ fn aim_target(g: &Game, stick: Vec2, end: f32) -> V3 {
     [x, 0.0, end * 8.0 + stick.y.clamp(-1.0, 1.0) * 2.8] // 5.2 .. 10.8 m past the net
 }
 
-/// The ball's predicted path for the contact search: this frame's ball, then one step per frame.
+/// The ball's predicted path for the contact search: this frame's ball, then one step per frame. As the
+/// original's, it is stepped against the court only (never the net) and counts court contacts; once the ball
+/// has touched the net the original re-seeds it from the ball but keeps the contacts its old prediction had
+/// reached (`path_base`), so a net cord in a rally is past every contact search and goes unplayed.
 fn predicted_path(g: &Game, frames: usize) -> Vec<PathPoint> {
     let mut f = g.flight;
+    f.net = false;
     let mut path = Vec::with_capacity(frames);
     for _ in 0..frames {
-        path.push(PathPoint { pos: f.ball.pos, bounces: f.bounces });
+        path.push(PathPoint { pos: f.ball.pos, bounces: g.path_base + f.contacts });
         f.step(&g.shot, &COURTS[g.court]);
     }
     path
@@ -1471,10 +1483,13 @@ fn simulate(mut g: ResMut<Game>) {
     g.prev_ball = g.flight.ball.pos;
     let (shot, surface) = (g.shot, &COURTS[g.court]);
     g.flight.in_play = g.shots > 0;
-    let before = g.flight.bounces;
+    let (before, touched) = (g.flight.bounces, g.flight.special_contacts);
     match &g.world {
         Some((world, materials)) => g.flight.step_world(&shot, surface, world, materials),
         None => g.flight.step(&shot, surface),
+    }
+    if touched == 0 && g.flight.special_contacts > 0 {
+        g.path_base = g.hit_flight.predicted_contacts(&shot, surface, g.since_hit);
     }
     // bounce sounds stop once the point is decided (the deciding bounce still plays)
     let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
