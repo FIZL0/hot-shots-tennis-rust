@@ -337,3 +337,109 @@ fn human_pad_replay() {
         assert_eq!(bad, 0, "{file}");
     }
 }
+
+/// A left-hander's stand/run motion and facing: Will (character 11, the CPU's player 3 in slot 4, hand −1)
+/// through the slot-4 recordings, with his pelvis rows from the disc and stats from TParam.csv.
+#[test]
+fn lefty_s04() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{Skeleton, first_frame};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("ISO absent, skipped");
+    };
+    let c = 11;
+    let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    let e = arc.entries.iter().find(|e| { let n = e.name.to_ascii_lowercase(); n.contains(&format!("pc{c:02}_t")) && n.ends_with("_c00.mdl") }).unwrap();
+    let m = mdl::parse(&arc.read(e).unwrap()).unwrap();
+    let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+    let hip = sk.names.iter().position(|n| n == "Bip01Pelvis").unwrap();
+    let anims = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+    let aarc = Archive::parse(&anims).unwrap();
+    let pelvis: Vec<[f32; 2]> = (0..48)
+        .map(|mo| {
+            let stem = ani::motion_name(mo, c).unwrap().to_ascii_lowercase();
+            aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).map_or([0.0, 1.0], |e| {
+                let r = first_frame(&sk, &ani::parse(&aarc.read(e).unwrap()).unwrap())[hip][2];
+                [r[0], r[2]]
+            })
+        })
+        .collect();
+    let p_v4 = |fr: Frame, p: usize, off: usize| [0, 4, 8, 12].map(|o| fr.player_f32(p, off + o));
+    let (p, hand) = (3, -1.0);
+    let (mut motions, mut bad_motion, mut faces, mut bad_face) = (0, 0, 0, 0);
+    for file in ["p7_carol_s04.bin", "p7_kaito_s04.bin"] {
+        let Ok(rec) = std::fs::read(format!("{dir}/{file}")) else {
+            eprintln!("{file} absent, skipped");
+            continue;
+        };
+        let frames = frames_live(&rec);
+        for k in 1..frames.len() {
+            let (a, fr) = (frames[k - 1], frames[k]);
+            if f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 || fr.gm()[0x55] != a.gm()[0x55] {
+                continue;
+            }
+            let fwd = if fr.player_f32(p, 0x3d78) < 0.0 { 1.0 } else { -1.0 };
+            let (mode, run, stamina) = (p_u8(fr, p, 0x3fa5), p_i32(fr, p, 0x3dfc), p_i32(fr, p, 0x3df4));
+            let target = p_v3(fr, p, 0x3dc0);
+            let turned = p_u8(fr, p, 0x3dd1) != 0 || p_u8(a, p, 0x3dd1) != 0;
+            let current = base_motion(p_i32(a, p, 0x3df0));
+            let want = p_i32(fr, p, 0x3df0);
+            if p_u8(fr, p, 0x3fa4) == 0 && mode <= 1 && p_u8(a, p, 0x3fa5) <= 1 && want < 16 {
+                let m = if mode == 1 {
+                    let d = if turned { p_v3(a, p, 0x3d60) } else { target };
+                    run_motion(current, angle(d, fwd, hand), dashing(&Stats::new(11, 25, 40, [8, 4, 7], 0), run))
+                } else {
+                    let d = if turned { p_v3(a, p, 0x3d60) } else { [0.0, 0.0, fwd] };
+                    let (old, new) = (a.global(0x423058), fr.global(0x423058));
+                    let before = old != new && (p as i32) < new;
+                    let ball = if before { a.live_ball() } else { fr.live_ball() };
+                    stand_motion(angle(d, fwd, hand), || {
+                        stance(&StanceInput {
+                            players: 4,
+                            phase: fr.gm()[0x55],
+                            last_hitter: if before { old } else { new },
+                            team: p as i32,
+                            current,
+                            watching: true,
+                            pos: fr.player_pos(p),
+                            ball: [f(ball, 0xe0), f(ball, 0xe4), f(ball, 0xe8)],
+                            ball_dir: [f(ball, 0x140), f(ball, 0x144), f(ball, 0x148)],
+                            hand,
+                        })
+                    })
+                };
+                motions += 1;
+                if with_tiredness(m, stamina) != want {
+                    bad_motion += 1;
+                    if bad_motion <= 10 {
+                        eprintln!("{file} motion k={k} mode={mode} current={current} turned={turned} target {target:?}: {m} vs {want}");
+                    }
+                }
+            }
+            if p_u8(fr, p, 0x3fa4) == 0 {
+                let mut face = Facing { dir: p_v4(a, p, 0x3d60), turned: p_u8(fr, p, 0x3dd1) != 0, reversed: p_u8(fr, p, 0x3dd0) != 0, way: p_i32(a, p, 0x3dd4), cross: p_v4(a, p, 0x3de0) };
+                let (start, now) = (p_i32(a, p, 0x3df0), p_i32(fr, p, 0x3df0));
+                if !(0..48).contains(&start) || !(0..48).contains(&now) {
+                    continue;
+                }
+                let target = p_v4(fr, p, 0x3dc0);
+                if mode >= 2 && mode != p_u8(a, p, 0x3fa5) {
+                    face.dir = target;
+                }
+                turn(&mut face, target, fwd, hand, start as usize, base_motion(start), now as usize, &pelvis);
+                faces += 1;
+                let want = (p_v4(fr, p, 0x3d60), p_i32(fr, p, 0x3dd4));
+                if (face.dir.map(f32::to_bits), face.way) != (want.0.map(f32::to_bits), want.1) {
+                    bad_face += 1;
+                    if bad_face <= 10 {
+                        eprintln!("{file} facing k={k} start={start:#x} now={now:#x}: {:?} way {} vs {:?} way {}", face.dir, face.way, want.0, want.1);
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("lefty: motion {motions} checked, {bad_motion} off; facing {faces} checked, {bad_face} off");
+    assert_eq!((bad_motion, bad_face), (0, 0));
+}
