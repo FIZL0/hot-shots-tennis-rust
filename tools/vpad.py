@@ -33,8 +33,7 @@ def serve():
         "start": e.BTN_START, "l1": e.BTN_TL, "r1": e.BTN_TR, "l3": e.BTN_THUMBL, "r3": e.BTN_THUMBR,
         "guide": e.BTN_MODE, "select": e.BTN_SELECT,
     }
-    if INST:  # SDL's guessed layout for pad N (an unknown USB id) swaps the bottom and right face buttons
-        buttons["cross"], buttons["circle"] = e.BTN_B, e.BTN_A
+    # (no swap for pad N: with it, "cross" reached PCSX2 copy 4 as ○ — pad word 0x4000, shot code 2, slice; N5)
     stick = AbsInfo(0, -32768, 32767, 16, 128, 0)
     trig = AbsInfo(0, 0, 255, 0, 0, 0)
     hat = AbsInfo(0, -1, 1, 0, 0, 0)

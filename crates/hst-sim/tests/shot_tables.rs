@@ -76,12 +76,21 @@ fn stick_turns_topspin_flat_and_slice_drop() {
 /// Every smash of the slot-5 doubles match (`match_s05.bin`, all smash kind 0) against the hitter's own character's
 /// `smsh0` table: the lookup runs from the hit to the ball's stored target (+0x70, +0x80), both shifted back by the
 /// hitter's timing scatter (1.5 × the swing's late/early offset +0x3ecc along the shot, scaled by +0x3ee0 less
-/// +0x3edc); speed, elevation and flight frames must match the launch. (Four of them, by characters 2 and 5, were
+/// +0x3edc, and 1.5 × the side offset across it, see `smashes`); speed, elevation and flight frames must match the launch. (Four of them, by characters 2 and 5, were
 /// off while character 0's table stood in for everyone.)
 #[test]
 fn smashes_launch_like_the_game() {
     let Some((smashes, exact)) = smashes("match_s05.bin", 0) else { return };
     assert_eq!((smashes, exact), (9, 9));
+}
+
+/// The human's smashes in a slot-4 doubles game driven by the virtual pad (`tools/record_human_smash.py`, P1 human,
+/// the opponents' strokes turned into lobs): two with each of ✕ and ○ (kind 0) and △ (kind 1), plus the partner's.
+#[test]
+fn human_smashes_launch_like_the_game() {
+    let (Some(k0), Some(k1)) = (smashes("human_smash_s04.bin", 0), smashes("human_smash_s04.bin", 1)) else { return };
+    eprintln!("kind 0 {k0:?}, kind 1 {k1:?}");
+    assert!(k0.0 >= 4 && k0.0 == k0.1 && k1.0 >= 2 && k1.0 == k1.1, "kind 0 {k0:?}, kind 1 {k1:?}");
 }
 
 /// The smash in the slot-3 match with a human (`new_recording.bin`), by the bot opponent (character 8).
@@ -128,9 +137,15 @@ fn smashes(fixture: &str, kind: i32) -> Option<(usize, usize)> {
         let Some(p) = (0..4).find(|&p| w[1].player_f32(p, 0x3ec0).to_bits().to_le_bytes()[1] == 4) else { continue };
         let late = w[1].player_f32(p, 0x3ecc).to_bits() as i32 as f32 / 10.0;
         let scatter = 1.5 * (if late < 0.0 { 2.0 * late } else { late } * w[1].player_f32(p, 0x3ee0) - w[1].player_f32(p, 0x3edc));
-        let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
-        let n = (dx * dx + dz * dz).sqrt();
-        let s = [scatter * dx / n, scatter * dz / n];
+        // and 1.5 × the side offset (+0x3ed0, already stepped by +0x3ed4 and clamped) across it, to the right of the
+        // unscattered shot direction u (side = up × u = (u.z, −u.x)); the stored target carries the scatter, so u is
+        // recovered from w = target − hit = c·u + side·(u.z, −u.x)
+        let side = 1.5 * (w[1].player_f32(p, 0x3ed0).to_bits() as i32 as f32 / 10.0 / 2.0);
+        let (wx, wz) = (target[0] - hit[0], target[2] - hit[2]);
+        let w2 = wx * wx + wz * wz;
+        let c = (w2 - side * side).sqrt();
+        let u = [(c * wx - side * wz) / w2, (c * wz + side * wx) / w2];
+        let s = [scatter * u[0] + side * u[1], scatter * u[1] - side * u[0]];
         let l = lookup(&table(w[1].global(0x422fa8 + 4 * p)).unwrap(), &Bounds::smash(kind), [hit[0] - s[0], hit[1], hit[2] - s[1]], [target[0] - s[0], 0.0, target[2] - s[1]]);
         let v = launch(hit, target, l.elevation, l.speed);
         let err = (0..3).map(|j| (v[j] - vel[j]).abs()).fold(0.0, f32::max);
