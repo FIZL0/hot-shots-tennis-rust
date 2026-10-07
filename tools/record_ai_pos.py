@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Record the computer players' AI objects, positions and the ball every frame from a save-state load (P11e).
 Usage: record_ai_pos.py <slot> <frames> <out.bin>.
-Header: u32 count (4); per player u32 player address, u32 AI address (*(player + 0x80)), then the player's
+Header: u32 count (players, | 0x100 when the extras are there); per player u32 player address, u32 AI address (*(player + 0x80)), then the player's
 0x12b0..0x12c0 (side sign f32, ?, index u32, ?) and 0x13f0..0x13f8 (pad u32, formation byte at +4); u32 ball address; u32 shot-record table address (*(gm + 0xa4)).
 Sample = u32 vsync, the score globals 0x423048..0x423060, the MT19937 at 0x427130 (0x9d0), the ball's 0xb0..0xf0,
 the 4 per-player shot records (table + 0x70 + 0x30i, 0x30 each; the shot's position at +0x20),
-then per player its 0x3d70..0x3d80 (position) and its AI's first 0x280 bytes. A frame that ticks mid-read is skipped."""
+then per player its 0x3d70..0x3d80 (position) and its AI's first 0x280 bytes, then (extras) per player its 0x3e90..0x3ea0
+(the shot's target), 0x3ec0..0x3ed0 and 0x3f90..0x3fa0 (swing state). A frame that ticks mid-read is skipped."""
 import struct, sys, time
 from pine import Pine
 
@@ -16,15 +17,16 @@ p = Pine()
 p.load_state(slot)
 time.sleep(0.3)
 gm0 = p.read32(GM_PTR)
-pls = [p.read32(gm0 + 0xa8 + 4 * i) for i in range(4)]
+pls = [a for a in (p.read32(gm0 + 0xa8 + 4 * i) for i in range(4)) if a]  # 2 in singles
 ais = [p.read32(a + 0x80) for a in pls]
 ball, recs = p.read32(gm0 + 0x88), p.read32(gm0 + 0xa4)
-out.write(struct.pack("<I", 4))
+out.write(struct.pack("<I", len(pls) | 0x100))
 for pl, ai in zip(pls, ais):
     out.write(struct.pack("<2I", pl, ai) + p.read_regions([(pl + 0x12b0, 0x10), (pl + 0x13f0, 8)]))
 out.write(struct.pack("<2I", ball, recs))
 regions = [(0x423048, 0x18), (MT, 0x9d0), (ball + 0xb0, 0x40), (recs + 0x70, 0xc0)]
 for pl, ai in zip(pls, ais): regions += [(pl + 0x3d70, 0x10), (ai, AI_SIZE)]
+for pl in pls: regions += [(pl + 0x3e90, 0x10), (pl + 0x3ec0, 0x10), (pl + 0x3f90, 0x10)]
 
 last, n, missed = p.read32(VSYNC), 0, 0
 while n < want:
