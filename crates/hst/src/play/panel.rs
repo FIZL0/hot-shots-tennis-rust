@@ -9,12 +9,13 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, tim2, xb::Archive};
+use hst_sim::score::{Rules, Score};
 
 use super::{Game, Pads, Phase};
 use crate::Args;
 
 /// The panel's textures, in `Tex` order.
-const TEXTURES: [&str; 10] = [
+const TEXTURES: [&str; 11] = [
     "i_status_00",
     "inpane_p",
     "i_status_02",
@@ -25,6 +26,7 @@ const TEXTURES: [&str; 10] = [
     "inpane_mini0",
     "inpane_mini1",
     "inpane_team1",
+    "i_gameinfo_00",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +51,8 @@ enum Tex {
     Sets,
     /// Team banner text and its pill pieces.
     Team,
+    /// "Score to win this game!" and the other calls, 256×24 rows.
+    Info,
     /// Player `i`'s face, 64×64.
     Face(usize),
 }
@@ -83,6 +87,8 @@ struct View {
     court: i32,
     /// The first team's panel is at the bottom (its end is nearer the camera).
     first_near: bool,
+    /// The "Score to win" line: the team it speaks to and its row (see `game_info`).
+    info: Option<(usize, usize)>,
     clock: Clock,
 }
 
@@ -357,7 +363,8 @@ fn layout(v: &View) -> Vec<Quad> {
             WHITE,
             a,
         );
-        if n > 2 {
+        // the team the "Score to win" line speaks to loses its banner while the line is up
+        if n > 2 && !(fully_in && v.info.is_some_and(|(a, _)| a == t)) {
             let tint = if t == 0 {
                 [127.0, 77.0, 77.0]
             } else {
@@ -424,8 +431,32 @@ fn layout(v: &View) -> Vec<Quad> {
             v.clock.ring() as f32,
         );
     }
-    // ponytail: the "Score to win this game!" line (i_gameinfo_00) is not drawn yet (P19b)
+    // the "Score to win" line on its team's side, just inside its panel (y 300 bottom, 124 top); it blinks (15 ticks off, 15
+    // on, from when the panel is in) and fades out solid with the panel
+    if let Some((t, row)) = v.info.filter(|_| fully_in) {
+        let x = if t == left { 0 } else { 384 };
+        let y = if ys[t] > 200 { 300 } else { 124 };
+        let blink = if (v.clock.serve as i32 - 7).rem_euclid(30) < 15 { 0.0 } else { 128.0 };
+        q(Tex::Info, [0, row as i32 * 24, 256, 24], x, y, None, WHITE, if fading { a } else { blink });
+    }
     out
+}
+
+/// The "Score to win" line for a game point (the first team's first): the team it speaks to and the
+/// `i_gameinfo_00` row — 0 "…this game!" (the server's), 3 "…for a service break!", 1 "…the set!", 2 "…the
+/// match!", or 4 "Score or you lose the match!" to the other team when only it has a human player.
+fn game_info(s: &Score, r: &Rules, human: [bool; 2]) -> Option<(usize, usize)> {
+    let t = (0..2).find(|&t| s.game_point(r, t))?;
+    let lead = (s.games[t] > s.games[t ^ 1]) as i32;
+    Some(if !s.tiebreak && s.games[t] < r.games - lead {
+        (t, if (s.server & 1) as usize == t { 0 } else { 3 })
+    } else if s.sets[t] < r.sets - 1 {
+        (t, 1)
+    } else if !human[t] && human[t ^ 1] {
+        (t ^ 1, 4)
+    } else {
+        (t, 2)
+    })
 }
 
 /// The panel's textures: `TEXTURES` in order, then each player's face.
@@ -564,6 +595,7 @@ fn draw(
         server: s.server,
         court: s.side,
         first_near,
+        info: game_info(s, &g.rules, [0, 1].map(|t| (t..n).step_by(2).any(|i| slot(i) < 4))),
         clock: *clock,
     };
     let quads = layout(&view);
@@ -585,6 +617,7 @@ fn draw(
                 Tex::Games,
                 Tex::Sets,
                 Tex::Team,
+                Tex::Info,
             ]
             .iter()
             .position(|&k| k == t)
@@ -624,6 +657,7 @@ mod tests {
             server: 0,
             court: 0,
             first_near: true,
+            info: None,
             clock,
         }
     }
@@ -712,5 +746,44 @@ mod tests {
                 (false, 128)
             ]
         );
+    }
+
+    #[test]
+    fn score_to_win() {
+        let r = Rules { sets: 2, games: 6, no_deuce: false, one_point_games: false, players: 4 };
+        let mut s = Score { points: [3, 1], ..default() };
+        assert_eq!(game_info(&s, &r, [false; 2]), Some((0, 0)));
+        s.server = 1;
+        assert_eq!(game_info(&s, &r, [false; 2]), Some((0, 3)));
+        s.games = [5, 3];
+        assert_eq!(game_info(&s, &r, [false; 2]), Some((0, 1)));
+        s.sets = [1, 0];
+        assert_eq!(game_info(&s, &r, [false; 2]), Some((0, 2)));
+        assert_eq!(game_info(&s, &r, [false, true]), Some((1, 4)));
+        s.deuce = true;
+        assert_eq!(game_info(&s, &r, [false; 2]), None);
+
+        // the first team near (bottom, left): its line on the left, just above its panel; blinking in once the panel is in
+        let mut c = Clock::default();
+        let mut v = doubles(c);
+        v.info = Some((0, 3));
+        let line = |v: &View| layout(v).into_iter().find(|q| q.tex == Tex::Info).map(|q| (q.src, q.dst, q.alpha));
+        assert_eq!(line(&v), None);
+        let mut alpha = Vec::new();
+        for _ in 0..37 {
+            c.step(&Phase::Serve);
+            v.clock = c;
+            alpha.push(line(&v).map(|l| l.2));
+        }
+        assert_eq!(alpha[..6], [None, None, None, None, None, Some(128.0)]);
+        assert_eq!(alpha[6..21], [Some(0.0); 15]);
+        assert_eq!(alpha[21..36], [Some(128.0); 15]);
+        let l = line(&v).unwrap();
+        assert_eq!((l.0, l.1), ([0.0, 72.0, 256.0, 24.0], [0.0, 300.0, 256.0, 24.0]));
+        v.info = Some((1, 0));
+        assert_eq!(line(&v).unwrap().1, [384.0, 124.0, 256.0, 24.0]);
+        // the line's team has no banner (the other's is still there)
+        let banners = |v: &View| layout(v).iter().filter(|q| q.tex == Tex::Team && q.rgb == [128.0; 3]).map(|q| q.src[1]).collect::<Vec<_>>();
+        assert_eq!(banners(&v), [0.0]);
     }
 }
