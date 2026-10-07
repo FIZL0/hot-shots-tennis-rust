@@ -43,6 +43,18 @@ pub struct ServeData {
     pub apex_drift_under: [f32; 2],
     /// Strong-toss mistiming error (cm): depth, along the stick, random sideways (per skill level).
     pub miss: [i32; 3],
+    /// Depth bias (tenths of a metre, + deep) by frames from the swing press, beside the timing tables.
+    pub strong_bias: Vec<i32>,
+    pub weak_bias: Vec<i32>,
+    /// How far (cm) the contact may stray from the ideal height before it costs depth, and how far beyond that
+    /// the cost doubles (TParam Strk GH / Strk NH).
+    pub reach: [i32; 2],
+    /// A strong toss's short error is multiplied by this (TParam column 54).
+    pub short_miss: f32,
+    /// Serve power and low-ball power (TParam Serv POW, LOW POW): together they decide whether the weak toss
+    /// serves from the `dw1` tables (see `dw1`).
+    pub power: i32,
+    pub low_power: i32,
     /// Widest serve angle from straight ahead (degrees).
     pub max_angle: f32,
 }
@@ -53,6 +65,9 @@ impl ServeData {
     }
     pub fn grades(&self, toss: Toss) -> &[u8] {
         if toss == Toss::Strong { &self.strong_grades } else { &self.weak_grades }
+    }
+    pub fn bias(&self, toss: Toss) -> &[i32] {
+        if toss == Toss::Strong { &self.strong_bias } else { &self.weak_bias }
     }
 }
 
@@ -111,7 +126,7 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
 /// A mistimed weak or underhand toss shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the
 /// aim deep (late) or short (early) and sideways, which is where faults come from. `side` 0 deuce / 1 ad,
 /// `stick` on the court (x, z), `rand_bit` a coin flip for the sideways error when the stick is centred.
-/// Returns the aim and that error (the scatter); the ball lands at their sum (see `launch`).
+/// Returns the aim and the swing's error off it (see `scatter`). `rand` are the game's coin flips in draw order.
 #[allow(clippy::too_many_arguments)]
 pub fn target(
     d: &ServeData,
@@ -123,8 +138,9 @@ pub fn target(
     side: i32,
     doubles: bool,
     stick: [f32; 2],
-    rand_bit: bool,
-) -> ([f32; 3], [f32; 3]) {
+    rand: [bool; 3],
+) -> ([f32; 3], Miss) {
+    use crate::ps2::{add, div, mul, madd, sqrt};
     let mistimed = offset.abs() > 1 && toss != Toss::Strong;
     let (range_x, depth) = if mistimed { (1.56, 2.4) } else { (2.0575, 3.4) };
     let range_z = depth / 2.0;
@@ -155,27 +171,90 @@ pub fn target(
             t[0] += short * dx / dz;
         }
     }
+    // aimed close to the centre line with the stick level: a random nudge sideways
+    let nudge = if t[0].abs() <= 1.0 && stick[0] == 0.0 { (if rand[1] { 1 } else { -1 }) * if rand[0] { 5 } else { 10 } } else { 0 };
+    let mut miss = Miss { side: 0.0, depth: 0.0, nudge };
     if toss == Toss::Strong && (grade == 3 || grade == 4) {
-        let sign = if offset < 1 { -1.0 } else { 1.0 };
-        let mut e = [0.0, 0.0, sign * d.miss[0] as f32 * 0.01];
-        if len > 0.0 {
-            let full = (stick[0] * stick[0] + stick[1] * stick[1]).sqrt();
-            let k = facing * d.miss[1] as f32 * 0.01 / full;
-            e[0] += stick[0] * k;
-            e[2] += stick[1] * k;
+        let sign = if offset < 1 { -1 } else { 1 };
+        miss.depth = mul((sign * d.miss[0]) as f32, 0.01);
+        let full = sqrt(madd(mul(stick[0], stick[0]), stick[1], stick[1]));
+        if full > 0.0 {
+            let inv = div(1.0, full);
+            let along = |s: f32| mul(mul(mul(mul(s, inv), facing), d.miss[1] as f32), 0.01);
+            miss.side = along(stick[0]);
+            miss.depth = add(along(stick[1]), miss.depth);
         } else {
-            e[0] += if rand_bit { -1.0 } else { 1.0 } * d.miss[2] as f32 * 0.01;
+            miss.side = mul(((if rand[2] { -1 } else { 1 }) * d.miss[2]) as f32, 0.01);
         }
-        return (t, [e[0] * 2.0 / 3.0, 0.0, e[2] * 2.0 / 3.0]);
+        miss.side = mul(miss.side, 0.6666667);
+        miss.depth = mul(miss.depth, 0.6666667);
     }
-    (t, [0.0; 3])
+    (t, miss)
+}
+
+/// A serve's error off its aim, decided at the swing: sideways and depth (m), and a sideways nudge in tenths
+/// of a metre.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Miss {
+    pub side: f32,
+    pub depth: f32,
+    pub nudge: i32,
+}
+
+/// The serve's depth error at the swing, in tenths of a metre (+ deep): the timing table's bias for the contact
+/// frame `k`, and 6 for every 10 cm the contact height `height` strays from the ideal past `reach[0]`, 12 per
+/// 10 cm past `reach[1]` more. A clean hit (grade 1 or 2) has none; ±1 m at most.
+pub fn depth_error(d: &ServeData, toss: Toss, k: usize, grade: u8, height: f32) -> i32 {
+    use crate::ps2::{mul, sub};
+    if grade == 1 || grade == 2 {
+        return 0;
+    }
+    let off = sub(height, d.window(toss)[1]);
+    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
+    let [from, step] = d.reach;
+    let steps = match cm - from {
+        n if n < 0 => 0,
+        n if n < step => n / 10,
+        n => step / 10 + (n - step) / 10 * 2,
+    };
+    let e = mul(steps as f32, 6.0) as i32 * if off > 0.0 { 1 } else { -1 };
+    (d.bias(toss)[k] + e).clamp(-10, 10)
+}
+
+/// Whether a weak toss serves from the `dw1` tables: its −0.5 variant weight, scaled by the share of the serve
+/// power the low-ball power covers, must stay below −0.2.
+pub fn dw1(d: &ServeData) -> bool {
+    d.power >= 1 && -0.5 * ((d.power - (d.power - d.low_power).max(0)) as f32 / d.power as f32) < -0.2
+}
+
+/// Where the serve lands off its aim (add it to the aim; see `launch`): the swing's `miss` with the depth
+/// `error` of `depth_error` (a strong toss's short error × `short_miss`), × 1.5, sideways and along the line
+/// from the contact `hit` to the `aim`.
+pub fn scatter(d: &ServeData, toss: Toss, miss: Miss, error: i32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
+    use crate::ps2::{add, div, madd, mul, sqrt, sub};
+    use crate::vu0::{cross, normalize, transform};
+    let side = add(div(div(miss.nudge.clamp(-10, 10) as f32, 10.0), 2.0), miss.side);
+    let mut depth = add(div(error as f32, 10.0), miss.depth);
+    if toss == Toss::Strong && depth < 0.0 {
+        depth = mul(depth, d.short_miss);
+    }
+    if side == 0.0 && depth == 0.0 {
+        return [0.0; 3];
+    }
+    let (dx, dz) = (sub(aim[0], hit[0]), sub(aim[2], hit[2]));
+    let inv = div(1.0, sqrt(madd(mul(dx, dx), dz, dz)));
+    let up = normalize([0.0, 1.0, 0.0, 0.0]);
+    let across = normalize(cross(up, [mul(dx, inv), 0.0, mul(dz, inv), 0.0]));
+    let ahead = normalize(cross(across, up));
+    let v = transform(&[across, up, ahead, [0.0, 0.0, 0.0, 1.0]], [mul(1.5, side), 0.0, mul(1.5, depth), 0.0]);
+    [v[0], v[1], v[2]]
 }
 
 /// A serve's launch velocity and flight frames, as the original: the trajectory table is looked up as if
 /// from the contact point less the scatter toward the aim, and the ball flies to aim + scatter.
 pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3]) -> ([f32; 3], i32) {
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [hit[0] - scatter[0], hit[1], hit[2] - scatter[2]], aim);
-    let target = [aim[0] + scatter[0], aim[1], aim[2] + scatter[2]];
+    let target = [crate::ps2::add(aim[0], scatter[0]), aim[1], crate::ps2::add(aim[2], scatter[2])];
     (shot::launch(hit, target, l.elevation, l.speed), l.frames)
 }
 
@@ -251,6 +330,12 @@ mod tests {
             apex_drift_over: [-0.133, 0.15],
             apex_drift_under: [0.184, 0.033],
             miss: [50, 30, 100],
+            strong_bias: vec![-8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16],
+            weak_bias: vec![-8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16],
+            reach: [40, 20],
+            short_miss: 3.0,
+            power: 4,
+            low_power: 4,
             max_angle: 22.0,
         }
     }
@@ -260,15 +345,35 @@ mod tests {
         let d = data();
         let server = [3.0, 0.0, -12.25];
         // centred: the deuce box's centre; full tilt reaches its corner exactly
-        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], false), ([-2.0575, 0.0, 4.7], [0.0; 3]));
-        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], false);
+        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], [false; 3]), ([-2.0575, 0.0, 4.7], Miss::default()));
+        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], [false; 3]);
         assert!((corner[0] + 4.115).abs() < 1e-3 && (corner[2] - 6.4).abs() < 1e-3, "{corner:?}");
         // the same aim with a late strong toss lands past the service line (fault)
-        let (aim, e) = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
+        let hit = [3.0, -2.5, -12.0];
+        let (aim, m) = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        let e = scatter(&d, Toss::Strong, m, depth_error(&d, Toss::Strong, 13, 4, 2.5), hit, aim);
         assert!(aim[2] + e[2] > 6.4, "{aim:?} {e:?}");
+        // an early one falls short, the short error tripled
+        let (aim, m) = target(&d, Toss::Strong, -5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        let e = scatter(&d, Toss::Strong, m, depth_error(&d, Toss::Strong, 3, 4, 2.5), hit, aim);
+        assert!(e[2] < -1.4, "{aim:?} {e:?}");
         // a mistimed weak toss stays inside
-        let (weak, e) = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], false);
-        assert!(weak[2] <= 6.4 && e == [0.0; 3], "{weak:?}");
+        let (weak, m) = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        assert!(weak[2] <= 6.4 && m == Miss::default(), "{weak:?}");
+    }
+
+    #[test]
+    fn depth_error_by_contact_height() {
+        let d = data();
+        // 50 cm low: one step past the 40 cm threshold (−6) on the late frame's +2 bias
+        assert_eq!(depth_error(&d, Toss::Strong, 13, 4, 2.0), -4);
+        // 85 cm high: two steps, then two doubled; capped at 1 m
+        assert_eq!(depth_error(&d, Toss::Strong, 13, 4, 3.35), 10);
+        // a clean hit has none
+        assert_eq!(depth_error(&d, Toss::Strong, 8, 1, 2.0), 0);
+        // the weak toss's dw1 variant: low power covering under 40 % of the serve power keeps the base tables
+        assert!(dw1(&d));
+        assert!(!dw1(&ServeData { power: 10, low_power: 4, ..d }));
     }
 
     #[test]
