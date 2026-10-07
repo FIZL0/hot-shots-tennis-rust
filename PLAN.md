@@ -108,7 +108,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
 - [x] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
-- [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
+- [x] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
 ### Presentation
 
@@ -133,7 +133,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
-- [ ] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
+- [x] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
 
 ### Stretch
