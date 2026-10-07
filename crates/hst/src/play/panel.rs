@@ -653,6 +653,38 @@ mod tests {
         );
     }
 
+    /// The stretched background pieces (B5): each piece's sub-rect and on-screen size as the original's draw passes
+    /// them (left strip at the bottom, right strip at the top, banners above/below them).
+    #[test]
+    fn doubles_pieces() {
+        let quads = layout(&doubles(Clock { serve: 40, fade: 0 }));
+        let pieces = |tex: Tex| {
+            quads
+                .iter()
+                .filter(|q| q.tex == tex && (tex != Tex::Team || q.rgb != [128.0; 3]))
+                .map(|q| (q.src.map(|s| s as i32), q.dst.map(|s| s as i32)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pieces(Tex::Strip),
+            [
+                ([40, 0, 16, 16], [0, 410, 200, 20]),
+                ([56, 0, 40, 16], [200, 410, 40, 20]),
+                ([0, 0, 40, 16], [400, 16, 40, 20]),
+                ([40, 0, 16, 16], [440, 16, 200, 20]),
+            ]
+        );
+        assert_eq!(
+            pieces(Tex::Team),
+            [
+                ([104, 0, 8, 24], [0, 298, 96, 24]),
+                ([112, 0, 16, 24], [96, 298, 16, 24]),
+                ([88, 0, 16, 24], [528, 122, 16, 24]),
+                ([104, 0, 8, 24], [544, 122, 96, 24]),
+            ]
+        );
+    }
+
     #[test]
     fn timeline() {
         let mut c = Clock::default();
