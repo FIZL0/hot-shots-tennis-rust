@@ -75,7 +75,7 @@ Things that need the human go under **Needs the human** at the bottom, never int
 cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
 
-Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (other team) = controller 2
+Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
 J/A topspin · K/B slice · I/X flat · L/Y lob · U/RB drive · J/Space/A/Start serve ·
 C/Select camera (original/free) · arrows/right stick turn the free camera.
