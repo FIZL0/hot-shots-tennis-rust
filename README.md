@@ -21,7 +21,7 @@ What you need:
 | **Format** | A disc image (`.iso`) you made from **a disc you own** |
 | **Where** | Anywhere; you pass its path on the command line. The examples assume `Hot Shots Tennis (USA).iso` in the repository folder, which `.gitignore` keeps out of git |
 
-- **Other regions don't work yet.** Everybody's Tennis (Europe), Minna no Tennis (Japan) and other versions have
+- **Other regions don't work.** Everybody's Tennis (Europe), Minna no Tennis (Japan) and other versions have
   different program data. The game checks the disc (`SYSTEM.CNF` boot file `SCUS_976.10` and the size and header of
   `ZZBIN/GAME.BIN`) and refuses anything else with `unsupported disc`.
 - **Don't ask for, share or commit disc images or anything extracted from them.** Nobody here can provide one.
