@@ -11,7 +11,20 @@
   real controller is connected. With `HST_PCSX2=N` (parallel runs) it is pad N, the only pad PCSX2 copy N sees. `tools/vpad.py send "press cross 120" "stick l -1 0" "sleep 300" release`.
   Never press Select (PCSX2 hotkeys are Select + shoulder combos). Timing is wall-clock; frame-exact replays
   should use PCSX2 input recording (`.p2m2`) — P0 decides.
-- `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it.
+- `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it; with `HST_PCSX2=N` it uses
+  copy N's own F8 screenshot instead (copies sit on hidden workspaces, where grim sees nothing; full-size PNG; not while paused).
+- `vpad.py send` returns at once and the server runs commands one after another (sleeps included): a script
+  that sends several batches must wait each one out (`vpad()` in `tools/pick.py`), or presses pile up and land late.
+  In menus ○ confirms, ✕ goes back.
+- **Choosing characters:** `tools/pcsx2.sh python3 tools/pick.py <char 0–13> [slot]` loads save slot 2 (doubles
+  character select), puts character <char> in as P1, takes the three COM picks where their cursors start, starts
+  the match and saves P1's first serve to the scratch slot (8). It prints P1's character (+0x12bc), hand
+  (+0x12b4) and model hand flag, and stops if the wrong character got picked. All 14 checked (P7b). Slot 2's P1 has
+  the "switch hand" toggle on, so every pick plays with the hand opposite to TParam's. To serve from that slot,
+  press ○ three times about 1.5 s apart: the first press after a load or a point is ignored, the second tosses,
+  the third hits. P1 serves every point there and points are short (about 2 s).
+  Not automated yet: choosing the COM characters (each COM cursor starts on a different character), the costume
+  (L1), the switch-hand toggle, singles, P1 receiving.
 - Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
 - `tools/overnight.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
 
