@@ -8,6 +8,7 @@ struct Gs {
     shininess: f32,
     highlight: f32,
     shadow: f32,
+    uv_offset: vec2<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -49,7 +50,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var rgb = min(f.rgb, vec3(255.0 / 128.0));
     var a = min(f.a, 255.0 / 128.0);
 #ifdef GS_TEXTURED
-    let t = textureSample(gs_texture, gs_sampler, in.uv);
+    let t = textureSample(gs_texture, gs_sampler, in.uv + gs.uv_offset);
     rgb = t.rgb * rgb;
 #ifdef GS_MODULATE
     a = t.a * a;

@@ -159,7 +159,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P17d** Clouds: category-6 `cloud` models scattered by the cloud system, singles only (not category 14) (in P17) → `main.rs` load · `layout.rs` cloud_count · `exe.rs` wind · new `hst-sim/src/clouds.rs` | t: clouds.rs, effects.rs | j: 2026-10-07-p17-court-rendering
 - [ ] **P17e** Sky time of day + seasons `_sXXXX`/SSN1; also the sky dome's open top: looking straight up shows the grey background colour (not the clouds) (in P17) → `main.rs` load
 - [ ] **P17i** Weather events (user 2026-10-07; P17d left these out): port the game's weathers and what each changes on court (rain and anything else it has: sky, light, sounds, play effects), including the rain-weather cloud layout (weathers 3 and 5) and the per-game wind gusts in doubles (clouds aren't drawn in doubles, but the wind still is) → `main.rs` load · `play.rs` · `layout.rs` (P17d clouds)
-- [ ] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
+- [x] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
 - [x] **P17g** Shadows: player/ball blobs, shadow models (in P17) → new
 - [ ] **P17h** Mipmaps + LOD (TEX1) (in P17) → `main.rs` gs_models
 - [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`

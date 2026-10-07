@@ -23,6 +23,7 @@ pub mod pose;
 pub mod motion;
 pub mod face;
 pub mod effect;
+pub mod court_anim;
 pub mod cutaway;
 pub mod sound;
 pub mod umpire;

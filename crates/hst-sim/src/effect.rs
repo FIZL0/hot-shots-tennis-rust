@@ -17,7 +17,7 @@ use crate::{
     ps2, world,
 };
 
-struct Track {
+pub(crate) struct Track {
     /// Morph target or material index.
     target: usize,
     ticks: Vec<i32>,
@@ -25,16 +25,16 @@ struct Track {
     cursor: usize,
 }
 
-struct Channel {
+pub(crate) struct Channel {
     tracks: Vec<Track>,
     ticks_per_frame: f32,
-    length: f32,
-    clock: Clock,
+    pub(crate) length: f32,
+    pub(crate) clock: Clock,
 }
 
 impl Channel {
     /// Tracks whose name `bind` finds, in file order.
-    fn new(t: &Tracks, bind: impl Fn(&str) -> Option<usize>) -> Channel {
+    pub(crate) fn new(t: &Tracks, bind: impl Fn(&str) -> Option<usize>) -> Channel {
         let tracks: Vec<Track> = t
             .tracks
             .iter()
@@ -45,7 +45,7 @@ impl Channel {
     }
 
     /// Sample every track at the clock's sampled time into `out[target]` (`empty` for a track without keys).
-    fn apply(&mut self, out: &mut [f32], empty: f32) {
+    pub(crate) fn apply(&mut self, out: &mut [f32], empty: f32) {
         let t = ps2::mul(self.clock.sampled, self.ticks_per_frame);
         for tr in &mut self.tracks {
             out[tr.target] = if tr.ticks.is_empty() { empty } else { face::sample(&tr.ticks, &tr.values, t, &mut tr.cursor, false)[0] };

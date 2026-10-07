@@ -69,6 +69,8 @@ pub struct GsUniform {
     pub highlight: f32,
     /// Shadow receiver: how much a shadow takes off the colour (0 = not a receiver).
     pub shadow: f32,
+    /// Texture coordinate offset (a court `.UVA`).
+    pub uv_offset: Vec2,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -108,7 +110,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0 };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO };
         tests
             .into_iter()
             .map(|test| GsMaterial {
