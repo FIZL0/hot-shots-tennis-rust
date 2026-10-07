@@ -390,15 +390,27 @@ fn dive_thuds_match_the_game() {
     assert_eq!(s[want[0]].play[2], thud.volume);
 }
 
-/// The players' shouts in the same match (doubles, voice banks of `spu_s05.csv`): every launch keys
+/// The players' shouts in the same match (doubles, voice banks of `spu_s05.csv`), and in slot 4's (characters
+/// 6, 4, 3, 11; `hits_s04.bin`, `record_sound.py 4 1800 … hits` with player 1 pressing ✕): every launch keys
 /// `sound::stroke_shout`'s program on the hitter's own bank that frame or the next — always where the shout is
 /// certain, never where it cannot be, by chance otherwise — and every dive program 3 as it starts (that frame or the next); each
-/// key is in its range and programs 1 and 2 never repeat a player's last key. No other stroke or dive shouts.
+/// key is in its range and programs 1 and 2 never repeat a player's last key; every player on their own character's
+/// bank. No other stroke or dive shouts.
 #[test]
 fn shouts_match_the_game() {
+    let Some((sure, banks, dives, whiffs, calls)) = shouts("hits_s05.bin", "spu_s05.csv") else { return };
+    assert!(sure >= 10 && banks == 4 && dives == 2 && whiffs == 1 && calls == 3);
+    // slot 4: characters 3, 4, 6 and 11 (doubles, voice a)
+    let Some((sure, banks, _, whiffs, _)) = shouts("hits_s04.bin", "spu_s04.csv") else { return };
+    assert!(sure >= 3 && banks == 4 && whiffs >= 5);
+}
+
+/// The shouts of `recording` (doubles, `tools/record_sound.py … hits`) on the voice banks `spu` lists: certain,
+/// players heard on their own bank, dive shouts, whiff shouts and call-outs, each checked as `shouts_match_the_game` says.
+fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize)> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let Ok(csv) = std::fs::read_to_string(format!("{root}/context/fixtures/spu_s05.csv")) else { return };
-    let Some((data, _)) = Court::load("hits_s05.bin") else { return };
+    let csv = std::fs::read_to_string(format!("{root}/context/fixtures/{spu}")).ok()?;
+    let (data, _) = Court::load(recording)?;
     let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
     // the four players' banks: name, header, SPU address, sample size
     let mut banks = Vec::new();
@@ -479,14 +491,23 @@ fn shouts_match_the_game() {
         if hit.branch == 3 {
             continue;
         }
-        check(k, p, sound::stroke_shout(&hit, 0, 4, || 99), sound::stroke_shout(&hit, 0, 4, || 0));
+        let c = i(h, 0x50 + 4 * p);
+        check(k, p, sound::stroke_shout(&hit, c, 4, || 99), sound::stroke_shout(&hit, c, 4, || 0));
     }
     eprintln!("{sure} certain shouts, {chance} by chance, {dives} dives, {quiet} quiet strokes; banks {bank_of:?}");
-    assert!(sure >= 10 && dives == 2);
     // a missed swing shouts program 4 at its contact pose, 8–10 frames after the miss
-    for &(k, p) in &whiffs {
-        let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).collect();
-        assert!(got.len() == 1 && got[0].1 == sound::WHIFF_SHOUT && Some(got[0].0) == bank_of[p], "whiff at {k}: {got:?}");
+    // ponytail: a re-swing (the same player's whiff within 60 frames) is muted and a swing with no ball for the
+    // player (no shot yet, or their own side hit last) has no shout; the recordings tell them apart by timing only
+    let mut shouted = 0;
+    for &(k, p) in whiffs.iter().filter(|w| w.0 + 10 < s.len()) {
+        let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).filter(|v| v.1 < 7).collect();
+        let reswing = whiffs.iter().any(|&(j, q)| q == p && j < k && j + 60 > k);
+        let theirs = launches.iter().rev().find(|l| l.0 < k).is_some_and(|l| l.1 & 1 != p & 1);
+        if got.is_empty() && (reswing || !theirs) {
+            continue;
+        }
+        assert!(got.len() == 1 && got[0].1 == sound::WHIFF_SHOUT && got[0].0 == *bank_of[p].get_or_insert(got[0].0), "whiff at {k}: {got:?}");
+        shouted += 1;
     }
     // every call (program 6 key 3/4) is by a player whose partner takes the incoming ball the other side hit
     let mut calls = Vec::new();
@@ -501,7 +522,209 @@ fn shouts_match_the_game() {
             calls.push(k);
         }
     }
-    eprintln!("{} whiffs, calls at {calls:?}", whiffs.len());
-    assert!(whiffs.len() == 1 && calls.len() == 3);
+    eprintln!("{} whiffs ({shouted} shouted), calls at {calls:?}", whiffs.len());
+    // each player shouts on their own character's bank
+    for (p, b) in bank_of.iter().enumerate() {
+        let c = i(s[0].hit, 0x50 + 4 * p);
+        assert!(b.is_none_or(|b| banks[b].0.contains(&format!("_vc{c:02}"))), "player {p} (character {c}) on {b:?}");
+    }
     // ponytail: the reaction voices after points (programs 7–10, frame 1029) are left out (see sound::call_out)
+    Some((sure, bank_of.iter().flatten().count(), dives, shouted, calls.len()))
+}
+
+/// The umpire's score calls (slot 5, umpire 4 voice a: `gag_vc04a` at SPU 870656 in slot 5): after each of
+/// hits_s05's three points, the two words `sound::score_call` gives, at the ticks `sound::Umpire` plays them (or the
+/// frame after: the ring is read once per frame), at the non-positional level; no other umpire word.
+#[test]
+fn umpire_calls_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let gaps = exe::Game::new(&cnf, &bin).unwrap().umpire_gaps(4, false);
+    let bank_volume = exe::bank_volumes(&iso.read("SCUS_976.10").unwrap()).unwrap()[5];
+    let xb = iso.read("SND/UMP/UV04A.XB0").unwrap();
+    let arc = Archive::parse(&xb).unwrap();
+    let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
+    let (hd, bd) = (read("gag_vc04a.hd"), read("gag_vc04a.bd"));
+    let bank = Bank::parse(&hd).unwrap();
+    const AT: u32 = 870656;
+    let s = samples(&data, 0x330);
+    // umpire key-ons of frame k: program, key, volume L/R
+    let heard = |k: usize| -> Vec<(usize, usize, [i16; 2])> {
+        let x = &s[k];
+        let mut out = Vec::new();
+        for c2 in x.cmds.iter().filter(|c| c[0] == 2 && c[3] != 8) {
+            let find = |cmd| x.cmds.iter().find(|c| c[0] == cmd && c[1] == c2[1]);
+            let (Some(c3), Some(c1)) = (find(3), find(1)) else { continue };
+            if !(AT..AT + bd.len() as u32).contains(&c3[2]) {
+                continue;
+            }
+            let pk = (0..8).flat_map(|p| (0..16).map(move |k| (p, k))).find(|&(p, k)| {
+                bank.key_ons(p, k).into_iter().flatten().any(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && AT + t.sample() as u32 == c3[2]))
+            });
+            out.push((pk.unwrap().0, pk.unwrap().1, [c1[2] as i16, c1[3] as i16]));
+        }
+        out
+    };
+    let points = |k: usize| [u(s[k].hit, 0x68 + 0x24) as i32, u(s[k].hit, 0x68 + 0x28) as i32];
+    let (mut umpire, mut want, mut got) = (sound::Umpire::default(), Vec::new(), Vec::new());
+    for k in 1..s.len() {
+        if let Some(p) = umpire.step(&gaps) {
+            want.push((k, p.program as usize, p.key as usize));
+        }
+        let (before, now) = (points(k - 1), points(k));
+        if now != before && now != [0, 0] {
+            let r = s[k].rally;
+            let score = hst_sim::score::Score {
+                points: now,
+                server: u(s[k].hit, 0x68 + 0xc) as i32,
+                tiebreak: r[0x2a] != 0,
+                deuce: r[0x30] != 0,
+                deuce_count: u(r, 0x34) as i32,
+                advantage: r[0x38] != 0,
+                ..Default::default()
+            };
+            umpire.call(sound::score_call(&score, (now[1] > before[1]) as usize, 10));
+        }
+        for (p, key, lr) in heard(k) {
+            let e = bank.key_ons(p, key).unwrap()[0];
+            let (t, set) = (bank.tone(e.set as usize, e.note).unwrap(), bank.set_volume(e.set as usize).unwrap());
+            let mut l = Level { seq: { let (angle, dist) = sound::place(sound::CENTRE); sound::stereo(sound::falloff(0x80, dist), angle, &court.stereo).map(|x| x as u32) }, bank: bank_volume, velocity: e.velocity as u32, pan: [0x40; 3], ..Default::default() };
+            l.tone(set, t, &court.gain);
+            assert_eq!(l.volume(&court.pan), lr, "frame {k}: program {p} key {key}");
+            got.push((k, p, key));
+        }
+    }
+    eprintln!("umpire words {got:?}");
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert!((g.1, g.2) == (w.1, w.2) && (g.0 == w.0 || g.0 == w.0 + 1), "heard {g:?}, want {w:?}");
+    }
+    assert_eq!(got.len(), 6);
+}
+
+/// The gallery (slot 6, `galsg10a` at its `spu_s05.csv` address) in hits_s05: the smash winner of the first
+/// point is applauded (program 0 key 0 from three stands) on the point's tick and cheered (program 10) from 31 ticks
+/// on; the two ground-stroke winners are cheered at once. Every cheer has the key, volume, stand and pitch range
+/// `sound::Gallery` gives; the cheers go round the stands, 12–40 ticks apart, until the next serve is set up. The
+/// stands and gaps are the game's random numbers, so they are checked by rule, not one for one.
+#[test]
+fn gallery_matches_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    let bank_volume = exe::bank_volumes(&iso.read("SCUS_976.10").unwrap()).unwrap()[6];
+    let xb = iso.read("SND/COURT/C_SND10A.XB0").unwrap();
+    let arc = Archive::parse(&xb).unwrap();
+    let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
+    let (hd, bd) = (read("galsg10a.hd"), read("galsg10a.bd"));
+    let bank = Bank::parse(&hd).unwrap();
+    const AT: u32 = 1070656;
+    let s = samples(&data, 0x330);
+    // first key-ons of gallery plays in frame k: program, key, L/R, pitch scale (a tone of program 9 key k + 1
+    // is also program 10 key k: taken as 10)
+    let heard = |k: usize| -> Vec<(u8, u8, [i16; 2], u32)> {
+        let x = &s[k];
+        let mut out = Vec::new();
+        for c2 in x.cmds.iter().filter(|c| c[0] == 2 && c[3] != 8) {
+            let find = |cmd| x.cmds.iter().find(|c| c[0] == cmd && c[1] == c2[1]);
+            let (Some(c3), Some(c1), Some(c4)) = (find(3), find(1), find(4)) else { continue };
+            if !(AT..AT + bd.len() as u32).contains(&c3[2]) {
+                continue;
+            }
+            let first = |p: usize, k: usize| bank.key_ons(p, k).and_then(|e| e.first().copied()).filter(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && AT + t.sample() as u32 == c3[2]));
+            if let Some((p, key)) = [10, 0, 1, 5, 6].into_iter().flat_map(|p| (0..8).map(move |k| (p, k))).find(|&(p, k)| first(p, k).is_some()) {
+                out.push((p as u8, key as u8, [c1[2] as i16, c1[3] as i16], c4[3] & 0xffff));
+            }
+        }
+        out
+    };
+    let level = |p: u8, key: u8, angle: i32, volume: i32| {
+        let e = bank.key_ons(p as usize, key as usize).unwrap()[0];
+        let (t, set) = (bank.tone(e.set as usize, e.note).unwrap(), bank.set_volume(e.set as usize).unwrap());
+        let mut l = Level { seq: sound::stereo(volume, angle, &court.stereo).map(|x| x as u32), bank: bank_volume, velocity: e.velocity as u32, pan: [0x40; 3], ..Default::default() };
+        l.tone(set, t, &court.gain);
+        l.volume(&court.pan)
+    };
+    let points = |k: usize| [u(s[k].hit, 0x68 + 0x24), u(s[k].hit, 0x68 + 0x28)];
+    let mut seed = 1u32;
+    let mut roll = move || {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        seed
+    };
+    let (mut gallery, mut errors) = (sound::Gallery::default(), 0);
+    let (mut want, mut got): (Vec<(usize, u8, u8, i32, i32)>, Vec<(usize, u8, u8, i32, i32)>) = (Vec::new(), Vec::new());
+    for k in 1..s.len() {
+        if s[k].rally[0] == 0 && s[k - 1].rally[0] == 1 {
+            gallery.hush();
+        }
+        if points(k) != points(k - 1) {
+            // the last hitter's branch (4 smash)
+            let branch = s[k].hit[0x20 + 8 * (u(s[k].rally, 8) as usize & 3) + 5];
+            gallery.point(sound::reaction(0, false, branch == 4, &mut errors).unwrap(), &mut roll);
+        }
+        for (p, angle) in gallery.step(10, 4, false, &mut roll) {
+            want.push((k + 1, p.program, p.key, angle, p.volume));
+        }
+        // (the second key-on of a cheer, 18 ticks on, is the same tone)
+        let first: Vec<_> = heard(k).into_iter().filter(|&(p, key, ..)| k > 900 && !got.iter().any(|g| g.0 + 18 == k && (g.1, g.2) == (p, key))).collect();
+        for (p, key, lr, scale) in first {
+            let [angle, _, volume] = s[k].play;
+            let angle = if p == 0 { [0, 225, 135].into_iter().find(|&a| level(p, key, a, volume) == lr).unwrap() } else { angle };
+            assert_eq!(level(p, key, angle, volume), lr, "frame {k}");
+            if p == 10 {
+                assert!((0xe00..=0x1400).contains(&scale), "frame {k}: pitch {scale:#x}");
+            }
+            got.push((k, p, key, angle, volume));
+        }
+    }
+    eprintln!("gallery heard {got:?}");
+    eprintln!("gallery model {want:?}");
+    // the applause, as given
+    let applause = |v: &Vec<(usize, u8, u8, i32, i32)>| v.iter().filter(|g| g.1 == 0).cloned().collect::<Vec<_>>();
+    assert_eq!(applause(&got), applause(&want));
+    // the cheers after each point: keys as given, the first on time (two frames late after the applause: the
+    // scoreboard's tick 31 takes three vsyncs), then round the stands 12–40 ticks apart at 115
+    for (from, to, late) in [(900, 2200, 2), (2200, 3000, 0), (3000, s.len(), 0)] {
+        let g: Vec<_> = got.iter().filter(|g| g.1 == 10 && (from..to).contains(&g.0)).collect();
+        let w: Vec<_> = want.iter().filter(|w| w.1 == 10 && (from..to).contains(&w.0)).collect();
+        assert!(g.len() >= 4, "{g:?}");
+        assert_eq!(g[0].0, w[0].0 + late);
+        for (i, x) in g.iter().enumerate() {
+            assert_eq!((x.2, x.4), ([0, 2, 3][i.min(2)], 115), "{x:?}");
+        }
+        for p in g.windows(2) {
+            let at = |a| [0, 180, 45, 225, 90, 270, 135, 325].iter().position(|&x| x == a).unwrap();
+            assert_eq!(at(p[1].3), (at(p[0].3) + 1) % 8, "{p:?}");
+            assert!((12..=40).contains(&(p[1].0 - p[0].0)), "{p:?}");
+        }
+        // none after the next serve is set up
+        assert!(g.last().unwrap().0 < (from..to).find(|&k| k < s.len() && s[k].rally[0] == 0 && s[k - 1].rally[0] == 1).unwrap_or(s.len()));
+    }
+}
+
+/// Every court's four gallery banks (archive A `galsg`, B `galdv`, crowd a/b) have the sequences `sound::Gallery`
+/// plays: cheer keys 0/2/3 (1/4/5 on court 5), applause 0..2, groan 0..1, shouts 5 (0..2) and 6 (0..1).
+#[test]
+fn gallery_banks_have_every_call() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else { return };
+    for n in 1..=11 {
+        for (xb, set) in [('A', "sg"), ('B', "dv")] {
+            let data = iso.read(&format!("SND/COURT/C_SND{n:02}{xb}.XB0")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            for crowd in ['a', 'b'] {
+                let name = format!("data/sound/VOICE/GALLERY/gal{set}{n:02}{crowd}.hd");
+                let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(&name)).unwrap();
+                let hd = arc.read(e).unwrap();
+                let bank = Bank::parse(&hd).unwrap();
+                let cheer = if n == 5 { [1, 4, 5] } else { [0, 2, 3] };
+                let calls = cheer.map(|k| (10, k)).into_iter().chain([(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (5, 0), (5, 1), (5, 2), (6, 0), (6, 1)]);
+                for (p, k) in calls {
+                    assert!(bank.key_ons(p, k).is_some_and(|e| !e.is_empty()), "{name}: program {p} key {k}");
+                }
+            }
+        }
+    }
 }

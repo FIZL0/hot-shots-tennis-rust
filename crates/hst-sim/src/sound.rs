@@ -310,3 +310,252 @@ pub fn flight_speed(height: f32, low: f32, top: f32) -> f32 {
     };
     s.clamp(0.0, 2.0)
 }
+
+/// The umpire's voice bank slot; the umpire's plays are not positional: 0x80 at the centre (`stereo` at bearing 0).
+const UMPIRE: u8 = 5;
+/// Where a non-positional play sounds as if it were placed: straight ahead of the listener, at full volume.
+pub const CENTRE: [f32; 3] = [0.0, 0.0, -9.0];
+/// The umpire calls the line as the point ends: the judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out
+/// after the net) is program 1's key call − 1; none for no call (0) or 6.
+pub fn line_call(call: u8) -> Option<Play> {
+    (call != 0 && call != 6).then(|| play(UMPIRE, 1, call - 1, 0x80))
+}
+/// The umpire's "change ends", as the change-ends phase begins.
+pub const CHANGE_ENDS_CALL: Play = play(UMPIRE, 2, 3, 0x80);
+/// The umpire's tiebreak call, as the first tiebreak serve is set up (the game that made 6-all).
+pub const TIEBREAK_CALL: Play = play(UMPIRE, 2, 0, 0x80);
+/// The umpire's match call, once the scoreboard has shown the match point (the match ends when it is over).
+pub const MATCH_CALL: Play = play(UMPIRE, 2, 4, 0x80);
+
+/// The umpire's score after a point that wins no game (program 0 keys, in order): one word at deuce (9; 13 for the
+/// game's second deuce except on court 5), "advantage" (10) then the server's (11) or the receiver's (12) by who
+/// won the point, nothing in a tiebreak, else the serving team's points (0..3) then "all" (8) or the receiving
+/// team's points (4..7).
+pub fn score_call(s: &crate::score::Score, winner: usize, court: u8) -> Vec<u8> {
+    let side = (s.server & 1) as usize;
+    if s.deuce {
+        vec![if s.deuce_count == 2 && court != 5 { 13 } else { 9 }]
+    } else if s.advantage {
+        vec![10, if winner == side { 11 } else { 12 }]
+    } else if s.tiebreak {
+        vec![]
+    } else {
+        let (a, b) = (s.points[side], s.points[side ^ 1]);
+        vec![a as u8, if a == b { 8 } else { b as u8 + 4 }]
+    }
+}
+
+/// Ticks from the point to the score call's first word (the scoreboard's pause, then the umpire's turn): the
+/// recordings' sound ring has it 33 (sound_s05) or 34 (hits_s05) frames after the score changed.
+const CALL_DELAY: i32 = 33;
+
+/// The umpire's queued score words: the first `CALL_DELAY` ticks after the point, each next one when the last
+/// word's gap is over. `gaps` (ticks per key, `exe::Game::umpire_gaps`) is measured from the word's call; the
+/// words land 2 ticks before it.
+/// ponytail: the game also moves on once the word stops sounding; with the bank's words shorter than their gaps
+/// that never shows in the recordings, so the gap alone times them.
+#[derive(Clone, Debug, Default)]
+pub struct Umpire {
+    words: Vec<u8>,
+    wait: i32,
+}
+
+impl Umpire {
+    /// The point was just scored: call `words` (`score_call`).
+    pub fn call(&mut self, words: Vec<u8>) {
+        *self = Umpire { words, wait: CALL_DELAY };
+    }
+
+    /// Any other umpire call drops the words still to come.
+    pub fn hush(&mut self) {
+        self.words.clear();
+    }
+
+    /// One tick (the first is the tick after `call`): the word due now, if any.
+    pub fn step(&mut self, gaps: &[i32; 14]) -> Option<Play> {
+        if self.words.is_empty() {
+            return None;
+        }
+        self.wait -= 1;
+        if self.wait > 0 {
+            return None;
+        }
+        let key = self.words.remove(0);
+        self.wait = gaps[key as usize] - 2;
+        Some(play(UMPIRE, 0, key, 0x80))
+    }
+}
+
+/// The gallery's bank slot (the court archive's `galsg` bank).
+const GALLERY: u8 = 6;
+/// The gallery's bearings (degrees from the listener): the cheer goes round them in order, a reaction shout takes
+/// one at random, the applause plays at the first, fourth and seventh at once.
+const STANDS: [i32; 8] = [0, 180, 45, 225, 90, 270, 135, 325];
+/// The cheer's volume, 0.9 · 128 (the game's level table is 0.9 at every level).
+const CHEER: i32 = 115;
+/// The applause's and groan's volume, and the shouts'.
+const CROWD: i32 = 0x4c;
+const SHOUT: i32 = 0x66;
+
+/// How the gallery takes a decided point: `cheer` (the rolling cheer, at once without an `event`, else once the
+/// event's shout has had its time), `event` (0 applause, 1 groan) and `chain` (a shout follows: 5 after the
+/// applause, 6 after the groan).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reaction {
+    pub cheer: bool,
+    pub event: Option<u8>,
+    pub chain: bool,
+}
+
+/// The gallery's reaction to the judge's `call` (`judge::Verdict::call`) on a point that wins a `game` (or set) or
+/// not. `applause`: the point was won outright — on a plain point a smash winner, on a game point a side the
+/// gallery favours (`favoured`). `errors` counts the errors in a row (every second one draws a shout); none for a
+/// fault or let.
+/// ponytail: a plain point is also applauded for an ace with a strong toss, a return winner, a dive winner and a
+/// ground or volley winner that passes the receivers; only smash winners are told apart yet.
+pub fn reaction(call: u8, game: bool, applause: bool, errors: &mut u32) -> Option<Reaction> {
+    let error = matches!(call, 1 | 3 | 5 | 6);
+    match call {
+        2 | 4 => None,
+        _ if game && error => {
+            *errors += 1;
+            Some(Reaction { cheer: true, event: Some(1), chain: false })
+        }
+        _ if game => {
+            *errors = 0;
+            Some(Reaction { cheer: true, event: applause.then_some(0), chain: false })
+        }
+        6 => Some(Reaction { cheer: false, event: Some(1), chain: false }),
+        _ if error => {
+            *errors += 1;
+            Some(Reaction { cheer: false, event: Some(1), chain: *errors % 2 == 0 })
+        }
+        _ => {
+            *errors = 0;
+            Some(Reaction { cheer: true, event: applause.then_some(0), chain: false })
+        }
+    }
+}
+
+/// Whether the gallery favours each side on a game point: a side with a human player, or both when both sides or
+/// neither have one.
+pub fn favoured(human: &[bool]) -> [bool; 2] {
+    let mut side = [false; 2];
+    for (i, &h) in human.iter().enumerate() {
+        side[i & 1] |= h;
+    }
+    if side[0] == side[1] { [true; 2] } else { side }
+}
+
+/// The gallery (slot 6): after a point the cheer, program 10 at the next stand every 12–40 ticks (21–70 on court
+/// 5) at a random pitch, and the applause or groan (programs 0 and 1 from three stands), perhaps followed by a
+/// shout (5 or 6 from a random stand). `roll` is the game's random number generator.
+/// ponytail: the match-start cheer, the match-end ceremony (programs 3/4 then 7/8), the shout when a player runs
+/// near the stands on courts 1, 4 and 6 (program 9) and the gallery's silence in the rain are left out; a shout's
+/// end is not waited on.
+#[derive(Clone, Debug)]
+pub struct Gallery {
+    cheering: bool,
+    pending: bool,
+    start: i32,
+    next: i32,
+    stand: usize,
+    count: u32,
+    event: Option<u8>,
+    wait: i32,
+    chain: bool,
+    /// The last key of each program, for the ones that take turns.
+    last: [i32; 7],
+}
+
+impl Default for Gallery {
+    fn default() -> Self {
+        Gallery { cheering: false, pending: false, start: 0, next: 0, stand: 0, count: 0, event: None, wait: 0, chain: false, last: [-1; 7] }
+    }
+}
+
+impl Gallery {
+    /// The point was just decided (`reaction`).
+    pub fn point(&mut self, r: Reaction, roll: &mut impl FnMut() -> u32) {
+        self.cheering = r.cheer;
+        self.count = 0;
+        self.stand = (roll() >> 16 & 7) as usize;
+        self.next = 1;
+        if let Some(e) = r.event {
+            self.cheering = false;
+            self.pending = r.cheer;
+            self.chain = r.chain;
+            self.wait = if e == 4 || e < 2 { 1 } else { 0x8c };
+            self.event = Some(e);
+            self.start = self.wait + if e == 1 { 0x3c } else { 0x1e };
+        }
+    }
+
+    /// The next serve: the gallery falls quiet until the next point.
+    pub fn hush(&mut self) {
+        (self.cheering, self.pending, self.event) = (false, false, None);
+    }
+
+    /// One tick (the first is the tick of `point`) on `court` with `players`; `game` when the point won a game.
+    /// The plays due now, each at its bearing (whole degrees, not placed: full volume
+    /// at that bearing).
+    pub fn step(&mut self, court: u8, players: u32, game: bool, roll: &mut impl FnMut() -> u32) -> Vec<(Play, i32)> {
+        let mut out = Vec::new();
+        if !self.cheering {
+            if self.pending && self.start != 0 {
+                self.start -= 1;
+                if self.start == 0 {
+                    (self.pending, self.cheering) = (false, true);
+                }
+            }
+        } else if self.next != 0 {
+            self.next -= 1;
+            if self.next == 0 {
+                let key = match (court == 5, self.count) {
+                    (false, 0) => 0,
+                    (false, 1) => 2,
+                    (false, _) => 3,
+                    (true, 0) => 1,
+                    (true, 1) => 4,
+                    (true, _) => 5,
+                };
+                self.count += 1;
+                let speed = roll() as f32 * 2.3283064e-10 * (1.25 - 0.875) + 0.875;
+                out.push((Play { speed, ..play(GALLERY, 10, key, CHEER) }, STANDS[self.stand]));
+                self.stand = (self.stand + 1) % 8;
+                let every = if court == 5 { 70.0 } else { 40.0 };
+                self.next = (every * (1.0 - 0.7 * roll() as f32 * 2.3283064e-10)) as i32;
+            }
+        }
+        if players < 2 || self.wait < 1 {
+            return out;
+        }
+        let Some(e) = self.event else { return out };
+        self.wait -= 1;
+        if self.wait != 0 {
+            return out;
+        }
+        let mut turn = |p: usize, n: i32| {
+            self.last[p] = (self.last[p] + 1) % n;
+            self.last[p] as u8
+        };
+        match e {
+            0 | 1 => {
+                let key = turn(e as usize, 3 - e as i32);
+                out.extend([0, 3, 6].map(|s| (play(GALLERY, e, key, CROWD), STANDS[s])));
+            }
+            5 | 6 => {
+                let key = turn(e as usize, if e == 5 { 3 } else { 2 });
+                out.push((play(GALLERY, e, key, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
+            }
+            _ => {}
+        }
+        if self.chain && e < 2 {
+            self.event = Some(e + 5);
+            self.wait = if game { 0xa0 } else { 0x3c };
+        } else {
+            self.event = None;
+        }
+        out
+    }
+}

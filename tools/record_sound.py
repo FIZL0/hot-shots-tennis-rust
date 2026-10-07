@@ -17,7 +17,7 @@ p.load_state(int(sys.argv[1]))
 time.sleep(0.3)
 gm, snd = p.read32(GM_PTR), p.read32(SND_PTR)
 ball = p.read32(gm + 0x88)
-hits = len(sys.argv) > 4
+hits = "hits" in sys.argv[4:]
 r = [(p.read32(gm + 0x88), 0x290), (p.read32(gm + 0x98), 0x290), (0x3165f0, 0x40), (snd + 8, 16)]
 if hits:
     r += [(p.read32(0x423f80) + 0xb8, 0x48), (0x422fa0, 0x20), (0x423040, 0x40), (gm + 0x340, 8),

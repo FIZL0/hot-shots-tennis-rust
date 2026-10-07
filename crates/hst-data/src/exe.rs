@@ -107,6 +107,12 @@ impl<'a> Game<'a> {
         [self.at(0x3f_cce0, 6).to_vec(), self.at(0x3f_cce8, 4).to_vec(), self.at(0x3f_ccf0, 7).to_vec()]
     }
 
+    /// Umpire `umpire`'s (0..4, voice a or `b`) gap after each score word (program 0 key), in ticks; English.
+    pub fn umpire_gaps(&self, umpire: usize, b: bool) -> [i32; 14] {
+        let row = self.at(0x41_3e20 + umpire as u32 * 0x70 + b as u32 * 0x38, 0x38);
+        std::array::from_fn(|k| i32::from_le_bytes(row[4 * k..4 * k + 4].try_into().unwrap()))
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
