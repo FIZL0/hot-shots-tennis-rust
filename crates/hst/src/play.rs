@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use hst_data::{exe::ScoreboardTiming, iso::Iso, tim2, xb::Archive};
 use hst_sim::ball::{Ball, COURTS, Flight, Material, Shot, V3, rows4};
 use hst_sim::camera::{Camera, Scene, View};
+use hst_sim::effect::{PathEntry, SmashSearch};
 use hst_sim::court;
 use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
@@ -252,10 +253,32 @@ struct Game {
     humans: Vec<bool>,
     /// The racket impact a shot started this tick.
     hit_effect: Option<effects::Hit>,
+    /// Character 0's smash window middle (TParam, m) and the landing markers' state.
+    smash_mid: f32,
+    marks: Marks,
     /// The jingle due (slot 8 key: 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
     jingle: Option<u8>,
     music_hold: bool,
+}
+
+/// The landing markers, as the original: the red one at the shot's aim (from the serve return on), the yellow one
+/// where a receiving human can smash the ball, searched along a predicted path grown 15 entries a frame.
+#[derive(Default)]
+struct Marks {
+    red: Option<[f32; 2]>,
+    /// The smash search, its path so far (y up) and the predictor's flight at the path's end.
+    smash: Option<(SmashSearch, Vec<PathEntry>, Flight)>,
+    /// The search found its first point this frame (the yellow marker's play starts).
+    start: bool,
+}
+
+const PATH_MAX: usize = 600;
+
+/// The predictor's path entry for `f` (the game stores it y up).
+fn path_entry(f: &Flight) -> PathEntry {
+    let (p, v) = (f.ball.pos, f.ball.vel);
+    PathEntry { pos: [p[0], -p[1], p[2]], vel: [v[0], -v[1], v[2]], bounces: f.bounces }
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -333,9 +356,6 @@ struct Figure(usize);
 /// The ball model, or (`true`) its shadow.
 #[derive(Component)]
 struct BallView(bool);
-/// Red dot on the court where the ball in flight will first bounce.
-#[derive(Component)]
-struct LandingMark;
 #[derive(Component)]
 struct ScoreText;
 /// A balloon billboard over player `.0`'s head (its own material).
@@ -351,7 +371,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, effects::draw_flight, effects::draw_bounce, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(Update, (read_input, camera, draw, effects::draw, effects::draw_sparks, effects::draw_trails, effects::draw_flight, effects::draw_bounce, effects::draw_marks, balloons, character::animate, hud).chain())
         .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, effects::tick_trails, played_out, held_ball, play_sounds).chain());
 }
 
@@ -473,7 +493,8 @@ fn balloon_index(b: Balloon) -> usize {
 
 /// Character 0's reach for the contact search: TParam.csv from the disc (reach base, reach, ideal stroke and
 /// volley heights, smash window, handedness).
-fn reach(iso: &mut Iso) -> Reach {
+/// …and the middle of its smash window (m).
+fn reach(iso: &mut Iso) -> (Reach, f32) {
     let data = iso.read("PCDATA/PCDATA.XB").expect("character archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).expect("TParam.csv");
@@ -487,7 +508,7 @@ fn reach(iso: &mut Iso) -> Reach {
         s.split('/').nth(k).and_then(|v| v.trim().parse().ok()).expect("TParam slash cell")
     };
     let right = cols[6].starts_with(&[0x89, 0x45]); // 右 (right) in Shift-JIS
-    Reach {
+    let reach = Reach {
         base: num(55),
         reach: (num(56) + num(57)) / 100.0,
         stroke_height: pair(63, 0) / 100.0,
@@ -507,7 +528,8 @@ fn reach(iso: &mut Iso) -> Reach {
         // joint); per-character from the skeleton with P8
         shoulder: [0.08548, -0.83622, 0.20118],
         tip: [0.006694, -0.646701, 1.220628],
-    }
+    };
+    (reach, pair(64, 1) / 100.0)
 }
 
 /// Line margin, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
@@ -570,6 +592,7 @@ fn setup(
     let art = balloon_art(&mut iso, &mut images);
     let (line_margin, board, world, shot_params, umpire) = disc(&mut iso, args.stage);
     let rules = if args.singles { SINGLES } else { DOUBLES };
+    let (reach, smash_mid) = reach(&mut iso);
     let mut game = Game {
         rules,
         tables: tables(&mut iso, "A", "strk", 5),
@@ -577,7 +600,7 @@ fn setup(
         smash_tables: tables(&mut iso, "B", "smsh", 2),
         serve_data: serve_data(&mut iso),
         serving: Serving::default(),
-        reach: reach(&mut iso),
+        reach,
         flight: Flight::new(Ball { pos: [0.0; 3], vel: [0.0; 3], spin: 0.0 }, [[0.0; 4]; 4], [[0.0; 4]; 4]),
         shot: Shot::default(),
         prev_ball: [0.0; 3],
@@ -621,6 +644,8 @@ fn setup(
         music_hold: false,
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
         hit_effect: None,
+        smash_mid,
+        marks: Marks::default(),
     };
     reset_positions(&mut game);
     game.emitters = emitters(&mut iso, args.stage.map_or(args.court, |s| s as usize), rules.players as u32, &mut game.rng);
@@ -680,6 +705,8 @@ fn setup(
     let flight = effects::load_flight(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images).expect("ball flight");
     commands.insert_resource(flight);
     let stage = args.stage.map_or(args.court, |s| s as usize);
+    let marks = effects::load_marks(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("landing markers");
+    commands.insert_resource(marks);
     let bounce = effects::load_bounce(&mut iso, stage, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("bounce effects");
     commands.insert_resource(bounce);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
@@ -699,11 +726,6 @@ fn setup(
     part("ballshadow.mdl", BallView(true));
     let ink = materials.add(StandardMaterial { base_color: Color::BLACK, unlit: true, cull_mode: Some(bevy::render::render_resource::Face::Front), ..default() });
     commands.entity(ball).with_child((Mesh3d(meshes.add(Sphere::new(0.0325 * 1.22).mesh().ico(4).unwrap())), MeshMaterial3d(ink)));
-    let mark = materials.add(StandardMaterial { base_color: Color::srgb(0.9, 0.05, 0.05), unlit: true, ..default() });
-    let m = commands
-        .spawn((LandingMark, Mesh3d(meshes.add(Cylinder::new(0.14, 0.004))), MeshMaterial3d(mark), Transform::default(), Visibility::Hidden))
-        .id();
-    commands.entity(root).add_child(m);
     commands.spawn((
         DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(4.0, 12.0, -6.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -840,6 +862,18 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         _ => KIND_SPIN[kind as usize],
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
+    // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
+    g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);
+    let heights: Vec<[f32; 2]> = (0..g.players.len()).filter(|&i| i & 1 != who & 1 && g.humans.get(i) == Some(&true)).map(|_| [g.reach.smash_top, g.smash_mid]).collect();
+    g.marks.smash = (!heights.is_empty()).then(|| {
+        let mut f = g.flight;
+        let mut path = vec![path_entry(&f)];
+        for _ in 0..14 {
+            f.step(&g.shot, &COURTS[g.court]);
+            path.push(path_entry(&f));
+        }
+        (SmashSearch::new(&heights), path, f)
+    });
     g.hit_effect = Some(effects::Hit { kind, smash: class == 3, pos: at, vel });
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
@@ -1742,6 +1776,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.rally.new_point();
     g.shots = 0;
     g.last_hitter = -1;
+    g.marks = Marks::default();
     g.phase = Phase::Serve;
     g.message.clear();
     reset_positions(g);
@@ -1780,32 +1815,23 @@ fn camera(g: Res<Game>, time: Res<Time<Fixed>>, mode: Res<CamMode>, cs: Res<CamS
 }
 
 /// First bounce point of the ball in flight, found by stepping a copy with the real physics.
-fn landing(g: &Game) -> Option<V3> {
-    if g.phase != Phase::Rally || g.flight.bounces > 0 {
-        return None;
+/// One frame of the smash search: grow the predicted path by 15 entries (until it has bounced twice) and search
+/// it; the yellow marker goes once the live ball bounces.
+// ponytail: whether the original also grows the path on the launch frame is unverified (a possible 1-frame offset)
+fn smash_frame(g: &mut Game) {
+    g.marks.start = false;
+    if g.flight.bounces > 0 {
+        g.marks.smash = None;
     }
-    let mut f = g.flight;
-    for _ in 0..240 {
-        f.step(&g.shot, &COURTS[g.court]);
-        if f.special_contacts > 0 {
-            return None;
-        }
-        if f.bounces > 0 {
-            return Some(f.ball.pos);
+    let (shot, court) = (g.shot, &COURTS[g.court]);
+    let Some((search, path, f)) = &mut g.marks.smash else { return };
+    if path.last().is_some_and(|e| e.bounces < 2) {
+        for _ in 0..15.min(PATH_MAX - path.len()) {
+            f.step(&shot, court);
+            path.push(path_entry(f));
         }
     }
-    None
-}
-
-fn mark_landing(g: Res<Game>, mut q: Query<(&mut Transform, &mut Visibility), With<LandingMark>>) {
-    let Ok((mut t, mut v)) = q.single_mut() else { return };
-    match landing(&g) {
-        Some(p) => {
-            t.translation = Vec3::new(p[0], -0.01, p[2]); // just above the court surface (Y-down)
-            *v = Visibility::Inherited;
-        }
-        None => *v = Visibility::Hidden,
-    }
+    g.marks.start = search.search(path);
 }
 
 fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut Transform)>, mut ball: Query<(&BallView, &mut Transform), Without<Figure>>) {
@@ -1834,9 +1860,14 @@ fn start_effects(
     mut sparks: ResMut<effects::HitSparks>,
     mut flight: ResMut<effects::BallFlight>,
     mut bounce: ResMut<effects::BallBounce>,
+    mut marks: ResMut<effects::LandingMarks>,
     mut transforms: Query<&mut Transform>,
     mut commands: Commands,
 ) {
+    smash_frame(&mut g);
+    marks.red_at = g.marks.red;
+    marks.smash_at = g.marks.smash.as_ref().and_then(|(s, _, _)| s.at());
+    marks.tick(g.marks.start);
     let hit = g.hit_effect.take();
     if let Some(h) = hit {
         fx.start(h, &mut transforms);

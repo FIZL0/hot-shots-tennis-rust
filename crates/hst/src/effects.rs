@@ -4,6 +4,8 @@
 //! (a `zanzou` ribbon behind the racket); the ball's flight ribbon (`ballrolling`, coloured by shot kind) and the
 //! glow spinning about it after a stroke (`impactef_*`); and the ball's bounce: a mark on the court, dust puffs in
 //! the court's colours, the `ballbound` ring model (a smash landing: the court's `chakudan` crater and a dust cloud).
+//! Also the landing markers from `PCDATA/PCCG0.XB`: the red one where a shot is aimed, the yellow one where a lob
+//! can be smashed.
 
 use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
@@ -86,7 +88,8 @@ fn model(
     let mtl = mtl::parse(&file("mtl")?, get(&format!("{s}.mti")).as_deref()).map_err(|e| e.0)?;
     let effect = Effect::new(
         &model,
-        &ani::parse(&file("ani")?).map_err(|e| e.0)?,
+        // the landing markers have no ANI: rest pose
+        &get(&format!("{s}.ani")).map_or(Ok(ani::Anim { ticks_per_frame: 1, tracks: vec![] }), |a| ani::parse(&a)).map_err(|e| e.0)?,
         &mor::parse(&file("mor")?, 1).map_err(|e| e.0)?,
         &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
         &mtl.materials,
@@ -580,5 +583,67 @@ pub fn draw_bounce(
     }
     if let Some(mut mesh) = meshes.get_mut(&fx.dust) {
         put(&mut mesh, b.dust.iter().map(|(p, _, _)| billboard(p)).collect());
+    }
+}
+
+/// The landing markers: `chakudan_p` (red, a looping pulse) at the shot's aim and `smash_p` (yellow, one 120-frame
+/// play) at the smash point; each placed on the court at (x, z) or hidden.
+#[derive(Resource)]
+pub struct LandingMarks {
+    red: (Effect, Shown),
+    smash: (Effect, Shown),
+    pub red_at: Option<[f32; 2]>,
+    pub smash_at: Option<[f32; 2]>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn load_marks(
+    iso: &mut Iso,
+    commands: &mut Commands,
+    parent: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Result<LandingMarks, String> {
+    let data = iso.read("PCDATA/PCCG0.XB").map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let mut red = model(&arc, "taguchi/other/chakudan_p", commands, parent, meshes, materials, images, bindposes)?;
+    // never restarted: the pulse runs on from wherever it was, ticked only while shown
+    red.0.looping = true;
+    red.0.start();
+    let smash = model(&arc, "taguchi/other/smash_p", commands, parent, meshes, materials, images, bindposes)?;
+    Ok(LandingMarks { red, smash, red_at: None, smash_at: None })
+}
+
+impl LandingMarks {
+    /// One game frame: `start_smash` (the first smash point was just found) restarts the yellow marker's play.
+    pub fn tick(&mut self, start_smash: bool) {
+        if self.red_at.is_some() {
+            self.red.0.tick();
+        }
+        if start_smash {
+            self.smash.0.start();
+        } else {
+            self.smash.0.tick();
+        }
+    }
+}
+
+pub fn draw_marks(fx: Res<LandingMarks>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    for ((effect, view), at) in [(&fx.red, fx.red_at), (&fx.smash, fx.smash_at.filter(|_| fx.smash.0.live))] {
+        match at {
+            Some([x, z]) => {
+                pose(effect, view, &mut q, &mut joints, &mut materials);
+                if let Ok(mut t) = joints.get_mut(view.root) {
+                    *t = Transform::from_xyz(x, 0.0, z);
+                }
+            }
+            None => {
+                if let Ok((mut v, _)) = q.get_mut(view.root) {
+                    *v = Visibility::Hidden;
+                }
+            }
+        }
     }
 }
