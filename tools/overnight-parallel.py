@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/overnight.sh, but keeps HST_SLOTS (3) headless Claude
 sessions going, each on its own PLAN.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/overnight-parallel.py      # progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/overnight-parallel.py      # (tools/overnight-parallel-5.sh: 5 at once) progress: context/notes/overnight.log, slot logs beside it
 
 Each session is the normal TUI in its own tmux window (s1..sN) of the runner's session: switch to one to watch or
 type to it. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
