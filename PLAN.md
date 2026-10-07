@@ -101,6 +101,10 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
 - [ ] **P13** Umpire (Lily) → new; `hst-data/src/layout.rs`
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
+- [x] **P14a** NPC roster and placement → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` · `layout.rs` · `main.rs` load | t: npc.rs
+- [ ] **P14b** Walking spectators (wander/react, animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c** Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
+- [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P15a** Per-court bounce profiles → `ball.rs` (COURTS) · `hst-data/src/exe.rs` · `play.rs` disc
 
 ### Presentation

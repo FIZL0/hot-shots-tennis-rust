@@ -24,3 +24,4 @@ pub mod motion;
 pub mod face;
 pub mod cutaway;
 pub mod sound;
+pub mod npc;

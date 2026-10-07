@@ -113,6 +113,29 @@ impl<'a> Game<'a> {
         std::array::from_fn(|k| i32::from_le_bytes(row[4 * k..4 * k + 4].try_into().unwrap()))
     }
 
+    /// Court `court`'s (1-based) creature roster: which `npcNN` entry becomes which background figure, in the
+    /// game's order (the first entry with a creature's name wins).
+    pub fn npc_roster(&self, court: u32) -> Vec<NpcEntry> {
+        let n = i32::from_le_bytes(self.at(0x41_27e0 + 4 * court, 4).try_into().unwrap()).max(0) as u32;
+        (0..n)
+            .filter_map(|k| {
+                let e = self.at(0x41_2820 + court * 0xc0 + k * 12, 12);
+                let name = u32::from_le_bytes(e[0..4].try_into().unwrap());
+                (name != 0).then(|| {
+                    let s = self.at(name, 16);
+                    NpcEntry { name: String::from_utf8_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(16)]).into(), kind: e[4] }
+                })
+            })
+            .collect()
+    }
+
+    /// Court `court`'s six walking spectators (npc00..npc05): model number, animation set, and whether they also
+    /// come out in doubles.
+    pub fn walkers(&self, court: u32) -> [[u8; 3]; 6] {
+        let t = self.at(0x41_39c0 + court * 0x12, 0x12);
+        std::array::from_fn(|k| [t[3 * k], t[3 * k + 1], t[3 * k + 2]])
+    }
+
     /// How long the scoreboard takes over the score after a point.
     pub fn scoreboard_timing(&self) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
@@ -172,6 +195,15 @@ fn check_boot(elf: &[u8]) -> Result<(), Error> {
 /// `n` bytes of the boot program at `addr`: one loadable segment from file offset 0x100 to vaddr 0x100000.
 fn boot_at(elf: &[u8], addr: usize, n: usize) -> &[u8] {
     &elf[addr - 0x10_0000 + 0x100..][..n]
+}
+
+/// One roster line: a creature entry name (`npc06`) and the figure it becomes — a trigger creature type (0..53),
+/// a walking spectator (54..59 = npc00..npc05's own rows of [`Game::walkers`]), the umpire (60) or one of court 5's
+/// own creatures (61..66).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NpcEntry {
+    pub name: String,
+    pub kind: u8,
 }
 
 /// Scoreboard timing after a point (frames unless noted).
