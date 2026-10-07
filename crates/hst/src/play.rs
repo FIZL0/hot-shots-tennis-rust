@@ -20,6 +20,7 @@ use hst_sim::court;
 use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
+use hst_sim::motion;
 use hst_sim::player::{self as loco, Stats};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::shot::{Bounds, Table, launch, lookup};
@@ -86,14 +87,35 @@ struct Player {
     bot_due: Option<usize>,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
-    /// The stroke motion playing (the contact search's swing animation) and its speed to reach the contact pose.
-    stroke: Option<(usize, f32)>,
+    /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
+    cmd: Cmd,
+    /// A swing waiting for 8 frames before contact while the body turns, and a soft follow-through due next frame.
+    wait_swing: Option<i32>,
+    follow: Option<i32>,
     /// A swing at nothing: its stroke motion and frames since the press.
     whiff: Option<(usize, u32)>,
     /// Movement stats from TParam.csv.
     stats: Stats,
     /// Run, stamina, stand/run motion and facing as the game's play state (`hst_sim::player::Body`).
     body: loco::Body,
+}
+
+/// A motion set by the game's code (the motion setter): number, speed, looping, start frame.
+#[derive(Clone, Copy, Default)]
+struct Cmd {
+    id: usize,
+    speed: f32,
+    looping: bool,
+    from: f32,
+    serial: u32,
+}
+
+/// The game's motion setter: a looping motion already playing keeps going, anything else restarts.
+fn set_motion(p: &mut Player, id: i32, speed: f32, looping: bool, from: f32) {
+    if looping && p.cmd.serial > 0 && p.cmd.id == id as usize {
+        return;
+    }
+    p.cmd = Cmd { id: id as usize, speed, looping, from, serial: p.cmd.serial + 1 };
 }
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
@@ -156,6 +178,10 @@ struct Game {
     cam_owner: Option<usize>,
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
     pelvis: Vec<Vec<[f32; 2]>>,
+    /// Each player's character number.
+    chars: Vec<i32>,
+    /// The team that won the last point.
+    post_winner: i32,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -450,6 +476,8 @@ fn setup(
         cam: Camera::new(),
         cam_owner: Some(0),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
+        chars: vec![0; rules.players as usize],
+        post_winner: 0,
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -472,6 +500,7 @@ fn setup(
         game.players[i].stats = character_stats(&mut iso, c);
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
+        game.chars[i] = c as i32;
         let f = character::spawn(&mut commands, &data, root);
         commands.entity(f).insert(Figure(i));
     }
@@ -772,6 +801,15 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
     })
 }
 
+/// The game's contact-search branch number (+0x3ec1).
+fn branch_code(b: swing::Branch) -> u8 {
+    match b {
+        swing::Branch::Ground => 1,
+        swing::Branch::Volley => 2,
+        swing::Branch::Smash => 4,
+    }
+}
+
 /// Pop-up wording for a timing result (offset < 0: the ball arrived sooner than the sweet frame, you were late).
 fn timing_word(c: &Contact) -> &'static str {
     match c.offset {
@@ -806,6 +844,11 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
         ball_dir: g.flight.ball.vel,
         short: false,
     };
+    // reacting to the point: the reaction plays, nobody runs
+    if g.post.as_ref().is_some_and(|p| p.reacted) {
+        g.players[i].prev = g.players[i].pos;
+        return;
+    }
     let Game { players, pelvis, .. } = g;
     let p = &mut players[i];
     p.prev = p.pos;
@@ -815,6 +858,8 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     p.vel = if p.body.running { Vec2::new(p.body.vel[0], p.body.vel[2]) } else { Vec2::ZERO };
     p.stride += p.vel.length() * 9.0;
     p.facing = yaw(p.body.face.dir);
+    let m = p.body.motion;
+    set_motion(p, m, 1.0, true, 0.0);
 }
 
 /// Figure yaw (0 faces −z) of a game-space facing direction.
@@ -836,6 +881,9 @@ fn square_up(p: &mut Player) {
 /// shot over the last frames before contact, as the original; the racket meets the ball on the chosen frame.
 fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Option<Contact> {
     let mut struck = None;
+    if let Some(f) = g.players[i].follow.take() {
+        set_motion(&mut g.players[i], f, 1.0, false, motion::SOFT_FOLLOW_FROM);
+    }
     if let Some(left) = g.players[i].pending {
         if let Some(c) = find_contact(g, i) {
             let p = &mut g.players[i];
@@ -843,7 +891,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             p.contact = Some(c);
             p.hit_at = Some(c.swing.ball);
             p.wind = c.frames.max(1);
-            p.stroke = Some((c.swing.anim as usize, serve::SWEET_FRAME as f32 / c.frames.max(1) as f32));
+            let (m, speed, wait) = motion::stroke_start(branch_code(c.swing.branch), c.frames as i32, c.swing.anim as i32);
+            set_motion(p, m, speed, wait.is_some(), 0.0);
+            p.wait_swing = wait;
             p.backhand = !c.swing.forehand;
             p.swing = Some(0);
             p.swung = false;
@@ -868,21 +918,27 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
             strike(g, i, 1, kind, target);
             debug!("player {i} {:?} {} anim {:#x}: {} (offset {}, grade {})", c.swing.branch, if c.swing.forehand { "forehand" } else { "backhand" }, c.swing.anim, timing_word(&c), c.offset, c.grade);
             let rally = g.phase == Phase::Rally && g.players.len() > 1;
+            let v = g.flight.ball.vel;
             let p = &mut g.players[i];
+            let branch = branch_code(c.swing.branch);
             if rally {
-                let branch = match c.swing.branch {
-                    swing::Branch::Ground => 1,
-                    swing::Branch::Volley => 2,
-                    swing::Branch::Smash => 4,
-                };
                 p.body.stamina = loco::stroke_stamina(&p.stats, p.body.stamina, branch, c.swing.forehand, 0);
             }
+            // a slow ball off a ground stroke: the soft follow-through from next frame (`forehand` is already
+            // mirrored for left-handers)
+            p.follow = motion::soft_follow(branch, c.swing.anim as i32, v, if c.swing.forehand { 1 } else { 2 }, 1.0);
             p.contact = None;
             p.swung = true;
             p.balloon = serve::balloon(c.grade, c.offset, false).map(|b| (b, 0));
             struck = Some(c);
         } else {
             p.contact = Some(Contact { frames: c.frames - 1, ..c });
+            // the swing waiting behind the body's turn starts 8 frames before contact
+            if c.frames as i32 - 1 == motion::SWING_LEAD {
+                if let Some(anim) = p.wait_swing.take() {
+                    set_motion(p, anim, 1.0, false, 0.0);
+                }
+            }
         }
     }
     // animation clock: contact at 45% of the swing, follow-through over the remaining frames
@@ -890,12 +946,17 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> V3) -> Opti
     if let Some((anim, f)) = p.whiff {
         p.prev = p.pos;
         p.whiff = (f + 1 < WHIFF_FRAMES).then_some((anim, f + 1));
+        // the stroke turns into its miss motion at the contact pose
+        if f + 1 == WHIFF_POSE {
+            if let Some(w) = motion::whiff(anim as i32) {
+                set_motion(p, w, 1.0, false, 0.0);
+            }
+        }
     }
     if let Some(f) = p.swing {
         p.swing = (f + 1 < p.wind + 16).then_some(f + 1);
         if p.swing.is_none() {
             p.hit_at = None;
-            p.stroke = None;
         }
     }
     struck
@@ -933,6 +994,7 @@ fn whiff(g: &mut Game, i: usize) {
     let right = d[1] * b.vel[0] - d[0] * b.vel[2] > 0.0;
     let other = if right { p.hand >= 0.0 } else { p.hand < 0.0 };
     p.whiff = Some((base + other as usize, 0));
+    set_motion(p, (base + other as usize) as i32, 1.0, false, 0.0);
     p.vel = Vec2::ZERO;
     p.facing = base_yaw(p.end);
 }
@@ -1110,7 +1172,12 @@ fn simulate(mut g: ResMut<Game>) {
         Phase::Post => {
             let g = &mut *g;
             let mut post = g.post.take().expect("post-point state");
-            match post.step(&mut g.score, &mut g.rally, &g.board) {
+            let reacted = post.reacted;
+            let step = post.step(&mut g.score, &mut g.rally, &g.board);
+            if post.reacted && !reacted {
+                react(g, post.event);
+            }
+            match step {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g),
                 Some(Next::ChangeEnds) => return g.phase = Phase::ChangeEnds(CHANGE_ENDS),
@@ -1149,6 +1216,7 @@ fn simulate(mut g: ResMut<Game>) {
         g.phase = Phase::Over(90); // ponytail: the umpire call sets this delay (call sprite + voice line, P0b4c)
         return;
     };
+    g.post_winner = team as i32;
     let event = g.score.point(&g.rules, team as usize);
     g.score.note_tiebreak_start();
     let who = format!("team {}", team + 1);
@@ -1161,6 +1229,32 @@ fn simulate(mut g: ResMut<Game>) {
     info!("point: {who} ({why}) after {} frames, {event:?} {:?}", g.since_hit, g.score);
     g.post = Some(PostPoint::new(event.expect("match in progress")));
     g.phase = Phase::Post;
+}
+
+/// Every player's reaction to the point (`hst_sim::motion::reaction`): winners `gu`, losers `di` (`_set` when the
+/// point ends a game), in doubles sometimes a team reaction instead, each player's own pick.
+/// ponytail: the app's random numbers stand in for the game's; ball body hits (`re_ball`) aren't simulated yet
+fn react(g: &mut Game, event: Event) {
+    let n = g.players.len() as i32;
+    let winner = g.post_winner;
+    let mut taken = Vec::new();
+    for i in 0..g.players.len() {
+        let won = i as i32 & 1 == winner;
+        let base = motion::reaction(false, n, won, matches!(event, Event::Game | Event::Set), false);
+        let id = if n == 4 {
+            let draw = |m: u32| (rand(&mut g.rng) * m as f32) as u32;
+            let id = motion::team_reaction(base, g.chars[i], &taken, draw);
+            if id >= 0x30 {
+                taken.push(id - 0x30);
+            }
+            id
+        } else {
+            base
+        };
+        let p = &mut g.players[i];
+        p.vel = Vec2::ZERO;
+        set_motion(p, id, 1.0, false, 0.0);
+    }
 }
 
 /// Leave the point: next server, receiver and side, and set up the serve.
@@ -1259,37 +1353,27 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             let s = g.serving;
             let under = s.toss == Some(Toss::Under);
             match (s.toss, s.swing) {
-                (None, _) if p.pos != p.prev => {
-                    let right = (p.pos[0] - p.prev[0]) * p.end * p.hand < 0.0;
-                    m.play(if right { 0x22 } else { 0x21 }, 1.0, true);
-                }
+                (None, _) if p.pos != p.prev => m.play(motion::serve_walk(p.pos[0] - p.prev[0], p.end, p.hand) as usize, 1.0, true),
                 (None, _) => m.play(0x20, 1.0, true),
                 (Some(_), Some(sw)) => {
-                    let id = if under { 0x26 } else { 0x25 };
-                    let speed = if m.id == id { m.speed } else { serve::SWEET_FRAME as f32 / sw.frames.max(1) as f32 };
-                    let past = m.id == id && m.time >= serve::SWEET_FRAME as f32;
-                    m.play(id, if past { 1.0 } else { speed }, false);
+                    let (id, speed) = motion::serve_swing(under, sw.frames as i32);
+                    // the speed is set once, at the swing's start
+                    let speed = if m.id == id as usize { m.speed } else { speed };
+                    m.play(id as usize, speed, false);
                 }
-                (Some(_), None) if s.whiffed => m.play(if under { 0x2a } else { 0x29 }, 1.0, false),
-                (Some(_), None) => m.play(if under { 0x24 } else { 0x23 }, 1.0, false),
+                (Some(_), None) if s.whiffed => m.play(motion::whiff(if under { 0x26 } else { 0x25 }).unwrap_or(0x29) as usize, 1.0, false),
+                (Some(_), None) => m.play(motion::serve_toss(under) as usize, 1.0, false),
             }
-            continue;
-        }
-        // a whiff's stroke turns into the whiff motion at the contact pose (forehand-side strokes 0x27, the others 0x28)
-        if let Some((anim, f)) = p.whiff {
-            m.play(if f < WHIFF_POSE { anim } else if anim % 2 == 0 { 0x27 } else { 0x28 }, 1.0, false);
-            continue;
-        }
-        if let Some((anim, speed)) = p.stroke {
-            let past = m.id == anim && m.time >= serve::SWEET_FRAME as f32;
-            m.play(anim, if past { 1.0 } else { speed }, false);
             continue;
         }
         // a finished serve swing plays out before running
         if (m.id == 0x25 || m.id == 0x26) && m.time < 30.0 {
             continue;
         }
-        m.play(p.body.motion as usize, 1.0, true);
+        let c = p.cmd;
+        if c.serial != m.serial {
+            *m = Motion { id: c.id, time: c.from, speed: c.speed, looping: c.looping, serial: c.serial };
+        }
     }
 }
 

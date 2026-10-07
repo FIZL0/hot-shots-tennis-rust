@@ -64,11 +64,13 @@ pub struct Motion {
     pub time: f32,
     pub speed: f32,
     pub looping: bool,
+    /// Bumped by whoever restarts the motion (lets a driver restart the same motion).
+    pub serial: u32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
-        Motion { id: 0, time: 0.0, speed: 1.0, looping: true }
+        Motion { id: 0, time: 0.0, speed: 1.0, looping: true, serial: 0 }
     }
 }
 
@@ -76,7 +78,7 @@ impl Motion {
     /// Switch to motion `id` from its start (keeps going if it already plays).
     pub fn play(&mut self, id: usize, speed: f32, looping: bool) {
         if self.id != id {
-            *self = Motion { id, time: 0.0, speed, looping };
+            *self = Motion { id, time: 0.0, speed, looping, serial: self.serial };
         } else {
             self.speed = speed;
             self.looping = looping;
@@ -244,22 +246,40 @@ pub fn load_disc(
             let r = hst_sim::pose::first_frame(&skeleton, &a)[h][2];
             *row = [r[0], r[2]];
         }
-        let per_frame = a.ticks_per_frame.max(1) as f32;
-        let tracks = a
-            .tracks
-            .iter()
-            .filter_map(|t| {
-                let j = joints.iter().position(|j| j.name == t.name)?;
-                // a rotation key is the conjugate of the joint's local rotation
-                let rot = t.rotation.iter().map(|&(tick, q)| (tick as f32 / per_frame, Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize())).collect();
-                let pos = t.position.iter().map(|&(tick, p)| (tick as f32 / per_frame, Vec3::new(p[0], p[1], p[2]))).collect();
-                Some((j, rot, pos))
-            })
-            .collect();
-        motions.insert(id, Clip { end: a.end_tick() as f32 / per_frame, tracks });
+        // the motion numbers 0x30.. are the team reactions (below); the files of those names are ball paths
+        if id < 0x30 {
+            motions.insert(id, clip(&a, &joints));
+        }
+    }
+    // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
+    if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
+        let carc = Archive::parse(&cg).map_err(|e| e.0)?;
+        for (k, stem) in ["co01_f", "co02_f", "co03", "co04", "co05"].iter().enumerate() {
+            let name = format!("mtgrl/re_pc00_{stem}.ani2");
+            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
+            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
+            motions.insert(0x30 + k, clip(&a, &joints));
+        }
     }
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     Ok(CharacterData { joints, parts, racket, motions, binds, pelvis })
+}
+
+/// A motion's keys per joint, in game frames.
+fn clip(a: &ani::Anim, joints: &[Joint]) -> Clip {
+    let per_frame = a.ticks_per_frame.max(1) as f32;
+    let tracks = a
+        .tracks
+        .iter()
+        .filter_map(|t| {
+            let j = joints.iter().position(|j| j.name == t.name)?;
+            // a rotation key is the conjugate of the joint's local rotation
+            let rot = t.rotation.iter().map(|&(tick, q)| (tick as f32 / per_frame, Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize())).collect();
+            let pos = t.position.iter().map(|&(tick, p)| (tick as f32 / per_frame, Vec3::new(p[0], p[1], p[2]))).collect();
+            Some((j, rot, pos))
+        })
+        .collect();
+    Clip { end: a.end_tick() as f32 / per_frame, tracks }
 }
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).

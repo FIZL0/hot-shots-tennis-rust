@@ -28,7 +28,7 @@ pub enum Next {
 pub struct PostPoint {
     /// Ticks run in this phase.
     pub tick: u32,
-    event: Event,
+    pub event: Event,
     board: Board,
     /// The scoreboard has paused; the players have been told to react to the point.
     pub reacted: bool,

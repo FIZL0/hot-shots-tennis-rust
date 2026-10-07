@@ -20,3 +20,4 @@ pub mod mesh;
 pub mod court;
 pub mod player;
 pub mod pose;
+pub mod motion;

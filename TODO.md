@@ -138,9 +138,15 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
     `tests/player.rs`: facing, way and cross bit-exact on 78255 play-state frames (5480 turning); the pelvis table
     computed from the disc (`hst_sim::pose::first_frame`) within 5e-7 of the game's. The app turns the body (model
     yaw = facing).
-  - [ ] **N1c — Mode state machine.** When each mode/motion applies: stroke mode 2 (`3ec4` countdown, recovery
-    +0x3e50, re-press), mode 3, serve motions, receive, reactions `re_*`, `3553d0`; verify the motion number on
-    every frame of `match_s05.bin` (not only stand/run frames).
+  - [x] **N1c — Motion state machine.** `hst_sim::motion`: stroke start (wind-up turn `tb_f`/`tb_b` when a ground
+    stroke/volley is > 8 frames out, else the swing at speed 8/frames), the swing 8 frames before contact, whiff
+    motions (`350840` table), soft follow-through `f_w`/`b_w` after a slow ground stroke (from frame 8), serve walk/
+    toss/swing, post-point reactions (gu/di, `_set` on game points, `re_ball` on body hits, doubles team reactions
+    `re_pc00_co01_f..co05` = motions 0x30..0x34 from `PCDATA/PCCG0.XB`, per-character sets 0x3fc790, not taken by an
+    earlier player). `tests/motion.rs` on `match_s05.bin`: 158 stroke starts, 33 swing switches, 6 whiffs, 131
+    contacts (soft follow or not), 1555 serve-walk frames, 108 reactions (62 team) — all match. The app's serve walk
+    motions were swapped (fixed). Open: the team-reaction draw uses the app's random numbers (game RNG `19f5c0`
+    with P11), reactions' root motion (`355270`/`3658b0`), the state-1 serve flow itself (P0b5 has the timing).
   - [ ] **N1d — Motion playback.** Motion time/speed (+0x34/+0x38), blending (`0x140360`/`0x1404c0`), contact IK
     and body step (`0x3561e0`), faces (`.MOR`/`.UVA`); record motion time over PINE to verify.
 - [ ] **N2 — The original ball when serving.** The ball sits in the server's hand and follows the serve motion's
