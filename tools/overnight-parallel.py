@@ -5,7 +5,8 @@ sessions going, each on its own PLAN.md task in its own git worktree, and merges
     tmux new -s hst tools/overnight-parallel.py      # progress: context/notes/overnight.log, slot logs beside it
 
 Each session is the normal TUI in its own tmux window (s1..sN) of the runner's session: switch to one to watch or
-type to it. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds.
+type to it. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
+into a finished session cancels that, so /exit it yourself or the runner never merges it.
 
 Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split parents, `(after X)` while X is open,
 Stretch, and anything tried already tonight. Two running tasks never share a PLAN section or a file named on their
