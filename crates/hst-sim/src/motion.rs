@@ -195,6 +195,19 @@ pub fn soft_follow(branch: u8, anim: i32, ball_vel: [f32; 3], side: u32, hand: f
 /// The soft follow-through comes in over an 8-frame crossfade: its clock holds at 0 for this countdown.
 pub const SOFT_FOLLOW_HOLD: i32 = 7;
 
+/// Frames after contact before a stick or a shot press may break off the follow-through: 15 after a slice (kind 1)
+/// off a ground stroke or volley (`branch` 1/2), else 30.
+pub fn recovery(branch: u8, kind: i32) -> u32 {
+    if kind == 1 && (branch == 1 || branch == 2) { 15 } else { 30 }
+}
+
+/// Whether a stroke's follow-through, `after` frames past contact (1 the frame after), hands off this frame to
+/// standing or running: its motion `played` to the end (as of the last tick), or with `input` (stick or press) past
+/// `recover` (the first chance comes two frames after it).
+pub fn follow_over(after: u32, recover: u32, played: bool, input: bool) -> bool {
+    played || (input && after >= recover + 2)
+}
+
 /// Serve: stance 0x20, walking the baseline (`serve_r` 0x22 when the stick points along the player's forward ×
 /// x, `serve_l` 0x21 otherwise, swapped for left-handers), the toss (0x24 underhand, else 0x23) and the swing
 /// (0x26 underhand, else 0x25, at speed 8 / frames to contact).

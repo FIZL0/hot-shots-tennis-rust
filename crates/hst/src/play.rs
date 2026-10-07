@@ -66,8 +66,13 @@ struct Player {
     /// `facing` one tick earlier (drawing blends the two).
     prev_facing: f32,
     stride: f32,
-    /// Frames into the current swing.
+    /// Frames into the current swing; it lasts through the follow-through.
     swing: Option<u32>,
+    /// The follow-through: frames since contact, frames before a stick or press may break it off, and whether the
+    /// motion has played to its end (as of the last tick).
+    after: Option<u32>,
+    recover: u32,
+    played: bool,
     swung: bool,
     backhand: bool,
     /// Serve animation progress (0..1) while this player serves.
@@ -297,7 +302,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
         .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick).chain());
+        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out).chain());
 }
 
 /// Character 0's stroke tables (kinds 0..4) straight from the disc.
@@ -1000,6 +1005,8 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.follow = motion::soft_follow(branch, c.swing.anim as i32, v, if c.swing.forehand { 1 } else { 2 }, 1.0);
             p.contact = None;
             p.swung = true;
+            p.after = Some(0);
+            p.recover = motion::recovery(branch, kind);
             p.balloon = serve::balloon(c.grade, c.offset, false).map(|b| (b, 0));
             struck = Some(c);
         } else {
@@ -1025,12 +1032,30 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         }
     }
     if let Some(f) = p.swing {
-        p.swing = (f + 1 < p.wind + 16).then_some(f + 1);
-        if p.swing.is_none() {
-            p.hit_at = None;
-        }
+        p.swing = Some(f + 1);
     }
     struck
+}
+
+/// One frame of the follow-through after contact: past its recovery a stick or press (`input`) breaks it off, else
+/// it plays to the end of its motion; either way the swing is over and the player stands, runs or swings again.
+fn follow_through(p: &mut Player, input: bool) {
+    let Some(a) = p.after.map(|a| a + 1) else { return };
+    p.after = Some(a);
+    p.prev = p.pos;
+    if motion::follow_over(a, p.recover, p.played, input) {
+        debug!("follow-through of motion {:#x} over {a} frames after contact ({})", p.cmd.id, if p.played { "played out" } else { "broken off" });
+        (p.after, p.swing, p.hit_at) = (None, None, None);
+    }
+}
+
+/// Whether each player's motion has played to its end, as of this tick (the game's end-of-motion test).
+fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>) {
+    for (f, m, rig) in &q {
+        if let Some(p) = g.players.get_mut(f.0) {
+            p.played = m.serial == p.cmd.serial && rig.data.motions.get(&m.id).is_some_and(|c| m.clock.done(c.length));
+        }
+    }
 }
 
 /// A shot button press: remembered for a while and checked every frame until a contact is found. With no
@@ -1101,13 +1126,15 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         serve_turn(g, i, stick, press);
         return;
     }
+    follow_through(&mut g.players[i], shot.is_some() || pad.stick != Vec2::ZERO);
     if let Some(kind) = shot {
         press(g, i, kind);
     }
-    if g.players[i].contact.is_none() && g.players[i].whiff.is_none() {
-        // screen-relative: stick right follows the camera's right, stick up its ground-forward; no running
-        // through the follow-through
-        let dir = if g.players[i].swing.is_some() { Vec2::ZERO } else { screen(g, pad.stick) };
+    // screen-relative: stick right follows the camera's right, stick up its ground-forward; nothing moves the
+    // player (or sets its motion) through the swing
+    let p = &g.players[i];
+    if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() {
+        let dir = screen(g, pad.stick);
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot
@@ -1160,6 +1187,8 @@ fn bot(g: &mut Game, i: usize) {
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         return bot_serve(g, i);
     }
+    // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
+    follow_through(&mut g.players[i], true);
     let busy = g.players[i].contact.is_some() || g.players[i].pending.is_some() || g.players[i].swing.is_some() || g.players[i].whiff.is_some();
     if !busy {
         let plan = match g.phase {

@@ -642,3 +642,42 @@ fn fade_mix_ram() {
     eprintln!("{players} players mid-fade, {tracks} tracks bit-exact");
     assert!(players >= 3);
 }
+
+/// Every stroke's hand-off in the slot-5 match (`context/fixtures/anim_s05.bin`; player +0x3f00 frames since contact,
+/// +0x3e50 recovery, +0x3ec1 branch, +0x3ee4 shot code): played out the frame after the motion's sampled time
+/// reached its length, broken off into standing or running no earlier than `follow_over` allows with input, and the
+/// recovery from the shot.
+#[test]
+fn anim_s05_follow_through() {
+    use hst_sim::motion::{follow_over, recovery};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/anim_s05.bin")) else { return eprintln!("anim_s05.bin absent, skipped") };
+    const S: usize = 4 + 0x100 + 4 * 0x484;
+    let blk = |k: usize, p: usize| &data[k * S + 0x104 + p * 0x484..][..0x484];
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let pl = |b: &[u8], o: usize| i(b, o - 0x3c00);
+    let (mut ends, mut cuts, mut earliest) = (0, 0, 0);
+    for p in 0..4 {
+        for k in 1..data.len() / S {
+            let (a, b) = (blk(k - 1, p), blk(k, p));
+            let (ma, mb) = (i(a, 0x420), i(b, 0x420));
+            if ma == mb || !(0x10..=0x1d).contains(&ma) || mb >= 0x10 || pl(b, 0x3f00) == 0 {
+                continue;
+            }
+            let (after, rec) = (pl(b, 0x3f00) as u32, pl(b, 0x3e50) as u32);
+            let played = |blk: &[u8]| f(blk, 0x480) <= f(blk, 0x438);
+            let kind = match pl(b, 0x3ee4) { 0x10 => 4, 4 => 3, 8 => 2, 2 => 1, _ => 0 };
+            assert_eq!(recovery(b[0x3ec1 - 0x3c00], kind), rec, "k={k} p={p}");
+            if played(a) {
+                assert!(follow_over(after, rec, true, false) && !played(blk(k - 2, p)), "end k={k} p={p} {ma:#x} after {after}");
+                ends += 1;
+            } else {
+                assert!(follow_over(after, rec, false, true), "cut k={k} p={p} {ma:#x} after {after} rec {rec}");
+                earliest += !follow_over(after - 1, rec, false, true) as i32;
+                cuts += 1;
+            }
+        }
+    }
+    eprintln!("{ends} played out, {cuts} broken off ({earliest} on the first frame allowed)");
+    assert!(ends > 10 && cuts > 10);
+}
