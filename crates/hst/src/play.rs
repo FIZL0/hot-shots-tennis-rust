@@ -116,12 +116,18 @@ struct Player {
     hit_at: Option<V3>,
     /// The timing balloon over this player's head and its age in frames.
     balloon: Option<(Balloon, u32)>,
-    /// Stand-in AI: the contact frame it waits for before pressing.
+    /// Stand-in AI: set once it has picked its shot for the coming ball (serving: the contact frame it waits for).
     bot_due: Option<usize>,
     /// Stand-in AI: the shot it last decided to leave to its partner.
     bot_left: i32,
     /// This player's AIParam.csv row when the computer plays it (`hst_sim::ai`).
     ai: hst_sim::ai::AiParams,
+    /// The AI's memory of the opponents' last two shots and last two serves' velocities, whether its team has hit
+    /// since the match began (its stroke error is halved until then), and the timing errors it drew last.
+    ai_seen: [Option<hst_sim::ai::Seen>; 2],
+    ai_serves: [Option<V3>; 2],
+    ai_hit: bool,
+    ai_timing: hst_sim::ai::Timing,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -1333,6 +1339,7 @@ fn strike(
         _ => KIND_SPIN[kind as usize],
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
+    ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);
     let heights: Vec<[f32; 2]> = (0..g.players.len())
@@ -2264,49 +2271,40 @@ fn intercept(g: &Game, i: usize) -> Option<(V3, u32)> {
     None
 }
 
-/// How early/late the original's bots press (contact frame − sweet frame, with counts), measured over every
-/// stroke and serve of a recorded bot match (slot 5). The stand-in AI draws its timing from these.
-/// ponytail: the AI's own timing logic (AIParam, P11) replaces this.
-const BOT_STROKE_TIMING: [(i32, u32); 17] = [
-    (-6, 52),
-    (-5, 16),
-    (-4, 4),
-    (-3, 4),
-    (-2, 4),
-    (-1, 9),
-    (0, 7),
-    (1, 4),
-    (2, 9),
-    (3, 4),
-    (4, 4),
-    (5, 3),
-    (6, 4),
-    (7, 1),
-    (9, 2),
-    (10, 2),
-    (15, 2),
-];
-const BOT_SERVE_TIMING: [(i32, u32); 7] = [
-    (-6, 9),
-    (-5, 2),
-    (-4, 1),
-    (-3, 1),
-    (-2, 1),
-    (-1, 1),
-    (0, 20),
-];
+/// A computer player draws its timing errors (`hst_sim::ai`), given the opponents' shots when one just hit.
+/// ponytail: the doubles AI's third-of-the-smash-base case is unknown here (P11b), so it is always off.
+fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
+    let (receiver, first) = (g.score.receiver == i as i32, !g.players[i].ai_hit);
+    let rng = &mut g.rng;
+    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, false, &mut || {
+        rand(rng);
+        *rng
+    });
+}
 
-/// A contact frame drawn from a recorded timing distribution.
-fn draw_due(rng: &mut u32, table: &[(i32, u32)]) -> usize {
-    let total: u32 = table.iter().map(|&(_, n)| n).sum();
-    let mut r = (rand(rng) * total as f32) as u32;
-    for &(off, n) in table {
-        if r < n {
-            return (SWEET_FRAME + off).max(0) as usize;
+/// The AI's hit message: every computer player remembers an opponent's shot (or notes its own team's hit) and
+/// redraws its timing errors. `branch` is the hitter's swing branch code.
+fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
+    // the AI's shot kinds: 0 serve, 1 ground stroke, 2 volley, 3 smash, 4 dive
+    let kind = [0, 1, 2, 4, 3][branch as usize];
+    for i in 0..g.players.len() {
+        if g.humans.get(i) == Some(&true) {
+            continue;
         }
-        r -= n;
+        let p = &mut g.players[i];
+        let shots = if i & 1 != who & 1 {
+            let last = hst_sim::ai::Seen { kind, vel };
+            if kind == 0 {
+                p.ai_serves = [Some(vel), p.ai_serves[0]];
+            }
+            p.ai_seen = [Some(last), p.ai_seen[0]];
+            Some(hst_sim::ai::Shots { last, before: p.ai_seen[1], serve_before: p.ai_serves[1] })
+        } else {
+            p.ai_hit = true;
+            None
+        };
+        ai_draw(g, i, shots);
     }
-    SWEET_FRAME as usize
 }
 
 /// Stand-in AI for player `i`: serves, runs to the predicted interception (in doubles only the teammate
@@ -2374,10 +2372,18 @@ fn bot(g: &mut Game, i: usize) {
                 } else {
                     3
                 };
-                g.players[i].bot_due = Some(draw_due(&mut g.rng, &BOT_STROKE_TIMING));
+                g.players[i].bot_due = Some(SWEET_FRAME as usize);
             }
-            let due = g.players[i].bot_due.unwrap_or(SWEET_FRAME as usize);
-            if find_contact(g, i).is_some_and(|c| c.frames as usize <= due) {
+            // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
+            let t = g.players[i].ai_timing;
+            if find_contact(g, i).is_some_and(|c| {
+                let err = match c.swing.branch {
+                    swing::Branch::Ground => t.stroke,
+                    swing::Branch::Volley => t.volley,
+                    swing::Branch::Smash => t.smash,
+                };
+                c.frames as i32 + err <= SWEET_FRAME
+            }) {
                 let kind = g.players[i].kind;
                 press(g, i, kind);
                 g.players[i].bot_due = None;
@@ -2391,11 +2397,12 @@ fn bot(g: &mut Game, i: usize) {
     });
 }
 
-/// The stand-in AI's serve: strong toss, swing timed from the recorded bots' serve timing (a badly timed
+/// The stand-in AI's serve: strong toss, swing timed by the AI's serve error (a badly timed
 /// strong toss then goes wide or long, as in the original). ponytail: the AI's serve aim is P11.
 fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
-        g.serving.bot_due = Some(draw_due(&mut g.rng, &BOT_SERVE_TIMING));
+        ai_draw(g, i, None);
+        g.serving.bot_due = Some((SWEET_FRAME - g.players[i].ai_timing.serve).max(0) as usize);
         g.serving.bot_aim = Vec2::new(rand(&mut g.rng) * 2.0 - 1.0, rand(&mut g.rng) * 2.0 - 1.0);
     }
     let s = g.serving;

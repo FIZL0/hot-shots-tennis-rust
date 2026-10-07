@@ -276,3 +276,117 @@ impl Choice {
         Choice { row: row as usize, level, strategy: (setup >> 16) as u8, reach }
     }
 }
+
+/// An opponent's shot as the AI remembers it: its kind (0 serve, 1 ground stroke, 2 volley, 3 smash, …) and the
+/// ball's velocity off the racket (m/frame).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Seen {
+    pub kind: i32,
+    pub vel: [f32; 3],
+}
+
+/// What the AI weighs when an opponent has just hit: that shot, the opponents' shot before it, and the serve before
+/// the last one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Shots {
+    pub last: Seen,
+    pub before: Option<Seen>,
+    pub serve_before: Option<[f32; 3]>,
+}
+
+/// The timing errors an AI draws for its next hit (frames; positive presses late), and what the ball's pace added.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Timing {
+    pub stroke: i32,
+    pub volley: i32,
+    pub smash: i32,
+    pub serve: i32,
+    /// Change of pace: + the ball came faster than the one before (late), − slower (early); 0 none.
+    pub pace: i32,
+    /// Extra reaction for a fast ball (frames; reaction itself is P11c's).
+    pub fast_ball: i32,
+}
+
+/// The ball's speed as the game sums it (y² first).
+fn speed(v: [f32; 3]) -> f32 {
+    ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(v[1], v[1]), v[0], v[0]), v[2], v[2]))
+}
+
+/// Change-of-pace error between two shots' velocities: `p` = [threshold %, frames per 5 % past it, most frames,
+/// chance %]. None below the threshold.
+fn pace(last: [f32; 3], earlier: [f32; 3], p: [i32; 4]) -> Option<i32> {
+    let (a, b) = (speed(last), speed(earlier));
+    let (r, sign) = if a < b { (ps2::div(b, a), -1) } else { (ps2::div(a, b), 1) };
+    let pct = ps2::mul(ps2::sub(r, 1.0), 100.0) as i32;
+    (pct >= p[0]).then(|| (p[1] * (pct - p[0]) / 5).min(p[2]) * sign)
+}
+
+/// A `p` % chance on the game's generator (bits 16..30, mod 100).
+fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
+    ((roll() >> 16 & 0x7fff) % 100) < p.max(0) as u32
+}
+
+/// A random error of up to `n` frames either way (`base` added to its size): a sign draw, then a size draw.
+fn error(roll: &mut impl FnMut() -> u32, base: i32, n: i32) -> i32 {
+    let sign = if roll() >> 16 & 1 == 0 { -1 } else { 1 };
+    sign * (base + (roll() >> 16 & 0x7fff) as i32 % (n + 1))
+}
+
+/// The pace error adds to an error's size and gives it its sign.
+fn with_pace(e: i32, pace: i32) -> i32 {
+    match pace.signum() {
+        1 => e.abs() + pace,
+        -1 => -(e.abs() - pace),
+        _ => e,
+    }
+}
+
+impl AiParams {
+    /// The timing errors an AI draws for its next hit, at the start of a point, before its serve and whenever a
+    /// ball is hit. `shots`: the opponents' shots when one of them just hit (None otherwise). `receiver`: this
+    /// player receives the serve. `first`: its team hasn't hit yet this point (the stroke error is halved).
+    /// `smash_third`: the doubles AI's case that takes a third of the smash base. `roll`: the AI's MT19937.
+    pub fn timing(
+        &self,
+        shots: Option<&Shots>,
+        receiver: bool,
+        first: bool,
+        smash_third: bool,
+        roll: &mut impl FnMut() -> u32,
+    ) -> Timing {
+        let mut t = Timing::default();
+        if let Some(s) = shots {
+            // the rally's change of pace (the shot before wasn't a serve), else the serve's against the last serve
+            let rally = match s.before {
+                Some(b) if b.kind != 0 && chance(roll, self.pace_error[3]) => Some(pace(s.last.vel, b.vel, self.pace_error)),
+                _ => None,
+            };
+            t.pace = match rally {
+                Some(p) => p.unwrap_or(0),
+                None => match s.serve_before {
+                    Some(v) if s.last.kind == 0 && receiver && chance(roll, self.serve_pace_error[3]) => {
+                        pace(s.last.vel, v, self.serve_pace_error).unwrap_or(0)
+                    }
+                    _ => 0,
+                },
+            };
+            // a ball faster than react_speed[0] km/h adds react_speed[1] frames, react_speed[2] % of the time
+            if !first
+                && chance(roll, self.react_speed[2])
+                && (s.last.kind != 0 || receiver)
+                && ps2::div(ps2::mul(3600.0, ps2::mul(60.0, speed(s.last.vel))), 1000.0) > self.react_speed[0] as f32
+            {
+                t.fast_ball = self.react_speed[1];
+            }
+        }
+        t.stroke = with_pace(error(roll, 0, self.stroke_error), t.pace);
+        if first {
+            t.stroke /= 2;
+        }
+        t.volley = with_pace(error(roll, 0, self.volley_error), t.pace);
+        let base = if smash_third { self.smash_error / 3 } else { self.smash_error };
+        t.smash = with_pace(error(roll, base, self.smash_error_random), t.pace);
+        t.serve = error(roll, 0, self.serve_error);
+        t
+    }
+}
