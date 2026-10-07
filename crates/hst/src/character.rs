@@ -138,7 +138,7 @@ fn mat(m: &[[f32; 4]; 4]) -> Mat4 {
     Mat4::from_cols_array_2d(m)
 }
 
-fn texture_image(t: &mtl::Texture) -> Image {
+pub fn texture_image(t: &mtl::Texture) -> Image {
     use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let mut img = Image::new(
@@ -177,42 +177,9 @@ fn materials_of(mats: &mtl::Mtl, images: &mut Assets<Image>, materials: &mut Ass
         .collect()
 }
 
-/// Build a character from the disc: character `n` (0..9) in costume `costume`.
-pub fn load_disc(
-    iso: &mut Iso,
-    n: usize,
-    costume: usize,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    images: &mut Assets<Image>,
-    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
-) -> Result<CharacterData, String> {
-    let data = iso.read(&format!("PC/PC{n:02}C{costume:02}.XB")).map_err(|e| e.to_string())?;
-    let arc = Archive::parse(&data).map_err(|e| e.0)?;
-    let find = |suffix: &str| arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).and_then(|e| arc.read(e).ok());
-    // pcNN_tTT_cCC: TT is the character's body type (standard, short, tall, …)
-    let body = arc
-        .entries
-        .iter()
-        .map(|e| e.name.to_ascii_lowercase())
-        .filter_map(|name| name.rsplit(['\\', '/']).next().map(str::to_string))
-        .find(|f| f.starts_with(&format!("pc{n:02}_t")) && f.ends_with(&format!("_c{costume:02}.mdl")))
-        .map(|f| f.trim_end_matches(".mdl").to_string())
-        .ok_or("no body model")?;
-    let model = mdl::parse(&find(&format!("{body}.mdl")).ok_or("no body model")?).map_err(|e| e.0)?;
-    let mats = mtl::parse(&find(&format!("{body}.mtl")).ok_or("no body MTL")?, find(&format!("{body}.mti")).as_deref()).map_err(|e| e.0)?;
-    let handles = materials_of(&mats, images, materials);
-
-    let joints: Vec<Joint> = (0..model.node_count)
-        .map(|i| Joint {
-            name: model.node_names[i].clone(),
-            parent: model.node_parent[i],
-            rest: Transform::from_matrix(mat(&model.node_local[i])),
-            inverse_bind: mat(&model.node_bind[i]).inverse(),
-        })
-        .collect();
-
-    // skinned parts, one mesh per material
+/// A skinned model's parts, one mesh per material (joints = the model's nodes), with its morph targets; `true`
+/// where a part carries them.
+pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut Assets<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
     #[allow(clippy::type_complexity)]
     let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
     let targets = model.morph_names.len();
@@ -259,6 +226,47 @@ pub fn load_disc(
         }
         parts.push((meshes.add(mesh), handles.get(m).cloned().unwrap_or_default(), morphed));
     }
+    parts
+
+}
+
+/// Build a character from the disc: character `n` (0..9) in costume `costume`.
+pub fn load_disc(
+    iso: &mut Iso,
+    n: usize,
+    costume: usize,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Result<CharacterData, String> {
+    let data = iso.read(&format!("PC/PC{n:02}C{costume:02}.XB")).map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let find = |suffix: &str| arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).and_then(|e| arc.read(e).ok());
+    // pcNN_tTT_cCC: TT is the character's body type (standard, short, tall, …)
+    let body = arc
+        .entries
+        .iter()
+        .map(|e| e.name.to_ascii_lowercase())
+        .filter_map(|name| name.rsplit(['\\', '/']).next().map(str::to_string))
+        .find(|f| f.starts_with(&format!("pc{n:02}_t")) && f.ends_with(&format!("_c{costume:02}.mdl")))
+        .map(|f| f.trim_end_matches(".mdl").to_string())
+        .ok_or("no body model")?;
+    let model = mdl::parse(&find(&format!("{body}.mdl")).ok_or("no body model")?).map_err(|e| e.0)?;
+    let mats = mtl::parse(&find(&format!("{body}.mtl")).ok_or("no body MTL")?, find(&format!("{body}.mti")).as_deref()).map_err(|e| e.0)?;
+    let handles = materials_of(&mats, images, materials);
+
+    let joints: Vec<Joint> = (0..model.node_count)
+        .map(|i| Joint {
+            name: model.node_names[i].clone(),
+            parent: model.node_parent[i],
+            rest: Transform::from_matrix(mat(&model.node_local[i])),
+            inverse_bind: mat(&model.node_bind[i]).inverse(),
+        })
+        .collect();
+
+    let parts = skinned_parts(&model, &handles, meshes);
+    let targets = model.morph_names.len();
 
     // the racket: a rigid model in its own space, carried by the `Racket` joint
     let mut racket = Vec::new();

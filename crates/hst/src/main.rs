@@ -9,6 +9,7 @@
 
 mod audio;
 mod character;
+mod effects;
 mod play;
 mod sandbox;
 

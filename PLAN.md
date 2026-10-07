@@ -89,7 +89,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P8a** Whiffs → `motion.rs` · `play.rs` whiff/press | t: motion.rs
 - [ ] **P9** (split into P9a–f) Hit effects → new; `hst-data/src/xb.rs` `mtl.rs` (AZUMA/C_EFF)
 - [x] **P9a** Effect model player (in P9) → `hst-data` mtl.rs/mor.rs · new `hst-sim/src/effect.rs` | j: 2026-10-07-p9-hit-effects
-- [ ] **P9b** Racket impact model (in P9) → `effect.rs` · `play.rs` strike | j: 2026-10-07-p9-hit-effects
+- [x] **P9b** Racket impact model (in P9) → `effect.rs` · `play.rs` strike | j: 2026-10-07-p9-hit-effects
 - [ ] **P9c** Hit sparks (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
 - [ ] **P9d** Ball trail ribbon (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects
 - [ ] **P9e** Flight effects (in P9) → `effect.rs` · `play.rs` | j: 2026-10-07-p9-hit-effects

@@ -32,6 +32,7 @@ use hst_sim::swing::{self, PathPoint, Reach};
 
 use crate::audio::{CourtBank, Sound, VoiceBanks, voice_bank};
 use crate::character::{self, CharacterData, Motion};
+use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -229,6 +230,8 @@ struct Game {
     data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
+    /// The racket impact a shot started this tick.
+    hit_effect: Option<effects::Hit>,
 }
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
@@ -322,8 +325,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<CamMode>()
         .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
-        .add_systems(Update, (read_input, camera, draw, balloons, mark_landing, character::animate, hud).chain())
-        .add_systems(FixedUpdate, (remember, control, simulate, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
+        .add_systems(Update, (read_input, camera, draw, effects::draw, balloons, mark_landing, character::animate, hud).chain())
+        .add_systems(FixedUpdate, (remember, effects::tick, control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball, play_sounds).chain());
 }
 
 /// Character 0's trajectory tables `tr_pc00_<name><k>.dat`, k in 0..n, from one of its archives on the disc.
@@ -527,6 +530,7 @@ fn setup(
         voices: vec![default(); rules.players as usize],
         data: Vec::new(),
         post_winner: 0,
+        hit_effect: None,
     };
     reset_positions(&mut game);
     let n = game.players.len();
@@ -559,6 +563,8 @@ fn setup(
     }
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
+    let impacts = effects::load(&mut iso, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("hit effects");
+    commands.insert_resource(impacts);
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
     // inverted hull (front faces culled) for the black outline
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
@@ -715,6 +721,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
         _ => KIND_SPIN[kind as usize],
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
+    g.hit_effect = Some(effects::Hit { kind, smash: class == 3, pos: at, vel });
     let hitter_far = g.players[who].end < 0.0;
     g.flight.lines = Some(Lines { shots: g.shots, doubles: g.rules.players > 2, side: g.score.side, hitter_far, margin: g.line_margin });
     g.prev_ball = at;
@@ -1632,6 +1639,12 @@ fn draw(g: Res<Game>, time: Res<Time<Fixed>>, mut figures: Query<(&Figure, &mut 
         if v.0 {
             t.translation.y = 0.0;
         }
+    }
+}
+
+fn start_effects(mut g: ResMut<Game>, mut fx: ResMut<effects::Impacts>, mut transforms: Query<&mut Transform>) {
+    if let Some(h) = g.hit_effect.take() {
+        fx.start(h, &mut transforms);
     }
 }
 
