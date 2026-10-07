@@ -76,6 +76,11 @@ Reverse-engineering notes and dumps live in `context/`, which is git-ignored and
 describes behaviour only. The single exception is `hst-data::exe`, which reads tuning values from your disc's
 program file at documented offsets.
 
+Claude Code sessions in this repo auto-compact at 200k tokens of context (`autoCompactWindow` in
+`.claude/settings.json`): past that, every turn re-reads the whole conversation and most usage goes there. For a big
+change that needs more in view at once, raise it for that session only: `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 claude`
+(the variable overrides the setting), or edit the setting and put it back afterwards.
+
 ## Legal
 
 This is an unofficial fan project, not affiliated with or endorsed by Sony Interactive Entertainment or Clap

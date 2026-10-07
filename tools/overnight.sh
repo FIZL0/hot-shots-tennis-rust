@@ -20,10 +20,23 @@ trap '[ -n "${vpad:-}" ] && kill "$vpad" 2>/dev/null' EXIT
 while grep -q '^- \[ \]' PLAN.md; do
   run=$((run + 1))
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' PLAN.md | cut -c1-100)" | tee -a "$log"
-  claude "continue" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
+  id=$(uuidgen)
+  claude "continue" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
     --append-system-prompt "Unattended run: nobody will answer questions. Decide yourself, or follow AGENT.md 'If you get stuck'." \
     --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
-  sleep "$pause"
+  t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1)
+  reset=$([ -n "$t" ] && grep -o 'limit · resets [0-9:]*[ap]m' "$t" | tail -1 | grep -o '[0-9:]*[ap]m')
+  wait=$pause
+  if [ -n "$reset" ] && ! grep -q '"type":"tool_use"' "$t"; then
+    # the run only hit the usage limit: drop its transcript and sleep until the reset instead of relaunching
+    rm -rf "$t" "${t%.jsonl}"
+    wait=$(( $(date -d "$reset" +%s) - $(date +%s) ))
+    [ "$wait" -lt -600 ] && wait=$((wait + 86400))  # reset is tomorrow
+    [ "$wait" -lt 0 ] && wait=0                     # just ticked over
+    wait=$((wait + pause))
+    echo "=== run $run only hit the limit; transcript discarded, sleeping until $reset" | tee -a "$log"
+  fi
+  sleep "$wait"
 done
 echo "=== all PLAN tasks checked off at $(date -Is)" | tee -a "$log"
