@@ -94,7 +94,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P11** Opponent AI → `play.rs` bot/bot_serve/intercept/draw_due
 
 ### Match
-- [ ] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs
+- [~] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs — BLOCKED: no recorded tiebreak (fixtures cover deuce/adv, side changes, sets, doubles only); needs the human's tiebreak recording, see *Needs the human*
 - [ ] **P12c** Net-cord bug: ball clips the net, drops over, and the point goes to the hitter's side. May need new recordings of net-cord rallies → `judge.rs` · `ball.rs` · `mesh.rs` (net) | t: score.rs, live.rs
 - [ ] **P12a** Post-point sequence → `flow.rs` · `motion.rs` · `play.rs` react/next_point | t: score.rs, motion.rs
 - [ ] **P12b** Match pop-ups → new `crates/hst/src/popups.rs` + hook in `play.rs` · `flow.rs`
@@ -159,4 +159,4 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
 
 ## Needs the human
 
-- (none yet)
+- **Record a tiebreak (for P12)**: no save state or fixture reaches one. Play/record a bot match to 4-4 and through the tiebreak (incl. its 6-point end change and the set/match end) with `tools/record_p2m2.py <slot> context/fixtures/tiebreak.bin <frames>`, ideally from a save made at 4-3 or 3-4. Agents' RAM-poked attempts from slot 5 failed (PINE op errors mid-capture).
