@@ -261,3 +261,115 @@ fn guess_verdicts_match_the_game() {
     eprintln!("{judged} guesses judged");
     assert!(judged >= 1);
 }
+
+/// The AI object's state machine against the slot-5 bots (`ai_mind_s05.bin`: tools/record_ai.py 5 5000 … 0x280
+/// 0x4230a8,0x423060, so the point's winning team and the shot count follow the MT): each first update of a point
+/// takes the state its role gives; each new net pick, hit count, net-rate step and point-over coin flip comes out of
+/// the game's own draws; each serve walks to the spot and waits as drawn.
+#[test]
+fn minds_match_the_game() {
+    use hst_sim::ai::{Mind, NET_RATE, Phase, serve_spot, serve_wait};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((ram, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_mind_s05.bin"))) else {
+        return eprintln!("disc or ai_mind_s05.bin missing, skipped");
+    };
+    // the clamp the point reaction keeps the rate in: doubles, then singles
+    for (lo, hi) in [(0x4179b8, 0x4179c0), (0x4178d0, 0x4178d8)] {
+        assert_eq!((word(&ram, lo) as i32, word(&ram, hi) as i32), NET_RATE);
+    }
+    let table = AiParams::table(&csv);
+    let (glob, mt, extra, size_ai) = (4, 4 + 0x18, 4 + 0x18 + 0x9d0, 0x280);
+    let ai = extra + 16;
+    let samples: Vec<&[u8]> = d[20..].chunks_exact(ai + 4 * size_ai).collect();
+    let int = |b: &[u8], o: usize| word(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let mind = |o: &[u8]| Mind {
+        phase: [Phase::Start, Phase::Serve, Phase::Receive, Phase::Rally][o[0x54] as usize],
+        active: o[0x60] != 0,
+        net: o[0x274] != 0,
+        net_rate: int(o, 0x270),
+        net_left: int(o, 0x26c),
+    };
+    let mut n = [0; 7];
+    for w in samples.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if word(b, 0) != word(a, 0) + 1 {
+            continue;
+        }
+        let vsync = word(b, 0);
+        let mut g = Mt::of(&a[mt..]);
+        let draws: Vec<u32> = (0..200).map(|_| g.next()).collect();
+        // some offset into this frame's draws gives `want`
+        let drawn = |want: &dyn Fn(&mut dyn FnMut() -> u32) -> bool| {
+            (0..150).any(|j| {
+                let mut n = draws[j..].iter().copied();
+                want(&mut || n.next().unwrap())
+            })
+        };
+        for k in 0..4 {
+            let (oa, ob) = (&a[ai + k * size_ai..][..size_ai], &b[ai + k * size_ai..][..size_ai]);
+            let (ma, mb) = (mind(oa), mind(ob));
+            let row = &table[(word(ob, 12) - TABLE) / RECORD];
+            if ma.phase == Phase::Start && mb.phase != Phase::Start {
+                let (server, receiver) = (int(b, glob + 4) == k as i32, int(b, glob + 0xc) == k as i32);
+                assert_eq!(ma.clone().start(server, receiver), mb.phase, "vsync {vsync} AI {k}: first update");
+                n[0] += 1;
+            }
+            if mb.net_rate != ma.net_rate {
+                assert_eq!(row.style, 3, "vsync {vsync} AI {k}: rate moved");
+                let won = int(b, extra) == k as i32 & 1;
+                let ok = drawn(&|r| {
+                    let mut m = ma;
+                    m.point_result(row.style, won, &mut || r());
+                    (m.net_rate, m.net) == (mb.net_rate, mb.net)
+                });
+                assert!(ok, "vsync {vsync} AI {k}: rate {} -> {} ({won})", ma.net_rate, mb.net_rate);
+                n[1] += 1;
+            } else if mb.net_left != ma.net_left {
+                let shots = (int(a, extra + 8), int(b, extra + 8));
+                if mb.net_left == ma.net_left - 1 && shots.1 == shots.0 + 1 {
+                    n[2] += 1; // its team's hit
+                } else if ma.net_left < 1 && mb.phase == Phase::Rally && ma.phase == Phase::Rally {
+                    let ok = drawn(&|r| {
+                        let mut m = ma;
+                        m.rally(&mut || r());
+                        (m.net, m.net_left) == (mb.net, mb.net_left)
+                    });
+                    assert!(ok, "vsync {vsync} AI {k}: pick {:?} -> {:?}", ma, mb);
+                    n[3] += 1;
+                } else {
+                    // a timing draw at a reset or serve ends with the count
+                    let ok = drawn(&|r| {
+                        let mut m = ma;
+                        m.count(&mut || r());
+                        m.net_left == mb.net_left
+                    });
+                    assert!(ok && mb.net == ma.net, "vsync {vsync} AI {k}: count {:?} -> {:?}", ma, mb);
+                    n[4] += 1;
+                }
+            }
+            if ma.active && !mb.active {
+                assert!(drawn(&|r| {
+                    let mut m = ma;
+                    m.point_over(&mut || r());
+                    !m.active
+                }));
+                n[5] += 1;
+            }
+            // the serve's first step: the spot along the baseline, then the wait on it
+            if ob[0x54] == 1 && ob[0x55] == 1 && (oa[0x54], oa[0x55]) != (1, 1) {
+                let (ad, level0) = (int(b, glob + 8) != 0, ob[0x5c] == 0);
+                let ok = [1.0, -1.0].iter().any(|&side| {
+                    drawn(&|r| {
+                        let x = serve_spot(level0, true, side, ad, &mut || r());
+                        x.to_bits() == f(ob, 0x70).to_bits() && serve_wait(&mut || r()) == int(ob, 0x58)
+                    })
+                });
+                assert!(ok, "vsync {vsync} AI {k}: spot {} wait {} (level {})", f(ob, 0x70), int(ob, 0x58), ob[0x5c]);
+                n[6] += 1;
+            }
+        }
+    }
+    eprintln!("{n:?}: first updates, rate steps, own hits, picks, counts, point-over stops, serve spots");
+    assert!(n.iter().all(|&c| c > 0), "{n:?}");
+}

@@ -42,3 +42,8 @@ See 3-P11E2-SINGLES-FINAL.md. `hst_sim::position::Single`; test `tests/singles.r
 
 See 3-P11E3-GUESS-FINAL.md. Done: `AiParams::guess`, `Guess`, tests `guesses_match_the_game` and
 `guess_verdicts_match_the_game` (fixture `ai_guess_s05.bin`).
+
+## P11b (AI object)
+
+See 4-P11B-MIND-FINAL.md. Done: `hst_sim::ai::Mind` and the serve spot/wait, test `minds_match_the_game` (fixture
+`ai_mind_s05.bin`); `play.rs` `ai_update` / `ai_heard_shot` / `bot_serve`.

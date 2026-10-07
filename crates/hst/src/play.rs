@@ -143,6 +143,12 @@ struct Player {
     /// and the branch of the swing it last had on (its after-hit reads it).
     ai_single: Option<hst_sim::position::Single>,
     ai_branch: Option<swing::Branch>,
+    /// The AI object (`hst_sim::ai::Mind`), kept across points (None until the match's first point); this point's
+    /// messages heard so far (0 none, 1 the reset, 2 the point over, 3 the players' reaction); its serve spot (x)
+    /// and the frames it still waits there before the toss.
+    ai_mind: Option<hst_sim::ai::Mind>,
+    ai_heard: u8,
+    ai_serve: (f32, i32),
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -1247,6 +1253,7 @@ fn reset_positions(g: &mut Game) {
         let body = loco::Body::new(at.pos, end, &stats);
         // the AI keeps its row and whether its team has hit yet across points
         let ai = (g.players[i].ai, g.players[i].ai_hit);
+        let mind = g.players[i].ai_mind;
         g.players[i] = Player {
             pos: at.pos,
             prev: at.pos,
@@ -1261,6 +1268,7 @@ fn reset_positions(g: &mut Game) {
             ..Player::default()
         };
         (g.players[i].ai, g.players[i].ai_hit) = ai;
+        g.players[i].ai_mind = mind;
     }
     // with more than one human the camera keeps its end through changes of ends; only solo games turn it
     if g.humans.iter().filter(|&&h| h).count() <= 1 {
@@ -2410,11 +2418,12 @@ fn intercept(g: &Game, i: usize) -> Option<(V3, u32)> {
 }
 
 /// A computer player draws its timing errors (`hst_sim::ai`), given the opponents' shots when one just hit.
-/// ponytail: the doubles AI's third-of-the-smash-base case is unknown here (P11b), so it is always off.
+/// A doubles AI beside a human partner takes a third of the smash base.
 fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
     let (receiver, first) = (g.score.receiver == i as i32, !g.players[i].ai_hit);
+    let third = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
     let rng = &mut g.rng;
-    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, false, &mut || {
+    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, third, &mut || {
         rand(rng);
         *rng
     });
@@ -2429,6 +2438,7 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
         if g.humans.get(i) == Some(&true) {
             continue;
         }
+        ai_heard_shot(g, i, i & 1 == who & 1);
         let p = &mut g.players[i];
         let shots = if i & 1 != who & 1 {
             let last = hst_sim::ai::Seen { kind, vel };
@@ -2509,7 +2519,8 @@ fn bot(g: &mut Game, i: usize) {
     if let Some(c) = &g.players[i].contact {
         g.players[i].ai_branch = Some(c.swing.branch);
     }
-    if g.phase == Phase::Serve && g.score.server == i as i32 {
+    let mind = ai_update(g, i);
+    if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
@@ -2562,6 +2573,7 @@ fn bot(g: &mut Game, i: usize) {
         let d = Vec2::new(goal[0] - p.pos[0], goal[2] - p.pos[2]);
         // ponytail: stops within one stride of the goal; the AI's own approach is P11
         let dir = if d.length() < 0.1 { Vec2::ZERO } else { d };
+        let dir = if mind.active { dir } else { Vec2::ZERO };
         locomote(g, i, dir);
         // press when the contact search would lock onto the drawn frame (or later, if it is already past)
         if mine.is_some() {
@@ -2710,17 +2722,38 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
     Some(go.map_or(p.pos, |d| [d[0], 0.0, d[1]]))
 }
 
-/// The stand-in AI's serve: strong toss, swing timed by the AI's serve error (a badly timed
-/// strong toss then goes wide or long, as in the original). ponytail: the AI's serve aim is P11.
+/// The AI's serve state: on entering it a timing draw (ending with the net count), then it walks the baseline to
+/// its spot, waits there 60 to 119 frames and tosses; the swing is timed by its serve error (a badly timed strong
+/// toss then goes wide or long, as in the original).
+/// ponytail: strong toss and swing, from the usual spot (the serve level and kinds are P11g); random aim (P11f).
 fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
         ai_draw(g, i, None);
+        let (end, ad, doubles) = (g.players[i].end, g.score.side == 1, g.players.len() == 4);
+        let mut roll = ai_roll(&mut g.rng);
+        let mut m = g.players[i].ai_mind.unwrap_or_default();
+        m.count(&mut roll);
+        let spot = hst_sim::ai::serve_spot(false, doubles, end, ad, &mut roll);
+        let wait = hst_sim::ai::serve_wait(&mut roll);
+        drop(roll);
+        (g.players[i].ai_mind, g.players[i].ai_serve) = (Some(m), (spot, wait));
         g.serving.bot_due = Some((SWEET_FRAME - g.players[i].ai_timing.serve).max(0) as usize);
         g.serving.bot_aim = Vec2::new(rand(&mut g.rng) * 2.0 - 1.0, rand(&mut g.rng) * 2.0 - 1.0);
     }
     let s = g.serving;
+    let mut stick = Vec2::ZERO;
     let press = if s.toss.is_none() {
-        (s.t >= 40).then_some(0)
+        let (spot, wait) = g.players[i].ai_serve;
+        let d = spot - g.players[i].pos[0];
+        if d.abs() >= serve::WALK {
+            stick.x = d.signum();
+            None
+        } else if wait > 0 {
+            g.players[i].ai_serve.1 -= 1;
+            None
+        } else {
+            Some(0)
+        }
     } else if s.tossed && s.swing.is_none() && !s.whiffed {
         let horizon = g.serve_data.grades(Toss::Strong).len();
         let due = s.bot_due.unwrap_or(SWEET_FRAME as usize);
@@ -2730,7 +2763,71 @@ fn bot_serve(g: &mut Game, i: usize) {
     } else {
         None
     };
-    serve_turn(g, i, Vec2::ZERO, press);
+    serve_turn(g, i, stick, press);
+}
+
+/// The AI's draws on the game's generator stand-in.
+fn ai_roll(rng: &mut u32) -> impl FnMut() -> u32 + '_ {
+    move || {
+        rand(rng);
+        *rng
+    }
+}
+
+/// The AI object's per-frame update (`hst_sim::ai::Mind`), ahead of the routine `bot` runs for it: the point
+/// reset on its first frame (with a timing draw), the state its role gives it, the hand-over to the rally once its
+/// serve or return is played, and the point-over messages (a coin flip whether it keeps moving; an ALL-style
+/// player's net rate moved by how its pick fared).
+/// ponytail: the serve, receive and both rally routines all run `bot`'s stand-in loop until P11e/P11f port them;
+/// the mind isn't made afresh for a new match.
+fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
+    use hst_sim::ai::Phase as Ai;
+    let partner_bot = g.players.len() == 2 || g.humans.get(i ^ 2) != Some(&true);
+    let (style, heard) = (g.players[i].ai.style, g.players[i].ai_heard);
+    let mut m = g.players[i].ai_mind.unwrap_or_default();
+    if heard == 0 {
+        m.reset(g.players[i].ai_mind.is_none(), partner_bot, &mut ai_roll(&mut g.rng));
+        g.players[i].ai_heard = 1;
+        ai_draw(g, i, None);
+        m.count(&mut ai_roll(&mut g.rng));
+    }
+    let p = g.players[i];
+    let done = match m.phase {
+        Ai::Start => {
+            m.start(g.score.server == i as i32, g.score.receiver == i as i32);
+            false
+        }
+        Ai::Serve => g.phase != Phase::Serve,
+        Ai::Receive => g.shots >= 2 && p.swing.is_none() && p.contact.is_none(),
+        Ai::Rally => false,
+    };
+    if done {
+        m.rally(&mut ai_roll(&mut g.rng));
+    }
+    if g.phase == Phase::Post && heard == 1 {
+        m.point_over(&mut ai_roll(&mut g.rng));
+        g.players[i].ai_heard = 2;
+    }
+    if heard == 2 && g.post.as_ref().is_some_and(|p| p.reacted && p.event.is_some()) {
+        let won = i as i32 & 1 == g.post_winner;
+        m.point_result(style, won, &mut ai_roll(&mut g.rng));
+        g.players[i].ai_heard = 3;
+    }
+    g.players[i].ai_mind = Some(m);
+    m
+}
+
+/// The AI hears a shot: while it rallies it looks again at its net pick (a new ball path), and it counts its own
+/// team's hits toward the next one.
+fn ai_heard_shot(g: &mut Game, i: usize, own: bool) {
+    let Some(mut m) = g.players[i].ai_mind else { return };
+    if m.phase == hst_sim::ai::Phase::Rally {
+        m.rally(&mut ai_roll(&mut g.rng));
+    }
+    if own {
+        m.own_hit();
+    }
+    g.players[i].ai_mind = Some(m);
 }
 
 /// What drawing blends from: facing and camera as the last tick left them.
