@@ -505,3 +505,75 @@ fn shouts_match_the_game() {
     assert!(whiffs.len() == 1 && calls.len() == 3);
     // ponytail: the reaction voices after points (programs 7–10, frame 1029) are left out (see sound::call_out)
 }
+
+/// The umpire's score calls (slot 5, umpire 4 voice a: `gag_vc04a` at SPU 870656 in slot 5): after each of
+/// hits_s05's three points, the two words `sound::score_call` gives, at the ticks `sound::Umpire` plays them (or the
+/// frame after: the ring is read once per frame), at the non-positional level; no other umpire word.
+#[test]
+fn umpire_calls_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Some((data, court)) = Court::load("hits_s05.bin") else { return };
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let gaps = exe::Game::new(&cnf, &bin).unwrap().umpire_gaps(4, false);
+    let bank_volume = exe::bank_volumes(&iso.read("SCUS_976.10").unwrap()).unwrap()[5];
+    let xb = iso.read("SND/UMP/UV04A.XB0").unwrap();
+    let arc = Archive::parse(&xb).unwrap();
+    let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
+    let (hd, bd) = (read("gag_vc04a.hd"), read("gag_vc04a.bd"));
+    let bank = Bank::parse(&hd).unwrap();
+    const AT: u32 = 870656;
+    let s = samples(&data, 0x330);
+    // umpire key-ons of frame k: program, key, volume L/R
+    let heard = |k: usize| -> Vec<(usize, usize, [i16; 2])> {
+        let x = &s[k];
+        let mut out = Vec::new();
+        for c2 in x.cmds.iter().filter(|c| c[0] == 2 && c[3] != 8) {
+            let find = |cmd| x.cmds.iter().find(|c| c[0] == cmd && c[1] == c2[1]);
+            let (Some(c3), Some(c1)) = (find(3), find(1)) else { continue };
+            if !(AT..AT + bd.len() as u32).contains(&c3[2]) {
+                continue;
+            }
+            let pk = (0..8).flat_map(|p| (0..16).map(move |k| (p, k))).find(|&(p, k)| {
+                bank.key_ons(p, k).into_iter().flatten().any(|e| bank.tone(e.set as usize, e.note).is_some_and(|t| t.adsr() == (c2[2] as u16, c2[3] as u16) && AT + t.sample() as u32 == c3[2]))
+            });
+            out.push((pk.unwrap().0, pk.unwrap().1, [c1[2] as i16, c1[3] as i16]));
+        }
+        out
+    };
+    let points = |k: usize| [u(s[k].hit, 0x68 + 0x24) as i32, u(s[k].hit, 0x68 + 0x28) as i32];
+    let (mut umpire, mut want, mut got) = (sound::Umpire::default(), Vec::new(), Vec::new());
+    for k in 1..s.len() {
+        if let Some(p) = umpire.step(&gaps) {
+            want.push((k, p.program as usize, p.key as usize));
+        }
+        let (before, now) = (points(k - 1), points(k));
+        if now != before && now != [0, 0] {
+            let r = s[k].rally;
+            let score = hst_sim::score::Score {
+                points: now,
+                server: u(s[k].hit, 0x68 + 0xc) as i32,
+                tiebreak: r[0x2a] != 0,
+                deuce: r[0x30] != 0,
+                deuce_count: u(r, 0x34) as i32,
+                advantage: r[0x38] != 0,
+                ..Default::default()
+            };
+            umpire.call(sound::score_call(&score, (now[1] > before[1]) as usize, 10));
+        }
+        for (p, key, lr) in heard(k) {
+            let e = bank.key_ons(p, key).unwrap()[0];
+            let (t, set) = (bank.tone(e.set as usize, e.note).unwrap(), bank.set_volume(e.set as usize).unwrap());
+            let mut l = Level { seq: { let (angle, dist) = sound::place(sound::CENTRE); sound::stereo(sound::falloff(0x80, dist), angle, &court.stereo).map(|x| x as u32) }, bank: bank_volume, velocity: e.velocity as u32, pan: [0x40; 3], ..Default::default() };
+            l.tone(set, t, &court.gain);
+            assert_eq!(l.volume(&court.pan), lr, "frame {k}: program {p} key {key}");
+            got.push((k, p, key));
+        }
+    }
+    eprintln!("umpire words {got:?}");
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert!((g.1, g.2) == (w.1, w.2) && (g.0 == w.0 || g.0 == w.0 + 1), "heard {g:?}, want {w:?}");
+    }
+    assert_eq!(got.len(), 6);
+}

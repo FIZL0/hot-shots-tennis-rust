@@ -310,3 +310,78 @@ pub fn flight_speed(height: f32, low: f32, top: f32) -> f32 {
     };
     s.clamp(0.0, 2.0)
 }
+
+/// The umpire's voice bank slot; the umpire's plays are not positional: 0x80 at the centre (`stereo` at bearing 0).
+const UMPIRE: u8 = 5;
+/// Where a non-positional play sounds as if it were placed: straight ahead of the listener, at full volume.
+pub const CENTRE: [f32; 3] = [0.0, 0.0, -9.0];
+/// The umpire calls the line as the point ends: the judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out
+/// after the net) is program 1's key call − 1; none for no call (0) or 6.
+pub fn line_call(call: u8) -> Option<Play> {
+    (call != 0 && call != 6).then(|| play(UMPIRE, 1, call - 1, 0x80))
+}
+/// The umpire's "change ends", as the change-ends phase begins.
+pub const CHANGE_ENDS_CALL: Play = play(UMPIRE, 2, 3, 0x80);
+/// The umpire's tiebreak call, as the first tiebreak serve is set up (the game that made 6-all).
+pub const TIEBREAK_CALL: Play = play(UMPIRE, 2, 0, 0x80);
+/// The umpire's match call, once the scoreboard has shown the match point (the match ends when it is over).
+pub const MATCH_CALL: Play = play(UMPIRE, 2, 4, 0x80);
+
+/// The umpire's score after a point that wins no game (program 0 keys, in order): one word at deuce (9; 13 for the
+/// game's second deuce except on court 5), "advantage" (10) then the server's (11) or the receiver's (12) by who
+/// won the point, nothing in a tiebreak, else the serving team's points (0..3) then "all" (8) or the receiving
+/// team's points (4..7).
+pub fn score_call(s: &crate::score::Score, winner: usize, court: u8) -> Vec<u8> {
+    let side = (s.server & 1) as usize;
+    if s.deuce {
+        vec![if s.deuce_count == 2 && court != 5 { 13 } else { 9 }]
+    } else if s.advantage {
+        vec![10, if winner == side { 11 } else { 12 }]
+    } else if s.tiebreak {
+        vec![]
+    } else {
+        let (a, b) = (s.points[side], s.points[side ^ 1]);
+        vec![a as u8, if a == b { 8 } else { b as u8 + 4 }]
+    }
+}
+
+/// Ticks from the point to the score call's first word (the scoreboard's pause, then the umpire's turn): the
+/// recordings' sound ring has it 33 (sound_s05) or 34 (hits_s05) frames after the score changed.
+const CALL_DELAY: i32 = 33;
+
+/// The umpire's queued score words: the first `CALL_DELAY` ticks after the point, each next one when the last
+/// word's gap is over. `gaps` (ticks per key, `exe::Game::umpire_gaps`) is measured from the word's call; the
+/// words land 2 ticks before it.
+/// ponytail: the game also moves on once the word stops sounding; with the bank's words shorter than their gaps
+/// that never shows in the recordings, so the gap alone times them.
+#[derive(Clone, Debug, Default)]
+pub struct Umpire {
+    words: Vec<u8>,
+    wait: i32,
+}
+
+impl Umpire {
+    /// The point was just scored: call `words` (`score_call`).
+    pub fn call(&mut self, words: Vec<u8>) {
+        *self = Umpire { words, wait: CALL_DELAY };
+    }
+
+    /// Any other umpire call drops the words still to come.
+    pub fn hush(&mut self) {
+        self.words.clear();
+    }
+
+    /// One tick (the first is the tick after `call`): the word due now, if any.
+    pub fn step(&mut self, gaps: &[i32; 14]) -> Option<Play> {
+        if self.words.is_empty() {
+            return None;
+        }
+        self.wait -= 1;
+        if self.wait > 0 {
+            return None;
+        }
+        let key = self.words.remove(0);
+        self.wait = gaps[key as usize] - 2;
+        Some(play(UMPIRE, 0, key, 0x80))
+    }
+}

@@ -209,6 +209,8 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     let n = args.stage.map_or(args.court, |s| s as usize);
     let court = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd"));
     commands.insert_resource(CourtBank(court.map(Arc::new)));
+    // the umpire's voice (slot 5); ponytail: umpire 4 voice a, as play.rs times it
+    commands.insert_resource(UmpireBank(SoundBank::load(&mut iso, "SND/UMP/UV04A.XB0", "data/sound/UMPIRE/gag_vc04a.hd").map(Arc::new)));
     commands.insert_resource(sound);
 }
 
@@ -222,6 +224,10 @@ pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<So
     let v = if b { 'b' } else { 'a' };
     SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + b as usize), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
 }
+
+/// The umpire's voice bank.
+#[derive(Resource)]
+pub struct UmpireBank(pub Option<Arc<SoundBank>>);
 
 /// The court's sound-effect bank.
 #[derive(Resource)]
