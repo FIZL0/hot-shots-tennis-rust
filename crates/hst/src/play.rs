@@ -204,8 +204,8 @@ struct Game {
     line_margin: f32,
     post: Option<PostPoint>,
     board: ScoreboardTiming,
-    /// The stage's collision world and material table (`--stage`); without one the ball meets a flat court and net.
-    world: Option<(World, Vec<Material>)>,
+    /// The stage's collision world (`--stage`, else court 10's) and the material table: court, net, posts, walls.
+    world: (World, Vec<Material>),
     court: usize,
     message: String,
     rng: u32,
@@ -510,16 +510,17 @@ fn reach(iso: &mut Iso) -> Reach {
 /// Line margin, scoreboard timing, the stage's collision world with the material table, the shot parameter table,
 /// and the umpire.
 #[allow(clippy::type_complexity)]
-fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, Option<(World, Vec<Material>)>, ShotParams, Umpire) {
+fn disc(iso: &mut Iso, stage: Option<u32>) -> (f32, ScoreboardTiming, (World, Vec<Material>), ShotParams, Umpire) {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
     let src = game.shot_params();
     let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
-    // ponytail: umpire 4 (Lily), voice set a, English; off a stage her chair stands where it does on court 10
+    // ponytail: umpire 4 (Lily), voice set a, English; off a stage her chair and the collision world (net, posts,
+    // fences) are court 10's
     let n = stage.unwrap_or(10);
     let chair = court::umpire_chair(iso, n).unwrap_or([6.5156, -1.7712, -0.0109]);
     let umpire = Umpire::new(chair, game.umpire_side(n as usize), n as u8, game.umpire_words(0, 4, 0), [0.0; 3]);
-    (game.line_margin(), game.scoreboard_timing(), stage.map(|n| (court::world(iso, n), court::materials(&game))), params, umpire)
+    (game.line_margin(), game.scoreboard_timing(), (court::world(iso, n), court::materials(&game)), params, umpire)
 }
 
 /// Character `c`'s serve tables and spins (see `Game::serve_tables`): the weak toss serves by the `dw1`
@@ -1606,10 +1607,7 @@ fn simulate(mut g: ResMut<Game>) {
     let (shot, surface) = (g.shot, &COURTS[g.court]);
     g.flight.in_play = g.shots > 0;
     let before = g.flight.bounces;
-    match &g.world {
-        Some((world, materials)) => g.flight.step_world(&shot, surface, world, materials),
-        None => g.flight.step(&shot, surface),
-    }
+    g.flight.step_world(&shot, surface, &g.world.0, &g.world.1);
     // bounce sounds stop once the point is decided (the deciding bounce still plays)
     let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
     let bounce = (n != before && n > 0 && g.phase == Phase::Rally).then_some((n, &material));

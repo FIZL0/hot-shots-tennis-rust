@@ -7,7 +7,7 @@
 
 use hst_data::exe;
 use hst_data::iso::Iso;
-use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot};
+use hst_sim::ball::{Ball, COURTS, Flight, Material, Params, Shot};
 use hst_sim::court;
 
 const SAMPLE: usize = 4 + 0x290 + 0x290 + 0x40;
@@ -52,23 +52,18 @@ fn load(b: &[u8]) -> (Flight, Shot) {
     (fl, shot)
 }
 
-#[test]
-fn live_ball_frames_match_the_game() {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let (Ok(data), Ok(mut iso), Ok(cnf), Ok(bin)) = (
-        std::fs::read(format!("{root}/context/live/net_s05.bin")),
-        Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")),
-        std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
-        std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
-    ) else {
-        eprintln!("recording or disc missing, skipped");
-        return;
-    };
-    let world = court::world(&mut iso, COURT as u32);
-    let materials = court::materials(&exe::Game::new(&cnf, &bin).unwrap());
+struct Replay {
+    exact: usize,
+    /// Contact frames by material (+0x220).
+    touches: std::collections::BTreeMap<u8, usize>,
+    failures: Vec<String>,
+}
 
+/// Steps every recorded frame pair of a `record_live.py` file once against court 10 and compares the next frame.
+/// `poked`: vsyncs after which the recorder rewrote the ball's velocity (`--aim`); the two frames after are skipped.
+fn replay(data: &[u8], poked: &[i32], world: &hst_sim::mesh::World, materials: &[Material]) -> Replay {
     let s: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
-    let (mut exact, mut touches, mut failures) = (0, std::collections::BTreeMap::new(), Vec::new());
+    let mut r = Replay { exact: 0, touches: Default::default(), failures: Vec::new() };
     for w in s.windows(2) {
         let (a, b) = (&w[0][4..4 + 0x290], &w[1][4..4 + 0x290]);
         let vsync = i(w[1], 0);
@@ -78,24 +73,78 @@ fn live_ball_frames_match_the_game() {
         if vsync != i(w[0], 0) + 1 || i(b, 0xac) != i(a, 0xac) + 1 || a[0xa4] > 1 || b[0xa4] > 1 || carried(a) || carried(b) {
             continue;
         }
+        if poked.iter().any(|&v| vsync == v + 1 || vsync == v + 2) {
+            continue;
+        }
         let (mut fl, shot) = load(a);
-        fl.step_world(&shot, &COURTS[COURT], &world, &materials);
+        fl.step_world(&shot, &COURTS[COURT], world, materials);
         let want = [v3(b, 0xe0), v3(b, 0x130)].concat();
         let got = [fl.ball.pos, fl.ball.vel].concat();
         let same = (0..6).all(|k| got[k].to_bits() == want[k].to_bits());
         // a contact moves a counter or changes the material of the last contact
         if i(b, 0x224) != i(a, 0x224) || i(b, 0x228) != i(a, 0x228) || i(b, 0x22c) != i(a, 0x22c) || b[0x220] != a[0x220] {
-            *touches.entry(b[0x220]).or_insert(0) += 1;
+            *r.touches.entry(b[0x220]).or_insert(0) += 1;
         }
         if same {
-            exact += 1;
+            r.exact += 1;
         } else {
-            failures.push(format!("vsync {vsync} material {} pos {:?}: got {got:?} want {want:?}", b[0x220], v3(b, 0xe0)));
+            r.failures.push(format!("vsync {vsync} material {} pos {:?}: got {got:?} want {want:?}", b[0x220], v3(b, 0xe0)));
         }
     }
-    eprintln!("{exact} frames bit-exact; contact frames by material: {touches:?}");
-    assert!(failures.is_empty(), "{} frames diverged:\n{}", failures.len(), failures[..failures.len().min(20)].join("\n"));
-    assert!(exact > 12000);
+    r
+}
+
+fn disc() -> Option<(hst_sim::mesh::World, Vec<Material>)> {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(mut iso), Ok(cnf), Ok(bin)) = (
+        Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")),
+        std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
+        std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
+    ) else {
+        return None;
+    };
+    Some((court::world(&mut iso, COURT as u32), court::materials(&exe::Game::new(&cnf, &bin).unwrap())))
+}
+
+#[test]
+fn live_ball_frames_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(data), Some((world, materials))) = (std::fs::read(format!("{root}/context/live/net_s05.bin")), disc()) else {
+        eprintln!("recording or disc missing, skipped");
+        return;
+    };
+    let r = replay(&data, &[], &world, &materials);
+    eprintln!("{} frames bit-exact; contact frames by material: {:?}", r.exact, r.touches);
+    assert!(r.failures.is_empty(), "{} frames diverged:\n{}", r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
+    assert!(r.exact > 12000);
+}
+
+/// Aimed shots from slot 5 (`record_live.py 5 … --aim`, `context/live/p15/*.bin`): balls into the net post (22),
+/// the net (26) and the cord (2) — clipped cords that dribble over, in rallies and on serves, and balls the net stops.
+#[test]
+fn aimed_net_cord_and_post_hits_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(dir), Some((world, materials))) = (std::fs::read_dir(format!("{root}/context/live/p15")), disc()) else {
+        eprintln!("recordings or disc missing, skipped");
+        return;
+    };
+    let mut files: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "bin")).collect();
+    files.sort();
+    let mut touches = std::collections::BTreeMap::new();
+    for path in files {
+        let data = std::fs::read(&path).unwrap();
+        let poke = std::fs::read_to_string(path.with_extension("bin.poke")).unwrap_or_default();
+        let poked: Vec<i32> = poke.lines().filter_map(|l| l.trim().parse().ok()).collect();
+        let r = replay(&data, &poked, &world, &materials);
+        eprintln!("{}: {} frames bit-exact; contact frames by material: {:?}", path.display(), r.exact, r.touches);
+        assert!(r.failures.is_empty(), "{}: {} frames diverged:\n{}", path.display(), r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
+        for (m, n) in r.touches {
+            *touches.entry(m).or_insert(0) += n;
+        }
+    }
+    for m in [2, 22, 26] {
+        assert!(touches.contains_key(&m), "no contact with material {m} recorded: {touches:?}");
+    }
 }
 
 #[test]
