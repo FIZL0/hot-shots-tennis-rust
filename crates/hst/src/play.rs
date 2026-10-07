@@ -789,7 +789,7 @@ fn strike(g: &mut Game, who: usize, class: u8, kind: i32, target: V3, (branch, g
     }
     g.smashed = branch == 4 && g.rules.players > 1;
     g.whistle = if kind == 3 { (true, g.whistle.1 + 1) } else { (false, g.whistle.1) };
-    // every recorded smash (kind 0) spins 5°; ponytail: kind 1's own spin waits for the per-character records
+    // every recorded smash spins 5°, △ smashes too (lob_smash_s05)
     let spin = match class {
         0 => g.serve_tables[who][weak][kind as usize].1,
         3 => 5f32.to_radians(),
@@ -989,10 +989,18 @@ fn predicted_path(g: &Game, frames: usize) -> Vec<PathPoint> {
     path
 }
 
+/// Whether `i`'s ball is the other team's, in play, and not already taken by `i`'s partner: the original never
+/// has both teammates locked onto a ball (match_s05, lob_smash_s05), so a teammate's lock leaves `i` nothing to
+/// hit, not a second stroke that would lose the point as an illegal hit.
+fn theirs(g: &Game, i: usize) -> bool {
+    let mate = g.players.get(i ^ 2).filter(|_| g.players.len() == 4);
+    g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1 && mate.is_none_or(|m| m.contact.is_none() && m.dive.is_none())
+}
+
 /// The original's contact search for player `i` (smash, volley, ground stroke), only while the other team's
 /// ball is in play.
 fn find_contact(g: &Game, i: usize) -> Option<Contact> {
-    if g.phase != Phase::Rally || g.last_hitter < 0 || g.last_hitter & 1 == i as i32 & 1 {
+    if !theirs(g, i) {
         return None;
     }
     let p = &g.players[i];
@@ -1005,7 +1013,7 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
 fn find_dive(g: &Game, i: usize) -> Option<swing::Dive> {
     let p = &g.players[i];
     // ponytail: this frame's run stands in for the game's previous-frame locomotion state
-    if g.phase != Phase::Rally || g.last_hitter < 0 || g.last_hitter & 1 == i as i32 & 1 || !p.body.running {
+    if !theirs(g, i) || !p.body.running {
         return None;
     }
     let path = predicted_path(g, swing::DIVE_HORIZON);

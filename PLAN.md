@@ -81,7 +81,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Shots
 
-- [ ] **N5a** Hitting a lob off a lob isn't accurate (bug, user 2026-10-07): mid-rally, returning the opponent's lob smash, the contact search gave an illegal hit point, though anyone should be able to hit that ball. Record such a rally and match the contact search and lob response to it → `swing.rs` find_contact · `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs
+- [x] **N5a** Hitting a lob off a lob isn't accurate (bug, user 2026-10-07): mid-rally, returning the opponent's lob smash, the contact search gave an illegal hit point, though anyone should be able to hit that ball. Record such a rally and match the contact search and lob response to it → `swing.rs` find_contact · `shot.rs` · `play.rs` find_contact/advance_stroke | t: swing.rs | j: 2026-10-07-n5a-lob-off-lob
 
 ### Players
 
