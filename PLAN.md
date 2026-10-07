@@ -209,6 +209,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P26** Match stats screen (user 2026-10-07, low priority): the original tracks stats over the match and shows them at the end (the match-over screen offers "Stats Screen" beside "✕ Continue"): sweet-spot rate and the rest of its figures. Find which stats it counts (and when each is counted) and port the counting and the screen, as drawn by the original → `hst-sim` (counters) · `play.rs` match end · `play/panel.rs` (P19, P21)
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 
