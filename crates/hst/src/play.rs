@@ -2572,6 +2572,22 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
     }
 }
 
+/// A computer player's run toward `goal` as the game passes it on: the AI's step toward it (none within ⅔ of a
+/// step), as stick bytes and back.
+fn bot_run(g: &Game, i: usize, goal: V3) -> Vec2 {
+    let p = &g.players[i];
+    let phase = match g.phase {
+        Phase::ChangeEnds(_) => 1,
+        Phase::Serve => 2,
+        Phase::Rally => 3,
+        Phase::Post => 4,
+    };
+    let body = loco::Body { pos: p.pos, ..p.body };
+    let (d, _) = body.toward(&p.stats, [goal[0], goal[2]], g.players.len() as i32, phase, false);
+    let [x, z] = loco::stick_dir(loco::bot_stick(d), phase);
+    Vec2::new(x, z)
+}
+
 /// Stand-in AI for player `i`: serves, runs to the predicted interception (in doubles only the teammate
 /// nearer to it; the other goes home), and presses the shot button around the sweet frame with a random timing
 /// error, through the same contact search as a human.
@@ -2634,9 +2650,7 @@ fn bot(g: &mut Game, i: usize) {
                 b[2] - p.end * g.reach.ahead,
             ]
         });
-        let d = Vec2::new(goal[0] - p.pos[0], goal[2] - p.pos[2]);
-        // ponytail: stops within one stride of the goal; the AI's own approach is P11
-        let dir = if d.length() < 0.1 { Vec2::ZERO } else { d };
+        let dir = bot_run(g, i, goal);
         let dir = if mind.active { dir } else { Vec2::ZERO };
         locomote(g, i, dir);
         // press when the contact search would lock onto the drawn frame (or later, if it is already past)
