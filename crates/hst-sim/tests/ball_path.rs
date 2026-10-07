@@ -1,5 +1,5 @@
 //! Replays flight segments of a path recorded from the real game (fixture CSV, not in git:
-//! `context/fixtures/ball_path_s08.csv`, made by `context/tools/fixture_ball_path.py`). Skips when absent.
+//! `context/fixtures/ball_path_s08.csv`, made by `research/tools/fixture_ball_path.py`). Skips when absent.
 
 use hst_sim::ball::{Ball, Params};
 

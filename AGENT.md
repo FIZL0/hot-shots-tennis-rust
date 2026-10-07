@@ -9,20 +9,20 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
   No code addresses, no game data in git.
 - Exactness: ported math uses `hst_sim::ps2` (PCSX2's EE FPU model: chop rounding, aligned adds) wherever the
   original's float results must match bit for bit.
-- Research lives in `context/` (git-ignored). Journal: `context/artifacts/YYYY-MM-DD-<slug>/`, one README per task,
-  newest iteration file says whose move it is: `-FINAL` done, `-PART` agent continues, `-READY` needs the human.
+- Research: our own scripts and notes are in `research/` (in git: no game data, no decompiled code, no captures or
+  screenshots); everything derived from the disc or the running game is in `context/` (git-ignored). Journal:
+  `research/journal/YYYY-MM-DD-<slug>/`, one README per task, newest iteration file says whose move it is:
+  `-FINAL` done, `-PART` agent continues, `-READY` needs the human. Put captures and images in `context/`, not
+  the journal.
 - Gameplay ports are verified against the real game over PINE (`tools/pine.py`, launch with `tools/pcsx2-hst.sh`).
 
-## Research setup (rebuild with these if `context/` is lost)
-- `context/iso/` — 7z-extracted disc. `context/xb/` — `cargo run -p hst-data --bin xbdump -- <iso> context/xb`.
-- `context/mkoverlay_elf.py` — disc ELF (`context/iso/SCUS_976.10`) + one Metrowerks overlay (ZZBIN/*.BIN, loaded whole at 0x322d00) per program.
-- `context/ghidra/` headless project `hst` (r5900:LE:32:default); `context/decomp/hst_{game,menu,movie}.c` full dumps
-  via `context/ghidra_scripts/DumpDecomp.java`; `context/fn.sh <addr>` prints one function.
-- `replacements/` — user's upscaled texture pack (PCSX2 hash-named PNGs); to be mapped onto disc textures.
+## Research setup
+`research/README.md` rebuilds `context/` from the disc (extract, overlay ELFs, Ghidra project, decompilation
+dumps, save states, recordings) and lists the tool pitfalls.
 
 ## Plan
 `TODO.md` is the ordered plan; "continue" means: take the first open item there, consult its journal entry in
-`context/artifacts/`, port + verify, update TODO.md, commit.
+`research/journal/`, port + verify, update TODO.md, commit.
 
 ## Controlling the game
 `TODO.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and

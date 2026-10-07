@@ -9,7 +9,7 @@ prompts or skip ahead. If a prompt turns out too big, split it into numbered sub
 Every prompt follows the same rules:
 
 - **Match the original exactly — no approximations, no placeholders left behind.** Find the behaviour in the
-  decompile (`context/decomp/`, `context/fn.sh <addr>`), port it, and prove it against the real game:
+  decompile (`context/decomp/`, `research/fn.sh <addr>`), port it, and prove it against the real game:
   record ground truth over PINE (`tools/pine.py`, `tools/trace_shots.py`, launch with `tools/pcsx2-hst.sh`)
   or from the user's save states (`~/Emulation/saves/ps2/states/SCUS-97610 (72326E67).NN.p2s`; slots 3, 4, 5
   belong to the user — only load them, save scratch states to 8/9). A prompt is done when a test compares the
@@ -32,7 +32,7 @@ Every prompt follows the same rules:
   court rendering. Use it for anything visual and as a sanity check on gameplay work; numbers over PINE stay the
   proof where they exist. Keep the screenshot pairs in the prompt's journal folder.
 - **Never stop while work remains.** See *When blocked* below — switch to other open prompts instead of ending.
-- Record findings and evidence in `context/artifacts/<date>-<slug>/` (memory maps, decomp addresses, captures).
+- Record findings and evidence in `research/journal/<date>-<slug>/` (memory maps, decomp addresses, captures).
 - Update **Done** and the **Play it now** controls when a prompt lands.
 
 ## When blocked
@@ -121,7 +121,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   (`0x140360`/`0x1404c0`), the contact pose (frame 8) and the arm IK / body step at contact (`0x3561e0`, +0x3fd0/
   +0x3fd8), faces (`.MOR`/`.UVA`). Verify per frame against a PINE recording of each player's motion number and
   time (player +0x54 motion object: number +0x20, time +0x34/+0x38) in the slot-5 match and a slot-3 human game.
-  Split (journal `context/artifacts/2026-10-06-n1-animations/`):
+  Split (journal `research/journal/2026-10-06-n1-animations/`):
   - [x] **N1a — Locomotion.** `hst_sim::player`: run speed (TParam SPE/10, Agili acceleration +30 %, stamina
     slow-down), run counter, stamina drain, stand/run motion choice (ready, turned stances to the ball, run
     f/b/l/r with hysteresis, dash, tired +8), game `acosf`. `tests/player.rs`: run velocity bit-exact (9657 frames),
@@ -169,7 +169,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   20791 frames, vsync 10018–30808, frame-exact, complete) replays score (29 points), verdicts (30) and line
   calls (158, bit-exact); `tests/replay.rs` checks the fixture itself. Input-driven player diffs land with P7
   (the port has no ported movement yet; P7 builds them on `Frame::{pad, player_pos}`). Next recording: add the
-  live ball `*(gm+0x88)` and the rally block 0x3165f0. Journal: `context/artifacts/2026-10-06-p0-input-replay/`.
+  live ball `*(gm+0x88)` and the rally block 0x3165f0. Journal: `research/journal/2026-10-06-p0-input-replay/`.
   - [x] **Capture `context/recordings/new_recording.p2m2`** (user-recorded, with its save state) →
     `context/fixtures/new_recording.bin` (`frames_live` layout, doubles, 5454 frames, vsync 5863–11316, no gaps,
     captured at NominalScalar 0.5). Contains player–player collision, a player hit by the ball, dives and
@@ -182,14 +182,14 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   0.98 factor, VU0 dot products), contact point `0x12fc30`, VU0 helpers (normalize `0x125b10` with Q sqrt/div,
   cross `0x125ac8`, mat×vec `0x125a50`/`0x125a80`, inverse `0x32d190`), quaternion slerp (`0x12d620`, `0x12d860`,
   `0x12d340`) and the game's own sin/cos/acos (`0x115fb8`, `0x115d18`, …). Needs a `vu0` arithmetic model
-  (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `context/ghidra_scripts/DumpAsm.java` →
+  (PCSX2 VU path: chop, no add alignment — verify like `ps2`). Asm: `research/ghidra_scripts/DumpAsm.java` →
   `context/notes/asm_*.txt`.
 
 - [x] **P0c — Live net hit, bit-exact.** Record a natural net contact (bot match, slot 5) per frame with
   `tools/trace_live.py`-style capture and replay it through `Flight` bit-exact. Needs the live collision path:
   world mesh query instead of the flat net (court object + grid objects, per-model triangle sweep) and the
-  after-first-bounce redirect `+0x1b0`. Findings so far: `context/artifacts/2026-10-06-net-hit/FINDINGS.md`.
-  Split (journal `context/artifacts/2026-10-06-net-hit/`):
+  after-first-bounce redirect `+0x1b0`. Findings so far: `research/journal/2026-10-06-net-hit/FINDINGS.md`.
+  Split (journal `research/journal/2026-10-06-net-hit/`):
   - [x] **P0c1 — Live-ball recording + per-frame replay.** `tools/record_live.py` (slot 5, every frame at
     0.25 speed: live ball `*(gm+0x88)`, predictor `*(gm+0x98)`, rally block) → `context/live/net_s05.bin`;
     `crates/hst-sim/tests/live.rs` steps each recorded frame through `Flight`: 12309 airborne frames bit-exact;
@@ -234,7 +234,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   covers the points captured so far. Part 2 done: line calls, point-over check, hit legality, umpire verdict
   (`hst_sim::judge`, in `Flight` and `play.rs`): 158 recorded calls bit-exact, 30 verdicts match. Faults/lets/
   net points are unverified until a capture includes the live ball `*(gm+0x88)` (the round1 capture's ball is
-  the path predictor) — see journal `2-JUDGE-PART.md`. Rest split (journal `context/artifacts/2026-10-06-p0b-rules/`):
+  the path predictor) — see journal `2-JUDGE-PART.md`. Rest split (journal `research/journal/2026-10-06-p0b-rules/`):
   - [x] **P0b3 — Live-ball verdicts.** `tools/record_p2m2.py 5 …` (fixture + live ball + rally block 0x3165f0) →
     `context/fixtures/match_s05.bin` (whole slot-5 match, 26400 frames); `tests/score.rs::match_s05_rally_block`:
     hit check and point-over check on the game's frames (the check sees the ball and body hit as of the previous
@@ -462,7 +462,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - [ ] **P19 — HUD.** Score display, names, serve indicator, in-match menus using the game's HUD textures
   (`AZUMA/INPANE`) and layout. Verify layout and update frames against frame-stepped screenshots of the original.
 - [~] **P20 — Audio.** Bank formats, driver slots and the play call mapped; note → tone unresolved (IOP driver).
-  Journal `context/artifacts/2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md`. Original text: HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
+  Journal `research/journal/2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md`. Original text: HD/BD sound banks (Sony VAG/ADPCM), sound effects and their triggers (hits, bounces,
   crowd, umpire voice), MIDI BGM with the game's banks. Verify each effect's trigger frame against recorded game events, and decoded
   samples against PCSX2 audio captures.
 - [ ] **P21 — Menus and modes.** (Includes the random-bounce option 0x2ef7e2 → `0x379ae0`, see net-hit journal 5.) Title, character/court select, exhibition, tournament/challenge modes, unlocks,

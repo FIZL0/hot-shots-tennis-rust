@@ -1,5 +1,5 @@
 //! Replays whole shots recorded from a bot match (fixture `context/fixtures/flights_s05.csv`, not in git;
-//! made by `context/tools/fixture_flights.py`) from frame 3 through every bounce to the end of the
+//! made by `research/tools/fixture_flights.py`) from frame 3 through every bounce to the end of the
 //! game's own path, requiring every frame's position and velocity to match bit for bit. Skips when the fixture is absent.
 
 use hst_sim::ball::{Ball, COURTS, Flight, Params, Shot, rows4};

@@ -1,5 +1,5 @@
 //! Stroke launches recorded from a bot match whose table lookups were confirmed exactly (speed, elevation and
-//! flight frames) by `context/tools/traj_inverse2.py`. Fixture `context/fixtures/shot_tables_s05.csv` and the
+//! flight frames) by `research/tools/traj_inverse2.py`. Fixture `context/fixtures/shot_tables_s05.csv` and the
 //! tables under `context/xb` stay out of git; skips when absent.
 
 use hst_sim::shot::{Bounds, Table, launch, lookup};

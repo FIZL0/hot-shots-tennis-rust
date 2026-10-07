@@ -64,6 +64,8 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 - `crates/hst-sim`: the game logic (ball physics, collision, rules, serve, contact search, camera), engine-free.
 - `crates/hst`: the Bevy app.
 - `tools/`: scripts to drive and record the original game in PCSX2 over PINE, for verification.
+- `research/`: our reverse-engineering scripts and research journal. `research/README.md` explains how to rebuild
+  the private analysis folder (decompilation, save states, recordings) from your own disc.
 
 `cargo test` runs everywhere. Tests that need the disc or recordings of the original game look in the repository
 folder and in `context/fixtures` (or `HST_FIXTURES`), and **skip themselves when those are missing**. The recordings

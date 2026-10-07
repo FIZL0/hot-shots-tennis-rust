@@ -4,3 +4,9 @@ replacements/
 context/
 target/
 __pycache__/
+# research/ holds our own scripts and notes only; captures and screenshots belong in context/
+research/**/*.png
+research/**/*.jpg
+research/**/*.bin
+research/**/*.p2s
+research/**/*.p2m2
