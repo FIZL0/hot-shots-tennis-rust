@@ -281,7 +281,7 @@ struct Game {
     /// Character 0's smash window middle (TParam, m) and the landing markers' state.
     smash_mid: f32,
     marks: Marks,
-    /// The jingle due (slot 8 key: 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
+    /// The jingle due (slot 8 key: 0 change ends, 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
     jingle: Option<u8>,
     music_hold: bool,
@@ -2498,6 +2498,8 @@ fn simulate(mut g: ResMut<Game>) {
                 Some(Next::ChangeEnds) => {
                     g.gallery.hush();
                     g.umpire.start(true, g.flight.ball.pos);
+                    // the change-ends tune, cued as the phase is entered
+                    g.jingle = Some(0);
                     return g.phase = Phase::ChangeEnds(CHANGE_ENDS);
                 }
                 Some(Next::MatchOver) => {
@@ -2956,8 +2958,9 @@ fn whoosh(g: &mut Game, i: usize, branch: u8, kind: i32) {
     }
 }
 
-/// The BGM's level as the game's director sets it each frame: full (55) until a game or set jingle, then down to
-/// silence over 60 frames, held there while the jingle plays and until the next point, then back up over 60 frames.
+/// The BGM's level as the game's director sets it each frame: full (55) until a game, set or change-ends jingle,
+/// then down to silence over 60 frames, held there while the jingle plays and until the next point, then back up
+/// over 60 frames.
 #[derive(Default)]
 struct Bgm {
     started: bool,
@@ -2990,7 +2993,10 @@ impl Bgm {
             );
             // ponytail: the match-end jingles (3, 4) leave the BGM as it is, as the game's match end does
             if key < 3 {
-                (self.fading, g.music_hold) = (true, true);
+                // the change-ends tune fades the BGM without a hold of its own: after a game the game jingle's
+                // hold lasts to the next serve; in a tiebreak the BGM comes back once the tune ends
+                self.fading = true;
+                g.music_hold |= key > 0;
             }
         }
         if self.jingle != 0 && !sound.playing(self.jingle) {

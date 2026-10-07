@@ -728,3 +728,36 @@ fn gallery_banks_have_every_call() {
         }
     }
 }
+
+/// The change-ends tune (N3g): in hits_s04 (`jig_00` at its `spu_s04.csv` address) the game jingle (program 0 key 1)
+/// keys on at the scoreboard's cue and, after its last note, the change-ends phase plays program 0 key 0, a tune of
+/// its own, 148 frames later. Every jingle key-on's sample is a tone of the key playing then.
+#[test]
+fn change_ends_tune_matches_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(data), Ok(mut iso)) = (std::fs::read(format!("{root}/context/fixtures/hits_s04.bin")), Iso::open(format!("{root}/Hot Shots Tennis (USA).iso"))) else {
+        return eprintln!("recording or disc missing, skipped");
+    };
+    let xb = iso.read("SND/JGL/JIG_00.XB").unwrap();
+    let arc = Archive::parse(&xb).unwrap();
+    let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
+    let (hd, bd) = (read("jig_00.hd"), read("jig_00.bd"));
+    let bank = Bank::parse(&hd).unwrap();
+    const AT: u32 = 1687360;
+    let samples_of = |key| -> Vec<u32> {
+        bank.key_ons(0, key).unwrap().into_iter().filter_map(|e| bank.tone(e.set as usize, e.note)).map(|t| AT + t.sample() as u32).collect()
+    };
+    let (game, ends) = (samples_of(1), samples_of(0));
+    let keyed: Vec<(usize, u32)> = samples(&data, 0x330)
+        .iter()
+        .enumerate()
+        .flat_map(|(k, x)| x.cmds.iter().filter(|c| c[0] == 3 && (AT..AT + bd.len() as u32).contains(&c[2])).map(move |c| (k, c[2])))
+        .collect();
+    let first = keyed[0].0;
+    let tune = keyed.iter().find(|&&(_, a)| ends.contains(&a) && !game.contains(&a)).unwrap().0;
+    eprintln!("game jingle at {first}, change-ends tune at {tune}");
+    assert_eq!(tune - first, 148);
+    for &(k, a) in &keyed {
+        assert!(if k < tune { game.contains(&a) } else { ends.contains(&a) }, "frame {k}: sample {a}");
+    }
+}
