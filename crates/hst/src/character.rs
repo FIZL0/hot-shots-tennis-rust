@@ -58,6 +58,61 @@ pub struct CharacterData {
     /// Each part's material as the GS draws it (one, or two for TEST mode 20..29), VU1-lit: `shade` swaps them in,
     /// per rig.
     pub gs: HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
+    /// A mod's texture face (standard §4b), if it swaps whole-face textures instead of morphing.
+    pub texture_face: Option<TextureFace>,
+}
+
+/// A texture face (standard §4b): the face materials show the strongest channel's whole-face texture above 0.5,
+/// else the neutral one. Each texture as (sRGB for a `StandardMaterial`, raw for the GS draws).
+pub struct TextureFace {
+    pub neutral: (Handle<Image>, Handle<Image>),
+    /// Per channel: its weight in the rig's `MorphWeights` (the donor's `.MOR` tracks drive it) and its texture.
+    pub channels: Vec<(usize, (Handle<Image>, Handle<Image>))>,
+}
+
+impl TextureFace {
+    /// The texture shown at weights `w`: the first strongest channel above 0.5, else neutral.
+    pub fn pick(&self, w: &[f32]) -> &(Handle<Image>, Handle<Image>) {
+        strongest(self.channels.iter().map(|c| c.0), w).map_or(&self.neutral, |k| &self.channels[k].1)
+    }
+
+    fn holds(&self, h: &Handle<Image>) -> bool {
+        std::iter::once(&self.neutral).chain(self.channels.iter().map(|c| &c.1)).any(|t| t.0 == *h || t.1 == *h)
+    }
+}
+
+/// Of the channels (by weight index), the first strongest one above 0.5.
+fn strongest(channels: impl Iterator<Item = usize>, w: &[f32]) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (k, t) in channels.enumerate() {
+        let x = w.get(t).copied().unwrap_or(0.0);
+        if x > 0.5 && best.is_none_or(|b| x > b.1) {
+            best = Some((k, x));
+        }
+    }
+    best.map(|b| b.0)
+}
+
+/// Swap every texture-face rig's face texture to the one its weights pick (after `animate` sets them).
+pub fn texture_faces(
+    rigs: Query<(&Rig, &bevy::mesh::morph::MorphWeights, &Children)>,
+    parts: Query<AnyOf<(&MeshMaterial3d<StandardMaterial>, &MeshMaterial3d<crate::gs::GsMaterial>)>>,
+    mut std_materials: ResMut<Assets<StandardMaterial>>,
+    mut gs: ResMut<Assets<crate::gs::GsMaterial>>,
+) {
+    for (rig, w, children) in &rigs {
+        let Some(face) = &rig.data.texture_face else { continue };
+        let (srgb, raw) = face.pick(w.weights());
+        for (s, g) in parts.iter_many(children) {
+            // only the face's draws carry a face texture; touch them only on a change
+            if let Some(m) = s.filter(|m| std_materials.get(&m.0).and_then(|m| m.base_color_texture.as_ref()).is_some_and(|t| t != srgb && face.holds(t))) {
+                std_materials.get_mut(&m.0).unwrap().base_color_texture = Some(srgb.clone());
+            }
+            if let Some(m) = g.filter(|m| gs.get(&m.0).and_then(|m| m.texture.as_ref()).is_some_and(|t| t != raw && face.holds(t))) {
+                gs.get_mut(&m.0).unwrap().texture = Some(raw.clone());
+            }
+        }
+    }
 }
 
 /// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
@@ -306,7 +361,7 @@ pub fn load_disc(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs, texture_face: None })
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
@@ -495,6 +550,7 @@ pub fn load_npc(
         skeleton,
         noise: None,
         gs,
+        texture_face: None,
     })
 }
 
@@ -640,5 +696,20 @@ fn spawn_viewer(
     let data = Arc::new(data.unwrap_or_else(|e| panic!("character: {e}")));
     info!("character {n}: {} joints, {} parts, motions {:?}", data.joints.len(), data.parts.len(), { let mut k: Vec<_> = data.motions.keys().collect(); k.sort(); k });
     let c = spawn(&mut commands, &data, root);
-    commands.entity(c).insert(Motion { id: motion, ..default() });
+    // `set`, so the motion's face plays too
+    let mut m = Motion::default();
+    m.set(motion, 1.0, true, None, 0);
+    commands.entity(c).insert(m);
+}
+
+#[cfg(test)]
+mod tests {
+    /// The strongest channel strictly above 0.5 wins, the first on a tie; none above 0.5 is neutral.
+    #[test]
+    fn texture_face_picks_the_strongest_channel() {
+        let w = [0.9, 0.5, 0.95, 0.95, 0.2];
+        assert_eq!(super::strongest([0, 1, 2, 3].into_iter(), &w), Some(2));
+        assert_eq!(super::strongest([1, 4].into_iter(), &w), None);
+        assert_eq!(super::strongest([4, 0, 9].into_iter(), &w), Some(1));
+    }
 }
