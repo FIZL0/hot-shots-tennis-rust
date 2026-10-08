@@ -26,7 +26,12 @@ mods/<id>/
   pose** (node locals compose to the inverse of the IBMs).
 - ≤ 4 influences per vertex (JOINTS_0/WEIGHTS_0), weights sum to 1.
 - Materials: base-colour PNG embedded; `KHR_materials_unlit` allowed (the GS path lights per vertex anyway).
-  Texture alpha is *not* coverage on HST bodies (it holds shading masks); mark real cut-outs `alphaMode: MASK`.
+  Texture alpha is *not* coverage on HST bodies (it holds shading masks); mark real cut-outs `alphaMode: MASK`
+  (alpha test, HST's ≥ 0x40) and see-through parts `BLEND` (HST's two-pass ≥ / < 0x70 with blending).
+  `doubleSided: false` drops back faces. Highlights: `material.extras.hst_mtl = {"shininess": s, "highlight": h}`
+  (the MTL's specular power and strength, as `hst-gltf` exports them); without it the material is matte.
+- Normals: HST lights each vertex with its first influence's share of the normal on that joint and the rest on
+  the weight blend of the others, i.e. exactly Σ wᵢ·Rᵢ·N.
 
 ## 3. Skeleton
 
@@ -42,7 +47,13 @@ removed): `Bip01` (root) › `Bip01Pelvis` › `Bip01Spine` › `Spine1` › `Sp
   others by rest bone length, `Bip01Pelvis` not at all. HST's own range: `Bip01` height 0.58–0.95 m (see
   `characters` in the JSON). Keep `TParam` reach values (§6) consistent with the arm length.
 - **Extra joints are allowed** (hair, skirts, earrings, accessories) anywhere below the core. HST motions don't
-  drive them; they follow their parent (sway via `.NOI`-style deformers is a later extension).
+  drive them; they follow their parent, plus the sway of §3a.
+
+### 3a. Sway (optional)
+
+HST's hair, ribbons and skirts sway by `.NOI` deformers. `mesh.extras.noise = [{"name", "period", "rate",
+"amp": [x, y, z]}, …]` lists a mesh's deformers; the vertex attribute `_HST_NOISE` (VEC2 float) gives each
+vertex `[deformer index, share]` (share 0 = still). `hst-gltf` exports the disc's; `rerig.py` keeps them.
 - `Racket`: where the racket's grip sits; the racket mesh is rigid in that joint's space.
 
 ## 4. Face

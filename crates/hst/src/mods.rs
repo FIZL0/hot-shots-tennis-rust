@@ -326,6 +326,7 @@ fn materials_of(
         let t = m.pbr_metallic_roughness().base_color_texture().map(|i| i.texture().source().index());
         let color = m.pbr_metallic_roughness().base_color_factor();
         let mask = m.alpha_mode() == gltf::material::AlphaMode::Mask;
+        let blend = m.alpha_mode() == gltf::material::AlphaMode::Blend;
         let h = materials.add(StandardMaterial {
             base_color: Color::linear_rgba(color[0], color[1], color[2], color[3]),
             base_color_texture: t.and_then(|t| tex.get(t)).map(|t| t.0.clone()),
@@ -333,15 +334,21 @@ fn materials_of(
             double_sided: true,
             cull_mode: None,
             // texture alpha is not coverage on HST bodies; `MASK` marks the real cut-outs (§2)
-            alpha_mode: if mask { AlphaMode::Mask(m.alpha_cutoff().unwrap_or(0.5)) } else { AlphaMode::Opaque },
+            alpha_mode: if mask { AlphaMode::Mask(m.alpha_cutoff().unwrap_or(0.5)) } else if blend { AlphaMode::Blend } else { AlphaMode::Opaque },
             ..default()
         });
-        // ponytail: a glTF material has none of the MTL header's lighting words (shininess, highlight): zero, as a
-        // matte disc material; MASK is TEST mode 10 (A ≥ 0x40)
+        // the MTL header a disc material would have: its lighting words from `extras.hst_mtl` (0, matte, when
+        // absent), TEST mode 10 (A ≥ 0x40) for MASK, 25 (two passes split at A 0x70, blended) for BLEND; drawn
+        // fogged like every disc character batch
+        let extras: serde_json::Value = m.extras().as_ref().and_then(|r| serde_json::from_str(r.get()).ok()).unwrap_or_default();
+        let word = |k: &str| (extras["hst_mtl"][k].as_f64().unwrap_or(0.0) as f32).to_le_bytes();
         let mut header = [0; 0x30];
-        header[0x1e..0x20].copy_from_slice(&(if mask { 10i16 } else { 0 }).to_le_bytes());
-        let mtl = mtl::Material { texture: t, color: color.map(|c| c.min(1.0)), attributes: None, two_sided: true, name: m.name().unwrap_or("").to_string(), header };
-        gs.insert(h.id(), crate::gs::GsMaterial::for_batch(&mtl, if t.is_some() { 0x10 } else { 0 }, t.and_then(|t| tex.get(t)).map(|t| t.1.clone())));
+        header[0x10..0x14].copy_from_slice(&word("shininess"));
+        header[0x14..0x18].copy_from_slice(&word("highlight"));
+        header[0x1e..0x20].copy_from_slice(&(if mask { 10i16 } else if blend { 25 } else { 0 }).to_le_bytes());
+        let mtl = mtl::Material { texture: t, color: color.map(|c| c.min(1.0)), attributes: None, two_sided: m.double_sided(), name: m.name().unwrap_or("").to_string(), header };
+        let prim = 0x20 | if t.is_some() { 0x10 } else { 0 } | if blend { 0x40 } else { 0 };
+        gs.insert(h.id(), crate::gs::GsMaterial::for_batch(&mtl, prim, t.and_then(|t| tex.get(t)).map(|t| t.1.clone())));
         out.push(h);
     }
     // glTF's default material
@@ -361,6 +368,8 @@ struct Prim {
     idx: Vec<u32>,
     /// Per target name, the position offsets.
     morph: Vec<(String, Vec<[f32; 3]>)>,
+    /// `_HST_NOISE`: per vertex its noise deformer and share (0: not moved).
+    noise: Vec<[f32; 2]>,
 }
 
 fn prim(p: &gltf::Primitive, blob: &[u8], names: &[String]) -> Result<Prim, String> {
@@ -378,6 +387,7 @@ fn prim(p: &gltf::Primitive, blob: &[u8], names: &[String]) -> Result<Prim, Stri
         joints: r.read_joints(0).map_or_else(|| vec![[0; 4]; n], |i| i.into_u16().collect()),
         weights: r.read_weights(0).map_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; n], |i| i.into_f32().collect()),
         idx: r.read_indices().map_or_else(|| (0..n as u32).collect(), |i| i.into_u32().collect()),
+        noise: p.get(&gltf::Semantic::Extras("HST_NOISE".into())).and_then(|a| gltf::accessor::Iter::<[f32; 2]>::new(a, |_| Some(blob))).map_or_else(Vec::new, |i| i.collect()),
         morph: r.read_morph_targets().zip(names).map(|((p, ..), name)| (name.clone(), p.map_or_else(|| vec![[0.0; 3]; n], |p| p.collect()))).collect(),
         pos,
     })
@@ -438,15 +448,23 @@ pub fn load(
         names.extend(target_names(&mesh).into_iter().filter(|t| !names.contains(t)).collect::<Vec<_>>());
     }
     let mut parts = Vec::new();
+    let mut deformers = Vec::new();
+    let mut swaying = Vec::new();
     for n in doc.nodes().filter(|n| n.skin().is_some()) {
         let mesh = n.mesh().unwrap();
         let tn = target_names(&mesh);
+        // the mesh's noise deformers (`extras.noise`, a disc `.NOI`'s), numbered across meshes
+        let first = deformers.len();
+        deformers.extend(noise_deformers(&mesh));
         for p in mesh.primitives() {
             let v = prim(&p, &blob, &tn).map_err(ctx)?;
             let count = v.pos.len();
-            // ponytail: VU1's per-bone normals from one glTF normal — the first joint's share in the normal slot, the
-            // rest in the second joint's tangent slot (gs.wgsl); exact for one or two influences
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+            let moved = moved(&v, first, deformers.len(), &joints);
+            // VU1's per-bone normals from one glTF normal: the first joint's share in the normal slot, the rest in the
+            // tangent slot, which gs.wgsl turns by the other joints' weight blend
+            // a swaying part stays readable: each rig sways its own copy (`noise`)
+            let usage = if moved.is_empty() { RenderAssetUsages::RENDER_WORLD } else { RenderAssetUsages::default() };
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, v.pos)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, v.nrm.iter().zip(&v.weights).map(|(n, w)| Vec3::from(*n) * w[0]).map(<[f32; 3]>::from).collect::<Vec<_>>())
                 .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, v.nrm.iter().zip(&v.weights).map(|(n, w)| (Vec3::from(*n) * (1.0 - w[0])).extend(0.0).to_array()).collect::<Vec<_>>())
@@ -462,6 +480,9 @@ pub fn load(
                 mesh.set_morph_targets(attrs.collect());
             }
             let mat = handles[p.material().index().unwrap_or(handles.len() - 1)].clone();
+            if !moved.is_empty() {
+                swaying.push((parts.len(), moved));
+            }
             parts.push((meshes.add(mesh), mat, morphed));
         }
     }
@@ -495,7 +516,42 @@ pub fn load(
     // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, stance_ball, skeleton, noise: None, gs })
+    let noise = (!swaying.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying }));
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, stance_ball, skeleton, noise, gs })
+}
+
+/// A mesh's `extras.noise` deformers (period, rate, amplitudes), as a `.NOI` gives them.
+fn noise_deformers(mesh: &gltf::Mesh) -> Vec<hst_data::noi::Deformer> {
+    let extras: serde_json::Value = mesh.extras().as_ref().and_then(|r| serde_json::from_str(r.get()).ok()).unwrap_or_default();
+    let f = |d: &serde_json::Value, k: &str| d[k].as_f64().unwrap_or(0.0) as f32;
+    extras["noise"].as_array().map_or_else(Vec::new, |a| {
+        a.iter()
+            .enumerate()
+            .map(|(i, d)| hst_data::noi::Deformer { node: i, period: f(d, "period"), rate: f(d, "rate"), amp: std::array::from_fn(|k| d["amp"][k].as_f64().unwrap_or(0.0) as f32), name: d["name"].as_str().unwrap_or("").to_string() })
+            .collect()
+    })
+}
+
+/// A primitive's vertices its deformers (`first..end`) move: as on the disc, one position entry per influence, in its
+/// joint's space times its weight (`w · inverse bind · p`), all with the vertex's share.
+fn moved(v: &Prim, first: usize, end: usize, joints: &[Joint]) -> Vec<crate::noise::Moved> {
+    v.noise
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &[d, share])| {
+            let d = first + d as usize;
+            if share == 0.0 || d >= end {
+                return None;
+            }
+            let skin: [(usize, f32); 4] = std::array::from_fn(|k| (v.joints[i][k] as usize, v.weights[i][k]));
+            let entries = skin
+                .iter()
+                .filter(|&&(j, w)| w > 0.0 && j < joints.len())
+                .map(|&(j, w)| crate::noise::Entry { deformer: d, p: (joints[j].inverse_bind.transform_point3(Vec3::from(v.pos[i])) * w).into(), weight: share, node: j })
+                .collect();
+            Some(crate::noise::Moved { v: i, base: v.pos[i], skin, entries })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -548,6 +604,16 @@ mod tests {
         assert!(c.faces.values().any(|f| !f.tracks.is_empty()), "no face track bound");
         assert_eq!(c.faces.values().map(|f| f.tracks.len()).sum::<usize>(), disc.faces.values().map(|f| f.tracks.len()).sum::<usize>());
         assert_eq!(m.hand, -1.0);
+        // M1d: the disc's sway (as many deformers and swaying vertices) and MTL words (the same draws, as a set)
+        let sway = |c: &CharacterData| c.noise.as_ref().map(|n| (n.deformers.len(), n.parts.iter().map(|p| p.1.len()).sum::<usize>()));
+        assert_eq!(sway(&c), sway(&disc));
+        let draws = |c: &CharacterData| {
+            let mut d: Vec<String> = c.gs.values().flatten().map(|g| format!("{:?} {} {}", g.key, g.uniform.shininess, g.uniform.highlight)).collect();
+            d.sort();
+            d.dedup();
+            d
+        };
+        assert_eq!(draws(&c), draws(&disc));
         let row = tparam(&mut iso, &m).unwrap();
         assert_eq!((&row[12][..], &row[40][..], &row[57][..], &row[13][..]), ("4", "10", "170", "4"));
     }

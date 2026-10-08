@@ -82,14 +82,17 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     // × its diffuse term (the first dimmed with the ambient when the camera looks near it, `glare`), and a specular term on the half vector between the light and the camera's forward axis,
     // Schlick's t/(k − (k − 1)t) for t^k. A skinned vertex's normal is the sum of its bones' pre-weighted normals
     // (|n| = the weight), each turned by its bone, not normalised; the second bone's rides in the tangent slot
-    // (character.rs). Meshes without normals (the weather's particles) go unlit.
+    // (character.rs). A mod's vertex has one normal N for up to four bones: w0·N in the normal slot, (1 − w0)·N in
+    // the tangent slot turned by bones 1..3 blended by their weights (bone 1 alone on the disc), so Σ wᵢ·Rᵢ·N.
+    // Meshes without normals (the weather's particles) go unlit.
     out.spec = 0.0;
 #ifdef VERTEX_NORMALS
 #ifdef SKINNED
     let j0 = skinning::skin_model(vertex.joint_indices, vec4(1.0, 0.0, 0.0, 0.0), instance);
     var n = mat3x3(j0[0].xyz, j0[1].xyz, j0[2].xyz) * vertex.normal;
 #ifdef VERTEX_TANGENTS
-    let j1 = skinning::skin_model(vertex.joint_indices, vec4(0.0, 1.0, 0.0, 0.0), instance);
+    let rest = vertex.joint_weights.y + vertex.joint_weights.z + vertex.joint_weights.w;
+    let j1 = skinning::skin_model(vertex.joint_indices, select(vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, vertex.joint_weights.yzw / rest), rest > 0.0), instance);
     n += mat3x3(j1[0].xyz, j1[1].xyz, j1[2].xyz) * vertex.tangent.xyz;
 #endif
 #else

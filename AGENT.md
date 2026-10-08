@@ -38,7 +38,7 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
   decompile reading and gameplay decisions.
 
 ## Controlling the game
-`plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`) and
+`plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`; remaster `--shot`s in a fixed-size floating window: `tools/shot.sh`) and
 `PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/single.sh`
 (one task at a time) or `tools/parallel.sh [N] [p|d]` (N at once in worktrees; p = PLAN order, d = different files). Multi-step game drives
 go under `tools/pcsx2.sh <cmd>`; pine.py tools take the same lock by themselves. In a parallel run `HST_PCSX2=N` gives

@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hst_data::{ani, mdl, mor, mtl};
+use hst_data::{ani, mdl, mor, mtl, noi};
 use hst_sim::pose::{Clip, Skeleton};
 use serde_json::{Value, json};
 
@@ -169,10 +169,20 @@ fn materials(g: &mut Glb, doc: &mut Value, model: &mdl::Model, mats: &mtl::Mtl, 
             pbr["baseColorTexture"] = json!({"index": textures.len() - 1});
         }
         let name = format!("{tag}{}", readable(&m.name, "mat", i));
-        doc["materials"].as_array_mut().unwrap().push(json!({
-            "name": name, "pbrMetallicRoughness": pbr, "doubleSided": true,
+        // the MTL header's lighting words (specular power +0x10, highlight +0x14) and its TEST mode (+0x1e:
+        // 10..19 A ≥ 0x40 = MASK, 20..29 the blended two-pass hair = BLEND) for the remaster's GS path
+        let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
+        let mut mat = json!({
+            "name": name, "pbrMetallicRoughness": pbr, "doubleSided": m.two_sided,
             "extensions": {"KHR_materials_unlit": {}},
-        }));
+            "extras": {"hst_mtl": {"shininess": f(0x10), "highlight": f(0x14)}},
+        });
+        match i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]) {
+            10..=19 => mat["alphaMode"] = json!("MASK"),
+            20..=29 => mat["alphaMode"] = json!("BLEND"),
+            _ => {}
+        }
+        doc["materials"].as_array_mut().unwrap().push(mat);
     }
     first
 }
@@ -186,7 +196,7 @@ fn colors(c: [u8; 4]) -> [f32; 4] {
     c.map(|c| (c as f32 / 128.0).min(1.0))
 }
 
-fn export(model: &mdl::Model, mats: &mtl::Mtl, motions: &[Motion], rigid: &[Rigid]) -> Vec<u8> {
+fn export(model: &mdl::Model, mats: &mtl::Mtl, noise: &[noi::Deformer], motions: &[Motion], rigid: &[Rigid]) -> Vec<u8> {
     let mut g = Glb::default();
     let mut doc = json!({
         "asset": {"version": "2.0", "generator": "hst-gltf"},
@@ -225,10 +235,17 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, motions: &[Motion], rigid: &[Rigi
         weights: Vec<[f32; 4]>,
         idx: Vec<u32>,
         morph: Vec<Vec<[f32; 3]>>,
+        noise: Vec<[f32; 2]>,
     }
     let mut prims: Vec<Prim> = (0..model.materials.len()).map(|_| Prim { morph: vec![Vec::new(); targets], ..Default::default() }).collect();
-    for (material, verts, tris, morph) in model.skinned() {
+    // `.NOI`: a deformer moves its node's packets; every entry of a moved vertex has the same share
+    for (pk, (material, verts, tris, morph)) in model.materials.iter().flatten().zip(model.skinned()) {
         let p = &mut prims[material];
+        let deformer = noise.iter().position(|d| d.node as i16 == pk.group).filter(|_| !pk.noise.is_empty());
+        p.noise.extend((0..verts.len()).map(|v| match deformer {
+            Some(d) => [d as f32, pk.noise.get(pk.bones[v] as usize).copied().unwrap_or(0.0)],
+            None => [0.0; 2],
+        }));
         let base = p.pos.len() as u32;
         for (t, offsets) in p.morph.iter_mut().enumerate() {
             offsets.extend(morph.get(t).cloned().unwrap_or_else(|| vec![[0.0; 3]; verts.len()]));
@@ -281,6 +298,9 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, motions: &[Motion], rigid: &[Rigi
             "WEIGHTS_0": g.floats(&p.weights, "VEC4", false, Some(34962)),
         });
         attrs["JOINTS_0"] = json!(g.ints(&p.joints, 5123, "VEC4", count, Some(34962)));
+        if !noise.is_empty() {
+            attrs["_HST_NOISE"] = json!(g.floats(&p.noise, "VEC2", false, Some(34962)));
+        }
         let idx: Vec<u8> = p.idx.iter().flat_map(|i| i.to_le_bytes()).collect();
         let indices = g.ints(&idx, 5125, "SCALAR", p.idx.len(), Some(34963));
         let mut prim = json!({"attributes": attrs, "indices": indices, "material": mat0 + m, "mode": 4});
@@ -294,6 +314,9 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, motions: &[Motion], rigid: &[Rigi
     if any_morph {
         mesh["weights"] = json!(vec![0.0; targets]);
         mesh["extras"] = json!({"targetNames": model.morph_names});
+    }
+    if !noise.is_empty() {
+        mesh["extras"]["noise"] = json!(noise.iter().map(|d| json!({"name": d.name, "period": d.period, "rate": d.rate, "amp": d.amp})).collect::<Vec<_>>());
     }
     doc["meshes"].as_array_mut().unwrap().push(mesh);
     let ibm: Vec<[f32; 16]> = (0..n)
@@ -486,6 +509,11 @@ fn sibling(p: &Path, ext: &str) -> Option<PathBuf> {
     })
 }
 
+/// The model's `.NOI` noise deformers (its sibling file), if it has any.
+fn deformers(mdl_path: &Path) -> Vec<noi::Deformer> {
+    sibling(mdl_path, "noi").and_then(|p| noi::parse(&read(&p).ok()?)).unwrap_or_default()
+}
+
 fn load_model(mdl_path: &Path, mtl_path: &Path) -> R<(mdl::Model, mtl::Mtl)> {
     let model = mdl::parse(&read(mdl_path)?).map_err(|e| format!("{}: {}", mdl_path.display(), e.0))?;
     let mti = sibling(mtl_path, "mti").map(|p| read(&p)).transpose()?;
@@ -562,7 +590,7 @@ fn hst(root: &Path, out: &Path) -> R<()> {
         }
         // ball paths and root dummies are not skeletal
         list.retain(|m| !m.name.ends_with("_dummy") && !m.name.ends_with("_ball"));
-        let glb = export(&model, &mats, &list, &[Rigid { joint, model: rmodel, mtl: rmtl }]);
+        let glb = export(&model, &mats, &deformers(mdl), &list, &[Rigid { joint, model: rmodel, mtl: rmtl }]);
         write(&out.join(format!("pc{n:02}_c00.glb")), &glb)?;
     }
     Ok(())
@@ -577,7 +605,7 @@ fn fore(root: &Path, out: &Path) -> R<()> {
             let mdl = files.iter().find(|p| ext_is(p, "mdl")).ok_or(format!("pc{n:02} c{c:02}: no mdl"))?;
             let mtl = files.iter().find(|p| ext_is(p, "mtl")).ok_or(format!("pc{n:02} c{c:02}: no mtl"))?;
             let (model, mats) = load_model(mdl, mtl)?;
-            write(&out.join(format!("models/fore/pc{n:02}/pc{n:02}_{slug}_c{c:02}.glb")), &export(&model, &mats, &[], &[]))?;
+            write(&out.join(format!("models/fore/pc{n:02}/pc{n:02}_{slug}_c{c:02}.glb")), &export(&model, &mats, &deformers(mdl), &[], &[]))?;
         }
         // motions per body variant: costumes 0–3 share one model (01p), 4–7 another (05p)
         for v in 0..2 {
@@ -598,7 +626,7 @@ fn fore(root: &Path, out: &Path) -> R<()> {
                 motions(s, "ani", &mut list, &mut sources);
             }
             let path = out.join(format!("anims/fore/pc{n:02}_{slug}_{}.glb", ["c00-03", "c04-07"][v]));
-            write(&path, &export(&model, &mats, &list, &[]))?;
+            write(&path, &export(&model, &mats, &deformers(mdl), &list, &[]))?;
             let names: Vec<&str> = list.iter().map(|m| m.name.as_str()).collect();
             println!("  {} motions: {}", list.len(), names.join(" "));
         }
@@ -618,7 +646,7 @@ fn retarget(mdl_path: &Path, mtl_path: &Path, out: &Path, anis: &[String]) -> R<
             }
         }
     }
-    write(out, &export(&model, &mats, &list, &[]))
+    write(out, &export(&model, &mats, &deformers(mdl_path), &list, &[]))
 }
 
 fn main() {
