@@ -300,7 +300,97 @@ pub fn load_disc(
     let noise = find(&format!("{body}.noi")).and_then(|d| crate::noise::costume(&model, &d, &parts, meshes));
     let targets = model.morph_names.len();
 
-    // the racket: a rigid model in its own space, carried by the `Racket` joint
+    let racket = disc_racket(&arc, n, meshes, materials, images, &mut gs)?;
+
+    let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+    // the game binds a face track to the target of the same name; others are dropped
+    let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
+    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs })
+}
+
+/// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
+/// serve stance's ball (see [`CharacterData`]).
+pub struct Motions {
+    pub motions: HashMap<usize, Clip>,
+    pub paths: HashMap<usize, Path>,
+    pub pelvis: Vec<[f32; 2]>,
+    pub arm: Option<Arc<ArmTable>>,
+    pub faces: HashMap<usize, Face>,
+    pub stance_ball: Option<Path>,
+}
+
+/// Character `n`'s motions (`PCANI/PCnnANI.XB`) and the shared team reactions (`PCDATA/PCCG0.XB`), bound to
+/// `skeleton`; `target` binds a `.MOR` track name to a morph target.
+pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>) -> Result<Motions, String> {
+    // motions by the game's numbers
+    let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
+    let aarc = Archive::parse(&anims).map_err(|e| e.0)?;
+    let mut motions = HashMap::new();
+    let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
+    let mut pelvis = vec![[0.0, 1.0]; 48];
+    let mut paths = HashMap::new();
+    let mut faces = HashMap::new();
+    let mut stance_ball = None;
+    for id in 0..ani::MOTIONS.len() {
+        let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
+        if let Some(t) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.mor"))).and_then(|e| mor::parse(&aarc.read(e).ok()?, 1).ok()) {
+            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
+            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
+            faces.insert(id, Face { tracks, length });
+        }
+        let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
+        let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
+        if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
+            let r = hst_sim::pose::first_frame(skeleton, &a)[h][2];
+            *row = [r[0], r[2]];
+        }
+        // the motion numbers 0x30.. are the team reactions (below); the files of those names are ball paths
+        if id < 0x30 {
+            motions.insert(id, Clip::new(skeleton, &a));
+        }
+        // gu_set's root path
+        if id == 0x35 {
+            paths.extend(Path::new(&a).map(|p| (0x2e, p)));
+        }
+        // the dive's (receive_f) root path
+        if id == 51 {
+            paths.extend(Path::new(&a).map(|p| (0x1e, p)));
+        }
+        if id == 52 {
+            stance_ball = Path::new(&a);
+        }
+    }
+    // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
+    if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
+        let carc = Archive::parse(&cg).map_err(|e| e.0)?;
+        for (k, stem) in ["co01_f", "co02_f", "co03", "co04", "co05"].iter().enumerate() {
+            let name = format!("mtgrl/re_pc00_{stem}.ani2");
+            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
+            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
+            motions.insert(0x30 + k, Clip::new(skeleton, &a));
+            let name = format!("mtgrl/re_pc00_{stem}_dummy.ani2");
+            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
+            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
+            paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
+        }
+    }
+    let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
+    let arm = strokes.map(|c| Arc::new(arm_table(skeleton, &c, n as i32)));
+    Ok(Motions { motions, paths, pelvis, arm, faces, stance_ball })
+}
+
+/// Character `n`'s racket from its costume archive `arc`: a rigid model in its own space, carried by the `Racket`
+/// joint; its GS draws go into `gs`.
+pub fn disc_racket(
+    arc: &Archive,
+    n: usize,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
+) -> Result<Vec<(Handle<Mesh>, Handle<StandardMaterial>)>, String> {
+    let find = |suffix: &str| arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).and_then(|e| arc.read(e).ok());
     let mut racket = Vec::new();
     let rk = format!("racket_{n:02}");
     if let (Some(rm), Some(rt)) = (find(&format!("{rk}.mdl")), find(&format!("{rk}.mtl"))) {
@@ -344,64 +434,7 @@ pub fn load_disc(
         }
     }
 
-    // motions by the game's numbers
-    let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
-    let aarc = Archive::parse(&anims).map_err(|e| e.0)?;
-    let mut motions = HashMap::new();
-    let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
-    let hip = skeleton.names.iter().position(|n| n == "Bip01Pelvis");
-    let mut pelvis = vec![[0.0, 1.0]; 48];
-    let mut paths = HashMap::new();
-    let mut faces = HashMap::new();
-    let mut stance_ball = None;
-    for id in 0..ani::MOTIONS.len() {
-        let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
-        if let Some(t) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.mor"))).and_then(|e| mor::parse(&aarc.read(e).ok()?, 1).ok()) {
-            // the game binds a track to the target of the same name; others are dropped
-            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((model.morph_names.iter().position(|n| *n == tr.name)?, tr.ticks, tr.values))).collect();
-            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
-            faces.insert(id, Face { tracks, length });
-        }
-        let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
-        let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
-        if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
-            let r = hst_sim::pose::first_frame(&skeleton, &a)[h][2];
-            *row = [r[0], r[2]];
-        }
-        // the motion numbers 0x30.. are the team reactions (below); the files of those names are ball paths
-        if id < 0x30 {
-            motions.insert(id, Clip::new(&skeleton, &a));
-        }
-        // gu_set's root path
-        if id == 0x35 {
-            paths.extend(Path::new(&a).map(|p| (0x2e, p)));
-        }
-        // the dive's (receive_f) root path
-        if id == 51 {
-            paths.extend(Path::new(&a).map(|p| (0x1e, p)));
-        }
-        if id == 52 {
-            stance_ball = Path::new(&a);
-        }
-    }
-    // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
-    if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
-        let carc = Archive::parse(&cg).map_err(|e| e.0)?;
-        for (k, stem) in ["co01_f", "co02_f", "co03", "co04", "co05"].iter().enumerate() {
-            let name = format!("mtgrl/re_pc00_{stem}.ani2");
-            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
-            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
-            motions.insert(0x30 + k, Clip::new(&skeleton, &a));
-            let name = format!("mtgrl/re_pc00_{stem}_dummy.ani2");
-            let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
-            let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
-            paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
-        }
-    }
-    let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
-    let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
-    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs })
+    Ok(racket)
 }
 
 /// Build a background figure (umpire, spectator, creature) from a court archive: the model `{stem}.MDL` with its
@@ -577,14 +610,21 @@ pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
     }
 }
 
-/// Character viewer (`--character N --motion M`): the character alone at the origin, playing motion M in a loop.
+/// Character viewer (`--character N --motion M`, or `--mod DIR` for a mod's first costume): the character alone at
+/// the origin, playing motion M in a loop.
 pub fn viewer(app: &mut App) {
     app.insert_resource(Time::<Fixed>::from_hz(60.0)).add_systems(PostStartup, spawn_viewer).add_systems(FixedUpdate, tick).add_systems(Update, animate);
 }
 
+/// The viewer's mod folder (`--mod`).
+#[derive(Resource)]
+pub struct ViewerMod(pub Option<String>);
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_viewer(
     mut commands: Commands,
     args: Res<crate::Args>,
+    view_mod: Res<ViewerMod>,
     root: Query<Entity, With<crate::GameSpace>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -593,7 +633,11 @@ fn spawn_viewer(
 ) {
     let (Some((n, motion)), Ok(root)) = (args.viewer, root.single()) else { return };
     let mut iso = Iso::open(&args.iso).expect("open iso");
-    let data = Arc::new(load_disc(&mut iso, n, 0, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("character"));
+    let data = match &view_mod.0 {
+        Some(dir) => crate::mods::read(dir.as_ref()).and_then(|m| crate::mods::load(&mut iso, &m, 0, &mut meshes, &mut materials, &mut images, &mut bindposes)),
+        None => load_disc(&mut iso, n, 0, &mut meshes, &mut materials, &mut images, &mut bindposes),
+    };
+    let data = Arc::new(data.unwrap_or_else(|e| panic!("character: {e}")));
     info!("character {n}: {} joints, {} parts, motions {:?}", data.joints.len(), data.parts.len(), { let mut k: Vec<_> = data.motions.keys().collect(); k.sort(); k });
     let c = spawn(&mut commands, &data, root);
     commands.entity(c).insert(Motion { id: motion, ..default() });

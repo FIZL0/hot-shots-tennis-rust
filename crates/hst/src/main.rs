@@ -17,6 +17,7 @@ mod character;
 mod court_anim;
 mod effects;
 mod gs;
+mod mods;
 mod hud_gamma;
 mod noise;
 mod play;
@@ -79,6 +80,7 @@ fn main() {
     let mut shot_at = 0.5;
     let mut sound = None;
     let mut outfits = Vec::new();
+    let mut viewer_mod = None;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -90,6 +92,7 @@ fn main() {
             "--play" => play = true,
             "--singles" => singles = true,
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
+            "--mod" => (viewer_mod, viewer_char) = (a.next(), viewer_char.or(Some(0))),
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--vsync" => vsync = true,
             "--music" => music = true,
@@ -119,7 +122,7 @@ fn main() {
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
-        app.add_plugins(character::viewer);
+        app.add_plugins(character::viewer).insert_resource(character::ViewerMod(viewer_mod));
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
