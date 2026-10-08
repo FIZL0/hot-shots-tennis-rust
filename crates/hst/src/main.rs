@@ -59,6 +59,14 @@ pub struct Args {
     pub sound: Option<(String, String, usize, usize)>,
     /// `--music`: the court's BGM in a match (off by default).
     pub music: bool,
+    /// The umpire (`--umpire N`, the menu's order: 0 Chika, 1 Suzuki, 2 Lily, 3 Robot Tennis, 4 Anna; default 4).
+    pub umpire: u8,
+    /// Sets to win (`--sets`, default 1) and games to win a set (`--games`, default 4).
+    pub sets: i32,
+    pub games: i32,
+    /// `--pads a,b`: the gamepads (indices into the sorted pad list, `-` none) driving players 1 and 2, as the main
+    /// menu assigned them (`controls::PadSlots`).
+    pub pads: Option<[Option<usize>; 2]>,
 }
 
 #[derive(Component)]
@@ -82,6 +90,7 @@ fn main() {
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
     let mut mod_slot = 0;
+    let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -98,6 +107,15 @@ fn main() {
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--vsync" => vsync = true,
             "--music" => music = true,
+            "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
+            "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
+            "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
+            "--pads" => {
+                let v: Vec<_> = a.next().unwrap_or_default().split(',').map(|p| p.trim().parse().ok()).collect();
+                pads = Some([v.first().copied().flatten(), v.get(1).copied().flatten()]);
+            }
+            "--4x3" => play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed),
+            "--no-upscale" => upscale = false,
             "--sound" => {
                 let mut n = || a.next().unwrap_or_default();
                 let (xb, hd, program, key) = (n(), n(), n(), n());
@@ -114,14 +132,20 @@ fn main() {
             _ => archives.push(x),
         }
     }
-    textures::init(&iso);
+    if upscale {
+        textures::init(&iso);
+    }
+    // nothing asked for: the main menu, which starts matches as child processes with the flags above
+    let menu = archives.is_empty() && stage.is_none() && !play && !ball && viewer_char.is_none() && sound.is_none();
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);
-    if play {
+    if menu {
+        app.add_plugins(play::main_menu::plugin);
+    } else if play {
         app.add_plugins(play::plugin);
         // `--play --mod DIR [--mod-slot N]`: the mod plays player N (default 1st), its costume by `--outfits`
         if let Some(dir) = &viewer_mod {
@@ -133,7 +157,7 @@ fn main() {
     } else if ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music })
+    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads })
         .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
         .add_systems(Startup, load)
         .add_systems(Update, (orbit, auto_shot, clouds))
@@ -247,7 +271,7 @@ fn load(
             let odds = hst_sim::weather::Odds { cloudy: o[0], cloudy_len: [o[1], o[2]], rain: o[3], rain_len: [o[4], o[5]], no_border: o[7] != 0, heavy: o[8] != 0 };
             let ((directions, speed), (chance, kind)) = (exe.wind(n), exe.gusts(n));
             let wind = hst_sim::weather::Wind { chance, kind, directions, speed };
-            // a match: 4 games, 1 set (`play` keeps `Weather::game` on the games played)
+            // a match: `--games`, `--sets` (`play` keeps `Weather::game` on the games played)
             let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
             // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
             // directly (slot 5's was 0x28c7c4a1)
@@ -260,7 +284,7 @@ fn load(
                 r.next()
             });
             let mut mt = hst_sim::weather::Mt::new(seed);
-            let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || mt.next());
+            let schedule = hst_sim::weather::schedule(&odds, &wind, args.games, args.sets, players, || mt.next());
             // the match goes on drawing from the same generators (with a given seed, `rand()` is taken as at boot)
             let mut rngs = hst_sim::rng::Rngs::new(r, mt);
             // the setup's own `rand()` calls: the lens flare, the sound manager, the clouds and the effects seed

@@ -61,6 +61,7 @@ mod timing;
 mod tornado;
 mod weather;
 mod widescreen;
+pub(crate) mod main_menu;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -662,7 +663,7 @@ mod every_character_tables {
             eprintln!("no ISO, skipped");
             return;
         };
-        let params = disc(&mut iso, None).3;
+        let params = disc(&mut iso, None, 4).3;
         for c in 0..14 {
             character_tables(&mut iso, c, "B", "smsh", "", 2);
             serve_tables(&mut iso, &params, c);
@@ -1032,6 +1033,7 @@ fn smash_heights(iso: &mut Iso, n: usize) -> [f32; 2] {
 fn disc(
     iso: &mut Iso,
     stage: Option<u32>,
+    umpire_n: u8,
 ) -> (
     (f32, hst_sim::shot::Margins),
     ScoreboardTiming,
@@ -1046,7 +1048,7 @@ fn disc(
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
     let src = game.shot_params();
     let params = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
-    // ponytail: umpire 4 (Lily), voice set a, English; off a stage her chair and the collision world (net, posts,
+    // umpire `umpire_n` (`Args::umpire`), voice set a, English; off a stage her chair and the collision world (net, posts,
     // fences) are court 10's
     let n = stage.unwrap_or(10);
     let chair = court::umpire_chair(iso, n).unwrap_or([6.5156, -1.7712, -0.0109]);
@@ -1054,13 +1056,13 @@ fn disc(
         chair,
         game.umpire_side(n as usize),
         n as u8,
-        game.umpire_words(0, 4, 0),
+        game.umpire_words(0, umpire_n, 0),
         [0.0; 3],
     );
     let (lines, angle) = game.court_margins();
     (
         (game.line_margin(), hst_sim::shot::Margins { lines, angle }),
-        game.scoreboard_timing(0, 4),
+        game.scoreboard_timing(0, umpire_n),
         (court::world(iso, n), court::materials(&game)),
         params,
         umpire,
@@ -1183,8 +1185,8 @@ fn setup(
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
-    let ((line_margin, margins), board, world, shot_params, umpire) = disc(&mut iso, args.stage);
-    let rules = if args.singles { SINGLES } else { DOUBLES };
+    let ((line_margin, margins), board, world, shot_params, umpire) = disc(&mut iso, args.stage, args.umpire);
+    let rules = Rules { sets: args.sets, games: args.games, ..if args.singles { SINGLES } else { DOUBLES } };
     let reach = reach(&mut iso);
     let mut game = Game {
         rules,
@@ -1369,7 +1371,7 @@ fn setup(
     }
     // her voice bank in slot 5 (`VoiceBanks` holds slots 1..)
     voices.resize(4, None);
-    voices.push(umpire_bank(&mut iso, 4, 0).map(std::sync::Arc::new));
+    voices.push(umpire_bank(&mut iso, args.umpire, 0).map(std::sync::Arc::new));
     // the jingles (slot 8: `jig_00` in a match) and, with `--music`, the court's BGM (`bgmg_NN`; `bgmg_14` off the
     // 11 courts)
     let stage = game.stage as usize;

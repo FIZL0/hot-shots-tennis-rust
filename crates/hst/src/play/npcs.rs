@@ -117,7 +117,7 @@ fn setup(
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
             npc::Kind::Umpire => {
-                let Some(data) = load(layout::umpire_files(4)) else { continue };
+                let Some(data) = load(layout::umpire_files(args.umpire)) else { continue };
                 // she faces the court centre: rows (up × forward, up, forward, chair)
                 let ([x, z], p) = (umpire.forward, umpire.pos);
                 let world = [[z, 0.0, -x, 0.0], [0.0, 1.0, 0.0, 0.0], [x, 0.0, z, 0.0], [p[0], p[1], p[2], 1.0]];
