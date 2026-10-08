@@ -88,6 +88,26 @@ pub struct GsUniform {
     pub fog_color: Vec4,
     /// TEX1 K, the mipmap LOD bias (the model's material header, `mdl::Model::lod_k`).
     pub lod_k: f32,
+    /// VU1's light: direction (game space, light → surface), its colour and the ambient colour (1.0 = ×1).
+    pub light_dir: Vec4,
+    pub light_color: Vec4,
+    pub ambient: Vec4,
+}
+
+/// The light VU1 has outside a match camera (direction, colour, ambient): white, from (1, 2, 1)/√6.
+pub const DEFAULT_LIGHT: (Vec4, Vec4, Vec4) =
+    (Vec4::new(0.408248, 0.816497, 0.408248, 0.0), Vec4::new(0.49, 0.49, 0.49, 1.0), Vec4::new(0.5, 0.5, 0.5, 1.0));
+
+/// A court's light for season `season` from its `envir_cNN.dat` (the light row `court_clear` reads): (colour,
+/// ambient) = the row's RGB × +0x10 and × +0xc. The direction is the sun's (`shadow::Sun::light`).
+/// ponytail: the game dims both (×(1 − x/2), ×(1 − 0.6x)) when the camera looks within ~37° of the sun; a match
+/// camera never does.
+pub fn court_light(envir: &[u8], season: usize) -> Option<(Vec4, Vec4)> {
+    let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
+    let t = ((*envir.get(0x10 + season * 0x30)? as i8) < 1) as usize;
+    let row = 0xd0 + season * 0x70 + t * 0x38;
+    let rgb = Vec3::new(f(row)?, f(row + 4)?, f(row + 8)?);
+    Some(((rgb * f(row + 0x10)?).extend(1.0), (rgb * f(row + 0xc)?).extend(1.0)))
 }
 
 /// Fog parameters that leave every pixel as it is.
@@ -163,7 +183,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0 };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: DEFAULT_LIGHT.0, light_color: DEFAULT_LIGHT.1, ambient: DEFAULT_LIGHT.2 };
         tests
             .into_iter()
             .map(|test| GsMaterial {

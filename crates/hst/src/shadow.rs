@@ -23,8 +23,10 @@ pub struct Caster;
 
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct Sun {
-    /// Light direction in game space (Y down), sun → ground.
+    /// Shadow direction in game space (Y down), sun → ground: `light` raised to at least 50°.
     pub dir: Vec3,
+    /// The sun as VU1 lights the court with it (game space, sun → ground).
+    pub light: Vec3,
     /// How much a shadow takes off the ground colour (0..1).
     pub darken: f32,
 }
@@ -47,7 +49,7 @@ impl Sun {
         let k = 0;
         let row = 0x10 + k * 0x30;
         let dir = sun_dir(f(&envir, row + 4)?, f(&envir, row + 8)?, f(&envir, row + 12)?, f(&hole, 0x58)?, 1.0);
-        Some(Sun { dir: clamp_elevation(dir, 50f32.to_radians()), darken: darken(f(&envir, 0x410 + k * 0x10)?) })
+        Some(Sun { dir: clamp_elevation(dir, 50f32.to_radians()), light: dir, darken: darken(f(&envir, 0x410 + k * 0x10)?) })
     }
 }
 

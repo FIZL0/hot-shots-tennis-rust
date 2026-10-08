@@ -12,6 +12,9 @@ struct Gs {
     fog: vec4<f32>,
     fog_color: vec4<f32>,
     lod_k: f32,
+    light_dir: vec4<f32>,
+    light_color: vec4<f32>,
+    ambient: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -43,13 +46,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #else
     var f = gs.color;
 #endif
-    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient 0.5 + 0.49 × the light from
-    // (1, 2, 1)/√6, and a specular term on the fixed half vector, Schlick's t/(k − (k − 1)t) for t^k
-    let n = normalize(in.world_normal) * vec3(1.0, -1.0, -1.0);
-    let diffuse = max(-dot(n, vec3(0.408248, 0.816497, 0.408248)), 0.0);
-    let h = max(-dot(n, vec3(0.243259, 0.486519, 0.839121)), 0.0);
+    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour × its
+    // diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
+    // Schlick's t/(k − (k − 1)t) for t^k
+    let flip = vec3(1.0, -1.0, -1.0);
+    let n = normalize(in.world_normal) * flip;
+    let diffuse = max(-dot(n, gs.light_dir.xyz), 0.0);
+    let forward = -view_bindings::view.world_from_view[2].xyz * flip;
+    let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
     let spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
-    f = vec4(f.rgb * (0.5 + 0.49 * diffuse), f.a);
+    f = vec4(f.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), f.a);
     var rgb = min(f.rgb, vec3(255.0 / 128.0));
     var a = min(f.a, 255.0 / 128.0);
 #ifdef GS_TEXTURED

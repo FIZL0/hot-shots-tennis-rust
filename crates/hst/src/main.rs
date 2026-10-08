@@ -208,12 +208,18 @@ fn load(
                 (m.uniform.fog, m.uniform.fog_color) = (fog, colour);
             }
         }
+        // and the match camera's light: the season's colours from the sun
+        let sun = shadow::Sun::read(&mut iso, n as usize);
+        if let Some(((colour, ambient), sun)) = envir.as_ref().and_then(|e| gs::court_light(e, season)).zip(sun) {
+            for (_, m) in gs_materials.iter_mut() {
+                (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (sun.light.extend(0.0), colour, ambient);
+            }
+        }
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
         // the hole's ground model is the one shadow receiver
-        let sun = shadow::Sun::read(&mut iso, n as usize);
         // the game loads every in-season sky but draws only the first; its colour also clears the screen
         let mut sky = None;
         for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole).filter(|e| layout::in_season(&e.stem, season)) {
