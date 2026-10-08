@@ -1,6 +1,6 @@
 # P2a
 
-- [ ] **P2a — Sweet spots by timing, not by memory writes.** P2's recorder (`tools/record_aim.py`) gets its sweet-spot
+- [x] **P2a — Sweet spots by timing, not by memory writes.** P2's recorder (`tools/record_aim.py`) gets its sweet-spot
   hits by writing P1's timing offset (+0x3fa0) to 0 during the locked swing (every other aim), and slices/sweet
   incoming shots by writing the opponents' +0x3ee4 / +0x3fa0. Find out why the recorder couldn't get them by timing
   and fix it, so the fixtures are plain play.
