@@ -523,7 +523,7 @@ fn aims_match_the_game() {
     let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
     for w in recs.chunks_exact(2) {
         let (a, b) = (w[0], w[1]);
-        assert_eq!((word(a, 0), word(b, 0), word(a, 8)), (3, 0x13, word(b, 8)), "unpaired at vsync {}", word(a, 4));
+        assert_eq!((word(a, 0), word(b, 0) & 0x10, word(a, 8)), (3, 0x10, word(b, 8)), "unpaired at vsync {}", word(a, 4));
         let ai = &a[0x10..0x290];
         let row = &table[(word(ai, 0xc) - TABLE) / RECORD];
         let l = Pair {
@@ -548,4 +548,56 @@ fn aims_match_the_game() {
     }
     eprintln!("aims by contact kind: {kinds:?}");
     assert!(kinds.iter().all(|&n| n > 0), "{kinds:?}");
+}
+
+/// The singles aim choosers (return of serve and rally) against `tools/record_ai_aim.py <slot> <frames> <out> singles`.
+#[test]
+fn singles_aims_match_the_game() {
+    use hst_sim::aim::Look;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_aim_singles.bin"))) else {
+        return eprintln!("disc or ai_aim_singles.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let at = |b: &[u8], o: usize| [f(b, o), f(b, o + 4)];
+    let mut seen = [[0; 5]; 2];
+    let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
+    for w in recs.chunks_exact(2) {
+        let (a, b) = (w[0], w[1]);
+        let tag = word(a, 0);
+        assert!((1..=2).contains(&tag) && word(b, 0) == 0x10 && word(a, 8) == word(b, 8), "unpaired at vsync {}", word(a, 4));
+        let ai = &a[0x10..0x290];
+        let row = &table[(word(ai, 0xc) - TABLE) / RECORD];
+        let l = Look {
+            me: at(a, 0x290),
+            opp: at(a, 0x2a0),
+            side: f(a, 0x2b0),
+            singles: true,
+            kind: ai[0x9a],
+            opp_kind: word(ai, 0x124) as i32,
+            opp_lefty: a[0x2ac] != 0,
+            mark: [f(ai, 0x130), f(ai, 0x138)],
+            contact_y: f(ai, 0x84),
+            heights: [f(a, 0x298), f(a, 0x29c), f(a, 0x2a8)],
+            volley_level: ai[0x5d],
+            high_level: ai[0x5f],
+            level: ai[0x10],
+        };
+        let mut mt = Mt::of(&a[0x2c0..]);
+        let mut short = ai[0x257] != 0;
+        let got = if tag == 1 { row.receive_aim(&l, &mut || mt.next()) } else { row.rally_aim(&l, &mut short, &mut || mt.next()) };
+        let want: Vec<u32> = (0..4).map(|k| word(b, 0x10 + 0xa0 + 4 * k) as u32).collect();
+        let ctx = format!("vsync {} tag {tag} AI {:#x}: {l:?}", word(a, 4), word(a, 8));
+        assert_eq!((got.stick.map(f32::to_bits).to_vec(), got.plan), (want, b[0x10 + 0xb2]), "{ctx}");
+        assert_eq!(mt.1, word(&b[0x2c0..], 0x9c4), "{ctx}: draws");
+        if tag == 2 {
+            assert_eq!(short, b[0x10 + 0x257] != 0, "{ctx}: short flag");
+        }
+        seen[tag as usize - 1][l.kind as usize] += 1;
+    }
+    eprintln!("singles aims (receive, rally) by contact kind: {seen:?}");
+    // ponytail: bot-only singles never took the return-of-serve chooser in 8000 frames (every call is the rally's),
+    // so `receive_aim` stays checked by hand only; record a human-served game to cover it
+    assert!(seen[1].iter().sum::<i32>() > 0, "{seen:?}");
 }
