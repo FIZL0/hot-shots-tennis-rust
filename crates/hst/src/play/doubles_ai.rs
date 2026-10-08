@@ -16,9 +16,10 @@ pub(super) struct Shared {
     seen: Vec<bool>,
     records: [Shot; 4],
     me: [Mine; 4],
-    /// The human players' record keepers, and the shot count the records were last reset on.
+    /// The human players' record keepers.
     humans: [Human; 4],
-    heard: Option<i32>,
+    /// The path object's claim: the player whose swing last found its contact (−1 none), and the tick it did.
+    claim: (i32, i32),
 }
 
 #[derive(Default)]
@@ -48,9 +49,6 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let singles = g.players.len() == 2;
     if !matches!(g.players.len(), 2 | 4) || !matches!(mind.phase, Ai::Receive | Ai::Rally) {
         return false;
-    }
-    if !singles {
-        heard_shot(g);
     }
     let d = &mut g.doubles_ai;
     if d.stepped & 1 << i != 0 {
@@ -271,19 +269,36 @@ fn landing(g: &Game) -> [f32; 4] {
     up(f.ball.pos)
 }
 
-/// The strike, new path and point messages to the AI objects: the shot records back to unset (n = −1) and the human
-/// players' searches back to the path's start. Run once per shot count, by whichever player steps first.
-// ponytail: keyed on the shot count changing, not the game's messages (the new path without a hit, P11k7); the
-// claim slot (path object +0x1fc) isn't kept (P11k7)
-fn heard_shot(g: &mut Game) {
-    let d = &mut g.doubles_ai;
-    if d.heard == Some(g.shots) {
-        return;
+/// A match message to the AI side (`msg`: 0x14 strike, 0x15 hit, 0x16 new path, 0xe serve, 0xc change ends, 0x19
+/// reaction), sent where the original sends it, in its order within the tick.
+pub(super) fn heard(g: &mut Game, msg: u8) {
+    g.doubles_ai.hear(&g.players, msg);
+}
+
+impl Shared {
+    /// `heard`: the path object drops its claim (not on 0x19) and every shot record (n = −1); on the strike, hit, new
+    /// path and serve each AI object's base handler sends its human search back to the path's start (by `players`'
+    /// z) and marks the shared path copy stale.
+    pub(super) fn hear(&mut self, players: &[Player], msg: u8) {
+        if msg != 0x19 {
+            self.claim.0 = -1;
+        }
+        self.records.iter_mut().for_each(|r| r.n = -1);
+        if matches!(msg, 0x14 | 0x15 | 0x16 | 0xe) {
+            self.path = PathCopy { stamp: -1, balls: Vec::new() };
+            for (h, p) in self.humans.iter_mut().zip(players) {
+                h.reset(p.pos[2]);
+            }
+        }
     }
-    d.heard = Some(g.shots);
-    for (k, p) in g.players.iter().enumerate().take(4) {
-        d.records[k].n = -1;
-        d.humans[k].reset(p.pos[2]);
+}
+
+/// Player `i`'s swing found its contact (the stroke, volley or smash search; not a dive): it claims the ball unless
+/// another player claimed it earlier this tick.
+pub(super) fn claim(g: &mut Game, i: usize) {
+    let d = &mut g.doubles_ai;
+    if d.claim.0 < 0 || d.claim.1 < d.frame {
+        d.claim = (i as i32, d.frame);
     }
 }
 
@@ -296,10 +311,11 @@ pub(super) fn human(g: &mut Game, i: usize) {
         Phase::Post => 4,
         Phase::ChangeEnds(_) => return,
     };
-    if g.players.len() != 4 {
+    // not while it serves (to its serve's end) or reacts to the point
+    let serving = i as i32 == g.score.server && (g.phase == Phase::Serve || g.players[i].served.is_some());
+    if g.players.len() != 4 || serving || input_off(g) {
         return;
     }
-    heard_shot(g);
     let d = &mut g.doubles_ai;
     if d.stepped & 1 << i != 0 {
         (d.frame, d.stepped) = (d.frame + 1, 0);
@@ -368,7 +384,8 @@ pub(super) fn human(g: &mut Game, i: usize) {
     // its AI object beside a human: level 3, +0x28 = 2
     (x.level, x.mate, x.first, x.window, x.singles) = (3, 2, 2, PATH_MAX as i32, false);
     let rng = &mut g.rng.ai;
-    x.human_record(&mut d.humans[i], &row, &b, &mut w, &mut d.path, &mut d.seen, false, &mut || rng.next());
+    let claimed = d.claim.0 == i as i32;
+    x.human_record(&mut d.humans[i], &row, &b, &mut w, &mut d.path, &mut d.seen, claimed, &mut || rng.next());
     d.records = w.records;
 }
 

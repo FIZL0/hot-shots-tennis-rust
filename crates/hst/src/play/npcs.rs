@@ -355,7 +355,7 @@ fn step(
         };
         let (e, t, row) = &mut npcs.triggers[k];
         // ponytail: a type's startled flag stays set until the next point (the original clears it sooner, from code
-        // not found); of message 0x14's other listeners (the AI, the landing markers) none hears it
+        // not found); of message 0x14's other listeners the landing markers don't hear it
         for s in t.step_near(row, &mut npcs.near, &mut roll) {
             let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
             g.sounds.push((sound::Play { slot: 0, program: 7, key: s as u8, volume: 0x40, speed: 1.0 }, at));
@@ -365,6 +365,7 @@ fn step(
         if t.struck {
             let (shot, material) = (g.shot, g.world.1[0]);
             g.flight.step_plane(&shot, &hst_sim::ball::COURTS[g.court], material);
+            g.doubles_ai.hear(&g.players, 0x14);
         }
         if let Ok((_, mut m)) = q.get_mut(*e) {
             m.clock.sampled = t.frame;

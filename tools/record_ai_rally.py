@@ -261,12 +261,46 @@ for spec in filter(None, os.environ.get("HST_AI", "").split(",")):
     assert ai, f"player {k} has no AI object"
     p.write32(ai + 0xc, 0x3174c0 + row * 0x118)
     p.write32(ai + 0x10, p.read32(ai + 0x10) & ~0xff | level)
+# HST_DRIVE=1 (P11k7): P1 (slot 3/4, human) is driven by the virtual pad as it records: it holds 4 m off the net,
+# steers to an incoming ball's x and z and presses ○ once per ball within 2.5 m of it, so its own swings claim
+# the path and its record sees volleys; serving it stands and presses ○ every 25 polls (idle, every 60). Needs tools/vpad.py serve.
+DRIVE = os.environ.get("HST_DRIVE") == "1"
+if DRIVE:
+    from vpad import FIFO
+    pad = os.open(FIFO, os.O_RDWR)
+    send = lambda c: os.write(pad, (c + "\n").encode())
+    f32 = lambda a: struct.unpack("<f", struct.pack("<I", p.read32(a)))[0]
+    me, ball = p.read32(gm0 + 0xa8), p.read32(gm0 + 0x88)
+    held, pressed_for, idle = None, None, 0
+def drive():
+    global held, pressed_for, idle
+    bx, bz, vz = f32(ball + 0x120), f32(ball + 0x128), f32(ball + 0x138)
+    mx, mz = f32(me + 0x3d70), f32(me + 0x3d78)
+    hit = tuple(p.read32(ball + o) for o in (0x70, 0x74, 0x78))  # a new hit point marks a new ball
+    side = 1 if mz > 0 else -1
+    coming = vz * side > 0
+    serving = p.read8(me + 0x3ec1) == 5
+    tx, tz = (mx, mz) if serving else (bx, bz if bz * side > 0 else 4 * side) if coming else (0, 4 * side)
+    dx, dz = tx - mx, tz - mz
+    d = (dx * dx + dz * dz) ** 0.5
+    stick = (round(-side * dx / d, 1), round(side * dz / d, 1)) if d > 0.4 else (0, 0)  # camera behind P1
+    if stick != held:
+        held = stick
+        send(f"stick l {stick[0]} {stick[1]}")
+    idle += 1
+    if coming and hit != pressed_for and bz * side > 0 and ((bx - mx) ** 2 + (bz - mz) ** 2) ** 0.5 < 2.5:
+        pressed_for, idle = hit, 0
+        send("press circle 60")
+    elif idle > (25 if serving else 60):
+        idle = 0
+        send("press circle 60")
 p.resume()
 v0 = p.read32(VSYNC)
 chunks = []
 try:
     while p.read32(VSYNC) - v0 < want and p.read32(GM_PTR) == gm0:
-        time.sleep(0.1)
+        time.sleep(0.03 if DRIVE else 0.1)
+        if DRIVE: drive()
         if p.read32(PTR) > BUF + (END - BUF) // 3:
             p.pause()
             chunks.append(drain())
@@ -277,6 +311,7 @@ finally:
         p.write32(at + 4, b)
         p.write32(at, a)
     p.resume()
+if DRIVE: send("release")
 time.sleep(0.2)
 chunks.append(drain())
 data = b"".join(chunks)
