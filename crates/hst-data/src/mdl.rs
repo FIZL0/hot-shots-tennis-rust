@@ -71,7 +71,9 @@ pub struct Packet {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SkinVertex {
     pub pos: [f32; 3],
-    pub normal: [f32; 3],
+    /// Bind-space normals of the entries on `joints[0]` and `joints[1]`, pre-weighted (|n| = the weight) and not
+    /// normalised: VU1 lights the vertex with their sum rotated by each bone, as is.
+    pub normals: [[f32; 3]; 2],
     pub uv: [f32; 2],
     pub color: [u8; 4],
     pub joints: [u16; 4],
@@ -128,8 +130,8 @@ pub struct Model {
 impl Model {
     /// Every material's packets as skinned geometry in the bind pose. A drawn vertex is the sum of its position
     /// entries, each stored in its bone's space already multiplied by its weight (the weight is the entry's `w`):
-    /// Σ [p, w] · bind(bone). Normals likewise (pre-weighted, rotated by the bone). Bones beyond the four
-    /// heaviest are dropped and the rest renormalised. Last, per morph target ([`Model::morph_names`]), each drawn
+    /// Σ [p, w] · bind(bone). Normals per bone (pre-weighted, rotated by the bone: `SkinVertex::normals`). Bones
+    /// beyond the four heaviest are dropped and the rest renormalised. Last, per morph target ([`Model::morph_names`]), each drawn
     /// vertex's model-space offset at weight 1 (empty for a packet without morphs).
     #[allow(clippy::type_complexity)]
     pub fn skinned(&self) -> Vec<(usize, Vec<SkinVertex>, Vec<[u32; 3]>, Vec<Vec<[f32; 3]>>)> {
@@ -143,8 +145,8 @@ impl Model {
                 for v in 0..n {
                     let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
                     let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
-                    let mut binds: Vec<(usize, f32)> = Vec::new();
-                    let (mut pos, mut nrm) = ([0.0f32; 3], [0.0f32; 3]);
+                    let mut binds: Vec<(usize, f32, [f32; 3])> = Vec::new();
+                    let mut pos = [0.0f32; 3];
                     for e in a..b {
                         let flags = pk.entry_flags.get(e).copied().unwrap_or(0);
                         let node = pk.palette.get(((flags >> 3) & 7) as usize).copied().unwrap_or(pk.palette.first().copied().unwrap_or(0));
@@ -152,11 +154,12 @@ impl Model {
                         let m = self.node_bind.get(node).copied().unwrap_or(IDENTITY);
                         let p = pk.vertices[e].pos;
                         let q = pk.vertices[e].normal;
+                        let mut nrm = [0.0f32; 3];
                         for k in 0..3 {
                             pos[k] += p[0] * m[0][k] + p[1] * m[1][k] + p[2] * m[2][k] + w * m[3][k];
-                            nrm[k] += q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
+                            nrm[k] = q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
                         }
-                        binds.push((node, w));
+                        binds.push((node, w, nrm));
                         // a morph offset moves the entry in its bone's space: rotate it like the position
                         for (t, target) in pk.morphs.iter().enumerate() {
                             for &(_, d) in target.iter().filter(|(i, _)| *i == e) {
@@ -169,13 +172,15 @@ impl Model {
                     binds.sort_by(|x, y| y.1.total_cmp(&x.1));
                     binds.truncate(4);
                     let total: f32 = binds.iter().map(|b| b.1).sum();
-                    for (k, (node, w)) in binds.iter().enumerate() {
+                    // ponytail: normals of a third and fourth bone are dropped; no vertex on the disc has more than two
+                    for (k, (node, w, nrm)) in binds.iter().enumerate() {
                         sv.joints[k] = *node as u16;
                         sv.weights[k] = if total > 0.0 { w / total } else { 0.0 };
+                        if k < 2 {
+                            sv.normals[k] = *nrm;
+                        }
                     }
-                    let len = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]).sqrt();
                     sv.pos = pos;
-                    sv.normal = if len > 0.0 { nrm.map(|c| c / len) } else { [0.0, -1.0, 0.0] };
                     verts.push(sv);
                     kick.push(pk.entry_flags.get(a).is_some_and(|f| f & 0x8000 == 0));
                 }

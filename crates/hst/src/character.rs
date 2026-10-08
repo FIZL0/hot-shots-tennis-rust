@@ -209,7 +209,7 @@ fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial
 /// where a part carries them.
 pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut Assets<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
     #[allow(clippy::type_complexity)]
-    let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
+    let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[[f32; 3]; 2]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
     let targets = model.morph_names.len();
     for (material, verts, tris, morph) in model.skinned() {
         let e = by_material.entry(material).or_default();
@@ -222,7 +222,7 @@ pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], m
         }
         for v in &verts {
             e.0.push(v.pos);
-            e.1.push(v.normal);
+            e.1.push(v.normals);
             e.2.push(v.uv);
             e.3.push(v.color.map(|c| c as f32 / 128.0));
             e.4.push(v.joints);
@@ -241,7 +241,9 @@ pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], m
         let n = pos.len();
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
+            // VU1's per-bone normals (gs.wgsl): the first joint's as the normal, the second's in the tangent slot
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm.iter().map(|n| n[0]).collect::<Vec<_>>())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, nrm.iter().map(|n| [n[1][0], n[1][1], n[1][2], 0.0]).collect::<Vec<_>>())
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, bevy::mesh::VertexAttributeValues::Uint16x4(joint))
