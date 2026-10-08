@@ -595,6 +595,11 @@ impl Trigger {
 
     /// Show frame `t` and next: wrapped into the animation when it loops, else held within it.
     fn set_frame(&mut self, t: f32, row: &TriggerRow) {
+        // no animation (length 0, e.g. court 7's 27–29): the controller only stores the next frame
+        if self.len == 0.0 {
+            self.next = t;
+            return;
+        }
         let t = self.held(t, row);
         (self.frame, self.next) = (t, t);
     }
@@ -867,8 +872,10 @@ impl Trigger {
                     self.repeat = jitter(row.repeat, roll);
                 }
                 // the controller: show the next frame (looped or held at the ends), step on by one
-                self.frame = self.held(self.next, row);
-                self.next = ps2::add(self.frame, 1.0);
+                if self.len != 0.0 {
+                    self.frame = self.held(self.next, row);
+                }
+                self.next = ps2::add(if self.len == 0.0 { self.next } else { self.frame }, 1.0);
             }
         }
         if self.timer != 0 {

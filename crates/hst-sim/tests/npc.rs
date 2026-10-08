@@ -476,8 +476,8 @@ fn trigger_engine_matches_the_game() {
 
 
 /// The startled creatures against `context/fixtures/prox_cNN.bin` (tools/record_npc.py with `prox`, HST_POKE moving a
-/// still creature next to a player or the ball; not in git, skipped when absent): courts 1 (types 0, 1), 2 (5) and
-/// 11 (48), any of 7, 8, 9 too. Every tick of every creature of those types from the recorded state before, with that
+/// still creature next to a player or the ball; not in git, skipped when absent): courts 1 (types 0, 1), 2 (5),
+/// 7 (27–29; `struck` against the game's message 0x14) and 11 (48), any of 8, 9 too. Every tick of every creature of those types from the recorded state before, with that
 /// tick's players' and ball's positions, must give the game's state after bit for bit, startled latch and 48's scrub
 /// too. The type flags are computed (from the first sample, set by a startle, cleared by a one-shot path's end and a
 /// reset message) and must match the game's after every tick. Skipped: message ticks, a poke's tick (moved while standing) and a new leg (the path manager is not
@@ -508,7 +508,7 @@ fn startled_creatures_match_the_game() {
             flags: std::array::from_fn(|t| s[x + 0x50 + t] != 0),
             ..Default::default()
         };
-        let (mut ticks, mut startles, mut turns, mut blocked) = (0, 0, 0, 0);
+        let (mut ticks, mut startles, mut turns, mut blocked, mut struck) = (0, 0, 0, 0, 0);
         let kinds: Vec<(usize, u8)> = (0..n)
             .map(|k| (k, samples[0][wo(k) + 0x50]))
             .filter(|&(_, ty)| matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48))
@@ -517,6 +517,7 @@ fn startled_creatures_match_the_game() {
         let mut flags = near(samples[0]).flags;
         for i in 1..samples.len() {
             let (a, b) = (samples[i - 1], samples[i]);
+            let mut tick14 = false;
             for &(k, ty) in &kinds {
                 let o = wo(k);
                 let row = game.trigger(ty);
@@ -531,6 +532,11 @@ fn startled_creatures_match_the_game() {
                 let poked = !before.moving && before.world[3] != after.world[3];
                 if poked {
                     before.world[3] = after.world[3];
+                }
+                // a creature struck by the ball (27–29) tells everyone 0x14 mid-tick, which only stores the message
+                let new14 = after.msg == 0x14 && before.msg != 0x14;
+                if new14 {
+                    before.msg = 0x14;
                 }
                 if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || before.target != after.target {
                     // not stepped; a reset message (0xc a game's end, 0xe a point's end, 0x1a) clears its type's flag
@@ -563,6 +569,9 @@ fn startled_creatures_match_the_game() {
                     t.step_near(&row, &mut seen, &mut || out[0]);
                     panic!("court {court} vsync {} creature {k} type {ty}:\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0))
                 };
+                assert!(!t.struck || after.msg == 0x14, "court {court} vsync {} creature {k}: struck without message 0x14", u(b, 0));
+                struck += t.struck as usize;
+                tick14 |= t.struck;
                 startles += (t.startled && !before.startled) as usize;
                 turns += (t.scrub.0 != before.scrub.0) as usize;
                 blocked += (!t.startled && flags[ty as usize] && near(b).pos.iter().any(|p| {
@@ -572,11 +581,17 @@ fn startled_creatures_match_the_game() {
                 flags = seen.flags;
                 ticks += 1;
             }
+            // where 27–29 stand, a new 0x14 came from one of them
+            if let Some(&(k, _)) = kinds.iter().find(|&&(_, ty)| (27..=29).contains(&ty)) {
+                let new14 = u(b, wo(k) + 0xc0) == 0x14 && u(a, wo(k) + 0xc0) != 0x14 && u(b, 0) == u(a, 0) + 1;
+                assert_eq!(tick14, new14, "court {court} vsync {}: message 0x14 vs struck", u(b, 0));
+            }
             for &(_, ty) in &kinds {
                 assert_eq!(flags[ty as usize], near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag", u(b, 0));
             }
         }
-        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag");
+        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag, {struck} struck");
+        assert!(court != 7 || struck > 0, "court 7: no creature struck by the ball");
         assert!(startles + turns > 0, "court {court}: nothing startled");
         courts.push(court);
     }
