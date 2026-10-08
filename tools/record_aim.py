@@ -11,6 +11,10 @@ Writes a pair of samples per aim: the frame before P1's +0x3e90 changes and the 
 sample followed by P1's +0x12b0..+0x1320 (end, character, TParam aim values) and the last shot's record
 (P1 +0x1400 → +0x1b0..+0x1c0). AIM_DEBUG=1 logs the approach. Needs tools/vpad.py serve (pcsx2-hst.sh starts it).
 AIM_INCOMING=1 keeps only the aims struck off an incoming rally slice (for the `incoming` cases plain play rarely gives).
+AIM_SERVE=1 records P1's serve aims instead (the swing's aim at the countdown's end, +0x3fa4 1, +0x3fa6 3): serving it
+tosses with the next button (✕ mostly: the strong toss, whose mistiming nudges +0x3f10..+0x3f1c), holds the next stick
+and swings AIM_SERVE_DELAY frames later (cycled, for every timing grade). Aims re-run by an instant replay (+0x4088
+set: the replay's recorded stick, not the live pad) are never kept.
 Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
@@ -49,6 +53,13 @@ r += [(pl + o, n) for pl in players for o, n in PLAYER] + [(ball, 0x290), RALLY,
 AIM = 4 + 0x90 + 0x180 + 0x100 + 0x290 + 0x200 + 0x3e90 - 0x3c00  # P1's +0x3e90 in a sample
 BRANCH = AIM + 0x3ec1 - 0x3e90
 SHOTS = 4 + 0x90 + 0x423060 - 0x422f80  # the rally's shot count
+SERVE = os.environ.get("AIM_SERVE") == "1"
+SERVE_DELAYS = [int(x) for x in os.environ.get("AIM_SERVE_DELAY", "40,30,52,36,46,26,58").split(",")]
+TOSSES = ("cross", "cross", "circle", "cross", "triangle")
+def pf(smp, o, f="<i"): return struct.unpack_from(f, smp, AIM + o - 0x3e90)[0]  # P1 +o (0x3c00..0x4000) in a sample
+def serve_aim(pre, cur):
+    """The serve swing's aim: the countdown ends this frame with no miss (+0x3fa4 1, +0x3fa6 3, +0x3ec4 1 → −1)."""
+    return pre[AIM + 0x3fa4 - 0x3e90] == 1 and pre[AIM + 0x3fa6 - 0x3e90] == 3 and pf(pre, 0x3ec4) == 1 and pre[AIM + 0x3ec8 - 0x3e90] == 0 and pf(cur, 0x3ec4) == -1
 ONLY_INCOMING = os.environ.get("AIM_INCOMING") == "1"  # keep only aims struck off an incoming slice
 def incoming(pre):
     """Some(was sweet) when the ball struck is a rally slice (the aim test's rule, from the last shot's record)."""
@@ -67,6 +78,7 @@ def contact_frame(mz, s):
     return min(ks, key=lambda k: abs(f32(struct.unpack_from("<I", b, 0x30 * k + 8)[0]) - zc)) if ks else None
 
 pressed_at = None
+serve_at, serves = None, 0  # the toss's sample, the serves tossed
 last, n, aims, prev_sample, pressed_for, held, idle, presses = p.read32(VSYNC), 0, 0, None, None, (0, 0), 0, 0
 while aims < want and n < cap:
     v = p.next_frame(last)
@@ -80,7 +92,14 @@ while aims < want and n < cap:
     sample = struct.pack("<I", v) + a
     n += 1
     while releases and releases[0][0] <= n: send(f"up {releases.pop(0)[1]}")
-    if prev_sample and prev_sample[BRANCH] in (1, 2, 3, 4) and sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16] and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
+    replay = p.read8(me + 0x4088) != 0
+    if SERVE and prev_sample and not replay and serve_aim(prev_sample, sample) and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
+        out.write(prev_sample + sample)
+        out.flush()
+        aims += 1
+        t = struct.unpack("<4f", sample[AIM:AIM + 16])
+        print(f"vsync {v}: serve aim {aims} toss {pf(sample, 0x3ea0)} stick {held} offset {pf(sample, 0x3fa0)} grade {sample[AIM + 0x3ee8 - 0x3e90]} branch {sample[BRANCH]} -> ({t[0]:.3f}, {t[2]:.3f}) nudge {struct.unpack_from('<4f', sample, AIM + 0x80)}", flush=True)
+    if not SERVE and not replay and prev_sample and prev_sample[BRANCH] in (1, 2, 3, 4) and sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16] and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
         inc = incoming(prev_sample)
         if not ONLY_INCOMING or inc is not None:
             out.write(prev_sample + sample)
@@ -125,6 +144,28 @@ while aims < want and n < cap:
     if stick != held:
         held = stick
         send(f"stick l {stick[0]} {stick[1]}")
+    serving = p.read8(me + 0x3fa4) == 1 and not replay
+    if SERVE and serving:
+        sub = p.read8(me + 0x3fa6)
+        if os.environ.get("AIM_DEBUG") and n % 4 == 0:
+            print(f"  {v}: serving sub {sub} countdown {s32(p.read32(me + 0x3ec4))} toss {s32(p.read32(me + 0x3ea0))} at {serve_at} n {n}", flush=True)
+        if serve_at is None and sub == 0 and idle > 60:
+            serve_at, idle = n, 0
+            stick = STICKS[serves % len(STICKS)]
+            press(TOSSES[serves % len(TOSSES)])
+            print(f"vsync {v}: toss {TOSSES[serves % len(TOSSES)]} stick {stick} delay {SERVE_DELAYS[serves % len(SERVE_DELAYS)]}", flush=True)
+        elif serve_at is not None:
+            stick = STICKS[serves % len(STICKS)]
+            if n - serve_at == SERVE_DELAYS[serves % len(SERVE_DELAYS)]:
+                press(TOSSES[serves % len(TOSSES)])
+        else:
+            stick = (0, 0)
+        if stick != held:
+            held = stick
+            send(f"stick l {stick[0]} {stick[1]}")
+        continue
+    if serve_at is not None:  # the serve is away
+        serve_at, serves = None, serves + 1
     if not locked and idle > (40 if branch == 5 else 120) and (branch == 5 or p.read8(gm + 0x55) != 3):  # never mid-rally
         idle = 0
         press("cross")

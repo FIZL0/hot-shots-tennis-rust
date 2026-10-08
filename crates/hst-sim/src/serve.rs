@@ -183,11 +183,12 @@ pub fn ai_search(d: &ServeData, toss: Toss, quick: bool, path: &[PathPoint]) -> 
 }
 
 /// Where the serve is aimed: the diagonal service box's centre plus the stick (reaching its sidelines and
-/// service line), never shorter than 3 m or wider than the character's angle from where the server stands.
-/// A mistimed weak or underhand toss shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the
-/// aim deep (late) or short (early) and sideways, which is where faults come from. `side` 0 deuce / 1 ad,
-/// `stick` on the court (x, z), `rand_bit` a coin flip for the sideways error when the stick is centred.
-/// Returns the aim and the swing's error off it (see `scatter`). `rand` are the game's coin flips in draw order.
+/// service line) through the rally aim's core (`shot::aim_from`, branch 0: never shorter than 3 m, no wider than
+/// the character's serve angle from where the server stands). A mistimed weak or underhand toss (offset beyond
+/// ±1) shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the aim deep (late) or short (early)
+/// and sideways, which is where faults come from. `side` 0 deuce / 1 ad, `stick` on the court (x, z).
+/// Returns the aim and the swing's error off it (see `scatter`). `rand` are the game's coin flips in draw order:
+/// the aim's centred nudge (5 or 10, its sign), then the strong toss's sideways error when the stick is centred.
 #[allow(clippy::too_many_arguments)]
 pub fn target(
     d: &ServeData,
@@ -201,56 +202,45 @@ pub fn target(
     stick: [f32; 2],
     rand: [bool; 3],
 ) -> ([f32; 3], Miss) {
-    use crate::ps2::{add, div, mul, madd, sqrt};
-    let mistimed = offset.abs() > 1 && toss != Toss::Strong;
-    let (range_x, depth) = if mistimed { (1.56, 2.4) } else { (2.0575, 3.4) };
-    let range_z = depth / 2.0;
-    let mut t = [facing * 2.0575 * if side == 0 { -1.0 } else { 1.0 }, 0.0, (depth / 2.0 + 3.0) * facing];
-    // the stick (at most full tilt), its circle stretched onto the square
-    let len = (stick[0] * stick[0] + stick[1] * stick[1]).sqrt().min(1.0);
-    if len > 0.0 {
-        let full = (stick[0] * stick[0] + stick[1] * stick[1]).sqrt();
-        let (nx, nz) = (stick[0] / full, stick[1] / full);
-        let m = nx.abs().max(nz.abs());
-        t[0] += nx / m * len * range_x;
-        t[2] += nz / m * len * range_z;
-    }
-    // no wider than the character's angle
-    let max = (d.max_angle + if doubles { 3.0 } else { 0.0 }).max(0.0).to_radians();
-    let (dx, dz) = (t[0] - server[0], t[2] - server[2]);
-    let cos = (facing * dz / (dx * dx + dz * dz).sqrt()).clamp(-1.0, 1.0);
-    if cos.acos() > max {
-        let reach = dz.abs() * max.tan();
-        t[0] = if server[0] < t[0] { server[0] + reach } else { server[0] - reach };
-    }
-    // never shorter than 3 m past the net (slid along the line from the server)
-    let short = 3.0 - t[2].abs();
-    if short > 0.0 {
-        let (dx, dz) = (t[0] - server[0], (t[2] - server[2]).abs());
-        t[2] = 3.0 * facing;
-        if dx != 0.0 {
-            t[0] += short * dx / dz;
-        }
-    }
+    use crate::ps2::{add, div, mul, madd, sqrt, sub};
+    let strong = toss == Toss::Strong;
+    let sweet = strong || offset.abs() < 2;
+    let (width, depth) = if sweet { (2.0575, 3.4) } else { (sub(2.0575, 0.5), sub(3.4, 1.0)) };
+    let half = div(depth, 2.0);
+    let x = mul(2.0575, facing);
+    let base = [if side == 0 { mul(x, -1.0) } else { x }, mul(add(3.0, half), facing)];
+    let h = shot::Hitter { end: facing, from: [server[0], server[2]], ..Default::default() };
+    let s = shot::AimStats { con: [0, 0, d.max_angle as i32], ..Default::default() };
+    let t = shot::aim_from(&h, &s, stick, doubles, false, None, base, width, half);
     // aimed close to the centre line with the stick level: a random nudge sideways
     let nudge = if t[0].abs() <= 1.0 && stick[0] == 0.0 { (if rand[1] { 1 } else { -1 }) * if rand[0] { 5 } else { 10 } } else { 0 };
     let mut miss = Miss { side: 0.0, depth: 0.0, nudge };
-    if toss == Toss::Strong && (grade == 3 || grade == 4) {
+    if strong && (grade == 3 || grade == 4) {
         let sign = if offset < 1 { -1 } else { 1 };
-        miss.depth = mul((sign * d.miss[0]) as f32, 0.01);
-        let full = sqrt(madd(mul(stick[0], stick[0]), stick[1], stick[1]));
+        miss.depth = madd(add(0.0, 0.0), 0.01, (sign * d.miss[0]) as f32);
+        let full = sqrt(madd(mul(stick[1], stick[1]), stick[0], stick[0]));
         if full > 0.0 {
             let inv = div(1.0, full);
-            let along = |s: f32| mul(mul(mul(mul(s, inv), facing), d.miss[1] as f32), 0.01);
-            miss.side = along(stick[0]);
-            miss.depth = add(along(stick[1]), miss.depth);
+            let along = |acc: f32, s: f32| madd(add(0.0, acc), mul(mul(mul(s, inv), facing), d.miss[1] as f32), 0.01);
+            miss.side = along(0.0, stick[0]);
+            miss.depth = along(miss.depth, stick[1]);
         } else {
-            miss.side = mul(((if rand[2] { -1 } else { 1 }) * d.miss[2]) as f32, 0.01);
+            miss.side = madd(add(0.0, 0.0), 0.01, ((if rand[2] { -1 } else { 1 }) * d.miss[2]) as f32);
         }
         miss.side = mul(miss.side, 0.6666667);
         miss.depth = mul(miss.depth, 0.6666667);
     }
     (t, miss)
+}
+
+/// The strong toss's mistiming error (cm: depth, along the stick, random sideways) for a character (0..13): the
+/// game's skill level 0 (characters 0..2, 5), 2 (8..11) or 1 picks a row of `rows` (`hst_data::exe::Game::serve_miss`).
+pub fn miss_of(rows: [[i32; 3]; 3], character: usize) -> [i32; 3] {
+    rows[match character {
+        0..=2 | 5 => 0,
+        8..=11 => 2,
+        _ => 1,
+    }]
 }
 
 /// A serve's error off its aim, decided at the swing: sideways and depth (m), and a sideways nudge in tenths
