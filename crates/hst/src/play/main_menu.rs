@@ -602,6 +602,8 @@ impl Repeat {
 enum Tex {
     Solid,
     Font,
+    /// The description bar's font (`ascii.bmp`), the last of `Art`'s images.
+    Bar,
     Hand,
     /// `SHEETS[k]`.
     Sheet(usize),
@@ -753,6 +755,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             }
         }
     }
+    art.push(images.add(bar_font(&read(&mut iso, "CMN/GFFONT.XB", "/ascii.bmp"))));
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
     let grades = hst_data::exe::Menu::new(&cnf, &bin).expect("supported disc").grades();
@@ -878,14 +881,14 @@ impl Draw<'_> {
     fn info(&mut self, s: &str) {
         self.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 404.0, 640.0, 32.0], [0.0; 3], 90.0);
         self.said = s.into();
-        // the original's monospace 11 px pitch; ponytail: its bar font isn't found yet, `word.tm2` squeezed into the cells
+        // the boot program's text printer: `ascii.bmp` cell char - 0x1f (21 a row, 12×23), 11×22 texels drawn
+        // 11×22 at an 11 px pitch, from y 408; a glyph is skipped once it is off either edge
         let mut x = ticker_x(self.tick, s.chars().count());
         for c in s.chars() {
-            if let Some(&(u, v, w)) = self.text.glyphs.get(&c) {
-                let gw = (w * 18.0 / 32.0).min(10.0);
-                if (-11.0..640.0).contains(&x) {
-                    self.q(Tex::Font, [u, v, w, 32.0], [x + (11.0 - gw) / 2.0, 411.0, gw, 18.0], WHITE, 128.0);
-                }
+            let g = (c as u32).wrapping_sub(0x1f).min(224);
+            if x + 11.0 > 0.0 && x < 640.0 {
+                let (u, v) = ((g % 21 * 12) as f32, (g / 21 * 23) as f32);
+                self.q(Tex::Bar, [u, v, 11.0, 22.0], [x, 408.0, 11.0, 22.0], WHITE, 128.0);
             }
             x += 11.0;
         }
@@ -902,27 +905,34 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
 }
 
 /// The description bar's first glyph x `f` frames after its text (`n` glyphs) changed, as the MENU overlay moves it:
-/// in from the right edge at 32 px a frame to x 16, held, then (if it runs off the right) left 2 px a frame, back in
-/// at the right edge once its last glyph is past x -8.
+/// in from x 656 at 32 px a frame to x 16; a text wider than 616 px (`n` × 11) then scrolls left 2 px a frame from
+/// frame 160, round a loop of `(n × 11 + 656) / 2` frames that re-enters at x 656.
 fn ticker_x(f: u32, n: usize) -> f32 {
-    const IN: u32 = 20; // (656 - 16) / 32
-    const HOLD: u32 = 160; // the frame before the scroll starts, from the change
-    if f < IN {
-        return 656.0 - 32.0 * f as f32;
+    let w = 11 * n as i32;
+    let x = if w <= 616 { 16 } else { 656 - 2 * ((f as i32 + 160) % ((w + 656) >> 1)) };
+    if f < 160 { (656 - 32 * f as i32).max(16) as f32 } else { x as f32 }
+}
+
+/// `ascii.bmp` (4-bit, bottom-up) as the bar's palette draws it: ink 200 under the text's 0x8f tint (223), its
+/// alpha by pixel index from a ramp (index 15 opaque, 0–4 clear).
+fn bar_font(bmp: &[u8]) -> Image {
+    const ALPHA: [u8; 16] = [0, 0, 0, 0, 0, 0x1a, 0x1a, 0x1a, 0x1a, 0x33, 0x33, 0x33, 0x4c, 0x4c, 0x66, 0x80];
+    let off = u32::from_le_bytes(bmp[10..14].try_into().unwrap()) as usize;
+    let mut rgba = Vec::with_capacity(256 * 256 * 4);
+    for y in 0..256 {
+        for x in 0..256 {
+            let b = bmp[off + (255 - y) * 128 + x / 2];
+            let i = if x % 2 == 0 { b >> 4 } else { b & 15 };
+            rgba.extend([223, 223, 223, (ALPHA[i as usize] as u32 * 255 / 128) as u8]);
+        }
     }
-    let last = 11 * n.saturating_sub(1) as i32;
-    // ponytail: which lengths scroll is a guess (37 glyphs held, 81 scrolled); B40e3 measures it
-    if f <= HOLD || 16 + last + 11 <= 624 {
-        return 16.0;
-    }
-    let k = (f - HOLD) as i32;
-    // first run from x 16, then whole runs from x 656, each ending when the last glyph is left of x -8
-    let first = (24 + last) / 2 + 1;
-    if k < first {
-        return (16 - 2 * k) as f32;
-    }
-    let run = (664 + last) / 2 + 1;
-    (656 - 2 * ((k - first) % run)) as f32
+    Image::new(
+        bevy::render::render_resource::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        rgba,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, tick: u32) -> (Vec<Quad>, String) {
@@ -1357,6 +1367,7 @@ fn draw(
         img.image = match quad.tex {
             Tex::Solid => art.0[0].clone(),
             Tex::Font => art.0[1].clone(),
+            Tex::Bar => art.0[art.0.len() - 1].clone(),
             Tex::Hand => art.0[2].clone(),
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 1 + 5 + k].clone(),
@@ -1433,6 +1444,8 @@ mod tests {
         assert_eq!([x(160 + 452), x(160 + 453), x(160 + 453 + 772), x(160 + 453 + 773)], [-888.0, 656.0, -888.0, 656.0]);
         // music's line (37 glyphs) fits and holds
         assert_eq!(ticker_x(1000, 37), 16.0);
+        // the overlay's test: 616 px (56 glyphs) still holds, 57 scroll
+        assert_eq!([ticker_x(10, 56), ticker_x(1000, 56), ticker_x(161, 57)], [336.0, 16.0, 14.0]);
     }
 
     #[test]
