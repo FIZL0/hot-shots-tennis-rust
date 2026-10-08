@@ -141,4 +141,16 @@ mod tests {
         let mut m = Mt::new(5489);
         assert_eq!((0..10000).map(|_| m.next()).last(), Some(4_123_659_995));
     }
+
+    #[test]
+    fn gallery_banks_across_matches() {
+        // four setups play each bank once; the fifth frees them all and may pick any
+        let (mut r, mut used) = (Rngs::new(Rand(1), Mt::new(7)), [false; 4]);
+        let mut picks: Vec<usize> = (0..4).map(|_| r.setup_gallery(&mut used)).collect();
+        picks.sort();
+        assert_eq!(picks, [0, 1, 2, 3]);
+        let fifth = r.setup_gallery(&mut used);
+        assert_eq!(used.iter().filter(|&&u| u).count(), 1);
+        assert!(used[fifth]);
+    }
 }
