@@ -45,12 +45,15 @@ Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, pl
 when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
 J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net at contact: flat; pulled back with slice: drop · J/Space/A/Start serve ·
 C/Select camera (original/free) · arrows/right stick turn the free camera.
+Rebind any of these in `controls.txt` beside the ISO (written with the defaults on first run). Controllers can be
+plugged and unplugged mid-match: each keeps its slot, a new one takes the first free slot. Wide windows show more court at the sides (the game's vertical view kept); the HUD stays on a centred 4:3 screen.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface. Drawing runs uncapped (the simulation stays a fixed 60 Hz tick, visuals blend the last two ticks); `--vsync` caps it to the display.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
 
 ## Done (ported and verified against the original)
 
+- P22: widescreen HUD on a centred 4:3 screen (play/widescreen.rs; the 3D view was already Hor+, F0 already uncapped), rebindable keys/pad buttons in `controls.txt` and hot-plug-stable controller slots (play/controls.rs); render/input only, hst-sim untouched, full test suite passes.
 - B7: one-sided court materials back-face culled as VU1 does (MDL material +0x24 = 0; winding from the third vertex's UV w); court 1's near school fence no longer blocks the camera (mdl.rs, gs.rs; tests/winding.rs; journal 2026-10-07-b7-camera-blocked).
 - P18: upscaled and moddable textures — PCSX2 pack hash names computed from the disc GS data (XXH3 of swizzled blocks + CLUT), lookup mods/textures → replacements/ → disc, `--dump-textures`, hot reload (hst-data texhash.rs, hst textures.rs; journal 2026-10-07-p18-textures/README.md).
 - P17h: court model mipmaps — TEX1 MXL from MTL header +0xf, K from MDL material header +4, level ⌊log2(view depth)+K+½⌋ (journal 2026-10-07-p17-court-rendering/6-MIPMAPS-FINAL.md).

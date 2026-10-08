@@ -15,3 +15,4 @@ research/**/*.p2m2
 research/journal/**/*
 !research/journal/**/
 !research/journal/**/*.md
+/controls.txt

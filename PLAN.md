@@ -178,7 +178,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P19a** In-match menus (pause, dialogs) from the original's INPANE assets and layout (in P19) → new `play/menu.rs` · `play.rs` | t: menu.rs slot3_pause, points, input | j: 2026-10-07-p19-hud
 - [~] **P20** Audio (see N3) → `hst-data/src/xb.rs` | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
 - [ ] **P21** Menus and modes → `main.rs`
-- [ ] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
+- [x] **P22** Widescreen, high fps, input polish → `main.rs` · `play.rs` read_input
 - [ ] **P23** Graphics settings menu (after P21) → `main.rs`
 - [ ] **P21a** Controller assignment screen (after P21): P1 picks which connected controller drives which player. The original shakes a controller's selector when that controller moves its right stick → `main.rs` · `play.rs` read_input/Pads
 - [ ] **P21b** Character select: costumes and stats (user 2026-10-07, after P21): on the character select menu, L1/R1 cycle the highlighted character's costumes (the game's own plus M1 mod costumes) with the model updating live, and △ shows that character's stats (the original's stat screen/graphics if it has one, else a panel in its style). Works per player when several are picking → `main.rs` menus · `character.rs` · `play.rs` character_stats
