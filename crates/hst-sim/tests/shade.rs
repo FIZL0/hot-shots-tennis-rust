@@ -5,9 +5,9 @@
 //! scale. Skips when the recording or the disc is absent.
 //! Also the sun-shade map built from the disc's court 10 against the game's (`context/p17l/map05.bin`, slot 5).
 
-use hst_data::{iso::Iso, layout, mdl, xb::Archive};
+use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
 use hst_sim::court;
-use hst_sim::shade::{self, Caster, Frame};
+use hst_sim::shade::{self, Caster, Frame, Shape};
 
 #[test]
 fn ball_light_scale_matches_the_game() {
@@ -65,13 +65,20 @@ fn court10_map_near_game() {
     ) else {
         return;
     };
-    let mut models = std::collections::HashMap::new();
+    let (mut models, mut shapes) = (std::collections::HashMap::new(), std::collections::HashMap::new());
     let mut read = |xb: &str, suffix: &str| {
         let d = iso.read(&format!("COURT/10/{xb}")).unwrap();
         let arc = Archive::parse(&d).unwrap();
         for e in arc.entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) {
+            let stem = &e.name[..e.name.len() - 4];
             if let Ok(m) = mdl::parse(&arc.read(e).unwrap()) {
-                models.insert(e.name[..e.name.len() - 4].rsplit('\\').next().unwrap().to_ascii_lowercase(), m);
+                let mtl = arc.find(&format!("{stem}.MTL")).and_then(|x| arc.read(x).ok());
+                let mti = arc.find(&format!("{stem}.MTI")).and_then(|x| arc.read(x).ok());
+                let key = stem.rsplit('\\').next().unwrap().to_ascii_lowercase();
+                if let Some(mats) = mtl.and_then(|t| mtl::parse(&t, mti.as_deref()).ok()) {
+                    shapes.insert(key.clone(), Shape::new(&m, &mats));
+                }
+                models.insert(key, m);
             }
         }
         arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).map(|e| arc.read(e).unwrap())
@@ -85,10 +92,10 @@ fn court10_map_near_game() {
         .iter()
         .filter(|p| p.code[3] != b'0' && (17..=19).contains(&p.category))
         .filter_map(|p| {
-            let m = models.get(&layout::resolve(&list, p, 0)?.stem)?;
+            let m = shapes.get(&layout::resolve(&list, p, 0)?.stem)?.clone();
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
             let (sn, c) = p.yaw.sin_cos();
-            Some(Caster { axes: [[c * s, 0.0, -sn * s], [0.0, s, 0.0], [sn * s, 0.0, c * s]], pos: p.pos, tris: tris(m) })
+            Some(Caster { axes: [[c * s, 0.0, -sn * s], [0.0, s, 0.0], [sn * s, 0.0, c * s]], pos: p.pos, tris: m.tris, cut: m.cut })
         })
         .collect();
     assert_eq!(casters.len(), 17);
@@ -99,6 +106,6 @@ fn court10_map_near_game() {
     let both: Vec<u8> = map.iter().zip(&game).map(|(a, b)| a & b).collect();
     let either: Vec<u8> = map.iter().zip(&game).map(|(a, b)| a | b).collect();
     let iou = ones(&both) as f64 / ones(&either) as f64;
-    // ponytail: solid casters and fitted screen (`shade::build`); leaf alpha P17u, bit for bit P17v
-    assert!(iou > 0.94, "IoU {iou}");
+    // ponytail: fitted screen (`shade::build`); bit for bit P17v
+    assert!(iou >= 0.975, "IoU {iou}");
 }

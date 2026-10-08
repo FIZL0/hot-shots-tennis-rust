@@ -106,12 +106,67 @@ pub fn ball_height(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) 
     Some(-ps2::sub(y, ground))
 }
 
-/// A shadow caster: its model's triangles (model space) and its placement, model axes (scaled, game space) and
-/// position.
+/// A shadow caster: its model's triangles (model space) drawn solid, those of its alpha-tested materials drawn
+/// through their texture ([`Shape::new`]), and its placement, model axes (scaled, game space) and position.
 pub struct Caster {
     pub axes: [[f32; 3]; 3],
     pub pos: [f32; 3],
     pub tris: Vec<[[f32; 3]; 3]>,
+    pub cut: Vec<Cutout>,
+}
+
+/// An alpha-tested material's triangles (model space, with their texture coordinates) and its texture's alpha
+/// (PS2, 0x80 opaque) and GS wrap modes.
+#[derive(Clone, Default)]
+pub struct Cutout {
+    pub width: usize,
+    pub height: usize,
+    pub alpha: Vec<u8>,
+    pub wrap: [u8; 2],
+    /// The red its triangles blend toward: 0x80, fogged (PRIM FGE, fog 0xff) 0x7f.
+    pub red: u8,
+    pub tris: Vec<([[f32; 3]; 3], [[f32; 2]; 3])>,
+}
+
+/// A caster model as its shadow texture draws it: an alpha-tested (TEST mode 10..29), textured material's
+/// triangles are drawn textured where the texture's bilinear alpha is at least 1 and blended by it (the game's
+/// shadow draw: TEST GEQUAL 1, TFX HIGHLIGHT2 on a black vertex, ALPHA (Cs − Cd)·As + Cd, bilinear, top level),
+/// every other one solid.
+#[derive(Clone, Default)]
+pub struct Shape {
+    pub tris: Vec<[[f32; 3]; 3]>,
+    pub cut: Vec<Cutout>,
+}
+
+impl Shape {
+    pub fn new(model: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl) -> Shape {
+        let mut s = Shape::default();
+        for (mi, packets) in model.materials.iter().enumerate() {
+            let mat = mats.materials.get(mi);
+            let mode = mat.map_or(0, |m| i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]));
+            let tex = mat.and_then(|m| m.texture).and_then(|t| mats.textures.get(t)).filter(|_| (10..=29).contains(&mode));
+            let mut cut = tex.map(|t| Cutout {
+                width: t.width as usize,
+                height: t.height as usize,
+                // back from the expanded alpha (a·255/128) to the PS2's
+                alpha: t.rgba.chunks_exact(4).map(|c| ((c[3] as u32 * 128).div_ceil(255)) as u8).collect(),
+                wrap: model.wrap.get(mi).copied().unwrap_or([0, 0]),
+                red: if packets.iter().any(|p| p.prim & 0x30 == 0x30) { 0x7f } else { 0x80 },
+                tris: Vec::new(),
+            });
+            for pk in packets {
+                for t in &pk.triangles {
+                    let v = t.map(|i| pk.vertices[i as usize]);
+                    match &mut cut {
+                        Some(c) if pk.prim & 0x10 != 0 => c.tris.push((v.map(|v| v.pos), v.map(|v| v.uv))),
+                        _ => s.tris.push(v.map(|v| v.pos)),
+                    }
+                }
+            }
+            s.cut.extend(cut.filter(|c| !c.tris.is_empty()));
+        }
+        s
+    }
 }
 
 type V3 = [f64; 3];
@@ -144,7 +199,7 @@ impl Light {
     /// texture axes `lu` = (0, 0, 1) × d, `lv` = d × `lu`, scaled so the box's wider side just fills the texture.
     fn new(c: &Caster, d: V3) -> Light {
         let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-        for p in c.tris.iter().flatten() {
+        for p in c.tris.iter().chain(c.cut.iter().flat_map(|k| k.tris.iter().map(|t| &t.0))).flatten() {
             for k in 0..3 {
                 lo[k] = lo[k].min(p[k] as f64);
                 hi[k] = hi[k].max(p[k] as f64);
@@ -239,28 +294,53 @@ fn raster(mut v: [[i64; 2]; 3], unit: i64, w: usize, h: usize, mut put: impl FnM
 /// Shadow texture side (texels).
 const TEX: usize = 128;
 
-/// A caster's shadow texture: its triangles drawn solid in light space at twice the size, every other pixel kept.
-fn texture(c: &Caster, l: &Light) -> Vec<bool> {
-    let mut tex = vec![false; TEX * TEX];
+/// A caster's shadow texture (palette index 0..15, red = index·0x20 clamped): its triangles drawn in light space at
+/// twice the size with red 0x80 over 0, every other pixel kept as red >> 4. Solid triangles write 0x80; a
+/// [`Shape`]'s cut ones blend toward it by their texture's bilinear alpha ((0x80 − Rd)·At >> 7 + Rd) where At ≥ 1.
+fn texture(c: &Caster, l: &Light) -> Vec<u8> {
+    let mut red = vec![0u32; TEX * TEX];
     let axes = c.axes.map(|a| a.map(f64::from));
-    for t in &c.tris {
-        let v = t.map(|p| {
+    let screen = |t: &[[f32; 3]; 3]| {
+        t.map(|p| {
             let g = add((0..3).fold([0.0; 3], |s, k| add(s, scale(axes[k], p[k] as f64))), c.pos.map(f64::from));
             l.uv(g).map(|u| ((128.0 * u + 126.0) * 16.0).floor() as i64)
-        });
-        raster(v, 32, TEX, TEX, |x, y, _| tex[x + y * TEX] = true);
+        })
+    };
+    for k in &c.cut {
+        for (t, uv) in &k.tris {
+            raster(screen(t), 32, TEX, TEX, |x, y, w| {
+                let st: [f64; 2] = std::array::from_fn(|i| w[0] * uv[0][i] as f64 + w[1] * uv[1][i] as f64 + w[2] * uv[2][i] as f64);
+                let a = alpha(k, st[0], st[1]);
+                if a >= 1 {
+                    let d = &mut red[x + y * TEX];
+                    *d = (((k.red as i32 - *d as i32) * a as i32 >> 7) + *d as i32) as u32;
+                }
+            });
+        }
     }
-    tex
+    for t in &c.tris {
+        raster(screen(t), 32, TEX, TEX, |x, y, _| red[x + y * TEX] = 0x80);
+    }
+    red.iter().map(|&r| (r >> 4) as u8).collect()
 }
 
-/// The GS's bilinear read (4-bit fraction, clamped) of a shadow texture (red 0 or 0xff) at (s, t) in 0..1.
-fn sample(tex: &[bool], s: f64, t: f64) -> u32 {
+/// The GS's bilinear read (4-bit fraction) of a cutout's alpha at (s, t), wrapped or clamped as its material sets.
+fn alpha(k: &Cutout, s: f64, t: f64) -> u32 {
+    let fix = |s: f64, n: usize| ((s * n as f64 - 0.5) * 16.0).floor() as i64;
+    let (u, v) = (fix(s, k.width), fix(t, k.height));
+    let (u0, v0, fu, fv) = (u >> 4, v >> 4, (u & 15) as u32, (v & 15) as u32);
+    let wrap = |x: i64, n: usize, mode: u8| if mode == 0 { x.rem_euclid(n as i64) } else { x.clamp(0, n as i64 - 1) } as usize;
+    let at = |x: i64, y: i64| k.alpha[wrap(x, k.width, k.wrap[0]) + wrap(y, k.height, k.wrap[1]) * k.width] as u32;
+    (at(u0, v0) * (16 - fu) * (16 - fv) + at(u0 + 1, v0) * fu * (16 - fv) + at(u0, v0 + 1) * (16 - fu) * fv + at(u0 + 1, v0 + 1) * fu * fv) >> 8
+}
+
+/// The GS's bilinear read (4-bit fraction, clamped) of a shadow texture (red index·0x20, clamped) at (s, t) in 0..1.
+fn sample(tex: &[u8], s: f64, t: f64) -> u32 {
     let fix = |s: f64| ((s * TEX as f64 - 0.5) * 16.0).floor() as i64;
     let (u, v) = (fix(s), fix(t));
     let (u0, v0, fu, fv) = (u >> 4, v >> 4, (u & 15) as u32, (v & 15) as u32);
-    let at = |x: i64, y: i64| tex[x.clamp(0, TEX as i64 - 1) as usize + y.clamp(0, TEX as i64 - 1) as usize * TEX] as u32;
-    let k = at(u0, v0) * (16 - fu) * (16 - fv) + at(u0 + 1, v0) * fu * (16 - fv) + at(u0, v0 + 1) * (16 - fu) * fv + at(u0 + 1, v0 + 1) * fu * fv;
-    0xff * k / 256
+    let at = |x: i64, y: i64| (tex[x.clamp(0, TEX as i64 - 1) as usize + y.clamp(0, TEX as i64 - 1) as usize * TEX] as u32 * 0x20).min(0xff);
+    (at(u0, v0) * (16 - fu) * (16 - fv) + at(u0 + 1, v0) * fu * (16 - fv) + at(u0, v0 + 1) * (16 - fu) * fv + at(u0 + 1, v0 + 1) * fu * fv) >> 8
 }
 
 /// Build the map: every caster's shadow texture is drawn along the sun `dir` (unit, sun → ground) onto each
@@ -268,12 +348,13 @@ fn sample(tex: &[bool], s: f64, t: f64) -> u32 {
 /// added up without depth over a screen viewing the hole from straight above, and the red kept above 0x6f.
 ///
 /// ponytail: the screen is orthographic with columns at ¾ of the map's scale, fitted to the game's map (the
-/// camera on paper is 40° perspective); the casters are drawn solid (no leaf alpha) and the setup is worked in
-/// double precision, not the game's VU1 floats: IoU 0.947 against the game's map on court 10 (P17u leaf alpha, P17v exact).
+/// camera on paper is 40° perspective), the setup is worked in double precision, not the game's VU1 floats, and
+/// every fogged cutout blends toward 0x7f (the game's court 10 seat and statue stay at 0x80, cause not found):
+/// IoU 0.975 against the game's map on court 10 (P17v, P17v2 exact).
 pub fn build(f: &Frame, dir: [f32; 3], casters: &[Caster], ground: &[[[f32; 3]; 3]]) -> Vec<u8> {
     let d = dir.map(f64::from);
     let lights: Vec<Light> = casters.iter().map(|c| Light::new(c, d)).collect();
-    let texs: Vec<Vec<bool>> = casters.iter().zip(&lights).map(|(c, l)| texture(c, l)).collect();
+    let texs: Vec<Vec<u8>> = casters.iter().zip(&lights).map(|(c, l)| texture(c, l)).collect();
     let (sz, sx) = (f.scale[0] as f64, f.scale[1] as f64);
     let (cz, cx) = (f.origin[0] as f64 + 640.0 / sz, f.origin[1] as f64 + 448.0 / sx);
     let mut red = vec![0u32; COLS * ROWS];
