@@ -45,6 +45,7 @@ mod markers;
 mod menu;
 mod panel;
 mod popups;
+mod surprise;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -117,6 +118,8 @@ struct Player {
     hit_at: Option<V3>,
     /// The timing balloon over this player's head and its age in frames.
     balloon: Option<(Balloon, u32)>,
+    /// The AI was caught off guard this tick (a change-of-pace or fast-ball reaction, a wrong guess): `surprise`.
+    surprised: bool,
     /// Stand-in AI: set once it has picked its shot for the coming ball (serving: the contact frame it waits for).
     bot_due: Option<usize>,
     /// Stand-in AI: the shot it last decided to leave to its partner.
@@ -447,6 +450,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(menu::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
+    app.add_plugins(surprise::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .init_resource::<CamMode>()
@@ -2520,6 +2524,7 @@ fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
         rand(rng);
         *rng
     });
+    g.players[i].surprised |= g.players[i].ai_timing.reacted;
     if shots.is_none() {
         // no opponent's hit to react to: no reaction, no guess
         (g.players[i].ai_hold, g.players[i].ai_guess) = (0, None);
@@ -2610,6 +2615,7 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
             None
         }
         Verdict::Wrong => {
+            g.players[i].surprised = true;
             g.players[i].ai_hold = p.ai.guess[2];
             Some(p.pos)
         }
