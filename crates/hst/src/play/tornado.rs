@@ -1,6 +1,8 @@
 //! The ball's wind tornado (`hst_sim::tornado`): `wind2/tatumakiball` from `AZUMA/C_EFF/EFFCT.XB0`, started by a
 //! shot leaving the racket at 90 km/h or more, riding the ball scaled up by the sim, its `.UVA` scrolling each
-//! part's texture at the launch speed + 1.5 frames a frame, its materials fading with the sim's alpha.
+//! part's texture at the launch speed + 1.5 frames a frame, its materials fading with the sim's alpha. Drawn as GS
+//! draws (`GsMaterial`) VU1-lit with the default light (ambient 0.5 + 0.49 × diffuse): the game passes the effect
+//! manager's own light block, which holds it in a match too (GS dump: vertex RGB 0x40 for vc 0x80 facing away).
 
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
@@ -9,12 +11,13 @@ use hst_sim::{court_anim::CourtAnim, tornado::Tornado};
 
 use super::Game;
 use crate::effects::{model, Shown};
+use crate::gs::GsMaterial;
 use crate::Args;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.before(super::start_effects).after(super::simulate))
-        .add_systems(Update, draw);
+        .add_systems(Update, (own_materials, draw).chain().after(crate::weather::apply));
 }
 
 #[derive(Resource)]
@@ -25,6 +28,8 @@ struct Wind {
     /// Per material its MTL colour.
     colours: Vec<[f32; 4]>,
     view: Shown,
+    /// Per material its GS draw (an `@add` draw is one), swapped in for `view`'s StandardMaterial by `own_materials`.
+    gs: Vec<Handle<GsMaterial>>,
     /// A swing locked onto the ball since the last hit (the game's per-player search records, not a dive's or a miss's).
     latched: bool,
     /// Last frame's locked swings: per player, then the serve's.
@@ -39,6 +44,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+    mut gs: ResMut<Assets<GsMaterial>>,
 ) {
     let Ok(root) = root.single() else { return };
     let mut iso = Iso::open(&args.iso).expect("open iso");
@@ -52,14 +58,32 @@ fn setup(
     let mtl = mtl::parse(&get("mtl").expect("tornado mtl"), get("mti").as_deref()).expect("tornado mtl");
     let uva = mor::parse(&get("uva").expect("tornado uva"), 4).expect("tornado uva");
     let (_, view) = model(&arc, s, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("tornado model");
-    // sRGB-decoded texels: the scene's PBR output re-encodes them, so the add is on the stored values as the GS's
-    // (hud_gamma.rs)
+    // raw texels, by the first packet's PRIM, as `character::gs_of`
+    let tex: Vec<Handle<Image>> = mtl
+        .textures
+        .iter()
+        .map(|t| {
+            let mut img = crate::character::texture_image(t);
+            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+            crate::textures::add_mtl(&mut images, img, t)
+        })
+        .collect();
+    let gs = mtl
+        .materials
+        .iter()
+        .enumerate()
+        .map(|(k, m)| {
+            let prim = mdl.materials.get(k).and_then(|p| p.first()).map_or(0x10, |p| p.prim);
+            gs.add(GsMaterial::for_batch(m, prim, m.texture.map(|t| tex[t].clone())).swap_remove(0))
+        })
+        .collect();
     commands.insert_resource(Wind {
         tornado: Tornado::default(),
         fade,
         uv: CourtAnim::new(&mdl, Some(&uva), None, &mtl.materials),
         colours: mtl.materials.iter().map(|m| m.color).collect(),
         view,
+        gs,
         latched: false,
         locked: Vec::new(),
     });
@@ -91,7 +115,19 @@ fn tick(fx: Option<ResMut<Wind>>, g: Res<Game>) {
     }
 }
 
-fn draw(fx: Option<Res<Wind>>, mut q: Query<(&mut Transform, &mut Visibility)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+/// Once the parts are spawned: each part's StandardMaterial → its GS draw.
+fn own_materials(mut commands: Commands, fx: Option<Res<Wind>>, children: Query<&Children>, parts: Query<&MeshMaterial3d<StandardMaterial>>, mut done: Local<bool>) {
+    let Some(fx) = fx.filter(|_| !*done) else { return };
+    for e in children.iter_descendants(fx.view.root) {
+        let Ok(m) = parts.get(e) else { continue };
+        if let Some(k) = fx.view.materials.iter().position(|h| h.id() == m.0.id()) {
+            commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(fx.gs[k].clone()));
+            *done = true;
+        }
+    }
+}
+
+fn draw(fx: Option<Res<Wind>>, mut q: Query<(&mut Transform, &mut Visibility)>, mut materials: ResMut<Assets<GsMaterial>>) {
     let Some(fx) = fx else { return };
     let t = &fx.tornado;
     if let Ok((mut tr, mut v)) = q.get_mut(fx.view.root) {
@@ -101,10 +137,12 @@ fn draw(fx: Option<Res<Wind>>, mut q: Query<(&mut Transform, &mut Visibility)>, 
     if !t.on {
         return;
     }
-    for (k, h) in fx.view.materials.iter().enumerate() {
+    for (k, h) in fx.gs.iter().enumerate() {
         let Some(mut m) = materials.get_mut(h) else { continue };
         let [r, g, b, a] = fx.colours[k];
-        m.base_color = Color::linear_rgba(r, g, b, a * t.opacity());
-        m.uv_transform = bevy::math::Affine2::from_translation(Vec2::from(fx.uv.uv_offset(k, 0)));
+        m.uniform.color = Vec4::new(r, g, b, a * t.opacity());
+        m.uniform.uv_offset = Vec2::from(fx.uv.uv_offset(k, 0));
+        // a weather change relights every GS draw with the court's model light; the effect keeps the default one
+        (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = crate::gs::DEFAULT_LIGHT;
     }
 }
