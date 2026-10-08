@@ -228,7 +228,7 @@ fn path(iso: &str) -> PathBuf {
     std::path::Path::new(iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()).join("controls.txt")
 }
 
-fn load(mut commands: Commands, args: Res<crate::Args>) {
+fn load(mut commands: Commands, args: Res<crate::Args>, pads: Option<ResMut<super::Pads>>) {
     let path = path(&args.iso);
     let b = match std::fs::read_to_string(&path) {
         Ok(text) => {
@@ -247,38 +247,86 @@ fn load(mut commands: Commands, args: Res<crate::Args>) {
         }
     };
     commands.insert_resource(b);
-    if args.pads.is_some() {
-        commands.insert_resource(PadSlots([None; 2], args.pads));
+    if let Some(seats) = args.pads {
+        commands.insert_resource(PadSlots([None; 4], Some(seats)));
+        if let Some(mut p) = pads {
+            p.seats = Some(seats.map(|s| s.is_some()));
+        }
     }
 }
 
-/// Controller slots 1 and 2: the gamepad entity holding each. A slot is kept while its pad stays connected.
-/// With seats (`--pads`, from the main menu's controller assignment) slot `s` first takes pad `seats[s]` (an index into
-/// the sorted pad list), and a slot without a seat never takes a pad (that player is the computer's).
+/// What drives one player seat (`--pads`, from the main menu's controller assignment): the keyboard or a gamepad (an
+/// index into the sorted pad list).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Seat {
+    Keys,
+    Pad(usize),
+}
+
+impl Seat {
+    /// `k` the keyboard, a number a gamepad, anything else (`-`) the computer.
+    pub fn parse(s: &str) -> Option<Seat> {
+        match s.trim() {
+            "k" => Some(Seat::Keys),
+            n => n.parse().ok().map(Seat::Pad),
+        }
+    }
+
+    /// `--pads` for seats 1P..4P (`-` the computer).
+    pub fn flag(seats: &[Option<Seat>]) -> String {
+        let one = |s: &Option<Seat>| match s {
+            Some(Seat::Keys) => "k".to_string(),
+            Some(Seat::Pad(n)) => n.to_string(),
+            None => "-".into(),
+        };
+        seats.iter().map(one).collect::<Vec<_>>().join(",")
+    }
+}
+
+/// Controller slots 1P..4P: the gamepad entity holding each. A slot is kept while its pad stays connected.
+/// With seats (`--pads`) slot `s` first takes pad `n` of seat `Pad(n)` (an index into the sorted pad list), then any
+/// free pad if that one is gone; a keyboard or computer seat never takes a pad.
 #[derive(Resource, Default)]
-pub struct PadSlots(pub [Option<Entity>; 2], pub Option<[Option<usize>; 2]>);
+pub struct PadSlots(pub [Option<Entity>; 4], pub Option<[Option<Seat>; 4]>);
 
 impl PadSlots {
     /// Drop pads gone from `present`, then give each new one the first free slot (in connection order). With seats a
-    /// seated slot prefers its own pad and an unseated one stays empty.
+    /// pad seat prefers its own pad and the others stay empty.
     pub fn update(&mut self, present: &[Entity]) {
         for s in &mut self.0 {
             if s.is_some_and(|e| !present.contains(&e)) {
                 *s = None;
             }
         }
-        for i in 0..2 {
-            if self.0[i].is_some() || self.1.is_some_and(|seats| seats[i].is_none()) {
-                continue;
+        let wants = |i: usize| self.1.map_or(Some(None), |seats| match seats[i] {
+            Some(Seat::Pad(n)) => Some(Some(n)),
+            _ => None,
+        });
+        // seats' own pads first, so a seat whose pad is gone doesn't take one another empty seat is waiting for
+        for i in 0..4 {
+            if let (None, Some(Some(n))) = (self.0[i], wants(i))
+                && let Some(&e) = present.get(n).filter(|e| !self.0.contains(&Some(**e)))
+            {
+                self.0[i] = Some(e);
             }
-            let own = self.1.and_then(|seats| seats[i]).and_then(|n| present.get(n)).filter(|e| !self.0.contains(&Some(**e)));
-            self.0[i] = own.or_else(|| present.iter().find(|e| !self.0.contains(&Some(**e)))).copied();
+        }
+        for i in 0..4 {
+            if self.0[i].is_none() && wants(i).is_some() {
+                let own: Vec<_> = (0..4).filter(|&j| j != i && self.0[j].is_none()).filter_map(|j| wants(j).flatten()).filter_map(|n| present.get(n)).collect();
+                let free = present.iter().find(|e| !self.0.contains(&Some(**e)) && (self.1.is_none() || !own.contains(e)));
+                self.0[i] = free.copied();
+            }
         }
     }
 
     /// Slots in use, as `Pads::connected` counts them: slot 2 counts while its pad is in, even with slot 1 empty.
     pub fn connected(&self) -> usize {
         self.0.iter().rposition(Option::is_some).map_or(0, |i| i + 1)
+    }
+
+    /// The slot the keyboard drives: 1P without seats (alongside 1P's pad), else its own seat, if it has one.
+    pub fn keys(&self) -> Option<usize> {
+        self.1.map_or(Some(0), |seats| seats.iter().position(|s| *s == Some(Seat::Keys)))
     }
 }
 
@@ -307,19 +355,31 @@ mod tests {
 
     #[test]
     fn seated_pads() {
-        let [a, b] = [Entity::from_raw_u32(5).unwrap(), Entity::from_raw_u32(7).unwrap()];
-        // P1 keyboard only, P2 on the second pad: slot 1 stays empty, slot 2 takes pad 1
-        let mut s = PadSlots([None; 2], Some([None, Some(1)]));
+        let [a, b, c] = [5, 7, 8].map(|n| Entity::from_raw_u32(n).unwrap());
+        let (k, p) = (Some(Seat::Keys), |n| Some(Seat::Pad(n)));
+        // 1P keyboard, 2P pad 1: slot 1 stays empty, slot 2 takes pad 1
+        let mut s = PadSlots([None; 4], Some([k, p(1), None, None]));
         s.update(&[a, b]);
-        assert_eq!(s.0, [None, Some(b)]);
-        // P2 the computer's: a second pad never makes it human
-        let mut s = PadSlots([None; 2], Some([Some(0), None]));
+        assert_eq!((s.0, s.keys()), ([None, Some(b), None, None], Some(0)));
+        // 2P the computer's: a second pad never makes it human
+        let mut s = PadSlots([None; 4], Some([p(0), None, None, None]));
         s.update(&[a, b]);
-        assert_eq!((s.0, s.connected()), ([Some(a), None], 1));
-        // no seats: connection order
+        assert_eq!((s.0, s.connected(), s.keys()), ([Some(a), None, None, None], 1, None));
+        // four humans, the keyboard as 3P; pad 0 gone: its seat waits instead of taking pad 2's (or 4P's pad 1)
+        let mut s = PadSlots([None; 4], Some([p(0), p(2), k, p(1)]));
+        s.update(&[a, b, c]);
+        assert_eq!((s.0, s.keys()), ([Some(a), Some(c), None, Some(b)], Some(2)));
+        s.update(&[b, c]);
+        assert_eq!(s.0, [None, Some(c), None, Some(b)]);
+        // a pad plugged back in fills it
+        s.update(&[b, c, a]);
+        assert_eq!(s.0, [Some(a), Some(c), None, Some(b)]);
+        // no seats: connection order, the keyboard with 1P
         let mut s = PadSlots::default();
-        s.update(&[a, b]);
-        assert_eq!(s.0, [Some(a), Some(b)]);
+        s.update(&[a, b, c]);
+        assert_eq!((s.0, s.keys()), ([Some(a), Some(b), Some(c), None], Some(0)));
+        assert_eq!(Seat::flag(&[k, None, p(1)]), "k,-,1");
+        assert_eq!(["k", "-", "2", ""].map(Seat::parse), [k, None, p(2), None]);
     }
 
     #[test]
@@ -327,12 +387,12 @@ mod tests {
         let (a, b, c) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap(), Entity::from_raw_u32(3).unwrap());
         let mut s = PadSlots::default();
         s.update(&[a, b]);
-        assert_eq!(s.0, [Some(a), Some(b)]);
+        assert_eq!(s.0, [Some(a), Some(b), None, None]);
         s.update(&[b]); // pad 1 unplugged: pad 2 stays slot 2
-        assert_eq!((s.0, s.connected()), ([None, Some(b)], 2));
+        assert_eq!((s.0, s.connected()), ([None, Some(b), None, None], 2));
         s.update(&[b, c]); // a new pad fills slot 1
-        assert_eq!(s.0, [Some(c), Some(b)]);
+        assert_eq!(s.0, [Some(c), Some(b), None, None]);
         s.update(&[c]);
-        assert_eq!((s.0, s.connected()), ([Some(c), None], 1));
+        assert_eq!((s.0, s.connected()), ([Some(c), None, None, None], 1));
     }
 }
