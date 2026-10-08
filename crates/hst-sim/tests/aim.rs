@@ -154,7 +154,9 @@ fn human_serve_aims() {
         let [sx, sz] = pad_dir(pad.buttons, pad.lx, pad.ly, cur.gm()[0x55]);
         let stick = if end < 0.0 { [-sx, -sz] } else { [sx, sz] };
         let want_miss = Miss { side: cur.player_f32(0, 0x3f10), depth: cur.player_f32(0, 0x3f18), nudge: pi(0x3ed4) };
-        let rand = [want_miss.nudge.abs() == 5, want_miss.nudge > 0, want_miss.side < 0.0];
+        // the coins the game drew, in order: a nudge's size and sign (a nudge is never 0), then the sideways error's
+        let mut coins = (if want_miss.nudge != 0 { vec![want_miss.nudge.abs() == 5, want_miss.nudge > 0] } else { vec![] }).into_iter().chain([want_miss.side < 0.0]);
+        let rand = || coins.next().unwrap();
         let side = cur.global(0x423050);
         let (got, miss) = target(&d, toss, offset, grade, server, end, side, cur.global(0x422fa4) == 4, stick, rand);
         let want = [cur.player_f32(0, 0x3e90), 0.0, cur.player_f32(0, 0x3e98)];

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """P3e5: log every draw on the AI's generator (0x427130) with its call site, from a save-state load (slot 5).
-Usage: p3e5_draw_log.py <slot> <frames> <out.bin>. Run under tools/pcsx2.sh.
+Usage: p3e5_draw_log.py <slot> <frames> <out.bin> [shared [stack]]. With `shared`, logs the shared generator *(gm+0x80) instead, and the word at sp+stack (hex, default 0x10) in place of sp+0x10 (P3d). Run under tools/pcsx2.sh.
 A hook on the MT draw (0x19f5c0) appends (u32 vsync, u32 ra, u32 *(sp+0x10), u32 s0, u32 the match frame *(gm+0x58)) per draw with a0 = the AI's
 generator: from the percent roll 0x3640b0 (ra 0x3640cc) the word at sp+0x10 is its caller's ra and s0 the percent. Built like tools/record_ai_rally.py's counter hook (patched while paused, a few frames after the load)."""
 import struct, sys, time, os
@@ -32,6 +32,7 @@ while not 7500 <= p.read32(VSYNC) < 7550: time.sleep(0.01)
 v0 = p.read32(VSYNC)
 while p.read32(VSYNC) - v0 < 4: time.sleep(0.01)
 gm0 = p.read32(GM_PTR)
+if sys.argv[4:5] == ["shared"]: MT = p.read32(gm0 + 0x80)
 a, b = p.read32(DRAW), p.read32(DRAW + 4)
 # 0 lui t4; 1-2 li t5; 3 bne a0,t5 -> skip; 4 nop; 5 lw t6 ptr; 6-7 li t7 END; 8 sltu t7,t6,t7; 9 beq t7,0 -> skip;
 # 10 nop; 11 lui t7 vsync; 12 lw t7; 13 sw t7; 14 sw ra; 15 lw t7 sp+0x10; 16 sw t7; 17 sw s0; 18-19 li t7 gm;
@@ -39,7 +40,7 @@ a, b = p.read32(DRAW), p.read32(DRAW + 4)
 stub = [lui("t4", DATA >> 16), *li("t5", MT), i(5, "a0", "t5", 25 - 4), 0, lw("t6", DATA & 0xffff, "t4"),
         *li("t7", END), sltu("t7", "t6", "t7"), i(4, "t7", "zero", 25 - 10), 0,
         lui("t7", VSYNC >> 16), lw("t7", VSYNC & 0xffff, "t7"), sw("t7", 0, "t6"), sw("ra", 4, "t6"),
-        lw("t7", 0x10, "sp"), sw("t7", 8, "t6"), sw("s0", 12, "t6"),
+        lw("t7", int(sys.argv[5], 16) if sys.argv[5:] else 0x10, "sp"), sw("t7", 8, "t6"), sw("s0", 12, "t6"),
         *li("t7", GM_PTR), lw("t7", 0, "t7"), lw("t7", 0x58, "t7"), sw("t7", 16, "t6"), addiu("t6", "t6", 20), sw("t6", DATA & 0xffff, "t4"), a, b, j(DRAW + 8), 0]
 p.pause()
 p.write32(DATA, BUF)
