@@ -50,10 +50,9 @@ pub fn packet_box(model: &hst_data::mdl::Model) -> ([f32; 3], [f32; 3]) {
     (lo, hi)
 }
 
-/// The map of the casters' game-space triangles' shadows cast along `dir` onto the hole's `ground` triangles.
-pub fn build(frame: Frame, dir: Vec3, casters: impl IntoIterator<Item = [[f32; 3]; 3]>, ground: impl IntoIterator<Item = [[f32; 3]; 3]>, world: World) -> Shade {
-    let mut map = vec![0u8; shade::BYTES];
-    shade::rasterize(&mut map, &frame, dir.to_array(), casters, ground);
+/// The map of the casters' shadows cast along `dir` onto the hole's `ground` triangles (game space).
+pub fn build(frame: Frame, dir: Vec3, casters: &[shade::Caster], ground: &[[[f32; 3]; 3]], world: World) -> Shade {
+    let map = shade::build(&frame, dir.to_array(), casters, ground);
     if let Ok(path) = std::env::var("HST_SHADE_DUMP") {
         _ = std::fs::write(path, &map);
     }
