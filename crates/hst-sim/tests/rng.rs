@@ -136,6 +136,20 @@ fn court_draws_like_the_game() {
     let (mut gallery, mut cheers, mut cheer) = (sound::Gallery::default(), npc::Cheers::default(), [false; 6]);
     let mut tick = u(&walkers_at(start + 1), mgr2 + 0x14) as i32 - ticks(start);
     let mut rng = court(start).unwrap();
+    // the reseed's own tick (the frame before `start`): rng_s05 reads the generator fresh from the reseed (index
+    // 624), but the walkers step after it in that tick, and walker 0 restarts its idle loop (one draw); npc_s05
+    // shows them after it. Replay it from the frame before.
+    let s = walkers_at(start - 1);
+    let mut restarted: Vec<npc::Walker> = (0..n).map(|k| walker(&s, k)).collect();
+    let mut draws = 0;
+    for w in &mut restarted {
+        w.new_point(players >= 3);
+        w.step(players, false, tick - 1, &mut || {
+            draws += 1;
+            rng.next()
+        });
+    }
+    assert_eq!((restarted, draws), (walkers.clone(), 1), "the reseed's tick");
     let mut frames = 0;
     for v in start..end {
         let mut draws = 0;
@@ -144,11 +158,6 @@ fn court_draws_like_the_game() {
             rng.next()
         };
         for _ in 0..ticks(v) {
-            if v == start {
-                // ponytail: one draw at the point's first tick, before the walkers, that no ported object makes
-                // (not the walkers' or figures' new-point handlers, not the gallery's pick): see PLAN P3e1
-                roll();
-            }
             if v == decided {
                 cheer = npc::cheerers(n, &mut roll);
                 gallery.point(sound::Reaction { cheer: true, event: Some(0), chain: false }, &mut roll);
