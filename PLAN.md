@@ -153,7 +153,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
 - [x] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
 - [ ] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5
-- [ ] **P11i** Record a bot-only match (singles and doubles) and match the AI logic against it frame by frame: kind lock, serve toss/swing/aim, quick serve, singles return-of-serve chooser (unchecked so far; see 8-P11G) (in P11) → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
+- [ ] **P11i** Record a bot-only match (singles and doubles) and match the AI logic against it frame by frame: kind lock, serve toss/swing/aim, quick serve, singles return-of-serve chooser (unchecked so far; see 8-P11G) (in P11). Singles bot match recorded (user 2026-10-08): `context/recordings/bots_singles.p2m2` + `bots_singles.p2m2_SaveState.p2s`; doubles still to record → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
 
 ### Match
 
@@ -241,6 +241,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 - [x] **P26** Match stats screen (user 2026-10-07, low priority): the original tracks stats over the match and shows them at the end (the match-over screen offers "Stats Screen" beside "✕ Continue"): sweet-spot rate and the rest of its figures. Find which stats it counts (and when each is counted) and port the counting and the screen, as drawn by the original → `hst-sim` (counters) · `play.rs` match end · `play/panel.rs` (P19, P21) | j: 2026-10-08-p26-match-stats
+- [ ] **P26b** Stats screen, the parts P26 left out (user 2026-10-08): the result page before it (win/loss banner, "Stats Screen" beside "✕ Continue", the page slide; now the stats screen opens on its own); the top-to-bottom colour fade on the row names (one colour now); the background behind the columns (texture not traced, drawn white); the character names under the faces. Match each to the original → `play.rs` match end · `play/panel.rs` | j: 2026-10-08-p26-match-stats
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
 
