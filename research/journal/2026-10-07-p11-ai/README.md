@@ -89,3 +89,10 @@ See 11-P11J-SEARCH-FINAL.md. Done: `ai::Runner` (run frames 0x35bc50) and `ai::S
 `tier_search` 0x360910). Tests `doubles_searches_match_the_game` / `singles_searches_match_the_game`
 (`crates/hst-sim/tests/ai_search.rs`, fixtures `ai_search_s05.bin` / `ai_search_singles.bin` from
 `tools/record_ai_search.py`). Not wired into `play.rs` yet: P11k/P11l use it.
+
+## P11k1 (doubles receive)
+
+See 12-P11K1-RECEIVE-FINAL.md. Done: `hst_sim::rally` (`Rally::receive` with the path copy, landing/bounce picks, dive
+check, smash search, ready check, stroke-frame pickers and return aim). Test `receive_matches_the_game` /
+`receive_matches_the_game_long` (`crates/hst-sim/tests/ai_rally.rs`, fixtures `ai_rally_s05*.bin` from
+`tools/record_ai_rally.py`, two with slowed players). Unreached branches: P11k4. Not wired into `play.rs` yet: P11k3.
