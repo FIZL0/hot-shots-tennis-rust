@@ -48,7 +48,6 @@ fn tornado_s05() {
             speed: f(t, 0xc0),
             fade: i(t, 0xb0),
             alpha: f(t, 0xbc),
-            uv: 0.0,
             m: std::array::from_fn(|r| v4(t, 0x70 + 16 * r)),
         }
     };

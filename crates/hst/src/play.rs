@@ -53,6 +53,7 @@ mod panel;
 mod popups;
 mod surprise;
 mod timing;
+mod tornado;
 mod weather;
 mod widescreen;
 
@@ -502,6 +503,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.add_plugins(surprise::plugin);
+    app.add_plugins(tornado::plugin);
     app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))

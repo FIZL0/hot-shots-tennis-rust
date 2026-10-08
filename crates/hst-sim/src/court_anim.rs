@@ -93,6 +93,11 @@ impl CourtAnim {
         if self.swap[material][packet] { [y, x] } else { [x, y] }
     }
 
+    /// Play the `.UVA` from its start at `speed` frames a frame.
+    pub fn restart(&mut self, speed: f32) {
+        self.uva_clock = Clock::start(speed, true, None);
+    }
+
     /// One frame.
     pub fn tick(&mut self) {
         if !self.uva.is_empty() {

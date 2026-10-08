@@ -20,8 +20,6 @@ pub struct Tornado {
     pub fade: i32,
     /// Alpha 0..128 while it fades (0 before: drawn opaque, see [`Tornado::opacity`]).
     pub alpha: f32,
-    /// The UV animation's time (frames).
-    pub uv: f32,
     /// The model's matrix: z along the ball's flight, at the ball.
     pub m: world::M4,
 }
@@ -32,7 +30,12 @@ impl Tornado {
         use ps2::{add, madd, mul};
         let speed = ps2::sqrt(madd(madd(mul(vel[0], vel[0]), vel[1], vel[1]), vel[2], vel[2]));
         let kmh = ps2::div(mul(mul(speed, 60.0), 3600.0), 1000.0);
-        *self = Tornado { on: kmh >= 90.0, t: 0.0, end: add(add(mul(speed, 8.0), 0.0), 0.0), speed, fade, uv: 0.0, ..*self };
+        *self = Tornado { on: kmh >= 90.0, t: 0.0, end: add(add(mul(speed, 8.0), 0.0), 0.0), speed, fade, ..*self };
+    }
+
+    /// The UV animation's speed (frames a frame).
+    pub fn uv_speed(&self) -> f32 {
+        ps2::add(self.speed, 1.5)
     }
 
     /// The model's material alpha (1 opaque).
@@ -57,7 +60,6 @@ impl Tornado {
         let pitch = libm::atan2f(-d[1], ps2::sqrt(madd(mul(d[0], d[0]), d[2], d[2])));
         self.m = world::mat_mul(&world::rot_x(pitch), &world::rot_y(libm::atan2f(d[0], d[2])));
         self.m[3] = pos;
-        self.uv = add(self.uv, add(self.speed, 1.5));
         if self.end <= self.t {
             self.alpha = ((self.fade << 7) / fade) as f32;
             self.fade -= 1;

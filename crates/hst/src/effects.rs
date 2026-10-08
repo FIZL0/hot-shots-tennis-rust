@@ -92,7 +92,8 @@ pub(crate) fn model(
         &get(&format!("{s}.ani")).map_or(Ok(ani::Anim { ticks_per_frame: 1, tracks: vec![] }), |a| ani::parse(&a)).map_err(|e| e.0)?,
         // some of the umpire's call models have no MOR: no morphs
         &get(&format!("{s}.mor")).map_or(Ok(mor::Tracks { ticks_per_frame: 1, tracks: vec![] }), |m| mor::parse(&m, 1)).map_err(|e| e.0)?,
-        &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
+        // the ball's tornado has no MTA: alpha as the MTL
+        &get(&format!("{s}.mta")).map_or(Ok(mor::Tracks { ticks_per_frame: 1, tracks: vec![] }), |m| mor::parse(&m, 1)).map_err(|e| e.0)?,
         &mtl.materials,
     );
     let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| crate::textures::add_mtl(images, crate::character::texture_image(t), t)).collect();
