@@ -1,7 +1,7 @@
 //! Timing grades against the live-ball recordings: every player's grade and bias tables from its character's
 //! TParam counts, and every recorded stroke and volley (scattered or not) through the timing error at the lock,
 //! its launch scaling, the table mode it picks and the scatter, to the launch velocity, flight frames and stored
-//! target (grades, bias, error and target exact; a scattered launch's velocity within 5e-4, ~5% within 2e-3).
+//! target, all bit for bit.
 
 use hst_sim::player::ReachStats;
 use hst_sim::replay::{Frame, frames_live};
@@ -94,7 +94,7 @@ fn timed_launches_like_the_game() {
     let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
-    let (mut seen, mut scattered, mut moded, mut near_misses, mut bad) = (0, 0, 0, 0, vec![]);
+    let (mut seen, mut scattered, mut moded, mut bad) = (0, 0, 0, vec![]);
     for (fx, ram) in FIXTURES {
         let Ok(data) = std::fs::read(format!("{}/{fx}", dir())) else { continue };
         let ram = ram.and_then(|r| std::fs::read(format!("{}/{r}", dir())).ok());
@@ -156,9 +156,6 @@ fn timed_launches_like_the_game() {
             if byte(w1, p, 0x3f0c) != 0 || byte(w1, p, 0x3f06) != 0 {
                 continue; // a mis-hit: the game's RNG
             }
-            if class == 1 && kind == 1 {
-                continue; // slices miss at every grade, as in shot_tables
-            }
             // the launch
             let (sx, sz, mut blend) = timing_launch(s, branch, kind, grade, e, nudge, short_only);
             let counter = byte(w1, p, 0x3f07) == 1;
@@ -172,23 +169,17 @@ fn timed_launches_like_the_game() {
             }
             let mode = table_mode(class, c, grade, kind, blend, &down2);
             let variant = if kind == 3 { lob_variant(&d.stats[ch], grade) } else { mode_variant(mode) }.filter(|&v| game.shot_variants(ch).iter().any(|x| x.class == class as usize && x.kind == kind as usize && x.uses[v] == 1));
-            let (stem, bounds) = if class == 1 { ("strk", Bounds::stroke(kind, hit[2])) } else { ("voly", Bounds::volley(kind, hit[2])) };
-            let suffix = variant.map_or("", |v| ["_up1", "_dw1", "_dw2", "_dw3"][v]);
             let aim = [0x3e90, 0x3e94, 0x3e98].map(|o| w1.player_f32(p, o));
             let pulled = m.inside(class, kind, false, w1.global(0x422fa4) >= 3, ch, false, hit, aim);
             let sc = hst_sim::serve::scatter_along(sx, sz, hit, pulled);
-            let to = [pulled[0] + sc[0], pulled[1], pulled[2] + sc[2]];
+            let hz = hst_sim::ps2::sub(hit[2], sc[2]);
+            let (stem, bounds) = if class == 1 { ("strk", Bounds::stroke(kind, hz)) } else { ("voly", Bounds::volley(kind, hz)) };
+            let suffix = variant.map_or("", |v| ["_up1", "_dw1", "_dw2", "_dw3"][v]);
+            let to = [hst_sim::ps2::add(pulled[0], sc[0]), pulled[1], hst_sim::ps2::add(pulled[2], sc[2])];
             let t = table(ch, &format!("{stem}{kind}{suffix}")).unwrap_or_else(|| panic!("{at}: no table {stem}{kind}{suffix}"));
-            let l = lookup(&t, &bounds, [hit[0] - sc[0], hit[1], hit[2] - sc[2]], pulled);
+            let l = lookup(&t, &bounds, [hst_sim::ps2::sub(hit[0], sc[0]), hit[1], hz], pulled);
             let v = launch(hit, to, mul(l.elevation, late_lift(grade, branch, kind)), l.speed);
-            // the launch's own vu0 math is float-close, as in shot_tables; a scattered launch's lookup lands within 5e-4
-            // ponytail: the scattered residual (~1e-4, best fit is the lookup from hit - scatter) is not chased down
-            let tol = if sx != 0.0 || sz != 0.0 { 5e-4 } else { 4e-6 };
-            let ok = (0..3).all(|k| (v[k] - vel[k]).abs() < tol) && l.frames + 1 == i(b, 0x260) && [0, 2].iter().all(|&k| (to[k] - target[k]).abs() < 2e-6);
-            // ponytail: ~5% land within 2e-3 and a frame (mostly grade-4 scattered volleys); counted, not chased down
-            let near = (0..3).all(|k| (v[k] - vel[k]).abs() < 2e-3) && (l.frames + 1).abs_diff(i(b, 0x260)) <= 1 && [0, 2].iter().all(|&k| (to[k] - target[k]).abs() < 2e-6);
-            near_misses += (!ok && near) as usize;
-            if !near {
+            if v != vel || l.frames + 1 != i(b, 0x260) || to != target {
                 bad.push(format!("{at}: grade {grade} branch {branch} error {e:?} mode {mode}{suffix} scatter {sx},{sz}: vel {v:?} want {vel:?}, frames {} want {}, target {to:?} want {target:?}", l.frames + 1, i(b, 0x260)));
             }
             seen += 1;
@@ -199,6 +190,6 @@ fn timed_launches_like_the_game() {
     for b in &bad {
         eprintln!("{b}");
     }
-    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {near_misses} near, {} wrong", bad.len());
-    assert!(bad.is_empty() && near_misses * 20 <= seen && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
+    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {} wrong", bad.len());
+    assert!(bad.is_empty() && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
 }

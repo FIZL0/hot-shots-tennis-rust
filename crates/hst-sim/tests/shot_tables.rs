@@ -181,15 +181,15 @@ fn volleys_launch_like_the_game() {
 
 /// The lobs (kind 3) of the doubles match with one human and three CPUs on court 11 (`1p3goodcpus.bin`): Will's
 /// stroke (vsync 19585, his `strk3`) and character 2's volley (20682); Carol's two (21143, 21279) carry timing
-/// scatter and are left out like any other. Ground strokes are only reported: as in the other recordings, slices
-/// miss and a few strokes land 2–4e-6 off the speed.
+/// scatter and are left out like any other. Every unscattered ground stroke launches bit for bit too.
 #[test]
 fn goodcpus_lobs_launch_like_the_game() {
     let lobs = [1, 2].map(|class| launches(&["1p3goodcpus.bin"], class, Some(3)));
     if lobs[1].0 == 0 {
         return eprintln!("1p3goodcpus.bin absent, skipped");
     }
-    eprintln!("strokes (seen, exact) {:?}", launches(&["1p3goodcpus.bin"], 1, None));
+    let (seen, exact) = launches(&["1p3goodcpus.bin"], 1, None);
+    assert_eq!(seen, exact, "strokes off their tables");
     assert_eq!(lobs, [(1, 1), (1, 1)]);
 }
 
@@ -244,10 +244,7 @@ fn launches(fixtures: &[&str], class: u8, only: Option<i32>) -> (usize, usize) {
                     let elevation = if scale == 1.0 { l.elevation } else { hst_sim::ps2::mul(l.elevation, scale) };
                     let (frame, v) = (launch_frame(hit, target, elevation), launch(hit, target, elevation, l.speed));
                     let rows = (0..4).all(|r| (0..4).all(|k| frame[r][k] == f(b, 0x160 + 16 * r + 4 * k)));
-                    // ground strokes still land within a few 1e-6 of the game (their lookup inputs aren't the
-                    // ball's hit point exactly); volleys are bit for bit, frame and velocity
-                    let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-                    if class == 1 { (len(v) - len(vel)).abs() < 2e-6 && (v[1] - vel[1]).abs() < 4e-6 } else { v == vel && rows }
+                    v == vel && rows
                 }) && l.frames + 1 == i(b, 0x260)
             });
             if !ok {

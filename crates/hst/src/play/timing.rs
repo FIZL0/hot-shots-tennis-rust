@@ -7,6 +7,7 @@ use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ball::V3;
 use hst_sim::params::{self, ShotParams};
 use hst_sim::player::ReachStats;
+use hst_sim::ps2;
 use hst_sim::shot::{Bounds, Lookup, Table, lookup};
 use hst_sim::swing::{self, TimingError};
 
@@ -95,8 +96,7 @@ pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, g
     let picked = variant.and_then(|v| s.variants.iter().find(|x| x.0 == (class as usize, kind as usize, v)));
     let table = picked.map_or(&g.rally_tables[src][base][kind as usize], |x| &x.1);
     let sc = hst_sim::serve::scatter_along(sx, sz, at, target);
-    // ponytail: the scattered lookup matches the recordings to ~1e-4 (tests/timing.rs), not to the bit
-    let mut l = lookup(table, &bounds, [at[0] - sc[0], at[1], at[2] - sc[2]], target);
-    l.elevation = hst_sim::ps2::mul(l.elevation, swing::late_lift(grade, branch, kind));
-    Timed { target: [target[0] + sc[0], target[1], target[2] + sc[2]], lookup: l, record: picked.map(|x| x.2) }
+    let mut l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], ps2::sub(at[2], sc[2])], target);
+    l.elevation = ps2::mul(l.elevation, swing::late_lift(grade, branch, kind));
+    Timed { target: [ps2::add(target[0], sc[0]), target[1], ps2::add(target[2], sc[2])], lookup: l, record: picked.map(|x| x.2) }
 }
