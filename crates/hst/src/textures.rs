@@ -3,6 +3,7 @@
 
 use bevy::prelude::*;
 use bevy::render::render_resource::Extent3d;
+use crate::character::Store;
 use hst_data::texhash::{self, Overrides, TEXA};
 use hst_data::{mtl, tim2};
 use std::collections::HashMap;
@@ -45,7 +46,7 @@ pub fn plugin(app: &mut App) {
 
 /// Add `img`, made from the texture with this key and these PCSX2 names, replaced if the mod folder or pack has it.
 pub fn add(
-    images: &mut Assets<Image>,
+    images: &mut impl Store<Image>,
     mut img: Image,
     key: String,
     names: Vec<String>,
@@ -59,16 +60,16 @@ pub fn add(
         debug!("textures: replaced {key} ({disc} -> {}x{})", r.0, r.1);
         apply(&mut img, r);
     });
+    let size = img.size_f32();
     let h = images.add(img);
     if replaced.is_some() {
-        s.scale
-            .insert(h.id(), images.get(h.id()).unwrap().size_f32() / disc);
+        s.scale.insert(h.id(), size / disc);
     }
     s.used.entry(key).or_insert((names, vec![])).1.push(h.id());
     h
 }
 
-pub fn add_mtl(images: &mut Assets<Image>, img: Image, t: &mtl::Texture) -> Handle<Image> {
+pub fn add_mtl(images: &mut impl Store<Image>, img: Image, t: &mtl::Texture) -> Handle<Image> {
     if t.levels.is_empty() {
         return images.add(img);
     }
@@ -76,7 +77,7 @@ pub fn add_mtl(images: &mut Assets<Image>, img: Image, t: &mtl::Texture) -> Hand
     add(images, img, g.key(), g.pcsx2_names(t.width, TEXA))
 }
 
-pub fn add_tim2(images: &mut Assets<Image>, img: Image, p: &tim2::Picture) -> Handle<Image> {
+pub fn add_tim2(images: &mut impl Store<Image>, img: Image, p: &tim2::Picture) -> Handle<Image> {
     add(images, img, p.gs().key(), texhash::tim2_names(p))
 }
 

@@ -16,6 +16,60 @@ use hst_data::{ani, iso::Iso, mdl, mor, mtl, xb::Archive};
 use hst_sim::pose::{arm_table, ArmTable, Clip, Path, Skeleton};
 use hst_sim::motion::{Clock, Fade};
 
+/// Where the loaders put their assets: the world's `Assets`, or a [`Staged`] set built off the main thread.
+pub trait Store<A: Asset> {
+    fn add(&mut self, asset: A) -> Handle<A>;
+    fn get_mut(&mut self, id: impl Into<AssetId<A>>) -> Option<&mut A>;
+}
+
+impl<A: Asset> Store<A> for Assets<A> {
+    fn add(&mut self, asset: A) -> Handle<A> {
+        Assets::add(self, asset)
+    }
+    fn get_mut(&mut self, id: impl Into<AssetId<A>>) -> Option<&mut A> {
+        Assets::get_mut(self, id).map(|a| a.into_inner())
+    }
+}
+
+impl<A: Asset> Store<A> for ResMut<'_, Assets<A>> {
+    fn add(&mut self, asset: A) -> Handle<A> {
+        Assets::add(self, asset)
+    }
+    fn get_mut(&mut self, id: impl Into<AssetId<A>>) -> Option<&mut A> {
+        Assets::get_mut(self, id).map(|a| a.into_inner())
+    }
+}
+
+/// Assets made on another thread under handles reserved from the world's `Assets`; [`Staged::insert`] moves them
+/// in on the main thread.
+pub struct Staged<A: Asset> {
+    provider: bevy::asset::AssetHandleProvider,
+    items: Vec<(Handle<A>, A)>,
+}
+
+impl<A: Asset> Staged<A> {
+    pub fn new(provider: bevy::asset::AssetHandleProvider) -> Self {
+        Staged { provider, items: Vec::new() }
+    }
+    pub fn insert(self, assets: &mut Assets<A>) {
+        for (h, a) in self.items {
+            let _ = assets.insert(&h, a);
+        }
+    }
+}
+
+impl<A: Asset> Store<A> for Staged<A> {
+    fn add(&mut self, asset: A) -> Handle<A> {
+        let h = self.provider.reserve_handle().typed::<A>();
+        self.items.push((h.clone(), asset));
+        h
+    }
+    fn get_mut(&mut self, id: impl Into<AssetId<A>>) -> Option<&mut A> {
+        let id = id.into();
+        self.items.iter_mut().find(|(h, _)| h.id() == id).map(|(_, a)| a)
+    }
+}
+
 /// One joint of the skeleton.
 pub struct Joint {
     pub name: String,
@@ -247,7 +301,7 @@ pub fn texture_image(t: &mtl::Texture) -> Image {
 }
 
 /// Materials of an MTL with their textures uploaded.
-fn materials_of(mats: &mtl::Mtl, images: &mut Assets<Image>, materials: &mut Assets<StandardMaterial>) -> Vec<Handle<StandardMaterial>> {
+fn materials_of(mats: &mtl::Mtl, images: &mut impl Store<Image>, materials: &mut impl Store<StandardMaterial>) -> Vec<Handle<StandardMaterial>> {
     let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| crate::textures::add_mtl(images, texture_image(t), t)).collect();
     mats.materials
         .iter()
@@ -268,7 +322,7 @@ fn materials_of(mats: &mtl::Mtl, images: &mut Assets<Image>, materials: &mut Ass
 }
 
 /// The GS draws of `mats` for `model`'s batches (by its first packet's PRIM; raw texels), by the material's handle.
-fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial>], images: &mut Assets<Image>) -> HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>> {
+fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial>], images: &mut impl Store<Image>) -> HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>> {
     let tex: Vec<Handle<Image>> = mats
         .textures
         .iter()
@@ -290,7 +344,7 @@ fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial
 
 /// A skinned model's parts, one mesh per material (joints = the model's nodes), with its morph targets; `true`
 /// where a part carries them.
-pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut Assets<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
+pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut impl Store<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
     #[allow(clippy::type_complexity)]
     let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[[f32; 3]; 2]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
     let targets = model.morph_names.len();
@@ -348,10 +402,10 @@ pub fn load_disc(
     iso: &mut Iso,
     n: usize,
     costume: usize,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    images: &mut Assets<Image>,
-    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    meshes: &mut impl Store<Mesh>,
+    materials: &mut impl Store<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
 ) -> Result<CharacterData, String> {
     let data = iso.read(&format!("PC/PC{n:02}C{costume:02}.XB")).map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
@@ -501,9 +555,9 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
 pub fn disc_racket(
     arc: &Archive,
     n: usize,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    images: &mut Assets<Image>,
+    meshes: &mut impl Store<Mesh>,
+    materials: &mut impl Store<StandardMaterial>,
+    images: &mut impl Store<Image>,
     gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
 ) -> Result<Vec<(Handle<Mesh>, Handle<StandardMaterial>)>, String> {
     let find = |suffix: &str| arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).and_then(|e| arc.read(e).ok());
@@ -520,7 +574,7 @@ pub fn disc_racket(
         for ((m, h), packets) in rmats.materials.iter().zip(&rh).zip(&rmodel.materials) {
             let mode = i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]);
             if (20..30).contains(&mode) && packets.iter().any(|p| p.prim & 0x40 != 0) {
-                if let Some(mut mat) = materials.get_mut(h) {
+                if let Some(mat) = materials.get_mut(h) {
                     mat.alpha_mode = AlphaMode::Blend;
                 }
             }

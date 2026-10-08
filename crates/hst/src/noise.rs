@@ -42,7 +42,7 @@ pub struct Costume {
 
 /// The costume's deformers over the parts `character::skinned_parts` built from `model` (one per material with
 /// triangles, in material order). The swaying parts' meshes stay readable, so each rig can copy them.
-pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<StandardMaterial>, bool)], meshes: &mut Assets<Mesh>) -> Option<Arc<Costume>> {
+pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<StandardMaterial>, bool)], meshes: &mut impl crate::character::Store<Mesh>) -> Option<Arc<Costume>> {
     let deformers = noi::parse(noi)?;
     let packets: Vec<_> = model.materials.iter().flatten().zip(model.skinned()).collect();
     let mut drawn: Vec<usize> = packets.iter().filter(|(_, s)| !s.2.is_empty()).map(|(_, s)| s.0).collect();
@@ -74,7 +74,7 @@ pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<St
         }
     }
     for (part, _) in &out {
-        if let Some(mut mesh) = meshes.get_mut(&parts[*part].0) {
+        if let Some(mesh) = meshes.get_mut(&parts[*part].0) {
             mesh.asset_usage = RenderAssetUsages::default();
         }
     }
