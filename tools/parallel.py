@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Unattended runner, several tasks at once: like tools/overnight.sh, but keeps HST_SLOTS (3) headless Claude
+"""Unattended runner, several tasks at once: like ./single.sh, but keeps N (3) Claude
 sessions going, each on its own PLAN.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/overnight-parallel.py      # (tools/overnight-parallel-5.sh: 5 at once) progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst ./parallel.sh [N] [p|d]      # e.g. 5 p; progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
 runner's session (the master has its own window): watch or type to any of them. Panes are found by their @hst option, so
-join/break/swap them freely. Like overnight.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
+join/break/swap them freely. Like single.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
 into a finished session cancels that, so /exit it yourself or the runner never merges it.
 
 Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split parents, `(after X)` while X is open,
-Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Two running tasks
-never share a file named on their lines, except SHARED (play.rs: nearly every task names it). The first open "Next"
-task always leads. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
+Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Mode p (priority):
+each free slot takes the next such task, exactly in order, files may overlap. Mode d (different): two running tasks
+never share a file named on their lines, except SHARED (play.rs: nearly every task names it); the first open "Next"
+task always leads and the rest of "Next" waits for it. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
 context/, mods/ (+ the old replacements/ link) and the ISO are symlinked in. Each slot N has its own PCSX2 (HST_PCSX2=N: copy
 N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
 tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
@@ -31,7 +32,12 @@ from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WT = ROOT + '-slots'
-SLOTS, PAUSE = int(os.environ.get('HST_SLOTS', 3)), int(os.environ.get('HST_PAUSE', 60))
+_args = sys.argv[1:]
+SLOTS = int(next((a for a in _args if a.isdigit()), 3))
+MODE = next((a for a in _args if a in ('p', 'd')), 'd')
+if any(a not in ('p', 'd') and not a.isdigit() for a in _args) or SLOTS < 1:
+    raise SystemExit('usage: ./parallel.sh [N] [p|d]   (N sessions, p = priority order, d = different files)')
+PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 WATCH = 600  # seconds between match-over checks of a slot's game while a capture drives it
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
@@ -88,6 +94,10 @@ def tasks():
 def pick(running, tried):
     busy, next_seen = list(running.values()), False
     for tid, section, files in tasks():
+        if MODE == 'p':
+            if tid not in tried and all(tid != b[0] for b in busy):
+                return tid, section, files
+            continue
         if tid in tried or (section.startswith('Next') and next_seen):
             continue  # the user's ordered list: only its first untried task is ever eligible
         next_seen |= section.startswith('Next')
@@ -161,7 +171,7 @@ def start(n, task):
     return p, sid, since
 
 
-MASTER = """You are the master of a parallel unattended run (tools/overnight-parallel.py): nobody will answer \
+MASTER = """You are the master of a parallel unattended run (./parallel.sh): nobody will answer \
 questions. Up to {slots} agents work on PLAN.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
 runner clears your context and sends you these instructions with one message at a time: `REPORT <ID> slot <n>: \
 <session, its commits>` as each one ends. Earlier reports' outcomes are at the end of context/notes/master.md. Handle the \
@@ -307,16 +317,16 @@ def watch(n):
 
 def main():
     if not os.environ.get('TMUX'):
-        raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
-    others = [p for p in sp.run(['pgrep', '-f', r'^(python3 \S*overnight-parallel\.py|bash \S*overnight\.sh)( |$)'], capture_output=True, text=True).stdout.split()
+        raise SystemExit('run me inside tmux: tmux new -s hst ./parallel.sh [N] [p|d]')
+    others = [p for p in sp.run(['pgrep', '-f', r'^(python3 \S*(overnight-parallel|tools/parallel)\.py|bash \S*(overnight|single)\.sh)( |$)'], capture_output=True, text=True).stdout.split()
               if int(p) != os.getpid()]
     if others:  # two parallel runners would share worktrees s1..sN; overnight.sh commits on main under the master
-        raise SystemExit(f'another overnight runner is going (pid {", ".join(others)}); wait for it to end')
+        raise SystemExit(f'another runner is going (pid {", ".join(others)}); wait for it to end')
     os.makedirs(NOTES, exist_ok=True)
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
     watched = {}  # slot -> time of its last match-over check
     stopping = False  # `s` typed: start nothing new
-    log(f'parallel run, {SLOTS} slots')
+    log(f'parallel run, {SLOTS} slots, mode {MODE}')
     master()
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
