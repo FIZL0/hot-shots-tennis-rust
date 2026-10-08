@@ -31,3 +31,4 @@ pub mod npc;
 pub mod ai;
 pub mod position;
 pub mod clouds;
+pub mod bodyhit;

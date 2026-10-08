@@ -41,6 +41,7 @@ use crate::character::{self, CharacterData, Motion};
 use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
+mod bodyhit;
 mod markers;
 mod panel;
 mod popups;
@@ -324,6 +325,8 @@ struct Game {
     marks: Marks,
     /// The finish and Set / Match Point banners (`popups`).
     finish: popups::Finish,
+    /// The player the ball hit this point, if any (`bodyhit`).
+    body_hit: Option<i32>,
     /// The jingle due (slot 8 key: 0 change ends, 1 game, 2 set, 3 match won by a player's side, 4 lost), and whether the BGM
     /// stays faded until the next point.
     jingle: Option<u8>,
@@ -440,6 +443,7 @@ struct BalloonView(usize, Handle<StandardMaterial>);
 struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
+    app.add_plugins(bodyhit::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
@@ -1030,6 +1034,7 @@ fn setup(
         cam_owner: Some(0),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
         chars: vec![0; rules.players as usize],
+        body_hit: None,
         voices: vec![default(); rules.players as usize],
         data: Vec::new(),
         post_winner: 0,
@@ -3065,7 +3070,7 @@ fn simulate(mut g: ResMut<Game>) {
         return;
     }
     let f = &g.flight;
-    // ponytail: no ball body hits and no rest detection on steep surfaces yet; the rally timeout counts as at rest
+    // ponytail: no rest detection on steep surfaces yet; the rally timeout counts as at rest
     let view = BallState {
         call: f.call,
         contacts: f.contacts,
@@ -3074,11 +3079,11 @@ fn simulate(mut g: ResMut<Game>) {
     };
     if !g
         .rally
-        .check(&view, g.shots, g.last_hitter, g.score.server, None, true)
+        .check(&view, g.shots, g.last_hitter, g.score.server, g.body_hit, true)
     {
         return;
     }
-    let verdict = g.rally.judge(None);
+    let verdict = g.rally.judge(g.body_hit);
     g.finish.point_over(&g.rally, verdict.call, g.players.len() > 2);
     let why = CALLS[verdict.call as usize];
     let Some(team) = verdict.winner else {
@@ -3153,7 +3158,7 @@ fn simulate(mut g: ResMut<Game>) {
 
 /// Every player's reaction to the point (`hst_sim::motion::reaction`): winners `gu`, losers `di` (`_set` when the
 /// point ends a game), in doubles sometimes a team reaction instead, each player's own pick.
-/// ponytail: the app's random numbers stand in for the game's; ball body hits (`re_ball`) aren't simulated yet
+/// ponytail: the app's random numbers stand in for the game's
 fn react(g: &mut Game, event: Event) {
     let n = g.players.len() as i32;
     let winner = g.post_winner;
@@ -3161,7 +3166,7 @@ fn react(g: &mut Game, event: Event) {
     for i in 0..g.players.len() {
         let won = i as i32 & 1 == winner;
         let base = motion::reaction(
-            false,
+            g.body_hit == Some(i as i32),
             n,
             won,
             matches!(event, Event::Game | Event::Set),
