@@ -369,6 +369,22 @@ pub fn timing(after: [i32; 3], before: [i32; 3]) -> (Vec<u8>, Vec<i32>) {
     (grades[..len].to_vec(), bias[..len].to_vec())
 }
 
+/// A dive's lock from the path index of its contact `frame`: (grade, offset), the bias being the offset. Its own
+/// sweet frame is 10, not the timing tables': grade 2 within a frame of it, else 4.
+pub fn dive_lock(frame: usize) -> (u8, i32) {
+    let offset = frame as i32 - 10;
+    (if offset.abs() < 2 { 2 } else { 4 }, offset)
+}
+
+/// The launch's motion flags of a ground stroke (`branch` 1) or volley (2) from the hitter's current `motion` (the
+/// game's motion number): (odd, awkward). An odd motion (the other hand's side) mirrors the shot's bend; it, or
+/// the body-shot swing (0x1a/0x1b), adds to the mis-hit chance. Other branches have neither.
+pub fn launch_motion(branch: u8, motion: i32) -> (bool, bool) {
+    let rally = branch == 1 || branch == 2;
+    let odd = rally && motion & 1 != 0;
+    (odd, odd || rally && (motion == 0x1a || motion == 0x1b))
+}
+
 /// A rally swing's timing error as the original sets it up at the lock (tenths of a metre): `side` and `depth`
 /// off the aim, and `mode` the pressure toward the weaker (down) trajectory tables. Ground strokes (branch 1),
 /// volleys (2) and dives (3); `bias` is the timing table's for the contact frame and `offset` frames from the

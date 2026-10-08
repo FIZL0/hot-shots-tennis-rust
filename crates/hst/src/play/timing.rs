@@ -57,9 +57,17 @@ pub fn load(iso: &mut Iso, params: &ShotParams, c: usize) -> Timing {
     Timing { character: c, stats, bias, down2: exe.down2_blend(), variants }
 }
 
+/// The timing error of player `i`'s dive `d` at its contact (the ball where it is), the lob button `lob`: its bias is
+/// its offset (`swing::dive_lock`), its error along the dive's direction.
+pub fn dive_error(g: &Game, i: usize, d: &hst_sim::swing::Dive, lob: bool) -> TimingError {
+    let (t, p) = (&g.timing[i], &g.players[i]);
+    let (_, offset) = swing::dive_lock(d.frame);
+    swing::timing_error(&t.stats, 3, lob, offset, offset, -g.flight.ball.pos[1], false, false, false, d.dir, p.end)
+}
+
 /// The timing error of player `i`'s ground stroke or volley at contact `c` (`branch` 1 or 2), the lob button
 /// `lob`.
-// ponytail: the contact height is the ball's at the contact frame; dives take no error (their grade is set apart)
+// ponytail: the contact height is the ball's at the contact frame
 pub fn error(g: &Game, i: usize, c: &Contact, branch: u8, lob: bool) -> TimingError {
     let (t, p) = (&g.timing[i], &g.players[i]);
     let bias = t.bias.get((c.offset + SWEET_FRAME) as usize).copied().unwrap_or(0);
@@ -86,15 +94,16 @@ pub struct Timed {
 }
 
 /// Player `who`'s mis-hit roll as it strikes a `grade` ground stroke (`branch` 1), volley (2) or dive (3) of `kind`
-/// (swing animation `anim`, `forehand` side) from the ball where it is: tired by its stamina after the stroke's
-/// cost, awkward on the body-shot swing or the other-hand side.
-pub fn mis_hit(g: &mut Game, who: usize, (branch, grade, kind): (u8, u8, i32), anim: u8, forehand: bool) -> swing::MisHit {
+/// (`forehand` side) from the ball where it is: tired by its stamina after the stroke's cost, awkward by the motion
+/// it plays (`swing::launch_motion`: the body-shot swing or the other-hand side).
+pub fn mis_hit(g: &mut Game, who: usize, (branch, grade, kind): (u8, u8, i32), forehand: bool) -> swing::MisHit {
     let p = &g.players[who];
     let rally = g.phase == super::Phase::Rally && g.players.len() > 1;
     let stamina = if rally { hst_sim::player::stroke_stamina(&p.stats, p.body.stamina, branch, forehand, 0) } else { p.body.stamina };
     let height = -g.flight.ball.pos[1];
     let rng = &mut g.rng;
-    swing::mis_hit(grade, branch, kind, stamina < 10, anim & 1 != 0 || anim == 0x1a, height, || {
+    let (_, awkward) = swing::launch_motion(branch, p.cmd.id as i32);
+    swing::mis_hit(grade, branch, kind, stamina < 10, awkward, height, || {
         super::rand(rng);
         *rng
     })
