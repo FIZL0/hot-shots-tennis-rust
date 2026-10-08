@@ -192,14 +192,16 @@ fn load(
         let season = args.singles as usize;
         let mut sky_colour = std::collections::HashMap::new();
         let (mut hole_box, mut model_tris) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let mut model_shapes = std::collections::HashMap::new();
         for name in ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
             for_models(&data, |n| n.contains("_sky"), |stem, model, mats| {
                 sky_colour.insert(stem, sky_top(&model, &mats));
             });
             // the sun-shade map: the hole model's box frames it, the casters' triangles shade it
-            for_models(&data, |n| !skip(n), |stem, model, _| {
+            for_models(&data, |n| !skip(n), |stem, model, mats| {
                 hole_box.insert(stem.clone(), shade::packet_box(&model));
+                model_shapes.insert(stem.clone(), hst_sim::shade::Shape::new(&model, &mats));
                 let tris: Vec<[[f32; 3]; 3]> = model.materials.iter().flatten().flat_map(|pk| pk.triangles.iter().map(|t| t.map(|i| pk.vertices[i as usize].pos))).collect();
                 model_tris.insert(stem, tris);
             });
@@ -308,12 +310,12 @@ fn load(
             let Some(parts) = library.get(&e.stem) else { continue };
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
             let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
-            let tris = model_tris.get(&e.stem);
+            let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
                 let axes = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| (t.rotation * a * t.scale).to_array());
-                shade_casters.push(hst_sim::shade::Caster { axes, pos: p.pos, tris: tris.cloned().unwrap_or_default() });
+                shade_casters.push(hst_sim::shade::Caster { axes, pos: p.pos, tris: shape.tris, cut: shape.cut });
             }
         }
         if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
