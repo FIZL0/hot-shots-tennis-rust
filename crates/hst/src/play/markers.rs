@@ -7,6 +7,11 @@
 //! the character's reach centre (TParam column 55) + 0.65 m. Its half-width is 0.3 · max(1, 0.15·z·t) · min(1,
 //! 0.2·z·t) for view depth z and t = tan of the horizontal half-angle, which keeps it a near-constant size on screen;
 //! its height is 0.84 of its width.
+//!
+//! The original queues them in a draw bucket after the whole 3D scene, Z-tested but not Z-written: the court and
+//! the players' bodies in front still cover them (sunk into the court they clip at the ground,
+//! `research/marker_depth.py`), but translucent scenery never draws over them. Bevy sorts blended meshes by centre
+//! distance, so a big blended scenery mesh nearer by centre would draw over the marker; `LAST` sorts it after them.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -14,6 +19,10 @@ use hst_data::{iso::Iso, xb::Archive};
 use super::panel::{self, Colours};
 use super::{Game, Pads, Phase};
 use crate::Args;
+
+/// Added to the marker's sort distance (metres) so it draws after every other blended mesh. Bevy also applies it
+/// as a constant GPU depth bias (in depth-buffer units: ~0.1 % of the view depth, a few cm at court range).
+const LAST: f32 = 1e4;
 
 /// One player's marker quad (its own material: tint and cell).
 #[derive(Component)]
@@ -60,6 +69,7 @@ fn setup(
             alpha_mode: AlphaMode::Blend,
             double_sided: true,
             cull_mode: None,
+            depth_bias: LAST,
             ..default()
         });
         commands.spawn((Marker(i, m.clone()), Mesh3d(quad.clone()), MeshMaterial3d(m), Transform::default(), Visibility::Hidden));
