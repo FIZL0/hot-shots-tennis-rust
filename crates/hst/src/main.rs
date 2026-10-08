@@ -21,6 +21,7 @@ mod play;
 mod sandbox;
 mod shadow;
 mod textures;
+mod weather;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -109,7 +110,7 @@ fn main() {
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -203,18 +204,42 @@ fn load(
             let arc = Archive::parse(&d).ok()?;
             arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}.dat")))?).ok()
         });
-        if let Some((fog, colour)) = envir.as_ref().and_then(|e| gs::court_fog(e, season)) {
-            for (_, m) in gs_materials.iter_mut() {
-                (m.uniform.fog, m.uniform.fog_color) = (fog, colour);
-            }
-        }
-        // and the match camera's light: the season's colours from the sun
+        // the fogs, light, clear colour and ground shadow follow the weather (`weather::apply`)
         let sun = shadow::Sun::read(&mut iso, n as usize);
-        if let Some(((colour, ambient), sun)) = envir.as_ref().and_then(|e| gs::court_light(e, season)).zip(sun) {
-            for (_, m) in gs_materials.iter_mut() {
-                (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (sun.light.extend(0.0), colour, ambient);
-            }
-        }
+        let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
+        let exe = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
+        let today = {
+            let o = exe.weather_odds(n);
+            let odds = hst_sim::weather::Odds { cloudy: o[0], cloudy_len: [o[1], o[2]], rain: o[3], rain_len: [o[4], o[5]], no_border: o[7] != 0, heavy: o[8] != 0 };
+            let ((directions, speed), (chance, kind)) = (exe.wind(n), exe.gusts(n));
+            let wind = hst_sim::weather::Wind { chance, kind, directions, speed };
+            // a match: 4 games, 1 set (`play` keeps `Weather::game` on the games played)
+            let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
+            let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
+            let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed
+            });
+            let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
+            let w = weather::Weather { schedule, game: 0, fixed };
+            let today = w.today();
+            commands.insert_resource(w);
+            today
+        };
+        let mut look = weather::CourtLook {
+            envir: envir.clone().unwrap_or_default(),
+            season,
+            sky: None,
+            looks: exe.weather_looks(),
+            bg: Default::default(),
+            skies: Default::default(),
+            holes: Default::default(),
+            acc: Vec::new(),
+            clo: Vec::new(),
+            last: None,
+        };
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
@@ -230,9 +255,13 @@ fn load(
                 sky = sky_colour.get(&e.stem).copied();
             }
             if let Some(parts) = library.get(&e.stem) {
-                spawn(&mut commands, parts, Transform::default());
-                for (_, m) in parts.iter().filter(|_| e.dir == "hole") {
-                    gs_materials.get_mut(m).unwrap().uniform.shadow = sun.map_or(0.0, |s| s.darken);
+                let id = spawn(&mut commands, parts, Transform::default());
+                let set = if e.dir == "hole" { &mut look.holes } else if e.stem.contains("_sky") { &mut look.skies } else { &mut look.bg };
+                set.extend(parts.iter().map(|(_, m)| m.id()));
+                if e.stem.contains("_acc") {
+                    look.acc.push(id);
+                } else if e.stem.contains("_clo") {
+                    look.clo.push(id);
                 }
                 // the hole model's own .UVA/.MTA play from the start (water, waterfalls)
                 if let Some((anim, tags)) = anims.remove(&e.stem).filter(|(a, _)| e.dir == "hole" && !a.is_empty()) {
@@ -241,8 +270,9 @@ fn load(
                 }
             }
         }
-        if let Some([r, g, b]) = envir.as_ref().zip(sky).and_then(|(e, c)| gs::court_clear(e, season, c)) {
-            commands.insert_resource(ClearColor(Color::srgb_u8(r, g, b)));
+        look.sky = sky;
+        if envir.is_some() {
+            commands.insert_resource(look);
         }
         if let Some(sun) = sun {
             commands.insert_resource(sun);
@@ -272,30 +302,9 @@ fn load(
             let count = envir.zip(hole).and_then(|(e, h)| layout::cloud_count(&e, &h, 1)).unwrap_or(20);
             let models: Vec<_> = list.iter().filter(|e| e.dir == "cloud" && layout::in_season(&e.stem, season)).filter_map(|e| library.get(&e.stem)).collect();
             if !models.is_empty() {
-                let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
-                let (directions, speed) = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").wind(n);
-                let mut rng = 0x2545_f491u32 ^ n;
-                let mut r = || {
-                    rng ^= rng << 13;
-                    rng ^= rng >> 17;
-                    rng ^= rng << 5;
-                    (rng >> 8) as f32 / (1 << 24) as f32
-                };
-                let degrees = directions[((r() * directions.len() as f32) as usize).min(directions.len() - 1)];
-                let list = hst_sim::clouds::spawn(count, models.len(), &mut r);
-                for (i, k) in list.iter().enumerate() {
-                    let rot = Quat::from_rotation_x(std::f32::consts::PI) * Quat::from_rotation_y(k.yaw);
-                    let bases = models[k.model].iter().map(|(_, m)| gs_materials.get(m).map_or(1.0, |m| m.uniform.color.w)).collect();
-                    let e = commands.spawn((CloudView(i, bases), Transform::from_rotation(rot).with_scale(Vec3::splat(40.0)), Visibility::default())).id();
-                    for (m, mat) in models[k.model] {
-                        // its own material: the fade scales its alpha
-                        let mut mat = gs_materials.get(mat).expect("cloud material").clone();
-                        mat.key.modulate = true;
-                        commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(gs_materials.add(mat))));
-                    }
-                    commands.entity(root).add_child(e);
-                }
-                commands.insert_resource(Clouds { list, degrees, speed, ticks: 0.0 });
+                let models = models.into_iter().cloned().collect();
+                // the layout is made when the weather settles (`clouds`)
+                commands.insert_resource(Clouds { list: Vec::new(), degrees: today.degrees, speed: today.speed, ticks: 0.0, count, models, root, layout: None, rng: 0x2545_f491u32 ^ n });
             }
         }
         // the background figures are `play::npcs`'s
@@ -541,22 +550,65 @@ struct Clouds {
     speed: f32,
     /// 60 Hz ticks owed.
     ticks: f32,
+    /// The court's cloud count, its cloud models and where they hang.
+    count: usize,
+    models: Vec<Vec<(Handle<Mesh>, Handle<gs::GsMaterial>)>>,
+    root: Entity,
+    /// The layout drawn (`hst_sim::weather::cloud_layout`), and the layout's random source.
+    layout: Option<(f32, f32, f32, Option<usize>)>,
+    rng: u32,
 }
 
 #[derive(Component)]
-/// Index into `Clouds::list` and each part's own material alpha.
-struct CloudView(usize, Vec<f32>);
+/// Index into `Clouds::list` and each part's own material colour.
+struct CloudView(usize, Vec<Vec4>);
 
-/// Drifts the clouds at 60 Hz; each stands at its place relative to the camera and fades out near the edge.
+/// Drifts the clouds at 60 Hz on the game's wind; each stands at its place relative to the camera, fades out near
+/// the edge and darkens in rain. Heavy rain remakes them low and many.
 fn clouds(
+    mut commands: Commands,
     time: Res<Time>,
     mut sky: Option<ResMut<Clouds>>,
+    weather: Option<Res<weather::Weather>>,
     camera: Query<&GlobalTransform, With<Orbit>>,
-    mut views: Query<(&CloudView, &mut Transform, &Children)>,
+    mut views: Query<(Entity, &CloudView, &mut Transform, &Children)>,
     parts: Query<&MeshMaterial3d<gs::GsMaterial>>,
     mut materials: ResMut<Assets<gs::GsMaterial>>,
 ) {
     let (Some(sky), Ok(camera)) = (sky.as_mut(), camera.single()) else { return };
+    let today = weather.map(|w| w.today()).unwrap_or_default();
+    (sky.degrees, sky.speed) = (today.degrees, today.speed);
+    let layout = hst_sim::weather::cloud_layout(today.weather);
+    if sky.layout != Some(layout) {
+        sky.layout = Some(layout);
+        for (e, ..) in &views {
+            commands.entity(e).despawn();
+        }
+        let (_, y0, y1, count) = layout;
+        let mut rng = sky.rng;
+        let mut r = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            (rng >> 8) as f32 / (1 << 24) as f32
+        };
+        sky.list = hst_sim::clouds::spawn(count.unwrap_or(sky.count), sky.models.len(), [y0 * 40.0, y1 * 40.0], &mut r);
+        sky.rng = rng;
+        for (i, k) in sky.list.iter().enumerate() {
+            let rot = Quat::from_rotation_x(std::f32::consts::PI) * Quat::from_rotation_y(k.yaw);
+            let bases = sky.models[k.model].iter().map(|(_, m)| materials.get(m).map_or(Vec4::ONE, |m| m.uniform.color)).collect();
+            let e = commands.spawn((CloudView(i, bases), Transform::from_rotation(rot).with_scale(Vec3::splat(40.0)), Visibility::default())).id();
+            for (m, mat) in &sky.models[k.model] {
+                // its own material: the fade scales its alpha; clouds draw without fog
+                let mut mat = materials.get(mat).expect("cloud material").clone();
+                mat.key.modulate = true;
+                mat.uniform.fog = gs::NO_FOG;
+                commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(materials.add(mat))));
+            }
+            commands.entity(sky.root).add_child(e);
+        }
+        return;
+    }
     sky.ticks += time.delta_secs() * 60.0;
     while sky.ticks >= 1.0 {
         sky.ticks -= 1.0;
@@ -565,7 +617,8 @@ fn clouds(
     }
     // game space is Bevy's turned a half-turn about X
     let eye = camera.translation() * Vec3::new(1.0, -1.0, -1.0);
-    for (v, mut t, children) in &mut views {
+    let tint = hst_sim::weather::cloud_tint(today.weather);
+    for (_, v, mut t, children) in &mut views {
         let k = &sky.list[v.0];
         t.translation = Vec3::from(k.pos) + eye;
         let fade = hst_sim::clouds::fade(k);
@@ -573,7 +626,7 @@ fn clouds(
             // ponytail: the fade scales the material alpha; the game writes it to the model (+0x5c) whose exact use
             // in the draw is unconfirmed
             if let Some(mut m) = parts.get(c).ok().and_then(|m| materials.get_mut(&m.0)) {
-                m.uniform.color.w = base * fade;
+                m.uniform.color = (base.truncate() * tint).extend(base.w * fade);
             }
         }
     }

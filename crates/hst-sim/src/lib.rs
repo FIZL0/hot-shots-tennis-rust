@@ -34,3 +34,4 @@ pub mod position;
 pub mod clouds;
 pub mod surprise;
 pub mod bodyhit;
+pub mod weather;

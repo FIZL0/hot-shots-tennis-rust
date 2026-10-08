@@ -193,14 +193,33 @@ impl<'a> Game<'a> {
     }
 
     /// Court `court`'s wind (1..11): the directions it may blow from (degrees, the game picks one at random; none
-    /// allowed = 180) and its speed (0 = calm).
+    /// allowed = 0) and its speed (0 = calm).
     pub fn wind(&self, court: u32) -> (Vec<f32>, f32) {
         let row = self.at(0x41_cf90 + (court - 1) * 0x14, 0x14);
         let i32_at = |o: usize| i32::from_le_bytes(row[o..o + 4].try_into().unwrap());
         let degrees = self.at(0x41_d070, 32).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32);
         let allowed: Vec<f32> = degrees.zip(&row[8..16]).filter(|(_, f)| **f != 0).map(|(d, _)| d).collect();
         let speed = if i32_at(0) > 0 { i32_at(0x10) as f32 } else { 0.0 };
-        (if allowed.is_empty() { vec![180.0] } else { allowed }, speed)
+        (if allowed.is_empty() { vec![0.0] } else { allowed }, speed)
+    }
+
+    /// Court `court`'s (1..11) gust odds: the chance per set of a gusty set and how gusty it is (0..2).
+    pub fn gusts(&self, court: u32) -> (i32, i32) {
+        let row = self.at(0x41_cf90 + (court - 1) * 0x14, 8);
+        (i32::from_le_bytes(row[..4].try_into().unwrap()), i32::from_le_bytes(row[4..].try_into().unwrap()))
+    }
+
+    /// Court `court`'s (1..11) weather odds: cloudy chance, its min and max length, rain chance, its min and max
+    /// length, (unused), no cloudy border, heavy rain.
+    pub fn weather_odds(&self, court: u32) -> [i32; 9] {
+        let row = self.at(0x41_ce00 + (court - 1) * 0x24, 0x24);
+        std::array::from_fn(|k| i32::from_le_bytes(row[4 * k..4 * k + 4].try_into().unwrap()))
+    }
+
+    /// Each weather's (0..5) look row: sky, bg and far fog amounts, fog z range (−1 = the court's own), light scale.
+    pub fn weather_looks(&self) -> [[f32; 6]; 6] {
+        let v = self.f32s(0x3f_c060, 36);
+        std::array::from_fn(|w| std::array::from_fn(|k| v[6 * w + k]))
     }
 
     /// Trigger creature type `ty`'s (0..53) sound (program 7 key, −1 none) and, for the types that play it now and

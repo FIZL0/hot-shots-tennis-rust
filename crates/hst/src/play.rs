@@ -51,6 +51,7 @@ mod panel;
 mod popups;
 mod surprise;
 mod timing;
+mod weather;
 mod widescreen;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -482,6 +483,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.add_plugins(surprise::plugin);
+    app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
@@ -664,7 +666,7 @@ fn tparam(iso: &mut Iso, n: usize) -> Vec<String> {
 }
 
 /// A character's movement stats from TParam.csv (SPE, Agili, STA, dive/backhand/smash stamina costs).
-/// ponytail: clear weather (0); the match's weather table (rain/snow slow the acceleration) comes with P17/P21
+/// Clear weather (0): `weather::step` turns the agility to rain's as the games go by.
 fn character_stats(iso: &mut Iso, n: usize) -> Stats {
     let row = tparam(iso, n);
     let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
@@ -2272,8 +2274,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.pending = None;
             p.dive = Some(d);
             p.aim_from = [p.pos[0], p.pos[2]];
-            // ponytail: clear weather (see Stats), so the thud's key is 0
-            let thud = sound::dive_thud(0);
+            let thud = sound::dive_thud(crate::weather::now());
             g.whooshes.extend([
                 (0, i, thud),
                 (sound::dive_echo(g.players.len() as u32), i, thud),

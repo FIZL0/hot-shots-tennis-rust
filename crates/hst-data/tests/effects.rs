@@ -47,6 +47,12 @@ fn court10_wind_and_clouds() {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
     assert_eq!(game.wind(10), (vec![315.0, 0.0, 45.0], 2.0));
+    // weathers (P17i): court 10 gusts 2% kind 2, cloudy 5% for 2..3 games, no rain; court 11 rains heavy; court 7 calm
+    assert_eq!(game.gusts(10), (2, 2));
+    assert_eq!(game.weather_odds(10), [5, 2, 3, 0, 1, 3, 0, 1, 0]);
+    assert_eq!(game.weather_odds(11), [20, 2, 3, 30, 2, 4, 0, 0, 1]);
+    assert_eq!(game.wind(7), (vec![0.0], 0.0));
+    assert_eq!(game.weather_looks()[3], [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
     let mut find = |xb: &str, suffix: &str| {
         let data = iso.read(xb).unwrap();
         let arc = Archive::parse(&data).unwrap();

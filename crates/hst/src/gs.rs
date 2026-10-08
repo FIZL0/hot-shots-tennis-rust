@@ -34,6 +34,7 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use hst_data::mtl;
+use hst_sim::weather::Look;
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "gs.wgsl");
@@ -98,49 +99,61 @@ pub struct GsUniform {
 pub const DEFAULT_LIGHT: (Vec4, Vec4, Vec4) =
     (Vec4::new(0.408248, 0.816497, 0.408248, 0.0), Vec4::new(0.49, 0.49, 0.49, 1.0), Vec4::new(0.5, 0.5, 0.5, 1.0));
 
-/// A court's light for season `season` from its `envir_cNN.dat` (the light row `court_clear` reads): (colour,
-/// ambient) = the row's RGB × +0x10 and × +0xc. The direction is the sun's (`shadow::Sun::light`).
+/// A court's light for season `season` from its `envir_cNN.dat` (the light row `court_clear` reads) in weather `w`:
+/// (colour, ambient) = the row's RGB × +0x10 (× the weather's scale) and × +0xc; rain greys the RGB to its mean.
+/// The direction is the sun's (`shadow::Sun::light`).
 /// ponytail: the game dims both (×(1 − x/2), ×(1 − 0.6x)) when the camera looks within ~37° of the sun; a match
 /// camera never does.
-pub fn court_light(envir: &[u8], season: usize) -> Option<(Vec4, Vec4)> {
+pub fn court_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)> {
+    let (rgb, ambient, intensity) = light_row(envir, season, w)?;
+    Some(((rgb * intensity).extend(1.0), (rgb * ambient).extend(1.0)))
+}
+
+/// The light row's RGB, ambient and intensity in weather `w`.
+fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> {
     let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
     let t = ((*envir.get(0x10 + season * 0x30)? as i8) < 1) as usize;
     let row = 0xd0 + season * 0x70 + t * 0x38;
-    let rgb = Vec3::new(f(row)?, f(row + 4)?, f(row + 8)?);
-    Some(((rgb * f(row + 0x10)?).extend(1.0), (rgb * f(row + 0xc)?).extend(1.0)))
+    let mut rgb = Vec3::new(f(row)?, f(row + 4)?, f(row + 8)?);
+    if w.grey {
+        rgb = Vec3::splat((rgb.x + rgb.y + rgb.z) / 3.0);
+    }
+    Some((rgb, f(row + 0xc)?, f(row + 0x10)? * w.scale))
 }
 
 /// Fog parameters that leave every pixel as it is.
 pub const NO_FOG: Vec4 = Vec4::new(255.0, 255.0, 0.0, 1.0);
 
-/// A court's fog for season `k` (1 in singles, 0 in doubles) from its `envir_cNN.dat`: (`GsUniform::fog`, `fog_color`).
-pub fn court_fog(envir: &[u8], k: usize) -> Option<(Vec4, Vec4)> {
+/// A court's fogs for season `k` (1 in singles, 0 in doubles) from its `envir_cNN.dat` in weather `w`:
+/// `GsUniform::fog` for the court, for the background models (`_bg`, `_acc`) and for the sky (both flat: the same
+/// F at every depth), and the `fog_color` they share (white in rain; × the weather's scale).
+pub fn court_fog(envir: &[u8], k: usize, w: &Look) -> Option<(Vec4, Vec4, Vec4, Vec4)> {
     let row = envir.get(0x290 + k * 0x60..0x2f0 + k * 0x60)?;
     let f = |o: usize| f32::from_le_bytes(row[o..o + 4].try_into().unwrap());
-    let colour = Vec4::new(row[0x18] as f32, row[0x19] as f32, row[0x1a] as f32, 255.0) / 255.0;
+    let rgb = if w.grey { [255; 3] } else { [row[0x18], row[0x19], row[0x1a]] };
+    let colour = Vec4::new(rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, 255.0).map(|c| (c * w.scale) as u8 as f32) / 255.0;
     // off: the game sets (255, 255, 0, 0.001)
-    let (near, far, z0, mut z1) = if row[0] != 0 { (255.0, 255.0, 0.0, 0.001) } else { (f(0x28), f(0x2c), f(0x38), f(0x3c)) };
+    const OFF: Vec4 = Vec4::new(255.0, 255.0, 0.0, 0.001);
+    let (near, far, z0, mut z1) = if row[0] != 0 { OFF.into() } else { (f(0x28), w.far.unwrap_or(f(0x2c)), w.z[0].unwrap_or(f(0x38)), w.z[1].unwrap_or(f(0x3c))) };
     if z1 <= z0 {
         z1 = z0 + 1.0;
     }
-    Some((Vec4::new(near, far, z0, z1), colour))
+    let flat = |off: u8, v: f32| if off != 0 { OFF } else { Vec4::new(v, v, 0.0, 1.0) };
+    Some((Vec4::new(near, far, z0, z1), flat(row[1], w.bg.unwrap_or(f(0x30))), flat(row[2], w.sky.unwrap_or(f(0x34))), colour.with_w(1.0)))
 }
 
 /// The colour the game clears the screen to before a court frame (what shows above the sky dome's open top).
 /// `sky` is the drawn sky's top-ring vertex colour × material colour / 128 (0..255). Per season the file has a
 /// time-of-day threshold byte at 0x10 (sub-row 1 when it is below the hole, 1) and two light rows at 0xd0
-/// (RGB, intensity, ambient); the fog row's F at +0x34 mixes in FOGCOL.
-/// ponytail: clear weather (0/1); weather 2..5 grey the light and white the fog (P17i). The eye-height term that
-/// lifts F only matters off court (0 for a match camera).
-pub fn court_clear(envir: &[u8], season: usize, sky: [f32; 3]) -> Option<[u8; 3]> {
-    let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
-    let t = ((*envir.get(0x10 + season * 0x30)? as i8) < 1) as usize;
-    let light = 0xd0 + season * 0x70 + t * 0x38;
-    let (fog, k) = (0x290 + season * 0x60, f(light + 0xc)? + f(light + 0x10)?);
-    let big_f = f(fog + 0x34)?;
+/// (RGB, intensity, ambient); the sky fog's F (the fog row's +0x34, or the weather's) mixes in FOGCOL.
+/// ponytail: the eye-height term that lifts F only matters off court (0 for a match camera).
+pub fn court_clear(envir: &[u8], season: usize, sky: [f32; 3], w: &Look) -> Option<[u8; 3]> {
+    let (rgb, ambient, intensity) = light_row(envir, season, w)?;
+    let (_, _, sky_fog, colour) = court_fog(envir, season, w)?;
+    let (k, big_f) = (ambient + intensity, sky_fog.x);
     let mut out = [0; 3];
     for i in 0..3 {
-        let v = sky[i] * f(light + 4 * i)? * k * big_f + *envir.get(fog + 0x18 + i)? as f32 * (255.0 - big_f);
+        let v = sky[i] * rgb[i] * k * big_f + (colour[i] * 255.0).round() * (255.0 - big_f);
         out[i] = (v / 255.0).min(255.0) as u8;
     }
     Some(out)
@@ -317,11 +330,17 @@ mod tests {
         for (o, v) in [(0x2b8, 255.0f32), (0x2bc, 224.4), (0x2c8, 40.0), (0x2cc, 190.0)] {
             envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
         }
-        let (fog, colour) = court_fog(&envir, 0).unwrap();
+        let (fog, _, _, colour) = court_fog(&envir, 0, &Look::CLEAR).unwrap();
         assert_eq!(fog, Vec4::new(255.0, 224.4, 40.0, 190.0));
         assert_eq!((colour * 255.0).round(), Vec4::new(181.0, 209.0, 220.0, 255.0));
+        // PINE, weather 3 forced: far 0x42cbffff, z 40..150; FOGCOL white × 0.65
+        let rain = hst_sim::weather::look(3, [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
+        let (fog, bg, sky, colour) = court_fog(&envir, 0, &rain).unwrap();
+        assert_eq!(fog, Vec4::new(255.0, f32::from_bits(0x42cb_ffff), 40.0, 150.0));
+        assert_eq!((bg, sky), (Vec4::new(76.5, 76.5, 0.0, 1.0), Vec4::new(0.0, 0.0, 0.0, 1.0)));
+        assert_eq!((colour * 255.0).round(), Vec4::new(165.0, 165.0, 165.0, 255.0));
         envir[0x290] = 1;
-        assert_eq!(court_fog(&envir, 0).unwrap().0, Vec4::new(255.0, 255.0, 0.0, 0.001));
+        assert_eq!(court_fog(&envir, 0, &Look::CLEAR).unwrap().0, Vec4::new(255.0, 255.0, 0.0, 0.001));
     }
 
     #[test]
@@ -334,9 +353,15 @@ mod tests {
         }
         envir[0x2a8..0x2ab].copy_from_slice(&[0xb5, 0xd1, 0xdc]);
         let sky = [7.0, 17.0, 43.0].map(|c: f32| c * 255.0 / 128.0);
-        assert_eq!(court_clear(&envir, 0, sky), Some([0x11, 0x28, 0x67]));
+        assert_eq!(court_clear(&envir, 0, sky, &Look::CLEAR), Some([0x11, 0x28, 0x67]));
+        // PINE, weather 3: the light greys to 0.847059 and its intensity drops to 0x3ee8f5c0
+        let rain = hst_sim::weather::look(3, [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
+        let (colour, _) = court_light(&envir, 0, &rain).unwrap();
+        assert_eq!(colour.x.to_bits(), (f32::from_bits(0x3f58_d8d8) * f32::from_bits(0x3ee8_f5c0)).to_bits());
+        // sky fog F 0: the clear colour is the fog colour, white × 0.65
+        assert_eq!(court_clear(&envir, 0, sky, &rain), Some([165, 165, 165]));
         // threshold 0 (court 9 season 0) picks the second light row, all zero here
         envir[0x10] = 0;
-        assert_eq!(court_clear(&envir, 0, sky), Some([0, 0, 0]));
+        assert_eq!(court_clear(&envir, 0, sky, &Look::CLEAR), Some([0, 0, 0]));
     }
 }
