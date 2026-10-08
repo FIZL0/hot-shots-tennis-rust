@@ -182,16 +182,6 @@ impl Bindings {
     pub fn pad_just_pressed(&self, g: &Gamepad, a: Action) -> bool {
         self.of(a).iter().any(|x| matches!(x, Input::Pad(b) if g.just_pressed(*b)))
     }
-
-    /// `J/PadSouth`-style list of an action's bindings (keys only unless `pads`), for the help line.
-    pub fn names(&self, a: Action, pads: bool) -> String {
-        let n: Vec<_> = self.of(a)
-            .iter()
-            .filter(|x| pads || matches!(x, Input::Key(_)))
-            .map(|x| x.name().trim_start_matches("Key").to_string())
-            .collect();
-        n.join("/")
-    }
 }
 
 /// `controls.txt` beside the disc image.

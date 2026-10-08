@@ -455,8 +455,6 @@ struct Figure(usize);
 /// The ball model, or (`true`) its shadow.
 #[derive(Component)]
 struct BallView(bool);
-#[derive(Component)]
-struct ScoreText;
 /// A balloon billboard over player `.0`'s head (its own material).
 #[derive(Component)]
 struct BalloonView(usize, Handle<StandardMaterial>);
@@ -493,7 +491,6 @@ pub fn plugin(app: &mut App) {
                 effects::draw_marks,
                 balloons,
                 character::animate,
-                hud,
             )
                 .chain(),
         )
@@ -1328,16 +1325,6 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(4.0, 12.0, -6.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    commands.spawn((
-        ScoreText,
-        Text::new(""),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Px(12.0),
-            ..default()
-        },
     ));
     // one balloon billboard per player (world space, turned to the camera every frame)
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
@@ -3643,34 +3630,6 @@ fn balloons(
         t.rotation = cam.rotation;
         t.scale = Vec3::splat(size);
         *vis = Visibility::Visible;
-    }
-}
-
-/// Debug lines under the original's panel (`panel`): the match message, controllers and controls; the score and who
-/// plays are the panel's.
-fn hud(
-    g: Res<Game>,
-    pads: Res<Pads>,
-    mode: Res<CamMode>,
-    bind: Res<controls::Bindings>,
-    mut q: Query<&mut Text, With<ScoreText>>,
-) {
-    use controls::Action as A;
-    for mut t in &mut q {
-        t.0 = format!(
-            "{}\ncontrollers: {} · camera: {} ({})\nmove {}{}{}{}/stick/d-pad · {} topspin · {} slice · {} lob · stick forward: flat, back + slice: drop",
-            g.message,
-            pads.connected,
-            if *mode == CamMode::Original { "original" } else { "free" },
-            bind.names(A::Camera, true),
-            bind.names(A::Up, false),
-            bind.names(A::Left, false),
-            bind.names(A::Down, false),
-            bind.names(A::Right, false),
-            bind.names(A::Normal, true),
-            bind.names(A::Cut, true),
-            bind.names(A::Lob, true),
-        );
     }
 }
 
