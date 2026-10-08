@@ -256,6 +256,14 @@ fn rot_z(t: f32) -> M4 {
     [[vu0::add(z, c), vu0::add(z, s), z, z], [vu0::sub(z, s), vu0::add(z, c), z, z], [z, z, vu0::add(z, 1.0), z], [z, z, z, vu0::add(z, 1.0)]]
 }
 
+/// The shot press a frame's pad gives (`before`, `now`: the pad words, ✕ 0x2000, ○ 0x4000, △ 0x1000): only a
+/// button going down this frame counts, ✕ before ○ before △ when several do; its kind (0 topspin, 1 slice, 3 lob).
+/// Holding a button gives nothing more: no charge, no repeat.
+pub fn press_kind(before: u16, now: u16) -> Option<i32> {
+    let down = now & !before;
+    [(0x2000, 0), (0x4000, 1), (0x1000, 3)].into_iter().find(|&(b, _)| down & b != 0).map(|(_, k)| k)
+}
+
 /// The shot buttons give three kinds: ✕ topspin (0), ○ slice (1), △ lob (3). Flat (2) and drop (4) have no
 /// button: at contact the stick (court x, z) turns a topspin into a flat shot when it points within 60° of
 /// `facing` (the hitter's end, +1 toward +z) and a slice into a drop shot when it points within 45° of straight
