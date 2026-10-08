@@ -40,6 +40,11 @@ HOOKS = {1: 0x3cf7b0, 2: 0x3d02c0, 3: 0x3d1320}
 # (*(*(*(opp+0x54)))+0x135, the aim choosers') at 0x521; no partner (0x510, 0x530, 0x720 zero).
 SINGLES = os.environ.get("HST_SINGLES") == "1"
 if SINGLES: HOOKS = {1: 0x3c9a40, 2: 0x3ca4e0, 3: 0x3cb130}
+# Tag 4 (B34): a human player's shot record routine 0x3646a0, called as (assist) from the player update; the assist
+# object is the AI's base (+4 player, +8 character record, +0x3c path count). No stick/button args (a1/a2 are left
+# zero in the record) and no partner/opponent regions. 0x740: the path object +0x1f0..+0x200 (its claimed slot +0x1fc
+# at 0x74c), every tag. Tag 4 takes the unused tag 0's scratch and call counter (tag & 3).
+HOOKS[4] = 0x3646a0
 # (at, source: list of (base, offsets to load through), first offset, bytes)
 PLAYER = [(0x340, 0x12b0, 0x20), (0x360, 0x1370, 0x20), (0x380, 0x13f0, 0x10), (0x390, 0x3050, 0x10),
           (0x3a0, 0x38f0, 0x10), (0x3b0, 0x3a90, 0xd0), (0x480, 0x3d60, 0x20), (0x4a0, 0x3df0, 0x20),
@@ -51,7 +56,8 @@ REGIONS = ([(0x40, ("abs", 0x423040), 0, 0x30), (0x80, ("ai",), 0, 0x280), (0x30
               (0x540, ("abs", GM_PTR, 0, 0x88), 0xe0, 0x10), (0x550, ("abs", GM_PTR, 0, 0x88), 0x220, 0x10),
               (0x560, ("abs", GM_PTR, 0, 0xa4), 0x50, 0xe0), (0x640, ("abs", 0x427050), 0, 0xc0),
               (0x700, ("ai", 8), 0, 0x10), (0x710, ("abs", GM_PTR, 0, 0x88), 0x8c0, 0x10),
-              (0x720, ("ai", 0xec), 0x3fa0, 0x10), (0x730, ("sp",), -0x20, 0x10)])
+              (0x720, ("ai", 0xec), 0x3fa0, 0x10), (0x730, ("sp",), -0x20, 0x10),
+              (0x740, ("abs", GM_PTR, 0, 0xa4), 0x1f0, 0x10)])
 if SINGLES:
     REGIONS = [r for r in REGIONS if not (r[1][0] == "ai" and r[1][1:2] and r[1][1] in (0xe4, 0xe8, 0xec))] + [
         (0x4f0, ("ai", 4), 0x3e90, 0x10), (0x500, ("ai", 0xd4), 0x3d70, 0x10),
@@ -122,13 +128,16 @@ def record(tag, size, exit):
     for k in range(3):
         p += [lw("t6", s + 4 + 4 * k, "t4"), sw("t6", 0x10 + 4 * k, "t5")]
     p += [sw("v0" if exit else "zero", 0x1c, "t5")]
-    p += [lw("t6", s + 8, "t4")] + copy("t6", 4, 0x20) + [lw("t6", s + 12, "t4"), lw("t6", 0, "t6"), sw("t6", 0x30, "t5")]
+    if tag != 4:
+        p += [lw("t6", s + 8, "t4")] + copy("t6", 4, 0x20) + [lw("t6", s + 12, "t4"), lw("t6", 0, "t6"), sw("t6", 0x30, "t5")]
     p += [*li("t6", GM_PTR), lw("t6", 0, "t6"), lw("t7", 0x58, "t6"), sw("t7", 0x34, "t5"), lbu("t7", 0x55, "t6"),
           sw("t7", 0x38, "t5"), *li("t6", 0x422fa4), lw("t6", 0, "t6"), sw("t6", 0x3c, "t5")]
     for a, at in [(0x427108, 0x70), (0x427110, 0x74), (0x3fc8d8, 0x78)]:
         p += [*li("t6", a), lw("t6", 0, "t6"), sw("t6", at, "t5")]
     p += [sw("zero", 0x7c, "t5")]
     for at, src, off, n in REGIONS:
+        if tag == 4 and src[0] == "ai" and src[1:2] and src[1] in (0xe4, 0xe8, 0xec, 0xd4):
+            continue
         if src[0] == "ai":
             p += [lw("t6", s + 4, "t4")] + [lw("t6", o, "t6") for o in src[1:]]
         elif src[0] == "sp":
@@ -148,7 +157,7 @@ def entry(tag, first, second):
     p = [lui("t4", DATA >> 16), lw("t6", busy, "t4"), br(5, "t6", "zero", "bad"), 0]
     # a nested call (busy) or one whose pointers aren't in RAM runs unhooked and is counted
     p += ram_check("a0", "bad")
-    for o in (4, 8, 0xd4) if SINGLES else (4, 8, 0xe4, 0xe8, 0xec):
+    for o in (4, 8) if tag == 4 else (4, 8, 0xd4) if SINGLES else (4, 8, 0xe4, 0xe8, 0xec):
         p += [lw("t7", o, "a0")] + ram_check("t7", "bad")
     for o in (0x88, 0xa4):
         p += [*li("t7", GM_PTR), lw("t7", 0, "t7"), lw("t7", o, "t7")] + ram_check("t7", "bad")
@@ -160,11 +169,11 @@ def entry(tag, first, second):
           lw("t2", 0x50, "t6"), sll("t8", "t7", 5), sll("t7", "t7", 4), addu("t7", "t7", "t8"), addu("t2", "t2", "t7")]
     # size: REC + count · 0x30
     p += [sll("t7", "t3", 5), sll("t6", "t3", 4), addu("t6", "t6", "t7"), addiu("at", "t6", REC), sw("at", s + 0x10, "t4"),
-          *li("t5", SCRATCH + 0x8000 * tag)]
+          *li("t5", SCRATCH + 0x8000 * (tag & 3))]
     p += [sw("t2", s + 0x14, "t4"), sw("t3", s + 0x18, "t4")]  # kept over record(): it uses t2
     p += record(tag, "at", False)
     p += [lw("t2", s + 0x14, "t4"), lw("t3", s + 0x18, "t4"), sll("t6", "t3", 3), sll("t3", "t3", 2), addu("t6", "t6", "t3"),
-          br(4, "t6", "zero", "nopath"), 0, *li("t5", SCRATCH + 0x8000 * tag + REC)]
+          br(4, "t6", "zero", "nopath"), 0, *li("t5", SCRATCH + 0x8000 * (tag & 3) + REC)]
     p += copyn("t2", "t6", 0) + ["nopath"]
     p += [lw(r, s + 4 + 4 * k, "t4") for k, r in enumerate(ARGS[:3])]
     p += [*li("ra", exit_at(tag)), first, second, j(HOOKS[tag] + 8), 0]
@@ -174,9 +183,9 @@ def entry(tag, first, second):
 
 
 def leave(tag, every):
-    scratch, s = SCRATCH + 0x8000 * tag, save(tag) & 0xffff
-    p = [lui("t4", DATA >> 16), sw("zero", D + 0x34 + 4 * tag, "t4"), lw("t6", D + 8 + 4 * tag, "t4"), addiu("t6", "t6", 1),
-         sw("t6", D + 8 + 4 * tag, "t4"), addiu("t7", "zero", every), br(5, "t6", "t7", "done"), 0, sw("zero", D + 8 + 4 * tag, "t4")]
+    scratch, s = SCRATCH + 0x8000 * (tag & 3), save(tag) & 0xffff
+    p = [lui("t4", DATA >> 16), sw("zero", D + 0x34 + 4 * tag, "t4"), lw("t6", D + 8 + 4 * (tag & 3), "t4"), addiu("t6", "t6", 1),
+         sw("t6", D + 8 + 4 * (tag & 3), "t4"), addiu("t7", "zero", every), br(5, "t6", "t7", "done"), 0, sw("zero", D + 8 + 4 * (tag & 3), "t4")]
     # room for the entry, the exit and its path copy? else count a drop
     p += [lw("t5", PTR & 0xffff, "t4"), *li("t6", END - 0x8000), sltu("t6", "t5", "t6"), br(5, "t6", "zero", "room"), 0,
           lw("t6", D + 0x18, "t4"), addiu("t6", "t6", 1), sw("t6", D + 0x18, "t4"), br(4, "zero", "zero", "done"), 0, "room"]

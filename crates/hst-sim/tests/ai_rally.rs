@@ -13,7 +13,7 @@ use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ai::{AiParams, Mind, Play};
 use hst_sim::player::{ReachStats, Stats};
 use hst_sim::position::Return;
-use hst_sim::rally::{Ball, Body, Out, PathCopy, Rally, Shot, World, SEEN};
+use hst_sim::rally::{Ball, Body, Human, Out, PathCopy, Rally, Shot, World, SEEN};
 
 const TABLE: u32 = 0x3174c0;
 const RECORD: u32 = 0x118;
@@ -324,6 +324,7 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         let row = &table[((u32_at(e, A + 0xc) - TABLE) / RECORD) as usize];
         // the dispatcher: receive in state 2, NET/BASE by style in state 3
         let want = match e[A + 0x54] {
+            _ if tag == 4 => 4,
             2 => 1,
             3 => match (Mind { net: e[A + back_mind(singles).1 + 8] != 0, ..Mind::default() }).play(row.style) {
                 Play::Net => 2,
@@ -354,8 +355,14 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
             used += 1;
             mt.next()
         };
+        let a = &e[A..];
+        let mut h = Human { found: a[0x40] != 0, next: i32_at(a, 0x44), kind: a[0x48], min: i32_at(a, 0x4c), volley: a[0x50] != 0 };
         let ret = if tag == 1 {
             r.receive(row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll)
+        } else if tag == 4 {
+            let claimed = i32_at(e, 0x74c) == b.team;
+            r.human_record(&mut h, row, &b, &mut w, &mut c, &mut seen, claimed, &mut roll);
+            false
         } else {
             if singles {
                 r.singles_rally(tag == 2, row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll);
@@ -369,7 +376,14 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         if used != u32_at(x, 0xc) - before {
             errs.push(format!("draws {used} vs {}", u32_at(x, 0xc) - before));
         }
-        let (got, want) = (bytes(e, &r, singles), &x[A..A + 0x280]);
+        let mut got = bytes(e, &r, singles);
+        if tag == 4 {
+            got[0x44..0x48].copy_from_slice(&h.next.to_le_bytes());
+            got[0x4c..0x50].copy_from_slice(&h.min.to_le_bytes());
+            flag(&mut got, 0x40, h.found);
+            got[0x48] = h.kind;
+        }
+        let want = &x[A..A + 0x280];
         let diff: Vec<String> = (0..0x280 / 4)
             .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
             .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
@@ -377,11 +391,12 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         if !diff.is_empty() {
             errs.push(format!("ai {}", diff.join(", ")));
         }
-        if out.stick.map(f32::to_bits) != quad(x, 0x20).map(f32::to_bits) {
+        // the human record takes no stick or button (their record slots hold whatever was there)
+        if tag != 4 && out.stick.map(f32::to_bits) != quad(x, 0x20).map(f32::to_bits) {
             errs.push(format!("stick {:?} vs {:?}", out.stick, quad(x, 0x20)));
         }
         let button = out.button.unwrap_or(u32_at(e, 0x30));
-        if button != u32_at(x, 0x30) {
+        if tag != 4 && button != u32_at(x, 0x30) {
             errs.push(format!("button {button} vs {}", u32_at(x, 0x30)));
         }
         if tag != 1 && records(e, &w) != x[0x580..0x640] {
@@ -440,6 +455,19 @@ fn receive_matches_the_game_long() {
 fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {
         for name in ["ai_net_s05.bin", "ai_rally_s05_weak.bin"] {
+            let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
+            eprintln!("{name} {what}: calls, per substate {n:?}");
+        }
+    }
+}
+
+/// B34: a human player's shot record (tag 4) in a 1P doubles match (`context/recordings/1p3goodcpus2.p2m2`
+/// played to a save at vsync 7930, 8380 and 8960, then hooked with the human idle: `context/b34/run2.sh`), and its
+/// CPU partner beside it (tags 1-3).
+#[test]
+fn human_record_matches_the_game() {
+    for name in ["ai_human_1p.bin", "ai_human_1p_b.bin", "ai_human_1p_c.bin"] {
+        for (tag, what) in [(4, "human"), (1, "receive"), (2, "NET"), (3, "BASE")] {
             let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
             eprintln!("{name} {what}: calls, per substate {n:?}");
         }

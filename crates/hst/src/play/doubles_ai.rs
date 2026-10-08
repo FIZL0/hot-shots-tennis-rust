@@ -4,7 +4,7 @@
 
 use super::*;
 use hst_sim::ai::{Guess, Phase as Ai, Play};
-use hst_sim::rally::{Ball as PathBall, Body, Out, PATH_MAX, PathCopy, Rally, SEEN, Shot, World};
+use hst_sim::rally::{Ball as PathBall, Body, Human, Out, PATH_MAX, PathCopy, Rally, SEEN, Shot, World};
 
 /// The doubles AI state the players share (the path copy and the shot records) and each one's own.
 #[derive(Default)]
@@ -16,6 +16,9 @@ pub(super) struct Shared {
     seen: Vec<bool>,
     records: [Shot; 4],
     me: [Mine; 4],
+    /// The human players' record keepers, and the shot count the records were last reset on.
+    humans: [Human; 4],
+    heard: Option<i32>,
 }
 
 #[derive(Default)]
@@ -45,6 +48,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let singles = g.players.len() == 2;
     if !matches!(g.players.len(), 2 | 4) || !matches!(mind.phase, Ai::Receive | Ai::Rally) {
         return false;
+    }
+    if !singles {
+        heard_shot(g);
     }
     let d = &mut g.doubles_ai;
     if d.stepped & 1 << i != 0 {
@@ -263,4 +269,105 @@ fn landing(g: &Game) -> [f32; 4] {
         f.step(&g.shot, &COURTS[g.court]);
     }
     up(f.ball.pos)
+}
+
+/// The strike, new path and point messages to the AI objects: the shot records back to unset (n = −1) and the human
+/// players' searches back to the path's start. Run once per shot count, by whichever player steps first.
+// ponytail: keyed on the shot count changing, not the game's messages (the new path without a hit, P11k7); the
+// claim slot (path object +0x1fc) isn't kept (P11k7)
+fn heard_shot(g: &mut Game) {
+    let d = &mut g.doubles_ai;
+    if d.heard == Some(g.shots) {
+        return;
+    }
+    d.heard = Some(g.shots);
+    for (k, p) in g.players.iter().enumerate().take(4) {
+        d.records[k].n = -1;
+        d.humans[k].reset(p.pos[2]);
+    }
+}
+
+/// A human player `i` in doubles: its AI object keeps its shot record (where it will play the opponents' shot), so
+/// a computer partner gives way to it or follows it.
+pub(super) fn human(g: &mut Game, i: usize) {
+    let phase = match g.phase {
+        Phase::Serve => 2,
+        Phase::Rally => 3,
+        Phase::Post => 4,
+        Phase::ChangeEnds(_) => return,
+    };
+    if g.players.len() != 4 {
+        return;
+    }
+    heard_shot(g);
+    let d = &mut g.doubles_ai;
+    if d.stepped & 1 << i != 0 {
+        (d.frame, d.stepped) = (d.frame + 1, 0);
+    }
+    d.stepped |= 1 << i;
+    let p = g.players[i];
+    let r = &g.reaches[i];
+    let b = Body {
+        pos: up(p.pos),
+        facing: [p.body.face.dir[0], -p.body.face.dir[1], p.body.face.dir[2], p.body.face.dir[3]],
+        vel: [p.body.vel[0], p.body.vel[2]],
+        side: p.end,
+        hand: p.hand,
+        team: i as i32,
+        size: 100,
+        stats: p.stats,
+        stamina: p.body.stamina,
+        tick: p.body.stamina_tick,
+        run: p.body.run,
+        moving: p.body.running as u8,
+        depth: r.ahead,
+        smash_off: [-0.067, r.smash_ahead],
+        control: 0x21,
+        reach: loco::ReachStats {
+            base: r.base,
+            reach: r.reach,
+            stroke_height: r.stroke_height,
+            volley_height: r.volley_height,
+            smash: [r.smash_top, g.smash_heights[i][1], r.smash_bottom],
+            ..Default::default()
+        },
+        strong: if r.hand >= 0.0 { 1 } else { 2 },
+        mate: up(g.players[i ^ 2].pos),
+        ..Default::default()
+    };
+    let mut w = World {
+        frame: g.doubles_ai.frame,
+        phase,
+        players: 4,
+        court: g.score.side,
+        receiver: g.score.receiver,
+        hitter: g.last_hitter,
+        shots: g.shots,
+        ball: up(g.flight.ball.pos),
+        hits: [g.shots; 2],
+        gravity: hst_sim::ball::Params::default().gravity,
+        drag: hst_sim::ball::Params::default().drag,
+        records: g.doubles_ai.records,
+        ..Default::default()
+    };
+    if g.doubles_ai.path.stamp != w.frame {
+        let mut f = g.flight;
+        f.net = false;
+        for _ in 0..PATH_MAX {
+            let e = path_entry(&f);
+            let [x, y, z] = e.pos;
+            let [u, v, s] = e.vel;
+            w.path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
+            f.step(&g.shot, &COURTS[g.court]);
+        }
+    }
+    let row = p.ai;
+    let d = &mut g.doubles_ai;
+    d.seen.resize(SEEN, false);
+    let x = &mut d.me[i].rally;
+    // its AI object beside a human: level 3, +0x28 = 2
+    (x.level, x.mate, x.first, x.window, x.singles) = (3, 2, 2, PATH_MAX as i32, false);
+    let rng = &mut g.rng.ai;
+    x.human_record(&mut d.humans[i], &row, &b, &mut w, &mut d.path, &mut d.seen, false, &mut || rng.next());
+    d.records = w.records;
 }

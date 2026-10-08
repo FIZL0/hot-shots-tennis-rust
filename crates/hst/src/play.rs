@@ -2719,6 +2719,7 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
                 let (shot, serve_press) = (pad.shot.take(), std::mem::take(&mut pad.serve));
                 post_press(g, shot.is_some() || serve_press);
                 human(g, i, pad, shot, serve_press);
+                doubles_ai::human(g, i);
             }
             None => bot(g, i),
         }
