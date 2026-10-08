@@ -419,8 +419,10 @@ def rerig(src_path, out_path, donor=None, motions=None):
                 p2["targets"] = ts
             prims.append(p2)
         m2 = {"name": m.get("name", ""), "primitives": prims}
+        if m.get("extras"):  # e.g. `noise` deformers (standard §3a)
+            m2["extras"] = dict(m["extras"])
         if names:
-            m2["extras"] = {"targetNames": short + [a for a, _ in alias]}
+            m2["extras"] = dict(m2.get("extras", {}), targetNames=short + [a for a, _ in alias])
             m2["weights"] = [0.0] * len(m2["extras"]["targetNames"])
         mi = out.add("meshes", m2)
         if skinned:

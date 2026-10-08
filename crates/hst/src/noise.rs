@@ -18,26 +18,26 @@ use crate::weather::Weather;
 static TABLE: LazyLock<[f32; 32]> = LazyLock::new(noise::table);
 
 /// A position entry a deformer moves: its bone-space position, its share of the noise and its bone (joint).
-struct Entry {
-    deformer: usize,
-    p: [f32; 3],
-    weight: f32,
-    node: usize,
+pub(crate) struct Entry {
+    pub(crate) deformer: usize,
+    pub(crate) p: [f32; 3],
+    pub(crate) weight: f32,
+    pub(crate) node: usize,
 }
 
 /// A moved drawn vertex: its index in the part's mesh, its bind-pose position, its skin (joints and weights as the
 /// mesh carries them) and its position entries.
-struct Moved {
-    v: usize,
-    base: [f32; 3],
-    skin: [(usize, f32); 4],
-    entries: Vec<Entry>,
+pub(crate) struct Moved {
+    pub(crate) v: usize,
+    pub(crate) base: [f32; 3],
+    pub(crate) skin: [(usize, f32); 4],
+    pub(crate) entries: Vec<Entry>,
 }
 
 /// A costume's deformers, and per swaying part (index into `CharacterData::parts`) its moved drawn vertices.
 pub struct Costume {
-    deformers: Vec<noi::Deformer>,
-    parts: Vec<(usize, Vec<Moved>)>,
+    pub(crate) deformers: Vec<noi::Deformer>,
+    pub(crate) parts: Vec<(usize, Vec<Moved>)>,
 }
 
 /// The costume's deformers over the parts `character::skinned_parts` built from `model` (one per material with

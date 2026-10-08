@@ -20,6 +20,11 @@
   should use PCSX2 input recording (`.p2m2`) — P0 decides.
 - `tools/screenshot.sh out.png [pattern]` captures a window (default PCSX2) without focusing it; with `HST_PCSX2=N` it uses
   copy N's own F8 screenshot instead (copies sit on hidden workspaces, where grim sees nothing; full-size PNG; not while paused).
+- Remaster shots: `tools/shot.sh out.png [hst args…]` runs `hst … --shot` in a **floating 1280×720 window on a hidden
+  special workspace** (Hyprland `hl.dsp.exec_cmd(cmd, { float = true, size = '1280 720', no_initial_focus = true,
+  workspace = 'special:hstshot silent' })`), so every shot is the same size (2048×1152 at the desktop's scale) however
+  many windows other agents have tiled; launch any window you compare across runs this way. `HST_ISO=` a symlink in a
+  folder without `mods/texture-replacements` shows the disc's own textures.
 - `vpad.py send` returns at once and the server runs commands one after another (sleeps included): a script
   that sends several batches must wait each one out (`vpad()` in `tools/pick.py`), or presses pile up and land late.
   In menus ○ confirms, ✕ goes back.
