@@ -483,17 +483,18 @@ pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
-    images.add(Image::new(
+    let img = Image::new(
         Extent3d {
             width: pic.width,
             height: pic.height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        pic.rgba,
+        pic.rgba.clone(),
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
-    ))
+    );
+    crate::textures::add_tim2(images, img, &pic)
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>) {

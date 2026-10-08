@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 png = "0.18.1"
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64"] }

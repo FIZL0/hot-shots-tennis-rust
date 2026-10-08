@@ -95,7 +95,7 @@ pub(crate) fn model(
         &mor::parse(&file("mta")?, 1).map_err(|e| e.0)?,
         &mtl.materials,
     );
-    let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| images.add(crate::character::texture_image(t))).collect();
+    let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| crate::textures::add_mtl(images, crate::character::texture_image(t), t)).collect();
     let mats: Vec<Handle<StandardMaterial>> = mtl
         .materials
         .iter()
@@ -212,7 +212,8 @@ fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, ima
     let path = if name.contains('/') { format!("{name}.tm2") } else { format!("yumoto/{name}.tm2") };
     let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&path)).ok_or(format!("{path} missing"))?;
     let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
-    let image = images.add(Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+    let img = Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba.clone(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+    let image = crate::textures::add_tim2(images, img, &pic);
     Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }))
 }
 

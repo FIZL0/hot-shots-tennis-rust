@@ -173,7 +173,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P17f** Animated court textures MTA/UVA (in P17) → `gs.rs` · `mtl.rs`
 - [x] **P17g** Shadows: player/ball blobs, shadow models (in P17) → new
 - [x] **P17h** Mipmaps + LOD (TEX1) (in P17) → `main.rs` gs_models
-- [ ] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`
+- [x] **P18** Upscaled + moddable textures → `main.rs` image · `character.rs` texture_image · `hst-data/src/tim2.rs` · `replacements/`
 - [x] **P19** (split: menus to P19a) HUD as the original (user 2026-10-07): the game's own player/score panel, head markers and 'Score to win' line, hidden during the rally → `play/panel.rs` · new `play/markers.rs` · `play.rs` hud | t: panel.rs score_to_win, markers.rs size | j: 2026-10-07-p19-hud
 - [ ] **P19a** In-match menus (pause, dialogs) from the original's INPANE assets and layout (in P19) → new `play/menu.rs` · `play.rs`
 - [~] **P20** Audio (see N3) → `hst-data/src/xb.rs` | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
