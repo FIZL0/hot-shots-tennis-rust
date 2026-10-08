@@ -128,9 +128,17 @@ impl Rngs {
         self.rand.next()
     }
 
-    /// The match intro's ticks of the lens flare (before the first point), recorded on court 4 in doubles.
-    // ponytail: one court's intro: other courts' and singles' lengths aren't recorded
-    pub const INTRO_TICKS: usize = 394;
+    /// The match intro's game ticks on court `stage` (before the first point, each a lens flare tick in clear or
+    /// cloudy weather). Recorded per court, the same in singles and doubles (research/p3f2_intro_log.py).
+    // ponytail: recorded lengths; court 3 is recorded in singles only and court 10 in doubles only
+    pub fn intro_ticks(stage: u32) -> usize {
+        match stage {
+            1 => 364,
+            5 => 446,
+            11 => 354,
+            _ => 394,
+        }
+    }
 
     /// One tick of the sun's lens flare while the weather shows it (clear or cloudy): each of its 24 rays' brightness
     /// steps by a `rand() % 11 − 5` hundredth.
