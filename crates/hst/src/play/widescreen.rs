@@ -1,5 +1,6 @@
 //! Widescreen: the 3D view widens with the window (`camera` keeps the game's vertical field of view), while the HUD
-//! stays on the PS2's 4:3 screen (its 640×448 space), centred, so its art keeps its shape.
+//! stays on the PS2's 4:3 screen (its 640×448 space), centred, so its art keeps its shape. The score panel is the
+//! exception: its halves are pinned to the window's edges (`pin`) so they don't float inside the 4:3 screen.
 
 use bevy::prelude::*;
 
@@ -20,8 +21,16 @@ pub fn screen_43() -> (Node, Screen43) {
 
 /// Share of the window's width the 4:3 screen covers: all of it at 4:3 or narrower (narrower windows stretch it
 /// vertically, as the 3D view widens vertically there).
-fn share(aspect: f32) -> f32 {
+pub(super) fn share(aspect: f32) -> f32 {
     (4.0 / 3.0 / aspect).min(1.0)
+}
+
+/// A 640-wide screen rect `x, w` on a full-window node, at the 4:3 screen's scale (`share`): left of the screen's
+/// centre it keeps its distance from the window's left edge, right of it from the right edge. Left and width in
+/// percent of the window.
+pub(super) fn pin(x: f32, w: f32, share: f32) -> (f32, f32) {
+    let left = if x + w / 2.0 < 320.0 { x / 6.4 * share } else { 100.0 - (640.0 - x) / 6.4 * share };
+    (left, w / 6.4 * share)
 }
 
 fn fit(window: Query<&Window>, mut q: Query<&mut Node, With<Screen43>>) {
@@ -45,4 +54,16 @@ fn share_of_width() {
     assert_eq!(share(4.0 / 3.0), 1.0);
     assert_eq!(share(1.0), 1.0);
     assert!((share(16.0 / 9.0) - 0.75).abs() < 1e-6);
+}
+
+#[test]
+fn pinned_to_edges() {
+    // 4:3: the plain 640 screen
+    assert_eq!(pin(16.0, 64.0, 1.0), (2.5, 10.0));
+    assert_eq!(pin(560.0, 80.0, 1.0), (87.5, 12.5));
+    // 16:9: left rects from the left edge, right rects end at the same distance from the right edge
+    assert_eq!(pin(0.0, 64.0, 0.75), (0.0, 7.5));
+    assert_eq!(pin(16.0, 64.0, 0.75), (1.875, 7.5));
+    let (l, w) = pin(560.0, 80.0, 0.75);
+    assert!((l + w - 100.0).abs() < 1e-4 && (w - 9.375).abs() < 1e-4);
 }

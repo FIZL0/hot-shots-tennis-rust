@@ -5,7 +5,8 @@
 //! It slides in from the screen's edges over the serve's first ticks (offset `cnt·44.8 − 224` for cnt 0..5), the
 //! ring pulses once it is in (31 ticks up, 31 down), and when the rally starts everything fades out over 5 ticks
 //! (alpha 128·c/5, c = 5..1) except the team banners, which stay solid until the panel goes. Coordinates are the
-//! PS2's 640×448 screen, stretched over the window; colours are GS colours (128 = the texture's own).
+//! PS2's 640×448 screen at the 4:3 screen's scale, each half pinned to its window edge (`widescreen::pin`);
+//! colours are GS colours (128 = the texture's own).
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, tim2, xb::Archive};
@@ -536,7 +537,12 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         .hud_colours();
     commands.insert_resource(Colours(pill, rank));
     commands
-        .spawn(super::widescreen::screen_43())
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        })
         .with_children(|p| {
             for i in 0..POOL {
                 p.spawn((
@@ -563,6 +569,7 @@ fn draw(
     art: Option<Res<Art>>,
     colours: Option<Res<Colours>>,
     cam: Query<&Transform, With<crate::Orbit>>,
+    window: Query<&Window>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let (Some(art), Some(colours)) = (art, colours) else {
@@ -595,6 +602,9 @@ fn draw(
         clock: *clock,
     };
     let quads = layout(&view);
+    let share = window
+        .single()
+        .map_or(1.0, |w| super::widescreen::share(w.width() / w.height().max(1.0)));
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             *vis = Visibility::Hidden;
@@ -625,9 +635,10 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        node.left = Val::Percent(x / 6.4);
+        let (left, width) = super::widescreen::pin(x, w, share);
+        node.left = Val::Percent(left);
         node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(w / 6.4);
+        node.width = Val::Percent(width);
         node.height = Val::Percent(h / 4.48);
         *vis = Visibility::Inherited;
     }
