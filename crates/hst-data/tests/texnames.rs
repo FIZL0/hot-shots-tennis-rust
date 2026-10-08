@@ -1,4 +1,4 @@
-//! PCSX2 replacement names computed from the disc match the user's pack (`replacements/`, dumped by PCSX2) for
+//! PCSX2 replacement names computed from the disc match the user's pack (`mods/texture-replacements/`, dumped by PCSX2) for
 //! court 05 and the HUD: every pack file whose texels belong to one of their textures is found by its full name.
 //! Skips without the ISO or the pack.
 
@@ -11,8 +11,8 @@ fn court_and_hud_match_the_pack() {
     let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else {
         return eprintln!("no ISO, skipped");
     };
-    let Ok(dir) = std::fs::read_dir(format!("{root}replacements")) else {
-        return eprintln!("no replacements/, skipped");
+    let Ok(dir) = std::fs::read_dir(format!("{root}mods/texture-replacements")) else {
+        return eprintln!("no mods/texture-replacements/, skipped");
     };
     let pack: HashSet<String> = dir
         .filter_map(|e| {

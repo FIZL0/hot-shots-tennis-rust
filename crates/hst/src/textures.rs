@@ -1,4 +1,4 @@
-//! Replaced textures: `mods/textures/` over the PCSX2 pack (`replacements/`) over the disc, both beside the ISO.
+//! Replaced textures: `mods/textures/` over the PCSX2 pack (`mods/texture-replacements/`) over the disc, both beside the ISO.
 //! Mod files are re-read when they change while running.
 
 use bevy::prelude::*;

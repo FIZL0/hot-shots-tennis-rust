@@ -1,4 +1,4 @@
-//! PCSX2's texture-replacement names for disc textures, so a PCSX2 pack (`replacements/`) can be applied.
+//! PCSX2's texture-replacement names for disc textures, so a PCSX2 pack (`mods/texture-replacements/`) can be applied.
 //!
 //! PCSX2 names a texture `<tex>-<clut>-<bits>.png` (`<tex>-<bits>.png` without a palette): `tex` is XXH3-64 of
 //! the texture as it sits in GS memory, `clut` XXH3-64 of the palette as 16 or 256 RGBA32 entries (raw PS2 alpha,
@@ -323,7 +323,7 @@ pub fn disc_textures(iso: &mut crate::iso::Iso, mut f: impl FnMut(DiscTexture)) 
 }
 
 /// User textures that replace disc ones: `mods/textures/**/<path>-<key>.png` (straight alpha, found by
-/// [`GsTex::key`]) over PCSX2's `replacements/<name>.png` (PS2 alpha, 0x80 opaque), both beside the ISO.
+/// [`GsTex::key`]) over PCSX2's `mods/texture-replacements/<name>.png` (PS2 alpha, 0x80 opaque), both beside the ISO.
 #[derive(Default)]
 pub struct Overrides {
     pub root: PathBuf,
@@ -334,7 +334,7 @@ pub struct Overrides {
 
 impl Overrides {
     pub fn scan(root: &Path) -> Self {
-        let pack = std::fs::read_dir(root.join("replacements"))
+        let pack = std::fs::read_dir(root.join("mods/texture-replacements"))
             .into_iter()
             .flatten()
             .filter_map(|e| {
@@ -399,26 +399,21 @@ impl Overrides {
         Some((w, h, rgba))
     }
 
-    /// Write every disc texture to `mods/textures/<path>-<key>.png`: the pack's version where it has one, else the disc's.
-    pub fn dump(&self, iso: &mut crate::iso::Iso) -> (usize, usize) {
-        let (mut n, mut packed) = (0, 0);
+    /// Write every disc texture as it is on the disc (native size, straight 0..255 alpha) to
+    /// `mods/textures-src/<path>-<key>.png`: the input for upscaling, whose output goes in `mods/textures/` under
+    /// the same names. Not the pack's PNGs, so every file is the same kind of input.
+    pub fn dump(&self, iso: &mut crate::iso::Iso) -> usize {
+        let mut n = 0;
         disc_textures(iso, |t| {
-            let (w, h, rgba) = match self.from_pack(&t.names) {
-                Some(r) => {
-                    packed += 1;
-                    r
-                }
-                None => (t.width, t.height, t.rgba),
-            };
             let p = self
                 .root
-                .join(format!("mods/textures/{}-{}.png", t.path, t.key));
-            if rgba.len() == (w * h * 4) as usize && w * h > 0 {
+                .join(format!("mods/textures-src/{}-{}.png", t.path, t.key));
+            if t.rgba.len() == (t.width * t.height * 4) as usize && t.width * t.height > 0 {
                 let _ = std::fs::create_dir_all(p.parent().unwrap());
-                n += write_png(&p, w, h, &rgba).is_ok() as usize;
+                n += write_png(&p, t.width, t.height, &t.rgba).is_ok() as usize;
             }
         });
-        (n, packed)
+        n
     }
 }
 
@@ -482,8 +477,8 @@ mod tests {
     fn mods_then_pack() {
         let root = std::env::temp_dir().join(format!("hst-texhash-{}", std::process::id()));
         std::fs::create_dir_all(root.join("mods/textures/A")).unwrap();
-        std::fs::create_dir_all(root.join("replacements")).unwrap();
-        write_png(&root.join("replacements/abc-1.png"), 1, 1, &[1, 2, 3, 0x40]).unwrap();
+        std::fs::create_dir_all(root.join("mods/texture-replacements")).unwrap();
+        write_png(&root.join("mods/texture-replacements/abc-1.png"), 1, 1, &[1, 2, 3, 0x40]).unwrap();
         let o = Overrides::scan(&root);
         let names = ["abc-1".to_string()];
         // pack: PS2 alpha expanded

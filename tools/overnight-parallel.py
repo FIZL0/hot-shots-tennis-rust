@@ -14,7 +14,7 @@ Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split pare
 Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Two running tasks
 never share a file named on their lines, except SHARED (play.rs: nearly every task names it). The first open "Next"
 task always leads. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
-context/, replacements/ and the ISO are symlinked in. Each slot N has its own PCSX2 (HST_PCSX2=N: copy
+context/, mods/ (+ the old replacements/ link) and the ISO are symlinked in. Each slot N has its own PCSX2 (HST_PCSX2=N: copy
 N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
 tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
 
@@ -101,7 +101,7 @@ def slot(n):
     if not os.path.isdir(d):
         os.makedirs(WT, exist_ok=True)
         git('worktree', 'add', '-q', '--detach', d, 'main')
-    for src in [os.path.join(ROOT, 'context'), os.path.join(ROOT, 'replacements'), *glob.glob(os.path.join(ROOT, '*.iso'))]:
+    for src in [os.path.join(ROOT, 'context'), os.path.join(ROOT, 'replacements'), os.path.join(ROOT, 'mods'), *glob.glob(os.path.join(ROOT, '*.iso'))]:
         dst = os.path.join(d, os.path.basename(src))
         if os.path.exists(src) and not os.path.lexists(dst):
             os.symlink(src, dst)
