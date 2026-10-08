@@ -7,8 +7,9 @@
 //! descriptions and names from `message0.dat`, the grades from the MENU overlay (`exe::Menu`), the play style from
 //! TParam.csv. Settings (each enhancement on or off) live in `settings.txt` beside the disc image.
 //!
-//! Who plays: the device that chose Local is player 1; in the assignment other pads join with ✕ (player 2; the
-//! match takes two humans, the keyboard drives player 1 only). Player slots in the match: singles 1P→0, 2P→1;
+//! Who plays: the device that chose Local is player 1; in the assignment the other pads and the keyboard join with ✕
+//! (the first free seat, ←/→ to change seat, ○ to leave), up to four humans, any device on any seat; the rest are the
+//! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
 //! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, confirm) opens on that screen (for `--shot`).
@@ -20,7 +21,7 @@ use hst_sim::sound;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::controls::{self, Action, Bindings};
+use super::controls::{self, Action, Bindings, Seat};
 use super::panel;
 use crate::Args;
 use crate::audio::{Sound, SoundBank};
@@ -244,11 +245,6 @@ impl Menu {
         None
     }
 
-    /// Who may take seat `p`: the keyboard 1P only, only 1P and 2P human (the match takes two).
-    fn may_sit(p: usize, dev: Dev) -> bool {
-        p == 0 || (p == 1 && dev != Dev::Keys)
-    }
-
     /// One device's presses on the current screen.
     fn step(&mut self, dev: Dev, k: Press) -> Vec<Effect> {
         use Effect::*;
@@ -333,9 +329,17 @@ impl Menu {
                         out.push(Sound(1));
                     }
                 } else if k.ok && seated.is_none() {
-                    if let Some(p) = (0..n).find(|&p| self.seats[p].is_none() && Menu::may_sit(p, dev)) {
+                    if let Some(p) = (0..n).find(|&p| self.seats[p].is_none()) {
                         self.seats[p] = Some(dev);
                         out.push(Sound(2));
+                    }
+                } else if (k.left || k.right || k.up || k.down) && let Some(p) = seated {
+                    // the next free seat that way (1P stays the host's)
+                    let d = if k.right || k.down { 1 } else { n - 2 };
+                    let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none());
+                    if let Some(q) = to {
+                        self.seats.swap(p, q);
+                        out.push(Sound(0));
                     }
                 } else if k.back && let Some(p) = seated {
                     self.seats[p] = None;
@@ -440,10 +444,12 @@ impl Menu {
             outfits[m] = self.players[p].costume;
         }
         let join = |v: &[usize]| v.iter().map(usize::to_string).collect::<Vec<_>>().join(",");
-        let pad = |p: usize| match self.seats[p] {
-            Some(Dev::Pad(e)) => pads.iter().position(|x| *x == e).map_or("-".into(), |i| i.to_string()),
-            _ => "-".to_string(),
+        let seat = |p: usize| match self.seats[p] {
+            Some(Dev::Keys) => Some(Seat::Keys),
+            Some(Dev::Pad(e)) => pads.iter().position(|x| *x == e).map(Seat::Pad),
+            None => None,
         };
+        let seats: Vec<_> = (0..self.players()).map(seat).collect();
         let mut a = vec!["--play".to_string(), "--stage".into(), court.to_string(), "--court".into(), court.to_string()];
         if !self.doubles {
             a.push("--singles".into());
@@ -460,7 +466,7 @@ impl Menu {
             "--games".into(),
             self.games.to_string(),
             "--pads".into(),
-            format!("{},{}", pad(0), pad(1)),
+            Seat::flag(&seats),
         ]);
         a.extend(self.settings.flags());
         a
@@ -828,7 +834,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
                 d.text(&dev_name(m.seats[p], pads), 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else { [60.0, 110.0, 40.0] });
             }
-            d.info(&format!("{} Other controllers: press X to join.", text.msg(193)));
+            d.info(&format!("{} Others: X or Enter joins, Left/Right changes seat, O leaves.", text.msg(193)));
         }
         Screen::Chars => chars(&mut d, m, text),
         Screen::Confirm => confirm(&mut d, m, text, hand_x),
@@ -1211,14 +1217,52 @@ mod tests {
         // match order: 1P, 3P, 2P, 4P
         assert_eq!(flag("--chars"), "0,1,0,2");
         assert_eq!(flag("--outfits"), "0,0,1,0");
-        assert_eq!(flag("--pads"), "-,1");
+        assert_eq!(flag("--pads"), "k,1,-,-");
         assert_eq!((flag("--umpire"), flag("--sets"), flag("--games")), ("4".into(), "1".into(), "4".into()));
         assert!(!a.contains(&"--singles".to_string()));
     }
 
     #[test]
-    fn keyboard_only_1p() {
-        assert!(Menu::may_sit(0, Dev::Keys) && !Menu::may_sit(1, Dev::Keys) && !Menu::may_sit(2, Dev::Pad(Entity::PLACEHOLDER)));
+    fn four_humans_any_device_any_seat() {
+        let [p0, p1, p2] = [3, 9, 11].map(|n| Dev::Pad(Entity::from_raw_u32(n).unwrap()));
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu::default();
+        m.step(p1, ok); // a pad chose Local: it is 1P
+        m.step(p1, press(|p| &mut p.down)); // doubles
+        m.step(p1, ok);
+        m.step(Dev::Keys, ok); // the keyboard joins as 2P
+        m.step(p0, ok); // 3P
+        m.step(Dev::Keys, press(|p| &mut p.right)); // the keyboard moves to the free 4P (other team)
+        assert_eq!(m.seats, [Some(p1), None, Some(p0), Some(Dev::Keys)]);
+        m.step(p2, ok); // the last pad takes 2P
+        m.step(Dev::Keys, press(|p| &mut p.left)); // no free seat: stays
+        assert_eq!(m.seats, [Some(p1), Some(p2), Some(p0), Some(Dev::Keys)]);
+        m.step(p1, ok);
+        assert_eq!(m.screen, Screen::Chars);
+        // every seat is a human: each readies its own player, 1P never drives another
+        for (i, d) in [p1, p2, p0, Dev::Keys].into_iter().enumerate() {
+            assert_eq!(m.driven(d), Some(i));
+            m.step(d, press(|p| &mut p.next));
+            for _ in 0..i {
+                m.step(d, press(|p| &mut p.right));
+            }
+            m.step(d, ok);
+        }
+        assert_eq!(m.screen, Screen::Confirm);
+        let a = m.args(&[3, 9, 11].map(|n| Entity::from_raw_u32(n).unwrap()));
+        let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!(flag("--pads"), "1,2,0,k");
+        // the match reads them back
+        let seats: Vec<_> = flag("--pads").split(',').map(Seat::parse).collect();
+        assert_eq!(seats, [Some(Seat::Pad(1)), Some(Seat::Pad(2)), Some(Seat::Pad(0)), Some(Seat::Keys)]);
+        // singles: the keyboard can be 2P
+        let mut m = Menu::default();
+        m.step(p0, ok);
+        m.step(p0, ok);
+        m.step(Dev::Keys, ok);
+        m.step(p1, ok); // no seat left
+        assert_eq!(m.seats, [Some(p0), Some(Dev::Keys), None, None]);
+        assert_eq!(m.args(&[]).iter().skip_while(|x| *x != "--pads").nth(1).unwrap(), "-,k");
     }
 
     #[test]

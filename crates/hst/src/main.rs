@@ -67,9 +67,9 @@ pub struct Args {
     /// Sets to win (`--sets`, default 1) and games to win a set (`--games`, default 4).
     pub sets: i32,
     pub games: i32,
-    /// `--pads a,b`: the gamepads (indices into the sorted pad list, `-` none) driving players 1 and 2, as the main
-    /// menu assigned them (`controls::PadSlots`).
-    pub pads: Option<[Option<usize>; 2]>,
+    /// `--pads a,b,c,d`: what drives seats 1P..4P (`k` the keyboard, a gamepad's index into the sorted pad list, `-`
+    /// the computer), as the main menu assigned them (`controls::PadSlots`).
+    pub pads: Option<[Option<play::controls::Seat>; 4]>,
 }
 
 #[derive(Component)]
@@ -127,8 +127,8 @@ fn main() {
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
-                let v: Vec<_> = a.next().unwrap_or_default().split(',').map(|p| p.trim().parse().ok()).collect();
-                pads = Some([v.first().copied().flatten(), v.get(1).copied().flatten()]);
+                let v: Vec<_> = a.next().unwrap_or_default().split(',').map(play::controls::Seat::parse).collect();
+                pads = Some(std::array::from_fn(|i| v.get(i).copied().flatten()));
             }
             "--4x3" => play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed),
             "--no-upscale" => upscale = false,

@@ -47,7 +47,8 @@ cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
 
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
-when connected; the other slots are CPU. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
+when connected, players 3 and 4 (the other team) = controllers 3 and 4 when connected; the other slots are CPU. `--pads a,b,c,d` seats
+1P..4P instead (`k` keyboard, a pad index, `-` CPU; the main menu passes it), e.g. `--pads -,k` = CPU 1P, keyboard 2P. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
 J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net at contact: flat; pulled back with slice: drop · J/Space/A/Start serve ·
 C/Select camera (original/free) · arrows/right stick turn the free camera.
 Rebind any of these in `controls.txt` beside the ISO (written with the defaults on first run). Controllers can be

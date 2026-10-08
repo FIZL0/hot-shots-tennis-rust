@@ -1,6 +1,7 @@
 //! Playable test mode (`--play`): doubles (four players, `--singles` for two) on the ported ball physics, rules,
 //! serve placement, contact search and the game's own shot tables. Players 1 and 3 (one team; 1 and 2 in singles) are
-//! humans on controllers 1 and 2 (the keyboard also drives player 1); every other slot is a stand-in AI. Players are
+//! humans on controllers 1 and 2, players 2 and 4 on controllers 3 and 4 (`Pads::slot_of`; the keyboard also drives
+//! player 1, or its own seat with `--pads`); every other slot is a stand-in AI. Players are
 //! original stand-in athletes (`figure.rs`); movement tuning, AI and the serve motion are placeholders until those
 //! systems are ported (see TODO.md).
 //!
@@ -44,7 +45,7 @@ use crate::{Args, GameSpace, Orbit};
 
 mod ball_shadow;
 mod bodyhit;
-mod controls;
+pub mod controls;
 mod cutaway;
 mod foot_fx;
 mod doubles_ai;
@@ -471,26 +472,31 @@ struct SlotPad {
     serve: bool,
 }
 
-/// Controller slots 1 and 2 (keyboard and the first gamepad drive slot 1). See `slot_of` for which player each drives.
+/// Controller slots 1P..4P (without `--pads` the keyboard and the first gamepad drive 1P). See `slot_of` for which
+/// player each drives.
 #[derive(Resource, Default)]
 struct Pads {
-    slots: [SlotPad; 2],
+    slots: [SlotPad; 4],
     /// Gamepads connected.
     connected: usize,
+    /// With `--pads`: which seats (1P..4P) are human, fixed for the match (`controls::load`).
+    seats: Option<[bool; 4]>,
 }
 
 impl Pads {
-    /// Which slot controls player `i` of `n`, if any (slot 2 only while a second gamepad is connected). In
-    /// doubles slot 2 is player 1's partner (player 3, teams are {1,3} vs {2,4}); in singles the opponent.
+    /// Which slot controls player `i` of `n`, if any. Slot s is the menu's (s+1)P: in singles player s; in doubles
+    /// 1P→0, 2P→2 (1P's partner, teams are {1,3} vs {2,4}), 3P→1, 4P→3. Without seats slot 1 is always human and
+    /// slot s > 1 while s+1 gamepads are connected.
     fn slot_of(&self, i: usize, n: usize) -> Option<usize> {
         if std::env::var_os("HST_AUTOPLAY").is_some() {
             return None;
         }
-        match i {
-            0 => Some(0),
-            _ if i == n / 2 && self.connected >= 2 => Some(1),
-            _ => None,
-        }
+        let s = if n == 4 { [0, 2, 1, 3][i] } else { i };
+        let human = match self.seats {
+            Some(seats) => seats[s],
+            None => s == 0 || self.connected > s,
+        };
+        human.then_some(s)
     }
 }
 
@@ -1613,19 +1619,24 @@ fn read_input(
     mut held: ResMut<controls::PadSlots>,
 ) {
     use controls::Action as A;
-    let mut now = [SlotPad::default(); 2];
+    let mut now = [SlotPad::default(); 4];
     let dirs = [(A::Up, 0x10), (A::Down, 0x40), (A::Left, 0x80), (A::Right, 0x20)];
     let shots = [(A::Normal, 0), (A::Cut, 1), (A::Lob, 3)];
+    // the keyboard drives its own seat (1P without `--pads`)
+    let mut kb = SlotPad::default();
     for (a, d) in dirs {
         if bind.key_pressed(&keys, a) {
-            now[0].dpad |= d;
+            kb.dpad |= d;
         }
     }
-    now[0].shot = shots
+    kb.shot = shots
         .into_iter()
         .find(|(a, _)| bind.key_just_pressed(&keys, *a))
         .map(|(_, kind)| kind);
-    now[0].serve = bind.key_just_pressed(&keys, A::Serve);
+    kb.serve = bind.key_just_pressed(&keys, A::Serve);
+    if let Some(k) = held.keys() {
+        now[k] = kb;
+    }
     let mut cycle = bind.key_just_pressed(&keys, A::Camera);
     let mut turn = bind.key_pressed(&keys, A::TurnRight) as i32 as f32
         - bind.key_pressed(&keys, A::TurnLeft) as i32 as f32;
