@@ -3,7 +3,7 @@
 when nobody can click Tools → Input Recording → Play (record_p2m2.py waits for that).
 Usage: HST_PCSX2=N play_p2m2.py <rec.p2m2> <slot> <out.bin> [frames]
   slot: the recording's save state copied into copy N's sstates as that slot.
-Copy N must run slowed (NominalScalar = 0.25) with tools/vpad.py serve up (tools/pcsx2-hst.sh does that).
+Copy N must run slowed with tools/vpad.py serve up: HST_REALTIME=1 tools/pcsx2-hst.sh (0.25).
 PCSX2's own playback, at each vsync: poll host input, frame counter += 1, override port 0 with frame[counter]. Here:
 on seeing the game's vsync counter at v (state loaded at v0), write frame[v - v0 + 1] to the pad's event node, so the
 next vsync's poll picks it up — the same frame. Sticks and R2 pressure are written as raw axis values calibrated
@@ -61,7 +61,7 @@ def put(f):
     for a, x in zip((e.ABS_RX, e.ABS_RY, e.ABS_X, e.ABS_Y), f[2:6]): dev.write(e.EV_ABS, a, stick(x))
     dev.syn()
 
-p = Pine()
+p = Pine(); p.require_realtime()  # polls by wall-clock: a copy launched with HST_REALTIME=1
 def tick(v):
     while (w := p.read32(VSYNC)) == v: pass
     return w

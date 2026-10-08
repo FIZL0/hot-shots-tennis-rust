@@ -14,7 +14,7 @@ slot, want, out = int(sys.argv[1]), int(sys.argv[2]), open(sys.argv[3], "wb")
 if len(sys.argv) > 4: AI_SIZE = int(sys.argv[4], 0)
 EXTRA = [int(a, 0) for a in sys.argv[5].split(",")] if len(sys.argv) > 5 else []
 
-p = Pine()
+p = Pine(step=True)
 p.load_state(slot)
 time.sleep(0.3)
 gm0 = p.read32(GM_PTR)
@@ -24,11 +24,8 @@ regions = [(0x423048, 0x18), (MT, 0x9d0)] + [(a, 4) for a in EXTRA] + [(a, AI_SI
 
 last, n, missed = p.read32(VSYNC), 0, 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     last = v
-    time.sleep(0.004)
     if p.read32(GM_PTR) != gm0:
         sys.exit(f"match object gone at vsync {v}, {n} samples")
     a = p.settle(regions, v)

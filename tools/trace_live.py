@@ -10,7 +10,7 @@ from pine import Pine
 GM_PTR, BALL, SIZE = 0x422f80, 0x98, 0x290
 POS, VEL, FRAME, SPIN = 0xe0, 0x130, 0xac, 0x1a4
 
-p = Pine()
+p = Pine(); p.require_realtime()  # polls by wall-clock: a copy launched with HST_REALTIME=1
 p.load_state(int(sys.argv[1]))
 time.sleep(0.2)
 want, out, net = int(sys.argv[2]), open(sys.argv[3], "wb"), "--net" in sys.argv

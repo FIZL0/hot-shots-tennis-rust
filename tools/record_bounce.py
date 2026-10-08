@@ -10,7 +10,7 @@ import struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, FX_PTR, CE_PTR, COURT = 0x1d5780, 0x422f80, 0x423f80, 0x43b1d0, 0x422f90
-p, want, out = Pine(), int(sys.argv[2]), open(sys.argv[3], "wb")
+p, want, out = Pine(step=True), int(sys.argv[2]), open(sys.argv[3], "wb")
 p.load_state(int(sys.argv[1]))
 time.sleep(2)  # the load lands asynchronously; pointers read before it are stale
 gm, fx = p.read32(GM_PTR), p.read32(FX_PTR)
@@ -28,13 +28,10 @@ for off in (0x50, 0x74):
 out.write(struct.pack(f"<{len(head)}I", *head))
 last, n = p.read32(VSYNC), 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     def grab():
         c = p.read32(ball + 0x8f8)
         ok = 0x100000 <= c < 0x2000000 - 0xf0 and c % 8 == 0  # a stale pointer between points fails the batch

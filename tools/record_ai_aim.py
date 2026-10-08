@@ -81,7 +81,7 @@ def leave():
 HOOKS = [(0x3cc700, 1), (0x3cce80, 2)] if SINGLES else [(0x3d3080, 3)]
 
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-p = Pine()
+p = Pine()  # the hooks log every frame themselves: any speed, no lock-step
 p.load_state(slot)
 time.sleep(0.3)
 orig = []

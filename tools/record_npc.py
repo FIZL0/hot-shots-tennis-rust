@@ -25,7 +25,7 @@ ram = zipfile.ZipFile(STATES % slot).read("eeMemory.bin")
 walkers = [a for a in range(0x100000, len(ram), 4) if struct.unpack_from("<I", ram, a)[0] == WALKER]
 out.write(struct.pack(f"<I{len(walkers)}I", len(walkers), *walkers))
 
-p = Pine()
+p = Pine(step=True)
 p.load_state(slot)
 time.sleep(0.3)
 
@@ -40,11 +40,8 @@ def regions():
 
 last, n, missed, gm0 = p.read32(VSYNC), 0, 0, p.read32(GM_PTR)
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     last = v
-    time.sleep(0.004)
     if p.read32(GM_PTR) != gm0:
         sys.exit(f"match object gone at vsync {v} (match over), {n} samples")
     if any(p.read32(w) != WALKER for w in walkers):

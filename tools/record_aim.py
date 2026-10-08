@@ -8,7 +8,7 @@ reads 2 over P1's contact, so the aim takes its singles width in a doubles save 
 Writes a pair of samples per aim: the frame before P1's +0x3e90 changes and the frame it does, each a `frames_live`
 sample followed by P1's +0x12b0..+0x1320 (end, character, TParam aim values) and the last shot's record
 (P1 +0x1400 → +0x1b0..+0x1c0). AIM_DEBUG=1 logs the approach. Needs tools/vpad.py serve (pcsx2-hst.sh starts it).
-Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. Run PCSX2 slowed down (NominalScalar 0.5)."""
+Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
 from vpad import FIFO
@@ -27,8 +27,10 @@ def f32(v): return struct.unpack("<f", struct.pack("<I", v))[0]
 
 pad = os.open(FIFO, os.O_RDWR)
 def send(*cmds): os.write(pad, ("\n".join(cmds) + "\n").encode())
+releases = []  # (sample, button): a press is held 3 frames, counted in frames so it lands alike at any speed
+def press(btn): send(f"down {btn}"); releases.append((n + 3, btn))
 
-p, out, want = Pine(), open(sys.argv[2], "wb"), int(sys.argv[3])
+p, out, want = Pine(step=True), open(sys.argv[2], "wb"), int(sys.argv[3])
 cap = int(sys.argv[4]) if len(sys.argv) > 4 else 30000
 send("release")
 p.load_state(int(sys.argv[1]))
@@ -42,13 +44,10 @@ AIM = 4 + 0x90 + 0x180 + 0x100 + 0x290 + 0x200 + 0x3e90 - 0x3c00  # P1's +0x3e90
 BRANCH = AIM + 0x3ec1 - 0x3e90
 last, n, aims, prev_sample, pressed_for, held, idle, presses = p.read32(VSYNC), 0, 0, None, None, (0, 0), 0, 0
 while aims < want and n < cap:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.read_regions(r)
     while True:
         b = p.read_regions(r)
@@ -56,6 +55,7 @@ while aims < want and n < cap:
         a = b
     sample = struct.pack("<I", v) + a
     n += 1
+    while releases and releases[0][0] <= n: send(f"up {releases.pop(0)[1]}")
     if prev_sample and prev_sample[BRANCH] in (1, 2, 3, 4) and sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16] and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
         out.write(prev_sample + sample)
         out.flush()
@@ -97,7 +97,7 @@ while aims < want and n < cap:
         if (mz - pos[2]) / vel[2] < int(os.environ.get("AIM_LEAD", "6")) and hit != pressed_for:  # frames to P1's line
             pressed_for, idle = hit, 0
             presses += 1
-            send(f"press {BUTTONS[presses % 3]} 80")
+            press(BUTTONS[presses % 3])
     else:
         stick = (0, 0)
     if SINGLES and not locked and p.read32(COUNT) != 4:
@@ -107,7 +107,7 @@ while aims < want and n < cap:
         send(f"stick l {stick[0]} {stick[1]}")
     if not locked and idle > (40 if branch == 5 else 120):
         idle = 0
-        send("press cross 80")
+        press("cross")
 if SINGLES: p.write32(COUNT, 4)
 send("release")
 print("done", n, "frames", aims, "aims", presses, "presses")

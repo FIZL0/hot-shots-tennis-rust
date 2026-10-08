@@ -75,7 +75,7 @@ HOOKS = [
 ]
 
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-p = Pine()
+p = Pine()  # the hooks log every frame themselves: any speed, no lock-step
 p.load_state(slot)
 time.sleep(0.3)
 for k, (at, word, stub) in enumerate(HOOKS):

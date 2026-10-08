@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Launch Hot Shots Tennis in PCSX2 with PINE (memory IPC) on, so tools/pine.py can read live game state.
-#   tools/pcsx2-hst.sh [pcsx2 args]   start (a no-op if this instance is up)
+#   tools/pcsx2-hst.sh [pcsx2 args]   start (a no-op if this instance is up); a copy runs at 1x (tools/pine.py),
+#                                     HST_REALTIME=1 slowed to 0.25 for real-time tools
 #   tools/pcsx2-hst.sh stop           close this instance only
 #   tools/pcsx2-hst.sh status         is this instance up (pid); the game's own state: tools/pine.py
 # HST_PCSX2=N (parallel runs, set by tools/overnight-parallel.py): copy N of the user's PCSX2 config,
@@ -29,9 +30,16 @@ else
 fi
 INI=${XDG_CONFIG_HOME:-$HOME/.config}/PCSX2/inis/PCSX2.ini
 sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the ini on exit; keep PINE on
-# copies: no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause,
-# which pine.py presses to resume a paused copy
-[ -n "$N" ] && sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' "$INI"
+# copies: no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause and
+# R3 (taken off the PS2 pad; the game doesn't use it) is FrameAdvance, pressed by pine.py's lock-step
+# (HST_LOCKSTEP=1); 1x speed (B24: recorders poll it with next to no loss), or HST_REALTIME=1 for the wall-clock tools (0.25).
+if [ -n "$N" ]; then
+    speed=$([ "${HST_REALTIME:-}" = 1 ] && echo 0.25 || echo 1)
+    sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' \
+        -e '/^FrameAdvance = /d' -e '/^R3 = SDL-0\/RightStick/d' -e 's|^\[Hotkeys\]|&\nFrameAdvance = SDL-0/RightStick|' \
+        -e "s/^NominalScalar = .*/NominalScalar = $speed/" "$INI"
+    echo "$speed" >"${PID%.pid}.speed"
+fi
 [ -z "$N" ] && { echo $$ >"$PID"; exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"; }  # exec keeps the pid
 # a copy's pad goes with it, however PCSX2 ends (stop, kill, crash)
 pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso" & echo $! >"$PID"

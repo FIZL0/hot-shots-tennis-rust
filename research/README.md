@@ -94,9 +94,13 @@ and save the state to that slot.
 | 5 | A full CPU-only doubles game (no human input; for ball, AI and camera captures). Court 10. |
 | 8, 9 | Scratch saves for tools. Never overwrite 3–5. |
 
-Launch with `tools/pcsx2-hst.sh`, which turns PINE (PCSX2's memory IPC, port 28011) on and boots the disc. For
-gap-free per-frame recordings, slow the game down (`[Framerate] NominalScalar = 0.5` or `0.25` in `PCSX2.ini`).
-Each recorder says which in its header.
+Launch with `tools/pcsx2-hst.sh`, which turns PINE (PCSX2's memory IPC, port 28011) on and boots the disc. On a PCSX2
+copy (`HST_PCSX2=N`) nothing needs setting for per-frame recordings: the copy runs at 1x and the recorders poll it,
+skipping and logging the odd frame that ticks mid-read (`missed frame …`). For a capture that must have every frame,
+`HST_LOCKSTEP=1` steps the game one frame at a time while paused (`tools/pine.py`; never torn, but slow). Tools that poll the running game (`play_p2m2.py`,
+`trace_*.py`) need `HST_REALTIME=1` for both the tool and `tools/pcsx2-hst.sh` (copy at 0.25); on the user's own PCSX2
+slow the game down by hand (`[Framerate] NominalScalar = 0.25` in `PCSX2.ini`). Faster than 1x the heavy
+recorders lose frames: B24 journal.
 
 ## Pitfalls
 

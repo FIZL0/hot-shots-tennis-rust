@@ -12,7 +12,7 @@ BALL, PATH = 0x98, 0xa4              # gm offsets: live ball sim, stored path re
 BALL_SIZE, PARAMS_PTR, PARAMS_SIZE = 0x290, 0x54, 0x900
 SWING_BLOCK, SWING_SIZE = 0x2f0e80, 0x300   # per-swing character reach heights (shot table axis bounds)
 
-p = Pine()
+p = Pine(); p.require_realtime()  # polls by wall-clock: a copy launched with HST_REALTIME=1
 p.load_state(int(sys.argv[1]))
 time.sleep(0.2)
 os.makedirs(sys.argv[3], exist_ok=True)

@@ -8,7 +8,7 @@ import struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, UMP_PTR, SB_PTR = 0x1d5780, 0x422f80, 0x43b1c8, 0x42d6c0
-p, want, out = Pine(), int(sys.argv[2]), open(sys.argv[3], "wb")
+p, want, out = Pine(step=True), int(sys.argv[2]), open(sys.argv[3], "wb")
 p.load_state(int(sys.argv[1]))
 time.sleep(0.3)
 gm, ump, sb = p.read32(GM_PTR), p.read32(UMP_PTR), p.read32(SB_PTR)
@@ -16,13 +16,10 @@ r = [(gm + 0x50, 8), (gm + 0x340, 8), (ump + 0xd0, 0xe0), (sb + 0x190, 8), (sb +
      (0x316600, 0x30), (p.read32(gm + 0x88) + 0xe0, 16), (0x2ef7dc, 8), (0x2ef110, 8)]
 last, n = p.read32(VSYNC), 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last, 0.009)  # read late in the frame, once the game's tick is done (real time)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.009)  # read late in the frame, once the game's tick is done
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)

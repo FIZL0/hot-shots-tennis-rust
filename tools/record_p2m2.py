@@ -2,9 +2,9 @@
 """Capture game state every frame while PCSX2 plays an input recording (Tools → Input Recording → Play).
 Usage: record_p2m2.py <state.p2s | slot> <out.bin> <frames>. With a .p2s: start it first, then start playback; it
 arms on that state's load (vsync counter jumps). With a slot number it loads the state itself (bot games: slot 5).
-Writes `frames` samples. Run PCSX2 slowed down ([Framerate] NominalScalar =
-0.5 in PCSX2.ini; 0.5 captured new_recording gap-free, drop to 0.25 if it reports missed frames) so each frame's emulation burst ends well before the next vsync: a sample is taken only when two
-reads in a row are identical, so it is never torn mid-frame.
+Writes `frames` samples. It polls the running game (a PCSX2 copy runs at 1x; the user's own PCSX2
+slowed: NominalScalar 0.5 or 0.25), taking a sample only when two reads in a row are identical, so it is never torn
+mid-frame (a frame that ticks mid-read is skipped and logged). HST_LOCKSTEP=1 steps it frame by frame (tools/pine.py).
 Sample = u32 vsync counter + the regions in REGIONS order (fixed size; layout in README of the P0 journal), then
 the live ball *(gm+0x88) and the rally block 0x3165f0 (not in round1.bin, which predates them)."""
 import struct, sys, time, zipfile
@@ -25,7 +25,7 @@ def regions(p):
         r += [(pl + o, n) for o, n in PLAYER]
     return gm, r + [(p.read32(gm + 0x88), BALL), RALLY]
 
-p, out, want = Pine(), open(sys.argv[2], "wb"), int(sys.argv[3])
+p, out, want = Pine(step=True), open(sys.argv[2], "wb"), int(sys.argv[3])
 if sys.argv[1].isdigit():
     last = p.read32(VSYNC)
     p.load_state(int(sys.argv[1]))
@@ -37,9 +37,7 @@ else:
 print("waiting for vsync", start, flush=True)
 n, armed = 0, False
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if not armed:
         armed = abs(v - last) > 2 and start <= v <= start + 2
         if not armed:
@@ -49,7 +47,6 @@ while n < want:
     elif v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     gm, r = regions(p)
     a = p.settle(r, v)
     if p.read32(GM_PTR) != gm: sys.exit(f"match object gone at vsync {v} (match over), {n} samples")

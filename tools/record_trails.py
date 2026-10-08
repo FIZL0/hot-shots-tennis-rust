@@ -8,7 +8,7 @@ import struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, FX_PTR, CLOCK, PLAYERS, POINTS = 0x1d5780, 0x422f80, 0x423f80, 0x423f88, 4, 48
-p, want, out = Pine(), int(sys.argv[2]), open(sys.argv[3], "wb")
+p, want, out = Pine(step=True), int(sys.argv[2]), open(sys.argv[3], "wb")
 p.load_state(int(sys.argv[1]))
 time.sleep(2)  # the load lands asynchronously; pointers read before it are stale
 gm, fx = p.read32(GM_PTR), p.read32(FX_PTR)
@@ -19,13 +19,10 @@ for i in range(PLAYERS):
     r += [(t, 0xa8), (p.read32(t + 0x64), POINTS * 0x30), (m, 0x90), (p.read32(m + 0x88), 0x40)]
 last, n = p.read32(VSYNC), 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)

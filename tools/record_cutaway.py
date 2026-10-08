@@ -8,14 +8,12 @@ clip's length (+0x2c) 8. Usage: record_cutaway.py <out.bin> <frames> [--players]
 import sys,time,struct
 sys.path.insert(0,'tools')
 from pine import Pine
-p=Pine(); p.load_state(5); time.sleep(1)
+p=Pine(step=True); p.load_state(5); time.sleep(1)
 out=open(sys.argv[1],'wb'); n=0; want=int(sys.argv[2])
 VS=0x1d5780
 last=p.read32(VS)
 while n<want:
-    v=p.read32(VS)
-    if v==last: continue
-    last=v
+    v=last=p.next_frame(last)
     gm=p.read32(0x422f80)
     if not gm: continue
     ch=p.read32(gm+0xbc)

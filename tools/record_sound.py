@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the sound command ring every frame from a save-state load, next to the live ball (bot games: slot 5).
-Usage: record_sound.py <slot> <frames> <out.bin> [hits]. Run PCSX2 slowed down ([Framerate] NominalScalar = 0.25).
+Usage: record_sound.py <slot> <frames> <out.bin> [hits]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
 Sample = record_live.py's (u32 vsync + live ball 0x290 + predictor 0x290 + rally block 0x40), the live ball's
 first 6 contact records (6 × 0x50, from the pointer at ball+0x8f8; zeros without one), then the sound library's
 last positional play (angle, distance, volume: 3 × i32), u32 n and the n ring commands
@@ -12,7 +12,7 @@ import struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, SND_PTR, RING, HEAD = 0x1d5780, 0x422f80, 0x312540, 0x305000, 0x304fc0
-p, want, out = Pine(), int(sys.argv[2]), open(sys.argv[3], "wb")
+p, want, out = Pine(step=True), int(sys.argv[2]), open(sys.argv[3], "wb")
 p.load_state(int(sys.argv[1]))
 time.sleep(0.3)
 gm, snd = p.read32(GM_PTR), p.read32(SND_PTR)
@@ -25,13 +25,10 @@ if hits:
 r += [(HEAD, 8)]
 last, n, head = p.read32(VSYNC), 0, p.read32(HEAD) % 1024
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)

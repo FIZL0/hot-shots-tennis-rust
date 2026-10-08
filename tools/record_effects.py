@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the hit-effect manager every frame from a save-state load (bot games: slot 5).
-Usage: record_effects.py <slot> <frames> <out.bin>. Run PCSX2 slowed down if it reports missed frames.
+Usage: record_effects.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
 
 Header: u32 n models (6), then per impact model u32 MOR entry count, u32 MTA entry count.
 Sample: u32 vsync, effects object 0x100, impact effect (+0xa0 object) 0x60, ball 0x290, court marker 8 (0x40),
@@ -11,7 +11,7 @@ import struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, FX_PTR = 0x1d5780, 0x422f80, 0x423f80
-p, want, out = Pine(), int(sys.argv[2]), open(sys.argv[3], "wb")
+p, want, out = Pine(step=True), int(sys.argv[2]), open(sys.argv[3], "wb")
 p.load_state(int(sys.argv[1]))
 time.sleep(2)  # the load lands asynchronously; pointers read before it are stale
 gm, fx = p.read32(GM_PTR), p.read32(FX_PTR)
@@ -28,13 +28,10 @@ for k in range(6):
 out.write(struct.pack(f"<{len(head)}I", *head))
 last, n = p.read32(VSYNC), 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)

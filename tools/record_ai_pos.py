@@ -13,7 +13,7 @@ from pine import Pine
 VSYNC, GM_PTR, MT, AI_SIZE = 0x1d5780, 0x422f80, 0x427130, 0x280
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), open(sys.argv[3], "wb")
 
-p = Pine()
+p = Pine(step=True)
 p.load_state(slot)
 time.sleep(0.3)
 gm0 = p.read32(GM_PTR)
@@ -30,11 +30,8 @@ for pl in pls: regions += [(pl + 0x3e90, 0x10), (pl + 0x3ec0, 0x10), (pl + 0x3f9
 
 last, n, missed = p.read32(VSYNC), 0, 0
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     last = v
-    time.sleep(0.004)
     if p.read32(GM_PTR) != gm0:
         sys.exit(f"match object gone at vsync {v}, {n} samples")
     a = p.settle(regions, v)

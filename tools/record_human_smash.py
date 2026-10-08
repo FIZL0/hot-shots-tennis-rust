@@ -5,7 +5,7 @@ once per incoming ball 4 frames before it comes down through 2.8 m, steering the
 smash locks; smash kinds 0, 0, 1).
 With nothing to hit for 2 s it presses ✕ (point-over skip; serving, every 40 frames: toss, hit). Needs tools/vpad.py serve (pcsx2-hst.sh
 starts it for HST_PCSX2 copies). Usage: record_human_smash.py <slot> <out.bin> <frames>. Same sample layout as
-record_p2m2.py (`hst_sim::replay::frames_live`). Run PCSX2 slowed down (NominalScalar 0.5)."""
+record_p2m2.py (`hst_sim::replay::frames_live`). A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
 from vpad import FIFO
@@ -20,8 +20,10 @@ def f32(v): return struct.unpack("<f", struct.pack("<I", v))[0]
 
 pad = os.open(FIFO, os.O_RDWR)  # held open so each command is a line, not a reopen
 def send(*cmds): os.write(pad, ("\n".join(cmds) + "\n").encode())
+releases = []  # (sample, button): a press is held 3 frames, counted in frames so it lands alike at any speed
+def press(btn): send(f"down {btn}"); releases.append((n + 3, btn))
 
-p, out, want = Pine(), open(sys.argv[2], "wb"), int(sys.argv[3])
+p, out, want = Pine(step=True), open(sys.argv[2], "wb"), int(sys.argv[3])
 send("release")
 p.load_state(int(sys.argv[1]))
 time.sleep(2)  # the load lands asynchronously; pointers read before it are stale
@@ -33,13 +35,10 @@ ball = p.read32(gm + 0x88)
 last, n, lobs, presses, idle, pressed_for, prev, held = p.read32(VSYNC), 0, 0, 0, 0, None, None, (0, 0)
 smashes, smashed_for = 0, None
 while n < want:
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.read_regions(r)
     while True:
         b = p.read_regions(r)
@@ -47,6 +46,7 @@ while n < want:
         a = b
     out.write(struct.pack("<I", v) + a)
     n += 1
+    while releases and releases[0][0] <= n: send(f"up {releases.pop(0)[1]}")
     for k in (1, 3):  # the opponents lob
         pl = players[k]
         if p.read8(pl + 0x3ec1) in (1, 2) and s32(p.read32(pl + 0x3ec4)) >= 0 and p.read32(pl + 0x3ee4) != TRIANGLE:
@@ -82,7 +82,7 @@ while n < want:
         pressed_for, idle = hit, 0
         btn = ("cross", "circle", "triangle")[smashes % 3]
         presses += 1
-        send(f"press {btn} 80")
+        press(btn)
         print(f"vsync {v}: {btn}, ball {eta} frames from smash height, {d:.2f} m off", flush=True)
     elif p.read8(me + 0x3ec1) == 4 and s32(p.read32(me + 0x3ec4)) >= 0 and smashed_for != pressed_for:
         smashed_for = pressed_for  # a smash locked: the next button
@@ -90,7 +90,7 @@ while n < want:
         print(f"vsync {v}: smash {smashes}", flush=True)
     elif idle > (40 if p.read8(me + 0x3ec1) == 5 else 120):  # serving: toss, then hit
         idle = 0
-        send("press cross 80")
+        press("cross")
     if n % 1200 == 0: print(n, flush=True)
 send("release")
 print("done", n, "lobs", lobs, "presses", presses, "smashes", smashes)

@@ -17,30 +17,28 @@ CAM, VIEW, FOV, VTABLE = 0x1e7f30, 0x1e7e30, 0x1e7d50, 0x1d1cc0
 slot, out, shots = int(sys.argv[1]), open(sys.argv[2], "wb"), sys.argv[3]
 who = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 os.makedirs(shots, exist_ok=True)
-p = Pine()
+p = Pine(step=True)
 p.load_state(slot)
 time.sleep(2)
 gm = p.read32(GM_PTR)
 # the pop-up object: found by its vtable pointer in the save state (stable across loads of one state)
 mgr = int(os.environ.get("HST_POPUPS", "0x1529db0"), 16)
 assert p.read32(mgr) == VTABLE, "pop-up object not at %x" % mgr
+last = p.read32(VSYNC)
 while p.read8(gm + 0x55) != 3:
-    time.sleep(0.05)
-v0 = p.read32(VSYNC)
-while p.read32(VSYNC) < v0 + 30:
-    time.sleep(0.005)
+    last = p.next_frame(last)
+v0 = last
+while last < v0 + 30:
+    last = p.next_frame(last)
 p.write32(HIT, who)
 print("hit set at vsync", p.read32(VSYNC), flush=True)
 r = [(gm, 0x60), (mgr + 0x140, 0x70), (mgr + 0x6f0, 0x60), (CAM, 0x40), (VIEW, 0x40), (FOV, 8)]
 last, n, gone, log = p.read32(VSYNC), 0, None, open(os.path.join(shots, "shots.txt"), "w")
 while n < 900 and (gone is None or n < gone + 30):
-    v = p.read32(VSYNC)
-    if v == last:
-        continue
+    v = p.next_frame(last)
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
-    time.sleep(0.004)
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)
