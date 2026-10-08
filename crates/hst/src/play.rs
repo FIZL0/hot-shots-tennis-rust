@@ -1791,6 +1791,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                 rows4([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
             );
             g.shot = Shot::default();
+            // a fresh path: last point's net/special count would read the toss as bounced and whiff every swing
+            g.path_base = 0;
             g.prev_ball = hand;
             g.serving.tossed = true;
         }
