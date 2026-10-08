@@ -42,12 +42,14 @@ use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
 mod bodyhit;
+mod controls;
 mod cutaway;
 mod markers;
 mod menu;
 mod panel;
 mod popups;
 mod surprise;
+mod widescreen;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -453,12 +455,14 @@ struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
     app.add_plugins(bodyhit::plugin);
+    app.add_plugins(controls::plugin);
     app.add_plugins(cutaway::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(menu::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.add_plugins(surprise::plugin);
+    app.add_plugins(widescreen::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .init_resource::<CamMode>()
@@ -1391,49 +1395,56 @@ fn read_input(
     mut cam: ResMut<CamMode>,
     mut cs: ResMut<CamState>,
     time: Res<Time>,
+    bind: Res<controls::Bindings>,
+    mut held: ResMut<controls::PadSlots>,
 ) {
+    use controls::Action as A;
     let mut now = [SlotPad::default(); 2];
-    for (k, d) in [
-        (KeyCode::KeyW, Vec2::Y),
-        (KeyCode::KeyS, -Vec2::Y),
-        (KeyCode::KeyA, -Vec2::X),
-        (KeyCode::KeyD, Vec2::X),
-    ] {
-        if keys.pressed(k) {
+    let dirs = [(A::Up, Vec2::Y), (A::Down, -Vec2::Y), (A::Left, -Vec2::X), (A::Right, Vec2::X)];
+    let shots = [(A::Normal, 0), (A::Cut, 1), (A::Lob, 3)];
+    for (a, d) in dirs {
+        if bind.key_pressed(&keys, a) {
             now[0].stick += d;
         }
     }
-    now[0].shot = [(KeyCode::KeyJ, 0), (KeyCode::KeyK, 1), (KeyCode::KeyL, 3)]
+    now[0].shot = shots
         .into_iter()
-        .find(|(k, _)| keys.just_pressed(*k))
+        .find(|(a, _)| bind.key_just_pressed(&keys, *a))
         .map(|(_, kind)| kind);
-    now[0].serve = keys.just_pressed(KeyCode::Space);
-    let mut cycle = keys.just_pressed(KeyCode::KeyC);
-    let mut turn = keys.pressed(KeyCode::ArrowRight) as i32 as f32
-        - keys.pressed(KeyCode::ArrowLeft) as i32 as f32;
-    // controllers in connection order: the first is slot 1, the second slot 2
+    now[0].serve = bind.key_just_pressed(&keys, A::Serve);
+    let mut cycle = bind.key_just_pressed(&keys, A::Camera);
+    let mut turn = bind.key_pressed(&keys, A::TurnRight) as i32 as f32
+        - bind.key_pressed(&keys, A::TurnLeft) as i32 as f32;
+    // controllers keep their slot while connected (`controls::PadSlots`); new ones fill the first free slot
     // ponytail: Steam Input's virtual pads (Valve, 0x28de) mirror real ones; skip them so slot 2 is the second real pad
     let mut list: Vec<_> = gamepads
         .iter()
         .filter(|(_, g)| g.vendor_id() != Some(0x28de))
+        .map(|(e, _)| e)
         .collect();
-    list.sort_by_key(|(e, _)| *e);
-    for (slot, (_, g)) in list.iter().take(2).enumerate() {
+    list.sort();
+    held.update(&list);
+    for (slot, e) in held.0.iter().enumerate() {
+        let Some(Ok((_, g))) = e.map(|e| gamepads.get(e)) else {
+            continue;
+        };
         let s = &mut now[slot];
-        s.stick += deadzone(g.left_stick()) + g.dpad();
-        let buttons = [
-            (GamepadButton::South, 0),
-            (GamepadButton::East, 1),
-            (GamepadButton::North, 3),
-        ];
-        s.shot = s.shot.or(buttons
+        s.stick += deadzone(g.left_stick());
+        for (a, d) in dirs {
+            if bind.pad_pressed(g, a) {
+                s.stick += d;
+            }
+        }
+        s.shot = s.shot.or(shots
             .into_iter()
-            .find(|(b, _)| g.just_pressed(*b))
+            .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
-        cycle |= g.just_pressed(GamepadButton::Select);
-        turn += deadzone(g.right_stick()).x;
+        s.serve |= bind.pad_just_pressed(g, A::Serve);
+        cycle |= bind.pad_just_pressed(g, A::Camera);
+        turn += deadzone(g.right_stick()).x + bind.pad_pressed(g, A::TurnRight) as i32 as f32
+            - bind.pad_pressed(g, A::TurnLeft) as i32 as f32;
     }
-    pads.connected = list.len();
+    pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
         slot.stick = n.stick.clamp_length_max(1.0);
         if n.shot.is_some() {
@@ -3516,18 +3527,24 @@ fn hud(
     g: Res<Game>,
     pads: Res<Pads>,
     mode: Res<CamMode>,
+    bind: Res<controls::Bindings>,
     mut q: Query<&mut Text, With<ScoreText>>,
 ) {
+    use controls::Action as A;
     for mut t in &mut q {
         t.0 = format!(
-            "{}\ncontrollers: {} · camera: {} (C / Select)\nmove WASD/stick/d-pad · J/A topspin · K/B slice · L/Y lob · stick forward: flat, back + slice: drop",
+            "{}\ncontrollers: {} · camera: {} ({})\nmove {}{}{}{}/stick/d-pad · {} topspin · {} slice · {} lob · stick forward: flat, back + slice: drop",
             g.message,
             pads.connected,
-            if *mode == CamMode::Original {
-                "original"
-            } else {
-                "free"
-            }
+            if *mode == CamMode::Original { "original" } else { "free" },
+            bind.names(A::Camera, true),
+            bind.names(A::Up, false),
+            bind.names(A::Left, false),
+            bind.names(A::Down, false),
+            bind.names(A::Right, false),
+            bind.names(A::Normal, true),
+            bind.names(A::Cut, true),
+            bind.names(A::Lob, true),
         );
     }
 }

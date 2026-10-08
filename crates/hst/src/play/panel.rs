@@ -536,12 +536,7 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         .hud_colours();
     commands.insert_resource(Colours(pill, rank));
     commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        })
+        .spawn(super::widescreen::screen_43())
         .with_children(|p| {
             for i in 0..POOL {
                 p.spawn((

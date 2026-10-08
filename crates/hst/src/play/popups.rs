@@ -563,7 +563,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     });
     commands.insert_resource(Art(art));
     commands
-        .spawn(Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() })
+        .spawn(super::widescreen::screen_43())
         .with_children(|p| {
             for i in 0..POOL {
                 p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
@@ -1172,7 +1172,7 @@ fn setup_banners(mut commands: Commands, args: Res<Args>, mut images: ResMut<Ass
     });
     commands.insert_resource(BannerArt(art));
     commands
-        .spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(1)))
+        .spawn((super::widescreen::screen_43(), GlobalZIndex(1)))
         .with_children(|p| {
             for i in 0..5 {
                 p.spawn((BannerSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));

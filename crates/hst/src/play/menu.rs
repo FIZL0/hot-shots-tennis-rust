@@ -344,12 +344,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     commands.insert_resource(Art(art, bank));
     commands
         .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
+            super::widescreen::screen_43(),
             GlobalZIndex(10),
             Root,
         ))
