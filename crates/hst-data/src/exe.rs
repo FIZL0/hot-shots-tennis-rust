@@ -214,6 +214,19 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// A trigger creature type's model under `data/azuma/trgCreMdl/`: the model's stem, the stem of its other files,
+    /// and its clip count (0 none, 1 `<base>.ANI`, else `<base>_a.ANI`, `<base>_b.ANI`); `None` where it has no model.
+    pub fn trigger_model(&self, ty: u8) -> Option<(String, String, u8)> {
+        let r = self.at(0x41_c6d0 + 0x18 * ty as u32, 0x18);
+        let s = |o: usize| {
+            let a = u32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+            let s = if a == 0 { &[0][..] } else { self.at(a, 32) };
+            String::from_utf8_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(32)]).into_owned()
+        };
+        let mdl = u32::from_le_bytes(r[0..4].try_into().unwrap());
+        (ty < 53 && mdl != 0).then(|| (s(0).split('.').next().unwrap_or_default().into(), s(4), if r[8] != 0 { r[9] } else { 0 }))
+    }
+
     /// A trigger creature type's parameter row (the part the creature engine uses).
     pub fn trigger(&self, ty: u8) -> TriggerRow {
         let r = self.at(0x41_aec0 + 0x74 * ty as u32, 0x74);

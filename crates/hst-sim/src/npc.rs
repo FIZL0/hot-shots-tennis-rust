@@ -189,6 +189,27 @@ impl Walker {
     }
 }
 
+/// Which of `count` walkers cheer a point (the gallery's pick): all of them below four, else three distinct ones
+/// drawn at random (a draw that repeats an earlier pick is drawn again).
+pub fn cheerers(count: usize, roll: &mut impl FnMut() -> u32) -> [bool; 6] {
+    let mut out = [false; 6];
+    if count < 4 {
+        out[..count].fill(true);
+        return out;
+    }
+    let mut picks = [usize::MAX; 3];
+    let mut k = 0;
+    while k < 3 {
+        let p = (roll() >> 16 & 0x7fff) as usize % count;
+        if !picks[..k].contains(&p) {
+            picks[k] = p;
+            k += 1;
+        }
+    }
+    picks.iter().for_each(|&p| out[p] = true);
+    out
+}
+
 /// Trigger creature types that just play their sound now and then (`exe::Game::emitter` gives the sound and gap).
 pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36, 41, 42, 45, 46, 50, 51];
 /// The emitter type whose sound sweeps across the stereo field after it starts.
@@ -690,5 +711,16 @@ impl Default for Trigger {
             gap: 0,
             voice: (-1, 0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn three_distinct_cheerers() {
+        assert_eq!(super::cheerers(2, &mut || unreachable!()), [true, true, false, false, false, false]);
+        // draws 1, 1 (again), 4, 1, 0: picks 1, 4, 0
+        let mut draws = [1u32, 1, 4, 1, 0].into_iter().map(|d| d << 16);
+        assert_eq!(super::cheerers(5, &mut || draws.next().unwrap()), [true, true, false, false, true, false]);
     }
 }

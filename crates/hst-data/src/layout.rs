@@ -144,6 +144,29 @@ mod tests {
     }
 }
 
+/// The background figures' files in a court's `COURTSET/NN/HOLE01.XB`: a model stem and its clips by motion number.
+/// Umpire `u`: motions 0 idle (`_h`), 1 turned right (`_r`), 2 left (`_l`).
+pub fn umpire_files(u: u8) -> (String, Vec<String>) {
+    let d = format!("data/azuma/umpire/u{u:02}/u{u:02}");
+    (d.clone(), ["h", "r", "l"].iter().map(|m| format!("{d}_{m}.ani")).collect())
+}
+
+/// A walking spectator's model `g-MM` and animation set `npcSS` (anims 0..6).
+pub fn walker_files(model: u8, set: u8) -> (String, Vec<String>) {
+    (format!("data/azuma/gallery/mdl/g-{model:02}"), (1..=7).map(|k| format!("data/azuma/gallery/ani/npc{set:02}/npc{set:02}_{k:02}.ani")).collect())
+}
+
+/// A trigger creature's model and clips (`exe::Game::trigger_model`'s stems and clip count).
+pub fn trigger_files(model: &str, base: &str, clips: u8) -> (String, Vec<String>) {
+    let d = "data/azuma/trgcremdl";
+    let anims = match clips {
+        0 => vec![],
+        1 => vec![format!("{d}/{base}.ani")],
+        _ => vec![format!("{d}/{base}_a.ani"), format!("{d}/{base}_b.ani")],
+    };
+    (format!("{d}/{model}"), anims)
+}
+
 /// How many clouds a court makes: `envir_cNN.dat`'s i16 per environment at 0x4d0 scaled by the hole file's
 /// `envir_cNN_h01.dat` percent at 0x50; 0 means 20. Environment 1 is singles, 0 doubles.
 pub fn cloud_count(envir: &[u8], hole_envir: &[u8], env: usize) -> Option<usize> {

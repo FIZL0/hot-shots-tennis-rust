@@ -46,6 +46,7 @@ mod controls;
 mod cutaway;
 mod markers;
 mod menu;
+mod npcs;
 mod panel;
 mod popups;
 mod surprise;
@@ -477,6 +478,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(cutaway::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(menu::plugin);
+    app.add_plugins(npcs::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.add_plugins(surprise::plugin);
@@ -1268,20 +1270,6 @@ fn setup(
             .flatten()
             .map(|(b, mid)| (std::sync::Arc::new(b), mid)),
     });
-    // ponytail: a stand-in figure for her (a capsule on the chair) until the umpire model is drawn
-    let chair = game.umpire.pos;
-    let coat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.9, 0.85, 0.7),
-        ..default()
-    });
-    let stand_in = commands
-        .spawn((
-            Mesh3d(meshes.add(Capsule3d::new(0.2, 0.8))),
-            MeshMaterial3d(coat),
-            Transform::from_xyz(chair[0], chair[1] - 0.6, chair[2]),
-        ))
-        .id();
-    commands.entity(root).add_child(stand_in);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(
