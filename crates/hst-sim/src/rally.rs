@@ -559,11 +559,16 @@ impl Rally {
 
     /// The pick for the contact kind: (swing frames).
     fn swing_frame(&self, b: &Body, c: &PathCopy) -> Option<i32> {
+        self.kind_frame(b, c, self.kind)
+    }
+
+    /// The pick for contact kind `kind`.
+    fn kind_frame(&self, b: &Body, c: &PathCopy, kind: u8) -> Option<i32> {
         let r = &b.reach;
         let m = mul;
         let far = m(f32::from_bits(0x3fa6_6666), r.reach);
         let base = Pick { stop: 1, net: 0.5, min: 0, low: 0.0, high: 0.0, near: 0.0, far, flat: false, depth: b.depth };
-        let got = match self.kind {
+        let got = match kind {
             3 => self.pick(b, c, Pick { min: 0, low: r.smash[2], high: r.smash[0], far: r.reach, flat: true, depth: b.smash_off[1], ..base }),
             2 => self.pick(b, c, Pick {
                 stop: 0,
@@ -573,19 +578,25 @@ impl Rally {
                 ..base
             }),
             1 => self.pick(b, c, Pick { min: 1, low: r.stroke_height, high: r.volley_height, ..base }),
-            0 => (0..4).find_map(|tier| {
-                let (h, rr) = (r.stroke_height, r.reach);
-                let (lo, hi, near, far) = match tier {
-                    0 => (m(0.9, h), m(f32::from_bits(0x3f8c_cccd), h), m(0.9, rr), m(f32::from_bits(0x3f8c_cccd), rr)),
-                    1 => (m(0.7, h), m(1.3, h), m(0.7, rr), m(1.3, rr)),
-                    2 => (m(0.3, h), m(f32::from_bits(0x3fd9_999a), h), m(0.3, rr), m(1.3, rr)),
-                    _ => (0.0, m(3.0, h), 0.0, m(1.3, rr)),
-                };
-                self.pick(b, c, Pick { low: lo, high: hi, near, far, ..base })
-            }),
+            0 => (0..4).find_map(|tier| self.tier_frame(b, c, tier)),
             _ => None,
         };
         got.map(|(at, _)| at)
+    }
+
+    /// The tiered kind's pick at one tier (0 the tightest band round the stroke height and reach, 3 the widest).
+    fn tier_frame(&self, b: &Body, c: &PathCopy, tier: u8) -> Option<(i32, bool)> {
+        let r = &b.reach;
+        let m = mul;
+        let (h, rr) = (r.stroke_height, r.reach);
+        let (lo, hi, near, far) = match tier {
+            0 => (m(0.9, h), m(f32::from_bits(0x3f8c_cccd), h), m(0.9, rr), m(f32::from_bits(0x3f8c_cccd), rr)),
+            1 => (m(0.7, h), m(1.3, h), m(0.7, rr), m(1.3, rr)),
+            2 => (m(0.3, h), m(f32::from_bits(0x3fd9_999a), h), m(0.3, rr), m(1.3, rr)),
+            _ => (0.0, m(3.0, h), 0.0, m(1.3, rr)),
+        };
+        let base = Pick { stop: 1, net: 0.5, min: 0, low: lo, high: hi, near, far, flat: false, depth: b.depth };
+        self.pick(b, c, base)
     }
 
     /// The ready check: 1 when a frame's move toward the stand spot brings the ball in reach, 2 when it already
@@ -1793,6 +1804,135 @@ impl Rally {
             } else if !net && self.kind == 3 {
                 self.dash = true;
             }
+        }
+    }
+}
+
+/// A human player's shot record keeper (its AI object runs it while a human plays it): whether it has found its
+/// contact, the path entry the next search starts from, the kind found, the tiered search's bounce floor (1 while
+/// the find was made with it) and whether it may volley (it stood within 6.4 of the net when the shot came).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Human {
+    pub found: bool,
+    pub next: i32,
+    pub kind: u8,
+    pub min: i32,
+    pub volley: bool,
+}
+
+impl Human {
+    /// The strike, new path and point messages: search again from the path's start; `z` is the player's.
+    pub fn reset(&mut self, z: f32) {
+        (self.found, self.next, self.volley) = (false, 0, abs(z) < 6.4);
+    }
+}
+
+impl Rally {
+    /// One frame of a human player's shot record, so a computer partner can weigh it (`give_way`): while the
+    /// opponents' shot comes, the contact it could make — a smash, a volley (near the net) or a tiered stroke from
+    /// the widest tier, searched along the path until one is found, then kept up while the stroke-frame pick still
+    /// finds it. `claimed`: the path object's claim is this player's (its record is left alone).
+    #[allow(clippy::too_many_arguments)]
+    pub fn human_record(
+        &mut self,
+        h: &mut Human,
+        row: &AiParams,
+        b: &Body,
+        w: &mut World,
+        c: &mut PathCopy,
+        seen: &mut [bool],
+        claimed: bool,
+        roll: &mut impl FnMut() -> u32,
+    ) {
+        let slot = b.team;
+        if w.hitter < 0 || w.hitter & 1 == slot & 1 || w.shot(slot).n == -2 || claimed {
+            return;
+        }
+        let n = self.copy_path(b, w, c, seen, true);
+        let path = self.path(c);
+        let s = Searcher {
+            row,
+            reach: &b.reach,
+            strong: b.strong,
+            singles: self.singles,
+            beside_human: self.mate > 0,
+            runner: self.runner(b, w),
+            depth: b.depth,
+            path: &path,
+            first: self.first.max(0) as usize,
+            end: self.len.max(0) as usize,
+        };
+        let first = self.first;
+        let put = |w: &mut World, at: i32, kind: i32, stand: [f32; 4]| w.put(slot, at, kind, b.pos, stand);
+        let tiered = |ct: crate::ai::Contact| {
+            let e = c.balls[ct.at].pos;
+            (ct.at as i32 - first, [ct.stand[0], e[1], ct.stand[1], e[3]])
+        };
+        if !h.found {
+            h.min = 0;
+            if h.next >= n {
+                return;
+            }
+            h.found = true;
+            if let Some((stand, _, _, at)) = self.smash_search(b, w, c, h.next, 0) {
+                put(w, at, 3, stand);
+                h.kind = 3;
+                return;
+            }
+            if h.volley {
+                if let Some((stand, _, _, at)) = self.volley_search(b, w, c, h.next, true, false) {
+                    put(w, at, 2, stand);
+                    h.kind = 2;
+                    return;
+                }
+            }
+            for min in [1, 0] {
+                if let Some(ct) = s.tier_search(Some(h.next.max(0) as usize), 3, min, true, false, false, seen, roll) {
+                    let (at, stand) = tiered(ct);
+                    put(w, at, 0, stand);
+                    (h.kind, h.min) = (0, min);
+                    return;
+                }
+            }
+            h.found = false;
+            h.next = n - 1;
+            if c.balls[(n - 1) as usize].bounces >= 2 {
+                put(w, -2, 0, [0.0; 4]);
+            }
+            return;
+        }
+        let lost = match h.kind {
+            0 => true,
+            2 | 3 => {
+                let got = if h.kind == 3 { self.smash_search(b, w, c, -1, 0) } else { self.volley_search(b, w, c, -1, true, false) };
+                if let Some((stand, _, _, at)) = got {
+                    put(w, at, h.kind as i32, stand);
+                    return;
+                }
+                self.kind_frame(b, c, h.kind).is_none()
+            }
+            _ => {
+                put(w, -2, 0, [0.0; 4]);
+                return;
+            }
+        };
+        if !lost {
+            return;
+        }
+        loop {
+            if let Some(ct) = s.tier_search(None, 3, h.min, true, false, false, seen, roll) {
+                let (at, stand) = tiered(ct);
+                put(w, at, 0, stand);
+                h.kind = 0;
+                return;
+            }
+            if h.min != 1 {
+                if self.tier_frame(b, c, 3).is_none() {
+                    put(w, -2, 0, [0.0; 4]);
+                }
+                return;
+            }
+            h.min = 0;
         }
     }
 }
