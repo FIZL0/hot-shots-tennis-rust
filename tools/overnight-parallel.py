@@ -47,7 +47,7 @@ runs short (record less, split it). Save slot 5 is the only bot-only game; 3 and
 input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Other agents edit play.rs at the same \
 time: keep your play.rs changes local (add functions, systems or new modules; don't move, rename or reformat existing \
 code) so the merges stay clean. Close it with `tools/pcsx2-hst.sh stop` \
-(never pkill pcsx2-qt: the other agents' copies are running too). When done, tick \
+(never pkill pcsx2-qt: the other agents' copies are running too). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, tick \
 {id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
 is not stuck: commit what's solid but don't mark it `[~]` or stop PCSX2 — the session waits for the reset and continues \
 the task."""

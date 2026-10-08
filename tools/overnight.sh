@@ -25,7 +25,7 @@ starts copy 6, pine.py and tools/vpad.py talk to it; its save states are a copy,
 anything that drives the game in several steps as one command under \`tools/pcsx2.sh <cmd>\`; each is cut off after \
 $((HST_PCSX2_MAX_HOLD / 60)) min, so keep runs short (record less, split it). Save slot 5 is the only bot-only game; 3 and \
 4 have P1 human and sit waiting for input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Close \
-it with \`tools/pcsx2-hst.sh stop\` (never pkill pcsx2-qt). When done, tick the task in PLAN.md and commit; if stuck, \
+it with \`tools/pcsx2-hst.sh stop\` (never pkill pcsx2-qt). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, tick the task in PLAN.md and commit; if stuck, \
 mark it \`[~]\` per AGENT.md 'If you get stuck', commit, and stop. A usage limit is not stuck: commit what's solid but \
 don't mark it \`[~]\` or stop PCSX2 — the session waits for the reset and continues the task."
 log=context/notes/overnight.log
