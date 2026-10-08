@@ -46,6 +46,7 @@ mod bodyhit;
 mod controls;
 mod cutaway;
 mod foot_fx;
+mod doubles_ai;
 mod markers;
 mod match_stats;
 mod menu;
@@ -167,6 +168,8 @@ struct Player {
     ai_branch: Option<swing::Branch>,
     /// A singles bot's net dash off its own serve (`AiParams::serve_aim_singles`): the spot it dashes to.
     ai_serve_dash: Option<[f32; 2]>,
+    /// Its serve swing plan while the aim waits for the frame before the contact.
+    ai_serve_swing: Option<u8>,
     /// The AI object (`hst_sim::ai::Mind`), kept across points (None until the match's first point); this point's
     /// messages heard so far (0 none, 1 the reset, 2 the point over, 3 the players' reaction); its serve spot (x)
     /// and the frames it still waits there before the toss.
@@ -375,6 +378,8 @@ struct Game {
     smash_heights: Vec<[f32; 2]>,
     /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
     reaches: Vec<Reach>,
+    /// The doubles AI's rally state (`doubles_ai`).
+    doubles_ai: doubles_ai::Shared,
     marks: Marks,
     /// The finish and Set / Match Point banners (`popups`).
     finish: popups::Finish,
@@ -1211,6 +1216,7 @@ fn setup(
         hit_effect: None,
         smash_heights: Vec::new(),
         reaches: Vec::new(),
+        doubles_ai: default(),
         marks: Marks::default(),
         finish: default(),
     };
@@ -2904,7 +2910,7 @@ fn bot(g: &mut Game, i: usize) {
     }
     // past its wait the rally step below decides the break-off (`ai_serve_step`)
     let stick = ai_serve_stick(g, i);
-    if !stick && serve_follow(&mut g.players[i], false) {
+    if !stick && serve_follow(&mut g.players[i], false) || doubles_ai::step(g, i, &mind) {
         return;
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
@@ -3171,7 +3177,12 @@ fn bot_serve(g: &mut Game, i: usize) {
         let wait = hst_sim::ai::serve_wait(&mut roll);
         drop(roll);
         (g.players[i].ai_mind, g.players[i].ai_serve) = (Some(m), (spot, wait));
+        g.players[i].ai_serve_swing = None;
         g.serving.bot_due = Some((SWEET_FRAME - g.players[i].ai_timing.serve).max(0) as usize);
+    }
+    // the aim, the frame before the contact (`serve_turn` hits as `left` runs out)
+    if g.players[i].ai_serve_swing.is_some() && g.serving.swing.is_some_and(|sw| sw.left <= 2) {
+        ai_serve_aim(g, i);
     }
     let s = g.serving;
     let mut stick = Vec2::ZERO;
@@ -3193,7 +3204,14 @@ fn bot_serve(g: &mut Game, i: usize) {
         let quick = g.players[i].ai_picks.quick_serve;
         serve::ai_search(&g.serve_data[i], toss, quick, &predicted_path(g, horizon))
             .filter(|&k| k <= due)
-            .map(|_| ai_serve_kind(g, i, toss))
+            .map(|k| {
+                let kind = ai_serve_kind(g, i, toss);
+                // ponytail: a contact a frame off aims at the press (the app's own search picks the swing's frames)
+                if k <= 1 {
+                    ai_serve_aim(g, i);
+                }
+                kind
+            })
     } else {
         None
     };
@@ -3287,16 +3305,24 @@ fn ai_toss_kind(g: &mut Game, i: usize) -> i32 {
     button_kind(hst_sim::aim::button(plan))
 }
 
-/// A serving computer player's swing (`AiParams::serve_swing`) and its aim (`serve_aim`, kept as the serve's stick).
+/// A serving computer player's swing (`AiParams::serve_swing`), kept for its aim.
 fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
-    let p = g.players[i];
     let toss = match toss {
         Toss::Strong => 1,
         Toss::Weak => 0,
         Toss::Under => 2,
     };
+    let swing = g.players[i].ai.serve_swing(toss, &mut ai_roll(&mut g.rng));
+    g.players[i].ai_serve_swing = Some(swing);
+    button_kind(hst_sim::aim::button(swing))
+}
+
+/// A serving computer player's aim (`serve_aim`, kept as the serve's stick) for its kept swing, and in singles the
+/// net dash.
+fn ai_serve_aim(g: &mut Game, i: usize) {
+    let Some(swing) = g.players[i].ai_serve_swing.take() else { return };
+    let p = g.players[i];
     let mut roll = ai_roll(&mut g.rng);
-    let swing = p.ai.serve_swing(toss, &mut roll);
     let ad = g.score.side == 1;
     let (s, dash) = if g.players.len() == 2 {
         // the app's AI is always level 3
@@ -3310,7 +3336,6 @@ fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
     drop(roll);
     g.players[i].ai_serve_dash = dash;
     g.serving.bot_aim = Vec2::new(s[0], s[2]);
-    button_kind(hst_sim::aim::button(swing))
 }
 
 /// A character's strong-toss chance (%) on a second serve, from the game program's per-character table.

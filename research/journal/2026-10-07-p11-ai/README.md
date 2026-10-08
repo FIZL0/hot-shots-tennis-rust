@@ -82,3 +82,41 @@ See 10-P11I-BOTS-FINAL.md. Done: tests `singles_serves_and_kind_lock` / `doubles
 (`crates/hst-sim/tests/ai_serve.rs`). Fixtures `ai_serve_singles.bin` (Carol vs Lola, costume 9, rows 48/52) and
 `ai_serve_s05.bin` (slot 5), both from `tools/record_ai_serve.py`. New `AiParams::serve_aim_singles` (the serve's net
 dash) and `serve::ai_pick`; the level-2 serve lanes are fixed. The return-of-serve chooser doesn't run in bot-only play.
+
+## P11j (contact searches)
+
+See 11-P11J-SEARCH-FINAL.md. Done: `ai::Runner` (run frames 0x35bc50) and `ai::Searcher` (`reach_search` 0x360150,
+`tier_search` 0x360910). Tests `doubles_searches_match_the_game` / `singles_searches_match_the_game`
+(`crates/hst-sim/tests/ai_search.rs`, fixtures `ai_search_s05.bin` / `ai_search_singles.bin` from
+`tools/record_ai_search.py`). Not wired into `play.rs` yet: P11k/P11l use it.
+
+## P11k1 (doubles receive)
+
+See 12-P11K1-RECEIVE-FINAL.md. Done: `hst_sim::rally` (`Rally::receive` with the path copy, landing/bounce picks, dive
+check, smash search, ready check, stroke-frame pickers and return aim). Test `receive_matches_the_game` /
+`receive_matches_the_game_long` (`crates/hst-sim/tests/ai_rally.rs`, fixtures `ai_rally_s05*.bin` from
+`tools/record_ai_rally.py`, two with slowed players). Unreached branches: P11k4. Not wired into `play.rs` yet: P11k3.
+
+## P11k2 (doubles NET/BASE)
+
+See 13-P11K2-NETBASE-FINAL.md. Done: `Rally::rally(net, …)` with the shot records (`World::shot`/`put`), formation
+repicks, give way, the volley search and the not-found tail. Test `net_and_base_match_the_game` (fixture
+`ai_net_s05.bin`). Recorder fix: the gm-relative regions (ball, hits, gravity, path object) were read from the wrong
+pointer in every earlier fixture; the receive was re-checked on `ai_rally_s05_fix.bin`. Unreached branches: P11k5.
+
+## P11k3 (doubles dispatcher + wiring)
+
+See 14-P11K3-DISPATCH-FINAL.md. Done: the dispatcher's state choice checked on every recorded call (ai_rally.rs). The
+receive and NET/BASE now drive doubles bots in the app (`play/doubles_ai.rs`, one hook in `bot`). Wiring gaps: P11k6.
+
+## P11l1 (singles receive)
+
+See 15-P11L1-SINGLES-RECEIVE-FINAL.md. The work is done: `Rally::receive` with `singles` set calls the singles return aim (`singles_aim`, 0x3cdd00) and uses the stroke-over dash spot.
+- Test: `singles_receive_matches_the_game`, on fixtures `ai_rally_singles*.bin` (`HST_SINGLES=1 tools/record_ai_rally.py`, slot 8 = `bots_singles`).
+- Branches no recording has reached: P11l4.
+
+## Wrap-up
+
+See 22-P11-WRAPUP-FINAL.md: `ai_rally_singles_base.bin` (BASE smash taken) and `ai_rally_s05_weak.bin` bit-exact; the
+remaining branch lists (P11k4/k5, P11l4/l5) need a human-driven recording, the replay checks (P11k6/l6) the ball path
+port; P11 marked blocked.
