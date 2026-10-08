@@ -9,6 +9,8 @@ motion object 0xa0, right toe bone 0x40, left toe bone 0x40. With `extras`, then
 0x9c8, run object +0x9ec0..+0xa0b0 (dash matrices and flags, puff flags, burst latches), and per player (4): +0x3f80
 0x10, +0x3ec0 0x10, Bip01Pelvis, Bip01Spine1 and Bip01Head world matrices 0x40 each.
 FOOT_POKE=dusty|wet forces the run object's court flags (+0xa090) every frame, for dive rings on any court.
+FOOT_RAIN=<weather> pokes the weather byte (gm+0x84 → +0x135; 2/3 rain) every frame: the run object takes its wet
+flag from it at the next point's reset, as in a real rain match.
 FOOT_DEBRIS=grass|dirt (with `extras`) forces an instant replay (only replays throw debris) of every point, by setting
 the replay decision (gm+0x32e, +0x350, +0x35c) once the point is over (gm+0x346); dirt forces the court table's clay
 byte; FOOT_FROM=vsync skips the samples before it. It appends: the debris slots (run object +0x71c0, 0x2d00), the C library
@@ -56,6 +58,8 @@ while n < want:
     if v != last + 1:
         print(f"missed frames {last + 1}..{v - 1}", flush=True)
     last = v
+    if os.environ.get("FOOT_RAIN"):
+        p.write32(w + 0x134, p.read32(w + 0x134) & ~0xff00 | int(os.environ["FOOT_RAIN"]) << 8)
     if os.environ.get("FOOT_POKE"):
         p.write32(run + 0xa090, 1 if os.environ["FOOT_POKE"] == "dusty" else 0x100)
     if DEBRIS:  # once per point, while the replay hasn't started

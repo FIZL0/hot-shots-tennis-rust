@@ -11,7 +11,7 @@ use hst_sim::effect::Effect;
 use hst_sim::foot::{DiveWatch, Feet, Runner};
 
 use super::{Figure, Game, Phase};
-use crate::character::{Motion, Rig};
+use crate::character::Motion;
 use crate::effects::{Shown, fill, look, model, pose};
 use crate::weather::Weather;
 use crate::Args;
@@ -41,6 +41,8 @@ struct FootFx {
     dives: [DiveWatch; 4],
     /// Debris: clods, blades.
     bits: [Handle<Mesh>; 2],
+    /// Each player's state byte (`state`), held once the point is over.
+    states: [u8; 4],
 }
 
 fn setup(
@@ -72,24 +74,15 @@ fn setup(
     let arc = Archive::parse(&arc).expect("EFFCT.XB0");
     let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
     let (table, feet) = (game.foot(), Feet::default());
-    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, dives: [DiveWatch::default(); 4], bits });
+    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, dives: [DiveWatch::default(); 4], bits, states: [0; 4] });
 }
 
-/// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim. The run
-/// object updates after the players (it takes their hit events the same frame), so the dive rings draw from the
-/// sound manager's generator after the frame's strokes.
-// ponytail: the toes are the last drawn pose (one frame behind the motion), as the swing trails
-fn tick(
-    fx: Option<ResMut<FootFx>>,
-    mut g: ResMut<Game>,
-    w: Option<Res<Weather>>,
-    q: Query<(&Figure, &Rig, &Motion, &GlobalTransform)>,
-    joints: Query<&GlobalTransform>,
-    root: Query<&GlobalTransform, With<crate::GameSpace>>,
-) {
-    let (Some(mut fx), Ok(root)) = (fx, root.single()) else { return };
+/// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
+/// step the sim. The run object updates after the players (it takes their hit events the same frame), so the dive
+/// rings draw from the sound manager's generator after the frame's strokes.
+fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, q: Query<(&Figure, &Motion)>) {
+    let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
-    let to_game = root.affine().inverse();
     // the game clears the run object as a point is set up
     if g.phase == Phase::Serve && !fx.serving {
         fx.feet = Feet::default();
@@ -97,34 +90,39 @@ fn tick(
     fx.serving = g.phase == Phase::Serve;
     fx.feet.after_point = g.phase == Phase::Post;
     fx.wet = w.as_ref().is_some_and(|w| hst_sim::weather::rain(w.today().weather));
+    let reacted = g.post.as_ref().is_some_and(|p| p.reacted);
+    for i in (0..g.players.len().min(4)).filter(|_| !fx.feet.after_point) {
+        fx.states[i] = state(&g, i);
+    }
+    let states = fx.states;
     let mut runners: Vec<(usize, Runner)> = q
         .iter()
-        .filter_map(|(f, rig, m, gt)| {
-            let pd = g.players.get(f.0).and_then(|p| p.dive.as_ref());
-            let (dive, lunge, dive_over) = fx.dives.get_mut(f.0).map_or((false, 0.0, false), |w| w.see(pd.map(|d| (d.slide, d.cut()))));
-            let joint = |n: &str| rig.data.joint(n).and_then(|j| joints.get(rig.joints[j]).ok()).map(|t| Mat4::from(to_game * t.affine()));
-            let toe = |n: &str| joint(n).map(|m| m.w_axis.to_array());
-            let cols = |m: Mat4| [m.x_axis, m.y_axis, m.z_axis, m.w_axis].map(|c| c.to_array());
-            let pm = Mat4::from(to_game * gt.affine());
+        .filter_map(|(f, m)| {
+            let (i, data) = (f.0, g.data.get(f.0)?);
+            let p = g.players.get(i)?;
+            let pd = p.dive.as_ref();
+            let (dive, lunge, dive_over) = fx.dives.get_mut(i).map_or((false, 0.0, false), |w| w.see(pd.map(|d| (d.slide, d.cut()))));
+            let sk = &data.skeleton;
+            let locals = super::bodyhit::posed(data, m)?;
+            let pm = super::player_matrix(p);
+            let joint = |n: &str| sk.names.iter().position(|b| b == n).map(|k| hst_sim::pose::node_world(sk, &locals, k, &pm));
             Some((
-                f.0,
+                i,
                 Runner {
-                    character: g.chars[f.0] as usize,
+                    character: g.chars[i] as usize,
                     motion: m.id as i32,
-                    // ponytail: the motion's sub-state (it only stops steps late in a high motion past the point) is 0
-                    sub: 0,
-                    toes: [toe("Bip01RToe0")?, toe("Bip01LToe0")?],
-                    m: [pm.x_axis, pm.y_axis, pm.z_axis, pm.w_axis].map(|c| c.to_array()),
-                    // ponytail: the player's state byte (1 running, 2 swinging, 0 else) from the motion id
-                    slide: (3..=0x1f).contains(&m.id),
-                    pelvis: cols(joint("Bip01Pelvis")?),
-                    spine: cols(joint("Bip01Spine1")?),
-                    head: toe("Bip01Head")?,
+                    sub: sub(&g, i, reacted),
+                    toes: [joint("Bip01RToe0")?[3], joint("Bip01LToe0")?[3]],
+                    m: pm,
+                    slide: states.get(i).is_some_and(|&s| s != 0),
+                    pelvis: joint("Bip01Pelvis")?,
+                    spine: joint("Bip01Spine1")?,
+                    head: joint("Bip01Head")?[3],
                     dive,
                     lunge,
                     dive_over,
                     // ponytail: where the motion set off, taken as a step back along the dive (the player hasn't moved yet)
-                    anchor: pd.map_or([0.0; 4], |d| [pm.w_axis.x - d.dir[0], pm.w_axis.y, pm.w_axis.z - d.dir[1], pm.w_axis.w]),
+                    anchor: pd.map_or([0.0; 4], |d| [pm[3][0] - d.dir[0], pm[3][1], pm[3][2] - d.dir[1], pm[3][3]]),
                     ..Runner::default()
                 },
             ))
@@ -150,11 +148,37 @@ fn tick(
     }
 }
 
-/// Puffs face the camera, pushed 0.5 toward it, `size` either side and twice that tall; footprints lie on the court.
-fn draw(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
+/// The player's state byte as the game's mode setter keeps it: 3 standing hit by the ball, 2 in a stroke (a press
+/// still searching, a locked swing through its follow-through, a whiff or a dive), 1 running (the stick held), else
+/// 0. It holds from the point's end to the next point (`tick` keeps it; foot_s05 has no change past the point).
+fn state(g: &Game, i: usize) -> u8 {
+    let p = &g.players[i];
+    if super::bodyhit::standing(g, i) {
+        3
+    } else if p.contact.is_some() || p.pending.is_some() || p.wait_swing.is_some() || p.swing.is_some() || p.whiff.is_some() || p.dive.is_some() {
+        2
+    } else {
+        p.body.running as u8
+    }
+}
+
+/// The player's reaction motion as the game files it at the players' reaction (0x2b for the player the ball hit;
+/// the point's setup clears it), else 0.
+fn sub(g: &Game, i: usize, reacted: bool) -> i32 {
+    match () {
+        _ if !reacted => 0,
+        _ if super::bodyhit::standing(g, i) => 0x2b,
+        _ => g.players[i].root.map_or(0, |r| r.motion as i32),
+    }
+}
+
+/// Puffs face the camera, pulled back half a metre along the game view's forward row (its camera → world row 2),
+/// `size` either side and twice that tall; footprints lie on the court.
+fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
     let (Some(fx), Ok(cam)) = (fx, cam.single()) else { return };
     let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
-    let (right, up, ahead) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y), game(cam.rotation * Vec3::NEG_Z));
+    let (right, up) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y));
+    let [ax, ay, az] = g.cam.view.rot[2];
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
     let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 4])>| {
         let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
@@ -167,14 +191,17 @@ fn draw(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>, mut
         }
         fill(mesh, pos, uv, colour, index);
     };
-    // ponytail: the game pulls the puff by its view matrix's third row × 0.5; taken as 0.5 along the view toward the camera
     let [r, g, b] = if fx.wet { [1.0; 3] } else { fx.dust };
     let puffs = fx
         .feet
         .puffs
         .iter()
         .map(|p| {
-            let (foot, w, h) = (v3(p.pos) - ahead * 0.5, right * p.size, up * 2.0 * p.size);
+            use hst_sim::ps2::{add, madd};
+            // pos + 0 − row 2 × 0.5 (the halving is exact, so one madd rounds as the game's mul and sub)
+            let pull = |a: f32, r: f32| madd(add(a, 0.0), r, -0.5);
+            let foot = Vec3::new(pull(p.pos[0], ax), pull(p.pos[1], ay), pull(p.pos[2], az));
+            let (w, h) = (right * p.size, up * 2.0 * p.size);
             ([foot - w + h, foot + w + h, foot - w, foot + w], [r, g, b, p.alpha / 128.0])
         })
         .collect();
