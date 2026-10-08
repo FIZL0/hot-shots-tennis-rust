@@ -192,6 +192,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 - [x] **P1** Shot parameters in play → `play.rs` strike/tables · `hst-sim/src/params.rs` `shot.rs` | t: shot_tables.rs, hst/tests/shot_params.rs | j: 2026-10-07-p1-shot-params/1-LAUNCH-FINAL.md
 - [x] **P2** Aim exactly (user 2026-10-07: a sweet-spot shot can't quite reach the exact corner as in the original; singles and doubles aim differently, their court lines differ) → `play.rs` aim_target/screen · `shot.rs` | t: aim.rs | j: 2026-10-07-p2-aim/1-AIM-FINAL.md
+- [ ] **P2a** Sweet spots by timing (user 2026-10-07): P2's aim recorder forces sweet hits (and the opponents' slices) by memory writes because its swings locked at arbitrary timing; find out why (stray buffered presses, or an auto-swing in the original) and make the recordings plain play → `tools/record_aim.py` · `play.rs` find_contact · `plan/P2a.md` | t: aim.rs | j: 2026-10-07-p2-aim
 - [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
