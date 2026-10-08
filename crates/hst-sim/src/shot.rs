@@ -23,21 +23,20 @@ impl Table {
         (bytes.len() == N * N * N * 4).then(|| Table(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()))
     }
 
-    /// (elevation, speed, frames) of one cell. At an axis maximum the game reads one cell past the grid
-    /// (whatever follows in memory); ponytail: clamped to the last cell, revisit if a capture ever hits it.
+    /// (elevation, speed, frames) of one cell.
     fn cell(&self, i: usize) -> (f32, f32, i32) {
-        let w = self.0[i.min(self.0.len() - 1)];
+        let w = self.0[i];
         let sext = |v: u32| ((v << 20) as i32 >> 20) as f32;
         (ps2::mul(sext(w & 0xfff), ANGLE_UNIT), ps2::mul(sext((w >> 12) & 0xfff), SPEED_UNIT), (w >> 24) as i32)
     }
 }
 
-/// Where a coordinate falls on a 16-point axis: cell index and fraction, with the game's edge rule.
+/// Where a coordinate falls on a 16-point axis: cell index and fraction, with the game's edge rule (at the far end
+/// the last cell pair at fraction 1; a zero-width axis divides to ±max and clamps).
 fn axis(num: f32, den: f32) -> (usize, f32) {
-    let u = if den == 0.0 { if num > 0.0 { 1.0 } else { 0.0 } } else { ps2::div(num, den).clamp(0.0, 1.0) };
-    let s = ps2::mul((N - 1) as f32, u);
+    let s = ps2::mul((N - 1) as f32, ps2::div(num, den).clamp(0.0, 1.0));
     let i = s as usize;
-    (i, if i == N - 1 { 1.0 } else { ps2::sub(s, i as f32) })
+    if i == N - 1 { (N - 2, 1.0) } else { (i, ps2::sub(s, i as f32)) }
 }
 
 const RADIUS: f32 = 0.064;
@@ -58,6 +57,8 @@ pub struct Bounds {
     pub far: f32,
     /// Hit height range (Y-down).
     pub low: f32,
+    /// The low end follows the hit's distance from the net (`low_bound`): `lookup` sets it from its own hit point.
+    pub sloped: bool,
     pub high: f32,
     /// Net-to-target distance range.
     pub short: f32,
@@ -65,17 +66,15 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    /// Ground strokes (class 1) by the ball's stored shot `kind` (0..4). Verified on recorded kinds 0–4:
-    /// only kind 2 starts the target axis deeper. (The decompiled range function has extra branches for
-    /// kinds 1 and 4, but recorded shots match these bounds — its index is not the ball's stored kind.)
+    /// Ground strokes (class 1) by the ball's stored shot `kind` (0..4): kind 2 starts the target axis deeper; a
+    /// slice (1) starts the height axis at the ground; a drop shot (4) has a flat height axis at 0.3 m and a short
+    /// target axis (2–8.22 m). `hit_z` sets `low` for a caller's use; `lookup` redoes it at its own hit point.
     pub fn stroke(kind: i32, hit_z: f32) -> Self {
-        Self {
-            near: -0.5,
-            far: -18.17,
-            low: low_bound(hit_z),
-            high: ps2::sub(ps2::msub(ps2::add(-1.1638, 0.0), 1.3, 1.3), 0.5),
-            short: if kind == 2 { 6.4 } else { 3.0 },
-            long: 16.17,
+        let high = ps2::sub(ps2::msub(ps2::add(-f32::from_bits(0x3f94_f893), 0.0), 1.3, 1.3), 0.5);
+        match kind {
+            4 => Self { near: -0.5, far: -18.17, low: -0.3, sloped: false, high: -0.3, short: 2.0, long: 8.22 },
+            1 => Self { near: -0.5, far: -18.17, low: -RADIUS, sloped: false, high, short: 3.0, long: 16.17 },
+            _ => Self { near: -0.5, far: -18.17, low: low_bound(hit_z), sloped: true, high, short: if kind == 2 { 6.4 } else { 3.0 }, long: 16.17 },
         }
     }
 
@@ -84,22 +83,29 @@ impl Bounds {
     pub fn volley(kind: i32, hit_z: f32) -> Self {
         Self {
             low: if kind == 1 { -RADIUS } else { low_bound(hit_z) },
+            sloped: kind != 1,
             high: ps2::sub(ps2::mul(-1.6, 1.3), 0.5),
-            ..Self::stroke(kind, hit_z)
+            short: match kind {
+                2 => 6.4,
+                4 => 2.0,
+                _ => 3.0,
+            },
+            long: if kind == 4 { 8.22 } else { 16.17 },
+            ..Self::stroke(0, hit_z)
         }
     }
 
     /// Serves (class 0); `underhand` is serve kind 3. The low height bound never sits above the ball's radius.
     pub fn serve(underhand: bool, radius: f32) -> Self {
         let (low, high) = if underhand { (0.0, -1.25) } else { (-1.5, -3.45) };
-        Self { near: -8.885, far: -17.42, low: if -radius <= low { -radius } else { low }, high, short: 3.0, long: 8.22 }
+        Self { near: -8.885, far: -17.42, low: if -radius <= low { -radius } else { low }, sloped: false, high, short: 3.0, long: 8.22 }
     }
 }
 
 impl Bounds {
     /// Smashes (class 3) by smash kind (0 ✕/○, 1 △): kind 0 starts the target axis deeper.
     pub fn smash(kind: i32) -> Self {
-        Self { near: -0.5, far: -18.17, low: -1.7, high: -3.05, short: if kind == 0 { 6.9425 } else { 3.0 }, long: 16.17 }
+        Self { near: -0.5, far: -18.17, low: -1.7, sloped: false, high: -3.05, short: if kind == 0 { 6.9425 } else { 3.0 }, long: 16.17 }
     }
 }
 
@@ -115,10 +121,15 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
     // the hit never sits lower than the ball's radius above the ground
     let (mut hit, mut tgt) = ([hit[0], hit[1].min(-RADIUS), hit[2]], target);
     if hit[2] > 0.0 {
-        // tables are authored for the near side; mirror the far side through the court centre
-        hit = [-hit[0], hit[1], -hit[2]];
-        tgt = [-tgt[0], tgt[1], -tgt[2]];
+        // tables are authored for the near side; turn the far side half a turn about the court centre (VU0)
+        let m = world::rot_y(world::PI);
+        let turn = |v: V3| {
+            let r = vu0::transform(&m, [v[0], v[1], v[2], 1.0]);
+            [r[0], r[1], r[2]]
+        };
+        (hit, tgt) = (turn(hit), turn(tgt));
     }
+    let b = &Bounds { low: if b.sloped { low_bound(hit[2]) } else { b.low }, ..*b };
     use crate::ps2::{add, div, madd, mul, sqrt, sub};
     tgt[2] = add(tgt[2], TARGET_PULL);
     let (dx, dz) = (sub(tgt[0], hit[0]), sub(tgt[2], hit[2]));
