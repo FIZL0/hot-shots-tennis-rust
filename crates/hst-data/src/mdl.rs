@@ -374,6 +374,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
     // Attributes arrive in a fixed order per strip; `slot` counts V4-32 unpacks seen in the strip.
     let mut slot = 0;
     let mut strip_start = 0usize;
+    let mut tri_start = 0usize;
     let mut p = 0;
     let rd = |p: usize| d.get(p..p + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
     while let Some(w) = rd(p) {
@@ -405,6 +406,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                         match slot {
                             0 => {
                                 strip_start = pk.vertices.len();
+                                tri_start = pk.triangles.len();
                             }
                             1 => {
                                 for v in data.chunks_exact(16) {
@@ -421,6 +423,13 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                     v.uv = [f32_at(uv, 0), f32_at(uv, 4)];
                                 }
                                 pk.uvs.extend(data.chunks_exact(16).map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
+                                // the third vertex's UV w is the triangle's winding (VU1 culls by it, as the
+                                // collision sweep orients by it): ≥ 0 keeps strip order, else reversed
+                                for t in &mut pk.triangles[tri_start..] {
+                                    let i = t[0].max(t[1]).max(t[2]);
+                                    let w = data.get((i as usize - strip_start) * 16 + 12..).map_or(1.0, |b| f32_at(b, 0));
+                                    *t = if 0.0 <= w { [i - 2, i - 1, i] } else { [i, i - 1, i - 2] };
+                                }
                                 slot = 0;
                                 continue;
                             }

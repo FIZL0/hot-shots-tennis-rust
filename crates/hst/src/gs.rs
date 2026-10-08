@@ -66,6 +66,8 @@ pub struct GsKey {
     pub blend: Option<mtl::Blend>,
     /// PRIM FGE.
     pub fog: bool,
+    /// One-sided (material header +0x24 = 0): VU1 drops back faces.
+    pub cull: bool,
 }
 
 #[derive(ShaderType, Clone, Copy, Debug)]
@@ -167,7 +169,7 @@ impl GsMaterial {
             .map(|test| GsMaterial {
                 uniform,
                 texture: texture.clone().filter(|_| textured),
-                key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0 },
+                key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0, cull: !m.two_sided },
             })
             .collect()
     }
@@ -206,7 +208,10 @@ impl Material for GsMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         let k = key.bind_group_data;
-        descriptor.primitive.cull_mode = None;
+        // ponytail: the shadow pass (Bevy's only DEPTH_PREPASS here) keeps both faces, as the shadows had before;
+        // check against the game's caster draw if a one-sided prop's shadow looks wrong
+        let shadow = key.mesh_key.contains(bevy::pbr::MeshPipelineKey::DEPTH_PREPASS);
+        descriptor.primitive.cull_mode = (k.cull && !shadow).then_some(bevy::render::render_resource::Face::Back);
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt70 | Test::Never));
         }
@@ -265,15 +270,15 @@ mod tests {
         let keys = |m: &mtl::Material, prim| GsMaterial::for_batch(m, prim, tex.clone()).iter().map(|g| g.key).collect::<Vec<_>>();
         // opaque material, textured unblended batch: HIGHLIGHT2, no test
         let k = keys(&material("grass", 5, 1.0), 0x30);
-        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None, fog: true }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None, fog: true, cull: true }]);
         // mode 15 cut-out, translucent colour → MODULATE
         let k = keys(&material("leaf", 15, 0.5), 0x70);
-        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal), fog: true }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal), fog: true, cull: true }]);
         // mode 25: two draws
         assert_eq!(keys(&material("fence@vert", 25, 1.0), 0x70).iter().map(|k| k.test).collect::<Vec<_>>(), [Test::Ge70, Test::Lt70]);
         // court lines: @add without ABE still adds, no Z; @sub wins over @add; untextured batch
         let k = keys(&material("line@add@sub", 15, 0.4), 0x20);
-        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub), fog: true }]);
+        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub), fog: true, cull: true }]);
         // specular exponent 128·(+0x10)^1.65, at least 1; highlight +0x14
         let mut m = material("crayline", 5, 1.0);
         m.header[0x10..0x14].copy_from_slice(&0.49f32.to_le_bytes());
