@@ -2836,6 +2836,16 @@ fn bot_run(g: &Game, i: usize, goal: V3) -> Vec2 {
     Vec2::new(x, z)
 }
 
+/// The AI's stick through its serve's follow-through (`motion::ai_serve_stick`); the return's own frame is the
+/// fresh flight's.
+/// ponytail: the rally routine's move can be no stick (within ⅔ of a step) or a frame later; the stand-in always
+/// breaks off then (B27c).
+fn ai_serve_stick(g: &mut Game, i: usize) -> bool {
+    let p = &mut g.players[i];
+    let Some(a) = p.served.map(|a| a + 1) else { return false };
+    motion::ai_serve_stick(a, p.recover, g.shots, g.flight.frame == 0, &mut p.ai_hold)
+}
+
 /// Stand-in AI for player `i`: serves, runs to the predicted interception (in doubles only the teammate
 /// nearer to it; the other goes home), and presses the shot button around the sweet frame with a random timing
 /// error, through the same contact search as a human.
@@ -2847,10 +2857,8 @@ fn bot(g: &mut Game, i: usize) {
     if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
     }
-    // the AI leaves its stick still through its serve's follow-through until the serve is returned
-    // ponytail: the original's stick then is its rally routine's; the stand-in moves as soon as it is past recovery
-    let returned = g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
-    if serve_follow(&mut g.players[i], returned) {
+    let stick = ai_serve_stick(g, i);
+    if serve_follow(&mut g.players[i], stick) {
         return;
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
