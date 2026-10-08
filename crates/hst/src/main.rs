@@ -162,7 +162,7 @@ fn main() {
     let menu = archives.is_empty() && stage.is_none() && !play && !ball && viewer_char.is_none() && sound.is_none() && roster.is_none();
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: "Hot Shots Tennis".into(), present_mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);
