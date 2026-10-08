@@ -26,6 +26,8 @@ struct Mine {
     /// The AI phase and shot count it last stepped in.
     phase: Option<Ai>,
     shots: i32,
+    /// The re-entry's return-to-centre draw, made in the hit message (`heard_hit`).
+    early: Option<u32>,
 }
 
 fn up(v: V3) -> [f32; 4] {
@@ -169,8 +171,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             }
         }
     }
+    let mut early = me.early.take();
     let rng = &mut g.rng.ai;
-    let mut roll = || rng.next();
+    let mut roll = || early.take().unwrap_or_else(|| rng.next());
     // the dispatcher's state setter on entering a state, and the strike/hit messages: back to the start of its
     // state (the app already drew the net repick those messages make, so theirs is dropped)
     let kept = x.mind;
@@ -230,6 +233,20 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         press(g, i, button_kind(button as u8));
     }
     advance_stroke(g, i, |g| ai_contact_stick(g, i));
+    true
+}
+
+/// The hit message to a computer player `i` that rallies: its state re-enters substate 0 (as `step` does on the new
+/// shot), which rolls the return to the centre first, ahead of the net repick and the timing draw. The roll is drawn
+/// here and kept for `step`'s re-entry. Whether it re-enters.
+pub(super) fn heard_hit(g: &mut Game, i: usize) -> bool {
+    let singles = g.players.len() == 2;
+    let rally = g.players[i].ai_mind.is_some_and(|m| m.phase == Ai::Rally);
+    let me = &mut g.doubles_ai.me[i];
+    if !(matches!(g.players.len(), 2 | 4) && rally && (singles || g.shots > 1) && me.rally.sub != 3) {
+        return false;
+    }
+    me.early = Some(g.rng.ai.next());
     true
 }
 

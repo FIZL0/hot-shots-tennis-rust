@@ -276,3 +276,53 @@ fn sound_draws_like_the_game() {
     eprintln!("{} frames: {} dive rings, {} stroke bits, {} burst ends, {} reseeds", tally[3], tally[0], tally[1], tally[2], tally[4]);
     assert!(tally[0] > 0 && tally[1] >= 5 && tally[2] >= 10 && tally[4] == 1);
 }
+
+/// The AI generator over rng_s05's two new points (7566, the match's first, and 8656): the new-point message draws
+/// each AI's reset (a net pick at the match's first point), timing errors, picks and hit count in turn; the next tick
+/// the server's state entry draws its timing, picks and count again and each rallying partner its return-to-centre
+/// roll (the receiver's entry draws none); the tick after, the serve draws its spot and wait. 93 and 89 draws, which
+/// land on the recorded generator exactly (the samples are torn mid-tick, so from the tick before to the one after).
+#[test]
+fn ai_draws_like_the_game() {
+    use hst_sim::ai::{AiParams, Mind, serve_spot, serve_wait};
+    use hst_sim::position::Return;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/p3b/rng_s05.bin")) else {
+        return eprintln!("rng_s05.bin missing, skipped");
+    };
+    let size = 4 + 8 + 4 * 0x9d0;
+    let ai_at = |v: u32| {
+        let s = d.chunks_exact(size).find(|s| u32::from_le_bytes(s[..4].try_into().unwrap()) == v).unwrap();
+        Mt::from_ram(&s[12 + 0x9d0..])
+    };
+    // the counts don't depend on the rows (but for the serve level)
+    let row = AiParams::default();
+    for (point, match_start, want) in [(7566, true, 93), (8656, false, 89)] {
+        let mut g = ai_at(point - 1);
+        let mut n = 0;
+        let mut roll = || {
+            n += 1;
+            g.next()
+        };
+        let mut minds = [Mind::default(); 4];
+        for m in &mut minds {
+            m.reset(match_start, true, &mut roll);
+            row.timing(None, false, true, false, &mut roll);
+            row.picks(true, &mut roll);
+            m.count(&mut roll);
+        }
+        // AI 0 serves, 1 receives, 2 and 3 rally
+        row.timing(None, false, true, false, &mut roll);
+        row.picks(true, &mut roll);
+        minds[0].count(&mut roll);
+        for k in [2, 3] {
+            Return::new(row.doubles_center_rate, &mut roll);
+            minds[k].rally(&mut roll);
+        }
+        // both serves were at level 0 (a spot draw; the other levels walk to the centre mark undrawn)
+        serve_spot(true, true, 1.0, false, &mut roll);
+        serve_wait(&mut roll);
+        assert_eq!(n, want, "vsync {point}: draws");
+        assert!(g == ai_at(point + 1), "vsync {point}: the AI generator after the new point");
+    }
+}
