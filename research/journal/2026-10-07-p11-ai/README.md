@@ -63,3 +63,9 @@ See 6-P11E4-RUNROUND-FINAL.md. Done: `AiParams::run_round` / `run_round_width` /
 See 7-P11F-TARGET-FINAL.md. Done: `hst_sim::aim` (doubles `pair_aim`/`aim_at`, singles `rally_aim`/`receive_aim`,
 `lets_go`), tests `aims_match_the_game` (fixture `ai_aim_s05.bin`) and `singles_aims_match_the_game`
 (`ai_aim_singles.bin`, from `tools/record_ai_aim.py ... singles`); `play.rs` `ai_aim` / `ai_lets_go`.
+
+## P11g (shot and serve kind)
+
+See 8-P11G-SHOTKIND-FINAL.md. Done: `AiParams::picks` (checked on all 155 timing draws in `ai_s05.bin`),
+`aim::button`, the singles kind lock, serve toss/swing/aim and the quick-serve contact pick; `play.rs`
+`ai_press_kind` / `ai_contact_stick` / `ai_toss_kind` / `ai_serve_kind`.

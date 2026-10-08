@@ -760,6 +760,110 @@ fn reroll(roll: &mut impl FnMut() -> u32) -> u8 {
     }
 }
 
+/// The button an aim's plan presses: 1 ✕, 2 ○, 4 △. The serve's plans use it too: toss 1 strong (✕), 0 weak (○),
+/// 2 underhand (△); swing 3 ✕, 4 ○, 6 △.
+pub fn button(plan: u8) -> u8 {
+    const BUTTONS: [u8; 19] = [2, 1, 4, 1, 2, 1, 4, 1, 2, 1, 4, 2, 1, 2, 1, 4, 2, 1, 4];
+    BUTTONS.get(plan as usize).copied().unwrap_or(1)
+}
+
+/// A stick value through the pad's byte (1..=255 about 0x80) and back, unsigned.
+fn pad_abs(x: f32) -> f32 {
+    let half = if x < 0.0 { -0.5 } else { 0.5 };
+    let b = (ps2::add(ps2::mul(x, 127.0), half) as i32 + 0x80).clamp(1, 255);
+    ps2::div((b - 0x80) as f32, 127.0).abs()
+}
+
+/// Snapped down to the pad's 1/127 steps.
+fn pad_step(v: f32) -> f32 {
+    ps2::mul((ps2::div(v, 0.007874016) as i32) as f32, 0.007874016)
+}
+
+impl AiParams {
+    /// Singles kind lock, on the button the AI presses: △ may turn ✕ (`kind_lock[2]`), ✕ may turn ○ (`[3]`, also
+    /// right after △ turned ✕), else ○ may turn ✕ (`[4]`). Each chance is drawn only when its button is held.
+    pub fn lock_button(&self, button: u8, roll: &mut impl FnMut() -> u32) -> u8 {
+        let mut b = button;
+        if b == 4 && chance(roll, self.kind_lock[2]) {
+            b = 1;
+        }
+        if b == 1 {
+            if chance(roll, self.kind_lock[3]) {
+                b = 2;
+            }
+        } else if b == 2 && chance(roll, self.kind_lock[4]) {
+            b = 1;
+        }
+        b
+    }
+
+    /// Singles kind lock on the stick, the frame before the contact, for the button kept from the press: a slice
+    /// (○) pulled back far enough for a drop shot (`shot::stick_kind`) is, `kind_lock[1]` % of the time, bent
+    /// short of it; a topspin (✕) pushed far enough for a flat shot likewise by `kind_lock[0]`. `side` is the
+    /// player's end. Only z changes (0 when x is 0).
+    pub fn lock_stick(&self, kept: u8, stick: [f32; 4], side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
+        let [x, y, z, w] = stick;
+        let len = ps2::sqrt(ps2::add(ps2::mul(x, x), ps2::mul(z, z)));
+        let along = |z: f32| ps2::mul(ps2::mul(side, z), ps2::div(1.0, len));
+        let bend = |k: f32| if x == 0.0 { 0.0 } else { pad_step(ps2::mul(ps2::mul(side, pad_abs(x)), k)) };
+        let z = if len <= 0.0 {
+            z
+        } else if kept == 2 && -along(z) >= std::f32::consts::FRAC_1_SQRT_2 && chance(roll, self.kind_lock[1]) {
+            bend(-0.96568877)
+        } else if kept == 1 && along(z) >= 0.5 && chance(roll, self.kind_lock[0]) {
+            bend(0.55430907)
+        } else {
+            z
+        };
+        [x, y, z, w]
+    }
+
+    /// The serve's toss plan: strong on a first serve; on a second serve strong `second_rate` % of the time (the
+    /// character's), else weak; at serve level 0 one in ten tosses underhand instead.
+    pub fn serve_toss(second: bool, second_rate: i32, level: u8, roll: &mut impl FnMut() -> u32) -> u8 {
+        let toss = if !second || chance(roll, second_rate) { 1 } else { 0 };
+        if level == 0 && chance(roll, 10) { 2 } else { toss }
+    }
+
+    /// The serve's swing plan, drawn as it presses: △ for an underhand toss, else ✕ `serve_kind[1]` % of the time,
+    /// ○ otherwise.
+    pub fn serve_swing(&self, toss: u8, roll: &mut impl FnMut() -> u32) -> u8 {
+        if toss == 2 {
+            6
+        } else if chance(roll, self.serve_kind[1]) {
+            3
+        } else {
+            4
+        }
+    }
+
+    /// The serve's stick, the frame before the contact, by serve level and swing plan: level 0 the middle; a ✕
+    /// swing goes for the wide corner `serve_kind[0]` % of the time (ad court: the other side), else level 1 picks
+    /// a near-middle lane and level 2 any lane and depth; other swings aim at the side away from the hand (`lefty`)
+    /// at level 1, any depth at level 2. A non-wide middle-depth aim never points back (z toward `side`).
+    pub fn serve_aim(&self, level: u8, swing: u8, ad: bool, lefty: bool, side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
+        let away = if lefty { 0 } else { 2 };
+        let draw = |roll: &mut dyn FnMut() -> u32| (roll() >> 16 & 0x7fff) as u8;
+        let (zone, wide) = match (level, swing == 3) {
+            (0, _) => ((1, 1), false),
+            (1, true) if chance(roll, self.serve_kind[0]) => ((if ad { 2 } else { 0 }, 2), true),
+            (1, true) => ((if ad { (!chance(roll, 50)) as u8 } else { 2 - chance(roll, 50) as u8 }, 1), false),
+            (1, false) => ((away, 1), false),
+            (_, true) if chance(roll, self.serve_kind[0]) => ((draw(roll) % 3, 2), true),
+            (_, true) => {
+                let x = draw(roll) % 3;
+                ((x, draw(roll) & 1), false)
+            }
+            _ => ((away, draw(roll) % 3), false),
+        };
+        let mut s = self.aim(zone, side, roll);
+        if !wide && zone.1 == 1 && ps2::mul(s[2], side) > 0.0 {
+            s[2] = 0.0;
+        }
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,5 +887,29 @@ mod tests {
         assert!(row.lets_go([0.0, 12.5], false, true) && !row.lets_go([0.0, 12.2], false, true));
         assert!(!row.lets_go([5.0, 3.0], false, false) && row.lets_go([5.0, 3.0], false, true));
         assert!(row.lets_go([1.0, 7.0], true, false) && !row.lets_go([1.0, 7.0], false, false));
+    }
+
+    #[test]
+    fn plans_press_and_lock() {
+        assert_eq!([0, 1, 2, 6, 0x11, 30].map(button), [2, 1, 4, 4, 1, 1]);
+        let row = AiParams { kind_lock: [100, 100, 100, 100, 0], ..Default::default() };
+        let mut zero = || 0u32;
+        // △ → ✕ → ○ chained; ○ stays with its chance 0
+        assert_eq!(row.lock_button(4, &mut zero), 2);
+        assert_eq!(row.lock_button(2, &mut zero), 2);
+        // a flat-shot stick (toward the far end of side +1) is bent below the flat line; a drop stick likewise
+        let s = row.lock_stick(1, [0.3, 0.0, 0.9, 0.0], 1.0, &mut zero);
+        assert_eq!(crate::shot::stick_kind(1, 0, [s[0], s[2]], 1.0), 0, "{s:?}");
+        let s = row.lock_stick(2, [-0.3, 0.0, -0.9, 0.0], 1.0, &mut zero);
+        assert_eq!(crate::shot::stick_kind(1, 1, [s[0], s[2]], 1.0), 1, "{s:?}");
+        assert_eq!(row.lock_stick(2, [0.0, 0.0, -0.9, 0.0], 1.0, &mut zero)[2], 0.0);
+        // serves: first serve strong, a level-0 roll under 10 tosses underhand (△ swing)
+        assert_eq!(AiParams::serve_toss(false, 0, 1, &mut zero), 1);
+        assert_eq!(AiParams::serve_toss(true, 0, 1, &mut || 99 << 16), 0);
+        assert_eq!(AiParams::serve_toss(true, 100, 0, &mut zero), 2);
+        let row = AiParams { serve_kind: [0, 100, 0], key_level: [0, 0, 0, 100], angle_width: 5.0, ..Default::default() };
+        assert_eq!((row.serve_swing(2, &mut zero), row.serve_swing(1, &mut zero)), (6, 3));
+        let s = row.serve_aim(1, 4, false, false, 1.0, &mut zero);
+        assert!(s[0].abs() > 0.5 && s[2] <= 0.0, "{s:?}");
     }
 }

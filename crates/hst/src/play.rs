@@ -164,6 +164,13 @@ struct Player {
     ai_mind: Option<hst_sim::ai::Mind>,
     ai_heard: u8,
     ai_serve: (f32, i32),
+    /// The AI's shot-choice picks drawn with its timing errors (`hst_sim::ai::Picks`); whether that draw takes the
+    /// dive chance after its own team's hit (None: a reset, always); the stick and button it chose at its press
+    /// (the button after the singles kind lock); its character's strong-toss chance (%) on a second serve.
+    ai_picks: hst_sim::ai::Picks,
+    ai_dove: Option<bool>,
+    ai_press: Option<(Vec2, u8)>,
+    ai_second: i32,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
     hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
@@ -1225,6 +1232,7 @@ fn setup(
         game.players[i].stats = character_stats(&mut iso, c);
         game.aim_stats.push(aim_stats(&mut iso, c));
         game.players[i].ai = ai_params(&mut iso, c, outfit, n == 4);
+        game.players[i].ai_second = ai_second_toss(&mut iso, c);
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
         game.chars[i] = c as i32;
@@ -2673,6 +2681,8 @@ fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
         *rng
     });
     g.players[i].surprised |= g.players[i].ai_timing.reacted;
+    let dive = shots.is_none() && g.players[i].ai_dove.take().unwrap_or(true);
+    g.players[i].ai_picks = g.players[i].ai.picks(dive, &mut ai_roll(&mut g.rng));
     if shots.is_none() {
         // no opponent's hit to react to: no reaction, no guess
         (g.players[i].ai_hold, g.players[i].ai_guess) = (0, None);
@@ -2700,6 +2710,7 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
             Some(hst_sim::ai::Shots { last, before: p.ai_seen[1], serve_before: p.ai_serves[1] })
         } else {
             p.ai_hit = true;
+            p.ai_dove = Some(who == i && branch == 3);
             None
         };
         ai_draw(g, i, shots);
@@ -2720,9 +2731,6 @@ fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
         *rng
     };
     let p = &mut g.players[i];
-    for _ in 0..hst_sim::ai::CHOICE_DRAWS {
-        roll();
-    }
     let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
     p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, false, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
     let guess = p.ai.guess(&p.ai_timing, kind == 0, !beside_human, &mut roll);
@@ -2864,14 +2872,6 @@ fn bot(g: &mut Game, i: usize) {
         // press when the contact search would lock onto the drawn frame (or later, if it is already past)
         if mine.is_some() {
             if g.players[i].bot_due.is_none() {
-                let r = rand(&mut g.rng);
-                g.players[i].kind = if r < 0.7 {
-                    0
-                } else if r < 0.9 {
-                    1
-                } else {
-                    3
-                };
                 g.players[i].bot_due = Some(SWEET_FRAME as usize);
             }
             // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
@@ -2884,7 +2884,7 @@ fn bot(g: &mut Game, i: usize) {
                 };
                 c.frames as i32 + err <= SWEET_FRAME
             }) {
-                let kind = g.players[i].kind;
+                let kind = ai_press_kind(g, i);
                 press(g, i, kind);
                 g.players[i].bot_due = None;
             }
@@ -2892,7 +2892,7 @@ fn bot(g: &mut Game, i: usize) {
             g.players[i].bot_due = None;
         }
     }
-    advance_stroke(g, i, |g| ai_aim(g, i));
+    advance_stroke(g, i, |g| ai_contact_stick(g, i));
 }
 
 /// The x a computer player runs to for ball `b`: the side of it the AI's contact search keeps (`hst_sim::ai::stand_side`,
@@ -3037,7 +3037,9 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
 /// The AI's serve state: on entering it a timing draw (ending with the net count), then it walks the baseline to
 /// its spot, waits there 60 to 119 frames and tosses; the swing is timed by its serve error (a badly timed strong
 /// toss then goes wide or long, as in the original).
-/// ponytail: strong toss and swing, from the usual spot (the serve level and kinds are P11g); random aim (P11f).
+/// The serve level picks the spot, the toss and the aim; the swing kind and its stick are drawn as it presses
+/// (`hst_sim::aim`), the press waits for the AI's own contact pick (rising for a quick serve).
+/// ponytail: the original aims the frame before the contact; the server stands still, so this aims at the press.
 fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
         ai_draw(g, i, None);
@@ -3045,12 +3047,12 @@ fn bot_serve(g: &mut Game, i: usize) {
         let mut roll = ai_roll(&mut g.rng);
         let mut m = g.players[i].ai_mind.unwrap_or_default();
         m.count(&mut roll);
-        let spot = hst_sim::ai::serve_spot(false, doubles, end, ad, &mut roll);
+        let level0 = g.players[i].ai_picks.serve_level == 0;
+        let spot = hst_sim::ai::serve_spot(level0, doubles, end, ad, &mut roll);
         let wait = hst_sim::ai::serve_wait(&mut roll);
         drop(roll);
         (g.players[i].ai_mind, g.players[i].ai_serve) = (Some(m), (spot, wait));
         g.serving.bot_due = Some((SWEET_FRAME - g.players[i].ai_timing.serve).max(0) as usize);
-        g.serving.bot_aim = Vec2::new(rand(&mut g.rng) * 2.0 - 1.0, rand(&mut g.rng) * 2.0 - 1.0);
     }
     let s = g.serving;
     let mut stick = Vec2::ZERO;
@@ -3064,14 +3066,15 @@ fn bot_serve(g: &mut Game, i: usize) {
             g.players[i].ai_serve.1 -= 1;
             None
         } else {
-            Some(0)
+            Some(ai_toss_kind(g, i))
         }
-    } else if s.tossed && s.swing.is_none() && !s.whiffed {
-        let horizon = g.serve_data[i].grades(Toss::Strong).len();
+    } else if let (true, None, false, Some(toss)) = (s.tossed, s.swing, s.whiffed, s.toss) {
+        let horizon = g.serve_data[i].grades(toss).len();
         let due = s.bot_due.unwrap_or(SWEET_FRAME as usize);
-        serve::search(&g.serve_data[i], Toss::Strong, &predicted_path(g, horizon))
+        let quick = g.players[i].ai_picks.quick_serve;
+        serve::ai_search(&g.serve_data[i], toss, quick, &predicted_path(g, horizon))
             .filter(|&k| k <= due)
-            .map(|_| 0)
+            .map(|_| ai_serve_kind(g, i, toss))
     } else {
         None
     };
@@ -3080,8 +3083,8 @@ fn bot_serve(g: &mut Game, i: usize) {
 
 /// A computer player's aim at its contact (`hst_sim::aim`): the doubles chooser from the four players' spots, the
 /// singles rally chooser from its own and its opponent's, as the stick a human would hold (world x, z).
-/// ponytail: the volley and high-ball level picks are P11g's draws (0 here), the exhibition level is always 3 (P11a),
-/// the mark is the opponent's spot, the reach heights are the contact's own (never low), the singles return of serve
+/// The volley and high-ball levels are the AI's picks; the aim and its button are kept on the player (`ai_press`).
+/// ponytail: the exhibition level is always 3 (P11a), the mark is the opponent's spot, the reach heights are the contact's own (never low), the singles return of serve
 /// and the short-ball flag aren't kept; the kind-1 contact (its own search) isn't told apart from a ground stroke.
 fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
     use hst_sim::aim::{Look, Pair};
@@ -3103,18 +3106,92 @@ fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
             side: p.end,
             singles: false,
             kind,
-            volley_level: 0,
+            volley_level: p.ai_picks.volley_level,
             level: 3,
             formation: if human_mate { p.ai.formation } else { 0 },
             smash_third: false,
         };
-        p.ai.pair_aim(&l, &mut ai_roll(rng)).stick
+        p.ai.pair_aim(&l, &mut ai_roll(rng))
     } else {
         let o = at(i ^ 1);
-        let l = Look { me: at(i), opp: o, side: p.end, singles: true, kind, mark: o, level: 3, ..Default::default() };
-        p.ai.rally_aim(&l, &mut false, &mut ai_roll(rng)).stick
+        let (volley_level, high_level) = (p.ai_picks.volley_level, p.ai_picks.high_level);
+        let l = Look { me: at(i), opp: o, side: p.end, singles: true, kind, mark: o, level: 3, volley_level, high_level, ..Default::default() };
+        p.ai.rally_aim(&l, &mut false, &mut ai_roll(rng))
     };
-    Vec2::new(stick[0], stick[2])
+    g.players[i].ai_press = Some((Vec2::new(stick.stick[0], stick.stick[2]), hst_sim::aim::button(stick.plan)));
+    Vec2::new(stick.stick[0], stick.stick[2])
+}
+
+/// The shot button a computer player presses: its aim's plan (`hst_sim::aim::button`), through the kind lock in
+/// singles, as the app's kind (✕ topspin 0, ○ slice 1, △ lob 3). The aim is kept for the contact.
+fn ai_press_kind(g: &mut Game, i: usize) -> i32 {
+    ai_aim(g, i);
+    let (stick, mut b) = g.players[i].ai_press.unwrap_or_default();
+    if g.players.len() == 2 {
+        let ai = g.players[i].ai;
+        b = ai.lock_button(b, &mut ai_roll(&mut g.rng));
+        g.players[i].ai_press = Some((stick, b));
+    }
+    button_kind(b)
+}
+
+/// A pad button (1 ✕, 2 ○, 4 △) as the app's shot kind.
+fn button_kind(b: u8) -> i32 {
+    match b {
+        2 => 1,
+        4 => 3,
+        _ => 0,
+    }
+}
+
+/// The stick a computer player holds at its contact: the one aimed at its press (a fresh aim if it has none),
+/// bent by the singles kind lock off a flat or drop shot the button didn't ask for.
+fn ai_contact_stick(g: &mut Game, i: usize) -> Vec2 {
+    let Some((stick, b)) = g.players[i].ai_press.take() else { return ai_aim(g, i) };
+    if g.players.len() != 2 {
+        return stick;
+    }
+    let (ai, end) = (g.players[i].ai, g.players[i].end);
+    let s = ai.lock_stick(b, [stick.x, 0.0, stick.y, 0.0], end, &mut ai_roll(&mut g.rng));
+    Vec2::new(s[0], s[2])
+}
+
+/// A serving computer player's toss (`AiParams::serve_toss`) as the press kind `serve_turn` reads.
+fn ai_toss_kind(g: &mut Game, i: usize) -> i32 {
+    let p = g.players[i];
+    let plan = hst_sim::ai::AiParams::serve_toss(
+        g.rally.faults > 0,
+        p.ai_second,
+        p.ai_picks.serve_level,
+        &mut ai_roll(&mut g.rng),
+    );
+    button_kind(hst_sim::aim::button(plan))
+}
+
+/// A serving computer player's swing (`AiParams::serve_swing`) and its aim (`serve_aim`, kept as the serve's stick).
+fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
+    let p = g.players[i];
+    let toss = match toss {
+        Toss::Strong => 1,
+        Toss::Weak => 0,
+        Toss::Under => 2,
+    };
+    let mut roll = ai_roll(&mut g.rng);
+    let swing = p.ai.serve_swing(toss, &mut roll);
+    let ad = g.score.side == 1;
+    let s = p.ai.serve_aim(p.ai_picks.serve_level, swing, ad, p.hand < 0.0, p.end, &mut roll);
+    drop(roll);
+    g.serving.bot_aim = Vec2::new(s[0], s[2]);
+    button_kind(hst_sim::aim::button(swing))
+}
+
+/// A character's strong-toss chance (%) on a second serve, from the game program's per-character table.
+fn ai_second_toss(iso: &mut Iso, n: usize) -> i32 {
+    let (cnf, bin) = (
+        iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),
+        iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"),
+    );
+    hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").second_toss()[n]
 }
 
 /// Whether a computer player leaves the ball: its predicted first bounce lands out by at least the row's line
