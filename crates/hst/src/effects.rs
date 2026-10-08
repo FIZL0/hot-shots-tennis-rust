@@ -357,7 +357,8 @@ pub struct BallFlight {
     /// The ball at the last frame.
     pos: Vec3,
     vel: Vec3,
-    /// `impactef_*` for top … drop.
+    /// The glow textures for top … drop: the game's list has `impactef_slice` (the ✕) first and `impactef_top`
+    /// (the ○) second, so topspin shows the ✕ and slice the ○, the buttons pressed.
     looks: [Handle<StandardMaterial>; 5],
 }
 
@@ -365,7 +366,7 @@ pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshe
     let ribbon = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
     let mut looks = Vec::new();
-    for k in &IMPACTS[..5] {
+    for k in ["slice", "top", "flat", "lob", "drop"] {
         looks.push(look(iso, &format!("impactef_{k}"), materials, images)?);
     }
     let disc = commands.spawn((Mesh3d(meshes.add(Rectangle::new(2.0 * GLOW_SIZE, 2.0 * GLOW_SIZE))), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden)).id();
