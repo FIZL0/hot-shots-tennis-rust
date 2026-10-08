@@ -439,13 +439,250 @@ pub fn build(f: &Frame, dir: [f32; 3], casters: &[Caster], ground: &[[[f32; 3]; 
 /// A caster's texture matrix in the game's EE floats: each row of its light matrix `light` (game point → (u, v)
 /// in −1..1, w ≈ 1; the row-vector form, translation last) times the bias that takes u, v to 0.5u + 0.5, 0.5v + 0.5
 /// and leaves the third component the light's w. The game first multiplies the receiver node's matrix in; the
-/// court's hole nodes are identity, which leaves `light` bit for bit.
-///
-/// ponytail: `light` is taken as the game builds it at load (its own box/sun setup in EE floats isn't ported).
+/// court's hole nodes are identity, which leaves `light` bit for bit. `light` is [`light_matrix`].
 pub fn tex_matrix(light: &[vu0::V4; 4]) -> [vu0::V4; 4] {
     const B: [vu0::V4; 4] = [[0.5, 0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0; 4], [0.5, 0.5, 1.0, 1.0]];
     // the EE sums the products as ((r1·b1 + r0·b0) + r2·b2) + r3·b3
     light.map(|r| std::array::from_fn(|j| ps2::madd(ps2::madd(ps2::madd(ps2::mul(r[1], B[1][j]), r[0], B[0][j]), r[2], B[2][j]), r[3], B[3][j])))
+}
+
+/// The sun at a match's start as the game sets it up, from the court's time-of-day row (`start`, `end` pitch,
+/// `tilt`), the hole's `azimuth` (degrees) and the hour: the light (the third row of Rx(−pitch)·Rz(tilt)·Ry(−π/2 −
+/// azimuth), normalized; game space, sun → ground) and the shade sun, rebuilt from the light's heading and
+/// elevation with the elevation raised to at least 50°.
+pub fn sun(start: f32, end: f32, tilt: f32, azimuth: f32, hour: i32) -> (vu0::V4, vu0::V4) {
+    use crate::{libm, shot, world};
+    let deg = f32::from_bits(0x3c8e_fa35); // π/180
+    let t = ps2::div((hour - 1) as f32, 17.0);
+    let pitch = -ps2::madd(ps2::add(0.0, start), t, ps2::sub(end, start));
+    let mut yaw = ps2::msub(ps2::add(0.0, -world::HALF_PI), deg, azimuth);
+    if yaw > world::PI {
+        yaw = ps2::sub(yaw, world::TWO_PI);
+    } else if yaw < -world::PI {
+        yaw = ps2::add(world::TWO_PI, yaw);
+    }
+    let m = world::mat_mul(&world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(pitch)), &shot::rot_z(tilt)), &world::rot_y(yaw));
+    let [x, y, z, w] = m[2];
+    let r = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
+    let light = [ps2::mul(x, r), ps2::mul(y, r), ps2::mul(z, r), ps2::mul(w, r)];
+    let [x, y, z, w] = light;
+    let h = libm::atan2f(x, z);
+    let e = libm::atan2f(y, ps2::madd(ps2::mul(z, libm::cosf(h)), x, libm::sinf(h)));
+    let e = e.max(ps2::mul(deg, 50.0));
+    let c = libm::cosf(e);
+    (light, [ps2::mul(c, libm::sinf(h)), libm::sinf(e), ps2::mul(c, libm::cosf(h)), w])
+}
+
+/// The light axes the game derives from the sun (unit, sun → ground) at load: lu = (0, 0, 1) × sun normalized (or
+/// (1, 0, 0) when the sun is near vertical in z), lv = sun × lu, and the sun itself. Rows of [`light_matrix`].
+pub fn sun_axes(sun: vu0::V4) -> [vu0::V4; 3] {
+    let [x, y, z, _] = sun;
+    let lu = if z.abs() < 0.99999 {
+        let k = [0.0, 0.0, 1.0];
+        let c = [
+            ps2::msub(ps2::mul(k[1], z), k[2], y),
+            ps2::msub(ps2::mul(k[2], x), k[0], z),
+            ps2::msub(ps2::mul(k[0], y), k[1], x),
+        ];
+        let r = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(c[1], c[1]), c[0], c[0]), c[2], c[2])));
+        [ps2::mul(c[0], r), ps2::mul(c[1], r), ps2::mul(c[2], r), ps2::mul(0.0, r)]
+    } else {
+        [1.0, 0.0, 0.0, 0.0]
+    };
+    let lv = [
+        ps2::msub(ps2::mul(y, lu[2]), z, lu[1]),
+        ps2::msub(ps2::mul(z, lu[0]), x, lu[2]),
+        ps2::msub(ps2::mul(x, lu[1]), y, lu[0]),
+        0.0,
+    ];
+    [lu, lv, sun]
+}
+
+/// A caster's light matrix (world → light space, u/v in ±1 over the caster, z along the sun) as the game builds
+/// it at load in EE floats: `item` is the caster's model matrix (scaled by `scale`), `centre`/`half` its model
+/// box, `axes` the [`sun_axes`]. The matrix is the inverse of [lu; lv; sun; box centre] scaled to the caster's
+/// extent across the light.
+pub fn light_matrix(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3], axes: &[vu0::V4; 3]) -> [vu0::V4; 4] {
+    let ws = ps2::div(1.0, scale);
+    let w = item.map(|r| r.map(|x| ps2::mul(x, ws)));
+    let [cx, cy, cz] = centre;
+    let c: [f32; 4] = std::array::from_fn(|k| ps2::madd(ps2::madd(ps2::madd(ps2::mul(cy, w[1][k]), cx, w[0][k]), cz, w[2][k]), 0.0, w[3][k]));
+    let f = ps2::div(1.0, w[3][3]);
+    let mut o = [0.0; 4];
+    for k in 0..3 {
+        o[k] = ps2::madd(ps2::add(0.0, w[3][k]), ps2::mul(c[k], f), w[3][3]);
+    }
+    o[3] = ps2::add(w[3][3], 0.0);
+    let a: [vu0::V4; 3] = std::array::from_fn(|i| w[i].map(|x| ps2::mul(x, half[i])));
+    // |a0·l| + |a1·l|, then |a2·l| + that; each dot as (y·y + x·x) + z·z of a and l
+    let reach = |l: vu0::V4| {
+        let d = |v: vu0::V4| ps2::madd(ps2::madd(ps2::mul(v[1], l[1]), v[0], l[0]), v[2], l[2]).abs();
+        ps2::add(d(a[2]), ps2::add(d(a[0]), d(a[1])))
+    };
+    let (su, sv) = (reach(axes[0]), reach(axes[1]));
+    let s = ps2::div(1.0, if su < sv { sv } else { su });
+    let o = o.map(|x| ps2::mul(x, s));
+    let r = ps2::div(1.0, o[3]);
+    inverse(&[axes[0], axes[1], axes[2], o].map(|v| v.map(|x| ps2::mul(x, r))))
+}
+
+/// The game's general 4×4 inverse in EE floats: the 2×2 minors' determinant, the 16 cofactors in the game's op order
+/// (generated from its code), each times 1/det; the identity when det is 0.
+fn inverse(m: &[vu0::V4; 4]) -> [vu0::V4; 4] {
+    let m = m.as_flattened();
+    let p = |a: usize, b: usize, c: usize, d: usize| ps2::msub(ps2::mul(m[a], m[b]), m[c], m[d]);
+    let det = ps2::msub(ps2::mul(p(0, 5, 1, 4), p(10, 15, 11, 14)), p(0, 6, 2, 4), p(9, 15, 11, 13));
+    let det = ps2::madd(ps2::msub(ps2::madd(ps2::madd(det, p(0, 7, 3, 4), p(9, 14, 10, 13)), p(1, 6, 2, 5), p(8, 15, 11, 12)), p(1, 7, 3, 5), p(8, 14, 10, 12)), p(2, 7, 3, 6), p(8, 13, 9, 12));
+    if det == 0.0 {
+        return std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1.0 } else { 0.0 }));
+    }
+    let r = ps2::div(1.0, det);
+    let t2 = ps2::mul(m[2], m[13]);
+    let t3 = ps2::mul(m[0], m[13]);
+    let t4 = ps2::mul(m[0], m[5]);
+    let t5 = ps2::mul(m[1], m[12]);
+    let t6 = ps2::mul(m[1], m[4]);
+    let t7 = ps2::mul(m[10], m[12]);
+    let t8 = ps2::mul(m[8], m[14]);
+    let t9 = ps2::mul(m[9], m[14]);
+    let t10 = ps2::mul(m[10], m[13]);
+    let t11 = ps2::mul(m[8], m[13]);
+    let t12 = ps2::mul(m[9], m[12]);
+    let t13 = ps2::mul(m[5], m[11]);
+    let t14 = ps2::mul(m[7], m[9]);
+    let t15 = ps2::mul(m[7], m[8]);
+    let t16 = ps2::mul(m[4], m[11]);
+    let t17 = ps2::mul(m[3], m[5]);
+    let t18 = ps2::mul(m[1], m[7]);
+    let t19 = ps2::mul(m[0], m[7]);
+    let t20 = ps2::mul(m[3], m[4]);
+    let t21 = ps2::mul(m[3], m[13]);
+    let t22 = ps2::mul(m[1], m[15]);
+    let t23 = ps2::mul(m[0], m[15]);
+    let t24 = ps2::mul(m[3], m[12]);
+    let t25 = ps2::mul(m[11], m[13]);
+    let t26 = ps2::mul(m[9], m[15]);
+    let t27 = ps2::mul(m[8], m[15]);
+    let t28 = ps2::mul(m[11], m[12]);
+    let t29 = ps2::mul(m[7], m[10]);
+    let t30 = ps2::mul(m[6], m[11]);
+    let t31 = ps2::mul(m[2], m[7]);
+    let t32 = ps2::mul(m[3], m[6]);
+    let t33 = ps2::mul(m[2], m[15]);
+    let t34 = ps2::mul(m[3], m[14]);
+    let t35 = ps2::mul(m[10], m[15]);
+    let t36 = ps2::mul(m[11], m[14]);
+    let t37 = ps2::mul(m[0], m[14]);
+    let t38 = ps2::sub(t9, t10);
+    let t39 = ps2::mul(m[1], m[14]);
+    let t40 = ps2::sub(t10, t9);
+    let t41 = ps2::mul(m[1], m[6]);
+    let t42 = ps2::sub(t35, t36);
+    let t43 = ps2::mul(m[2], m[5]);
+    let t44 = ps2::sub(t36, t35);
+    let t45 = ps2::mul(m[6], m[9]);
+    let t46 = ps2::sub(t25, t26);
+    let t47 = ps2::mul(m[5], m[10]);
+    let t48 = ps2::sub(t26, t25);
+    let t49 = ps2::mul(m[2], m[12]);
+    let t50 = ps2::mul(m[6], t46);
+    let t51 = ps2::mul(m[0], m[6]);
+    let t52 = ps2::madd(ps2::add(0.0, t50), m[5], t42);
+    let t53 = ps2::mul(m[2], m[4]);
+    let t54 = ps2::madd(ps2::add(0.0, t52), m[7], t38);
+    let t55 = ps2::mul(m[4], m[10]);
+    let t56 = ps2::mul(m[4], t48);
+    let t57 = ps2::mul(m[6], m[8]);
+    let t58 = ps2::sub(t39, t2);
+    let t59 = ps2::mul(m[5], m[8]);
+    let t60 = ps2::sub(t2, t39);
+    let t61 = ps2::mul(m[4], m[9]);
+    let t62 = ps2::sub(t33, t34);
+    let t63 = ps2::sub(t34, t33);
+    let t64 = ps2::sub(t21, t22);
+    let t65 = ps2::mul(m[10], t64);
+    let t66 = ps2::sub(t22, t21);
+    let t67 = ps2::mul(m[8], t66);
+    let t68 = ps2::sub(t41, t43);
+    let t69 = ps2::madd(ps2::add(0.0, t65), m[9], t62);
+    let t70 = ps2::sub(t43, t41);
+    let t71 = ps2::madd(ps2::add(0.0, t69), m[11], t58);
+    let t72 = ps2::sub(t31, t32);
+    let t73 = ps2::sub(t32, t31);
+    let t74 = ps2::sub(t37, t49);
+    let t75 = ps2::sub(t17, t18);
+    let t76 = ps2::sub(t18, t17);
+    let t77 = ps2::mul(m[14], t75);
+    let t78 = ps2::madd(ps2::add(0.0, t77), m[13], t72);
+    let t79 = ps2::madd(ps2::add(0.0, t78), m[15], t68);
+    let t80 = ps2::mul(m[12], t76);
+    let t81 = ps2::sub(t45, t47);
+    let t82 = ps2::sub(t47, t45);
+    let t83 = ps2::sub(t29, t30);
+    let t84 = ps2::sub(t30, t29);
+    let t85 = ps2::sub(t13, t14);
+    let t86 = ps2::sub(t14, t13);
+    let t87 = ps2::mul(m[2], t85);
+    let t88 = ps2::madd(ps2::add(0.0, t87), m[1], t83);
+    let t89 = ps2::madd(ps2::add(0.0, t88), m[3], t81);
+    let t90 = ps2::mul(m[0], t86);
+    let t91 = ps2::sub(t27, t28);
+    let t92 = ps2::sub(t28, t27);
+    let t93 = ps2::sub(t7, t8);
+    let t94 = ps2::sub(t8, t7);
+    let t95 = ps2::mul(m[7], t93);
+    let t96 = ps2::madd(ps2::add(0.0, t95), m[6], t91);
+    let t97 = ps2::mul(m[5], t94);
+    let t98 = ps2::madd(ps2::add(0.0, t96), m[4], t44);
+    let t99 = ps2::sub(t23, t24);
+    let t100 = ps2::sub(t24, t23);
+    let t101 = ps2::sub(t49, t37);
+    let t102 = ps2::mul(m[11], t101);
+    let t103 = ps2::madd(ps2::add(0.0, t102), m[10], t99);
+    let t104 = ps2::mul(m[9], t74);
+    let t105 = ps2::madd(ps2::add(0.0, t103), m[8], t63);
+    let t106 = ps2::sub(t19, t20);
+    let t107 = ps2::sub(t20, t19);
+    let t108 = ps2::sub(t53, t51);
+    let t109 = ps2::mul(m[15], t108);
+    let t110 = ps2::madd(ps2::add(0.0, t109), m[14], t106);
+    let t111 = ps2::sub(t51, t53);
+    let t112 = ps2::madd(ps2::add(0.0, t110), m[12], t73);
+    let t113 = ps2::mul(m[13], t111);
+    let t114 = ps2::sub(t15, t16);
+    let t115 = ps2::sub(t16, t15);
+    let t116 = ps2::sub(t55, t57);
+    let t117 = ps2::sub(t57, t55);
+    let t118 = ps2::mul(m[3], t116);
+    let t119 = ps2::madd(ps2::add(0.0, t118), m[2], t114);
+    let t120 = ps2::mul(m[1], t117);
+    let t121 = ps2::madd(ps2::add(0.0, t119), m[0], t84);
+    let t122 = ps2::sub(t11, t12);
+    let t123 = ps2::madd(ps2::add(0.0, t56), m[7], t122);
+    let t124 = ps2::madd(ps2::add(0.0, t123), m[5], t92);
+    let t125 = ps2::sub(t12, t11);
+    let t126 = ps2::sub(t3, t5);
+    let t127 = ps2::madd(ps2::add(0.0, t67), m[11], t126);
+    let t128 = ps2::madd(ps2::add(0.0, t127), m[9], t100);
+    let t129 = ps2::sub(t5, t3);
+    let t130 = ps2::sub(t4, t6);
+    let t131 = ps2::madd(ps2::add(0.0, t80), m[15], t130);
+    let t132 = ps2::madd(ps2::add(0.0, t131), m[13], t107);
+    let t133 = ps2::sub(t59, t61);
+    let t134 = ps2::madd(ps2::add(0.0, t90), m[3], t133);
+    let t135 = ps2::madd(ps2::add(0.0, t134), m[1], t115);
+    let t136 = ps2::madd(ps2::add(0.0, t97), m[4], t40);
+    let t137 = ps2::madd(ps2::add(0.0, t136), m[6], t125);
+    let t138 = ps2::sub(t6, t4);
+    let t139 = ps2::madd(ps2::add(0.0, t104), m[8], t60);
+    let t140 = ps2::madd(ps2::add(0.0, t139), m[10], t129);
+    let t141 = ps2::sub(t61, t59);
+    let t142 = ps2::madd(ps2::add(0.0, t113), m[12], t70);
+    let t143 = ps2::madd(ps2::add(0.0, t142), m[14], t138);
+    let t144 = ps2::madd(ps2::add(0.0, t120), m[0], t82);
+    let t145 = ps2::madd(ps2::add(0.0, t144), m[2], t141);
+    let o = [t54, t71, t79, t89, t98, t105, t112, t121, t124, t128, t132, t135, t137, t140, t143, t145];
+    std::array::from_fn(|i| std::array::from_fn(|j| ps2::mul(o[4 * i + j], r)))
 }
 
 /// One shade receiver vertex as the game's VU1 program sends it to the GS: screen X, Y (12.4 fixed point) and
