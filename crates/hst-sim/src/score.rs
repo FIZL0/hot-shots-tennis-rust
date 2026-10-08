@@ -259,4 +259,16 @@ impl Score {
             p == 6 && self.points[team ^ 1] < 6 || p == 7 && self.points[team ^ 1] < 7
         }
     }
+
+    /// The team one point from the match (the players' serve call): the first team at a game point (team 0 first; a
+    /// game point for team 0 that isn't for the match hides team 1's), when it is a tiebreak in the last possible
+    /// set, or the team has its games (one short with a lead) and is one set short.
+    pub fn match_point(&self, r: &Rules) -> Option<usize> {
+        let t = (0..2).find(|&t| self.game_point(r, t))?;
+        if self.tiebreak && self.set + 1 == 2 * r.sets - 1 {
+            return Some(t);
+        }
+        let lead = (self.games[t] - self.games[t ^ 1] > 0) as i32;
+        (self.games[t] >= r.games - lead && self.sets[t] >= r.sets - 1).then_some(t)
+    }
 }

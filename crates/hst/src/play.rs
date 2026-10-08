@@ -363,6 +363,8 @@ struct Game {
     voices: Vec<sound::Voice>,
     /// No serve struck yet this match: the singles server's voice on the coming new point.
     first_serve: bool,
+    /// Who has made their match-point serve call this match (`serve_call`).
+    serve_called: [bool; 4],
     data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
@@ -1216,6 +1218,7 @@ fn setup(
         body_hit: None,
         voices: vec![default(); rules.players as usize],
         first_serve: true,
+        serve_called: [false; 4],
         data: Vec::new(),
         post_winner: 0,
         umpire,
@@ -1829,6 +1832,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             });
             s.t = 0;
             g.players[i].stance = pos[0].abs();
+            serve_call(g, i, s.toss.unwrap());
         } else {
             // walk the baseline: a human by the pad's run direction (its dead square, camera flip), a bot by its stick
             let walk = if g.humans.get(i) == Some(&true) {
@@ -2019,6 +2023,9 @@ fn toss_draws(g: &mut Game) {
 /// change of ends (`ends`) half the time.
 // ponytail: the doubles formation the draw picks from (staggered when `% 100 < 20`) is left out (PLAN P3d2)
 fn placement_draws(g: &mut Game, ends: bool) {
+    if g.first_serve {
+        g.serve_called = [false; 4];
+    }
     for i in 0..g.players.len() {
         g.rng.shared.next();
         if g.players.len() == 2
@@ -2030,6 +2037,26 @@ fn placement_draws(g: &mut Game, ends: bool) {
         }
     }
     g.first_serve = false;
+}
+
+/// A strong toss on the server's team's match point (`Score::match_point`): in doubles the server's partner, in
+/// singles the server, calls program 6 key 2 (one shared key draw), once a match.
+fn serve_call(g: &mut Game, server: usize, toss: Toss) {
+    let n = g.players.len();
+    if toss != Toss::Strong || g.score.match_point(&g.rules) != Some(server & 1) {
+        return;
+    }
+    let caller = match n {
+        2 => server,
+        4 => server ^ 2,
+        _ => return,
+    };
+    if std::mem::replace(&mut g.serve_called[caller], true) {
+        return;
+    }
+    if let Some(play) = g.voices[caller].react(caller, (6, 2, 2, None), || g.rng.shared.r15()) {
+        g.whooshes.push((0, caller, play));
+    }
 }
 
 /// The ball is held: still, and placed on the server's motion each tick (`held_ball`).

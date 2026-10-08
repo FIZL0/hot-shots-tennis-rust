@@ -568,3 +568,58 @@ fn serve_placement_replay(name: &str, setups: usize) {
     }
     assert_eq!(placed, setups, "{name}: serve set-ups in the match");
 }
+
+/// The match-point check behind the players' serve call (`Score::match_point`): game points that are and aren't
+/// for the match, team 0's plain game point hiding team 1's match point, a deciding-set tiebreak.
+#[test]
+fn match_points() {
+    let r = Rules { sets: 2, games: 6, ..DOUBLES };
+    let s = Score { points: [3, 0], games: [5, 4], sets: [1, 0], ..Score::new() };
+    assert_eq!(s.match_point(&r), Some(0));
+    assert_eq!(Score { sets: [0, 0], ..s.clone() }.match_point(&r), None);
+    assert_eq!(Score { games: [4, 4], ..s.clone() }.match_point(&r), None);
+    assert_eq!(Score { points: [3, 3], deuce: true, ..s.clone() }.match_point(&r), None);
+    // deuce off: 40-40 is a game point for both
+    let sudden = Score { points: [3, 3], games: [0, 5], sets: [0, 1], ..Score::new() };
+    assert_eq!(sudden.match_point(&Rules { no_deuce: true, ..r }), None);
+    assert_eq!(Score { points: [2, 3], ..sudden }.match_point(&r), Some(1));
+    let tb = Score { tiebreak: true, points: [6, 2], games: [6, 6], sets: [1, 1], set: 2, ..Score::new() };
+    assert_eq!(tb.match_point(&r), Some(0));
+}
+
+/// Live toss recordings (`research/p3d4_serve_call.py`, context/p3d4, skipped when absent): slot 5's doubles serve
+/// with the server's team put at match point, left as is, the receivers at match point; slot 8's singles serve at
+/// match point. On a strong toss (kind 1) at the server's team's match point the server's partner (doubles) or the
+/// server (singles) sets its call flag and the shared generator draws once more; otherwise nothing.
+#[test]
+fn serve_calls_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/p3d4");
+    let mut seen = 0;
+    for name in ["call_s05", "call_s05_asis", "call_s05_other", "call_singles"] {
+        let Ok(d) = std::fs::read(format!("{root}/{name}.bin")) else { continue };
+        let u = |k: usize| u32::from_le_bytes(d[4 + 4 * k..8 + 4 * k].try_into().unwrap()) as i32;
+        let (players, server, kind) = (u(0), u(1) as usize, u(2));
+        let s = Score {
+            points: [u(3), u(4)],
+            games: [u(5), u(6)],
+            sets: [u(7), u(8)],
+            tiebreak: u(13) != 0,
+            deuce: u(14) != 0,
+            advantage: u(15) != 0,
+            ..Score::new()
+        };
+        let r = Rules { sets: u(10), games: u(11), players, ..SINGLES };
+        let caller = if players == 4 { server ^ 2 } else { server };
+        let calls = kind == 1 && s.match_point(&r) == Some(server & 1);
+        let flips: Vec<usize> = (0..4).filter(|&k| u(16 + k) == 0 && u(20 + k) != 0).collect();
+        assert_eq!(flips, if calls { vec![caller] } else { vec![] }, "{name}");
+        // the new point's placements (one per player, the singles first serve's key) and the call's key
+        let draws = u(24);
+        let first = (players == 2) as i32;
+        assert_eq!(draws, players + first + calls as i32, "{name}");
+        seen += 1;
+    }
+    if seen == 0 {
+        eprintln!("context/p3d4 missing, skipped");
+    }
+}
