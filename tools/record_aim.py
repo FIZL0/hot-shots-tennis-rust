@@ -10,6 +10,7 @@ reads 2 over P1's contact, so the aim takes its singles width in a doubles save 
 Writes a pair of samples per aim: the frame before P1's +0x3e90 changes and the frame it does, each a `frames_live`
 sample followed by P1's +0x12b0..+0x1320 (end, character, TParam aim values) and the last shot's record
 (P1 +0x1400 → +0x1b0..+0x1c0). AIM_DEBUG=1 logs the approach. Needs tools/vpad.py serve (pcsx2-hst.sh starts it).
+AIM_INCOMING=1 keeps only the aims struck off an incoming rally slice (for the `incoming` cases plain play rarely gives).
 Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
@@ -47,6 +48,13 @@ r = [PAD, GLOBALS, (gm, 0x100), (p.read32(gm + 0x98), 0x290)]
 r += [(pl + o, n) for pl in players for o, n in PLAYER] + [(ball, 0x290), RALLY, (me + 0x12b0, 0x70), (p.read32(me + 0x1400) + 0x1b0, 0x10)]  # + the last shot's record
 AIM = 4 + 0x90 + 0x180 + 0x100 + 0x290 + 0x200 + 0x3e90 - 0x3c00  # P1's +0x3e90 in a sample
 BRANCH = AIM + 0x3ec1 - 0x3e90
+SHOTS = 4 + 0x90 + 0x423060 - 0x422f80  # the rally's shot count
+ONLY_INCOMING = os.environ.get("AIM_INCOMING") == "1"  # keep only aims struck off an incoming slice
+def incoming(pre):
+    """Some(was sweet) when the ball struck is a rally slice (the aim test's rule, from the last shot's record)."""
+    rec = pre[-0x10:]
+    hb, kind = struct.unpack_from("<2i", rec, 4)
+    return (rec[12] != 0) if s32(struct.unpack_from("<I", pre, SHOTS)[0]) > 0 and hb < 4 and kind == 1 else None
 def contact_frame(mz, s):
     """Frames until the game's predicted path (P1's shot record +0x1400: entries +0x50, count +0x54, now +0x58; 0x30
     each: pos, vel, bounces) comes nearest the contact depth AIM_AHEAD m in front of P1, as the search picks it."""
@@ -73,11 +81,13 @@ while aims < want and n < cap:
     n += 1
     while releases and releases[0][0] <= n: send(f"up {releases.pop(0)[1]}")
     if prev_sample and prev_sample[BRANCH] in (1, 2, 3, 4) and sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16] and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
-        out.write(prev_sample + sample)
-        out.flush()
-        aims += 1
+        inc = incoming(prev_sample)
+        if not ONLY_INCOMING or inc is not None:
+            out.write(prev_sample + sample)
+            out.flush()
+            aims += 1
         t = struct.unpack("<4f", sample[AIM:AIM + 16])
-        print(f"vsync {v}: aim {aims} branch {prev_sample[BRANCH]} kind {sample[BRANCH + 0x23]} stick {held} offset {s32(struct.unpack_from('<I', sample, AIM + 0x110)[0])} -> ({t[0]:.3f}, {t[2]:.3f})", flush=True)
+        print(f"vsync {v}: aim {aims} incoming {inc} branch {prev_sample[BRANCH]} kind {sample[BRANCH + 0x23]} stick {held} offset {s32(struct.unpack_from('<I', sample, AIM + 0x110)[0])} -> ({t[0]:.3f}, {t[2]:.3f})", flush=True)
     if os.environ.get("AIM_DEBUG") and prev_sample and (prev_sample[BRANCH] != sample[BRANCH] or sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16]):
         print(f"vsync {v}: branch {prev_sample[BRANCH]}->{sample[BRANCH]} aim {struct.unpack('<4f', sample[AIM:AIM + 16])}", flush=True)
     prev_sample = sample
