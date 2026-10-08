@@ -103,6 +103,14 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     })
 }
 
+/// Every mod under `root` (the select's custom roster, sorted by folder); a broken one is left out with its
+/// `<path>: <reason>` logged.
+pub fn list(root: &Path) -> Vec<Mod> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|d| d.is_dir()).collect();
+    dirs.sort();
+    dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
+}
+
 /// TParam.csv's column headers, line breaks as spaces.
 const COLUMNS: [&str; 67] = [
     "#", "通称", "性別", "身長", "モデル", "モデルタイプ", "利き腕", "タイプ", "得意１", "得意２", "Special SHOT", "Special POW", "Serv POW",
@@ -593,6 +601,23 @@ mod tests {
             assert!(!e.is_empty(), "accepted {field}");
             eprintln!("{e}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The custom roster lists every packaged mod (all four games) and leaves a broken folder out.
+    #[test]
+    fn lists_the_custom_roster() {
+        let Ok(root) = std::env::var("HST_MODS") else { return eprintln!("no HST_MODS, skipped") };
+        let all = list(Path::new(&root));
+        let n = std::fs::read_dir(&root).unwrap().flatten().filter(|e| e.path().join("mod.json").is_file()).count();
+        assert_eq!(all.len(), n);
+        for game in ["fore_", "getagrip_", "opentee_", "oob_"] {
+            assert!(all.iter().any(|m| m.id.starts_with(game)), "no {game} mod");
+        }
+        let dir = std::env::temp_dir().join(format!("hst-roster-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("broken")).unwrap();
+        std::fs::write(dir.join("broken/mod.json"), "{}").unwrap();
+        assert!(list(&dir).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
