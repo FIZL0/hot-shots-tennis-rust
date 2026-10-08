@@ -354,9 +354,18 @@ fn step(
             continue;
         };
         let (e, t, row) = &mut npcs.triggers[k];
-        // ponytail: their sounds and a hit's message (`struck`) are not played; a type's startled flag stays set
-        // until the next point (the original clears it sooner, from code not found)
-        t.step_near(row, &mut npcs.near, &mut roll);
+        // ponytail: a type's startled flag stays set until the next point (the original clears it sooner, from code
+        // not found); of message 0x14's other listeners (the AI, the landing markers) none hears it
+        for s in t.step_near(row, &mut npcs.near, &mut roll) {
+            let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
+            g.sounds.push((sound::Play { slot: 0, program: 7, key: s as u8, volume: 0x40, speed: 1.0 }, at));
+        }
+        // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
+        // ponytail: a struck toss doesn't match (the original stops it dead; tracked in PLAN)
+        if t.struck {
+            let (shot, material) = (g.shot, g.world.1[0]);
+            g.flight.step_plane(&shot, &hst_sim::ball::COURTS[g.court], material);
+        }
         if let Ok((_, mut m)) = q.get_mut(*e) {
             m.clock.sampled = t.frame;
         }

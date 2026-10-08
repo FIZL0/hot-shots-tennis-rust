@@ -12,7 +12,8 @@ controller *(+0x60) (0x40) and that controller's animation header *(ctrl+0x24) (
 flags *(0x43b820)+0x424 (0x40), then per creature the 8 bytes at *(+0xb8) (type 48's scrub state).
 HST_PAD="press cross 100;sleep 500;..." sends those tools/vpad.py commands right after the load (a human P1).
 HST_POKE="<sample>:<k>:<b|0..3>:<dx>:<dz>;..." moves creature k (header order) to the ball's or player i's position
-plus (dx, 0, dz) after that sample, so a frozen creature finds someone close."""
+plus (dx, 0, dz) after that sample, so a frozen creature finds someone close.
+HST_BALL=1 (with `prox`) appends the ball's whole object *(gm+0x88) (0x290) to each sample."""
 import os, subprocess, struct, sys, time, zipfile
 from pine import Pine
 
@@ -50,6 +51,8 @@ def regions():
         r += [(p.read32(gm + 0xa8 + 4 * i) + 0x3d70, 0x10) for i in range(4)]
         r.append((p.read32(0x43b820) + 0x424, 0x40))
         r += [(p.read32(w + 0xb8) if 0x100000 <= p.read32(w + 0xb8) < 0x2000000 else 0x100000, 8) for w in walkers]
+        if os.environ.get("HST_BALL"):
+            r.append((p.read32(gm + 0x88), 0x290))
     return r
 
 # HST_POKE="<sample>:<creature k>:<b|player i>:<dx>:<dz>;...": move a creature next to the ball or a player

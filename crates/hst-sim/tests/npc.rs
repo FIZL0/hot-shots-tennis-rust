@@ -508,7 +508,7 @@ fn startled_creatures_match_the_game() {
             flags: std::array::from_fn(|t| s[x + 0x50 + t] != 0),
             ..Default::default()
         };
-        let (mut ticks, mut startles, mut turns, mut blocked, mut struck) = (0, 0, 0, 0, 0);
+        let (mut ticks, mut startles, mut turns, mut blocked, mut struck, mut sounds) = (0, 0, 0, 0, 0, 0);
         let kinds: Vec<(usize, u8)> = (0..n)
             .map(|k| (k, samples[0][wo(k) + 0x50]))
             .filter(|&(_, ty)| matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48))
@@ -554,16 +554,16 @@ fn startled_creatures_match_the_game() {
                 }
                 let found = [1, 0, 2, 3].into_iter().find_map(|steps| {
                     (0..=out.len()).find_map(|j| {
-                        let (mut t, mut it, mut seen) = (before.clone(), out[j..].iter(), near(b));
+                        let (mut t, mut it, mut seen, mut heard) = (before.clone(), out[j..].iter(), near(b), Vec::new());
                         seen.flags = flags;
                         for _ in 0..steps {
-                            t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0));
+                            heard.extend(t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0)));
                         }
                         let want = npc::Trigger { struck: t.struck, path: t.path.clone(), anchor: t.anchor, ..after.clone() };
-                        (t == want).then_some((t, seen))
+                        (t == want).then_some((t, seen, heard))
                     })
                 });
-                let Some((t, seen)) = found else {
+                let Some((t, seen, heard)) = found else {
                     let (mut t, mut seen) = (before.clone(), near(b));
                     seen.flags = flags;
                     t.step_near(&row, &mut seen, &mut || out[0]);
@@ -571,6 +571,9 @@ fn startled_creatures_match_the_game() {
                 };
                 assert!(!t.struck || after.msg == 0x14, "court {court} vsync {} creature {k}: struck without message 0x14", u(b, 0));
                 struck += t.struck as usize;
+                // a sound started: the game's handle to it (+0xc4) is new
+                assert_eq!(!heard.is_empty(), u(b, o + 0xc4) != u(a, o + 0xc4), "court {court} vsync {} creature {k}: sound {heard:?}", u(b, 0));
+                sounds += heard.len();
                 tick14 |= t.struck;
                 startles += (t.startled && !before.startled) as usize;
                 turns += (t.scrub.0 != before.scrub.0) as usize;
@@ -590,7 +593,7 @@ fn startled_creatures_match_the_game() {
                 assert_eq!(flags[ty as usize], near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag", u(b, 0));
             }
         }
-        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag, {struck} struck");
+        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag, {struck} struck, {sounds} sounds");
         assert!(court != 7 || struck > 0, "court 7: no creature struck by the ball");
         assert!(startles + turns > 0, "court {court}: nothing startled");
         courts.push(court);
@@ -648,6 +651,7 @@ fn trigger_at(s: &[u8], o: usize, row: &hst_data::exe::TriggerRow, anchor: [f32;
         sweep: h(s, 0xd0),
         pan: f(s, 0xd4),
         down: s[o + 0xd8] != 0,
+        done: s[o + 0xbc] != 0,
         counter,
         gap: 0,
         voice: (-1, 0),

@@ -335,7 +335,9 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P14c3a** Steering creatures walk (row `steer`, e.g. court 1's startled type 1) (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [x] **P14c3b** Startled-type flags cleared like the original (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [x] **P14c3c** Types 27–29 against a recording (court 7) (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
-- [ ] **P14c3d** Startled creatures' sounds and leftovers (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [x] **P14c3d** Startled creatures' sounds and leftovers (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c3e** A struck toss and message 0x14's other listeners (in P14c3d) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c3f** Startled creatures' model weight, replay save, +0x280 (in P14c3d) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
