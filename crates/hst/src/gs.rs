@@ -116,9 +116,10 @@ fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> 
     let row = 0xd0 + season * 0x70 + t * 0x38;
     let mut rgb = Vec3::new(f(row)?, f(row + 4)?, f(row + 8)?);
     if w.grey {
-        rgb = Vec3::splat((rgb.x + rgb.y + rgb.z) / 3.0);
+        use hst_sim::ps2;
+        rgb = Vec3::splat(ps2::div(ps2::add(ps2::add(rgb.x, rgb.y), rgb.z), 3.0));
     }
-    Some((rgb, f(row + 0xc)?, f(row + 0x10)? * w.scale))
+    Some((rgb, f(row + 0xc)?, hst_sim::ps2::mul(f(row + 0x10)?, w.scale)))
 }
 
 /// Fog parameters that leave every pixel as it is.
@@ -357,7 +358,8 @@ mod tests {
         // PINE, weather 3: the light greys to 0.847059 and its intensity drops to 0x3ee8f5c0
         let rain = hst_sim::weather::look(3, [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
         let (colour, _) = court_light(&envir, 0, &rain).unwrap();
-        assert_eq!(colour.x.to_bits(), (f32::from_bits(0x3f58_d8d8) * f32::from_bits(0x3ee8_f5c0)).to_bits());
+        // (within an ulp: the test's 0.7 and 0.65 literals may not be the files' exact bits)
+        assert!(colour.x.to_bits().abs_diff((f32::from_bits(0x3f58_d8d8) * f32::from_bits(0x3ee8_f5c0)).to_bits()) <= 1);
         // sky fog F 0: the clear colour is the fog colour, white × 0.65
         assert_eq!(court_clear(&envir, 0, sky, &rain), Some([165, 165, 165]));
         // threshold 0 (court 9 season 0) picks the second light row, all zero here

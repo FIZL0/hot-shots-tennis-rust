@@ -3,6 +3,8 @@
 //! agility ×1.5). In rain each player also casts a round blob (`shadow.tm2`, 1.2 m, vertex colour
 //! (128, 128, 128, 77)) just above the ground between the feet, on top of the projected shadow.
 
+mod rain;
+
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 
@@ -12,7 +14,7 @@ use crate::weather::Weather;
 use crate::Args;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, setup.after(super::setup)).add_systems(FixedUpdate, step).add_systems(Update, blobs);
+    app.add_plugins(rain::plugin).add_systems(PostStartup, setup.after(super::setup)).add_systems(FixedUpdate, step).add_systems(Update, blobs);
 }
 
 /// A player's rain blob.
