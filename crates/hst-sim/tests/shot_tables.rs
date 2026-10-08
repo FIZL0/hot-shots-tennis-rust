@@ -2,7 +2,7 @@
 //! flight frames) by `research/tools/traj_inverse2.py`. Fixture `context/fixtures/shot_tables_s05.csv` and the
 //! tables under `context/xb` stay out of git; skips when absent.
 
-use hst_sim::shot::{Bounds, Table, launch, lookup};
+use hst_sim::shot::{Bounds, Table, launch, launch_frame, lookup};
 
 #[test]
 fn strokes_launch_like_the_game() {
@@ -235,14 +235,20 @@ fn launches(fixtures: &[&str], class: u8, only: Option<i32>) -> (usize, usize) {
             seen += 1;
             let counter = w[1].player_f32(p, 0x3f04).to_bits().to_le_bytes()[3] == 1;
             let ch = w[1].global(0x422fa8 + 4 * if counter { w[0].global(0x423058) as usize } else { p });
-            let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
             let (stem, bounds) = if class == 1 { ("strk", Bounds::stroke(kind, hit[2])) } else { ("voly", Bounds::volley(kind, hit[2])) };
             let ok = ["", "_up1", "_dw1", "_dw2"].iter().any(|suf| {
                 let Some(t) = table(ch, &format!("{stem}{kind}{suf}")) else { return false };
                 let l = lookup(&t, &bounds, hit, target);
-                let v = launch(hit, target, l.elevation, l.speed);
-                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-                (len - speed).abs() < 2e-6 && (v[1] - vel[1]).abs() < 4e-6 && l.frames + 1 == i(b, 0x260)
+                // a poorly timed (grade 4) stroke's elevation is scaled down (P3's mis-hit roll): 0.95, or one of 0.9..0.8
+                [1.0, 0.95, 0.9, 0.85, 0.8].iter().any(|&scale| {
+                    let elevation = if scale == 1.0 { l.elevation } else { hst_sim::ps2::mul(l.elevation, scale) };
+                    let (frame, v) = (launch_frame(hit, target, elevation), launch(hit, target, elevation, l.speed));
+                    let rows = (0..4).all(|r| (0..4).all(|k| frame[r][k] == f(b, 0x160 + 16 * r + 4 * k)));
+                    // ground strokes still land within a few 1e-6 of the game (their lookup inputs aren't the
+                    // ball's hit point exactly); volleys are bit for bit, frame and velocity
+                    let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                    if class == 1 { (len(v) - len(vel)).abs() < 2e-6 && (v[1] - vel[1]).abs() < 4e-6 } else { v == vel && rows }
+                }) && l.frames + 1 == i(b, 0x260)
             });
             if !ok {
                 eprintln!("{fx} vsync {} p{p} (character {ch}): class {class} kind {kind} off its tables", w[1].vsync());
