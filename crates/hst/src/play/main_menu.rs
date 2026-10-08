@@ -13,6 +13,12 @@
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
 //! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, confirm) opens on that screen (for `--shot`).
+//!
+//! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
+//! second page of the select, switched for everyone by Tab / Select: a list of names, 2 columns of [`LIST_ROWS`] a
+//! page (↑↓ one, ←→ a column). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
+//! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
+//! (`--slot-mod N DIR`, `--chars` the donor), and a costume readied on is closed to the others as on the disc.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -51,6 +57,10 @@ const GRID: [(usize, f32, f32); CHARS] = [
     (10, 368.0, 360.0),
     (11, 435.0, 360.0),
 ];
+/// Rows a column of the custom list; two columns a page.
+const LIST_ROWS: usize = 12;
+/// The custom list's columns (x) and first row (y), one row 22 px.
+const LIST: [f32; 3] = [176.0, 324.0, 96.0];
 /// The original's courts on the confirm screen (names `message0` 276 + 2k, descriptions 581 + 2k).
 const COURTS: usize = 11;
 /// Sets on the confirm screen (sets played; to win: (n + 1) / 2).
@@ -144,6 +154,8 @@ struct Press {
     /// L1 / R1: the costume.
     prev: bool,
     next: bool,
+    /// Select / Tab: the disc or custom page.
+    page: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -166,12 +178,22 @@ struct Player {
     costume: usize,
     ready: bool,
     card: bool,
+    /// The custom list's entry, and whether the player is on it (else on the grid).
+    pick: usize,
+    modded: bool,
 }
 
 impl Player {
     fn char(&self) -> usize {
         GRID[self.cursor].0
     }
+}
+
+/// Who a player has on the select: a disc character or the custom roster's entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Who {
+    Disc(usize),
+    Mod(usize),
 }
 
 #[derive(Resource, Debug)]
@@ -189,6 +211,9 @@ struct Menu {
     umpire: u8,
     /// The action waiting for a new key or button (controls screen).
     rebinding: Option<usize>,
+    /// The custom roster, and whether the select shows it.
+    mods: Vec<crate::mods::Mod>,
+    custom: bool,
 }
 
 impl Default for Menu {
@@ -205,6 +230,8 @@ impl Default for Menu {
             games: 4,
             umpire: 4,
             rebinding: None,
+            mods: Vec::new(),
+            custom: false,
         }
     }
 }
@@ -227,10 +254,33 @@ impl Menu {
         if self.doubles { 4 } else { 2 }
     }
 
+    fn who(&self, p: usize) -> Who {
+        let pl = self.players[p];
+        if pl.modded { Who::Mod(pl.pick) } else { Who::Disc(pl.char()) }
+    }
+
+    fn costumes(&self, w: Who) -> usize {
+        match w {
+            Who::Disc(_) => COSTUMES,
+            Who::Mod(i) => self.mods[i].costumes.len(),
+        }
+    }
+
     /// Whether player `p`'s character and costume are locked in by someone else.
     fn blocked(&self, p: usize) -> bool {
         let me = self.players[p];
-        (0..self.players()).any(|q| q != p && self.players[q].ready && self.players[q].char() == me.char() && self.players[q].costume == me.costume)
+        (0..self.players()).any(|q| q != p && self.players[q].ready && self.who(q) == self.who(p) && self.players[q].costume == me.costume)
+    }
+
+    /// Player `p` picking again, on the page shown.
+    fn unready(&mut self, p: usize) {
+        let custom = self.custom;
+        let me = &mut self.players[p];
+        me.ready = false;
+        if me.modded != custom {
+            me.modded = custom;
+            me.costume = 0;
+        }
     }
 
     /// The player `dev` drives on the character select: its own until it is ready, then (player 1's device, once
@@ -324,6 +374,7 @@ impl Menu {
                         for p in &mut self.players {
                             *p = Player::default();
                         }
+                        self.custom = false;
                         self.go(Screen::Chars, &mut out);
                     } else if k.back {
                         self.seats[1..].fill(None);
@@ -350,6 +401,21 @@ impl Menu {
             }
             Screen::Chars => {
                 let Some(p) = self.driven(dev) else { return out };
+                if k.page {
+                    if self.mods.is_empty() {
+                        out.push(Sound(1));
+                    } else {
+                        self.custom = !self.custom;
+                        for q in 0..self.players() {
+                            if !self.players[q].ready {
+                                self.unready(q);
+                            }
+                        }
+                        out.push(Sound(0));
+                    }
+                }
+                let costumes = self.costumes(self.who(p));
+                let n_mods = self.mods.len();
                 let me = &mut self.players[p];
                 if k.card {
                     me.card = !me.card;
@@ -357,7 +423,14 @@ impl Menu {
                 }
                 if !me.ready {
                     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
-                    if dx != 0.0 || dy != 0.0 {
+                    if (dx != 0.0 || dy != 0.0) && me.modded {
+                        let to = (me.pick as i32 + dy as i32 + dx as i32 * LIST_ROWS as i32).clamp(0, n_mods as i32 - 1) as usize;
+                        if to != me.pick {
+                            me.pick = to;
+                            me.costume = 0;
+                            out.push(Sound(0));
+                        }
+                    } else if dx != 0.0 || dy != 0.0 {
                         let to = grid_step(me.cursor, dx, dy);
                         if to != me.cursor {
                             me.cursor = to;
@@ -366,7 +439,7 @@ impl Menu {
                         }
                     }
                     if k.prev || k.next {
-                        me.costume = (me.costume + if k.next { 1 } else { COSTUMES - 1 }) % COSTUMES;
+                        me.costume = (me.costume + if k.next { 1 } else { costumes - 1 }) % costumes;
                         out.push(Sound(0));
                     }
                 }
@@ -382,12 +455,12 @@ impl Menu {
                     }
                 } else if k.back {
                     if self.players[p].ready {
-                        self.players[p].ready = false;
+                        self.unready(p);
                         out.push(Sound(1));
                     } else if self.seats[p].is_none() {
                         // player 1 driving a computer player: back to the last one readied
                         if let Some(q) = (0..self.players()).rev().find(|&q| self.players[q].ready) {
-                            self.players[q].ready = false;
+                            self.unready(q);
                         }
                         out.push(Sound(1));
                     } else if p == 0 {
@@ -416,8 +489,8 @@ impl Menu {
                     out.extend([Sound(2), Launch]);
                     self.screen = Screen::Playing;
                 } else if k.back {
-                    for p in &mut self.players {
-                        p.ready = false;
+                    for p in 0..4 {
+                        self.unready(p);
                     }
                     self.screen = Screen::Chars;
                     out.push(Sound(1));
@@ -441,9 +514,15 @@ impl Menu {
         let order: &[usize] = if self.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
         let mut chars = vec![0; order.len()];
         let mut outfits = vec![0; order.len()];
+        let mut slot_mods = Vec::new();
         for (p, &m) in order.iter().enumerate() {
             chars[m] = self.players[p].char();
             outfits[m] = self.players[p].costume;
+            if let Who::Mod(i) = self.who(p) {
+                // the donor's number: the match's tables and voice draw go by it
+                chars[m] = self.mods[i].donor;
+                slot_mods.extend(["--slot-mod".to_string(), m.to_string(), self.mods[i].dir.display().to_string()]);
+            }
         }
         let join = |v: &[usize]| v.iter().map(usize::to_string).collect::<Vec<_>>().join(",");
         let seat = |p: usize| match self.seats[p] {
@@ -470,6 +549,7 @@ impl Menu {
             "--pads".into(),
             Seat::flag(&seats),
         ]);
+        a.extend(slot_mods);
         a.extend(self.settings.flags());
         a
     }
@@ -571,6 +651,19 @@ struct Text {
     grades: [[u8; 5]; 14],
     /// Play style (0 all-round, 1 baseline, 2 net, 3 big server) by character.
     style: [usize; 14],
+    /// The custom roster's play style and △ numbers (`MOD_STATS`), from each one's TParam.csv row.
+    mods: Vec<(usize, [String; 5])>,
+}
+
+/// The custom card's △ numbers: TParam.csv column and label.
+const MOD_STATS: [(usize, &str); 5] = [(12, "Serve"), (13, "Stroke"), (14, "Volley"), (40, "Speed"), (41, "Stamina")];
+
+/// A mod's play style: its base row's, or its `タイプ` override's.
+fn mod_style(m: &crate::mods::Mod, base: &[usize; 14]) -> usize {
+    match m.overrides.iter().find(|(k, _)| k == "タイプ") {
+        Some((_, v)) => ["オール", "ベース", "ネット", "ビッグ"].iter().position(|p| v.starts_with(p)).unwrap_or(0),
+        None => base[m.base],
+    }
 }
 
 impl Text {
@@ -598,7 +691,8 @@ fn messages(d: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// TParam.csv's type cell (column 7, Shift-JIS) as the select's label: オール, ベース, ネット, ビッグ.
+/// TParam.csv's type cell (column 7, Shift-JIS) as the select's label: オール, ベース, ネット, ビッグ (the mods' are
+/// `mod_style`'s).
 fn styles(csv: &[u8]) -> [usize; 14] {
     let mut out = [0; 14];
     for line in csv.split(|&b| b == b'\n') {
@@ -664,9 +758,24 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let pc = Archive::parse(&pc).expect("xb archive");
     let csv = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok()).unwrap_or_default();
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
-    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style: styles(&csv) }));
+    let style = styles(&csv);
+    // the custom roster: a mod whose row can't be read is left out like a broken one
+    let mods_dir = Settings::path(&args.iso).with_file_name("mods");
+    let roster: Vec<_> = crate::mods::list(&mods_dir)
+        .into_iter()
+        .filter_map(|m| match crate::mods::tparam(&mut iso, &m) {
+            Ok(row) => Some(((mod_style(&m, &style), MOD_STATS.map(|(c, _)| row.get(c).cloned().unwrap_or_default())), m)),
+            Err(e) => {
+                warn!("{}: {e}", m.dir.display());
+                None
+            }
+        })
+        .collect();
+    info!("{} custom characters in {}", roster.len(), mods_dir.display());
+    let (mod_text, mods) = roster.into_iter().unzip();
+    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, mods: mod_text }));
 
-    let mut menu = Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| Settings::default(), |t| Settings::parse(&t)), ..default() };
+    let mut menu = Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| Settings::default(), |t| Settings::parse(&t)), mods, ..default() };
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
         "settings" => Screen::Settings,
@@ -734,6 +843,12 @@ impl Draw<'_> {
     fn centred(&mut self, s: &str, cx: f32, y: f32, size: f32, rgb: [f32; 3]) {
         let w = self.width(s, size);
         self.text(s, cx - w / 2.0, y, size, rgb);
+    }
+
+    /// `s` centred on `cx`, shrunk to fit `max` px wide.
+    fn fitted(&mut self, s: &str, cx: f32, y: f32, size: f32, max: f32) {
+        let k = (max / self.width(s, size).max(1.0)).min(1.0);
+        self.centred(s, cx, y + size * (1.0 - k) / 2.0, size * k, WHITE);
     }
 
     /// A pill (`Option_00`'s white one, three-sliced) tinted.
@@ -863,10 +978,16 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     let n = m.players();
     d.q(CS0, if m.doubles { [2.0, 34.0, 252.0, 30.0] } else { [2.0, 2.0, 252.0, 30.0] }, [194.0, 56.0, 252.0, 30.0], WHITE, 128.0);
-    // the faces, darkened where every costume of it is ... (all open in the remaster)
-    for &(c, x, y) in &GRID {
-        d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
-        d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
+    let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
+    let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
+    if m.custom {
+        custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready), m.players[lead].pick);
+    } else {
+        // the faces, darkened where every costume of it is ... (all open in the remaster)
+        for &(c, x, y) in &GRID {
+            d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
+            d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
+        }
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
     for p in 0..n {
@@ -875,12 +996,24 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         let [x, y] = panels[p];
         let [u, v] = CARDS[p];
         let human = m.seats[p].is_some();
-        let picking = human || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
+        let picking = picking(p);
+        let modded = match m.who(p) {
+            Who::Mod(i) => Some(i),
+            Who::Disc(_) => None,
+        };
         // a card nobody is picking on yet is dark
         d.q(CARD, [u, v, 140.0, 164.0], [x, y, 144.0, 168.0], if picking || pl.ready { WHITE } else { [55.0; 3] }, 128.0);
         if picking || pl.ready {
             d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
-            if pl.card {
+            if pl.card && let Some(i) = modded {
+                d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
+                for (k, ((_, label), v)) in MOD_STATS.iter().zip(&text.mods[i].1).enumerate() {
+                    let yy = y + 40.0 + 18.0 * k as f32;
+                    d.text(label, x + 10.0, yy, 16.0, WHITE);
+                    let w = d.width(v, 16.0);
+                    d.text(v, x + 130.0 - w, yy, 16.0, WHITE);
+                }
+            } else if pl.card {
                 d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
                 for (k, g) in text.grades[c].iter().enumerate() {
                     let yy = y + 40.0 + 18.0 * k as f32;
@@ -888,15 +1021,19 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                     d.q(NAMES, [0.0, 24.0 * (5 - *g as usize).min(5) as f32, 22.0, 24.0], [x + 112.0, yy - 2.0, 18.0, 20.0], WHITE, 128.0);
                 }
             }
-            let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][text.style[c]];
+            let style = modded.map_or(text.style[c], |i| text.mods[i].0);
+            let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
             d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, y + 118.0, style[2] * 0.9, 22.0], WHITE, 128.0);
-            d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0);
+            match modded {
+                Some(i) => d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0),
+                None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
+            }
             if pl.ready {
                 d.q(CS0, [2.0, 208.0, 108.0, 24.0], [x + 18.0, y + 96.0, 108.0, 24.0], WHITE, 128.0);
             } else if m.blocked(p) {
                 d.q(CS0, [2.0, 232.0, 110.0, 24.0], [x + 17.0, y + 96.0, 110.0, 24.0], WHITE, 128.0);
             }
-            if !pl.ready {
+            if !pl.ready && !pl.modded {
                 let [fx, fy] = [GRID[pl.cursor].1, GRID[pl.cursor].2];
                 d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
                 d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
@@ -910,9 +1047,36 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.text("COM", x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
         }
     }
-    let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
-    let c = m.players[lead].char();
-    d.info(text.msg(308 + c));
+    match m.who(lead) {
+        Who::Mod(i) => {
+            let md = &m.mods[i];
+            let s = if md.costumes.len() == 1 { "" } else { "s" };
+            d.info(&format!("{}: custom character, {} costume{s}. Tab / Select: the disc characters.", md.name, md.costumes.len()));
+        }
+        Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Select: custom characters)", text.msg(308 + c))),
+        Who::Disc(c) => d.info(text.msg(308 + c)),
+    }
+}
+
+/// The custom page: the roster's names, the page holding `at`, a hand per player picking on it.
+fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, at: usize) {
+    let per = 2 * LIST_ROWS;
+    let page = at / per;
+    let cell = |i: usize| {
+        let k = i % per;
+        (LIST[k / LIST_ROWS], LIST[2] + 22.0 * (k % LIST_ROWS) as f32)
+    };
+    for i in page * per..(page * per + per).min(m.mods.len()) {
+        let (x, y) = cell(i);
+        d.q(Tex::Solid, [0.0; 4], [x, y, 140.0, 20.0], [40.0, 40.0, 50.0], 100.0);
+        d.fitted(&m.mods[i].name, x + 70.0, y + 2.0, 16.0, 132.0);
+    }
+    for p in players.filter(|&p| m.players[p].modded && m.players[p].pick / per == page) {
+        let (x, y) = cell(m.players[p].pick);
+        d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [x - 34.0 + 6.0 * (p % 2) as f32, y - 2.0 + 4.0 * (p / 2) as f32, 40.0, 20.0], COLOURS[p], 128.0);
+    }
+    let pages = m.mods.len().div_ceil(per);
+    d.centred(&format!("Custom characters  {}/{pages}", page + 1), 320.0, LIST[2] + 22.0 * LIST_ROWS as f32 + 8.0, 18.0, WHITE);
 }
 
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
@@ -921,9 +1085,19 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     let w = 600.0 / order.len() as f32;
     for (k, &p) in order.iter().enumerate() {
         let pl = m.players[p];
-        let (sheet, src) = portrait(pl.char(), pl.costume);
         let x = 20.0 + w * k as f32 + (w - 112.0) / 2.0;
-        d.q(sheet, src, [x, 64.0, 112.0, 147.0], WHITE, 128.0);
+        match m.who(p) {
+            Who::Mod(i) => {
+                // ponytail: no 3D preview on this screen; the name and costume on a dark card
+                d.q(Tex::Solid, [0.0; 4], [x, 64.0, 112.0, 147.0], [30.0, 30.0, 40.0], 110.0);
+                d.fitted(&m.mods[i].name, x + 56.0, 120.0, 20.0, 104.0);
+                d.centred(&format!("{}", pl.costume + 1), x + 56.0, 146.0, 18.0, WHITE);
+            }
+            Who::Disc(c) => {
+                let (sheet, src) = portrait(c, pl.costume);
+                d.q(sheet, src, [x, 64.0, 112.0, 147.0], WHITE, 128.0);
+            }
+        }
         d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]);
         if m.seats[p].is_none() {
             d.centred("COM", x + 56.0, 236.0, 18.0, [60.0, 120.0, 30.0]);
@@ -1051,6 +1225,7 @@ fn step(
                 k.card = bind.key_just_pressed(&keys, Action::Lob);
                 k.prev = keys.any_just_pressed([KeyCode::KeyQ, KeyCode::PageUp]);
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
+                k.page = keys.just_pressed(KeyCode::Tab);
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -1061,6 +1236,7 @@ fn step(
                 k.card = g.just_pressed(GamepadButton::North);
                 k.prev = g.just_pressed(GamepadButton::LeftTrigger);
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
+                k.page = g.just_pressed(GamepadButton::Select);
             }
         }
         let mut dirs = [false; 4];
@@ -1268,6 +1444,63 @@ mod tests {
         m.step(p1, ok); // no seat left
         assert_eq!(m.seats, [Some(p0), Some(Dev::Keys), None, None]);
         assert_eq!(m.args(&[]).iter().skip_while(|x| *x != "--pads").nth(1).unwrap(), "-,k");
+    }
+
+    /// The custom page: Tab switches it, a mod's costumes wrap at its own count, a readied mod costume is closed to
+    /// the others, and the match gets the donor in `--chars` and the mod's folder per slot.
+    #[test]
+    fn custom_page_picks_a_mod() {
+        let fake = |id: &str, donor: usize, costumes: usize| crate::mods::Mod {
+            dir: format!("mods/{id}").into(),
+            id: id.into(),
+            name: id.into(),
+            costumes: (0..costumes).map(|c| format!("model/c{c:02}.glb")).collect(),
+            donor,
+            hand: 1.0,
+            base: donor,
+            overrides: vec![],
+            ai_row: donor,
+            texture_face: false,
+            no_face: false,
+            voice: "voice/".into(),
+        };
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };
+        m.step(Dev::Keys, ok); // Local, singles
+        m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert!(m.custom && m.players[0].modded && m.players[1].modded);
+        m.step(Dev::Keys, press(|p| &mut p.next));
+        m.step(Dev::Keys, press(|p| &mut p.next));
+        assert_eq!(m.players[0].costume, 0, "mod a has 2 costumes");
+        m.step(Dev::Keys, ok); // 1P: a, costume 1
+        // the computer's 2P on a costume 1 too: closed; down to b, then back up and on to costume 2
+        assert!(m.blocked(1));
+        m.step(Dev::Keys, ok);
+        assert!(!m.players[1].ready);
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        assert_eq!(m.who(1), Who::Mod(1));
+        m.step(Dev::Keys, press(|p| &mut p.down)); // the list ends
+        assert_eq!(m.who(1), Who::Mod(1));
+        m.step(Dev::Keys, press(|p| &mut p.up));
+        m.step(Dev::Keys, press(|p| &mut p.prev));
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Confirm);
+        let a = m.args(&[]);
+        let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!((flag("--chars"), flag("--outfits")), ("5,5".into(), "0,1".into()));
+        let mods: Vec<_> = a.windows(3).filter(|w| w[0] == "--slot-mod").map(|w| (w[1].clone(), w[2].clone())).collect();
+        assert_eq!(mods, [("0".into(), "mods/a".into()), ("1".into(), "mods/a".into())]);
+        // back from the confirm: everyone picks again on the page shown; Tab with no mods is refused
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert!(m.players[0].modded && !m.players[0].ready);
+        let mut m = Menu::default();
+        m.screen = Screen::Chars;
+        m.seats[0] = Some(Dev::Keys);
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.page)), [Effect::Sound(1)]);
+        assert!(!m.custom);
     }
 
     #[test]

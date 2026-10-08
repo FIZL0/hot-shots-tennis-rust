@@ -93,6 +93,7 @@ fn main() {
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
     let mut mod_slot = 0;
+    let mut slot_mods = Vec::new();
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
     while let Some(x) = a.next() {
@@ -108,6 +109,12 @@ fn main() {
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
             "--mod" => (viewer_mod, viewer_char) = (a.next(), viewer_char.or(Some(0))),
             "--mod-slot" => mod_slot = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
+            "--slot-mod" => {
+                let (n, dir) = (a.next().and_then(|r| r.parse::<usize>().ok()), a.next());
+                if let (Some(n), Some(dir)) = (n, dir) {
+                    slot_mods.push((n, dir));
+                }
+            }
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--inspect" => {
                 let list = a.next().filter(|l| l != "all").unwrap_or_else(|| (0..14).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
@@ -164,10 +171,15 @@ fn main() {
         app.add_plugins(play::main_menu::plugin);
     } else if play {
         app.add_plugins(play::plugin);
-        // `--play --mod DIR [--mod-slot N]`: the mod plays player N (default 1st), its costume by `--outfits`
-        if let Some(dir) = &viewer_mod {
-            let m = mods::read(dir.as_ref()).unwrap_or_else(|e| panic!("{e}"));
-            app.insert_resource(mods::MatchMod { slot: mod_slot, m });
+        // `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays player N (default
+        // 1st), its costume by `--outfits`
+        slot_mods.extend(viewer_mod.clone().map(|d| (mod_slot, d)));
+        if !slot_mods.is_empty() {
+            let mut mm = mods::MatchMod::default();
+            for (n, dir) in slot_mods {
+                mm.set(n, mods::read(dir.as_ref()).unwrap_or_else(|e| panic!("{e}")));
+            }
+            app.insert_resource(mm);
         }
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);

@@ -6,10 +6,11 @@
 //! The cards stack by quad order: every slot's `ZIndex` is its index in the layout, the preview's its `Tex::Preview`'s.
 //! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms), every
 //! character's first costume as soon as the menu opens and the hovered one's next and previous costumes on hover, so
-//! moving the cursor never waits on the disc; a card shows its model once it has loaded.
+//! moving the cursor never waits on the disc; a card shows its model once it has loaded. A custom character (a mod)
+//! loads on hover only, its hovered and neighbouring costumes.
 //!
-//! `HST_SELECT=c,c,c,c` (with `HST_MENU=chars`) seats all four players on the keyboard hovering those characters, to
-//! `--shot` every card at once.
+//! `HST_SELECT=c,c,c,c` (with `HST_MENU=chars`) seats all four players on the keyboard hovering those characters (`mN`:
+//! the custom roster's entry N, the select on the custom page), to `--shot` every card at once.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender};
@@ -19,7 +20,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use hst_data::iso::Iso;
 
-use super::{Art, COSTUMES, Dev, GRID, Menu, Screen, Slot, Tex, layout};
+use super::{Art, Dev, GRID, Menu, Screen, Slot, Tex, Who, layout};
+use crate::mods::Mod;
 use crate::character::{self, CharacterData, Motion, Staged};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use crate::inspect::{self, Act, Preview, PreviewMaterial};
@@ -37,51 +39,57 @@ pub(super) fn plugin(app: &mut App) {
 
 /// A card's preview: what it shows, its camera and its UI node.
 struct Shown {
-    key: (usize, usize),
+    key: (Who, usize),
     cam: Entity,
     node: Entity,
 }
 
 /// Loaded characters by (character, costume), with their hand.
-type Cache = HashMap<(usize, usize), Option<(Arc<CharacterData>, f32)>>;
+type Cache = HashMap<(Who, usize), Option<(Arc<CharacterData>, f32)>>;
 
 /// A worker's load: the character, its hand and its assets, to move into the world's.
-type Loaded = ((usize, usize), Result<(CharacterData, f32, Staged<Mesh>, Staged<StandardMaterial>, Staged<Image>, Staged<SkinnedMeshInverseBindposes>), String>);
+type Loaded = ((Who, usize), Result<(CharacterData, f32, Staged<Mesh>, Staged<StandardMaterial>, Staged<Image>, Staged<SkinnedMeshInverseBindposes>), String>);
 
 /// The worker thread loading characters off the main thread.
 #[derive(Resource)]
 struct Loader {
-    ask: Sender<(usize, usize)>,
+    ask: Sender<((Who, usize), Option<Mod>)>,
     done: Mutex<Receiver<Loaded>>,
-    asked: HashSet<(usize, usize)>,
+    asked: HashSet<(Who, usize)>,
 }
 
 impl Loader {
-    fn want(&mut self, key: (usize, usize)) {
+    /// Load `key` (`m`: the mod, for a custom one).
+    fn want(&mut self, key: (Who, usize), m: Option<&Mod>) {
         if self.asked.insert(key) {
-            let _ = self.ask.send(key);
+            let _ = self.ask.send((key, m.cloned()));
         }
     }
 }
 
 fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh>>, materials: Res<Assets<StandardMaterial>>, images: Res<Assets<Image>>, binds: Res<Assets<SkinnedMeshInverseBindposes>>) {
-    let (ask, asks) = std::sync::mpsc::channel::<(usize, usize)>();
+    let (ask, asks) = std::sync::mpsc::channel::<((Who, usize), Option<Mod>)>();
     let (send, done) = std::sync::mpsc::channel();
     let providers = (meshes.get_handle_provider(), materials.get_handle_provider(), images.get_handle_provider(), binds.get_handle_provider());
     let path = args.iso.clone();
     std::thread::spawn(move || {
         let Ok(mut iso) = Iso::open(&path) else { return };
-        for (c, costume) in asks {
+        for ((who, costume), md) in asks {
             let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
-            let r = character::load_disc(&mut iso, c, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, inspect::disc_hand(&mut iso, c), m, t, i, b));
-            if send.send(((c, costume), r)).is_err() {
+            let r = match (who, md) {
+                (Who::Mod(_), Some(md)) => crate::mods::load(&mut iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
+                (Who::Disc(c), _) => character::load_disc(&mut iso, c, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, inspect::disc_hand(&mut iso, c))),
+                (Who::Mod(_), None) => Err("no mod".into()),
+            };
+            let r = r.map(|(d, hand)| (d, hand, m, t, i, b));
+            if send.send(((who, costume), r)).is_err() {
                 return;
             }
         }
     });
     let mut loader = Loader { ask, done: Mutex::new(done), asked: HashSet::new() };
     for &(c, ..) in &GRID {
-        loader.want((c, 0));
+        loader.want((Who::Disc(c), 0), None);
     }
     commands.insert_resource(loader);
 }
@@ -111,7 +119,7 @@ fn sync(
                 Some((Arc::new(d), hand))
             }
             Err(e) => {
-                warn!("select preview of character {} costume {}: {e}", key.0, key.1);
+                warn!("select preview of {:?} costume {}: {e}", key.0, key.1);
                 None
             }
         };
@@ -130,10 +138,15 @@ fn sync(
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0);
     for (p, slot) in shown.iter_mut().enumerate() {
         let want = quads.iter().enumerate().find(|(_, q)| q.tex == Tex::Preview(p));
-        let key = want.map(|_| (menu.players[p].char(), menu.players[p].costume));
-        if let Some((c, costume)) = key {
-            for k in [costume, (costume + 1) % COSTUMES, (costume + COSTUMES - 1) % COSTUMES] {
-                loader.want((c, k));
+        let key = want.map(|_| (menu.who(p), menu.players[p].costume));
+        let modded = |w: Who| match w {
+            Who::Mod(i) => Some(&menu.mods[i]),
+            Who::Disc(_) => None,
+        };
+        if let Some((w, costume)) = key {
+            let n = menu.costumes(w);
+            for k in [costume, (costume + 1) % n, (costume + n - 1) % n] {
+                loader.want((w, k), modded(w));
             }
         }
         if slot.as_ref().map(|s| s.key) != key {
@@ -147,15 +160,20 @@ fn sync(
                 commands.entity(s.cam).despawn();
                 commands.entity(s.node).despawn();
             }
-            if let (Some((c, costume)), Some((_, q))) = (key, want)
-                && let Some(Some((data, hand))) = cache.get(&(c, costume)).cloned()
+            if let (Some((w, costume)), Some((_, q))) = (key, want)
+                && let Some(Some((data, hand))) = cache.get(&(w, costume)).cloned()
             {
+                // a mod poses with its donor's timing and yaws
+                let c = match w {
+                    Who::Disc(c) => c,
+                    Who::Mod(i) => menu.mods[i].donor,
+                };
                 let image = inspect::target(images, (Vec2::new(q.dst[2], q.dst[3]) * scale).as_uvec2());
                 let cam = inspect::spawn_into(&mut commands, &data, c, hand, 1 + p, image.clone());
                 commands.entity(cam).insert(Card(p));
                 let node = commands.spawn((Shot, Node { position_type: PositionType::Absolute, ..default() }, MaterialNode(ui.add(PreviewMaterial { image })))).id();
                 commands.entity(root).add_child(node);
-                *slot = Some(Shown { key: (c, costume), cam, node });
+                *slot = Some(Shown { key: (w, costume), cam, node });
             }
         }
         if let (Some(s), Some((i, q))) = (slot.as_ref(), want)
@@ -217,8 +235,13 @@ fn buttons(
 /// character order: each is looked up).
 fn hover_all(mut menu: ResMut<Menu>) {
     let Ok(list) = std::env::var("HST_SELECT") else { return };
-    for (p, c) in list.split(',').filter_map(|c| c.trim().parse::<usize>().ok()).take(4).enumerate() {
-        if let Some(cursor) = super::GRID.iter().position(|g| g.0 == c) {
+    for (p, c) in list.split(',').map(str::trim).take(4).enumerate() {
+        if let Some(i) = c.strip_prefix('m').and_then(|i| i.parse::<usize>().ok()).filter(|&i| i < menu.mods.len()) {
+            menu.custom = true;
+            menu.players[p].pick = i;
+            menu.players[p].modded = true;
+            menu.seats[p] = Some(Dev::Keys);
+        } else if let Some(cursor) = c.parse::<usize>().ok().and_then(|c| super::GRID.iter().position(|g| g.0 == c)) {
             menu.players[p].cursor = cursor;
             menu.seats[p] = Some(Dev::Keys);
         }

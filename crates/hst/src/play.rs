@@ -1308,7 +1308,7 @@ fn setup(
         // default line-up: player 1 is Carol (character 6), then characters 1, 2, 3
         let c = args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]);
         let outfit = args.outfits.get(i).copied().unwrap_or(0);
-        let modded = match_mod.as_deref().filter(|m| m.slot == i).map(|m| &m.m);
+        let modded = match_mod.as_deref().and_then(|m| m.get(i));
         let c = modded.map_or(c, |m| m.donor);
         let mod_data = modded.map(|m| mod_match::load(&mut iso, m, outfit, &mut meshes, &mut materials, &mut images, &mut bindposes));
         let data = match mod_data.or_else(|| loaded.get(&(c, outfit)).cloned()) {
