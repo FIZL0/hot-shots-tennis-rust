@@ -2,7 +2,7 @@
 
 Not a texture/CLUT problem: the eye textures, materials and UVs load right (the viewer drew Will c00/c09 and both
 of Carol c09's eyes at every motion). Two draw bugs in play together left the eye sockets empty. Through the empty
-sockets you saw the inside of the head, which reads as black at court distance (`will_before.png`).
+sockets you saw the inside of the head, which reads as black at court distance.
 
 ## 1. Frustum culling on bind-pose bounds
 Bevy culls a skinned part by its mesh's bind-pose AABB under the rig root, and never by the posed one. Will c09's
@@ -25,8 +25,8 @@ Both fixes are needed: with only one of them, Will's eyes stay missing in a play
 
 ## Checked
 `--shot` play close-ups (a temporary camera override, removed) on stage 4, chars 6,11,2,10, outfits 9,9,4,9:
-- Will (`will_after.png`): both eyes draw.
-- Carol c09 in slot 1 (`carol_after.png`): both eyes (blue and green) draw, mirrored as a left-hander.
+- Will: both eyes draw.
+- Carol c09 in slot 1: both eyes (blue and green) draw, mirrored as a left-hander.
 - `tools/check.sh` passed.
 
 ## LOD (the user's note)
