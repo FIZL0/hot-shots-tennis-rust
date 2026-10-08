@@ -113,8 +113,26 @@ pub fn court_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)
     Some(((rgb * intensity).extend(1.0), (rgb * ambient).extend(1.0)))
 }
 
+/// The light VU1 has for the match's characters and ball (the game copies the court's light for them with factors of
+/// their own): (colour, ambient) = the light row's RGB × +0x1c and × +0x18, each the court's +0x10 / +0xc where 0,
+/// and not × the weather's scale. A model's light scale (`shade`) multiplies the colour.
+/// ponytail: the row's third light (+0x20 / +0x14, the opposite direction) is left out, as for the court; 0 on court 10
+pub fn model_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)> {
+    let (rgb, row) = light_rgb(envir, season, w)?;
+    let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
+    let or = |a: f32, b: f32| if a != 0.0 { a } else { b };
+    Some(((rgb * or(f(row + 0x1c)?, f(row + 0x10)?)).extend(1.0), (rgb * or(f(row + 0x18)?, f(row + 0xc)?)).extend(1.0)))
+}
+
 /// The light row's RGB, ambient and intensity in weather `w`.
 fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> {
+    let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
+    let (rgb, row) = light_rgb(envir, season, w)?;
+    Some((rgb, f(row + 0xc)?, hst_sim::ps2::mul(f(row + 0x10)?, w.scale)))
+}
+
+/// The light row's RGB in weather `w` (rain greys it to its mean) and the row's offset.
+fn light_rgb(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, usize)> {
     let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
     let t = ((*envir.get(0x10 + season * 0x30)? as i8) < 1) as usize;
     let row = 0xd0 + season * 0x70 + t * 0x38;
@@ -123,7 +141,7 @@ fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> 
         use hst_sim::ps2;
         rgb = Vec3::splat(ps2::div(ps2::add(ps2::add(rgb.x, rgb.y), rgb.z), 3.0));
     }
-    Some((rgb, f(row + 0xc)?, hst_sim::ps2::mul(f(row + 0x10)?, w.scale)))
+    Some((rgb, row))
 }
 
 /// Fog parameters that leave every pixel as it is.
@@ -371,5 +389,23 @@ mod tests {
         // threshold 0 (court 9 season 0) picks the second light row, all zero here
         envir[0x10] = 0;
         assert_eq!(court_clear(&envir, 0, sky, &Look::CLEAR), Some([0, 0, 0]));
+    }
+
+    #[test]
+    fn model_light_row() {
+        // court 10 season 0: +0x18 0.69, +0x1c 0.62; slot 5 RAM holds the characters' light colour (0.5349, 0.52031)
+        // and ambient (0.59529, 0.57906), where the court's is (0.60392, 0.58745) and (0.63843, 0.62102)
+        let mut envir = vec![0; 0x550];
+        envir[0x10] = 18;
+        for (o, v) in [(0xd0, 0.8627451f32), (0xd4, 0.8392157), (0xd8, 0.8392157), (0xdc, 0.74), (0xe0, 0.7), (0xe8, 0.69), (0xec, 0.62)] {
+            envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let near = |a: Vec4, b: [f32; 3]| (a.truncate() - Vec3::from(b)).abs().max_element() < 1e-5;
+        let (colour, ambient) = model_light(&envir, 0, &Look::CLEAR).unwrap();
+        assert!(near(colour, [0.5349, 0.52031, 0.52031]) && near(ambient, [0.59529, 0.57906, 0.57906]), "{colour} {ambient}");
+        // 0 falls back to the court's factors
+        envir[0xe8..0xf0].fill(0);
+        let (colour, ambient) = model_light(&envir, 0, &Look::CLEAR).unwrap();
+        assert!(near(colour, [0.60392, 0.58745, 0.58745]) && near(ambient, [0.63843, 0.62102, 0.62102]), "{colour} {ambient}");
     }
 }

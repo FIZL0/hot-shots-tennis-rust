@@ -60,7 +60,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, apply);
 }
 
-fn apply(
+pub(crate) fn apply(
     mut commands: Commands,
     weather: Option<Res<Weather>>,
     look: Option<ResMut<CourtLook>>,

@@ -395,6 +395,13 @@ fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) 
                 let Some(mesh) = mesh(packets.iter()) else { continue };
                 let mat = mats.materials.get(mi);
                 let texture = mat.and_then(|m| m.texture).map(|t| tex[t].clone());
+                if let (Some(m), Some(t), Some(h)) = (mat, mat.and_then(|m| m.texture), &texture) {
+                    let mut raw = image(&mats.textures[t]);
+                    raw.texture_descriptor.format = TextureFormat::Rgba8Unorm;
+                    let mut draws = gs::GsMaterial::for_batch(m, packets.first().map_or(0x10, |p| p.prim), Some(textures::add_mtl(images, raw, &mats.textures[t])));
+                    draws.iter_mut().for_each(|g| g.uniform.lod_k = model.lod_k.get(mi).copied().unwrap_or(0.0));
+                    shade::BALL_GS.lock().unwrap().insert(h.id(), draws);
+                }
                 let [r, g, b, a] = mat.map_or([1.0; 4], |m| m.color);
                 parts.push((
                     mesh,
