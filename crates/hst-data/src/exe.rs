@@ -113,6 +113,11 @@ impl<'a> Game<'a> {
         self.f32s(0x3f_c980, 14).try_into().unwrap()
     }
 
+    /// Per character (0..13) the computer player's chance (%) of a strong toss on a second serve (else weak).
+    pub fn second_toss(&self) -> [i32; 14] {
+        std::array::from_fn(|k| i32::from_le_bytes(self.at(0x41_e410 + 4 * k as u32, 4).try_into().unwrap()))
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)

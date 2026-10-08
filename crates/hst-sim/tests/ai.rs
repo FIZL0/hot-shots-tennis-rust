@@ -100,7 +100,7 @@ impl Mt {
 /// it receives and whether its team has hit yet. The change of pace must show up in some of them.
 #[test]
 fn timing_errors_match_the_game() {
-    use hst_sim::ai::{Seen, Shots};
+    use hst_sim::ai::{Picks, Seen, Shots};
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_s05.bin"))) else {
         return eprintln!("disc or ai_s05.bin missing, skipped");
@@ -111,7 +111,7 @@ fn timing_errors_match_the_game() {
     let samples: Vec<&[u8]> = d[20..].chunks_exact(size).collect();
     let int = |b: &[u8], o: usize| word(b, o) as i32;
     let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
-    let (mut checked, mut paced, mut fast) = (0, 0, 0);
+    let (mut checked, mut paced, mut fast, mut dives) = (0, 0, 0, 0);
     for w in samples.windows(2) {
         let (a, b) = (w[0], w[1]);
         if word(b, 0) != word(a, 0) + 1 {
@@ -135,15 +135,36 @@ fn timing_errors_match_the_game() {
             let (first, third) = (ob[0x230] != 0, int(ob, 0x28) != 0);
             let mut g = Mt::of(&a[mt..]);
             let draws: Vec<u32> = (0..200).map(|_| g.next()).collect();
+            // the dive chance is drawn at a reset (always) and on a hit message only after the AI's own dive: its team's
+            // shot record (+0xf0) just written with itself as hitter and kind 3. Without a new shot either may be it.
+            let own = oa[0xf0..0x130] != ob[0xf0..0x130];
+            let dives_drawn: &[bool] = match (shots.is_some(), own) {
+                (true, _) => &[false],
+                (false, true) => &[int(ob, 0xf0) == k as i32 && int(ob, 0xf4) == 3],
+                (false, false) => &[true, false],
+            };
+            let want = |p: Picks| {
+                [p.quick_serve as u8, p.body as u8, p.low as u8, p.dive.map_or(oa[0x245], |d| d as u8)]
+                    == [ob[0x244], ob[0x24c], ob[0x24d], ob[0x245]]
+                    && [p.serve_level, p.volley_level, p.return_level, p.high_level] == ob[0x5c..0x60]
+            };
+            // the errors and then the picks, from consecutive draws
             let draw = |shots: Option<&Shots>| {
                 (0..150).find_map(|j| {
                     let mut n = draws[j..].iter().copied();
-                    let t = row.timing(shots, receiver, first, third, &mut || n.next().unwrap());
-                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then_some(t)
+                    let mut roll = || n.next().unwrap();
+                    let t = row.timing(shots, receiver, first, third, &mut roll);
+                    let rest: Vec<u32> = (0..10).map(|_| roll()).collect();
+                    let picked = |dive: bool| {
+                        let mut r = rest.iter().copied();
+                        want(row.picks(dive, &mut || r.next().unwrap()))
+                    };
+                    ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then_some(t).zip(dives_drawn.iter().copied().find(|&d| picked(d)))
                 })
             };
-            let t = draw(shots.as_ref())
+            let (t, dive) = draw(shots.as_ref())
                 .unwrap_or_else(|| panic!("vsync {} AI {k}: errors {:?} not drawn ({shots:?})", word(b, 0), errs(ob)));
+            dives += dive as u32;
             checked += 1;
             if t.pace != 0 {
                 // without the pace the same draws must not explain them
@@ -153,7 +174,7 @@ fn timing_errors_match_the_game() {
             fast += (t.fast_ball != 0) as u32;
         }
     }
-    eprintln!("{checked} draws checked, {paced} with a change of pace, {fast} fast-ball reactions");
+    eprintln!("{checked} draws checked, {paced} with a change of pace, {fast} fast-ball reactions, {dives} dive draws");
     assert!(checked >= 100, "only {checked} draws");
     assert!(paced > 0, "no change of pace seen");
 }
@@ -203,9 +224,11 @@ fn guesses_match_the_game() {
                     let mut roll = || n.next().unwrap();
                     let t = row.timing(Some(&shots), receiver, ob[0x230] != 0, int(ob, 0x28) != 0, &mut roll);
                     ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then(|| {
-                        for _ in 0..hst_sim::ai::CHOICE_DRAWS {
-                            roll();
-                        }
+                        let p = row.picks(false, &mut roll);
+                        let bytes = [p.quick_serve as u8, p.body as u8, p.low as u8];
+                        let levels = [p.serve_level, p.volley_level, p.return_level, p.high_level];
+                        assert_eq!(bytes, [ob[0x244], ob[0x24c], ob[0x24d]], "vsync {} AI {k}: picks", word(b, 0));
+                        assert_eq!(levels, ob[0x5c..0x60], "vsync {} AI {k}: levels", word(b, 0));
                         // the reaction's own draws (its value is checked in reactions_match_the_game)
                         let lob = ob[0x138] == 3;
                         row.reaction(&t, &shots.last, lob, ob[0x13d] != 0, false, false, &mut roll);
@@ -397,7 +420,7 @@ fn minds_match_the_game() {
 /// frame off by the sample.
 #[test]
 fn reactions_match_the_game() {
-    use hst_sim::ai::{CHOICE_DRAWS, Seen, Shots};
+    use hst_sim::ai::{Seen, Shots};
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_pos_s05.bin"))) else {
         return eprintln!("disc or ai_pos_s05.bin missing, skipped");
@@ -441,9 +464,7 @@ fn reactions_match_the_game() {
                     let mut roll = || n.next().unwrap();
                     let t = row.timing(Some(&shots), receiver, ob[0x230] != 0, int(ob, 0x28) != 0, &mut roll);
                     ([t.stroke, t.volley, t.smash, t.serve] == errs(ob)).then(|| {
-                        for _ in 0..CHOICE_DRAWS {
-                            roll();
-                        }
+                        row.picks(false, &mut roll);
                         let human = int(ob, 0x28) == 1;
                         row.reaction(&t, &shots.last, ob[0x138] == 3, ob[0x13d] != 0, human, z.abs() <= 6.4, &mut roll)
                     })

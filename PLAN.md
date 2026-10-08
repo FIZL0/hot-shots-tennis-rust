@@ -148,7 +148,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P11e3** Guessing (ヤマ張り) (in P11e; after P11c/P11g/P11h's draws) → `ai.rs` · `play.rs` bot/ai_guessing | t: ai.rs | j: 2026-10-07-p11-ai
 - [x] **P11e4** Strong-side run-round (in P11e) → `ai.rs` · `play.rs` intercept | t: ai.rs | j: 2026-10-07-p11-ai
 - [x] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
-- [ ] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve
+- [x] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
 - [ ] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5
 
 ### Match

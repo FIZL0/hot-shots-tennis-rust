@@ -413,9 +413,54 @@ pub enum Verdict {
     Neither,
 }
 
-/// Draws between `timing` and `reaction` on an opponent's hit: quick serve, body shot, low shot, the four level picks.
-/// ponytail: taken and dropped until P11g ports them.
-pub const CHOICE_DRAWS: usize = 7;
+/// The shot-choice picks an AI draws right after its timing errors (and before the reaction on an opponent's hit).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Picks {
+    pub quick_serve: bool,
+    /// Drawn only at a reset or after the AI's own dive (`picks`' `dive`); kept otherwise.
+    pub dive: Option<bool>,
+    pub body: bool,
+    pub low: bool,
+    /// Indices into the row's mixes: serve 0..2, volley 0..3, return 0..2, high contact 0..2.
+    pub serve_level: u8,
+    pub volley_level: u8,
+    pub return_level: u8,
+    pub high_level: u8,
+}
+
+/// A level picked from a % mix: the first bucket the draw (mod 100) falls under, else the last.
+fn level(roll: &mut impl FnMut() -> u32, mix: &[i32]) -> u8 {
+    let u = ((roll() >> 16 & 0x7fff) % 100) as i32;
+    let mut edge = 0;
+    for (i, &m) in mix[..mix.len() - 1].iter().enumerate() {
+        edge += m;
+        if u < edge {
+            return i as u8;
+        }
+    }
+    (mix.len() - 1) as u8
+}
+
+impl AiParams {
+    /// The picks drawn after `timing`. `dive`: the dive chance is drawn too (a reset or serve, or the AI's own
+    /// team just hit with the AI's own dive); 7 draws without it, 8 with.
+    pub fn picks(&self, dive: bool, roll: &mut impl FnMut() -> u32) -> Picks {
+        let quick_serve = chance(roll, self.quick_serve_rate);
+        let dive = dive.then(|| chance(roll, self.dive_rate));
+        let body = chance(roll, self.body_shot_rate);
+        let low = chance(roll, self.low_shot_rate);
+        Picks {
+            quick_serve,
+            dive,
+            body,
+            low,
+            serve_level: level(roll, &self.serve_level),
+            volley_level: level(roll, &self.volley_level),
+            return_level: level(roll, &self.return_level),
+            high_level: level(roll, &self.high_level),
+        }
+    }
+}
 
 impl AiParams {
     /// The reaction (frames the AI stands before going for the ball) drawn after an opponent's hit, after the

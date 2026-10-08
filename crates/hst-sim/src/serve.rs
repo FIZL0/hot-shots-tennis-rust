@@ -159,6 +159,29 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
     best.map(|(k, _)| k)
 }
 
+/// The AI's serve contact pick: over the path before the first bounce, the frame closest to the ideal height
+/// within the window while the ball falls, or while it still rises for a quick serve (never on an underhand toss);
+/// earliest on ties, no timing table. The AI presses once the frames to it, plus its serve error, are few enough.
+pub fn ai_search(d: &ServeData, toss: Toss, quick: bool, path: &[PathPoint]) -> Option<usize> {
+    let [top, ideal, low] = d.window(toss);
+    let quick = quick && toss != Toss::Under;
+    let mut best: Option<(usize, f32)> = None;
+    for (k, w) in path.windows(2).enumerate() {
+        if w[0].bounces > 0 {
+            break;
+        }
+        // heights are −y; the next frame's says which way the ball is going
+        let (h, rising) = (-w[0].pos[1], w[1].pos[1] <= w[0].pos[1]);
+        if rising == quick && low <= h && h <= top {
+            let off = (h - ideal).abs();
+            if best.is_none_or(|(_, b)| off < b) {
+                best = Some((k, off));
+            }
+        }
+    }
+    best.map(|(k, _)| k)
+}
+
 /// Where the serve is aimed: the diagonal service box's centre plus the stick (reaching its sidelines and
 /// service line), never shorter than 3 m or wider than the character's angle from where the server stands.
 /// A mistimed weak or underhand toss shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the
