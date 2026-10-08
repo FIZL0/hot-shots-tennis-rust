@@ -281,7 +281,8 @@ pub fn serve_over(after: u32, recover: u32, played: bool, stick: bool) -> bool {
 /// A computer server's stick through its follow-through, `after` frames past contact (as `serve_over`): its serve
 /// state leaves it still through the stroke (to `recover`); then its rally state's waiting step gives none before the
 /// serve is returned (`shots` < 2), then counts the reaction frames `hold` (drawn on the return) down, not on the
-/// return's own frame (`fresh`). Whether it moves the stick this frame.
+/// return's own frame (`fresh`). Whether its wait is over this frame: the rally step then gives the stick (can be
+/// none).
 pub fn ai_serve_stick(after: u32, recover: u32, shots: i32, fresh: bool, hold: &mut i32) -> bool {
     if after <= recover || shots < 2 || fresh {
         return false;
