@@ -108,6 +108,11 @@ impl<'a> Game<'a> {
         (lines, self.f32s(0x41_09c4, 14).try_into().unwrap())
     }
 
+    /// Per character (0..13) the volley-class launch blend below which it plays from its `dw2` tables.
+    pub fn down2_blend(&self) -> [f32; 14] {
+        self.f32s(0x3f_c980, 14).try_into().unwrap()
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)
