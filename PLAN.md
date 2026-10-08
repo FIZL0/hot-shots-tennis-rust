@@ -43,7 +43,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B32** Cody's face renders wrong (bug, user 2026-10-08): something odd happens with Cody's face. Pin down what (texture/UV, face-swap frames, material, lighting, depth) with `--shot` vs `tools/screenshot.sh` on Cody and match → `character.rs` · `main.rs` load · `play.rs` draw
+- [x] **B32** Cody's face renders wrong (bug, user 2026-10-08): something odd happens with Cody's face. Pin down what (texture/UV, face-swap frames, material, lighting, depth) with `--shot` vs `tools/screenshot.sh` on Cody and match → `character.rs` · `main.rs` load · `play.rs` draw
 - [ ] **B33** Special serves missing (user 2026-10-08): character special serves such as Will's curve and Lola's curve, with their own effects and sound effects, don't seem to be in. Find their trigger, ball path, fx and sfx in the original and port them; the user recorded Will hitting it: `context/recordings/serve_recording.p2m2` (+ save state) → `play.rs` serve/strike · `hst-sim/src/ball.rs` · `effects.rs` · audio
 - [ ] **B34** 1P's CPU partner sometimes doesn't hit the ball (bug, user 2026-10-08): in a 1P doubles match the computer partner sometimes just lets a ball it should play go by. Find when, against `context/recordings/1p3goodcpus2.p2m2` (+ save state), and match the original's partner AI → `play.rs` bot/intercept · `hst-sim/src/ai.rs`
 - [ ] **B35** HUD shows level 5 for lower-costume CPUs (bug, user 2026-10-08): the HUD shows level 5 for computer players whose costumes should give a lower level. Match the original's costume → level mapping and the HUD's level shown, checked on `context/recordings/1p3goodcpus2.p2m2` → `play/panel.rs` · `character.rs`

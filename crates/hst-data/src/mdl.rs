@@ -48,6 +48,8 @@ pub struct Packet {
     pub entry_flags: Vec<u16>,
     /// Per drawn vertex, in order: UV and colour.
     pub uvs: Vec<[f32; 2]>,
+    /// Per drawn vertex: its UV's `w`, the winding of the triangle it closes (≥ 0 strip order, else reversed).
+    pub uv_w: Vec<f32>,
     pub colors: Vec<[u8; 4]>,
     /// Nodes this packet's batch is bound to (bone slots).
     pub palette: Vec<usize>,
@@ -184,13 +186,14 @@ impl Model {
                     verts.push(sv);
                     kick.push(pk.entry_flags.get(a).is_some_and(|f| f & 0x8000 == 0));
                 }
-                // one strip per packet: a kicked vertex closes a triangle with the two before it, winding
-                // alternating along the strip (as the rigid decode)
+                // one strip per packet: a kicked vertex closes a triangle with the two before it, wound by its UV's
+                // `w` as the rigid decode (VU1 culls by it; strip parity flips some, e.g. Cody's face)
                 let mut tris = Vec::new();
                 for (i, &k) in kick.iter().enumerate() {
                     if k && i >= 2 {
+                        let w = pk.uv_w.get(i).copied().unwrap_or(1.0);
                         let i = i as u32;
-                        tris.push(if i % 2 == 0 { [i - 2, i - 1, i] } else { [i - 1, i - 2, i] });
+                        tris.push(if 0.0 <= w { [i - 2, i - 1, i] } else { [i, i - 1, i - 2] });
                     }
                 }
                 out.push((material, verts, tris, morph));
@@ -443,6 +446,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                     v.uv = [f32_at(uv, 0), f32_at(uv, 4)];
                                 }
                                 pk.uvs.extend(data.chunks_exact(16).map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
+                                pk.uv_w.extend(data.chunks_exact(16).map(|uv| f32_at(uv, 12)));
                                 // the third vertex's UV w is the triangle's winding (VU1 culls by it, as the
                                 // collision sweep orients by it): ≥ 0 keeps strip order, else reversed
                                 for t in &mut pk.triangles[tri_start..] {
