@@ -154,6 +154,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_GE40
     if a8 < 64.0 { discard; }
 #endif
+#ifdef GS_GE60
+    if a8 < 96.0 { discard; }
+#endif
+#ifdef GS_LT60
+    if a8 >= 96.0 { discard; }
+#endif
 #ifdef GS_GE70
     if a8 < 112.0 { discard; }
 #endif

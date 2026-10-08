@@ -664,6 +664,12 @@ fn clouds(
                 mat.uniform.fog = gs::NO_FOG;
                 // the game builds each cloud with object flags 3: alpha and VU1's unlit path
                 mat.uniform.unlit = 1.0;
+                // and sets its TEST to GEQUAL 0x60, FB_ONLY on fail (mode 25's split at 0x70 moved down)
+                mat.key.test = match mat.key.test {
+                    gs::Test::Ge70 => gs::Test::Ge60,
+                    gs::Test::Lt70 => gs::Test::Lt60,
+                    t => t,
+                };
                 commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(materials.add(mat))));
             }
             commands.entity(sky.root).add_child(e);
@@ -684,8 +690,8 @@ fn clouds(
         t.translation = Vec3::from(k.pos) + eye;
         let fade = hst_sim::clouds::fade(k);
         for (c, base) in children.iter().zip(&v.1) {
-            // ponytail: the fade scales the material alpha; the game writes it to the model (+0x5c) whose exact use
-            // in the draw is unconfirmed
+            // VU1 (flag bit 0): A = vc.a·mat.a·fade, highlight 0; the weather tint scales the light colour, the same
+            // product (court 10 GS dump, research/p17s7_cloud_gs.py)
             if let Some(mut m) = parts.get(c).ok().and_then(|m| materials.get_mut(&m.0)) {
                 m.uniform.color = (base.truncate() * tint).extend(base.w * fade);
             }

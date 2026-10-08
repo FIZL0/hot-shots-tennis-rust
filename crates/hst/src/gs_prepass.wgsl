@@ -43,6 +43,9 @@ fn alpha_test(in: VertexOutput) {
 #ifdef GS_GE40
     if a8 < 64.0 { discard; }
 #endif
+#ifdef GS_GE60
+    if a8 < 96.0 { discard; }
+#endif
 #ifdef GS_GE70
     if a8 < 112.0 { discard; }
 #endif
