@@ -101,6 +101,28 @@ pub struct Runner {
     pub anchor: V4,
 }
 
+/// A player's dive as the run object reads it from the player: the hit event's dive branch fires on the frame a
+/// dive starts, the slide length and the cut-short flag are the player's own and outlive the dive (the flag is
+/// cleared only by the next dive's start).
+#[derive(Clone, Copy, Default)]
+pub struct DiveWatch {
+    live: bool,
+    lunge: f32,
+    cut: bool,
+}
+
+impl DiveWatch {
+    /// This frame's dive (its slide length and cut-short flag) or none: (`Runner::dive`, `lunge`, `dive_over`).
+    pub fn see(&mut self, dive: Option<(f32, bool)>) -> (bool, f32, bool) {
+        let start = dive.is_some() && !self.live;
+        self.live = dive.is_some();
+        if let Some((lunge, cut)) = dive {
+            (self.lunge, self.cut) = (lunge, cut);
+        }
+        (start, self.lunge, self.cut)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Feet {
     pub armed: [[bool; 2]; 4],
