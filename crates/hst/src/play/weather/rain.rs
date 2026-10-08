@@ -250,7 +250,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh
                 img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
             }
         }
-        // ponytail: blended without a Z write (`Test::Never`), as they were as standard materials
+        // ponytail: blended without a Z write (`Test::Never`), as they were as standard materials (P17n)
         let uniform = GsUniform { color: Vec4::ONE, shininess: 1.0, highlight: 0.0, shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: Vec4::ZERO, light_color: Vec4::ZERO, ambient: Vec4::ONE };
         let key = GsKey { textured: true, modulate: true, test: Test::Never, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false };
         let m = materials.add(GsMaterial { uniform, texture, key });

@@ -107,7 +107,7 @@ fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Children), Added<R
 
 /// Every tick: a motion change restarts the deformers, then they step with the wind (1.0 off court, as the game
 /// boots) and the parts' moved vertices are redrawn from the previous phase.
-/// ponytail: a restart of the same motion under the same serial doesn't reset them (the game resets on every set).
+/// ponytail: a restart of the same motion under the same serial doesn't reset them (the game resets on every set; P17m).
 fn sway(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway)>, mut meshes: ResMut<Assets<Mesh>>) {
     let wind = weather.map_or(1.0, |w| noise::wind(w.today().speed));
     for (rig, motion, mut s) in &mut rigs {
