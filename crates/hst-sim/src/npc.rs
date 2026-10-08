@@ -70,8 +70,8 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
 /// after, advancing by `speed`), whether it is reacting to a point, and the stagger that restarts the idle loop
 /// one walker per tick after a new point. Animations: 0 idle, 1 its variant, 2 (a quiet reaction), 3/5 loop
 /// (5 the cheer), 4 shown frozen.
-/// ponytail: dodging the ball and players (wander mode's walk, collision, ground height) and facing the winner
-/// while reacting move the walker; no recording has a walker moving, so they are not ported (P14e).
+/// ponytail: dodging the ball and players (wander mode's walk, collision, ground height) moves the walker; no
+/// recording has a walker moving, so it is not ported (P14e). Its turns in place are [`walker_facing`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Walker {
     pub slot: u32,
@@ -187,6 +187,19 @@ impl Walker {
             self.advance();
         }
     }
+}
+
+/// A walker's drawn matrix: standing at `home`, turned toward (0, 0, `z`). Every serve placement (and the
+/// walkers' reset) turns them to the court centre (`z` 0); a point they react to turns them to the middle of the
+/// winners' half, `z` = 6.4 when the winning team's first player stands at z ≥ 0, else −6.4. Rows (up × forward,
+/// up, forward, home); the layout's yaw only lasts until the first serve.
+pub fn walker_facing(home: [f32; 4], z: f32) -> M4 {
+    let (dx, dz) = (ps2::sub(0.0, home[0]), ps2::sub(z, home[2]));
+    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dx, dx), dz, dz)));
+    let f = [ps2::mul(dx, inv), 0.0, ps2::mul(dz, inv)];
+    let up = [0.0, 1.0, 0.0];
+    let cross = |a: usize, b: usize| ps2::msub(ps2::mul(up[a], f[b]), up[b], f[a]);
+    [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], home]
 }
 
 /// Which of `count` walkers cheer a point (the gallery's pick): all of them below four, else three distinct ones
