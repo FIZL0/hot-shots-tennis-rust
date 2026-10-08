@@ -128,14 +128,14 @@ fn buttons(
     keys: Res<ButtonInput<KeyCode>>,
     bind: Res<Bindings>,
     pads: Query<&Gamepad>,
-    cams: Query<(&Preview, &Card)>,
+    mut cams: Query<(&mut Preview, &Card)>,
     data: Query<&character::Rig>,
     mut rigs: Query<(&mut Motion, &mut Transform)>,
 ) {
     if menu.screen != Screen::Chars {
         return;
     }
-    for (p, Card(player)) in &cams {
+    for (mut p, Card(player)) in &mut cams {
         let Some(dev) = menu.seats[*player] else { continue };
         let pressed = |b: GamepadButton, k: bool| match dev {
             Dev::Keys => k,
@@ -152,7 +152,7 @@ fn buttons(
         };
         let Ok(rig) = data.get(p.rig) else { continue };
         let d = rig.data.clone();
-        inspect::apply(p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
+        inspect::apply(&mut p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
     }
 }
 

@@ -63,3 +63,25 @@ and light matches by eye. `tools/check.sh -p hst` passes.
 - The preview image is sized for the window when spawned; a window resize keeps the old resolution until the next
   hover/costume change.
 - Costumes other than 0 aren't compared against the original (B40b4).
+
+# B40b3 — inspect gu/di details
+
+## Findings in the original (menu overlay + PCSX2 copy 4, Data → Items → Characters, scratch slot 9)
+
+- The inspect object's draw (0x3230e0) takes one of two paths: +0x840 = 0 → the plain draw (0x37d160: the model's matrix from its spot, yaw and hand mirror); +0x840 = 1 → 0x37d280: the same matrix, the skeleton posed with it, `Bip01Pelvis` (string at 0x3888f8) looked up, and the matrix moved by (spot − pelvis world) in x and z (y 0) before drawing. So the pelvis sits over the spot (0, 8).
+- +0x840 is set to 1 by the R2 and L2 handlers (0x3476e0) when the character is 5 or 13, else 0. △ (0x1000) doesn't touch it, so after a reaction the pose is pelvis-centred too. A character or costume change (0x34ce10) and the screen's init (0x322f70) clear it.
+- No root path: the menu loads only `re_pcNN_gu_set/di_set.ANI2` (+ .MOR/.UVA) from `MENU/PC/PCnn.XB` (byte-identical to PCANI's), no `_dummy` path. Live for char 0: the root matrix stays at (0, 1.5, 8) through gu_set (context/b40b3/c0_r2.tsv). The B40b gap note "apply gu_set's root path" was wrong; nothing to apply.
+- No crossfade: both switches call the motion setter 0x140360 with a null blend source, and its blend copy (0x140a70) returns at once without one. It's a cut, as the port already does.
+- Live for char 5 (context/b40b3/c5_r2.tsv, `research/b40b3_probe.py`): with +0x840 = 1 the pelvis world x/z stays (0, 8.0) and the root z moves 7.79–8.03 over gu_set; after △ the root is (−0.000284, 8.001564). The motion clock reads one frame ahead of the drawn joints (it ticks after the draw).
+
+## Built
+
+- `inspect.rs`: `Preview::centre` (set by `apply` for Win/Loss on chars 5/13, kept through Pose; a respawned preview starts false), `pelvis_centre(skeleton, clip, t, yaw, hand)` (the pelvis's world point through `hst_sim::pose::node_world`, model x/z = 2·spot − pelvis) and a `centre` system after `character::animate` that moves the rig for the drawn time. `apply` now takes `&mut Preview`.
+- Test `inspect::tests::pelvis_centre_matches_the_game`: Brad's pose (66) and gu_set frames 0, 12, 15, 59, 120 against the recorded root x/z, within 1e-5.
+
+## Not verified / not 1:1
+
+- Float exactness: `pelvis_centre` uses Rust `sin_cos` for the yaw and plain f32 for the shift, not the game's sin and `hst_sim::ps2` ops. It matches to ~1e-6 on the recorded frames, not bit-exact (drawing only).
+- Char 13 and L2 (di_set) weren't recorded live. Same handler branch and draw path per the decompile.
+- Frame phase: the original draws clock − 1. The port draws its own interpolated clock (general motion timing, not this task's).
+- No side-by-side screenshot: `--shot` can't press R2, so the centring is checked by the test only.
