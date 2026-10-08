@@ -1,6 +1,8 @@
 //! The ball hitting a player (`hst_sim::bodyhit`): each rally tick before the point is judged, every player not
 //! swinging is tested against the ball with its head and trunk bones as posed; the first hit ends the point and
 //! pops up CONK or SMACK at the ball, a camera-facing quad hanging up from its anchor, until the players react.
+//! The ball comes back off the player (`Flight::step_plane`), and the player turns to face where it came from,
+//! cries out and plays motion 0x2b, standing in it until the point's reaction.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -11,12 +13,15 @@ use super::{Figure, Game, Phase};
 use crate::Args;
 use crate::character::Motion;
 
-/// Per player its character's collision size (m); the point's pop-up, and whether it has been made.
+/// Per player its character's collision size (m); the point's pop-up, and whether it has been made; the ball's
+/// position a tick ago (its last move is the way it came); the pop-up's alpha a tick ago (drawn between the two).
 #[derive(Resource)]
 struct Hits {
     radius: Vec<f32>,
     pop: Option<Popup>,
     made: bool,
+    last: [f32; 3],
+    alpha: f32,
 }
 
 /// The pop-up quad (its own material) and the two words' textures.
@@ -38,8 +43,10 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
-    let radius = g.chars.iter().map(|&c| ReachStats::from_tparam(&super::tparam(&mut iso, c as usize).join(",")).collision).collect();
-    commands.insert_resource(Hits { radius, pop: None, made: false });
+    // `HST_BODY_SIZE=<m>`: every player's collision size (research/bodyhit_rec.py pokes the game's the same way)
+    let size = std::env::var("HST_BODY_SIZE").ok().and_then(|v| v.parse::<f32>().ok());
+    let radius = g.chars.iter().map(|&c| size.unwrap_or_else(|| ReachStats::from_tparam(&super::tparam(&mut iso, c as usize).join(",")).collision)).collect();
+    commands.insert_resource(Hits { radius, pop: None, made: false, last: [0.0; 3], alpha: 0.0 });
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     let words = [Word::Conk, Word::Smack].map(|w| {
@@ -61,7 +68,8 @@ fn setup(
 }
 
 /// Swinging, diving or whiffing players aren't tested (the game's stroke state).
-fn detect(mut g: ResMut<Game>, hits: Res<Hits>, q: Query<(&Figure, &Motion)>) {
+fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, q: Query<(&Figure, &Motion)>) {
+    let last = std::mem::replace(&mut hits.last, g.flight.ball.pos);
     if g.phase == Phase::Serve {
         g.body_hit = None;
     }
@@ -84,11 +92,10 @@ fn detect(mut g: ResMut<Game>, hits: Res<Hits>, q: Query<(&Figure, &Motion)>) {
         }
         let sk = &data.skeleton;
         let bone = |n: &str| sk.names.iter().position(|b| b == n);
-        let (Some(c), Some(head), Some(neck), Some(spine)) = (data.motions.get(&m.id), bone("Bip01Head"), bone("Bip01Neck"), bone("Bip01Spine")) else {
+        let (Some(locals), Some(head), Some(neck), Some(spine)) = (posed(data, m), bone("Bip01Head"), bone("Bip01Neck"), bone("Bip01Spine")) else {
             continue;
         };
-        // ponytail: posed from the motion's own clip at its sampled time; mid-crossfade the game's pose is the mix
-        let (locals, player) = (c.locals(sk, m.clock.sampled), super::player_matrix(p));
+        let player = super::player_matrix(p);
         let at = |n: usize| hst_sim::pose::node_world(sk, &locals, n, &player);
         let point = |n: usize| {
             let r = at(n)[3];
@@ -97,14 +104,69 @@ fn detect(mut g: ResMut<Game>, hits: Res<Hits>, q: Query<(&Figure, &Motion)>) {
         if bodyhit::hit(ball, &at(head), point(spine), point(neck), hits.radius[f.0]) {
             info!("ball hit player {}", f.0);
             g.body_hit = Some(f.0 as i32);
+            struck(&mut g, f.0, last);
             return;
         }
     }
 }
 
+/// Every node's local matrix as the motion player last posed it: the clip at its sampled time, mid-crossfade mixed
+/// with the other motion over the first 23 tracks by this tick's weight (as `character::animate` draws it).
+// ponytail: a node the base clip doesn't key mixes from the other clip's own value (the game's from what it last held)
+fn posed(data: &crate::character::CharacterData, m: &Motion) -> Option<Vec<[[f32; 4]; 4]>> {
+    let (sk, new) = (&data.skeleton, data.motions.get(&m.id)?);
+    let old = data.motions.get(&(m.fade.id as usize)).filter(|_| m.fade.clip);
+    let (base, t, over) = match (m.mix, old) {
+        (Some((w, true)), Some(old)) => (old, m.fade.sampled, Some((new, 0.0, w))),
+        (Some((w, false)), Some(old)) => (new, m.clock.sampled, Some((old, m.fade.sampled, w))),
+        _ => (new, m.clock.sampled, None),
+    };
+    let mut local = base.locals(sk, t);
+    let Some((other, ot, w)) = over else { return Some(local) };
+    for k in 0..other.tracks.len().min(23) {
+        let n = other.tracks[k].node;
+        let (rot, pos) = other.sample(k, ot);
+        let mine = base.tracks.iter().position(|tr| tr.node == n).map(|j| base.sample(j, t));
+        let cur_q = mine.and_then(|s| s.0).or(rot).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        let r = local[n][3];
+        let cur_p = mine.and_then(|s| s.1).unwrap_or([r[0], r[1], r[2]]);
+        let (q, p) = hst_sim::motion::mix((cur_q, cur_p), (rot.unwrap_or(cur_q), pos.unwrap_or(cur_p)), w);
+        if rot.is_some() {
+            local[n][..3].copy_from_slice(&hst_sim::pose::q_matrix(q)[..3]);
+        }
+        if pos.is_some() {
+            local[n][3] = [p[0], p[1], p[2], r[3]];
+        }
+    }
+    Some(local)
+}
+
+/// The hit as the original's handler takes it: the ball's extra step back off the player; the player faces against
+/// the ball's last move (normalised flat), plays motion 0x2b once and cries out.
+fn struck(g: &mut Game, i: usize, last: [f32; 3]) {
+    use hst_sim::ps2::{div, madd, mul, sqrt, sub};
+    let (shot, surface, material) = (g.shot, &hst_sim::ball::COURTS[g.court], g.world.1[0]);
+    let d = [0, 1, 2].map(|k| sub(g.flight.ball.pos[k], last[k]));
+    let before = g.flight.ball.vel;
+    g.flight.step_plane(&shot, surface, material);
+    info!("ball off player {i}: velocity {before:?} -> {:?}, bounces {}", g.flight.ball.vel, g.flight.bounces);
+    let inv = div(1.0, sqrt(madd(madd(mul(0.0, 0.0), d[0], d[0]), d[2], d[2])));
+    let dir = [-mul(d[0], inv), -mul(0.0, inv), -mul(d[2], inv), -mul(0.0, inv)];
+    let p = &mut g.players[i];
+    (p.body.face.dir, p.body.target) = (dir, dir);
+    p.facing = super::yaw(dir);
+    p.vel = Vec2::ZERO;
+    super::set_motion(p, 0x2b, 1.0, false, None);
+    g.whooshes.push((0, i, hst_sim::sound::hit_cry(i)));
+}
+
+/// The hit player stands in its motion from the hit to the point's reaction (in a match; the game's mode 3).
+pub(super) fn standing(g: &Game, i: usize) -> bool {
+    g.body_hit == Some(i as i32) && g.players.len() >= 2 && std::env::var("HST_BODY_HIT").is_err()
+}
+
 /// The pop-up is made the tick the hit is seen and ticks from then; it goes when the players react, and a new
 /// point clears it.
-/// ponytail: the ball flies on through the player (the game's own course after a body hit isn't ported)
 fn age(g: Res<Game>, mut hits: ResMut<Hits>) {
     if g.phase == Phase::Serve || g.post.as_ref().is_some_and(|p| p.reacted) {
         hits.pop = None;
@@ -116,6 +178,7 @@ fn age(g: Res<Game>, mut hits: ResMut<Hits>) {
         hits.pop = Some(Popup::new(g.flight.ball.pos, hst_sim::sound::kmh(g.flight.ball.vel)));
     }
     let practice = g.players.len() < 2;
+    hits.alpha = hits.pop.map_or(0.0, |p| p.alpha);
     if hits.pop.as_mut().is_some_and(|p| !p.tick(practice)) {
         hits.pop = None;
     }
@@ -123,6 +186,7 @@ fn age(g: Res<Game>, mut hits: ResMut<Hits>) {
 
 fn draw(
     g: Res<Game>,
+    time: Res<Time<Fixed>>,
     hits: Res<Hits>,
     cam: Query<&Transform, (With<crate::Orbit>, Without<View>)>,
     mut q: Query<(&View, &mut Transform, &mut Visibility)>,
@@ -145,7 +209,9 @@ fn draw(
         tr.scale = Vec3::new(2.0 * w, 2.0 * h, 1.0);
         if let Some(mut m) = materials.get_mut(&v.0) {
             m.base_color_texture = Some(v.1[(p.word == Word::Smack) as usize].clone());
-            m.base_color = Color::srgba(1.0, 1.0, 1.0, p.alpha / 128.0);
+            // between the last two ticks' alphas (a fresh pop-up starts at its own)
+            let a = if hits.alpha == 0.0 { p.alpha } else { hits.alpha + (p.alpha - hits.alpha) * time.overstep_fraction() };
+            m.base_color = Color::srgba(1.0, 1.0, 1.0, a / 128.0);
         }
         *vis = Visibility::Visible;
     }

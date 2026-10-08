@@ -2009,6 +2009,10 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
         ball_dir: g.flight.ball.vel,
         short: false,
     };
+    if bodyhit::standing(g, i) {
+        g.players[i].prev = g.players[i].pos;
+        return;
+    }
     // reacting to the point: the reaction plays, nobody runs
     if g.post.as_ref().is_some_and(|p| p.reacted) {
         let (p, data) = (&mut g.players[i], &g.data[i]);
@@ -3251,6 +3255,13 @@ fn react(g: &mut Game, event: Event) {
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
         (p.whiff, p.pending, p.approach) = (None, None, None);
+        // the ball's target keeps the 0x2b it has played since the hit, in place
+        // ponytail: one the reaction finds unfinished isn't snapped to its end (in a match it has long ended by then)
+        if bodyhit::standing(g, i) {
+            g.players[i].root = None;
+            continue;
+        }
+        let p = &mut g.players[i];
         set_motion(p, id, 1.0, false, None);
         let spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         p.root = Some(Root {
