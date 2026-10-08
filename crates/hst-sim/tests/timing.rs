@@ -7,15 +7,21 @@
 use hst_sim::player::ReachStats;
 use hst_sim::replay::{Frame, frames_live};
 use hst_sim::shot::{Bounds, Margins, Table, launch, lookup};
-use hst_sim::swing::{TimingError, high_blend, mis_hit, lob_variant, mode_variant, table_mode, timing, timing_error, timing_launch};
+use hst_sim::swing::{TimingError, dive_lock, high_blend, launch_motion, mis_hit, lob_variant, mode_variant, table_mode, timing, timing_error, timing_launch};
 use hst_sim::ps2::mul;
 
-const FIXTURES: [(&str, Option<&str>); 5] = [
+const FIXTURES: [(&str, Option<&str>); 10] = [
     ("match_s05.bin", Some("slot5_ee.bin")),
     ("lob_smash_s05.bin", Some("slot5_ee.bin")),
     ("1p3goodcpus.bin", Some("1p3goodcpus_ee.bin")),
     ("new_recording.bin", None),
     ("human_smash_s04.bin", None),
+    // P1 driven into dives (research/p7e_dive_record.py) and pressing over the virtual pad
+    ("p7e_c03.bin", None),
+    ("p7e_c07.bin", None),
+    ("p5_presses_s04.bin", None),
+    ("p7_carol_s04.bin", None),
+    ("p7_kaito_s04.bin", None),
 ];
 
 fn word(fr: Frame, p: usize, off: usize) -> i32 {
@@ -96,7 +102,7 @@ fn timed_launches_like_the_game() {
     let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
     let (mut seen, mut scattered, mut moded, mut bad) = (0, 0, 0, vec![]);
-    let (mut dulls, mut framed) = (0, 0);
+    let (mut dulls, mut framed, mut dives, mut awkwards) = (0, 0, 0, 0);
     for (fx, ram) in FIXTURES {
         let Ok(data) = std::fs::read(format!("{}/{fx}", dir())) else { continue };
         let ram = ram.and_then(|r| std::fs::read(format!("{}/{r}", dir())).ok());
@@ -134,14 +140,30 @@ fn timed_launches_like_the_game() {
                 continue; // locked before the recording starts
             };
             let (grades, bias) = timing(s.after, s.before);
+            // a dive locks by its own sweet frame, its bias the offset
+            let (lock_grade, lock_bias, offset) = if branch == 3 {
+                let (g, o) = dive_lock(lock as usize);
+                (g, o, o)
+            } else {
+                (grades[lock as usize], bias[lock as usize], lock - 8)
+            };
             let grade = byte(w1, p, 0x3ee8);
-            assert_eq!((grade, word(w1, p, 0x3f98), word(w1, p, 0x3fa0)), (grades[lock as usize], bias[lock as usize], lock - 8), "{at}: lock");
+            assert_eq!((grade, word(w1, p, 0x3f98), word(w1, p, 0x3fa0)), (lock_grade, lock_bias, offset), "{at}: lock");
+            dives += (branch == 3) as usize;
+            // the motion flags read at the launch: the player's current motion (+0x3df0), which on every recorded
+            // stroke and volley is the swing it locked (+0x3e44), as the app reads it
+            let motion = word(w1, p, 0x3df0);
+            let (_, awkward) = launch_motion(branch, motion);
+            if branch != 3 {
+                assert_eq!(motion, word(w1, p, 0x3e44), "{at}: motion at the launch");
+            }
+            awkwards += awkward as usize;
             // the error, set up at the launch and clamped there (+0x3ecc depth, +0x3ed0 side with the aim's nudge
             // +0x3ed4, +0x3ed8 mode)
             let flags = word(w1, p, 0x3f50);
             let right = hand(p, c);
             let end = if w1.player_pos(p)[2] < 0.0 { 1.0 } else { -1.0 };
-            let e = timing_error(s, branch, word(w1, p, 0x3ee4) == 4, bias[lock as usize], lock - 8, w1.player_f32(p, 0x3f44), flags & 1 != 0, flags & if right { 1 } else { 2 } != 0, flags & 4 != 0, [w1.player_f32(p, 0x3e60), w1.player_f32(p, 0x3e68)], end);
+            let e = timing_error(s, branch, word(w1, p, 0x3ee4) == 4, lock_bias, offset, w1.player_f32(p, 0x3f44), flags & 1 != 0, flags & if right { 1 } else { 2 } != 0, flags & 4 != 0, [w1.player_f32(p, 0x3e60), w1.player_f32(p, 0x3e68)], end);
             let short_only = byte(w1, p, 0x3eca) != 0;
             let nudge = word(w1, p, 0x3ed4);
             let clean = grade == 1 || grade == 2;
@@ -230,8 +252,8 @@ fn timed_launches_like_the_game() {
             let l = lookup(&t, &bounds, [hst_sim::ps2::sub(hit[0], sc[0]), hit[1], hz], pulled);
             // the mis-hit roll: none (draws of 99) or, on a dull hit, the scale entry it drew
             let roll = |k: u32| { let mut r = [0, k, k].into_iter().map(|x| x << 16); move || r.next().unwrap() };
-            let scaled = |k| mis_hit(grade, branch, kind, false, false, height, roll(k));
-            let Some(miss) = (if dull { [99, 97, 98].map(scaled).into_iter().find(|m| launch(hit, to, mul(l.elevation, m.scale), l.speed) == vel) } else { Some(mis_hit(grade, branch, kind, false, false, height, || 99 << 16)) }) else {
+            let scaled = |k| mis_hit(grade, branch, kind, false, awkward, height, roll(k));
+            let Some(miss) = (if dull { [99, 97, 98].map(scaled).into_iter().find(|m| launch(hit, to, mul(l.elevation, m.scale), l.speed) == vel) } else { Some(mis_hit(grade, branch, kind, false, awkward, height, || 99 << 16)) }) else {
                 bad.push(format!("{at}: dull hit off every scale"));
                 continue;
             };
@@ -248,8 +270,8 @@ fn timed_launches_like_the_game() {
     for b in &bad {
         eprintln!("{b}");
     }
-    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {dulls} dull, {framed} framed, {} wrong", bad.len());
-    assert!(bad.is_empty() && (seen == 0 || dulls > 0 && framed > 0) && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
+    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {dulls} dull, {framed} framed, {dives} dives, {awkwards} awkward, {} wrong", bad.len());
+    assert!(bad.is_empty() && (seen == 0 || dulls > 0 && framed > 0 && dives > 0 && awkwards > 0) && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
 }
 
 /// `wild_aim`'s five ways by its draws (the case draws in the top half-word, as the game's RNG gives them).

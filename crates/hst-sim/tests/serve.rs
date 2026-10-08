@@ -458,9 +458,8 @@ fn round1_turned_serves() {
 }
 
 /// Every stroke's and volley's effect against the game's in the live doubles matches and `round1.bin`: every
-/// lob's curve (character row × distance, clean timing) bit-exact, and Kaito's (3) two slice bends in round1
-/// up to the sign. The game mirrors the bend of a backhand (the swing's motion, not recorded): both of
-/// those are mirrored.
+/// lob's curve (character row × distance, clean timing) and Kaito's (3) two slice bends in round1 bit-exact. The
+/// game mirrors the bend of a stroke or volley whose motion at the launch is odd (+0x3df0): both of those are.
 #[test]
 fn rally_effects_like_the_game() {
     use hst_sim::replay::frames;
@@ -483,13 +482,14 @@ fn rally_effects_like_the_game() {
             let (class, kind) = (b[0x58], i(b, 0x5c));
             let special = hst_sim::shot::special(class, kind, false, pu8(w[1], p, 0x3ee8), pi(w[1], p, 0x3fa0));
             // Carol (6) and Will (11) are left-handed (TParam.csv; nobody switched hands in these matches)
-            let e = if special { hst_sim::shot::effect(&game.shot_effects(c), class, kind, v3(b, 0x70), v3(b, 0x80), c == 6 || c == 11, false) } else { (0.0, 0.0, 0.0) };
+            // the hitter's motion at the launch: an odd one mirrors the bend
+            let (flip, _) = hst_sim::swing::launch_motion(pu8(w[1], p, 0x3ec1), pi(w[1], p, 0x3df0));
+            let e = if special { hst_sim::shot::effect(&game.shot_effects(c), class, kind, v3(b, 0x70), v3(b, 0x80), c == 6 || c == 11, flip) } else { (0.0, 0.0, 0.0) };
             let at = format!("{m} vsync {} player {p} (character {c}) class {class} kind {kind}", w[1].vsync());
-            let flip = f(b, 0x250) != e.0;
-            assert_eq!([if flip { -e.0 } else { e.0 }, e.1, e.2].map(f32::to_bits), [0x250, 0x254, 0x1b0].map(|o| f(b, o).to_bits()), "{at}");
+            assert_eq!([e.0, e.1, e.2].map(f32::to_bits), [0x250, 0x254, 0x1b0].map(|o| f(b, o).to_bits()), "{at}");
             curves += (e.1 != 0.0) as i32;
             bends += (e.0 != 0.0) as i32;
-            flipped += flip as i32;
+            flipped += (flip && e.0 != 0.0) as i32;
         }
         eprintln!("{m}: {curves} curved lobs, {bends} bent slices ({flipped} mirrored)");
         assert!(curves >= 1);

@@ -1108,8 +1108,8 @@ fn shot_effect(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, 
     if !hst_sim::shot::special(class, kind, strong, grade, offset) {
         return (0.0, 0.0, 0.0);
     }
-    // a backhand ground stroke or volley bends the other way
-    let flip = (branch == 1 || branch == 2) && g.players[who].backhand;
+    // a ground stroke or volley played with an odd motion (the other hand's side) bends the other way
+    let flip = swing::launch_motion(branch, g.players[who].cmd.id as i32).0;
     hst_sim::shot::effect(&g.specials[src].0, class, kind, hit, target, g.players[who].hand < 0.0, flip)
 }
 
@@ -2401,7 +2401,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             };
             g.timing_error = (branch < 3).then(|| timing::error(g, i, &c, branch, g.players[i].kind == 3));
             g.smash_scatter = (branch == 4).then(|| timing::smash(g, i, &c, kind == 0));
-            g.mis_hit = (1..4).contains(&branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.anim, c.swing.forehand));
+            g.mis_hit = (1..4).contains(&branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.forehand));
             strike(
                 g,
                 i,
@@ -2502,16 +2502,17 @@ fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
     if d.contact && n == d.frame {
         let stick = aim(g);
         let kind = hst_sim::shot::stick_kind(3, g.players[i].kind, [stick.x, stick.y], end);
-        let offset = d.frame as i32 - SWEET_FRAME;
+        let (grade, offset) = swing::dive_lock(d.frame);
         let target = aim_target(g, i, stick, 3, kind, offset, false, 0.0);
-        g.mis_hit = Some(timing::mis_hit(g, i, (3, if offset.abs() < 2 { 2 } else { 4 }, kind), 0, true));
+        g.timing_error = Some(timing::dive_error(g, i, &d, g.players[i].kind == 3));
+        g.mis_hit = Some(timing::mis_hit(g, i, (3, grade, kind), true));
         strike(
             g,
             i,
             2,
             kind,
             target,
-            (3, if offset.abs() < 2 { 2 } else { 4 }, offset),
+            (3, grade, offset),
         );
         if g.phase == Phase::Rally && g.players.len() > 1 {
             let p = &mut g.players[i];
