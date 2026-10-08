@@ -505,3 +505,47 @@ fn stand_sides_match_the_game() {
     eprintln!("{checked} sides checked, {ran} ran round, {kept_nearer_on_roll} rolls kept the nearer side");
     assert!(checked >= 30 && ran > 0, "{checked} sides, {ran} run-rounds");
 }
+
+/// Every aim choice of the slot-5 bots (`context/fixtures/ai_aim_s05.bin`, tools/record_ai_aim.py; skipped when
+/// absent): from the AI object, the four players' spots and the generator at the doubles chooser's entry, the stick,
+/// the plan byte and the generator's index at its exit must come out as the game's.
+#[test]
+fn aims_match_the_game() {
+    use hst_sim::aim::Pair;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_aim_s05.bin"))) else {
+        return eprintln!("disc or ai_aim_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let at = |b: &[u8], o: usize| [f(b, o), f(b, o + 4)];
+    let mut kinds = [0; 5];
+    let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
+    for w in recs.chunks_exact(2) {
+        let (a, b) = (w[0], w[1]);
+        assert_eq!((word(a, 0), word(b, 0), word(a, 8)), (3, 0x13, word(b, 8)), "unpaired at vsync {}", word(a, 4));
+        let ai = &a[0x10..0x290];
+        let row = &table[(word(ai, 0xc) - TABLE) / RECORD];
+        let l = Pair {
+            me: at(a, 0x290),
+            mate: at(a, 0x298),
+            opp: [at(a, 0x2a0), at(a, 0x2a8)],
+            side: f(a, 0x2b0),
+            singles: ai[0x38] != 0,
+            kind: ai[0x9a],
+            volley_level: ai[0x5d],
+            level: ai[0x10],
+            formation: a[0x2b4],
+            smash_third: word(ai, 0x28) != 0,
+        };
+        let mut mt = Mt::of(&a[0x2c0..]);
+        let got = row.pair_aim(&l, &mut || mt.next());
+        let want: Vec<u32> = (0..4).map(|k| word(b, 0x10 + 0xa0 + 4 * k) as u32).collect();
+        let ctx = format!("vsync {} AI {:#x}: {l:?}", word(a, 4), word(a, 8));
+        assert_eq!((got.stick.map(f32::to_bits).to_vec(), got.plan), (want, b[0x10 + 0xb2]), "{ctx}");
+        assert_eq!(mt.1, word(&b[0x2c0..], 0x9c4), "{ctx}: draws");
+        kinds[l.kind as usize] += 1;
+    }
+    eprintln!("aims by contact kind: {kinds:?}");
+    assert!(kinds.iter().all(|&n| n > 0), "{kinds:?}");
+}

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Log every aim choice of the AI (P11f: the return-of-serve and rally choosers) from a save-state load.
-Usage: record_ai_aim.py <slot> <frames> <out.bin>.
+"""Log every aim choice of the AI (P11f) from a save-state load: the doubles chooser, or with `singles` the singles
+return-of-serve and rally choosers. Usage: record_ai_aim.py <slot> <frames> <out.bin> [singles].
 
 The choice leaves only its result in RAM (and draws the generator several times), so this patches the running game
 as record_ai_side.py does: the choosers' first two instructions become a jump to a stub in free RAM (0x1e00000)
 that appends a record, swaps the return address for an exit stub, runs the two instructions and jumps back; the
 exit stub appends a second record and returns to the caller. The patches are removed at the end.
 
-Record (0xc90 bytes): u32 tag (1/2 receive/rally entry, 0x11/0x12 at its exit), u32 vsync, u32 AI, u32 0; the AI
-object (0x280 bytes); f32 opponent x, z, own x, z, own side (+0x12b0), u32 the opponent's hand byte (the chooser's
-lane rule), f32 the three reach heights the AI holds its contact against (+8 → +0xdc/+0xe0/+0xe4); at 0x2c0 the
-generator's block (0x9c8 bytes: state, index at +0x9c4)."""
+Record (0xc90 bytes): u32 tag (3 doubles, 1/2 singles receive/rally at the entry; 0x10 at the exit), u32 vsync,
+u32 AI, u32 0; the AI object (0x280 bytes); at 0x290 f32 x, z of the player, its partner, the two opponents (+0xe4,
++0xe8); f32 its side (+0x12b0), u32 its formation byte (+0x13f4). Singles: the opponent (+0xd4) at 0x2a0; the three
+reach heights the AI holds its contact against (+8 -> +0xdc/+0xe0/+0xe4) at 0x298, 0x29c, 0x2a8; u32 the
+opponent's hand byte at 0x2ac. At 0x2c0 the generator's block (0x9c8 bytes: state, index at +0x9c4)."""
 import struct, sys, time
 from pine import Pine
 
@@ -47,16 +48,21 @@ def record(tag, ai):
              lui("t2", VSYNC >> 16), lw("t2", VSYNC & 0xffff, "t2"), sw("t2", 4, "t1"), sw(ai, 8, "t1"),
              sw("zero", 12, "t1")]
             + copy(ai, 0xa0, 0x10)
-            + [lw("t6", 0xd4, ai), lw("t2", 0x3d70, "t6"), sw("t2", 0x290, "t1"), lw("t2", 0x3d78, "t6"),
-               sw("t2", 0x294, "t1"), lw("t6", 4, ai), lw("t2", 0x3d70, "t6"), sw("t2", 0x298, "t1"),
-               lw("t2", 0x3d78, "t6"), sw("t2", 0x29c, "t1"), lw("t2", 0x12b0, "t6"), sw("t2", 0x2a0, "t1"),
-               lw("t6", 0xd4, ai), lw("t6", 0x54, "t6"), lw("t6", 0, "t6"), lw("t6", 0, "t6"), lbu("t2", 0x135, "t6"),
-               sw("t2", 0x2a4, "t1"), lw("t6", 8, ai), lw("t2", 0xdc, "t6"), sw("t2", 0x2a8, "t1"),
-               lw("t2", 0xe0, "t6"), sw("t2", 0x2ac, "t1"), lw("t2", 0xe4, "t6"), sw("t2", 0x2b0, "t1")]
+            + sum(([lw("t6", obj, ai), lw("t2", 0x3d70, "t6"), sw("t2", at, "t1"), lw("t2", 0x3d78, "t6"),
+                    sw("t2", at + 4, "t1")] for obj, at in PLAYERS), [])
+            + [lw("t6", 4, ai), lw("t2", 0x12b0, "t6"), sw("t2", 0x2b0, "t1"), lbu("t2", 0x13f4, "t6"),
+               sw("t2", 0x2b4, "t1")]
+            + ([] if not SINGLES else
+               [lw("t6", 0xd4, ai), lw("t6", 0x54, "t6"), lw("t6", 0, "t6"), lw("t6", 0, "t6"), lbu("t2", 0x135, "t6"),
+                sw("t2", 0x2ac, "t1"), lw("t6", 8, ai), lw("t2", 0xdc, "t6"), sw("t2", 0x298, "t1"),
+                lw("t2", 0xe0, "t6"), sw("t2", 0x29c, "t1"), lw("t2", 0xe4, "t6"), sw("t2", 0x2a8, "t1")])
             + li("t6", MT) + copy("t6", 0x9c8 // 4, 0x2c0)
             + [lui("t0", PTR >> 16), lw("t1", PTR & 0xffff, "t0"), addiu("t1", "t1", REC), sw("t1", PTR & 0xffff, "t0")])
 
 
+SINGLES = len(sys.argv) > 4 and sys.argv[4] == "singles"
+# own, partner, the two opponents (singles: own, opponent): (pointer in the AI, record offset of x, z)
+PLAYERS = [(4, 0x290), (0xd4, 0x2a0)] if SINGLES else [(4, 0x290), (0xec, 0x298), (0xe4, 0x2a0), (0xe8, 0x2a8)]
 EXIT = STUB + 0x800
 
 
@@ -72,7 +78,7 @@ def leave():
             + [lui("t0", SAVE >> 16), lw("ra", SAVE & 0xffff, "t0"), jr("ra"), 0])
 
 
-HOOKS = [(0x3cc700, 1), (0x3cce80, 2)]
+HOOKS = [(0x3cc700, 1), (0x3cce80, 2)] if SINGLES else [(0x3d3080, 3)]
 
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 p = Pine()

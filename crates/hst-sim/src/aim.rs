@@ -383,10 +383,344 @@ impl AiParams {
         Aim { stick: self.aim((x, d), l.side, roll), plan: 7 }
     }
 
-    /// Whether the AI lets a ball go that lands out (`out`: the ball's call) by `by` metres: at least its margin.
-    pub fn lets_go(&self, out: bool, by: f32) -> bool {
-        out && self.line_margin <= by
+    /// Whether the AI lets a ball go whose first bounce `at` (x, z) is out by at least its line margin: past the
+    /// singles or doubles court in a rally, the service box (either half) for a serve.
+    pub fn lets_go(&self, at: [f32; 2], serve: bool, singles: bool) -> bool {
+        let (w, l) = if serve { (4.115, 6.4) } else { (width(singles), 11.885) };
+        let out = at[0].abs() > w || at[1].abs() > l;
+        out && self.line_margin <= out_by(at, w, l)
     }
+}
+
+/// What a doubles AI reads when it picks its shot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pair {
+    /// Its own, its partner's and the two opponents' positions (x, z).
+    pub me: [f32; 2],
+    pub mate: [f32; 2],
+    pub opp: [[f32; 2]; 2],
+    /// Its side sign.
+    pub side: f32,
+    pub singles: bool,
+    /// The contact it found (0/1 ground stroke, 2 volley, 3 smash, 4 dive), its volley level pick and its level.
+    pub kind: u8,
+    pub volley_level: u8,
+    pub level: u8,
+    /// Its formation (2: both up) and the smash-third flag.
+    pub formation: u8,
+    pub smash_third: bool,
+}
+
+/// The lanes (0..=2) neither opponent stands in, and how many.
+fn open_lanes(a: u8, b: u8) -> ([u8; 3], usize) {
+    let (mut out, mut n) = ([0; 3], 0);
+    for k in 0..3 {
+        if k != a && k != b {
+            out[n] = k;
+            n += 1;
+        }
+    }
+    (out, n)
+}
+
+/// One of the open lanes, at random.
+fn any_open(open: ([u8; 3], usize), roll: &mut impl FnMut() -> u32) -> u8 {
+    open.0[((roll() >> 16 & 0x7fff) as usize) % open.1]
+}
+
+/// Of three lanes, `a`, `b` or else `c` by two coin flips weighted `p`: `a` when the roll is under `p`.
+fn lane_or(roll: &mut impl FnMut() -> u32, p: i32, a: u8, b: u8) -> u8 {
+    if chance(roll, p) { a } else { b }
+}
+
+/// The unit direction from `from` to `to` on the ground (x, z), 1/√ as the game takes it.
+fn toward(from: [f32; 2], to: [f32; 2]) -> [f32; 2] {
+    let (dx, dz) = (ps2::sub(to[0], from[0]), ps2::sub(to[1], from[1]));
+    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx)));
+    [ps2::mul(dx, inv), ps2::mul(dz, inv)]
+}
+
+impl AiParams {
+    /// A doubles AI's aim, by its contact: a volley, a kind-1 stroke, else a ground stroke (a smash then aimed
+    /// again).
+    pub fn pair_aim(&self, l: &Pair, roll: &mut impl FnMut() -> u32) -> Aim {
+        match l.kind {
+            2 => self.pair_volley(l, roll),
+            1 => self.pair_low(l, roll),
+            _ => self.pair_ground(l, roll),
+        }
+    }
+
+    /// The stick at a point: straight from the player through it, out to the baseline or the side line, as a
+    /// stick on the court (x over the half width, depth over the back court); a length from the row's 4-way
+    /// mix in fifths and a turn within the angle width; z by the side.
+    pub fn aim_at(&self, me: [f32; 2], at: [f32; 2], side: f32, singles: bool, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
+        let w = width(singles);
+        let d = toward(me, at);
+        let reach = ps2::div(ps2::add(11.885, me[1].abs()), d[1].abs());
+        let mut x = ps2::madd(ps2::add(0.0, me[0]), d[0], reach);
+        let depth = if x.abs() <= w {
+            11.885
+        } else {
+            x = if d[0] < 0.0 { -w } else { w };
+            ps2::mul(ps2::div(ps2::sub(x, me[0]), d[0]), d[1].abs())
+        };
+        let (x0, z0) = (ps2::div(x, w), ps2::div(ps2::sub(depth, 4.4425), 4.4425));
+        let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(z0, z0), x0, x0)));
+        let r = percent(roll);
+        let k = &self.key_level;
+        let f = |b: u32| f32::from_bits(b);
+        let (lo, hi) = if r < k[0] {
+            (f(0x3e4c_cccd), f(0x3ecc_cccd))
+        } else if r < k[0] + k[1] {
+            (f(0x3ecc_cccd), f(0x3f19_999a))
+        } else if r < k[0] + k[1] + k[2] {
+            (f(0x3f19_999a), f(0x3f4c_cccd))
+        } else {
+            (f(0x3f4c_cccd), 1.0)
+        };
+        let len = ps2::madd(ps2::add(0.0, lo), ps2::sub(hi, lo), uniform(roll));
+        let v = [ps2::mul(ps2::mul(x0, inv), len), 0.0, ps2::mul(ps2::mul(z0, inv), len), 0.0];
+        let aw = self.angle_width;
+        let mut rad = ps2::mul(f32::from_bits(0x3c8e_fa35), ps2::madd(ps2::add(0.0, -aw), ps2::sub(aw, -aw), uniform(roll)));
+        if rad > world::PI {
+            rad = ps2::sub(ps2::add(world::PI, rad) % world::TWO_PI, world::PI);
+        } else if rad < -world::PI {
+            rad = ps2::add(world::PI, ps2::sub(rad, world::PI) % world::TWO_PI);
+        }
+        let m = world::mat_mul(&world::IDENTITY, &world::rot_y(rad));
+        let mut v = vu0::transform(&m, v);
+        v[2] = ps2::mul(v[2], side);
+        v
+    }
+
+    fn pair_volley(&self, l: &Pair, roll: &mut impl FnMut() -> u32) -> Aim {
+        let w = width(l.singles);
+        let z1 = zone_in(l.opp[0], w, Some(&mut *roll));
+        let z2 = zone_in(l.opp[1], w, Some(&mut *roll));
+        let (mx, _) = zone_in(l.me, w, None);
+        let aim = |zone, roll: &mut dyn FnMut() -> u32| {
+            let mut roll = || roll();
+            self.aim(zone, l.side, &mut roll)
+        };
+        if l.volley_level == 3 {
+            let x = any_open(open_lanes(z1.0, z2.0), roll);
+            return Aim { stick: aim((x, 0), roll), plan: 0x10 };
+        }
+        let half = |a: f32, b: f32| ps2::mul(ps2::add(a, b), 0.5);
+        let mid = [half(l.opp[0][0], l.opp[1][0]), half(l.opp[0][1], l.opp[1][1])];
+        let dir = toward(l.me, mid);
+        // the line between the opponents, from the nearer to the farther one
+        let (n, f) = if l.opp[0][1].abs() < l.opp[1][1].abs() { (0, 1) } else { (1, 0) };
+        let (dx, dz) = (ps2::sub(l.opp[f][0], l.opp[n][0]), ps2::sub(l.opp[f][1], l.opp[n][1]));
+        let len = ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx));
+        let (ux, uz) = if 0.0 < len { (ps2::mul(dx, ps2::div(1.0, len)), ps2::mul(dz, ps2::div(1.0, len))) } else { (dx, dz) };
+        let (ex, ez) = (ps2::sub(l.opp[0][0], l.opp[1][0]), ps2::sub(l.opp[0][1], l.opp[1][1]));
+        let gap = ps2::sqrt(ps2::madd(ps2::mul(ez, ez), ex, ex));
+        let dot = ps2::madd(ps2::mul(dir[0], ux), dir[1], uz).abs();
+        // its lane down the line is open past a deep opponent, or (from the middle) both side lanes are
+        let line = mx ^ 2;
+        let open = match mx {
+            0 | 2 => (z1.0 != line || z1.1 != 0) && (z2.0 != line || z2.1 != 0),
+            _ => (z1.0 != 0 || z1.1 != 0) && (z1.0 != 2 || z1.1 != 0) && (z2.0 != 0 || z2.1 != 0) && (z2.0 != 2 || z2.1 != 0),
+        };
+        if open && chance(roll, 30) {
+            let x = if mx == 1 { lane_or(roll, 50, 0, 2) } else { line };
+            return Aim { stick: aim((x, 0), roll), plan: 0xc };
+        }
+        if dot < 0.8660254 && 2.5 <= gap && chance(roll, 60) {
+            return Aim { stick: self.aim_at(l.me, mid, l.side, l.singles, roll), plan: 0xc };
+        }
+        // the nearer opponent (to the net) and the other one
+        let (near, far, zn, zf) = if l.opp[1][1].abs() < l.opp[0][1].abs() {
+            (l.opp[1], l.opp[0], z2.0, z1.0)
+        } else {
+            (l.opp[0], l.opp[1], z1.0, z2.0)
+        };
+        if 6.4 < near[1].abs() {
+            let x = any_open(open_lanes(z1.0, z2.0), roll);
+            let d = if x == mx && mx != 1 { 0 } else { (!chance(roll, 80)) as u8 };
+            let stick = aim((x, d), roll);
+            let plan = if d == 0 && chance(roll, 10) { 0xd } else { 0xc };
+            return Aim { stick, plan };
+        }
+        let top = if far[1].abs() <= 6.4 { 70 } else { 90 };
+        let u = percent(roll);
+        if u < 60 {
+            return Aim { stick: self.aim_at(l.me, near, l.side, l.singles, roll), plan: 0xc };
+        }
+        if top <= u {
+            let x = if zn != zf {
+                zn
+            } else {
+                match zf {
+                    1 => lane_or(roll, 50, 0, 2),
+                    0 => lane_or(roll, 50, 1, 2),
+                    _ => lane_or(roll, 50, 0, 1),
+                }
+            };
+            return Aim { stick: aim((x, 2), roll), plan: 0xf };
+        }
+        let x = match (mx, zn) {
+            (1, 1) => lane_or(roll, 50, 2, 0),
+            (1, 0) => lane_or(roll, 90, 2, 1),
+            (1, _) => lane_or(roll, 90, 0, 1),
+            (0, 1) => lane_or(roll, 90, 2, 0),
+            (0, 0) => lane_or(roll, 70, 2, 1),
+            (0, _) => lane_or(roll, 80, 0, 1),
+            (_, 1) => lane_or(roll, 90, 0, 2),
+            (_, 0) => lane_or(roll, 70, 2, 1),
+            _ => lane_or(roll, 80, 0, 1),
+        };
+        let d = (!chance(roll, 80)) as u8;
+        let stick = aim((x, d), roll);
+        let plan = if d == 0 && chance(roll, 10) { 0xd } else { 0xc };
+        Aim { stick, plan }
+    }
+
+    fn pair_low(&self, l: &Pair, roll: &mut impl FnMut() -> u32) -> Aim {
+        let w = width(l.singles);
+        // the nearer opponent's lane first
+        let (a, b) = if l.opp[0][1].abs() < l.opp[1][1].abs() { (l.opp[0], l.opp[1]) } else { (l.opp[1], l.opp[0]) };
+        let (n, _) = zone_in(a, w, Some(&mut *roll));
+        let (f, _) = zone_in(b, w, Some(&mut *roll));
+        let (mx, md) = zone_in(l.me, w, None);
+        let open = open_lanes(n, f);
+        let free = |k: u8| k != n && k != f;
+        let lvl = l.level as i32;
+        let line = 2 - mx;
+        // a lane next to the near opponent's, skipping the line when `skip`
+        let beside = |roll: &mut dyn FnMut() -> u32, skip: bool| {
+            let i = (n as i32 + 1) % 3;
+            let pair = [(i % 3) as u8, ((i + 1) % 3) as u8];
+            let k = (roll() >> 16 & 1) as usize;
+            if skip && pair[k] == line { pair[(k + 1) & 1] } else { pair[k] }
+        };
+        let mut r = || roll();
+        let (x, d, plan) = if l.formation == 2 && !l.smash_third {
+            if free(line) && chance(&mut r, lvl * 15 + 30) {
+                (line, 2, 7)
+            } else if chance(&mut r, lvl * 10 + 30) {
+                let i = (f as i32 + 1) % 3;
+                let pair = [(i % 3) as u8, ((i + 1) % 3) as u8];
+                (pair[(r() >> 16 & 1) as usize], 2, 10)
+            } else if chance(&mut r, lvl * 10 + 30) {
+                (any_open(open, &mut r), 2, 7)
+            } else if chance(&mut r, lvl * 10 + 30) {
+                let x = beside(&mut r, true);
+                (x, 2, if chance(&mut r, 60) { 7 } else { 8 })
+            } else {
+                let x = ((r() >> 16 & 0x7fff) % 3) as u8;
+                let u = percent(&mut r);
+                let d = if u < 40 { 0 } else if u < 80 { 2 } else { 1 };
+                (x, d, if chance(&mut r, 50) { 7 } else { 8 })
+            }
+        } else if md != 2 {
+            if free(line) && chance(&mut r, lvl * 10 + 30) {
+                (line, 2, 7)
+            } else if chance(&mut r, lvl * 15 + 30) {
+                let x = beside(&mut r, true);
+                (x, (!chance(&mut r, lvl * 5 + 55)) as u8, 7)
+            } else {
+                let x = ((r() >> 16 & 0x7fff) % 3) as u8;
+                let u = percent(&mut r);
+                let d = if u < 40 { 0 } else if u < 80 { 2 } else { 1 };
+                (x, d, if chance(&mut r, 60) { 7 } else { 8 })
+            }
+        } else if free(line) && chance(&mut r, lvl * 15 + 30) {
+            (line, 2, 7)
+        } else if chance(&mut r, lvl * 10 + 30) {
+            (any_open(open, &mut r), 2, 7)
+        } else if chance(&mut r, lvl * 10 + 30) {
+            (beside(&mut r, false), 2, 7)
+        } else {
+            let x = ((r() >> 16 & 0x7fff) % 3) as u8;
+            (x, 2, if chance(&mut r, 60) { 7 } else { 8 })
+        };
+        Aim { stick: self.aim((x, d), l.side, roll), plan }
+    }
+
+    fn pair_ground(&self, l: &Pair, roll: &mut impl FnMut() -> u32) -> Aim {
+        let w = width(l.singles);
+        let (mx, md) = zone_in(l.me, w, None);
+        let mate_in = on_court(l.mate, w);
+        let me_in = on_court(l.me, w);
+        let u = percent(roll);
+        let (x, mut d, mut plan);
+        if l.formation == 2 && !l.smash_third {
+            // the nearer opponent (to the net) and the other one, both zones blurred
+            let (near, far) = if l.opp[1][1].abs() < l.opp[0][1].abs() { (l.opp[1], l.opp[0]) } else { (l.opp[0], l.opp[1]) };
+            let (zn, _) = zone_in(near, w, Some(&mut *roll));
+            let (zf, _) = zone_in(far, w, Some(&mut *roll));
+            let cross = 2 - mx;
+            let avoid = |k: u8| zn != k && zf != k;
+            if avoid(cross) {
+                x = cross;
+                d = 2;
+                plan = 7;
+            } else if near[1].abs() <= 6.4 && !(6.4 < far[1].abs() && chance(roll, 30)) {
+                x = match zf {
+                    0 => lane_or(roll, 50, 1, 2),
+                    1 => lane_or(roll, 50, 0, 2),
+                    _ => (!chance(roll, 50)) as u8,
+                };
+                d = 2;
+                plan = 10;
+            } else if near[1].abs() <= 6.4 {
+                x = match zn {
+                    0 => 2,
+                    2 => 0,
+                    _ => lane_or(roll, 50, 0, 2),
+                };
+                d = (!chance(roll, 70)) as u8;
+                plan = 7;
+            } else {
+                x = if mx == 1 { lane_or(roll, 50, 0, 2) } else { mx };
+                d = (!chance(roll, 80)) as u8;
+                plan = 7;
+            }
+        } else if l.formation == 0 && u < 30 && !l.smash_third {
+            let (a, _) = zone_in(l.opp[0], w, Some(&mut *roll));
+            let (b, _) = zone_in(l.opp[1], w, Some(&mut *roll));
+            x = any_open(open_lanes(a, b), roll);
+            return Aim { stick: self.aim((x, 2), l.side, roll), plan: 10 };
+        } else {
+            x = match mx {
+                0 => if u < 70 { 0 } else { 2 },
+                2 => if u < 70 { 2 } else { 0 },
+                _ => {
+                    lane_or(roll, 50, 0, 2)
+                }
+            };
+            d = 2;
+            plan = 7;
+            let base = if u < 70 { 20 } else { 30 };
+            let p = if me_in { base } else { base + 10 } + if mate_in { 0 } else { 10 };
+            if chance(roll, p) {
+                plan = 8;
+            }
+        }
+        let mut stick = self.aim((x, d), l.side, roll);
+        if l.kind == 3 {
+            if md == 2 && d == 0 {
+                match percent(roll) {
+                    u if u < 50 => d = 1,
+                    u if u < 70 => d = 2,
+                    _ => {}
+                }
+            }
+            plan = 0x11;
+            stick = self.aim((x, d), l.side, roll);
+        }
+        Aim { stick, plan }
+    }
+}
+
+/// How far a bounce lies past the nearer of the side line (half width `w`) and the end line (`l` from the net),
+/// negative inside: the game's measure.
+pub fn out_by(at: [f32; 2], w: f32, l: f32) -> f32 {
+    let (x, z) = (ps2::sub(at[0].abs(), w), ps2::sub(at[1].abs(), l));
+    if z.abs() <= x.abs() { z } else { x }
 }
 
 /// A smash at the opponent's body: their spot (pulled out along the line from the AI to 3 m from the net when
@@ -445,5 +779,9 @@ mod tests {
         assert!(v[2] < -0.8, "{v:?}");
         assert_eq!(fine_zone([0.1, -5.0], 4.115, None), (3, 2));
         assert_eq!(fine_zone([-4.0, 11.0], 4.115, None), (5, 5));
+        let row = AiParams { line_margin: 0.5, ..Default::default() };
+        assert!(row.lets_go([0.0, 12.5], false, true) && !row.lets_go([0.0, 12.2], false, true));
+        assert!(!row.lets_go([5.0, 3.0], false, false) && row.lets_go([5.0, 3.0], false, true));
+        assert!(row.lets_go([1.0, 7.0], true, false) && !row.lets_go([1.0, 7.0], false, false));
     }
 }
