@@ -132,11 +132,11 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P11b** AI object and update dispatch (in P11) → `hst-sim/src/ai.rs` · `play.rs` bot | t: ai.rs | j: 2026-10-07-p11-ai
 - [x] **P11c** Reaction delay (in P11) → `ai.rs` · `play.rs` bot/ai_draw_guess | t: ai.rs | j: 2026-10-07-p11-ai
 - [x] **P11d** Timing error (in P11) → `ai.rs` · `play.rs` bot/bot_serve
-- [ ] **P11e** Positioning (in P11) → `ai.rs` · `play.rs` bot/intercept
+- [x] **P11e** Positioning (in P11) → `ai.rs` · `play.rs` bot/intercept
 - [x] **P11e1** Doubles formation and the walk back to it (in P11e) → `hst-sim/src/position.rs` · `play.rs` ai_wait | t: position.rs | j: 2026-10-07-p11-ai
 - [x] **P11e2** Singles return to centre and net dash (in P11e) → `hst-sim/src/position.rs` · `play.rs` ai_wait_singles | t: singles.rs | j: 2026-10-07-p11-ai
 - [x] **P11e3** Guessing (ヤマ張り) (in P11e; after P11c/P11g/P11h's draws) → `ai.rs` · `play.rs` bot/ai_guessing | t: ai.rs | j: 2026-10-07-p11-ai
-- [ ] **P11e4** Strong-side run-round (in P11e) → `ai.rs` · `play.rs` intercept
+- [x] **P11e4** Strong-side run-round (in P11e) → `ai.rs` · `play.rs` intercept | t: ai.rs | j: 2026-10-07-p11-ai
 - [ ] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
 - [ ] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve
 - [ ] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5
