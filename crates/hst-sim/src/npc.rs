@@ -2,7 +2,7 @@
 //! what, and where they stand. A creature linked to an anchor record (category 14) stands at the anchor's position
 //! minus its own (FPU subtractions); every figure's matrix is a turn by its yaw at that position.
 
-use crate::{ps2, sound};
+use crate::{libm, ps2, sound};
 use crate::world::{self, M4};
 use hst_data::exe::{EmitterRow, NpcEntry, TriggerRow};
 use hst_data::layout::{self, Entry, Placement};
@@ -418,7 +418,7 @@ impl Emitter {
 }
 
 /// A trigger creature's state for the generic engine (`step`), driven by its type's [`TriggerRow`].
-/// ponytail: steering (row `steer`), the turn eased through a pause, spline legs, random points about the area,
+/// ponytail: the turn eased through a pause, spline legs, random points about the area,
 /// randomised waypoints (rows without `exact`), ground snapping and start modes 2–3 are not ported: no recorded
 /// idle creature uses them (they are taken as the plain node / left alone). Add with P14c3–5's recordings.
 #[derive(Clone, Debug, PartialEq)]
@@ -456,6 +456,9 @@ pub struct Trigger {
     pub snap: i16,
     /// Turn to face the direction of travel on the next move.
     pub orient: bool,
+    /// Steering rows: the heading's pitch (about X) and yaw (about Y), eased toward the target each tick.
+    pub pitch: f32,
+    pub yaw: f32,
     /// Circling clockwise (seen from above), its angle and radius.
     pub clockwise: bool,
     pub angle: f32,
@@ -532,6 +535,48 @@ fn minus(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|c| ps2::sub(a[c], b[c]))
 }
 
+/// `b` turned to `a` the short way round: the plain difference unless adding or taking a full turn is shorter.
+fn turn(a: f32, b: f32) -> f32 {
+    let d = ps2::sub(ps2::add(a, world::PI), ps2::add(b, world::PI));
+    let (up, dn) = (ps2::add(world::TWO_PI, d), ps2::sub(d, world::TWO_PI));
+    if d.abs() < up.abs() && d.abs() < dn.abs() {
+        d
+    } else if up.abs() < dn.abs() {
+        up
+    } else {
+        dn
+    }
+}
+
+/// Into ±π by one turn.
+fn wrap(a: f32) -> f32 {
+    if world::PI < a {
+        ps2::sub(a, world::TWO_PI)
+    } else if a < -world::PI {
+        ps2::add(world::TWO_PI, a)
+    } else {
+        a
+    }
+}
+
+/// (pitch, yaw) of direction `d`: yaw about Y from x and z, pitch from −y over the horizontal length.
+fn heading([x, y, z, _]: [f32; 4]) -> (f32, f32) {
+    (libm::atan2f(-y, ps2::sqrt(ps2::madd(ps2::mul(z, z), x, x))), libm::atan2f(x, z))
+}
+
+/// `d` scaled to unit length (its w too).
+fn unit(d: [f32; 4]) -> [f32; 4] {
+    let q = ps2::div(1.0, ps2::sqrt(dist2(d)));
+    d.map(|c| ps2::mul(c, q))
+}
+
+/// [`unit`] with the length summed y, x, z on the accumulator (no leading zero).
+fn unit3(d: [f32; 4]) -> [f32; 4] {
+    let [x, y, z, _] = d;
+    let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
+    d.map(|c| ps2::mul(c, q))
+}
+
 impl Trigger {
     fn pos(&self) -> [f32; 4] {
         self.world[3]
@@ -548,9 +593,26 @@ impl Trigger {
         (self.frame, self.next) = (0.0, 0.0);
     }
 
-    /// Show frame `t` (held within the animation) and next.
-    fn set_frame(&mut self, t: f32) {
-        (self.frame, self.next) = (t.clamp(0.0, self.len), t.clamp(0.0, self.len));
+    /// Show frame `t` and next: wrapped into the animation when it loops, else held within it.
+    fn set_frame(&mut self, t: f32, row: &TriggerRow) {
+        let t = self.held(t, row);
+        (self.frame, self.next) = (t, t);
+    }
+
+    /// The controller's frame set: rows without an idle repeat gap loop their animation (the spawn sets the
+    /// controller's loop flag), the others hold at the ends.
+    fn held(&self, t: f32, row: &TriggerRow) -> f32 {
+        let (len, mut t) = (self.len, t);
+        if row.repeat.0 != 0 || len == 0.0 {
+            return t.clamp(0.0, len);
+        }
+        while len <= t {
+            t = ps2::sub(t, len);
+        }
+        while t < 0.0 {
+            t = ps2::add(t, len);
+        }
+        t
     }
 
     /// The motion reset (a new point, or a loop's end): back to the start, a direction bit with `reverse_roll`,
@@ -664,6 +726,9 @@ impl Trigger {
             let [x, y, z, _] = d;
             let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
             self.face(d.map(|c| ps2::mul(c, q)));
+            if row.steer != 0.0 {
+                (self.pitch, self.yaw) = heading(unit(minus(target, self.pos())));
+            }
         }
         self.left = -1;
         self.orient = row.orient != 0;
@@ -693,6 +758,7 @@ impl Trigger {
         let mut sounds = Vec::new();
         if self.on {
             if self.moving && self.wait == 0 {
+                let mut arrived = false;
                 if self.left > 0 {
                     self.left -= 1;
                 }
@@ -713,8 +779,26 @@ impl Trigger {
                         self.world = world::mat_mul(&m, &turn);
                         self.world[3] = pos;
                     }
+                } else if row.steer != 0.0 {
+                    // steering: pitch and yaw eased by `steer` toward the target, a step of `speed` along the heading
+                    let (p, y) = heading(unit(minus(self.target, self.pos())));
+                    self.pitch = wrap(ps2::madd(ps2::add(0.0, self.pitch), row.steer, turn(p, self.pitch)));
+                    self.yaw = wrap(ps2::madd(ps2::add(0.0, self.yaw), row.steer, turn(y, self.yaw)));
+                    let m = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(self.pitch)), &world::rot_y(self.yaw));
+                    let f = m[2];
+                    if self.orient {
+                        self.face(if row.orient == 2 { [f[0], 0.0, f[2], 0.0] } else { f });
+                    }
+                    self.world[3] = std::array::from_fn(|c| ps2::madd(ps2::add(0.0, self.world[3][c]), f[c], row.speed));
+                    // arrived once the heading points past the target (seen from the origin, then from here)
+                    // ponytail: the first point it measures from (+0x260) is never written: the origin in every recording
+                    let [x, y, z, _] = unit3(minus(self.target, [0.0; 4]));
+                    if !(ps2::madd(ps2::madd(ps2::mul(f[1], y), f[0], x), f[2], z) < 0.0) {
+                        let [x, y, z, _] = unit3(minus(self.target, self.pos()));
+                        let dot = ps2::madd(ps2::add(0.0, ps2::madd(ps2::add(0.0, ps2::mul(f[1], y)), f[0], x)), f[2], z);
+                        arrived = dot <= 0.0;
+                    }
                 } else {
-                    // ponytail: steering creatures (row `steer`) move like the rest
                     self.world[3] = std::array::from_fn(|c| ps2::add(self.world[3][c], self.vel[c]));
                     if self.orient {
                         let v = self.vel;
@@ -729,7 +813,7 @@ impl Trigger {
                     }
                 }
                 let pause = self.every != 0 && self.left % self.every == 0;
-                let mut next = false;
+                let mut next = arrived;
                 if pause && row.retarget && self.left != 0 {
                     next = true;
                     self.node = self.prev;
@@ -782,8 +866,8 @@ impl Trigger {
                 if row.repeat.0 >= 1 && self.repeat == 0 && self.len <= self.frame {
                     self.repeat = jitter(row.repeat, roll);
                 }
-                // the controller: show the next frame (held at the ends), step on by one
-                self.frame = self.next.clamp(0.0, self.len);
+                // the controller: show the next frame (looped or held at the ends), step on by one
+                self.frame = self.held(self.next, row);
                 self.next = ps2::add(self.frame, 1.0);
             }
         }
@@ -796,6 +880,16 @@ impl Trigger {
             }
         }
         sounds.extend(self.callback(row, 2, near, roll));
+        // the draw after the tick counts `stage` down (set to 1 at a one-shot path's end): at 0 it is gone and its
+        // type's startled flag clears
+        // ponytail: rows with byte +0x71 (of the moving ones only type 32) count only while in view; not ported
+        if self.on && self.stage != 0 {
+            self.stage -= 1;
+            if self.stage == 0 {
+                self.active = false;
+                near.flags[self.ty as usize] = false;
+            }
+        }
         sounds
     }
 
@@ -833,14 +927,14 @@ impl Trigger {
                         0 => 28.0,
                         31 => 36.0,
                         _ => 32.0,
-                    });
+                    }, row);
                 }
             }
             (0 | 1 | 5 | 31 | 32 | 39, 0 | 4) => {
-                // ponytail: 32 stays on with its controller at speed 1 (the others at 0): the controller speed and
-                // the facing angles are not kept
+                // ponytail: 32 stays on with its controller at speed 1 (the others at 0): the controller speed is not kept
                 (self.on, self.animating, self.moving, self.world) = (ty == 32, false, false, self.home);
-                self.set_frame(0.0);
+                (self.pitch, self.yaw) = heading(self.home[2]);
+                self.set_frame(0.0, row);
                 near.flags[ty] = false;
             }
             // within 4.0: the animation once; the ball's box (±0.2) on its own tells the match (message 0x14)
@@ -870,7 +964,7 @@ impl Trigger {
                 match s {
                     0 if !far() => s = if f != 0 { 2 } else { 1 },
                     1 => {
-                        self.set_frame(f as f32);
+                        self.set_frame(f as f32, row);
                         f += 1;
                         if self.len <= f as f32 && far() {
                             s = 0;
@@ -878,7 +972,7 @@ impl Trigger {
                         f = (f as f32).min(self.len) as i32;
                     }
                     2 => {
-                        self.set_frame(f as f32);
+                        self.set_frame(f as f32, row);
                         f -= 1;
                         if f < 1 && far() {
                             s = 0;
@@ -1023,6 +1117,8 @@ impl Default for Trigger {
             to: [0.0; 4],
             snap: 0,
             orient: false,
+            pitch: 0.0,
+            yaw: 0.0,
             clockwise: false,
             angle: 0.0,
             radius: 0.0,
