@@ -49,6 +49,7 @@ mod cutaway;
 mod foot_fx;
 mod doubles_ai;
 mod markers;
+mod mod_match;
 mod match_stats;
 mod menu;
 mod npcs;
@@ -738,7 +739,11 @@ fn tparam(iso: &mut Iso, n: usize) -> Vec<String> {
 /// A character's movement stats from TParam.csv (SPE, Agili, STA, dive/backhand/smash stamina costs).
 /// Clear weather (0): `weather::step` turns the agility to rain's as the games go by.
 fn character_stats(iso: &mut Iso, n: usize) -> Stats {
-    let row = tparam(iso, n);
+    stats_of(&tparam(iso, n))
+}
+
+/// `character_stats` from a TParam.csv row.
+fn stats_of(row: &[String]) -> Stats {
     let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
     let costs: Vec<i32> = row[42]
         .split('/')
@@ -756,7 +761,11 @@ fn character_stats(iso: &mut Iso, n: usize) -> Stats {
 /// A character's aim values from TParam.csv: Strk/Voley/Serv CON (columns 20–22), Body/Vbdy ADJ (23, 24),
 /// Rizing ADJ (26) and the underhand limit in cm (62).
 fn aim_stats(iso: &mut Iso, n: usize) -> hst_sim::shot::AimStats {
-    let row = tparam(iso, n);
+    aim_of(&tparam(iso, n))
+}
+
+/// `aim_stats` from a TParam.csv row.
+fn aim_of(row: &[String]) -> hst_sim::shot::AimStats {
     let cell = |i: usize| row[i].split('/').next().unwrap().parse::<i32>().expect("TParam aim value");
     hst_sim::shot::AimStats {
         con: [cell(20), cell(21), cell(22)],
@@ -972,7 +981,12 @@ fn reach(iso: &mut Iso) -> Reach {
 /// grades and dive arm) with the character's own TParam reach centre, reach, ideal heights and smash window as the
 /// game parses them, and the player's hand.
 fn character_reach(base: &Reach, iso: &mut Iso, n: usize, hand: f32) -> Reach {
-    let s = loco::ReachStats::from_tparam(&tparam(iso, n).join(","));
+    reach_of(base, &tparam(iso, n), hand)
+}
+
+/// `character_reach` from a TParam.csv row.
+fn reach_of(base: &Reach, row: &[String], hand: f32) -> Reach {
+    let s = loco::ReachStats::from_tparam(&row.join(","));
     Reach {
         base: s.base,
         reach: s.reach,
@@ -1165,6 +1179,7 @@ fn setup(
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     (match_rng, pads, weather): (Option<Res<MatchRng>>, Res<Pads>, Option<Res<crate::weather::Weather>>),
     mut gallery_used: Local<[bool; 4]>,
+    match_mod: Option<Res<crate::mods::MatchMod>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -1285,7 +1300,10 @@ fn setup(
         // default line-up: player 1 is Carol (character 6), then characters 1, 2, 3
         let c = args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]);
         let outfit = args.outfits.get(i).copied().unwrap_or(0);
-        let data = match loaded.get(&(c, outfit)) {
+        let modded = match_mod.as_deref().filter(|m| m.slot == i).map(|m| &m.m);
+        let c = modded.map_or(c, |m| m.donor);
+        let mod_data = modded.map(|m| mod_match::load(&mut iso, m, outfit, &mut meshes, &mut materials, &mut images, &mut bindposes));
+        let data = match mod_data.or_else(|| loaded.get(&(c, outfit)).cloned()) {
             Some(d) => d.clone(),
             None => {
                 let d = std::sync::Arc::new(
@@ -1330,6 +1348,9 @@ fn setup(
         let drawn = game.rng.shared.r15() % 100 >= 70;
         banks.push(hst_sim::rng::voice_bank(&line_up, i, &banks, drawn));
         voices.push(voice_bank(&mut iso, c, n, game.stage as u32, banks[i]).map(std::sync::Arc::new));
+        if let Some(m) = modded {
+            mod_match::apply(&mut game, i, &mut iso, m, outfit, &mut voices);
+        }
         // a CPU gets an AI object, and so does a human beside a CPU partner; making one restarts the AI generator
         // ponytail: who is human is taken from the pads at setup
         let cpu = |k: usize| pads.slot_of(k, n).is_none();

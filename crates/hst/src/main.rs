@@ -81,6 +81,7 @@ fn main() {
     let mut sound = None;
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
+    let mut mod_slot = 0;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -93,6 +94,7 @@ fn main() {
             "--singles" => singles = true,
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
             "--mod" => (viewer_mod, viewer_char) = (a.next(), viewer_char.or(Some(0))),
+            "--mod-slot" => mod_slot = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
             "--vsync" => vsync = true,
             "--music" => music = true,
@@ -121,6 +123,11 @@ fn main() {
     app.add_plugins(noise::plugin);
     if play {
         app.add_plugins(play::plugin);
+        // `--play --mod DIR [--mod-slot N]`: the mod plays player N (default 1st), its costume by `--outfits`
+        if let Some(dir) = &viewer_mod {
+            let m = mods::read(dir.as_ref()).unwrap_or_else(|e| panic!("{e}"));
+            app.insert_resource(mods::MatchMod { slot: mod_slot, m });
+        }
     } else if viewer_char.is_some() {
         app.add_plugins(character::viewer).insert_resource(character::ViewerMod(viewer_mod));
     } else if ball {

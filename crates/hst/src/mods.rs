@@ -46,6 +46,13 @@ pub struct Mod {
     pub voice: String,
 }
 
+/// The mod playing in a match slot (`--mod DIR`, `--mod-slot N`) until the character select lists mods (B40a).
+#[derive(Resource)]
+pub struct MatchMod {
+    pub slot: usize,
+    pub m: Mod,
+}
+
 /// Reads and checks `dir/mod.json`.
 pub fn read(dir: &Path) -> Result<Mod, String> {
     let at = dir.join("mod.json");

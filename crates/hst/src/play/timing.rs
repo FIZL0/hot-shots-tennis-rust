@@ -57,6 +57,14 @@ pub fn load(iso: &mut Iso, params: &ShotParams, c: usize) -> Timing {
     Timing { character: c, stats, bias, down2: exe.down2_blend(), variants }
 }
 
+impl Timing {
+    /// A mod's TParam.csv row in place of its donor's: its timing stats and bias (the donor's tables and records stay).
+    pub fn restat(&mut self, row: &[String]) {
+        self.stats = ReachStats::from_tparam(&row.join(","));
+        self.bias = swing::timing(self.stats.after, self.stats.before).1;
+    }
+}
+
 /// The timing error of player `i`'s dive `d` at its contact (the ball where it is), the lob button `lob`: its bias is
 /// its offset (`swing::dive_lock`), its error along the dive's direction.
 pub fn dive_error(g: &Game, i: usize, d: &hst_sim::swing::Dive, lob: bool) -> TimingError {

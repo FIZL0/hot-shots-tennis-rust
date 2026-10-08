@@ -48,6 +48,7 @@ C/Select camera (original/free) · arrows/right stick turn the free camera.
 Rebind any of these in `controls.txt` beside the ISO (written with the defaults on first run). Controllers can be
 plugged and unplugged mid-match: each keeps its slot, a new one takes the first free slot. Wide windows show more court at the sides (the game's vertical view kept); the HUD stays on a centred 4:3 screen.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface. Drawing runs uncapped (the simulation stays a fixed 60 Hz tick, visuals blend the last two ticks); `--vsync` caps it to the display.
+`--mod DIR [--mod-slot N]` puts a standard character mod (`modding/`) in player N (default the first), costume by `--outfits`.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
 
