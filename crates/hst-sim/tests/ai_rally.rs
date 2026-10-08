@@ -466,7 +466,8 @@ fn net_and_base_match_the_game() {
 /// CPU partner beside it (tags 1-3).
 #[test]
 fn human_record_matches_the_game() {
-    for name in ["ai_human_1p.bin", "ai_human_1p_b.bin", "ai_human_1p_c.bin"] {
+    // P11k7: ai_human_vpad.bin is slot 3 with P1 driven by the pad (`context/p11k7/drive.sh 3 1800`)
+    for name in ["ai_human_1p.bin", "ai_human_1p_b.bin", "ai_human_1p_c.bin", "ai_human_vpad.bin"] {
         for (tag, what) in [(4, "human"), (1, "receive"), (2, "NET"), (3, "BASE")] {
             let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
             eprintln!("{name} {what}: calls, per substate {n:?}");

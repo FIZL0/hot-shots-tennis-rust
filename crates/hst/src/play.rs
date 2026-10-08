@@ -1820,6 +1820,7 @@ fn strike(
     g.path_base = 0;
     g.phase = Phase::Rally;
     g.umpire.rally();
+    doubles_ai::heard(g, 0x15);
 }
 
 /// The server's turn while the serve is set up, as the original: before the toss the server stands or walks
@@ -2387,6 +2388,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         if left > 0 {
             g.players[i].pending = Some(left - 1);
         } else if let Some(c) = find_contact(g, i) {
+            doubles_ai::claim(g, i);
             let p = &mut g.players[i];
             p.pending = None;
             p.contact = Some(c);
@@ -2778,8 +2780,8 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
                 let pad = &mut pads.slots[s];
                 let (shot, serve_press) = (pad.shot.take(), std::mem::take(&mut pad.serve));
                 post_press(g, shot.is_some() || serve_press);
-                human(g, i, pad, shot, serve_press);
                 doubles_ai::human(g, i);
+                human(g, i, pad, shot, serve_press);
             }
             None => bot(g, i),
         }
@@ -3581,6 +3583,7 @@ fn simulate(mut g: ResMut<Game>) {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g, true),
                 Some(Next::ChangeEnds) => {
+                    doubles_ai::heard(g, 0xc);
                     reseed_sound(g);
                     g.gallery.hush();
                     g.umpire.start(true, g.flight.ball.pos);
@@ -3610,6 +3613,7 @@ fn simulate(mut g: ResMut<Game>) {
     g.flight.step_world(&shot, surface, &g.world.0, &g.world.1);
     if touched == 0 && g.flight.special_contacts > 0 {
         g.path_base = g.hit_flight.predicted_contacts(&shot, surface, g.since_hit);
+        doubles_ai::heard(g, 0x16);
     }
     // bounce sounds stop once the point is decided (the deciding bounce still plays)
     let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
@@ -3715,6 +3719,7 @@ fn simulate(mut g: ResMut<Game>) {
 /// point ends a game), in doubles sometimes a team reaction instead, each player's own pick.
 /// ponytail: the app's random numbers stand in for the game's
 fn react(g: &mut Game, event: Event) {
+    doubles_ai::heard(g, 0x19);
     let n = g.players.len() as i32;
     let winner = g.post_winner;
     let mut taken = Vec::new();
@@ -3775,6 +3780,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.last_hitter = -1;
     g.marks = Marks::default();
     g.phase = Phase::Serve;
+    doubles_ai::heard(g, 0xe);
     g.message.clear();
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
