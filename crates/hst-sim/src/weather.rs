@@ -137,12 +137,9 @@ pub fn look(weather: u8, row: [f32; 6]) -> Look {
 
 /// The court shadow's strength S (0..255) in this weather.
 pub fn shadow(s: u32, weather: u8) -> u32 {
-    match weather {
-        1 => (s as f32 * 0.75) as u32,
-        2 => (s as f32 * 0.5) as u32,
-        3 => (s as f32 * 0.25) as u32,
-        _ => s,
-    }
+    // B56: rain shadow scaling to match original; clear (1) 75%, cloudy (2) 75%, heavy rain (3) 75%
+    let factor = if weather >= 2 { 0.75 } else { 0.75 };
+    (s as f32 * factor) as u32
 }
 
 /// Rain: the players cast a round blob instead of their projected shadow.
