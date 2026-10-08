@@ -154,6 +154,8 @@ pub struct Dive {
     prev: [f32; 2],
     origin: usize,
     stopped: bool,
+    /// A blocked move cut the slide or the lunge short; it stays set after the dive.
+    cut: bool,
 }
 
 /// The dive branch of the search, tried after `search` fails while the player runs: a player at `pos`, court end
@@ -193,7 +195,7 @@ pub fn dive(r: &Reach, path: &[PathPoint], pos: [f32; 3], end: f32, face: [f32; 
     let inv = div(1.0, sqrt(add(add(mul(dz, dz), mul(dx, dx)), 0.0)));
     let dir = [mul(dx, inv), mul(dz, inv)];
     let slide = if contact { arm_slide(r, dir, sub3(path[k].pos, pos)) } else { miss.unwrap().2 };
-    Some(Dive { frame: k, contact, dir, slide, tick: 0, start: [pos[0], pos[2]], prev: [0.0; 2], origin: k, stopped: false })
+    Some(Dive { frame: k, contact, dir, slide, tick: 0, start: [pos[0], pos[2]], prev: [0.0; 2], origin: k, stopped: false, cut: false })
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -225,6 +227,11 @@ fn arm_slide(r: &Reach, dir: [f32; 2], d: [f32; 3]) -> f32 {
 }
 
 impl Dive {
+    /// A blocked move cut the slide or the lunge short.
+    pub fn cut(&self) -> bool {
+        self.cut
+    }
+
     /// Frames the dive locks the player, counting the search frame.
     pub fn len(&self) -> usize {
         self.frame + DIVE_RECOVERY + 1
@@ -266,6 +273,7 @@ impl Dive {
                 } else {
                     self.stopped = true;
                 }
+                self.cut = true;
             }
         }
         Some(now)

@@ -7,7 +7,7 @@ use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
 use hst_data::{exe::Foot, iso::Iso, xb::Archive};
 use hst_sim::effect::Effect;
-use hst_sim::foot::{Feet, Runner};
+use hst_sim::foot::{DiveWatch, Feet, Runner};
 use hst_sim::weather::Mt;
 
 use super::{Figure, Game, Phase};
@@ -37,8 +37,8 @@ struct FootFx {
     prints: Handle<Mesh>,
     /// One `run/dash` per player.
     dash: Vec<(Effect, Shown)>,
-    /// A dive was under way last tick, per player.
-    diving: [bool; 4],
+    /// Each player's dive as the run object sees it.
+    dives: [DiveWatch; 4],
     /// The dive rings' random draws.
     // ponytail: its own generator, not the match's shared one
     mt: Mt,
@@ -72,7 +72,7 @@ fn setup(
     let arc = Archive::parse(&arc).expect("EFFCT.XB0");
     let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
     let (table, feet, mt) = (game.foot(), Feet::default(), Mt::new(1));
-    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], mt });
+    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, dives: [DiveWatch::default(); 4], mt });
 }
 
 /// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim.
@@ -98,11 +98,12 @@ fn tick(
     let mut runners: Vec<(usize, Runner)> = q
         .iter()
         .filter_map(|(f, rig, m, gt)| {
+            let dive = g.players.get(f.0).and_then(|p| p.dive.as_ref()).map(|d| (d.slide, d.cut()));
+            let (dive, lunge, dive_over) = fx.dives.get_mut(f.0).map_or((false, 0.0, false), |w| w.see(dive));
             let joint = |n: &str| rig.data.joint(n).and_then(|j| joints.get(rig.joints[j]).ok()).map(|t| Mat4::from(to_game * t.affine()));
             let toe = |n: &str| joint(n).map(|m| m.w_axis.to_array());
             let cols = |m: Mat4| [m.x_axis, m.y_axis, m.z_axis, m.w_axis].map(|c| c.to_array());
             let pm = Mat4::from(to_game * gt.affine());
-            let dive = g.players.get(f.0).and_then(|p| p.dive.as_ref());
             Some((
                 f.0,
                 Runner {
@@ -117,20 +118,15 @@ fn tick(
                     pelvis: cols(joint("Bip01Pelvis")?),
                     spine: cols(joint("Bip01Spine1")?),
                     head: toe("Bip01Head")?,
-                    // a dive starting: the game raises it with the hit event's dive branch
-                    dive: dive.is_some() && !fx.diving.get(f.0).copied().unwrap_or(true),
-                    lunge: dive.map_or(0.0, |d| d.slide),
-                    // ponytail: the game's own end-of-dive byte taken as the dive being over
-                    dive_over: dive.is_none(),
+                    dive,
+                    lunge,
+                    dive_over,
                     ..Runner::default()
                 },
             ))
         })
         .collect();
     runners.sort_by_key(|(i, _)| *i);
-    for (i, d) in fx.diving.iter_mut().enumerate() {
-        *d = g.players.get(i).is_some_and(|p| p.dive.is_some());
-    }
     let runners: Vec<Runner> = runners.into_iter().map(|(_, r)| r).collect();
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;

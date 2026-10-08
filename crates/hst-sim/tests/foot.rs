@@ -3,7 +3,7 @@
 //! (the first 32) and footprints match the game bit for bit.
 
 use hst_data::exe;
-use hst_sim::foot::{Feet, Print, Puff, Runner};
+use hst_sim::foot::{DiveWatch, Feet, Print, Puff, Runner};
 
 fn f(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
@@ -305,4 +305,39 @@ fn foot_extras_s05() {
     }
     eprintln!("puffs born by kind {kinds:?}, {rings} dive frames, {dashes} streaks");
     assert!(kinds[1] >= 10 && kinds[2] >= 4 && dashes > 0);
+}
+
+/// The app's dive inputs (`DiveWatch` over each player's dive: from the search frame for its length, with its slide
+/// and cut-short flag) against the run object's: the hit event's dive branch, +0x3f80 and +0x3ec9, frame for frame.
+#[test]
+fn dive_inputs_s05() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut dives = 0;
+    for name in ["x", "w", "d"] {
+        let Ok(data) = std::fs::read(format!("{root}/context/fixtures/foot_s05{name}.bin")) else {
+            eprintln!("foot_s05{name}.bin absent, skipped");
+            continue;
+        };
+        let frames: Vec<&[u8]> = data[8..].chunks_exact(EX + 4 * EXSZ).collect();
+        for p in 0..4 {
+            let (mut watch, mut until, mut seen) = (DiveWatch::default(), None, false);
+            for fr in &frames {
+                let (vsync, x) = (i(fr, 0), &fr[EX + EXSZ * p..]);
+                let event = fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3;
+                // a dive lasts its search frame and its counter's run to +0x3f84 (the app's `Dive::len`)
+                if event {
+                    until = Some(vsync + i(x, 4));
+                    seen = true;
+                    dives += 1;
+                }
+                let live = until.is_some_and(|u| vsync <= u);
+                let (start, lunge, over) = watch.see(live.then(|| (f(x, 0), x[0x19] != 0)));
+                // before the player's first dive its flag holds whatever was there
+                if seen {
+                    assert_eq!((start, lunge.to_bits(), over), (event, f(x, 0).to_bits(), x[0x10 + 9] != 0), "{name} p{p} vsync {vsync}");
+                }
+            }
+        }
+    }
+    eprintln!("{dives} dives");
 }
