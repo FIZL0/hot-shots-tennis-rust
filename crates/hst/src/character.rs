@@ -53,6 +53,8 @@ pub struct CharacterData {
     pub stance_ball: Option<Path>,
     /// The model's skeleton in the game's terms (bone-attached points such as the held serve ball).
     pub skeleton: Skeleton,
+    /// The costume's noise deformers (`.NOI`), if it sways.
+    pub noise: Option<Arc<crate::noise::Costume>>,
 }
 
 /// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
@@ -266,6 +268,7 @@ pub fn load_disc(
         .collect();
 
     let parts = skinned_parts(&model, &handles, meshes);
+    let noise = find(&format!("{body}.noi")).and_then(|d| crate::noise::costume(&model, &d, &parts, meshes));
     let targets = model.morph_names.len();
 
     // the racket: a rigid model in its own space, carried by the `Racket` joint
@@ -368,7 +371,7 @@ pub fn load_disc(
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise })
 }
 
 /// Build a background figure (umpire, spectator, creature) from a court archive: the model `{stem}.MDL` with its
@@ -426,6 +429,7 @@ pub fn load_npc(
         faces: HashMap::new(),
         stance_ball: None,
         skeleton,
+        noise: None,
     })
 }
 

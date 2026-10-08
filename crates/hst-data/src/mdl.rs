@@ -58,6 +58,11 @@ pub struct Packet {
     pub uv_swap: bool,
     /// Per morph target ([`Model::morph_names`]): (position entry, offset) — the entry moves by weight × offset.
     pub morphs: Vec<Vec<(usize, [f32; 3])>>,
+    /// The node owning the packet's batch (batch header +0x2a): a `.NOI` deformer moves its node's packets.
+    pub group: i16,
+    /// Per position entry, its share of the noise deformer (the VIF unpack after the bounding boxes, when packet
+    /// header +0x56 is set); empty when the packet has none.
+    pub noise: Vec<f32>,
 }
 
 /// A drawn vertex of a skinned model in its bind pose (model space), with up to four (node, weight) bindings.
@@ -280,9 +285,14 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 let n = size_at(ph, 0x38)?;
                 let starts = c.take(n)?;
                 let bounds = c.take(n << 5)?;
-                if ph[0x56] != 0 {
-                    c.take((ph[0x57] as usize) << 4)?;
-                }
+                // STCYCL, UNPACK S-32 of `num` words (0 = 256), the words
+                let noise = if ph[0x56] != 0 {
+                    let x = c.take((ph[0x57] as usize) << 4)?;
+                    let num = x.get(6).map_or(0, |&n| if n == 0 { 256 } else { n as usize });
+                    x.get(8..).unwrap_or_default().chunks_exact(4).take(num).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+                } else {
+                    Vec::new()
+                };
                 let mut morphs = Vec::new();
                 for _ in 0..i16::from_le_bytes([ph[0x54], ph[0x55]]).max(0) {
                     let k = c.count(0xc)?;
@@ -305,6 +315,8 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 pk.prim = bh[0x31];
                 pk.uv_swap = ph[0x58] != 0;
                 pk.morphs = morphs;
+                pk.group = i16::from_le_bytes([bh[0x2a], bh[0x2b]]);
+                pk.noise = noise;
                 packets.push(pk);
             }
         }

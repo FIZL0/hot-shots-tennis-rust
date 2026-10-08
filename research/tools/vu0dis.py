@@ -35,6 +35,7 @@ def lower(w):
             if n in ('DIV',): return f'DIV Q,vf{fs}{BC[fsf]},vf{ft}{BC[ftf]}'
             if n in ('SQRT','RSQRT'): return f'{n} Q,vf{ft}{BC[ftf]}' if n=='SQRT' else f'RSQRT Q,vf{fs}{BC[fsf]},vf{ft}{BC[ftf]}'
             if n=='MOVE' and d=='': return 'NOP'
+            if n in ('MTIR','RINIT','RXOR'): return f'{n} vi{ft},vf{fs}{BC[fsf]}' if n=='MTIR' else f'{n} R,vf{fs}{BC[fsf]}'
             return f'{n}.{d} vf{ft},vf{fs}'
         return f'?low {op:#x}'
     n=LOW.get(top,f'?L{top:#x}'); imm11=w&0x7ff; imm11=imm11-0x800 if imm11&0x400 else imm11
