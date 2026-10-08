@@ -428,9 +428,9 @@ const POOL: usize = 80;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, (setup.after(super::setup), setup_calls))
-        .add_systems(PostStartup, setup_banners.after(setup))
-        .add_systems(Update, (draw, draw_calls, draw_banners))
-        .add_systems(FixedUpdate, (tick_calls, tick_banners, tick_result).after(super::simulate))
+        .add_systems(PostStartup, (setup_banners, setup_speed).after(setup))
+        .add_systems(Update, (draw, draw_calls, draw_banners, draw_speed))
+        .add_systems(FixedUpdate, (tick_calls, tick_banners, tick_result, tick_speed).after(super::simulate))
         .init_resource::<ResultBanner>();
 }
 
@@ -1305,5 +1305,140 @@ mod banner_tests {
         assert_eq!(seen[60].2, Some((217.6, 204.8, 128)));
         assert_eq!(seen[69].2.map(|s| s.2), Some(12));
         assert_eq!(seen[70].2, None);
+    }
+}
+
+// The speed readout: each serve or smash shows its speed in mph (km/h · 0.9 · 0.62137, truncated) at the bottom left,
+// or the bottom right when the hitter stands at x < 0, from the tick after the strike: fading in over 7 ticks (alpha
+// 128 − 128·t/6), held 61, fading out over 7 (128·t/6). A new serve or smash restarts it.
+
+/// The readout on show: mph, right side, stage (0 in, 1 hold, 2 out), ticks and alpha.
+#[derive(Resource, Default)]
+struct Speed {
+    shots: i32,
+    show: Option<(i32, bool, u8, i32, i32)>,
+}
+
+impl Speed {
+    fn start(&mut self, kmh: f32, right: bool) {
+        let mph = (kmh * 0.9 * 0.62137) as i32;
+        self.show = Some((mph, right, 0, 6, 0));
+    }
+
+    fn tick(&mut self) {
+        let Some((_, _, stage, t, alpha)) = &mut self.show else { return };
+        match *stage {
+            0 => *alpha = (128.0 - (*t << 7) as f32 / 6.0) as i32,
+            2 => *alpha = ((*t << 7) as f32 / 6.0) as i32,
+            _ => {}
+        }
+        *t -= 1;
+        if *t < 0 {
+            match *stage {
+                0 => (*stage, *t) = (1, 60),
+                1 => (*stage, *t) = (2, 6),
+                _ => self.show = None,
+            }
+        }
+    }
+
+    /// "mph" then the digits leftwards from it, ones first (24×32 cells; up to 3 digits): source and screen rects.
+    fn quads(&self) -> Vec<([f32; 4], [f32; 4], i32)> {
+        let Some((mph, right, _, _, alpha)) = self.show else { return vec![] };
+        let digits: Vec<i32> = [mph % 10, mph / 10 % 10, mph / 100 % 10].into_iter().take(match mph {
+            ..=9 => 1,
+            10..=99 => 2,
+            _ => 3,
+        }).collect();
+        let mut x = if right { 576.0 } else { 16.0 + 24.0 * digits.len() as f32 };
+        let mut out = vec![([248.0, 0.0, 56.0, 32.0], [x, 216.0, 56.0, 32.0], alpha)];
+        for d in digits {
+            x -= 24.0;
+            out.push(([d as f32 * 24.0, 0.0, 24.0, 32.0], [x, 216.0, 24.0, 32.0], alpha));
+        }
+        out
+    }
+}
+
+#[derive(Resource)]
+struct SpeedArt(Handle<Image>);
+#[derive(Component)]
+struct SpeedSlot(usize);
+
+fn setup_speed(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc
+        .entries
+        .iter()
+        .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with("/inpane_speed00.tm2"))
+        .expect("inpane_speed00 in INPANE");
+    commands.insert_resource(SpeedArt(panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))));
+    commands.init_resource::<Speed>();
+    commands.spawn((super::widescreen::screen_43(), GlobalZIndex(1))).with_children(|p| {
+        for i in 0..4 {
+            p.spawn((SpeedSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+        }
+    });
+}
+
+/// One tick of the readout, then a new serve or smash (the last strike's branch 0 or 4) starts it afresh with the
+/// ball's launch speed.
+fn tick_speed(g: Res<Game>, speed: Option<ResMut<Speed>>) {
+    let Some(mut s) = speed else { return };
+    s.tick();
+    if g.shots != std::mem::replace(&mut s.shots, g.shots) && g.shots > 0 && g.last_hitter >= 0 {
+        if matches!(g.finish.prev.1, 0 | 4) {
+            let right = g.players[g.last_hitter as usize].pos[0] < 0.0;
+            s.start(hst_sim::sound::kmh(g.flight.ball.vel), right);
+        }
+    }
+}
+
+fn draw_speed(speed: Option<Res<Speed>>, art: Option<Res<SpeedArt>>, mut q: Query<(&SpeedSlot, &mut ImageNode, &mut Node, &mut Visibility)>) {
+    let (Some(speed), Some(art)) = (speed, art) else { return };
+    let quads = speed.quads();
+    for (SpeedSlot(i), mut img, mut node, mut vis) in &mut q {
+        let Some(&([u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i).filter(|q| q.2 > 0) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        img.image = art.0.clone();
+        img.rect = Some(Rect::new(u, v, u + w, v + h));
+        img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
+        node.left = Val::Percent(x / 6.4);
+        node.top = Val::Percent(y / 4.48);
+        node.width = Val::Percent(dw / 6.4);
+        node.height = Val::Percent(dh / 4.48);
+        *vis = Visibility::Inherited;
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+
+    #[test]
+    fn readout() {
+        // the RAM serve: 0.5923 m/frame → 71 mph, left, 2 digits from x 64
+        let mut s = Speed::default();
+        s.start(hst_sim::sound::kmh([-0.16952264, -0.024526097, 0.56700176]), false);
+        let mut alphas = vec![];
+        while s.show.is_some() {
+            s.tick();
+            alphas.push(s.show.map(|v| v.4));
+            if alphas.len() == 1 {
+                let q = s.quads();
+                assert_eq!(q.iter().map(|q| (q.0[0], q.1[0])).collect::<Vec<_>>(), [(248.0, 64.0), (24.0, 40.0), (168.0, 16.0)]);
+            }
+        }
+        assert_eq!(&alphas[..7], &[Some(0), Some(21), Some(42), Some(64), Some(85), Some(106), Some(128)]);
+        assert_eq!(alphas.len(), 75);
+        assert_eq!(alphas[73], Some(21));
+        // the RAM smash: 84 mph, right
+        s.start(hst_sim::sound::kmh([0.37663022, 0.14124857, -0.57089436]), true);
+        assert_eq!(s.show.unwrap().0, 84);
+        assert_eq!(s.quads()[1].1[0], 552.0);
     }
 }
