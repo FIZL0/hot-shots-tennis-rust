@@ -256,6 +256,14 @@ impl PostPoint {
             _ => None,
         }
     }
+
+    /// Ticks the scoreboard has waited before the score show (1 on the wait's first tick), `None` outside the wait.
+    pub fn waited(&self) -> Option<i32> {
+        match self.board {
+            Board::Wait(n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 impl Show {
