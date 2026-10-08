@@ -705,6 +705,34 @@ mod tests {
         assert_eq!((&row[12][..], &row[40][..], &row[57][..], &row[13][..]), ("4", "10", "170", "4"));
     }
 
+    /// M1f: the PSP mods' heads and faces are unskinned mesh nodes under `Bip01Head`; every costume of every Get a
+    /// Grip and Open Tee mod in `context/mods` carries vertices on the head joint, at rest above its neck.
+    #[test]
+    fn psp_mods_keep_their_heads() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let Ok(dir) = std::fs::read_dir(MODS) else { return eprintln!("no context/mods, skipped") };
+        let mut s = Stores(default(), default(), default(), default());
+        let mut seen = 0;
+        for e in dir.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("getagrip_") || n.starts_with("opentee"))) {
+            let m = read(&e.path()).unwrap();
+            for k in 0..m.costumes.len() {
+                let c = load(&mut iso, &m, k, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+                let (head, neck) = (c.joint("Bip01Head").unwrap(), c.joint("Bip01Neck").unwrap());
+                let rest = model(&c.skeleton, &c.skeleton.rest);
+                // game space is Y down: the head's vertices sit above (below in y) the neck joint
+                let top = c.parts.iter().filter_map(|p| s.0.get(&p.0)).flat_map(|mesh| {
+                    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return Vec::new() };
+                    let Some(VertexAttributeValues::Uint16x4(j)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX) else { return Vec::new() };
+                    pos.iter().zip(j).filter(|(_, j)| j[0] as usize == head).map(|(p, _)| p[1]).collect()
+                });
+                let top = top.fold(f32::INFINITY, f32::min);
+                assert!(top < rest[neck][3][1], "{} costume {k}: no head (top {top}, neck {})", m.id, rest[neck][3][1]);
+                seen += 1;
+            }
+        }
+        eprintln!("{seen} PSP costumes have heads");
+    }
+
     /// Get a Grip's Emi (a texture face, §4b): her face material starts neutral, the donor's `.MOR` tracks drive
     /// face.json's channels by name, and over the donor's faces some frames show an expression texture.
     #[test]
