@@ -5,8 +5,9 @@
 //!   sliding and fading.
 //!
 //! Their random source is the game's effects LCG, restarted from the match's seed at every serve.
-//! ponytail: the game draws these in the court's fogged pass; here they're unfogged. The rain ambience (four court
-//! SE voices sweeping ±45° around bearings 90/135/225/270) isn't played.
+//! Rain also plays its ambience: court sound program 1 key 2 from four bearings (90, 135, 225, 270).
+//! ponytail: the game draws these in the court's fogged pass; here they're unfogged. Its rain voices also sweep
+//! ±45° (a degree every 5 frames); here they stay put.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -21,7 +22,7 @@ use crate::weather::Weather;
 use crate::{Args, Orbit};
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, setup).add_systems(FixedUpdate, tick).add_systems(Update, draw);
+    app.add_systems(Startup, setup).add_systems(FixedUpdate, tick).add_systems(Update, (draw, ambience));
 }
 
 /// The game's effects random source: an LCG giving 15-bit draws in [0, 1).
@@ -329,6 +330,18 @@ fn tick(fx: Option<ResMut<Particles>>, g: Res<Game>, w: Option<Res<Weather>>, ca
         wind.tick(&mut fx.rng, today.degrees, today.speed, today.weather);
     }
     fx.tick = fx.tick.wrapping_add(1);
+}
+
+/// The rain voices: started when the rain starts (and again if they run out), stopped when it ends.
+fn ambience(fx: Option<Res<Particles>>, sound: Option<Res<crate::audio::Sound>>, bank: Option<Res<crate::audio::CourtBank>>, mut ids: Local<Vec<u64>>) {
+    let (Some(fx), Some(sound), Some(Some(bank))) = (fx, sound, bank.map(|b| b.0.clone())) else { return };
+    if !fx.rain || ids.iter().all(|&id| !sound.playing(id)) {
+        ids.drain(..).for_each(|id| sound.stop(id));
+    }
+    if fx.rain && ids.is_empty() {
+        let p = hst_sim::sound::Play { slot: 0, program: 1, key: 2, volume: 0x80, speed: 1.0 };
+        *ids = [90, 135, 225, 270].map(|a| sound.play_toward(&bank, p, a)).to_vec();
+    }
 }
 
 #[derive(Default)]
