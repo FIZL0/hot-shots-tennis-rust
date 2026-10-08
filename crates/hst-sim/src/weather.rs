@@ -65,7 +65,7 @@ impl Rand {
 /// The game's shared MT19937 (the match object's generator): seeded with a `rand()` output when the match is set
 /// up, and the weather schedule is its first draws.
 #[derive(Clone, Debug)]
-pub struct Mt([u32; 624], usize);
+pub struct Mt(pub [u32; 624], pub usize);
 
 impl Mt {
     pub fn new(seed: u32) -> Mt {

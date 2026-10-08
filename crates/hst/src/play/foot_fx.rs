@@ -1,21 +1,25 @@
 //! Footstep puffs and footprints (`hst_sim::foot`): each player's toes (`Bip01RToe0`, `Bip01LToe0`) in game space
 //! feed the sim every tick; puffs are drawn as camera-facing quads (`run/kemuri_00` dust in the court's dust colour,
-//! `run/spray` grey in rain), footprints as ground quads (`run/e_footprint` in the court's print colour).
+//! `run/spray` grey in rain), footprints as ground quads (`run/e_footprint` in the court's print colour); and each
+//! player's `run/dash` streak model at the hips through a dive.
 
+use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
-use hst_data::{exe::Foot, iso::Iso};
+use hst_data::{exe::Foot, iso::Iso, xb::Archive};
+use hst_sim::effect::Effect;
 use hst_sim::foot::{Feet, Runner};
+use hst_sim::weather::Mt;
 
 use super::{Figure, Game, Phase};
 use crate::character::{Motion, Rig};
-use crate::effects::{fill, look};
+use crate::effects::{Shown, fill, look, model, pose};
 use crate::weather::Weather;
 use crate::Args;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(crate::character::tick))
-        .add_systems(Update, draw.after(super::camera));
+        .add_systems(Update, (draw.after(super::camera), draw_dash));
 }
 
 #[derive(Resource)]
@@ -31,6 +35,13 @@ struct FootFx {
     dry_puffs: Handle<Mesh>,
     wet_puffs: Handle<Mesh>,
     prints: Handle<Mesh>,
+    /// One `run/dash` per player.
+    dash: Vec<(Effect, Shown)>,
+    /// A dive was under way last tick, per player.
+    diving: [bool; 4],
+    /// The dive rings' random draws.
+    // ponytail: its own generator, not the match's shared one
+    mt: Mt,
 }
 
 fn setup(
@@ -40,6 +51,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let Ok(root) = root.single() else { return };
     let mut iso = Iso::open(&args.iso).expect("open iso");
@@ -56,7 +68,11 @@ fn setup(
         m
     };
     let (dry_puffs, wet_puffs, prints) = (mesh("run/kemuri_00"), mesh("run/spray"), mesh("run/e_footprint"));
-    commands.insert_resource(FootFx { table: game.foot(), feet: Feet::default(), court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints });
+    let arc = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT.XB0");
+    let arc = Archive::parse(&arc).expect("EFFCT.XB0");
+    let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
+    let (table, feet, mt) = (game.foot(), Feet::default(), Mt::new(1));
+    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], mt });
 }
 
 /// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim.
@@ -82,8 +98,11 @@ fn tick(
     let mut runners: Vec<(usize, Runner)> = q
         .iter()
         .filter_map(|(f, rig, m, gt)| {
-            let toe = |n: &str| rig.data.joint(n).and_then(|j| joints.get(rig.joints[j]).ok()).map(|t| to_game.transform_point3(t.translation()).extend(1.0).to_array());
+            let joint = |n: &str| rig.data.joint(n).and_then(|j| joints.get(rig.joints[j]).ok()).map(|t| Mat4::from(to_game * t.affine()));
+            let toe = |n: &str| joint(n).map(|m| m.w_axis.to_array());
+            let cols = |m: Mat4| [m.x_axis, m.y_axis, m.z_axis, m.w_axis].map(|c| c.to_array());
             let pm = Mat4::from(to_game * gt.affine());
+            let dive = g.players.get(f.0).and_then(|p| p.dive.as_ref());
             Some((
                 f.0,
                 Runner {
@@ -95,16 +114,38 @@ fn tick(
                     m: [pm.x_axis, pm.y_axis, pm.z_axis, pm.w_axis].map(|c| c.to_array()),
                     // ponytail: the player's state byte (1 running, 2 swinging, 0 else) from the motion id
                     slide: (3..=0x1f).contains(&m.id),
+                    pelvis: cols(joint("Bip01Pelvis")?),
+                    spine: cols(joint("Bip01Spine1")?),
+                    head: toe("Bip01Head")?,
+                    // a dive starting: the game raises it with the hit event's dive branch
+                    dive: dive.is_some() && !fx.diving.get(f.0).copied().unwrap_or(true),
+                    lunge: dive.map_or(0.0, |d| d.slide),
+                    // ponytail: the game's own end-of-dive byte taken as the dive being over
+                    dive_over: dive.is_none(),
+                    ..Runner::default()
                 },
             ))
         })
         .collect();
     runners.sort_by_key(|(i, _)| *i);
+    for (i, d) in fx.diving.iter_mut().enumerate() {
+        *d = g.players.get(i).is_some_and(|p| p.dive.is_some());
+    }
     let runners: Vec<Runner> = runners.into_iter().map(|(_, r)| r).collect();
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;
     // ponytail: no wind drift (the weather's wind vector is not ported to the scene)
-    fx.feet.tick(&fx.table, c, dusty, fx.wet, [0.0; 4], &runners, true);
+    let mt = &mut fx.mt;
+    fx.feet.tick(&fx.table, c, dusty, fx.wet, [0.0; 4], &runners, true, &mut || mt.next());
+    // the streak plays from each dive's start while it shows
+    for (p, (e, _)) in fx.dash.iter_mut().enumerate() {
+        if fx.feet.dash_start[p] {
+            e.start();
+        }
+        if fx.feet.dash[p].is_some() {
+            e.tick();
+        }
+    }
 }
 
 /// Puffs face the camera, pushed 0.5 toward it, `size` either side and twice that tall; footprints lie on the court.
@@ -155,5 +196,25 @@ fn draw(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>, mut
         .collect();
     if let Some(mut mesh) = meshes.get_mut(&fx.prints) {
         put(&mut mesh, prints);
+    }
+}
+
+/// Each player's `run/dash` streak at the yaw and position of the hips as its dive started.
+fn draw_dash(fx: Option<Res<FootFx>>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Some(fx) = fx else { return };
+    for ((effect, view), at) in fx.dash.iter().zip(fx.feet.dash) {
+        match at {
+            Some(m) if effect.live => {
+                pose(effect, view, &mut q, &mut joints, &mut materials);
+                if let Ok(mut t) = joints.get_mut(view.root) {
+                    *t = Transform::from_matrix(Mat4::from_cols_array_2d(&m));
+                }
+            }
+            _ => {
+                if let Ok((mut v, _)) = q.get_mut(view.root) {
+                    *v = Visibility::Hidden;
+                }
+            }
+        }
     }
 }
