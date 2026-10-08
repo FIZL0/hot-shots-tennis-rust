@@ -276,3 +276,67 @@ fn wild_aims_by_draw() {
     let (a, side, _) = aim(&[99 << 16, 66 << 16, 0, u32::MAX]);
     assert!(a[0] == -4.115 && near(side, 1.0 / 1.5), "{side}");
 }
+
+/// Every smash launch: the scatter `smash_scatter` gives from the lock (grade +0x3ee8, bias +0x3f98), the contact
+/// height, the aim's nudge (+0x3ed4) and held depth (+0x3edc) and `smash_scale` (+0x3ee0), to the stored target
+/// (the aim pulled inside, plus the scatter) and the launch velocity off the base smash table, bit for bit.
+#[test]
+fn timed_smashes_like_the_game() {
+    use hst_sim::swing::{smash_scale, smash_scatter};
+    let Some(d) = disc() else { return eprintln!("disc absent, skipped") };
+    let game = hst_data::exe::Game::new(&d.cnf, &d.game_bin).unwrap();
+    let (lines, angle) = game.court_margins();
+    let m = Margins { lines, angle };
+    let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let table = |c: usize, kind: i32| {
+        ["A", "B"].iter().find_map(|ab| std::fs::read(format!("{ctx}/xb/TRAJ/TRAJ{c:02}{ab}.XB/data/hatsuyama/traj/tr_pc{c:02}_smsh{kind}.dat")).ok()).and_then(|b| Table::parse(&b)).unwrap()
+    };
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
+    let (mut seen, mut scattered, mut held, mut scaled, mut bad) = (0, 0, 0, 0, vec![]);
+    for (fx, _) in FIXTURES {
+        let Ok(data) = std::fs::read(format!("{}/{fx}", dir())) else { continue };
+        let frames = frames_live(&data);
+        for k in 1..frames.len() {
+            let (w0, w1) = (frames[k - 1], frames[k]);
+            let (a, b) = (w0.live_ball(), w1.live_ball());
+            let launched = |x: &[u8]| x[0x58] == 3 && i(x, 0xac) == 0;
+            let vel = v3(b, 0x130);
+            // class 3 also marks the held and tossed serve ball
+            if !launched(b) || launched(a) || mul(vel[0], vel[0]) + mul(vel[1], vel[1]) + mul(vel[2], vel[2]) < 0.01 {
+                continue;
+            }
+            let Some(p) = (0..4).find(|&p| byte(w1, p, 0x3ec1) == 4) else { continue };
+            let (hit, target, kind) = (v3(b, 0x70), v3(b, 0x80), i(b, 0x5c));
+            let at = format!("{fx} vsync {} p{p} kind {kind}", w1.vsync());
+            let c = w1.global(0x422fa8 + 4 * p) as usize;
+            let (grade, bias, offset) = (byte(w1, p, 0x3ee8), word(w1, p, 0x3f98), word(w1, p, 0x3fa0));
+            let (nudge, hold) = (word(w1, p, 0x3ed4), w1.player_f32(p, 0x3edc));
+            let scale = smash_scale(word(w1, p, 0x3ee4) != 4, offset, w1.player_f32(p, 0x3ef8));
+            if scale.to_bits() != w1.player_f32(p, 0x3ee0).to_bits() {
+                bad.push(format!("{at}: scale {scale} want {}", w1.player_f32(p, 0x3ee0)));
+                continue;
+            }
+            let (sx, sz) = smash_scatter(&d.stats[c], grade, bias, w1.player_f32(p, 0x3f44), nudge, scale, hold);
+            let aim = [0x3e90, 0x3e94, 0x3e98].map(|o| w1.player_f32(p, o));
+            let pulled = m.inside(3, kind, false, w1.global(0x422fa4) >= 3, c, false, hit, aim);
+            let sc = hst_sim::serve::scatter_along(sx, sz, hit, pulled);
+            let to = [hst_sim::ps2::add(pulled[0], sc[0]), pulled[1], hst_sim::ps2::add(pulled[2], sc[2])];
+            let l = lookup(&table(c, kind), &Bounds::smash(kind), [hst_sim::ps2::sub(hit[0], sc[0]), hit[1], hst_sim::ps2::sub(hit[2], sc[2])], pulled);
+            let v = launch(hit, to, l.elevation, l.speed);
+            if v != vel || l.frames + 1 != i(b, 0x260) || to != target {
+                bad.push(format!("{at}: grade {grade} bias {bias} offset {offset} nudge {nudge} held {hold} scale {scale} scatter {sx},{sz}: target {to:?} want {target:?}, vel {v:?} want {vel:?}, frames {} want {}", l.frames + 1, i(b, 0x260)));
+            }
+            seen += 1;
+            scattered += (sx != 0.0 || sz != 0.0) as usize;
+            held += (hold != 0.0) as usize;
+            scaled += (scale != 1.0) as usize;
+        }
+    }
+    for b in &bad {
+        eprintln!("{b}");
+    }
+    eprintln!("{seen} smashes, {scattered} scattered, {held} held, {scaled} scaled, {} wrong", bad.len());
+    assert!(bad.is_empty() && (seen == 0 || scattered > 0), "{} of {seen} smashes wrong", bad.len());
+}

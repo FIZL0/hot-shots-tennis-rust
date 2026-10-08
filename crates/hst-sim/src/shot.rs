@@ -381,8 +381,9 @@ pub struct Hitter {
 /// character's widest angle off straight, the dip of an angled drive back onto the straight line's depth and
 /// a 3 m (drop 2 m) minimum past the net. `button` is the original's 0x20 aim (deep), which only the AI sets;
 /// `incoming` is Some(was sweet) when the ball being struck is a slice (not a smash) in a rally under way.
-/// ponytail: the centred-stick ±5/±10 timing nudge (P3) and the smash's held depth value aren't returned
-pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>) -> V3 {
+/// Also what the aim leaves for the launch (see `Aim`); `roll` is the game's RNG (bit 16 is the coin), drawn twice
+/// for the nudge.
+pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>, roll: &mut impl FnMut() -> u32) -> Aim {
     use ps2::{add, div, mul, sub};
     let (end, b) = (h.end, h.branch);
     let kind = |k: i32| (1..=3).contains(&b) && h.kind == k;
@@ -399,7 +400,34 @@ pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, 
     let base_z = mul(add(near, half), end);
     let width = if four { 5.485 } else { 4.115 };
     let width = if sweet { width } else { sub(width, 0.5) };
-    aim_from(h, s, stick, four, button, incoming, [0.0, base_z], width, half)
+    let target = aim_from(h, s, stick, four, button, incoming, [0.0, base_z], width, half);
+    // a plain smash with the stick pulled back holds the pull as a shorter launch (the stick's own depth, not
+    // the square's)
+    let held = if !button && b == 4 && h.kind != 3 && mul(stick[1], end) < 0.0 {
+        div(mul(div(half, 1.5), stick[1].abs()), 2.0)
+    } else {
+        0.0
+    };
+    // aimed close to the centre line with the stick level: a random sideways nudge of 5 or 10 tenths
+    let mut coin = || roll() >> 16 & 1 != 0;
+    let nudge = if target[0].abs() <= 1.0 && stick[0] == 0.0 {
+        let n = if coin() { 5 } else { 10 };
+        if coin() { n } else { -n }
+    } else {
+        0
+    };
+    Aim { target, nudge, short_only: drop, held }
+}
+
+/// A rally aim and what it leaves for the launch: the centred stick's sideways `nudge` (tenths, added to the
+/// timing error's side), `short_only` (a drop shot: the depth error can only fall short) and the plain smash's
+/// `held` depth (m) taken off its depth error.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Aim {
+    pub target: V3,
+    pub nudge: i32,
+    pub short_only: bool,
+    pub held: f32,
 }
 
 /// `aim` from its base point (x, z), the stick's full reach across (`width`) and along (`half`): the stick, the

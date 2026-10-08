@@ -10,7 +10,9 @@ reads 2 over P1's contact, so the aim takes its singles width in a doubles save 
 Writes a pair of samples per aim: the frame before P1's +0x3e90 changes and the frame it does, each a `frames_live`
 sample followed by P1's +0x12b0..+0x1320 (end, character, TParam aim values) and the last shot's record
 (P1 +0x1400 → +0x1b0..+0x1c0). AIM_DEBUG=1 logs the approach. Needs tools/vpad.py serve (pcsx2-hst.sh starts it).
-AIM_INCOMING=1 keeps only the aims struck off an incoming rally slice (for the `incoming` cases plain play rarely gives).
+AIM_INCOMING=1 keeps only the aims struck off an incoming rally slice (for the `incoming` cases plain play rarely gives),
+AIM_INCOMING=sweet only those off a slice struck sweet; AIM_STICKS="x,z;x,z" replaces the stick cycle,
+AIM_BUTTONS="cross,circle" the button cycle.
 AIM_SERVE=1 records P1's serve aims instead (the swing's aim at the countdown's end, +0x3fa4 1, +0x3fa6 3): serving it
 tosses with the next button (✕ mostly: the strong toss, whose mistiming nudges +0x3f10..+0x3f1c), holds the next stick
 and swings AIM_SERVE_DELAY frames later (cycled, for every timing grade). Aims re-run by an instant replay (+0x4088
@@ -24,7 +26,11 @@ VSYNC, GM_PTR = 0x1d5780, 0x422f80
 PAD, GLOBALS, RALLY = (0x2efb00, 0x90), (0x422f80, 0x180), (0x3165f0, 0x50)
 PLAYER = ((0x1380, 0x200), (0x3c00, 0x400))
 STICKS = [(1, -1), (-1, -1), (1, 1), (-1, 1), (0, -1), (1, 0), (-1, 0), (0, 1), (0, 0), (0.6, -0.8), (-0.4, -1)]  # 11: coprime to the 3 buttons
+if os.environ.get("AIM_STICKS"):  # e.g. "1,-1;-1,-1": a cycle of its own (wide sticks reach the angle limit)
+    STICKS = [tuple(float(c) for c in x.split(",")) for x in os.environ["AIM_STICKS"].split(";")]
 BUTTONS = ("cross", "circle", "triangle")
+if os.environ.get("AIM_BUTTONS"):  # e.g. "cross": ✕ alone (kind 0, whose angle limit ○/△ lift to 90°)
+    BUTTONS = tuple(os.environ["AIM_BUTTONS"].split(","))
 SINGLES, COUNT = os.environ.get("AIM_SINGLES") == "1", 0x422fa4  # player count
 REACH = float(os.environ.get("AIM_REACH", "1.0"))
 # AIM_LEAD: frames to the contact (contact_frame) to press at, cycled per press. Standing in reach the swing locks 2
@@ -60,7 +66,8 @@ def pf(smp, o, f="<i"): return struct.unpack_from(f, smp, AIM + o - 0x3e90)[0]  
 def serve_aim(pre, cur):
     """The serve swing's aim: the countdown ends this frame with no miss (+0x3fa4 1, +0x3fa6 3, +0x3ec4 1 → −1)."""
     return pre[AIM + 0x3fa4 - 0x3e90] == 1 and pre[AIM + 0x3fa6 - 0x3e90] == 3 and pf(pre, 0x3ec4) == 1 and pre[AIM + 0x3ec8 - 0x3e90] == 0 and pf(cur, 0x3ec4) == -1
-ONLY_INCOMING = os.environ.get("AIM_INCOMING") == "1"  # keep only aims struck off an incoming slice
+ONLY_INCOMING = os.environ.get("AIM_INCOMING") in ("1", "sweet")  # keep only aims struck off an incoming slice
+ONLY_SWEET = os.environ.get("AIM_INCOMING") == "sweet"  # and of those only the ones the opponent struck sweet
 def incoming(pre):
     """Some(was sweet) when the ball struck is a rally slice (the aim test's rule, from the last shot's record)."""
     rec = pre[-0x10:]
@@ -101,7 +108,7 @@ while aims < want and n < cap:
         print(f"vsync {v}: serve aim {aims} toss {pf(sample, 0x3ea0)} stick {held} offset {pf(sample, 0x3fa0)} grade {sample[AIM + 0x3ee8 - 0x3e90]} branch {sample[BRANCH]} -> ({t[0]:.3f}, {t[2]:.3f}) nudge {struct.unpack_from('<4f', sample, AIM + 0x80)}", flush=True)
     if not SERVE and not replay and prev_sample and prev_sample[BRANCH] in (1, 2, 3, 4) and sample[AIM:AIM + 16] != prev_sample[AIM:AIM + 16] and last - struct.unpack("<I", prev_sample[:4])[0] == 1:
         inc = incoming(prev_sample)
-        if not ONLY_INCOMING or inc is not None:
+        if not ONLY_INCOMING or inc is not None and (inc or not ONLY_SWEET):
             out.write(prev_sample + sample)
             out.flush()
             aims += 1
@@ -134,9 +141,9 @@ while aims < want and n < cap:
         if k is not None and k <= LEADS[presses % len(LEADS)] and hit != pressed_for:
             pressed_for, idle = hit, 0
             presses += 1
-            press(BUTTONS[presses % 3])
+            press(BUTTONS[presses % len(BUTTONS)])
             pressed_at = v
-            print(f"vsync {v}: press {BUTTONS[presses % 3]} side {dx + (REACH if dx > 0 else -REACH):.2f} m contact in {k} lead {LEADS[(presses - 1) % len(LEADS)]}", flush=True)
+            print(f"vsync {v}: press {BUTTONS[presses % len(BUTTONS)]} side {dx + (REACH if dx > 0 else -REACH):.2f} m contact in {k} lead {LEADS[(presses - 1) % len(LEADS)]}", flush=True)
     else:
         stick = (0, 0)
     if SINGLES and not locked and p.read32(COUNT) != 4:
