@@ -44,55 +44,7 @@ pub struct Game {
     pub degrees: f32,
 }
 
-/// The C library's `rand()`: a 64-bit LCG whose state is 1 at boot (the game never reseeds it); each call returns
-/// bits 32..62 of the stepped state.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rand(pub u64);
-
-impl Default for Rand {
-    fn default() -> Self {
-        Rand(1)
-    }
-}
-
-impl Rand {
-    pub fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
-        (self.0 >> 32) as u32 & 0x7fff_ffff
-    }
-}
-
-/// The game's shared MT19937 (the match object's generator): seeded with a `rand()` output when the match is set
-/// up, and the weather schedule is its first draws.
-#[derive(Clone, Debug)]
-pub struct Mt(pub [u32; 624], pub usize);
-
-impl Mt {
-    pub fn new(seed: u32) -> Mt {
-        let mut m = [0u32; 624];
-        m[0] = seed;
-        for i in 1..624 {
-            m[i] = (i as u32).wrapping_add((m[i - 1] ^ (m[i - 1] >> 30)).wrapping_mul(0x6c07_8965));
-        }
-        Mt(m, 624)
-    }
-
-    pub fn next(&mut self) -> u32 {
-        if self.1 >= 624 {
-            for k in 0..624 {
-                let y = (self.0[k] & 0x8000_0000) | (self.0[(k + 1) % 624] & 0x7fff_ffff);
-                self.0[k] = self.0[(k + 397) % 624] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908_b0df } else { 0 };
-            }
-            self.1 = 0;
-        }
-        let mut y = self.0[self.1];
-        self.1 += 1;
-        y ^= y >> 11;
-        y ^= (y << 7) & 0x9d2c_5680;
-        y ^= (y << 15) & 0xefc6_0000;
-        y ^ (y >> 18)
-    }
-}
+pub use crate::rng::{Mt, Rand};
 
 fn r15(rand: &mut impl FnMut() -> u32) -> i32 {
     ((rand() >> 16) & 0x7fff) as i32

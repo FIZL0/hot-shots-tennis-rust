@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, layout, xb::Archive};
 use hst_sim::npc;
 
-use super::{rand, Game, Phase};
+use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace};
 
@@ -86,11 +86,8 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default() };
-    let (umpire, rng) = (g.umpire.clone(), &mut g.rng);
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
+    let mut roll = || rng.next();
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
             npc::Kind::Umpire => {
@@ -158,11 +155,8 @@ fn step(
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
     // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
     let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let rng = &mut g.rng.court;
+    let mut roll = || rng.next();
     // a decided point: the walkers react, some cheering
     let cheer = if motion != 0 && npcs.motion == 0 {
         for (e, w, home) in &mut npcs.walkers {

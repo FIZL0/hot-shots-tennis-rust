@@ -101,21 +101,15 @@ pub fn mis_hit(g: &mut Game, who: usize, (branch, grade, kind): (u8, u8, i32), f
     let rally = g.phase == super::Phase::Rally && g.players.len() > 1;
     let stamina = if rally { hst_sim::player::stroke_stamina(&p.stats, p.body.stamina, branch, forehand, 0) } else { p.body.stamina };
     let height = -g.flight.ball.pos[1];
-    let rng = &mut g.rng;
+    let rng = &mut g.rng.shared;
     let (_, awkward) = swing::launch_motion(branch, p.cmd.id as i32);
-    swing::mis_hit(grade, branch, kind, stamina < 10, awkward, height, || {
-        super::rand(rng);
-        *rng
-    })
+    swing::mis_hit(grade, branch, kind, stamina < 10, awkward, height, || rng.next())
 }
 
 /// A framed hit's lob for player `who`: (aim, side, depth error), as `swing::wild_aim`.
 pub fn wild(g: &mut Game, who: usize) -> (V3, f32, f32) {
-    let (doubles, end, rng) = (g.rules.players > 2, g.players[who].end, &mut g.rng);
-    swing::wild_aim(doubles, end, || {
-        super::rand(rng);
-        *rng
-    })
+    let (doubles, end, rng) = (g.rules.players > 2, g.players[who].end, &mut g.rng.shared);
+    swing::wild_aim(doubles, end, || rng.next())
 }
 
 /// What timing error `e` does to player `who`'s stroke (class 1) or volley (class 2) of `kind` from `at` toward the

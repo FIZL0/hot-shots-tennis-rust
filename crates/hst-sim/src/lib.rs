@@ -3,6 +3,7 @@
 pub mod ball;
 pub mod params;
 pub mod ps2;
+pub mod rng;
 pub mod shot;
 pub mod contact;
 pub mod quat;
