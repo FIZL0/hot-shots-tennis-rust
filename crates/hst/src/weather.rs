@@ -45,6 +45,8 @@ pub struct CourtLook {
     pub season: usize,
     pub sky: Option<[f32; 3]>,
     pub looks: [[f32; 6]; 6],
+    /// The players' light factors (`exe::Game::player_light`).
+    pub players: [f32; 4],
     /// Background models (`_bg`, `_acc`, `_clo`) and the sky: their own flat fogs.
     pub bg: HashSet<AssetId<GsMaterial>>,
     pub skies: HashSet<AssetId<GsMaterial>>,

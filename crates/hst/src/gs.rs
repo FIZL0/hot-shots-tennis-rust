@@ -124,6 +124,14 @@ pub fn model_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)
     Some(((rgb * or(f(row + 0x1c)?, f(row + 0x10)?)).extend(1.0), (rgb * or(f(row + 0x18)?, f(row + 0xc)?)).extend(1.0)))
 }
 
+/// The light VU1 has for the match's players: (colour, ambient) = the light row's RGB × the court's own player factors
+/// (`exe::Game::player_light`: [ambient, light, ..]), not the row's model factors and not × the weather's scale.
+/// ponytail: the third light (its factor × RGB, from the player's court end) is left out, as for the court; 0 on court 10
+pub fn player_light(envir: &[u8], season: usize, w: &Look, factors: [f32; 4]) -> Option<(Vec4, Vec4)> {
+    let (rgb, _) = light_rgb(envir, season, w)?;
+    Some(((rgb * factors[1]).extend(1.0), (rgb * factors[0]).extend(1.0)))
+}
+
 /// The light row's RGB, ambient and intensity in weather `w`.
 fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> {
     let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
@@ -407,5 +415,11 @@ mod tests {
         envir[0xe8..0xf0].fill(0);
         let (colour, ambient) = model_light(&envir, 0, &Look::CLEAR).unwrap();
         assert!(near(colour, [0.60392, 0.58745, 0.58745]) && near(ambient, [0.63843, 0.62102, 0.62102]), "{colour} {ambient}");
+        // the players: court 10's own factors (0.7, 0.7); slot 5's GS dump draws them with ambient = light =
+        // (0.60392, 0.58745), unlit (77, 75, 75) and at most (154, 150, 150) for vertex colour 0x80
+        let (colour, ambient) = player_light(&envir, 0, &Look::CLEAR, [0.7, 0.7, 0.0, 245.0]).unwrap();
+        assert!(near(colour, [0.60392, 0.58745, 0.58745]) && near(ambient, [0.60392, 0.58745, 0.58745]), "{colour} {ambient}");
+        assert_eq!((ambient * 128.0).truncate().as_uvec3().to_array(), [77, 75, 75]);
+        assert_eq!(((ambient + colour) * 128.0).truncate().as_uvec3().to_array(), [154, 150, 150]);
     }
 }
