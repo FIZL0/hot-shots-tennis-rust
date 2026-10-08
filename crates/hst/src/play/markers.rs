@@ -35,7 +35,8 @@ pub fn plugin(app: &mut App) {
 
 /// Whether the markers show: from the serve's set-up until the toss, with more than one player.
 fn shown(g: &Game) -> bool {
-    g.players.len() > 1 && g.phase == Phase::Serve && g.serving.toss.is_none()
+    // not under the result screen, which replaces the match HUD
+    g.players.len() > 1 && g.phase == Phase::Serve && g.serving.toss.is_none() && g.match_stats.result.is_none()
 }
 
 /// The marker's half-width at view depth `z` with `t` = tan(horizontal half-angle).

@@ -311,6 +311,10 @@ fn layout(v: &View) -> Vec<Quad> {
     out
 }
 
+/// The match HUD's root nodes, hidden under the pause and result screens. Not B5b's composite node (aimed at its own
+/// output camera): it draws the whole frame, and hiding it leaves the clear colour (the "blue screen").
+type Hud = (With<Node>, Without<ChildOf>, Without<Root>, Without<super::match_stats::Root>, Without<Slot>, Without<UiTargetCamera>);
+
 #[derive(Resource)]
 struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>);
 #[derive(Component)]
@@ -366,6 +370,7 @@ fn step(
     gamepads: Query<&Gamepad>,
     time: Res<Time>,
     mut fixed: ResMut<Time<Fixed>>,
+    g: Res<Game>,
     mut menu: ResMut<Menu>,
     mut pads: ResMut<Pads>,
     art: Option<Res<Art>>,
@@ -388,7 +393,8 @@ fn step(
     let timed = !*auto
         && std::env::var("HST_PAUSE").ok().and_then(|s| s.parse::<f32>().ok()).is_some_and(|t| time.elapsed_secs() >= t);
     if !menu.open {
-        if start || timed {
+        // the result screen has no pause
+        if (start || timed) && g.match_stats.result.is_none() {
             *auto = true;
             *menu = Menu::opened();
             play(2);
@@ -429,7 +435,7 @@ fn draw(
     panel_art: Option<Res<panel::Art>>,
     colours: Option<Res<Colours>>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
-    mut others: Query<(Entity, &mut Visibility), (With<Node>, Without<ChildOf>, Without<Root>, Without<Slot>)>,
+    mut others: Query<(Entity, &mut Visibility), Hud>,
     mut hidden: Local<Vec<(Entity, Visibility)>>,
 ) {
     let (Some(art), Some(panel_art), Some(colours)) = (art, panel_art, colours) else {
@@ -437,13 +443,14 @@ fn draw(
     };
     let n = g.players.len();
     let s = &g.score;
-    // the pause screen replaces the rest of the HUD (panel, pop-ups, the port's text)
-    if menu.open && hidden.is_empty() {
+    // the pause and result screens replace the rest of the HUD (panel, pop-ups, the port's text)
+    let cover = menu.open || g.match_stats.result.is_some();
+    if cover && hidden.is_empty() {
         for (e, mut vis) in &mut others {
             hidden.push((e, *vis));
             *vis = Visibility::Hidden;
         }
-    } else if !menu.open {
+    } else if !cover {
         for (e, vis) in hidden.drain(..) {
             if let Ok((_, mut v)) = others.get_mut(e) {
                 *v = vis;
@@ -543,6 +550,18 @@ mod tests {
         assert_eq!(pts, [([64.0, 96.0, 64.0, 48.0], 128.0), ([64.0, 48.0, 64.0, 48.0], 64.0)]);
         let qs = layout(&View { points: [6, 6], deuce: true, tiebreak: true, ..view() });
         assert!(qs.iter().filter(|q| q.tex == TIEBREAK).all(|q| q.src == [0.0, 192.0, 64.0, 48.0]));
+    }
+
+    /// The HUD filter takes the panel's root but neither the frame composite nor the pause screen's own root.
+    #[test]
+    fn hud_roots() {
+        let mut w = World::new();
+        let cam = w.spawn_empty().id();
+        let panel = w.spawn(Node::default()).id();
+        w.spawn((Node::default(), UiTargetCamera(cam)));
+        w.spawn((Node::default(), Root));
+        let found: Vec<Entity> = w.query_filtered::<Entity, Hud>().iter(&w).collect();
+        assert_eq!(found, [panel]);
     }
 
     /// Down moves and wraps, input waits 5 ticks, the hand swings to −16 and back, ✕ on the second option fades out.

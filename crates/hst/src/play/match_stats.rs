@@ -356,7 +356,7 @@ struct Art(Vec<Handle<Image>>, Option<std::sync::Arc<crate::audio::SoundBank>>);
 #[derive(Component)]
 struct Slot(usize);
 #[derive(Component)]
-struct Root;
+pub(super) struct Root;
 const POOL: usize = 400;
 
 /// The "Game, Set, Match!" model.
