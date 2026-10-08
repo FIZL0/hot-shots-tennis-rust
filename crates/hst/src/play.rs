@@ -2857,12 +2857,19 @@ fn bot_run(g: &Game, i: usize, goal: V3) -> Vec2 {
 
 /// The AI's stick through its serve's follow-through (`motion::ai_serve_stick`); the return's own frame is the
 /// fresh flight's.
-/// ponytail: the rally routine's move can be no stick (within ⅔ of a step) or a frame later; the stand-in always
-/// breaks off then (B27c).
+/// True once the wait is over: then the rally step's own stick decides (`ai_serve_step`).
 fn ai_serve_stick(g: &mut Game, i: usize) -> bool {
     let p = &mut g.players[i];
     let Some(a) = p.served.map(|a| a + 1) else { return false };
     motion::ai_serve_stick(a, p.recover, g.shots, g.flight.frame == 0, &mut p.ai_hold)
+}
+
+/// The rally step's stick `dir` ends a computer server's follow-through once its wait is over; none (the step
+/// zeroed within ⅔ of a step) keeps it playing out. Whether the server is still held this frame.
+/// ponytail: the goal is the stand-in's; the original's sub-state 0 picks a contact chase (keep on, sub-state 1) or a
+/// spot helper (keep off) or nothing, which can put the first stick a frame later (B27d)
+fn ai_serve_step(g: &mut Game, i: usize, dir: Vec2) -> bool {
+    g.players[i].served.is_some() && serve_follow(&mut g.players[i], dir != Vec2::ZERO)
 }
 
 /// Stand-in AI for player `i`: serves, runs to the predicted interception (in doubles only the teammate
@@ -2876,8 +2883,9 @@ fn bot(g: &mut Game, i: usize) {
     if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
     }
+    // past its wait the rally step below decides the break-off (`ai_serve_step`)
     let stick = ai_serve_stick(g, i);
-    if serve_follow(&mut g.players[i], stick) {
+    if !stick && serve_follow(&mut g.players[i], false) {
         return;
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
@@ -2944,6 +2952,9 @@ fn bot(g: &mut Game, i: usize) {
         });
         let dir = bot_run(g, i, goal);
         let dir = if mind.active { dir } else { Vec2::ZERO };
+        if ai_serve_step(g, i, dir) {
+            return;
+        }
         locomote(g, i, dir);
         // press when the contact search would lock onto the drawn frame (or later, if it is already past)
         if mine.is_some() {
