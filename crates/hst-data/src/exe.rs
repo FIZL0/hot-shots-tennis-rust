@@ -113,16 +113,21 @@ impl<'a> Game<'a> {
         let row = |a: u32| FootPuff {
             fade_in: i(a),
             fade_out: i(a + 4),
+            fade_out2: i(a + 8),
             alpha: i(a + 0xc),
+            alpha2: i(a + 0x10),
             size: self.f32(a + 0x14),
             grow: self.f32(a + 0x18),
             speed: self.f32(a + 0x1c),
             rise: self.f32(a + 0x20),
+            ring_size: [self.f32(a + 0x24), self.f32(a + 0x28)],
+            ring_speed: [self.f32(a + 0x2c), self.f32(a + 0x30)],
+            ring_rise: self.f32(a + 0x34),
         };
         let steps = (0..14u32)
             .map(|c| {
                 let t = 0x41_1620 + c * 0x144;
-                FootStep { cooldown: i(0x41_1520 + c * 0xc), lift: self.f32(0x41_1524 + c * 0xc), runs: self.at(t, 56).iter().map(|&b| b != 0).collect(), scale: self.f32s(t + 0x38, 53) }
+                FootStep { cooldown: i(0x41_1520 + c * 0xc), lift: self.f32(0x41_1524 + c * 0xc), runs: self.at(t, 56).iter().map(|&b| b != 0).collect(), scale: self.f32s(t + 0x38, 53), burst: self.at(t + 0x10c, 56).iter().map(|&b| b != 0).collect() }
             })
             .collect();
         let rgb = |r: &[u8], o: usize| std::array::from_fn(|k| f32::from_le_bytes(r[o + 4 * k..o + 4 * k + 4].try_into().unwrap()));
@@ -553,26 +558,33 @@ pub struct Foot {
 }
 
 /// A character's footstep rule: a foot lifted above 0.08 m lands at `lift`; then it can't step again for `cooldown`
-/// frames. Per motion whether it steps at all and its puff scale.
+/// frames. Per motion whether it steps at all, its puff scale and whether it throws a burst as the hips hit the court.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FootStep {
     pub cooldown: i32,
     pub lift: f32,
     pub runs: Vec<bool>,
     pub scale: Vec<f32>,
+    pub burst: Vec<bool>,
 }
 
 /// A footstep puff's look: frames to fade in and out, peak alpha, start size, growth over its life, drift speed,
-/// rise per frame.
+/// rise per frame. Bursts and dive rings fade out over `fade_out2` from `alpha2`; a dive ring's start size and
+/// outward speed are drawn in their ranges, and it rises `ring_rise` per frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FootPuff {
     pub fade_in: i32,
     pub fade_out: i32,
+    pub fade_out2: i32,
     pub alpha: i32,
+    pub alpha2: i32,
     pub size: f32,
     pub grow: f32,
     pub speed: f32,
     pub rise: f32,
+    pub ring_size: [f32; 2],
+    pub ring_speed: [f32; 2],
+    pub ring_rise: f32,
 }
 
 /// A court's footstep look: dust puffs rise, footprints stay; footprint colour, alpha and life (frames) dry, wet.

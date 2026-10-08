@@ -50,6 +50,8 @@ fn puff(b: &[u8]) -> Puff {
         speed: f(b, 0x4c),
         fresh: b[0x50] != 0,
         scale: f(b, 0x70),
+        kind: i(b, 0) as u8,
+        vel: v4(b, 0x60),
     }
 }
 fn puff_key(u: &Puff) -> (Vec<u32>, [i32; 4], [bool; 2]) {
@@ -77,7 +79,13 @@ fn state(fr: &[u8]) -> Feet {
         puffs,
         prints: (0..np).map(|k| print(&fr[PRINTS + 0x50 * k..])).collect(),
         after_point: h[0xc0] != 0,
+        ..Feet::default()
     }
+}
+
+/// The step puffs (this recording has no bones for the sit-down bursts; `foot_extras` checks every kind).
+fn steps0(a: &Feet) -> impl Iterator<Item = &Puff> {
+    a.puffs.iter().filter(|u| u.kind == 0)
 }
 
 #[test]
@@ -116,6 +124,7 @@ fn footsteps_s05() {
                     toes: [v4(b, 0xf0 + 0x30), v4(b, 0x130 + 0x30)],
                     m: m4(b, 0),
                     slide: b[0x41] != 0,
+                    ..Runner::default()
                 }
             })
             .collect();
@@ -125,10 +134,10 @@ fn footsteps_s05() {
         let same = |a: &Feet| {
             (a.armed, a.cooldown) == (want.armed, want.cooldown)
                 && a.prints.iter().map(print_key).eq(want.prints.iter().map(print_key))
-                && (!full || a.puffs.iter().map(puff_key).eq(want.puffs.iter().map(puff_key)))
+                && (!full || steps0(a).map(puff_key).eq(want.puffs.iter().map(puff_key)))
         };
         // the game sometimes skips the update a frame and catches up with two the next
-        let tick = |a: &mut Feet| a.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0);
+        let tick = |a: &mut Feet| a.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || unreachable!());
         let mut one = feet.clone();
         tick(&mut one);
         if !same(&one) && same(&feet) {
@@ -147,7 +156,7 @@ fn footsteps_s05() {
         assert_eq!((feet.armed, feet.cooldown), (want.armed, want.cooldown), "frame {k}: step state");
         assert_eq!(feet.prints.iter().map(print_key).collect::<Vec<_>>(), want.prints.iter().map(print_key).collect::<Vec<_>>(), "frame {k}: prints");
         if full {
-            assert_eq!(feet.puffs.iter().map(puff_key).collect::<Vec<_>>(), want.puffs.iter().map(puff_key).collect::<Vec<_>>(), "frame {k}: puffs");
+            assert_eq!(steps0(&feet).map(puff_key).collect::<Vec<_>>(), want.puffs.iter().map(puff_key).collect::<Vec<_>>(), "frame {k}: puffs");
             checked += 1;
         }
         steps += feet.puffs.iter().filter(|u| u.timer == t.puffs[0].fade_in && u.phase == 0).count();
@@ -155,4 +164,145 @@ fn footsteps_s05() {
     }
     eprintln!("{} frames ({skipped} without an update, {doubled} with two, {resets} points), {checked} puff frames, {steps} puffs, {prints} footprint frames", frames.len());
     assert!(steps > 100 && prints > 100);
+}
+
+// `foot_s05x.bin` (`record_foot.py 5 5000 … extras`): each frame as above, then the shared MT 0x9c8, run object
+// +0x9ec0..+0xa0a0, per player +0x3f80 0x10, +0x3ec0 0x10 and the pelvis, spine and head world matrices.
+const MT: usize = SIZE;
+const DASH: usize = MT + 0x9c8;
+const EX: usize = DASH + 0x1f0;
+const EXSZ: usize = 0x20 + 0xc0;
+
+/// A puff's live fields by kind (the game leaves the rest of a reused slot stale).
+fn any_key(u: &Puff) -> (u8, Vec<u32>, [i32; 4], [bool; 2]) {
+    match u.kind {
+        0 => {
+            let (v, i, b) = puff_key(u);
+            (0, v, i, b)
+        }
+        1 => {
+            let v = [[u.size, u.grow, u.alpha, u.fade, u.speed].as_slice(), &u.pos, &u.dir, &u.vel].concat();
+            (1, bits(&v), [u.phase, u.timer, u.player as i32, 0], [u.fresh, false])
+        }
+        _ => (2, bits(&[[u.size, u.grow, u.alpha, u.fade, u.scale].as_slice(), &u.pos].concat()), [u.phase, u.timer, 0, 0], [false; 2]),
+    }
+}
+
+fn mt(fr: &[u8]) -> hst_sim::weather::Mt {
+    hst_sim::weather::Mt(std::array::from_fn(|k| i(fr, MT + 4 + 4 * k) as u32), i(fr, MT + 0x9c4) as usize)
+}
+
+#[test]
+fn foot_extras_s05() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")), std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN"))) else {
+        return eprintln!("disc absent, skipped");
+    };
+    let t = exe::Game::new(&cnf, &bin).unwrap().foot();
+    let (mut kinds, mut rings, mut dashes) = ([0; 3], 0, 0);
+    // the w and d recordings force the court wet and dusty (`FOOT_POKE`) for the dive rings
+    for name in ["x", "w", "d"] {
+    let Ok(data) = std::fs::read(format!("{root}/context/fixtures/foot_s05{name}.bin")) else {
+        eprintln!("foot_s05{name}.bin absent, skipped");
+        continue;
+    };
+    let court = i(&data, 0) as usize;
+    let frames: Vec<&[u8]> = data[8..].chunks_exact(EX + 4 * EXSZ).collect();
+    let full = |fr: &[u8]| {
+        let mut s = state(fr);
+        let n = i(fr, RUN + 0x11c) as usize;
+        s.puffs = (0..n.min(32)).map(|k| puff(&fr[PUFFS + 0x80 * k..])).collect();
+        s.burst = std::array::from_fn(|p| fr[DASH + 0x1dd + p] != 0);
+        s
+    };
+    let dash = |fr: &[u8]| -> [Option<[[f32; 4]; 4]>; 4] { std::array::from_fn(|p| (fr[DASH + 0x50 + 0x50 * p] != 0).then(|| m4(fr, DASH + 0x10 + 0x50 * p))) };
+    let mut feet = full(frames[0]);
+    feet.dash = dash(frames[0]);
+    let mut skipped = 0;
+    for k in 1..frames.len() {
+        let (fr, h) = (frames[k], &frames[k][RUN..]);
+        // a frame the recorder missed, or a point's end or the next one's start: start over from the recording
+        let gap = i(fr, 0) != i(frames[k - 1], 0) + 1;
+        if gap || feet.after_point != (h[0xc0] != 0) {
+            feet = full(fr);
+            feet.dash = dash(fr);
+            continue;
+        }
+        feet.after_point = h[0xc0] != 0;
+        let runners: Vec<Runner> = (0..4)
+            .map(|p| {
+                let (b, x) = (&fr[PL + PLSZ * p..], &fr[EX + EXSZ * p..]);
+                Runner {
+                    character: i(h, 0x7c + 4 * p) as usize,
+                    motion: i(b, 0x50 + 0x20),
+                    sub: i(b, 0x48),
+                    toes: [v4(b, 0xf0 + 0x30), v4(b, 0x130 + 0x30)],
+                    m: m4(b, 0),
+                    slide: b[0x41] != 0,
+                    pelvis: m4(x, 0x20),
+                    spine: m4(x, 0x60),
+                    head: v4(x, 0xa0 + 0x30),
+                    // the manager's hit event: flag at +0x758 + p, branch (3 a dive) at +0x761 + 8p
+                    dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
+                    lunge: f(x, 0),
+                    dive_over: x[0x10 + 9] != 0,
+                }
+            })
+            .collect();
+        let want = full(fr);
+        let fits = i(h, 0x11c) <= 32;
+        let key = |a: &Feet| (a.burst, if fits { a.puffs.iter().map(any_key).collect() } else { vec![] }, a.dash.map(|d| d.map(|m| bits(&m.concat()))));
+        let mut wkey = key(&want);
+        wkey.2 = dash(fr).map(|d| d.map(|m| bits(&m.concat())));
+        let diving = runners.iter().any(|r| r.dive);
+        // the dive rings draw from the shared generator somewhere in the frame's draws: find where
+        let mut found = None;
+        for skip in 0..if diving { 400 } else { 1 } {
+            let mut g = mt(frames[k - 1]);
+            (0..skip).for_each(|_| {
+                g.next();
+            });
+            let mut one = feet.clone();
+            one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
+            if key(&one) == wkey {
+                found = Some(one);
+                break;
+            }
+        }
+        if found.is_none() && !diving {
+            // or catches up with two
+            let mut two = feet.clone();
+            for _ in 0..2 {
+                two.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || unreachable!());
+            }
+            found = (key(&two) == wkey).then_some(two);
+        }
+        let Some(one) = found else {
+            // the game sometimes skips the update a frame (see `footsteps_s05`)
+            if key(&feet) != wkey {
+                let mut one = feet.clone();
+                let mut g = mt(frames[k - 1]);
+                one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
+                let got = key(&one);
+                eprintln!("burst {:?} vs {:?}\ndash {:?}\n vs {:?}", got.0, wkey.0, got.2, wkey.2);
+                let fl = |v: &Vec<u32>| v.iter().map(|&b| f32::from_bits(b)).collect::<Vec<_>>();
+                got.1.iter().for_each(|a| eprintln!("got  {} {:?} {:?} {:?}", a.0, fl(&a.1), a.2, a.3));
+                key(&feet).1.iter().for_each(|a| eprintln!("old  {} {:?} {:?} {:?}", a.0, fl(&a.1), a.2, a.3));
+                wkey.1.iter().for_each(|a| eprintln!("want {} {:?} {:?} {:?}", a.0, fl(&a.1), a.2, a.3));
+                panic!("frame {k}: no match ({} vs {} puffs)", got.1.len(), wkey.1.len());
+            }
+            skipped += 1;
+            continue;
+        };
+        rings += diving as usize;
+        dashes += one.dash_start.iter().filter(|&&s| s).count();
+        // a ring puff's timer starts at fade_in (3 on both rows) and counts down
+        kinds[1] += one.puffs.iter().filter(|u| u.kind == 1 && u.phase == 0 && u.timer == 3).count();
+        kinds[2] += 4 * (0..4).filter(|&p| one.burst[p] && !feet.burst[p]).count();
+        feet = one;
+    }
+    eprintln!("{name}: {} frames ({skipped} without an update)", frames.len());
+    }
+    eprintln!("puffs born by kind {kinds:?}, {rings} dive frames, {dashes} streaks");
+    assert!(kinds[1] >= 10 && kinds[2] >= 4 && dashes > 0);
 }
