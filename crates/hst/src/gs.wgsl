@@ -1,7 +1,8 @@
 // PS2 GS colour path for court models (see gs.rs). Values are in PS2 units: 1.0 = 0x80 for vertex/material colour
 // and alpha, texel colour 1.0 = 0xff, texel alpha 1.0 = 0x80 (mtl.rs expands it to 0xff).
-#import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows}
+#import bevy_pbr::{mesh_bindings::mesh, mesh_functions, skinning, morph, forward_io::Vertex}
+#import bevy_pbr::view_transformations::position_world_to_clip
 
 struct Gs {
     color: vec4<f32>,
@@ -21,6 +22,88 @@ struct Gs {
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var gs_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var gs_sampler: sampler;
 
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+#ifdef VERTEX_UVS_A
+    @location(2) uv: vec2<f32>,
+#endif
+    // VU1's vertex colour, as the GS gets it: vertex × material colour × light, 8-bit (0x80 = 1.0, at most 0xff)
+    @location(5) color: vec4<f32>,
+    // its specular term (the vertex alpha HIGHLIGHT2 adds)
+    @location(8) spec: f32,
+}
+
+#ifdef MORPH_TARGETS
+// as Bevy's mesh.wgsl
+fn morph_vertex(vertex_in: Vertex, instance_index: u32) -> Vertex {
+    var vertex = vertex_in;
+    let vertex_index = vertex.index - mesh[instance_index].first_vertex_index;
+    for (var i = 0u; i < morph::layer_count(instance_index); i++) {
+        let weight = morph::weight_at(i, instance_index);
+        if weight != 0.0 {
+            vertex.position += weight * morph::morph_position(vertex_index, i, instance_index);
+        }
+    }
+    return vertex;
+}
+#endif
+
+@vertex
+fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+    let instance = vertex_no_morph.instance_index;
+#ifdef MORPH_TARGETS
+    let vertex = morph_vertex(vertex_no_morph, instance);
+#else
+    let vertex = vertex_no_morph;
+#endif
+#ifdef SKINNED
+    let world_from_local = skinning::skin_model(vertex.joint_indices, vertex.joint_weights, instance);
+#else
+    let world_from_local = mesh_functions::get_world_from_local(instance);
+#endif
+    out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4(vertex.position, 1.0));
+    out.position = position_world_to_clip(out.world_position.xyz);
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
+    // vertex colour × material colour (0x80 = 1.0)
+#ifdef VERTEX_COLORS
+    var c = vertex.color * gs.color;
+#else
+    var c = gs.color;
+#endif
+    // VU1 lighting, per vertex in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour
+    // × its diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
+    // Schlick's t/(k − (k − 1)t) for t^k. A skinned vertex's normal is the sum of its bones' pre-weighted normals
+    // (|n| = the weight), each turned by its bone, not normalised; the second bone's rides in the tangent slot
+    // (character.rs). Meshes without normals (the weather's particles) go unlit.
+    out.spec = 0.0;
+#ifdef VERTEX_NORMALS
+#ifdef SKINNED
+    let j0 = skinning::skin_model(vertex.joint_indices, vec4(1.0, 0.0, 0.0, 0.0), instance);
+    var n = mat3x3(j0[0].xyz, j0[1].xyz, j0[2].xyz) * vertex.normal;
+#ifdef VERTEX_TANGENTS
+    let j1 = skinning::skin_model(vertex.joint_indices, vec4(0.0, 1.0, 0.0, 0.0), instance);
+    n += mat3x3(j1[0].xyz, j1[1].xyz, j1[2].xyz) * vertex.tangent.xyz;
+#endif
+#else
+    var n = mesh_functions::mesh_normal_local_to_world(vertex.normal, instance);
+#endif
+    let flip = vec3(1.0, -1.0, -1.0);
+    n *= flip;
+    let diffuse = max(-dot(n, gs.light_dir.xyz), 0.0);
+    let forward = -view_bindings::view.world_from_view[2].xyz * flip;
+    let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
+    out.spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
+    c = vec4(c.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), c.a);
+#endif
+    // FTOI0 to the GS's 8 bits
+    out.color = floor(min(c * 128.0, vec4(255.0)) + 1e-3) / 128.0;
+    return out;
+}
+
 // 1 lit, 0 in shadow: the first directional light that casts shadows (the match's sun)
 fn sun_visibility(in: VertexOutput) -> f32 {
     for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
@@ -36,27 +119,10 @@ fn sun_visibility(in: VertexOutput) -> f32 {
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    // vertex colour × material colour, as 8-bit RGBAQ (0x80 = 1.0, at most 0xff)
-#ifdef VERTEX_COLORS
-    var f = in.color * gs.color;
-#else
-    var f = gs.color;
-#endif
-    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour × its
-    // diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
-    // Schlick's t/(k − (k − 1)t) for t^k. Meshes without normals (the weather's particles) go unlit.
-    var spec = 0.0;
-#ifdef VERTEX_NORMALS
-    let flip = vec3(1.0, -1.0, -1.0);
-    let n = normalize(in.world_normal) * flip;
-    let diffuse = max(-dot(n, gs.light_dir.xyz), 0.0);
-    let forward = -view_bindings::view.world_from_view[2].xyz * flip;
-    let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
-    spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
-    f = vec4(f.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), f.a);
-#endif
-    var rgb = min(f.rgb, vec3(255.0 / 128.0));
-    var a = min(f.a, 255.0 / 128.0);
+    // the vertex's lit colour, Gouraud-shaded
+    var rgb = in.color.rgb;
+    var a = in.color.a;
+    let spec = in.spec;
 #ifdef GS_TEXTURED
     // TEX1 as the game sets it: LCM 0, L 0, K per model material, MMIN linear-mipmap-nearest, MXL = the levels
     // uploaded. Q = 1/w (VU1), w the view depth (m), so LOD = log2(w) + K, rounded off to a level

@@ -15,14 +15,14 @@
 //!   model's material header (mdl.rs). Q = 1/w (VU1), so a pixel's level is ⌊log2(view depth m) + K + ½⌋ clamped
 //!   to 0..MXL.
 //! - Colour = texture × vertex colour × material colour × light in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma
-//!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl); its specular term,
+//!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl's vertex stage: a
+//!   skinned vertex with its bones' pre-weighted normals summed, not normalised); its specular term,
 //!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
 //!   the colour directly). The specular exponent is max(1, 128·(header +0x10)^1.65).
 //!
 //! - Shadows (see shadow.rs): caster draws go into the sun's shadow map through `gs_prepass.wgsl`, which keeps the
 //!   alpha test; receiver draws (`shadow` > 0) multiply their colour by 1 − `shadow` where the sun is blocked.
 //!
-//! ponytail: lit per pixel, not per vertex as VU1 does; the same where the light is flat across a triangle.
 //! ponytail: textured MODULATE draws keep vertex × material alpha; on VU1 their vertex alpha is the highlight too.
 
 use bevy::mesh::MeshVertexBufferLayoutRef;
@@ -240,6 +240,10 @@ impl GsMaterial {
 }
 
 impl Material for GsMaterial {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://hst/gs.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         "embedded://hst/gs.wgsl".into()
     }

@@ -43,10 +43,15 @@ fn character_models_skin() {
     let (lo, hi) = parts.iter().flat_map(|p| p.1.iter()).fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.pos[1]), hi.max(v.pos[1])));
     eprintln!("{verts} vertices, y {lo}..{hi}");
     assert!(verts > 1000 && lo < -1.3 && hi > -0.1, "y range {lo}..{hi}");
-    // every vertex's copies agree in the bind pose: weights sum to 1
+    // every vertex's copies agree in the bind pose: weights sum to 1; each bone's normal comes pre-weighted
+    // (VU1 sums them as is: |n| = the weight)
     for (_, vs, _, _) in &parts {
         for v in vs {
             assert!((v.weights.iter().sum::<f32>() - 1.0).abs() < 1e-3, "{v:?}");
+            for k in 0..2 {
+                let len = v.normals[k].iter().map(|c| c * c).sum::<f32>().sqrt();
+                assert!((len - v.weights[k]).abs() < 0.01, "{v:?}");
+            }
         }
     }
 }
