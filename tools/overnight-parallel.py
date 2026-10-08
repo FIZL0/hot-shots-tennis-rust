@@ -304,6 +304,10 @@ def watch(n):
 def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/overnight-parallel.py')
+    others = [p for p in sp.run(['pgrep', '-f', r'^(python3 \S*overnight-parallel\.py|bash \S*overnight\.sh)( |$)'], capture_output=True, text=True).stdout.split()
+              if int(p) != os.getpid()]
+    if others:  # two parallel runners would share worktrees s1..sN; overnight.sh commits on main under the master
+        raise SystemExit(f'another overnight runner is going (pid {", ".join(others)}); wait for it to end')
     os.makedirs(NOTES, exist_ok=True)
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
     watched = {}  # slot -> time of its last match-over check

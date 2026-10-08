@@ -11,7 +11,7 @@ T=$(dirname "$(realpath "$0")")
 N=${HST_PCSX2:-}
 PID=${XDG_RUNTIME_DIR:-/tmp}/hst-pcsx2$N.pid  # pcsx2-qt hides its environment (file caps), so track it by pid
 PAD=${XDG_RUNTIME_DIR:-/tmp}/hst-vpad$N.fifo.lock  # held by copy N's vpad.py serve (started below)
-nopad() { [ -n "$N" ] && fuser -k -TERM "$PAD" >/dev/null 2>&1; true; }
+nopad() { [ -n "$N" ] && fuser -k -TERM "$PAD" >/dev/null 2>&1 || true; }  # set -e: a failed &&-list tail exits
 mine() { p=$(cat "$PID" 2>/dev/null) && [ "$(ps -o comm= -p "$p")" = pcsx2-qt ] && echo "$p"; true; }
 if [ "$1" = stop ]; then p=$(mine); [ -n "$p" ] && kill $p; nopad; exit 0; fi
 if [ "$1" = status ]; then p=$(mine); echo "PCSX2 ${N:+copy $N }$([ -n "$p" ] && echo "running (pid $p)" || echo "not running")"; exit 0; fi

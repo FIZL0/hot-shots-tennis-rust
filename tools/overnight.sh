@@ -16,7 +16,9 @@ pgrep -f '^python3 .*[o]vernight-parallel\.py' >/dev/null && { echo "a parallel 
 export HST_PCSX2=6 HST_PCSX2_MAX_HOLD=${HST_PCSX2_MAX_HOLD:-1200}
 cfg=../$(basename "$PWD")-slots/pcsx2/s6/PCSX2
 [ -d "$cfg" ] || { echo "no PCSX2 copy at $cfg (needs its own PINESlot 28017)"; exit 1; }
-cp -n ~/.config/PCSX2/sstates/* "$cfg/sstates/" 2>/dev/null  # the copy's save states start as the user's
+# the copy's save states start as the user's (their [Folders] SaveStates, relative to ~/.config/PCSX2)
+ss=$(sed -n 's/^SaveStates = //p' ~/.config/PCSX2/inis/PCSX2.ini); [[ $ss = /* ]] || ss=~/.config/PCSX2/${ss:-sstates}
+cp -n "$ss"/SCUS-97610* "$cfg/sstates/" 2>/dev/null
 prompt="Unattended run: nobody will answer questions. Do the next open task in PLAN.md — \`tools/ctx.py next\` — \
 following PLAN.md's rules and AGENT.md; commit on main. You have your own PCSX2 (HST_PCSX2=6 is set: tools/pcsx2-hst.sh \
 starts copy 6, pine.py and tools/vpad.py talk to it; its save states are a copy, so scratch saves to 8/9 are yours). Run \
