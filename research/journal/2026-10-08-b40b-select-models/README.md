@@ -129,3 +129,34 @@ Verified on PCSX2 copy 3, slot 9 (Items screen, Ashley's pose preview):
 - Mods get no UV binding (`part_nodes` is empty for mods): a rerigged mod has no packet palettes → M1i.
 - In-match per-motion UVAs are loaded into `Face::uv` but only the inspect previews play them; the in-match face path is unchanged.
 - `tools/check.sh`: `mods::tests::rerigged_mod_plays_forehand_and_run` fails on the sway assertion (`noise`: mod None vs disc Some(3, 126)). This diff doesn't touch sway. The local `context/mods/test_pc00` fixture is likely an export from before M1d's sway; not re-exported.
+
+# B40b4 — costume and umpire previews (2026-10-08)
+
+## Costumes
+
+All 14 characters × 10 costumes compared: the original's Data → Items → Costumes tab (PCSX2 copy 3, scratch slot 8,
+driven by a script that sets the tab's character and costume bytes and shoots each) against the port's
+`--inspect c:k` (one costume per run). Model, textures, colours, pose and racket hand match for all 140. The previews
+were already in place (B40b1 loads any costume through `load_disc`); no code change. Shots: `context/b40b4/orig/`,
+`context/b40b4/port/`, side-by-side crops `context/b40b4/side_cNN.png`.
+
+## Umpires: the original has no 3D umpire previews
+
+- Data → Items → Umpires is not a 3D object. It draws the pre-rendered sprite `MENU60.XB0 item_umpireNN.tm2`
+  (256×512, the umpire on the chair). The tab screen's inspect object is used only for the Characters and Costumes
+  tabs; on the Umpires and the next tab it is hidden. So it is not the same object as the inspect screen, and there is
+  no pose, camera or light to port.
+- The real umpire select (confirm screen → Select Umpire, `context/b40b4/ump1.png`) is 2D too: a row of five face
+  cards (Chika, Suzuki, Lily, Robot Tennis, Anna), the hovered card drawn larger and raised with the hand on its left,
+  a "△ Voice Sample" pill at the right, the info line "Choose an umpire for this match.", and the face plus name at
+  the top right. No 3D models anywhere on that screen.
+- So no 3D umpire preview was built: its pose, camera and light would all be guesses. The 1:1 face-card select is
+  B64's / B40e's job; B64's "umpires posed and animated" wording was corrected to match.
+
+## Not verified / not 1:1
+
+- The original's shots are under PCSX2's widescreen patch, which squeezes its 3D ×0.75 across; framing was compared
+  with that in mind, not pixel for pixel.
+- Costume lighting compared by eye only (no light values read for the Costumes tab beyond B40b's).
+- No 3D umpire previews: the original has none (see above). If the remaster wants them anyway as a deliberate
+  change, that needs the user's call and its own task.
