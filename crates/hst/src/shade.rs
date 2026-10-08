@@ -1,6 +1,7 @@
 //! The court's sun-shade map (`hst_sim::shade`) on court: built from the shadow casters at load (the game: a few
 //! frames after), then each frame the ball's ([`Ball`]) and every NPC's light scale is looked up under it in clear and
-//! cloudy weather (1.0 in rain and on court 7) and darkens it. The players are never shaded.
+//! cloudy weather (1.0 in rain and on court 7) and darkens it. Off the court the ball's height is a ray cast down at
+//! the court's collision model; a miss keeps its last scale. The players are never shaded.
 //!
 //! `HST_SHADE_DUMP=<file>` writes the built map (the game's bit layout) for comparing with a capture.
 //!
@@ -8,6 +9,7 @@
 //! directional light; exact once they are VU1-lit (P17s).
 
 use bevy::prelude::*;
+use hst_sim::mesh::World;
 use hst_sim::shade::{self, Frame};
 
 use crate::character::Rig;
@@ -15,11 +17,13 @@ use crate::character::Rig;
 /// The share of a character's colour its directional light gives.
 const DIRECT: f32 = 0.5;
 
-/// The court's map frame (from the hole model) and map.
+/// The court's map frame (from the hole model) and map, and the collision world whose court the ball's ground
+/// ray hits.
 #[derive(Resource)]
 pub struct Shade {
     pub frame: Frame,
     pub map: Vec<u8>,
+    pub world: World,
 }
 
 /// The ball model: shaded on the ground only.
@@ -47,13 +51,13 @@ pub fn packet_box(model: &hst_data::mdl::Model) -> ([f32; 3], [f32; 3]) {
 }
 
 /// The map of the casters' game-space triangles' shadows cast along `dir` onto the hole's `ground` triangles.
-pub fn build(frame: Frame, dir: Vec3, casters: impl IntoIterator<Item = [[f32; 3]; 3]>, ground: impl IntoIterator<Item = [[f32; 3]; 3]>) -> Shade {
+pub fn build(frame: Frame, dir: Vec3, casters: impl IntoIterator<Item = [[f32; 3]; 3]>, ground: impl IntoIterator<Item = [[f32; 3]; 3]>, world: World) -> Shade {
     let mut map = vec![0u8; shade::BYTES];
     shade::rasterize(&mut map, &frame, dir.to_array(), casters, ground);
     if let Ok(path) = std::env::var("HST_SHADE_DUMP") {
         _ = std::fs::write(path, &map);
     }
-    Shade { frame, map }
+    Shade { frame, map, world }
 }
 
 /// Give every new NPC rig and the ball materials of their own, so each can be shaded apart.
@@ -82,16 +86,16 @@ fn light(
     mut rigs: Query<(&GlobalTransform, &mut Lit, Has<Ball>), Without<crate::effects::SwingTrail>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(Shade { frame, map }) = shade.as_deref() else { return };
+    let Some(Shade { frame, map, world }) = shade.as_deref() else { return };
     let rain = crate::weather::now() >= 2;
     for (t, mut lit, ball) in &mut rigs {
         let p = t.translation();
         // Bevy (x, y, z) is game (x, −y, −z); the ball is shaded only on the ground, NPCs anywhere
-        // ponytail: off the court the game measures the ball's height from the ground model under it; here from y 0
         let s = if rain {
             1.0
         } else if ball {
-            shade::ball(map, frame, p.x, -p.z, p.y)
+            let Some(h) = shade::ball_height(&world.court, &world.models, [p.x, -p.y, -p.z, 1.0]) else { continue };
+            shade::ball(map, frame, p.x, -p.z, h)
         } else {
             shade::lookup(map, frame, p.x, -p.z)
         };

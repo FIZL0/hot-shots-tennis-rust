@@ -227,6 +227,38 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
     found
 }
 
+/// The segment `start` → `end` against triangle `v` (one winding): crossing its plane from the face side inside all
+/// three edges (0.0005 slack). Updates `hit` (t, centre = point on the segment, normal) and returns true when nearer
+/// than `hit.t`.
+pub fn ray_triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4) -> bool {
+    let d = sub4(end, start);
+    for (a, b) in [(v[0], v[2]), (v[1], v[0]), (v[2], v[1])] {
+        let side = vu0::normalize(vu0::cross(d, vsub(a, b)));
+        if vu0::dot3(side, vsub(b, start)) < f32::from_bits(0xba03_126f) {
+            return false;
+        }
+    }
+    let n = vu0::cross(sub3(v[1], v[0]), sub3(v[2], v[1]));
+    let de = vu0::dot3(n, sub3(end, v[0]));
+    if !(de <= 0.0) {
+        return false;
+    }
+    let ds = vu0::dot3(n, sub3(start, v[0]));
+    if ds < -0.0 {
+        return false;
+    }
+    let t = if de < ds { let t = ps2::div(ds, ps2::sub(ds, de)); if t <= 1.0 { t } else { 1.0 } } else { 1.0 };
+    if hit.t <= t {
+        return false;
+    }
+    hit.t = t;
+    hit.centre = vu0::lerp(end, start, t);
+    hit.centre[3] = 1.0;
+    hit.point = hit.centre;
+    hit.normal = vu0::normalize(n);
+    true
+}
+
 /// A material's attribute map: a 4-bit texture whose texels pick ground material ids through `table`.
 #[derive(Clone, Debug)]
 pub struct AttributeMap {
@@ -403,6 +435,17 @@ impl Object {
     // ponytail: the game also skips whole nodes, batches and packets by their boxes first; each holds its
     // triangles' boxes, so the triangle test alone keeps the same set.
     pub fn sweep(&self, models: &[Model], hit: &mut Hit, start: V4, end: V4, r: f32, ignore: &[u32]) -> bool {
+        self.cast(models, hit, start, end, r, ignore, triangle)
+    }
+
+    /// The nearest hit of the segment `start` → `end` with this object (the game's ground ray): like [`Self::sweep`]
+    /// with no radius, each triangle met by [`ray_triangle`].
+    pub fn ray(&self, models: &[Model], hit: &mut Hit, start: V4, end: V4) -> bool {
+        self.cast(models, hit, start, end, 0.0, &[], |v, hit, s, e, _| ray_triangle(v, hit, s, e))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cast(&self, models: &[Model], hit: &mut Hit, start: V4, end: V4, r: f32, ignore: &[u32], test: impl Fn(&[V4; 3], &mut Hit, V4, V4, f32) -> bool) -> bool {
         let model = &models[self.model];
         let (mut rs, mut re) = (r, r);
         let start = vu0::transform(&self.to_model, [start[0], start[1], start[2], 1.0]);
@@ -426,7 +469,7 @@ impl Object {
             for _ in 0..if mat.two_sided { 2 } else { 1 } {
                 let v = if reversed { [tri.pos[2], tri.pos[1], tri.pos[0]] } else { tri.pos };
                 let before = *hit;
-                if triangle(&v, hit, s, e, rs) {
+                if test(&v, hit, s, e, rs) {
                     if reversed {
                         uv.swap(0, 2);
                     }
