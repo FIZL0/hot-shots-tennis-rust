@@ -5,8 +5,9 @@
 //!
 //! `context/fixtures/ai_rally_s05.bin`, `ai_rally_s05_all.bin`: save slot 5, the bot-only doubles match.
 //! `ai_rally_singles*.bin`: the singles routines (`HST_SINGLES=1`), `bots_singles` in slot 8 (`_rows`: rows 45 level 3 and 16
-//! level 1, both NET, set with `HST_AI=0:45:3,1:16:1`; `_spec`: rows 13 BASE and 2 NET, level 3); the AI fields 0x234..0x260
-//! sit 0x10 lower there.
+//! level 1, both NET, set with `HST_AI=0:45:3,1:16:1`; `_spec`: rows 13 BASE and 2 NET, level 3; `_base`: rows 51 level 3 and
+//! 5 level 0, both BASE); the AI fields 0x234..0x260 sit 0x10 lower there. `ai_rally_s05_weak.bin`: slot 5 with level-0
+//! doubles rows (`HST_AI=0:89:0,1:84:0,2:86:0,3:97:0`).
 
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ai::{AiParams, Mind, Play};
@@ -428,7 +429,7 @@ fn receive_matches_the_game() {
 
 #[test]
 fn receive_matches_the_game_long() {
-    for name in ["ai_rally_s05_fix.bin", "ai_rally_s05_all.bin", "ai_rally_s05_long.bin", "ai_rally_s05_slow.bin", "ai_rally_s05_slow2.bin"] {
+    for name in ["ai_rally_s05_fix.bin", "ai_rally_s05_all.bin", "ai_rally_s05_long.bin", "ai_rally_s05_slow.bin", "ai_rally_s05_slow2.bin", "ai_rally_s05_weak.bin"] {
         let Some(n) = replay(name, 1) else { return eprintln!("fixture or disc missing, skipped") };
         eprintln!("{name}: calls, per substate {n:?}");
         assert!(n.1.iter().all(|&k| k > 0), "{n:?}");
@@ -438,14 +439,16 @@ fn receive_matches_the_game_long() {
 #[test]
 fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {
-        let Some(n) = replay("ai_net_s05.bin", tag) else { return eprintln!("fixture or disc missing, skipped") };
-        eprintln!("{what}: calls, per substate {n:?}");
+        for name in ["ai_net_s05.bin", "ai_rally_s05_weak.bin"] {
+            let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
+            eprintln!("{name} {what}: calls, per substate {n:?}");
+        }
     }
 }
 
 #[test]
 fn singles_receive_matches_the_game() {
-    for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin", "ai_rally_singles_rows.bin", "ai_rally_singles_spec.bin"] {
+    for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin", "ai_rally_singles_rows.bin", "ai_rally_singles_spec.bin", "ai_rally_singles_base.bin"] {
         let Some(n) = replay(name, 1) else { return eprintln!("fixture or disc missing, skipped") };
         eprintln!("{name}: calls, per substate {n:?}");
     }
@@ -453,7 +456,7 @@ fn singles_receive_matches_the_game() {
 
 #[test]
 fn singles_net_and_base_match_the_game() {
-    for name in ["ai_rally_singles_net.bin", "ai_rally_singles_rows.bin", "ai_rally_singles_spec.bin"] {
+    for name in ["ai_rally_singles_net.bin", "ai_rally_singles_rows.bin", "ai_rally_singles_spec.bin", "ai_rally_singles_base.bin"] {
         for (tag, what) in [(2, "NET"), (3, "BASE")] {
             let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
             eprintln!("{name} {what}: calls, per substate {n:?}");

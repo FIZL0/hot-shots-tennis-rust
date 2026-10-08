@@ -114,3 +114,9 @@ receive and NET/BASE now drive doubles bots in the app (`play/doubles_ai.rs`, on
 See 15-P11L1-SINGLES-RECEIVE-FINAL.md. The work is done: `Rally::receive` with `singles` set calls the singles return aim (`singles_aim`, 0x3cdd00) and uses the stroke-over dash spot.
 - Test: `singles_receive_matches_the_game`, on fixtures `ai_rally_singles*.bin` (`HST_SINGLES=1 tools/record_ai_rally.py`, slot 8 = `bots_singles`).
 - Branches no recording has reached: P11l4.
+
+## Wrap-up
+
+See 22-P11-WRAPUP-FINAL.md: `ai_rally_singles_base.bin` (BASE smash taken) and `ai_rally_s05_weak.bin` bit-exact; the
+remaining branch lists (P11k4/k5, P11l4/l5) need a human-driven recording, the replay checks (P11k6/l6) the ball path
+port; P11 marked blocked.
