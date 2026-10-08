@@ -223,6 +223,46 @@ pub fn cheerers(count: usize, roll: &mut impl FnMut() -> u32) -> [bool; 6] {
     out
 }
 
+/// The gallery's cheer marks: a cheering walker registers one at its position, held for `slot` × 3 ticks; then
+/// every 5th tick the mark jumps to a random offset from it (three draws). The gallery clears them at a new point,
+/// a change of ends and a new match. The manager keeps six.
+/// ponytail: the sprite drawn at each mark (and court 5 reading its marks 0x120 bytes on) is not ported
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cheers(pub Vec<Cheer>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cheer {
+    pub pos: [f32; 3],
+    pub base: [f32; 3],
+    pub delay: i32,
+    pub n: i32,
+}
+
+/// The offsets a cheer mark jumps by on each axis.
+const CHEER_JUMP: [f32; 6] = [0.05, 0.2, 0.1, -0.04, -0.21, -0.1];
+
+impl Cheers {
+    /// Walker `slot` at `pos` cheers.
+    pub fn add(&mut self, pos: [f32; 3], slot: u32) {
+        if self.0.len() < 6 {
+            self.0.push(Cheer { pos, base: pos, delay: slot as i32 * 3, n: 0 });
+        }
+    }
+
+    /// The gallery's tick (after its cheer and reactions).
+    pub fn step(&mut self, roll: &mut impl FnMut() -> u32) {
+        for c in &mut self.0 {
+            if c.delay < 1 {
+                if c.n % 5 == 0 && c.n != 0 {
+                    c.pos = std::array::from_fn(|i| ps2::add(c.base[i], CHEER_JUMP[(roll() >> 16 & 0x7fff) as usize % 6]));
+                }
+                c.n += 1;
+            }
+            c.delay -= 1;
+        }
+    }
+}
+
 /// Trigger creature types that just play their sound now and then (`exe::Game::emitter` gives the sound and gap).
 pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36, 41, 42, 45, 46, 50, 51];
 /// The emitter type whose sound sweeps across the stereo field after it starts.
@@ -387,11 +427,13 @@ pub struct Near {
     /// The match is changing ends (its state 1; type 15 only rolls then) and how many play.
     pub ends: bool,
     pub players: u32,
+    /// A tiebreak in the deciding set (type 44's crowd animates and calls only then).
+    pub deciding: bool,
 }
 
 impl Default for Near {
     fn default() -> Near {
-        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0 }
+        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false }
     }
 }
 
@@ -471,6 +513,16 @@ impl Trigger {
         }
         self.speed = 1.0;
         self.callback(row, 4, near, roll)
+    }
+
+    /// Type 44 made with `voice` (`Game::deciding_voices`, the first four made; the rest silent): its call's
+    /// countdown.
+    pub fn give_voice(&mut self, row: &TriggerRow, voice: (i32, i32), roll: &mut impl FnMut() -> u32) {
+        self.voice = voice;
+        if voice.1 != 0 {
+            let u = ps2::mul(2.3283064e-10, ps2::utof(roll()));
+            self.gap = ps2::mul(voice.1 as f32, ps2::msub(1.0, row.idle.1, u)) as i32;
+        }
     }
 
     /// Next waypoint: the leg's target, pause, velocity; `first` (from a reset) also turns to face it.
@@ -826,6 +878,17 @@ impl Trigger {
                 }
                 if self.len <= self.frame {
                     (self.playing, self.on, self.done) = (false, false, true);
+                }
+            }
+            // the reset: in the deciding set its idle countdown, else its call's countdown (a voiced one only)
+            // ponytail: the fixed matrix it takes in the deciding set, and the gallery's manager it pauses then
+            // (resumes otherwise), are not ported (P3e4)
+            (44, 4) => {
+                (self.on, self.animating) = (near.deciding, false);
+                if self.on {
+                    self.counter = ps2::mul(row.idle.0 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                } else if self.voice.1 != 0 {
+                    self.gap = ps2::mul(self.voice.1 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
                 }
             }
             (44, 2) if self.on => {

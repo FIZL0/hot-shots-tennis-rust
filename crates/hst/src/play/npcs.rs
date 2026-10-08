@@ -45,6 +45,8 @@ struct Npcs {
     ends: bool,
     /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
     uncull: Vec<Entity>,
+    /// The gallery's cheer marks (where a walker started cheering); stepped after the walkers.
+    cheers: npc::Cheers,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -90,8 +92,9 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: default() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
+    let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
@@ -121,6 +124,9 @@ fn setup(
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
                 let routes = game.ball_routes();
                 let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, len, routes, ..default() };
+                if t == 44 {
+                    tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
+                }
                 tr.reset(&row, &mut roll);
                 let e = place(&data, &c.world, c.scale);
                 if t == 15 {
@@ -176,6 +182,8 @@ fn step(
     npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
     let ends = matches!(g.phase, Phase::ChangeEnds(_));
+    let played = g.score.sets[0] + g.score.sets[1];
+    npcs.near.deciding = g.score.tiebreak && played + 1 == 2 * g.rules.sets - 1;
     // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
     let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
     let rng = &mut g.rng.court;
@@ -195,6 +203,7 @@ fn step(
     if npcs.decided && serve {
         npcs.decided = false;
         npcs.tick = 0;
+        npcs.cheers = default();
         for (e, w, home) in &mut npcs.walkers {
             // the serve placement turns them back to the court centre
             face(&mut turn, *e, *home, 0.0);
@@ -208,6 +217,7 @@ fn step(
     // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
     if ends && !npcs.ends {
         (npcs.near.ends, npcs.near.players) = (true, players);
+        npcs.cheers = default();
         for (_, t, row) in npcs.triggers.iter_mut().filter(|(_, t, _)| t.ty == 15) {
             t.reset_near(row, &mut npcs.near, &mut roll);
         }
@@ -232,12 +242,19 @@ fn step(
         }
     }
     npcs.motion = motion;
-    for (k, (e, w, _)) in npcs.walkers.iter_mut().enumerate() {
+    for (k, (e, w, home)) in npcs.walkers.iter_mut().enumerate() {
+        let react = w.mode == 1;
         w.step(players, cheer[k], npcs.tick, &mut roll);
+        // a walker breaking into its cheer leaves a mark where it stands
+        if react && w.anim == 5 {
+            npcs.cheers.add([home[0], home[1], home[2]], w.slot);
+        }
         if let Ok((_, mut m)) = q.get_mut(*e) {
             show(&mut m, w.anim as usize, w.frame, matches!(w.anim, 3 | 5));
         }
     }
+    // ponytail: the gallery's cheer steps before the walkers (in `simulate`), the game's after them (P3e3)
+    npcs.cheers.step(&mut roll);
     npcs.tick += 1;
     for (e, t, row) in &mut npcs.triggers {
         // ponytail: their sounds and a hit's message (`struck`) are not played; a type's startled flag stays set

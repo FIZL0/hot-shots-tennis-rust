@@ -1698,7 +1698,8 @@ fn strike(
         hits: g.shots,
         strong_toss: g.serving.toss == Some(Toss::Strong),
         solo: g.rules.players == 1,
-        random_bit: g.rng.sound.bit(),
+        // the sound generator's bit is drawn only for an unclean stroke (not a smash or drop)
+        random_bit: branch != 4 && kind != 4 && !matches!(grade, 1 | 2) && g.rng.sound.bit(),
         framed: framed.is_some(),
         dull: miss.is_some_and(|m| m.dull),
         ..default()
