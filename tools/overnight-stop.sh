@@ -9,9 +9,12 @@ s=$(n)
 p=$PPID
 # a usage limit isn't the end: Claude Code shows "Usage limit reached · continuing automatically at <reset>" and
 # resumes the session itself then, so leave it waiting
-# (a notice with no tool use after it; a resumed session uses tools, so an old notice doesn't count)
+# (a notice with no tool use and no "limit has reset" prompt after it; a resumed session that was already done
+# only answers in text, so the reset prompt counts too)
 waiting() {
   jq -se '(map(.type == "system" and (.content | tostring | test("continuing automatically"))) | rindex(true)) as $i
-    | $i != null and (.[$i:] | all(.type != "assistant" or (.message.content | tostring | test("\"tool_use\"") | not)))' "$t" >/dev/null
+    | $i != null and (.[$i:] | all(
+        (.type != "assistant" or (.message.content | tostring | test("\"tool_use\"") | not))
+        and (.type != "user" or (.message.content | tostring | test("usage limit has reset") | not))))' "$t" >/dev/null
 }
 (sleep "${HST_IDLE:-90}"; [ "$(n)" = "$s" ] && ! waiting && kill "$p") >/dev/null 2>&1 &
