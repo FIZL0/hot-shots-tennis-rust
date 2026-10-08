@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -509,8 +510,11 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
         commands.entity(up).add_child(joints[i]);
     }
     let skin = SkinnedMesh { inverse_bindposes: data.binds.clone(), joints: joints.clone() };
+    // a skinned part's bounds are its bind pose's: posed, a small part (the eyes, on the `eye` joint alone) leaves
+    // them and was culled in close-ups (the sockets showed through, black at a distance). The GS draws every packet.
+    // ponytail: no culling per part; posed bounds from the joints if the draw count ever matters
     for (mesh, material, morphed) in &data.parts {
-        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default())).id();
+        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default(), NoFrustumCulling)).id();
         if *morphed {
             commands.entity(part).insert(bevy::mesh::morph::MeshMorphWeights::Reference(root));
         }
@@ -518,7 +522,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
     }
     if let Some(r) = data.joint("Racket") {
         for (mesh, material) in &data.racket {
-            let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default())).id();
+            let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), NoFrustumCulling)).id();
             commands.entity(joints[r]).add_child(part);
         }
     }
@@ -635,7 +639,7 @@ fn spawn_viewer(
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = match &view_mod.0 {
         Some(dir) => crate::mods::read(dir.as_ref()).and_then(|m| crate::mods::load(&mut iso, &m, 0, &mut meshes, &mut materials, &mut images, &mut bindposes)),
-        None => load_disc(&mut iso, n, 0, &mut meshes, &mut materials, &mut images, &mut bindposes),
+        None => load_disc(&mut iso, n, args.outfits.first().copied().unwrap_or(0), &mut meshes, &mut materials, &mut images, &mut bindposes),
     };
     let data = Arc::new(data.unwrap_or_else(|e| panic!("character: {e}")));
     info!("character {n}: {} joints, {} parts, motions {:?}", data.joints.len(), data.parts.len(), { let mut k: Vec<_> = data.motions.keys().collect(); k.sort(); k });
