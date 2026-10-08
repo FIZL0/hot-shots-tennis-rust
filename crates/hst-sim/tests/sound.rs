@@ -55,6 +55,8 @@ struct Court {
     bank_volume: u32,
     hd: Vec<u8>,
     bd_len: u32,
+    /// Where the bank sits in SPU RAM (`BASE` for slot 5).
+    base: u32,
 }
 
 const BASE: u32 = 0x7f1c0; // where slot 5 has co_se10 in SPU RAM (spu_s05.csv)
@@ -76,7 +78,7 @@ impl Court {
         let arc = Archive::parse(&xb).unwrap();
         let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name)).unwrap()).unwrap();
         let (hd, bd) = (read("data/sound/SE/court/co_se10.hd"), read("data/sound/SE/court/co_se10.bd"));
-        Some((data, Self { pan, gain, stereo, bank_volume, hd, bd_len: bd.len() as u32 }))
+        Some((data, Self { pan, gain, stereo, bank_volume, hd, bd_len: bd.len() as u32, base: BASE }))
     }
 
     /// One-shot key-ons of court sounds: ADSR, sample address and volume L/R of one voice. Without `next` only
@@ -87,7 +89,7 @@ impl Court {
             let find = |cmd| x.cmds.iter().find(|c| c[0] == cmd && c[1] == c2[1]);
             if let (Some(c3), Some(c1), Some(c4)) = (find(3), find(1), find(4))
                 && (next.is_some() || c4[3] & 0xffff == 0x1000)
-                && (BASE..BASE + self.bd_len).contains(&c3[2])
+                && (self.base..self.base + self.bd_len).contains(&c3[2])
             {
                 let later = next.and_then(|n| n.cmds.iter().find(|c| c[0] == 1 && c[1] == c2[1]));
                 for c1 in [Some(c1), later].into_iter().flatten() {
@@ -107,7 +109,7 @@ impl Court {
                 let (Some(t), Some(set)) = (bank.tone(e.set as usize, e.note), bank.set_volume(e.set as usize)) else { return false };
                 let mut l = Level { seq, bank: self.bank_volume, velocity: e.velocity as u32, pan: [0x40; 3], ..Default::default() };
                 l.tone(set, t, &self.gain);
-                t.adsr() == adsr && BASE + t.sample() as u32 == addr && l.volume(&self.pan) == want
+                t.adsr() == adsr && self.base + t.sample() as u32 == addr && l.volume(&self.pan) == want
             })
         })
     }
@@ -364,6 +366,65 @@ fn flight_whistle_matches_the_game() {
     eprintln!("{} whistles from hits {want:?}, keyed {starts:?}, {frames} frames", want.len());
     assert!(want.len() >= 5 && frames >= 200);
     assert!(want.iter().zip(&starts).all(|(&h, &k)| (h..=h + 1).contains(&k)) && want.len() == starts.len());
+}
+
+/// The rush (`sound::Flight::Rush`): every hit `Flight::start` gives one to, and no other, keys program 5 key 6 at
+/// the hit's speed band, re-placed at the ball every frame and stopped at the bounce. Will's special serve in the
+/// user's recording (`special_serve.bin`, made from `serve_recording.p2m2` replayed from a state saved before the
+/// toss; its court bank sits at 0x89b90), the same serve with the server's character poked to Lola's (10) a few
+/// frames before the hit (`special_serve_lola.bin`: key 0 at play speed 1.5, full volume) and the smash of
+/// `hits_s05.bin`.
+#[test]
+fn rushes_match_the_game() {
+    let mut rushes = Vec::new();
+    for (name, base) in [("special_serve.bin", 0x89b90), ("special_serve_lola.bin", 0x89b90), ("hits_s05.bin", BASE)] {
+        let Some((data, mut court)) = Court::load(name) else { return };
+        court.base = base;
+        let s = samples(&data, 0x330);
+        let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+        let ball = |k: usize| std::array::from_fn(|j| f(s[k].ball, 0xe0 + 4 * j));
+        let vel = |k: usize| std::array::from_fn(|j| f(s[k].ball, 0x140 + 4 * j));
+        let (fx, rally) = (|o: usize| o - 0xb8, 0x68);
+        let at = |j: usize, volume| { let (angle, dist) = sound::place(ball(j)); [angle, dist, sound::falloff(volume, dist)] };
+        let keyed = |k: usize| s[k].cmds.iter().any(|c| c[0] == 3 && c[2] == base + 0x2a9a0);
+        let hits: Vec<usize> = (1..s.len()).filter(|&k| u(s[k].hit, rally + 0x20) != 0 && u(s[k].hit, rally + 0x20) != u(s[k - 1].hit, rally + 0x20)).collect();
+        for &k in &hits {
+            let h = s[k].hit;
+            let who = u(h, rally + 0x18) as usize;
+            let hit = sound::Hit { branch: h[fx(0xd8 + 8 * who) + 5], kind: u(h, fx(0xd0)) as i32, hits: u(h, rally + 0x20) as i32, framed: h[fx(0xbc)] != 0, ..Default::default() };
+            let character = u(h, 0x48 + 8 + 4 * who) as i32;
+            // special only changes character 10's rush: the serves are special (Will's bend), the bots' hits have no 10
+            let special = name.starts_with("special");
+            let Some(mut flight @ sound::Flight::Rush { play: p, .. }) = sound::Flight::start(&hit, character, special, sound::kmh(vel(k))) else {
+                assert!(!(k..k + 2).any(keyed), "{name} frame {k}: rush without a fast serve or smash");
+                continue;
+            };
+            let k = (k..k + 2).find(|&k| keyed(k)).unwrap_or_else(|| panic!("{name} frame {k}: no rush"));
+            let key = court.keyed(&s[k], Some(&s[k])).into_iter().find(|key| key.1 == base + 0x2a9a0).unwrap();
+            let pk = [(p.program as usize, p.key as usize)];
+            assert!((k - 1..=k).any(|j| court.gives(&key, at(j, p.volume), pk)), "{name} frame {k}: {key:?}");
+            let voice = s[k].cmds.iter().find(|c| c[0] == 3 && c[2] == key.1).unwrap()[1];
+            let scale = s[k].cmds.iter().find(|c| c[0] == 4 && c[1] == voice).unwrap()[3];
+            assert_eq!(scale & 0xffff, sound::speed_word(p.speed), "{name} frame {k}");
+            let mut frames = 0;
+            for j in k + 1.. {
+                if u(s[j].ball, 0x224) != 0 {
+                    assert!((j..=j + 1).any(|i| s[i].cmds.iter().any(|c| c[0] == 2 && c[1] == voice && c[3] == 8)), "{name} frame {j}: no key-off at the bounce");
+                    break;
+                }
+                let (play, fade) = flight.frame(ball(j)[1], sound::kmh(vel(j)), at(j, p.volume)[2]);
+                assert_eq!(fade, None, "{name} frame {j}");
+                // a frame the recorder missed lands in the next sample
+                let Some(c) = s[j].cmds.iter().rfind(|c| c[0] == 1 && c[1] == voice) else { continue };
+                let key = (key.0, key.1, [c[2] as i16, c[3] as i16]);
+                assert!((j - 1..=j).any(|i| court.gives(&key, at(i, play.volume), pk)), "{name} frame {j}: L/R {key:?}");
+                frames += 1;
+            }
+            rushes.push((name, k, character, hit.branch, p.key, p.volume, frames));
+        }
+    }
+    eprintln!("rushes (fixture, frame, character, branch, key, volume, frames re-placed): {rushes:?}");
+    assert!(rushes.len() >= 3 && rushes.iter().any(|r| r.3 == 4) && rushes.iter().any(|r| r.2 == 10 && r.4 == 0));
 }
 
 /// The dive thud (`sound::dive_thud`): every dive of `hits_s05.bin` (a hit record with branch 3, missed ones too) keys

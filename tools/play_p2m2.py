@@ -33,6 +33,7 @@ def regions(p):
 
 RAW = 0x2efc10  # pad manager's raw packet buffer, port 0 at +6 (the bytes PCSX2's pad sent)
 INST = os.environ["HST_PCSX2"]
+SAVE_AT = int(os.environ.get("HST_SAVE_AT", -1))  # this vsync: save a state to scratch slot 9 (then record from it)
 
 def frames(path):
     d = open(path, "rb").read()
@@ -107,6 +108,7 @@ if __name__ == "__main__":
     while n < want:
         k = v - v0 + 1
         put(f[k] if k < len(f) else NEUTRAL)
+        if v == SAVE_AT: p.save_state(9); print(f"saved slot 9 at vsync {v}", flush=True)
         time.sleep(0.004)
         gm, r = regions(p)
         a = p.settle(r + [(m + 0x50, 0x160)], v)  # the marker read in the same settled frame
