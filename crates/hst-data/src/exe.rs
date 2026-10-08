@@ -135,9 +135,35 @@ impl<'a> Game<'a> {
         let courts = self
             .at(0x41_5000, 13 * 0x90)
             .chunks_exact(0x90)
-            .map(|r| FootCourt { dusty: r[0x80] != 0, prints: r[0x83] != 0, print_rgb: [rgb(r, 0x40), rgb(r, 0x50)], print_alpha: [n(r, 0x70), n(r, 0x74)], print_life: [n(r, 0x78), n(r, 0x7c)] })
+            .map(|r| FootCourt {
+                dusty: r[0x80] != 0,
+                prints: r[0x83] != 0,
+                print_rgb: [rgb(r, 0x40), rgb(r, 0x50)],
+                print_alpha: [n(r, 0x70), n(r, 0x74)],
+                print_life: [n(r, 0x78), n(r, 0x7c)],
+                grass: r[0x81] != 0,
+                clay: r[0x82] != 0,
+                blade_rgb: [rgb(r, 0x10), rgb(r, 0x20)],
+                clod_rgb: rgb(r, 0x30),
+            })
             .collect();
-        Foot { steps, puffs: [row(0x41_14a0), row(0x41_14d8)], decay: self.f32(0x41_13d8), wind: self.f32(0x41_13e0), courts }
+        let pair = |a: u32| [self.f32(a), self.f32(a + 4)];
+        let bits = |a: u32| DebrisRow {
+            reach: self.f32(a),
+            spread: self.f32(a + 4),
+            speed: pair(a + 8),
+            power: self.f32(a + 0x10),
+            decay: self.f32(a + 0x14),
+            size: pair(a + 0x18),
+            shrink: self.f32(a + 0x20),
+            fall: self.f32(a + 0x24),
+            offset: [pair(a + 0x28), pair(a + 0x30)],
+            spin: [pair(a + 0x38), pair(a + 0x40), pair(a + 0x48)],
+            push: self.f32(a + 0x50),
+        };
+        let cells = |a: u32| std::array::from_fn(|k| [i(a + 4 * k as u32), i(a + 0x10 + 4 * k as u32)]);
+        let debris = Debris { rows: [bits(0x41_13f0), bits(0x41_1444)], cells: [cells(0x41_15d0), cells(0x41_1600)], lift: self.f32(0x41_15f0), sink: self.f32(0x41_1510) };
+        Foot { steps, puffs: [row(0x41_14a0), row(0x41_14d8)], decay: self.f32(0x41_13d8), wind: self.f32(0x41_13e0), courts, debris }
     }
 
     /// Frames the ball's wind tornado takes to fade out once grown.
@@ -565,6 +591,37 @@ pub struct Foot {
     /// Share of the wind a puff drifts with per frame.
     pub wind: f32,
     pub courts: Vec<FootCourt>,
+    pub debris: Debris,
+}
+
+/// The instant replay's dive debris: rows for clods (clay courts) and blades (grass courts), each bit's texture
+/// cell (x, y pixels, 32 square) per kind, a clod's least fall speed (game space is Y-down: −0.03 is up) and a
+/// blade's sink per frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Debris {
+    pub rows: [DebrisRow; 2],
+    pub cells: [[[i32; 2]; 4]; 2],
+    pub lift: f32,
+    pub sink: f32,
+}
+
+/// One debris kind: thrown from `reach` m ahead of the toe, spread up to `spread` across, at a speed in `speed`
+/// (times the dive's push, raised to `power` when that is positive), slowed by `decay` and shrunk by `shrink` per frame, falling
+/// `fall`; size in `size`. Blades start offset in x and y (`offset`), spin per frame in `spin` (x, y, z degrees)
+/// and take `push` of the dive's push.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebrisRow {
+    pub reach: f32,
+    pub spread: f32,
+    pub speed: [f32; 2],
+    pub power: f32,
+    pub decay: f32,
+    pub size: [f32; 2],
+    pub shrink: f32,
+    pub fall: f32,
+    pub offset: [[f32; 2]; 2],
+    pub spin: [[f32; 2]; 3],
+    pub push: f32,
 }
 
 /// A character's footstep rule: a foot lifted above 0.08 m lands at `lift`; then it can't step again for `cooldown`
@@ -605,6 +662,12 @@ pub struct FootCourt {
     pub print_rgb: [[f32; 3]; 2],
     pub print_alpha: [i32; 2],
     pub print_life: [i32; 2],
+    /// Replay dive debris: grass blades (unless raining) take precedence over clay clods; blade colours (the first
+    /// 11 bits of a throw, the rest) and the clod colour.
+    pub grass: bool,
+    pub clay: bool,
+    pub blade_rgb: [[f32; 3]; 2],
+    pub clod_rgb: [f32; 3],
 }
 
 /// Number of scripted camera shots.
