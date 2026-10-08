@@ -204,6 +204,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         // `ai_contact_stick`)
         out.button = out.button.map(|bt| row.lock_button(bt as u8, &mut roll) as u32);
     }
+    if let Some(bit) = x.said.take() {
+        g.whooshes.push((0, i, hst_sim::sound::call_out(i, bit)));
+    }
     let (net, net_rate, net_left, aim) = (x.mind.net, x.mind.net_rate, x.mind.net_left, x.stick);
     (me.lost, me.lost_log) = (b.lost, b.lost_log);
     g.doubles_ai.records = w.records;

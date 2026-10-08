@@ -180,6 +180,8 @@ pub struct Rally {
     pub ours: bool,
     pub tick: i32,
     pub voice: bool,
+    /// The voice line it called on giving way (the key bit), for the caller to play; not the game's.
+    pub said: Option<bool>,
     pub lean: i32,
     pub back: Return,
     pub lane: u8,
@@ -1099,7 +1101,7 @@ impl Rally {
     /// The partner's voice line on giving way (one roll, a second when it speaks).
     fn call(&mut self, b: &Body, roll: &mut impl FnMut() -> u32) {
         if self.voice && b.mate_voice < 2 && chance(roll, 25) {
-            roll(); // ponytail: picks the voice line; the sound isn't played (P11n)
+            self.said = Some(roll() >> 16 & 1 != 0);
         }
         self.voice = false;
     }
