@@ -1,13 +1,13 @@
 //! noidump <model.mdl> [<model.mtl>] — every packet's drawn vertices with their position entries, for checking the costume noise
 //! against a GS dump (`research/p17m_noise_gs.py`). Lines: `P material group drawn`, then per drawn vertex
-//! `V kick r g b a` (its vertex colour) and per entry `E x y z w node noise nx ny nz` (its normal); with the MTL first `M index r g b a +0x10 +0x14 name mode` per material.
+//! `V kick r g b a` (its vertex colour) and per entry `E x y z w node noise nx ny nz` (its normal); with the MTL first `M index r g b a +0x10 +0x14 name mode header-hex` per material.
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let m = hst_data::mdl::parse(&std::fs::read(&a[1]).unwrap()).unwrap();
     if let Some(path) = a.get(2) {
         for (i, x) in hst_data::mtl::parse(&std::fs::read(path).unwrap(), std::fs::read(path.replace(".MTL", ".MTI")).ok().as_deref()).unwrap().materials.iter().enumerate() {
             let f = |o: usize| f32::from_le_bytes(x.header[o..o + 4].try_into().unwrap());
-            println!("M {i} {} {} {} {} {} {} {} {}", x.color[0], x.color[1], x.color[2], x.color[3], f(0x10), f(0x14), x.name, i16::from_le_bytes([x.header[0x1e], x.header[0x1f]]));
+            println!("M {i} {} {} {} {} {} {} {} {} {}", x.color[0], x.color[1], x.color[2], x.color[3], f(0x10), f(0x14), x.name, i16::from_le_bytes([x.header[0x1e], x.header[0x1f]]), x.header.iter().map(|b| format!("{b:02x}")).collect::<String>());
         }
     }
     for (mi, pks) in m.materials.iter().enumerate() {

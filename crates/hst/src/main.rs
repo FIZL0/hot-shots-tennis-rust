@@ -538,14 +538,14 @@ fn gs_models_anim(
                 });
                 textures::add_mtl(images, img, t)
             });
-            let key = |pi: usize| (packets[pi].prim & 0x70, anim.uv_track(mi, pi), packets[pi].uv_swap);
+            let key = |pi: usize| (packets[pi].prim & 0x70, anim.uv_track(mi, pi), packets[pi].uv_swap, packets[pi].flags & 2);
             let mut keys: Vec<_> = (0..packets.len()).map(|pi| (key(pi), pi)).collect();
             keys.sort();
             keys.dedup_by_key(|k| k.0);
             for (k, first) in keys {
                 let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi])) else { continue };
                 let mut draws = gs::GsMaterial::for_batch(mat, k.0, texture.clone());
-                draws.iter_mut().for_each(|g| g.uniform.lod_k = model.lod_k.get(mi).copied().unwrap_or(0.0));
+                draws.iter_mut().for_each(|g| (g.uniform.lod_k, g.uniform.unlit) = (model.lod_k.get(mi).copied().unwrap_or(0.0), (k.3 != 0) as u8 as f32));
                 parts.push((mesh, draws, (mi, first)));
             }
         }

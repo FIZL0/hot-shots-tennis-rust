@@ -103,6 +103,9 @@ pub struct GsUniform {
     /// 1: the light and ambient dim when the camera looks within ~37° of the light (the light block's glare flag, off in
     /// rain): x = (−forward·light_dir − 0.8)/0.2 > 0 takes ambient ×(1 − x/2) and light ×(1 − 0.6x).
     pub glare: f32,
+    /// 1: VU1 skips the normal transform (object flag bit 1: the batch's `mdl::Packet::flags`, and every sky and
+    /// background draw), so N' = (1, 0, 0): colour = vc · mat · (ambient + light), no second light or specular.
+    pub unlit: f32,
 }
 
 /// The light VU1 has outside a match camera (direction, colour, ambient): white, from (1, 2, 1)/√6.
@@ -311,7 +314,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: DEFAULT_LIGHT.0, light_color: DEFAULT_LIGHT.1, ambient: DEFAULT_LIGHT.2, light2_dir: Vec4::ZERO, light2_color: Vec4::ZERO, glare: 0.0 };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: DEFAULT_LIGHT.0, light_color: DEFAULT_LIGHT.1, ambient: DEFAULT_LIGHT.2, light2_dir: Vec4::ZERO, light2_color: Vec4::ZERO, glare: 0.0, unlit: 0.0 };
         tests
             .into_iter()
             .map(|test| GsMaterial {
