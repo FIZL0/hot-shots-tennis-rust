@@ -35,3 +35,4 @@ pub mod clouds;
 pub mod surprise;
 pub mod bodyhit;
 pub mod stats;
+pub mod weather;

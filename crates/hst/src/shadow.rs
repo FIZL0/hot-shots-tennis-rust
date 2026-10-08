@@ -10,8 +10,9 @@
 //! - Casters: the players (and rackets), and the trees/props/structures whose placement code byte 3 is not `'0'`.
 //!   Only the hole's ground model receives. The ball has its own shadow model.
 //!
-//! ponytail: time of day 0, hour 1 and no weather (rain/snow scale S by 0.75/0.5/0.25 and swap in the blob
-//! shadow `shadow.tm2`); add them with the match settings that pick them (P17e).
+//! - Weather scales S (`hst_sim::weather::shadow`, applied by `weather`); in rain the players also get a blob.
+//!
+//! ponytail: time of day 0 and hour 1; add them with the match settings that pick them (P17e).
 
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
@@ -27,8 +28,8 @@ pub struct Sun {
     pub dir: Vec3,
     /// The sun as VU1 lights the court with it (game space, sun → ground).
     pub light: Vec3,
-    /// How much a shadow takes off the ground colour (0..1).
-    pub darken: f32,
+    /// The shadow's strength S (0..255) in clear weather (`darken_s`, `hst_sim::weather::shadow`).
+    pub strength: u32,
 }
 
 pub fn plugin(app: &mut App) {
@@ -49,7 +50,8 @@ impl Sun {
         let k = 0;
         let row = 0x10 + k * 0x30;
         let dir = sun_dir(f(&envir, row + 4)?, f(&envir, row + 8)?, f(&envir, row + 12)?, f(&hole, 0x58)?, 1.0);
-        Some(Sun { dir: clamp_elevation(dir, 50f32.to_radians()), light: dir, darken: darken(f(&envir, 0x410 + k * 0x10)?) })
+        let strength = (f(&envir, 0x410 + k * 0x10)? * 255.0) as u32;
+        Some(Sun { dir: clamp_elevation(dir, 50f32.to_radians()), light: dir, strength })
     }
 }
 
@@ -83,8 +85,13 @@ fn clamp_elevation(d: Vec3, min: f32) -> Vec3 {
     Vec3::new(elev.cos() * heading.sin(), elev.sin(), elev.cos() * heading.cos())
 }
 
+#[cfg(test)]
 fn darken(strength: f32) -> f32 {
-    let s = (strength * 255.0) as u32;
+    darken_s((strength * 255.0) as u32)
+}
+
+/// How much a shadow of strength S takes off the ground colour.
+pub fn darken_s(s: u32) -> f32 {
     ((s * 255) >> 8) as f32 / 128.0
 }
 

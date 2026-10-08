@@ -203,7 +203,7 @@ fn roll(rng: &mut u32) -> Roll {
 }
 
 /// `yumoto/<name>.tm2` (or `<dir>/<name>.tm2`) from the effect archive as an unlit, alpha-blended, two-sided material.
-fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Handle<StandardMaterial>, String> {
+pub(crate) fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Handle<StandardMaterial>, String> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     // ponytail: re-reads the archive per texture; a handful at load
@@ -219,7 +219,7 @@ fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, ima
 
 /// Write a frame's quads into a dynamic mesh. Nothing to draw still writes one invisible degenerate triangle: Bevy's
 /// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
-fn fill(mesh: &mut Mesh, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
+pub(crate) fn fill(mesh: &mut Mesh, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
     if pos.is_empty() {
         (pos, uv, colour, index) = (vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[0.0; 4]; 3], vec![0, 0, 0]);
     }

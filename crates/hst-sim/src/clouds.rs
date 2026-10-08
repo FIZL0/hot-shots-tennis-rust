@@ -1,5 +1,6 @@
-//! Sky clouds (singles only): flat quads scaled 40 scattered in a 2R square 200..400 m up, drifting with the
-//! court's wind and wrapping around; each fades out over the outer tenth of the radius.
+//! Sky clouds (singles only): flat quads scaled 40 scattered in a 2R square 200..400 m up (heavy rain: 200 of them
+//! 80..200 m up, `weather::cloud_layout`), drifting with the court's wind and wrapping around; each fades out over
+//! the outer tenth of the radius.
 
 const R: f32 = 2000.0;
 
@@ -13,11 +14,11 @@ pub struct Cloud {
     pub model: usize,
 }
 
-/// `count` clouds over `models` cloud models; `rand` gives 0..1.
-pub fn spawn(count: usize, models: usize, mut rand: impl FnMut() -> f32) -> Vec<Cloud> {
+/// `count` clouds over `models` cloud models between heights `y` (game space, ×40 cloud units); `rand` gives 0..1.
+pub fn spawn(count: usize, models: usize, y: [f32; 2], mut rand: impl FnMut() -> f32) -> Vec<Cloud> {
     let mut v: Vec<Cloud> = (0..count)
         .map(|_| {
-            let y = -200.0 - 200.0 * rand();
+            let y = y[0] + (y[1] - y[0]) * rand();
             let (x, z) = ((2.0 * rand() - 1.0) * R, (2.0 * rand() - 1.0) * R);
             Cloud { pos: [x, y, z], yaw: rand() * std::f32::consts::TAU, model: ((rand() * models as f32) as usize).min(models.saturating_sub(1)) }
         })
@@ -60,7 +61,7 @@ mod tests {
         k[0].pos = [1924.0, -300.0, 0.0];
         assert!((fade(&k[0]) - 0.39).abs() < 0.02);
         let mut n = 0u32;
-        let v = spawn(11, 3, || { n += 1; (n % 7) as f32 / 7.0 });
+        let v = spawn(11, 3, [-200.0, -400.0], || { n += 1; (n % 7) as f32 / 7.0 });
         assert!(v.len() == 11 && v.windows(2).all(|w| w[0].pos[1] <= w[1].pos[1]) && v.iter().all(|k| k.model < 3));
     }
 }
