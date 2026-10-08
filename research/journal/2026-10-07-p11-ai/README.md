@@ -82,3 +82,10 @@ See 10-P11I-BOTS-FINAL.md. Done: tests `singles_serves_and_kind_lock` / `doubles
 (`crates/hst-sim/tests/ai_serve.rs`). Fixtures `ai_serve_singles.bin` (Carol vs Lola, costume 9, rows 48/52) and
 `ai_serve_s05.bin` (slot 5), both from `tools/record_ai_serve.py`. New `AiParams::serve_aim_singles` (the serve's net
 dash) and `serve::ai_pick`; the level-2 serve lanes are fixed. The return-of-serve chooser doesn't run in bot-only play.
+
+## P11j (contact searches)
+
+See 11-P11J-SEARCH-FINAL.md. Done: `ai::Runner` (run frames 0x35bc50) and `ai::Searcher` (`reach_search` 0x360150,
+`tier_search` 0x360910). Tests `doubles_searches_match_the_game` / `singles_searches_match_the_game`
+(`crates/hst-sim/tests/ai_search.rs`, fixtures `ai_search_s05.bin` / `ai_search_singles.bin` from
+`tools/record_ai_search.py`). Not wired into `play.rs` yet: P11k/P11l use it.

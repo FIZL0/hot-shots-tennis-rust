@@ -737,3 +737,282 @@ pub fn serve_spot(level0: bool, doubles: bool, side: f32, ad: bool, roll: &mut i
 pub fn serve_wait(roll: &mut impl FnMut() -> u32) -> i32 {
     (roll() >> 16 & 0x7fff) as i32 % 60 + 60
 }
+
+/// What the AI's run estimate reads off its player: its side and spot, its running state and the match's
+/// stamina rules (`player::drain`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Runner {
+    /// Speed, agility (as the player has it, weather included) and full stamina.
+    pub stats: crate::player::Stats,
+    /// Size (%).
+    pub size: i32,
+    pub side: f32,
+    /// Position (x, z).
+    pub pos: [f32; 2],
+    pub stamina: i32,
+    /// Frames into the current stamina second, and frames run so far.
+    pub tick: i32,
+    pub run: i32,
+    /// Its move state: 1 running (the estimate runs on from `run`), 0 and 2 standing (from a standstill); any
+    /// other keeps `run`.
+    pub moving: u8,
+    pub players: i32,
+    pub rally: bool,
+    pub floor: i32,
+}
+
+/// The PS2's `neg.s`-if-negative absolute value (keeps −0).
+fn abs(v: f32) -> f32 {
+    if v < 0.0 { -v } else { v }
+}
+
+impl Runner {
+    /// Frames the AI's run to `to` (x, z) takes, as the game estimates it: speeding up frame by frame until full
+    /// speed, draining stamina every 60 frames on the way. 9999 for a spot off its half of the court.
+    pub fn frames_to(&self, to: [f32; 2]) -> i32 {
+        let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
+        let [x, z] = to;
+        if sign(self.side) == sign(z) || !(abs(x) <= 8.685) || abs(z) < 1.5 || !(abs(z) <= 17.885) {
+            return 9999;
+        }
+        let (dz, dx) = (ps2::sub(z, self.pos[1]), ps2::sub(x, self.pos[0]));
+        let mut dist = ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx));
+        if dist <= 0.0 {
+            return 0; // ponytail: the game runs on with its speed register unset; standing on the spot is rare
+        }
+        let s = &self.stats;
+        let drain = |st, tick| crate::player::drain(s, st, tick, self.players, self.rally, self.floor);
+        let speed = |st, run| crate::player::run_speed(s, run, st, self.size);
+        let fit = |dist, v| {
+            let q = ps2::div(dist, v);
+            let k = q as i32;
+            k + ((k as f32) < q) as i32
+        };
+        let (mut st, mut tick, mut run) = (self.stamina, self.tick, self.run);
+        match self.moving {
+            0 | 2 => run = 0,
+            1 => {
+                run += 1;
+                (st, tick) = drain(st, tick);
+            }
+            _ => {}
+        }
+        let mut v = speed(st, run);
+        let mut frames = 1;
+        dist = ps2::sub(dist, v);
+        while run < s.agility && !(dist <= 0.0) {
+            run += 1;
+            (st, tick) = drain(st, tick);
+            v = speed(st, run);
+            frames += 1;
+            dist = ps2::sub(dist, v);
+        }
+        if st >= crate::player::TIRED {
+            // the frames left before it tires, in one go
+            let n = (59 - tick) + (st - crate::player::TIRED) * 60;
+            let fresh = ps2::mul(v, n as f32);
+            if dist <= fresh {
+                return frames + fit(dist, v);
+            }
+            dist = ps2::sub(dist, fresh);
+            (frames, tick, st) = (frames + n, 59, crate::player::TIRED);
+        }
+        while !(dist <= 0.0) {
+            let drained = tick + 1 >= crate::player::STAMINA_FRAMES;
+            (st, tick) = drain(st, tick);
+            if drained {
+                v = speed(st, run);
+            }
+            if st == 0 {
+                return frames + fit(dist, v);
+            }
+            frames += 1;
+            dist = ps2::sub(dist, v);
+        }
+        frames
+    }
+}
+
+/// One entry of the AI's predicted ball path: the ball (x, height, z) and its bounces so far.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PathBall {
+    pub pos: [f32; 3],
+    pub bounces: i32,
+}
+
+/// Where a contact search found the ball: the path entry (`at`, an index into the whole path), the frames the
+/// run there takes, and the spot to stand at (x, z; the stand height is the ball's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Contact {
+    pub at: usize,
+    pub frames: i32,
+    pub stand: [f32; 2],
+}
+
+/// What the AI's contact searches read: its row, its character's reach, its player and the predicted path.
+pub struct Searcher<'a> {
+    pub row: &'a AiParams,
+    pub reach: &'a crate::player::ReachStats,
+    /// TParam's hand: 1 minus, 2 plus (see `stand_side`).
+    pub strong: u8,
+    pub singles: bool,
+    /// A doubles AI beside a human partner (voids the run-round roll).
+    pub beside_human: bool,
+    pub runner: Runner,
+    /// The player's depth stat: it stands depth · side / 2 short of the ball.
+    pub depth: f32,
+    pub path: &'a [PathBall],
+    /// The AI's window on the path: from `first` (now) up to `end`.
+    pub first: usize,
+    pub end: usize,
+}
+
+/// A search's limits: contact height `low..=top` and squared reach `d2`.
+struct Window {
+    low: f32,
+    top: f32,
+    d2: [f32; 2],
+}
+
+impl Searcher<'_> {
+    /// The search for a ground stroke or volley (and, `body`, a body shot: reach 0, minus side only): the entry
+    /// highest above the stroke height, within 1.3 reach of the base height and below the volley height, that
+    /// the AI can run to in time. From `from` (else the window's start), entries with `min_bounces` or more; it
+    /// stops at the first frame that finds one unless `all`. Then `stand_side` picks the side.
+    pub fn reach_search(
+        &self,
+        from: Option<usize>,
+        min_bounces: i32,
+        all: bool,
+        body: bool,
+        roll: &mut impl FnMut() -> u32,
+    ) -> Option<Contact> {
+        let r = self.reach;
+        let far = ps2::mul(1.3, r.reach);
+        let run = self.row.run_round(self.beside_human, roll);
+        let top = ps2::add(r.base, far);
+        let w = Window {
+            low: r.stroke_height,
+            top: if r.volley_height <= top { r.volley_height } else { top },
+            d2: [0.0, ps2::mul(far, far)],
+        };
+        let low = r.stroke_height;
+        let reach = if body { 0.0 } else { r.reach };
+        self.scan(from, min_bounces, all, reach, !body, run, w, None, |b| ps2::sub(b[1], low), |new, best| !(new <= best))
+    }
+
+    /// The tiered search: the entry nearest the stroke height (`no_height`: nearest the ground), with a penalty
+    /// for a ball past the baseline or the run-round width, in a height and reach band set by `tier` (0 the
+    /// tightest, 3 the loosest). `no_reach` stands on the ball (reach 0, minus side only). Entries it checks in
+    /// reach are marked in `seen` and skipped by later searches.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tier_search(
+        &self,
+        from: Option<usize>,
+        tier: u8,
+        min_bounces: i32,
+        all: bool,
+        no_reach: bool,
+        no_height: bool,
+        seen: &mut [bool],
+        roll: &mut impl FnMut() -> u32,
+    ) -> Option<Contact> {
+        let r = self.reach;
+        let (h, m) = (r.stroke_height, |k: f32, v: f32| ps2::mul(k, v));
+        // ponytail: a tier past 3 leaves the game's band unset; it gets tier 3's
+        let (low, high, near, far) = match tier {
+            0 => (m(0.9, h), m(1.1, h), m(0.9, r.reach), m(1.1, r.reach)),
+            1 => (m(0.7, h), m(1.3, h), m(0.7, r.reach), m(1.3, r.reach)),
+            2 => (m(0.3, h), m(1.7, h), m(0.3, r.reach), m(1.3, r.reach)),
+            _ => (0.0, m(3.0, h), 0.0, m(1.3, r.reach)),
+        };
+        let run = self.row.run_round(self.beside_human, roll);
+        let top = ps2::add(r.base, far);
+        let w = Window { low, top: if high <= top { high } else { top }, d2: [m(near, near), m(far, far)] };
+        let width = self.row.run_round_width(self.singles);
+        let h = if no_height { 0.0 } else { h };
+        let reach = if no_reach { 0.0 } else { r.reach };
+        let over = |v: f32| ps2::div(ps2::mul(0.05, v), 0.5);
+        let score = |b: [f32; 3]| {
+            let mut s = abs(ps2::sub(h, b[1]));
+            for p in [over(ps2::sub(abs(b[2]), 11.885)), over(ps2::sub(abs(b[0]), width))] {
+                if !(p <= 0.0) {
+                    s = ps2::add(s, p);
+                }
+            }
+            s
+        };
+        self.scan(from, min_bounces, all, reach, !no_reach, run, w, Some(seen), score, |new, best| !(best <= new))
+    }
+
+    /// Both searches' walk over the path: per side, the best-scoring entry in the window it can reach in time.
+    #[allow(clippy::too_many_arguments)]
+    fn scan(
+        &self,
+        from: Option<usize>,
+        min_bounces: i32,
+        all: bool,
+        reach: f32,
+        plus: bool,
+        run: bool,
+        w: Window,
+        mut seen: Option<&mut [bool]>,
+        score: impl Fn([f32; 3]) -> f32,
+        better: impl Fn(f32, f32) -> bool,
+    ) -> Option<Contact> {
+        let rn = &self.runner;
+        let side = rn.side;
+        let off = ps2::mul(reach, side);
+        let back = |z| ps2::sub(z, ps2::div(ps2::mul(self.depth, side), 2.0));
+        let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
+        let base = self.reach.base;
+        // per side (minus, plus): the entry, its score and its run frames
+        let mut best: [Option<(usize, f32, i32)>; 2] = [None, None];
+        for at in from.unwrap_or(self.first)..self.end {
+            if seen.as_ref().is_some_and(|s| s[at]) {
+                continue;
+            }
+            let b = self.path[at];
+            if b.bounces >= 2 {
+                break;
+            }
+            let [x, y, z] = b.pos;
+            if sign(side) == sign(z) || abs(z) < 1.5 {
+                continue;
+            }
+            if b.bounces >= min_bounces && w.low <= y && y <= w.top {
+                for (k, sx) in [ps2::sub(x, off), ps2::add(x, off)].into_iter().enumerate().take(1 + plus as usize) {
+                    let sz = back(z);
+                    let (dy, dx, dz) = (ps2::sub(base, y), ps2::sub(sx, x), ps2::sub(sz, z));
+                    let d2 = ps2::madd(ps2::madd(ps2::mul(dy, dy), dx, dx), dz, dz);
+                    if !(w.d2[0] <= d2 && d2 <= w.d2[1]) {
+                        continue;
+                    }
+                    if let Some(s) = seen.as_deref_mut() {
+                        s[at] = true;
+                    }
+                    let sc = score(b.pos);
+                    if best[k].is_some_and(|(_, s, _)| !better(sc, s)) {
+                        continue;
+                    }
+                    let frames = rn.frames_to([sx, sz]);
+                    if at as i32 - (self.first as i32) < frames {
+                        continue;
+                    }
+                    best[k] = Some((at, sc, frames));
+                }
+            }
+            if !all && best.iter().any(Option::is_some) {
+                break;
+            }
+        }
+        let spot = |k: usize| best[k].map(|(at, _, _)| (at as i32, [self.path[at].pos[0], self.path[at].pos[2]]));
+        let width = self.row.run_round_width(self.singles);
+        let minus = stand_side(spot(0), spot(1), rn.pos, reach, side, self.depth, self.strong, run.then_some(width))?;
+        let (at, _, frames) = best[if minus { 0 } else { 1 }]?;
+        let [x, _, z] = self.path[at].pos;
+        let acc = ps2::add(0.0, x);
+        let sx = if minus { ps2::msub(acc, reach, side) } else { ps2::madd(acc, reach, side) };
+        Some(Contact { at, frames, stand: [sx, back(z)] })
+    }
+}
