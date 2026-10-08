@@ -415,6 +415,7 @@ Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE
 ### Polish (at the end, user 2026-10-08)
 
 - [ ] **Z1** Performance pass, no lost functionality (user 2026-10-08): time every load and frame across the whole game (startup, menus, select previews, match load, court/weather/NPC setup, texture replacements, first draws/shader pipelines, results) and remove every stutter: move loads off the main thread or prefetch (as the select previews do, `previews.rs` worker + `character::Staged`), cache repeated work, pre-warm pipelines; no feature, look or bit-exact behaviour may change (check.sh and the replay tests still pass). Known: the first preview spawn in the select takes a ~67 ms frame (render target/pipeline creation) → whole game
+- [~] **Z2** Strip unused loads and replacement textures (user 2026-10-08; the very last task): find every texture, model, sound and other asset the game loads but never draws or plays, and stop loading it; delete the replacement/upscaled textures nothing uses. Prove it unused by logging every asset actually used across a full run of every mode, court, character, costume and mod, not by reading code; no feature, look or bit-exact behaviour may change (check.sh and the replay tests still pass). BLOCKED: user-only, never start it autonomously; the user starts it after everything else is done
 
 ## Code map
 
