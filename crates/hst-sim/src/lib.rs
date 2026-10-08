@@ -29,6 +29,7 @@ pub mod sound;
 pub mod umpire;
 pub mod npc;
 pub mod ai;
+pub mod mt;
 pub mod aim;
 pub mod rally;
 pub mod position;

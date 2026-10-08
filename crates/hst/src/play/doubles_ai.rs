@@ -169,11 +169,8 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             }
         }
     }
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
     // the dispatcher's state setter on entering a state, and the strike/hit messages: back to the start of its
     // state (the app already drew the net repick those messages make, so theirs is dropped)
     let kept = x.mind;
@@ -208,7 +205,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let mut m = *mind;
     (m.net, m.net_rate, m.net_left) = (net, net_rate, net_left);
     if received {
-        m.rally(&mut ai_roll(&mut g.rng));
+        m.rally(&mut ai_roll(&mut g.ai_mt));
     }
     g.players[i].ai_mind = Some(m);
     if !busy {

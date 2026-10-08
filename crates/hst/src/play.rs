@@ -317,6 +317,8 @@ struct Game {
     court: usize,
     message: String,
     rng: u32,
+    /// The AI's own generator (every AI draw).
+    ai_mt: hst_sim::mt::Mt,
     /// Sounds due this tick, at a game-space position.
     sounds: Vec<(sound::Play, V3)>,
     /// Swing whooshes and dive thuds waiting to play: ticks left, the player (played at their position) and the sound.
@@ -1168,6 +1170,8 @@ fn setup(
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
         rng: 0x2468_ace1,
+        // ponytail: the game seeds it with a draw from its main generator as each AI is made; that one isn't ported
+        ai_mt: hst_sim::mt::Mt::new(0x2468_ace1),
         sounds: Vec::new(),
         whooshes: Vec::new(),
         bounces: default(),
@@ -2689,15 +2693,12 @@ fn intercept(g: &Game, i: usize) -> Option<(V3, u32)> {
 fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
     let (receiver, first) = (g.score.receiver == i as i32, !g.players[i].ai_hit);
     let third = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-    let rng = &mut g.rng;
-    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, third, &mut || {
-        rand(rng);
-        *rng
-    });
+    let mt = &mut g.ai_mt;
+    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, third, &mut || mt.next());
     g.players[i].surprised |= g.players[i].ai_timing.reacted;
     let dive = shots.is_none() && g.players[i].ai_dove.take().unwrap_or(true);
     let kept = g.players[i].ai_picks.dive;
-    g.players[i].ai_picks = g.players[i].ai.picks(dive, &mut ai_roll(&mut g.rng));
+    g.players[i].ai_picks = g.players[i].ai.picks(dive, &mut ai_roll(&mut g.ai_mt));
     // an undrawn dive chance keeps the last one
     g.players[i].ai_picks.dive = g.players[i].ai_picks.dive.or(kept);
     if shots.is_none() {
@@ -2742,11 +2743,8 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
 /// ponytail: the app has no special serves yet, so the special-serve part never comes in.
 fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
     let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
     let p = &mut g.players[i];
     let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
     p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, false, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
@@ -2781,8 +2779,7 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
     g.players[i].ai_guess = None;
     match q.verdict(p.end, from, [b[0], b[2]]) {
         Verdict::Right => {
-            rand(&mut g.rng);
-            let e = (g.rng >> 16 & 0x7fff) as i32 % 3 - 1;
+            let e = (g.ai_mt.next() >> 16 & 0x7fff) as i32 % 3 - 1;
             let t = &mut g.players[i].ai_timing;
             (t.stroke, t.volley, t.smash) = (e, e, e);
             None
@@ -2950,11 +2947,7 @@ fn ai_stand_x(g: &mut Game, i: usize, b: V3) -> f32 {
         Some((shot, minus)) if shot == g.shots => minus,
         _ => {
             let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-            let rng = &mut g.rng;
-            let run = p.ai.run_round(beside_human, &mut || {
-                rand(rng);
-                *rng
-            });
+            let run = p.ai.run_round(beside_human, &mut ai_roll(&mut g.ai_mt));
             let width = run.then(|| p.ai.run_round_width(g.players.len() == 2));
             // the strong side is TParam's hand (the game's +0x12dc ignores the select-screen hand toggle)
             let strong = if g.reaches[i].hand >= 0.0 { 1 } else { 2 };
@@ -2990,11 +2983,8 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
     };
     let t = Team { side: p.end, formation, lean: Team::lean(formation, !human_mate, p.ai.style, m.ai.style) };
     let at = |q: &Player| [q.pos[0], q.pos[2]];
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
     let pl = &mut g.players[i];
     if pl.ai_form.lane == 0 {
         let starter = g.score.server == i as i32 || g.score.receiver == i as i32;
@@ -3038,11 +3028,8 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
     let reach = hst_sim::ai::Choice::new(0, 0, false).reach;
     let c = Court { side: p.end, reach, rate: p.ai.singles_center_rate, radius: p.ai.singles_center_radius };
     let (target, ball) = (g.marks.red.unwrap_or(at(&o)), [g.flight.ball.pos[0], g.flight.ball.pos[2]]);
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
     let pl = &mut g.players[i];
     let mut s = match pl.ai_single {
         Some(s) => s,
@@ -3088,7 +3075,8 @@ fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
         ai_draw(g, i, None);
         let (end, ad, doubles) = (g.players[i].end, g.score.side == 1, g.players.len() == 4);
-        let mut roll = ai_roll(&mut g.rng);
+        let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
         let mut m = g.players[i].ai_mind.unwrap_or_default();
         m.count(&mut roll);
         let level0 = g.players[i].ai_picks.serve_level == 0;
@@ -3140,7 +3128,7 @@ fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
         (_, Some(swing::Branch::Smash)) => 3,
         _ => 0,
     };
-    let rng = &mut g.rng;
+    let rng = &mut g.ai_mt;
     let stick = if g.players.len() == 4 {
         let human_mate = g.humans.get(i ^ 2) == Some(&true);
         let l = Pair {
@@ -3173,7 +3161,7 @@ fn ai_press_kind(g: &mut Game, i: usize) -> i32 {
     let (stick, mut b) = g.players[i].ai_press.unwrap_or_default();
     if g.players.len() == 2 {
         let ai = g.players[i].ai;
-        b = ai.lock_button(b, &mut ai_roll(&mut g.rng));
+        b = ai.lock_button(b, &mut ai_roll(&mut g.ai_mt));
         g.players[i].ai_press = Some((stick, b));
     }
     button_kind(b)
@@ -3196,7 +3184,7 @@ fn ai_contact_stick(g: &mut Game, i: usize) -> Vec2 {
         return stick;
     }
     let (ai, end) = (g.players[i].ai, g.players[i].end);
-    let s = ai.lock_stick(b, [stick.x, 0.0, stick.y, 0.0], end, &mut ai_roll(&mut g.rng));
+    let s = ai.lock_stick(b, [stick.x, 0.0, stick.y, 0.0], end, &mut ai_roll(&mut g.ai_mt));
     Vec2::new(s[0], s[2])
 }
 
@@ -3207,7 +3195,7 @@ fn ai_toss_kind(g: &mut Game, i: usize) -> i32 {
         g.rally.faults > 0,
         p.ai_second,
         p.ai_picks.serve_level,
-        &mut ai_roll(&mut g.rng),
+        &mut ai_roll(&mut g.ai_mt),
     );
     button_kind(hst_sim::aim::button(plan))
 }
@@ -3220,7 +3208,8 @@ fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
         Toss::Weak => 0,
         Toss::Under => 2,
     };
-    let mut roll = ai_roll(&mut g.rng);
+    let mt = &mut g.ai_mt;
+    let mut roll = || mt.next();
     let swing = p.ai.serve_swing(toss, &mut roll);
     let ad = g.score.side == 1;
     let (s, dash) = if g.players.len() == 2 {
@@ -3266,11 +3255,8 @@ fn ai_lets_go(g: &Game, i: usize) -> bool {
 }
 
 /// The AI's draws on the game's generator stand-in.
-fn ai_roll(rng: &mut u32) -> impl FnMut() -> u32 + '_ {
-    move || {
-        rand(rng);
-        *rng
-    }
+fn ai_roll(mt: &mut hst_sim::mt::Mt) -> impl FnMut() -> u32 + '_ {
+    move || mt.next()
 }
 
 /// The AI object's per-frame update (`hst_sim::ai::Mind`), ahead of the routine `bot` runs for it: the point
@@ -3285,10 +3271,10 @@ fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
     let (style, heard) = (g.players[i].ai.style, g.players[i].ai_heard);
     let mut m = g.players[i].ai_mind.unwrap_or_default();
     if heard == 0 {
-        m.reset(g.players[i].ai_mind.is_none(), partner_bot, &mut ai_roll(&mut g.rng));
+        m.reset(g.players[i].ai_mind.is_none(), partner_bot, &mut ai_roll(&mut g.ai_mt));
         g.players[i].ai_heard = 1;
         ai_draw(g, i, None);
-        m.count(&mut ai_roll(&mut g.rng));
+        m.count(&mut ai_roll(&mut g.ai_mt));
     }
     let p = g.players[i];
     let done = match m.phase {
@@ -3301,15 +3287,15 @@ fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
         Ai::Rally => false,
     };
     if done {
-        m.rally(&mut ai_roll(&mut g.rng));
+        m.rally(&mut ai_roll(&mut g.ai_mt));
     }
     if g.phase == Phase::Post && heard == 1 {
-        m.point_over(&mut ai_roll(&mut g.rng));
+        m.point_over(&mut ai_roll(&mut g.ai_mt));
         g.players[i].ai_heard = 2;
     }
     if heard == 2 && g.post.as_ref().is_some_and(|p| p.reacted && p.event.is_some()) {
         let won = i as i32 & 1 == g.post_winner;
-        m.point_result(style, won, &mut ai_roll(&mut g.rng));
+        m.point_result(style, won, &mut ai_roll(&mut g.ai_mt));
         g.players[i].ai_heard = 3;
     }
     g.players[i].ai_mind = Some(m);
@@ -3321,7 +3307,7 @@ fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
 fn ai_heard_shot(g: &mut Game, i: usize, own: bool) {
     let Some(mut m) = g.players[i].ai_mind else { return };
     if m.phase == hst_sim::ai::Phase::Rally {
-        m.rally(&mut ai_roll(&mut g.rng));
+        m.rally(&mut ai_roll(&mut g.ai_mt));
     }
     if own {
         m.own_hit();
