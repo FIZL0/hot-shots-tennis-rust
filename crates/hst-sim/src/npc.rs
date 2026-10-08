@@ -131,6 +131,17 @@ impl Walker {
         self.set_frame(ps2::lerp(ps2::mul(k, part), ps2::mul(k + 1.0, part), r));
     }
 
+    /// The match's start: with more than one player the cheer (animation 5) from a random frame in this walker's
+    /// sixth of it, until the first point restarts the idle loops; else nothing until then.
+    pub fn start(&mut self, players: u32, roll: &mut impl FnMut() -> u32) {
+        self.counter = 0;
+        if players > 1 {
+            self.set_anim(5, players);
+            self.random_frame(ps2::div(self.lens[5], 6.0), roll);
+            self.counter = -1;
+        }
+    }
+
     /// A point was decided (the game skips faults and lets).
     pub fn react(&mut self) {
         self.mode = 1;
@@ -275,13 +286,24 @@ impl Cheers {
         }
     }
 
-    /// A new point or a change of ends: the count goes to 0.
+    /// The match's start, a change of ends, a new point: every mark zeroed, the count 0. (A new point straight
+    /// after the match's start or a change of ends only zeroes the count; nothing else of it is ever seen.)
     pub fn clear(&mut self) {
-        self.count = 0;
+        *self = Cheers { court5: self.court5, ..Cheers::default() };
     }
 
-    /// Court 5's own marks (`exe::Game::court5_marks`) set: at a two-or-more-player match's start, and when the
-    /// umpire calls a point that wins a game (or an ace or a return winner) in a plain voice.
+    /// The match is over (more than one player): court 5 shows its own marks again when the favoured team won,
+    /// any other court keeps its marks; an unfavoured win zeroes them.
+    pub fn match_over(&mut self, favoured: bool, marks: &[[f32; 4]]) {
+        if !favoured {
+            self.clear();
+        } else if self.court5 {
+            self.court5(marks);
+        }
+    }
+
+    /// Court 5's own marks (`exe::Game::court5_marks`) set: at a two-or-more-player match's start, when
+    /// [`court5_again`] says so at a point's end, and at the match's end when the favoured team won.
     pub fn court5(&mut self, marks: &[[f32; 4]]) {
         for (c, m) in self.slots[6..].iter_mut().zip(marks) {
             let p = [m[0], m[1], m[2]];
@@ -309,6 +331,13 @@ impl Cheers {
             c.delay -= 1;
         }
     }
+}
+
+/// Court 5 shows its own marks again at a point's end: called plain (`call` 0), and a game or set won short of
+/// the match's end (`game`) or the point an ace or a return winner (`shots` ≤ 2, the last hitter's team won it).
+/// ponytail: the scoreboard voids an ace or return winner for one ball state of its own (not ported)
+pub fn court5_again(call: u8, game: bool, shots: i32, hitter_won: bool) -> bool {
+    call == 0 && (game || (1..=2).contains(&shots) && hitter_won)
 }
 
 /// Trigger creature types that just play their sound now and then (`exe::Game::emitter` gives the sound and gap).
@@ -1050,5 +1079,51 @@ mod tests {
         let mut c = super::Cheers::new(1);
         c.add([-2.0; 3], 0);
         assert_eq!(c.shown()[0].pos, [-2.0; 3]);
+    }
+
+    /// Recorded at a doubles match's start (court 4): the four walkers register marks 0–3 (delays 0, 3, 6, 9)
+    /// in their order, each from its cheer, then the manager zeroes them; court 5 then sets its own.
+    #[test]
+    fn match_start() {
+        let marks: Vec<[f32; 4]> = (0..93).map(|i| [i as f32, 1.0, 0.0, 1.0]).collect();
+        for court in [4, 5] {
+            let mut c = super::Cheers::new(court);
+            let mut draws = 0;
+            for slot in 0..4 {
+                let mut w = super::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7] };
+                w.start(4, &mut || { draws += 1; 0x8000_0000 });
+                // the middle of its sixth of the cheer
+                assert_eq!((w.anim, w.counter, w.frame), (5, -1, 10.0 * slot as f32 + 5.0));
+                c.add([slot as f32; 3], slot);
+            }
+            assert_eq!((draws, c.count, c.slots[3].delay), (4, 4, 9));
+            c.clear();
+            if court == 5 {
+                c.court5(&marks);
+            }
+            assert_eq!(c.shown().len(), if court == 5 { 93 } else { 0 });
+        }
+        // singles too; one player draws nothing
+        let mut w = super::Walker { slot: 0, mode: 0, counter: 5, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7] };
+        w.start(1, &mut || unreachable!());
+        assert_eq!((w.anim, w.counter), (0, 0));
+    }
+
+    #[test]
+    fn court5_point_and_match_over() {
+        use super::court5_again;
+        // a game won, an ace, a return winner; not with a call, nor a winner from the third shot on
+        assert!(court5_again(0, true, 7, false) && court5_again(0, false, 1, true) && court5_again(0, false, 2, true));
+        assert!(!court5_again(1, true, 1, true) && !court5_again(0, false, 3, true) && !court5_again(0, false, 2, false));
+        let marks = vec![[1.0, 2.0, 3.0, 1.0]; 93];
+        let mut c = super::Cheers::new(5);
+        c.match_over(true, &marks);
+        assert_eq!((c.kind, c.count), (1, 93));
+        c.match_over(false, &marks);
+        assert_eq!((c.kind, c.count, c.slots[6].pos), (0, 0, [0.0; 3]));
+        let mut c = super::Cheers::new(2);
+        c.add([1.0; 3], 0);
+        c.match_over(true, &marks);
+        assert_eq!(c.count, 1);
     }
 }

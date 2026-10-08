@@ -8,7 +8,9 @@
 //!
 //! The points are seen from the game's state: a decided point is the umpire turning (`point_over` sets her
 //! motion only then), a new point the next serve after it. The walkers react and the gallery picks who cheers
-//! ([`npc::cheerers`]) in the tick the point is decided.
+//! ([`npc::cheerers`]) in the tick the point is decided. At the match's start the walkers cheer and leave marks
+//! that the gallery's manager zeroes straight after (court 5 then shows its own); the first serve restarts their
+//! idle loops.
 //!
 //! The court generator's draws come in the game's order each tick: the decided point's cheerers, the gallery's
 //! applause and the walkers' reactions; the walkers' step (adding cheer marks); the gallery's manager (its cheer,
@@ -59,6 +61,10 @@ struct Npcs {
     /// The cheer marks' sprites (`npc/clap`) and their sizes by kind (`exe::Game::cheer_sprites`).
     sprites: Handle<Mesh>,
     sizes: [[f32; 5]; 2],
+    /// The match's first point has been served (the walkers' match-start cheer ends then).
+    started: bool,
+    /// The match was decided: whether the favoured team won, until the next serve.
+    over: Option<bool>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -104,14 +110,7 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites() };
-    // court 5 shows its own marks from the match's start (with more than one player)
-    if g.stage == 5 {
-        npcs.marks = game.court5_marks();
-        if players > 1 {
-            npcs.cheers.court5(&npcs.marks);
-        }
-    }
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -129,7 +128,10 @@ fn setup(
                 let Some(data) = load(layout::walker_files(model, set)) else { continue };
                 let lens = std::array::from_fn(|a| data.motions.get(&a).map_or(0.0, |c| c.length));
                 let slot = npcs.walkers.len() as u32;
-                let w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens };
+                let mut w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens };
+                // the match's start: its cheer, and a mark where it stands
+                w.start(players, &mut roll);
+                npcs.cheers.add([c.world[3][0], c.world[3][1], c.world[3][2]], slot);
                 // the serve placement before the first point turns it to the court centre
                 let world = npc::walker_facing(c.world[3], 0.0);
                 npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
@@ -159,6 +161,14 @@ fn setup(
             }
             // ponytail: court 5's own creatures are not drawn (their models are not found yet)
             npc::Kind::Court5(_) => {}
+        }
+    }
+    // then the manager's match start zeroes the walkers' marks; court 5 shows its own (with more than one player)
+    npcs.cheers.clear();
+    if g.stage == 5 {
+        npcs.marks = game.court5_marks();
+        if players > 1 {
+            npcs.cheers.court5(&npcs.marks);
         }
     }
     for &e in &hidden {
@@ -236,11 +246,35 @@ fn step(
     let decided = motion != 0 && npcs.motion == 0;
     let cheer = if decided { npc::cheerers(npcs.walkers.len(), &mut roll) } else { [false; 6] };
     applaud(&mut g.gallery, &mut g.applause, &mut roll);
-    // court 5 shows its own marks again after a game or set won
-    // ponytail: only without a call, and also after an ace or a return winner (the scoreboard's point kind), in
-    // the original; neither is known here (P3e7)
-    if decided && g.stage == 5 && g.gallery_game {
-        npcs.cheers.court5(&npcs.marks);
+    // court 5 shows its own marks again after a plain call that won a game or set (short of the match), an ace or a
+    // return winner
+    if decided && g.stage == 5 {
+        let call = g.rally.judge(g.body_hit).call;
+        let game = g.gallery_game && !g.score.match_over;
+        if npc::court5_again(call, game, g.shots, g.last_hitter & 1 == g.post_winner) {
+            npcs.cheers.court5(&npcs.marks);
+        }
+    }
+    if decided && g.score.match_over {
+        npcs.over = Some(sound::favoured(&g.humans)[g.post_winner.clamp(0, 1) as usize]);
+    }
+    // the match's first serve (a new point straight after its start): the idle loops restart one walker per tick
+    // (with more than one player), the marks go
+    if serve && !npcs.started {
+        npcs.started = true;
+        npcs.tick = 0;
+        npcs.cheers.clear();
+        npcs.walkers.iter_mut().for_each(|(_, w, _)| w.new_point(players > 1));
+    }
+    // the match over: the manager resumes, court 5 shows its marks if the favoured team won, an unfavoured win
+    // zeroes them
+    // ponytail: the match-over phase isn't played (the next match starts at once, its new point zeroing the marks
+    // again); the walkers' cheer at it and their match-start cheer for the next match are not replayed
+    if serve && let Some(favoured) = npcs.over.take() {
+        if players > 1 {
+            npcs.cheers.match_over(favoured, &npcs.marks);
+        }
+        npcs.near.paused = false;
     }
     if decided {
         for (e, w, home) in &mut npcs.walkers {
