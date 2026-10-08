@@ -112,6 +112,34 @@ impl Rngs {
         self.sound = Mt::new(self.rand.next());
     }
 
+    /// The match setup's `rand()` calls after the seed, up to the sound manager's second reseed (which
+    /// `change_ends` makes): the sun's lens flare is made (24 rays × a brightness and an angle jitter), the sound
+    /// manager's first reseed, the court's `clouds` clouds are placed (5 each: a heading, x, height, z and a model;
+    /// made in doubles too, where they neither move nor draw), and the effects seed is drawn. Returns the effects
+    /// seed (the effects' LCG restarts from it at every new point).
+    pub fn setup_rand(&mut self, clouds: usize) -> u32 {
+        for _ in 0..48 {
+            self.rand.next();
+        }
+        self.change_ends();
+        for _ in 0..5 * clouds {
+            self.rand.next();
+        }
+        self.rand.next()
+    }
+
+    /// The match intro's ticks of the lens flare (before the first point), recorded on court 4 in doubles.
+    // ponytail: one court's intro: other courts' and singles' lengths aren't recorded
+    pub const INTRO_TICKS: usize = 394;
+
+    /// One tick of the sun's lens flare while the weather shows it (clear or cloudy): each of its 24 rays' brightness
+    /// steps by a `rand() % 11 − 5` hundredth.
+    pub fn flare_tick(&mut self) {
+        for _ in 0..24 {
+            self.rand.next();
+        }
+    }
+
     /// The match setup's shared draws after the players' (each player's voice-bank pick, AI reseed and placement):
     /// the hit-spark table (25 sparks × 4, lost to the sound manager's own roll), then the gallery bank (0..3) among
     /// those `used` doesn't hold, which it then holds (all four used: all freed first).
@@ -126,6 +154,24 @@ impl Rngs {
         let pick = free[self.shared.r15() as usize % free.len()];
         used[pick] = true;
         pick
+    }
+}
+
+/// Player `i`'s voice bank (b or a) from its draw `drawn` (`r15 % 100 >= 70`, always made) and the banks `banks` of
+/// the players before it, `chars` every player's character: two of one character take different banks (the second
+/// the other of the first's); three: the first two keep their draws, the third takes the other of its partner's
+/// (`i ^ 2`) when the partner is one of them; four: the third takes b when the first two have a, a when they have b,
+/// and the fourth a when exactly one of the first three has a, else b.
+pub fn voice_bank(chars: &[u32], i: usize, banks: &[bool], drawn: bool) -> bool {
+    let mine = chars[i];
+    let same = chars.iter().filter(|&&c| c == mine).count();
+    let prev: Vec<bool> = (0..i).filter(|&k| chars[k] == mine).map(|k| banks[k]).collect();
+    match (same, prev.as_slice()) {
+        (2, [b]) => !b,
+        (3, [_, ..]) if i >= 2 && chars[i ^ 2] == mine => !banks[i ^ 2],
+        (4, [a, b]) if a == b => !a,
+        (4, [_, _, _]) => prev.iter().filter(|&&b| !b).count() != 1,
+        _ => drawn,
     }
 }
 

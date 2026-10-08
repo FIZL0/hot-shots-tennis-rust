@@ -147,6 +147,16 @@ fn court_layout(iso: &mut Iso, n: usize) -> Option<(Vec<layout::Entry>, Vec<layo
 #[derive(Component)]
 pub struct GameSpace;
 
+/// How many clouds court `n`'s setup places (`layout::cloud_count`; singles' environment row 1, doubles' 0).
+// ponytail: the rain weathers' count (an exe constant) isn't read: the clear and cloudy rule only
+fn cloud_count(iso: &mut Iso, n: u32, envir: Option<&[u8]>, singles: bool) -> usize {
+    let hole = iso.read(&format!("COURT/{n:02}/GRD01.XB")).ok().and_then(|d| {
+        let arc = Archive::parse(&d).ok()?;
+        arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}_h01.dat")))?).ok()
+    });
+    envir.zip(hole).and_then(|(e, h)| layout::cloud_count(e, &h, singles as usize)).unwrap_or(20)
+}
+
 fn load(
     mut commands: Commands,
     args: Res<Args>,
@@ -231,7 +241,8 @@ fn load(
             let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
             // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
             // directly (slot 5's was 0x28c7c4a1)
-            // ponytail: the menus' `rand()` calls before the match aren't ported; a clock-picked count stands in for them
+            // the menus' `rand()` calls before the match: their count follows how long each screen is up (a draw per
+            // frame of some screens), so a clock-picked count stands in for them
             let mut r = hst_sim::weather::Rand::default();
             let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
                 let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
@@ -241,7 +252,11 @@ fn load(
             let mut mt = hst_sim::weather::Mt::new(seed);
             let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || mt.next());
             // the match goes on drawing from the same generators (with a given seed, `rand()` is taken as at boot)
-            commands.insert_resource(play::MatchRng(hst_sim::rng::Rngs::new(r, mt)));
+            let mut rngs = hst_sim::rng::Rngs::new(r, mt);
+            // the setup's own `rand()` calls: the lens flare, the sound manager, the clouds and the effects seed
+            let effects = rngs.setup_rand(cloud_count(&mut iso, n, envir.as_deref(), args.singles));
+            play::set_effects_seed(effects);
+            commands.insert_resource(play::MatchRng(rngs));
             let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
             let w = weather::Weather { schedule, game: 0, fixed };
             let today = w.today();

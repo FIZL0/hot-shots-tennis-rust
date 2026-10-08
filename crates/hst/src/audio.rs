@@ -353,11 +353,13 @@ pub fn gallery_bank(iso: &mut Iso, n: usize, pick: usize) -> Option<SoundBank> {
 #[derive(Resource)]
 pub struct VoiceBanks(pub Vec<Option<Arc<SoundBank>>>);
 
-/// Character `c`'s voice bank for a game of `players`: the singles (`sgv`) or doubles (`dvv`) set, variant a or b.
-pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, b: bool) -> Option<SoundBank> {
+/// Character `c`'s voice bank for a game of `players` on `court`: the singles (`sgv`) or doubles (`dvv`) set,
+/// variant a or b (`b`); court 7 has its own pair, c and d.
+pub fn voice_bank(iso: &mut Iso, c: usize, players: usize, court: u32, b: bool) -> Option<SoundBank> {
     let (n, set, tag) = if players < 3 { (0, "SGL", "sgv") } else { (4, "DBL", "dvv") };
-    let v = if b { 'b' } else { 'a' };
-    SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + b as usize), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
+    let k = b as usize + if court == 7 { 2 } else { 0 };
+    let v = (b'a' + k as u8) as char;
+    SoundBank::load(iso, &format!("SND/VOICE/PC/PC{c:02}VCE{}.XB0", n + k), &format!("data/sound/VOICE/{set}/{tag}_vc{c:02}{v}.hd"))
 }
 
 /// The gallery's bank.
@@ -394,15 +396,18 @@ fn mix(iso: &mut Iso) -> Mix {
 mod tests {
     use super::*;
 
-    /// Every character's voice banks (0..13, singles and doubles, variants a and b) load from the disc.
+    /// Every character's voice banks (0..13, singles and doubles, variants a and b, and court 7's c and d) load from
+    /// the disc.
     #[test]
     fn loads_voice_banks() {
         let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
             return eprintln!("no ISO, skipped");
         };
         let missing: Vec<_> = (0..14)
-            .flat_map(|c| [(c, 2, false), (c, 2, true), (c, 4, false), (c, 4, true)])
-            .filter(|&(c, players, b)| voice_bank(&mut iso, c, players, b).is_none())
+            .flat_map(|c| [2, 4].map(|players| [1, 7].map(|court| [false, true].map(|b| (c, players, court, b)))))
+            .flatten()
+            .flatten()
+            .filter(|&(c, players, court, b)| voice_bank(&mut iso, c, players, court, b).is_none())
             .collect();
         assert!(missing.is_empty(), "{missing:?}");
     }

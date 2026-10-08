@@ -555,6 +555,12 @@ fn setup_draws_like_the_game() {
     ) else {
         return eprintln!("setup_ram.bin or the ISO missing, skipped");
     };
+    // P3f's states (research/p3d3_setup_ram.py --chars: the characters after each record) have players of one
+    // character; p3d3's have none (all-different characters stand in)
+    let same = std::fs::read(format!("{root}/context/p3f/setup_ram.bin")).unwrap_or_else(|_| {
+        eprintln!("p3f/setup_ram.bin missing: no same-character states");
+        Vec::new()
+    });
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let exe = hst_data::exe::Game::new(&cnf, &bin).unwrap();
     // rand()'s step backwards: its multiplier's inverse mod 2⁶⁴ is a^(2⁶³ − 1)
@@ -562,7 +568,9 @@ fn setup_draws_like_the_game() {
     let inv = (0..63).fold((1u64, A), |(x, b), _| (x.wrapping_mul(b), b.wrapping_mul(b))).0;
     const SIZE: usize = 20 + 8 + 32 + 8 + 0x9d0 + 68 + 65 * 8;
     assert!(d.len() >= SIZE * 5);
-    for s in d.chunks_exact(SIZE) {
+    for (s, chars) in d.chunks_exact(SIZE).map(|s| (s, [0, 1, 2, 3])).chain(same.chunks_exact(SIZE + 16).map(|s| {
+        (s, std::array::from_fn(|k| u32::from_le_bytes(s[SIZE + 4 * k..][..4].try_into().unwrap())))
+    })) {
         let u = |o: usize| u32::from_le_bytes(s[o..o + 4].try_into().unwrap());
         let (court, players, games, sets, match_seed) = (u(0), u(4) as usize, u(8), u(12), u(16));
         let (pick, used) = (u(60) as usize, &s[64..68]);
@@ -588,8 +596,11 @@ fn setup_draws_like_the_game() {
             .unwrap_or_else(|| panic!("court {court}: no seed gives RAM's weather"));
         let mut r = Rngs::new(Rand(0), shared);
         let mut ai_seen = None;
+        let mut banks = Vec::new();
         for i in 0..players {
-            assert_eq!(r.shared.r15() % 100 >= 70, u(28 + 8 * i) != 0, "court {court} player {i} voice bank");
+            let drawn = r.shared.r15() % 100 >= 70;
+            banks.push(hst_sim::rng::voice_bank(&chars[..players], i, &banks, drawn));
+            assert_eq!(banks[i], u(28 + 8 * i) != 0, "court {court} characters {chars:?} player {i} voice bank");
             if u(32 + 8 * i) != 0 {
                 r.new_ai();
                 ai_seen = Some(r.ai.clone());
@@ -602,4 +613,94 @@ fn setup_draws_like_the_game() {
         let mut before = std::array::from_fn(|k| k != pick && used[k] != 0);
         assert_eq!(r.setup_gallery(&mut before), pick, "court {court}: gallery");
     }
+}
+
+/// `rand()` over all of `context/p3b/rng_s05.bin`: the lens flare's tick (`Rngs::flare_tick`; slot 5's weather
+/// shows it) in every tick the game ran (`trig_s05.bin`'s emitter countdowns, as `court_draws_like_the_game`), the
+/// new point's two reseeds and, after a played point, the sound manager's must add up to the recorded steps. The
+/// samples are torn by a tick now and then (read before or after that tick's flare, or the sound manager's reseed),
+/// so the count may run a tick's draws ahead or behind for a frame; at each new point it must be exact.
+#[test]
+fn rand_draws_like_the_game() {
+    use hst_sim::npc;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(rng), Ok(trig)) = (std::fs::read(format!("{root}/context/p3b/rng_s05.bin")), std::fs::read(format!("{root}/context/fixtures/trig_s05.bin"))) else {
+        return eprintln!("rng_s05.bin or trig_s05.bin missing, skipped");
+    };
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let at = |d: &[u8], size: usize, head: usize, v: u32| d[head..].chunks_exact(size).find(|s| u(s, 0) == v).map(|s| s.to_vec());
+    let sample = |v: u32| at(&rng, 12 + 4 * 0x9d0, 0, v).map(|s| (Rand(u64::from_le_bytes(s[4..12].try_into().unwrap())), Mt::from_ram(&s[12..])));
+    let m = u(&trig, 0) as usize;
+    let to = |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300;
+    let figures_at = |v: u32| at(&trig, to(m), 4 + 4 * m, v);
+    let first = figures_at(u(&trig, 4 + 4 * m)).unwrap();
+    let ours: Vec<usize> = (0..m).filter(|&k| npc::EMITTERS.contains(&first[to(k) + 0x50])).collect();
+    let timer = |s: &[u8], k: usize| u(s, to(k) + 200) as i32;
+    let ticks = |v: u32| {
+        let (a, b) = (figures_at(v)?, figures_at(v + 1)?);
+        ours.iter().map(|&k| timer(&a, k) - timer(&b, k)).filter(|&d| d >= 0).max()
+    };
+    // both recordings' frames
+    let vs: Vec<u32> = rng.chunks_exact(12 + 4 * 0x9d0).map(|s| u(s, 0)).filter(|&v| ticks(v).is_some() && sample(v + 1).is_some()).collect();
+    assert!(vs.windows(2).all(|w| w[1] == w[0] + 1), "contiguous frames");
+    let (start, _) = sample(vs[0]).unwrap();
+    let mut g = Rngs::new(start, Mt::new(1));
+    // the game's steps since the start (from the samples) less the port's
+    let (mut steps, mut points, mut played, mut exact) = (0i64, 0, false, 0);
+    for &v in &vs {
+        let ((a, shared), (b, next)) = (sample(v).unwrap(), sample(v + 1).unwrap());
+        let mut r = a;
+        steps += (0..200).find(|_| r == b || { r.next(); false }).expect("rand() steps") as i64;
+        if reach(&shared, &next, 4000).is_none() {
+            // a new point: the shared and court reseeds first, from the state the samples show
+            let (mut x, mut k) = (start, 0i64);
+            while x != a { x.next(); k += 1; }
+            let mut y = start;
+            let ported = (0..).find(|_| y == g.rand || { y.next(); false }).unwrap() as i64;
+            assert_eq!(ported, k, "vsync {v}: rand() at the new point");
+            g.new_point();
+            // the sound manager's after a played point (7566 is the match's first: its reseed was at the start)
+            if played { g.change_ends() }
+            played = true;
+            points += 1;
+        }
+        for _ in 0..ticks(v).unwrap() {
+            g.flare_tick();
+        }
+        let mut y = start;
+        let ported = (0..).find(|_| y == g.rand || { y.next(); false }).unwrap() as i64;
+        assert!((steps - ported).abs() <= 25, "vsync {v}: the game {steps} rand() steps, the port {ported}");
+        exact += (steps == ported) as usize;
+    }
+    eprintln!("{} frames from {}, {exact} exact, {points} new points", vs.len(), vs[0]);
+    assert_eq!(points, 2);
+}
+
+/// The match setup's `rand()` calls against `context/p3f/setup_rand.bin` (research/p3f_setup_seq.py --fixture over
+/// two research/p3f_menu_log.py logs: court 4 doubles, clear): from the match seed, `Rngs::setup_rand` (20 clouds)
+/// must draw the effects seed where the game does, and with the sound manager's second reseed and the intro's
+/// `Rngs::INTRO_TICKS` flare ticks land where the first point's shared reseed draws. Each record holds the state's
+/// low word only: the full state is found by stepping from boot.
+#[test]
+fn setup_rand_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/p3f/setup_rand.bin")) else {
+        return eprintln!("setup_rand.bin missing, skipped");
+    };
+    let low = |r: &Rand| r.0 as u32;
+    let find = |mut r: Rand, w: u32, max: usize| (0..max).find(|_| low(&r) == w || { r.next(); false }).map(|_| r);
+    for rec in d.chunks_exact(12) {
+        let [seed, effects, point] = std::array::from_fn(|k| u32::from_le_bytes(rec[4 * k..4 * k + 4].try_into().unwrap()));
+        let mut r = find(Rand::default(), seed, 1 << 20).expect("the seed's state from boot");
+        let mt = Mt::new(r.next());
+        let mut g = Rngs::new(r, mt);
+        let fx = g.setup_rand(20);
+        let mut at = find(r, effects, 1000).expect("the effects seed's state");
+        assert_eq!(fx, at.next(), "the effects seed");
+        assert_eq!(g.rand, at, "rand() after the effects seed");
+        g.change_ends();
+        (0..Rngs::INTRO_TICKS).for_each(|_| g.flare_tick());
+        assert_eq!(low(&g.rand), point, "rand() at the first point");
+    }
+    assert_eq!(d.len(), 24);
 }
