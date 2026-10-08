@@ -135,6 +135,11 @@ impl<'a> Game<'a> {
         Foot { steps, puffs: [row(0x41_14a0), row(0x41_14d8)], decay: self.f32(0x41_13d8), wind: self.f32(0x41_13e0), courts }
     }
 
+    /// Frames the ball's wind tornado takes to fade out once grown.
+    pub fn tornado_fade(&self) -> i32 {
+        i32::from_le_bytes(self.at(0x41_6650, 4).try_into().unwrap())
+    }
+
     /// How far inside the court lines shots are pulled: per shot class (serve, stroke, volley, smash) and kind
     /// (0..4) the margins (across, along) for a shot mode ≥ 0 then < 0; and per character (0..13) the widest
     /// sideline margin a short angled topspin stroke can get.

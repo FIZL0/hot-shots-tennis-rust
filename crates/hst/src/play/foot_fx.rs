@@ -1,0 +1,159 @@
+//! Footstep puffs and footprints (`hst_sim::foot`): each player's toes (`Bip01RToe0`, `Bip01LToe0`) in game space
+//! feed the sim every tick; puffs are drawn as camera-facing quads (`run/kemuri_00` dust in the court's dust colour,
+//! `run/spray` grey in rain), footprints as ground quads (`run/e_footprint` in the court's print colour).
+
+use bevy::prelude::*;
+use hst_data::{exe::Foot, iso::Iso};
+use hst_sim::foot::{Feet, Runner};
+
+use super::{Figure, Game, Phase};
+use crate::character::{Motion, Rig};
+use crate::effects::{fill, look};
+use crate::weather::Weather;
+use crate::Args;
+
+pub fn plugin(app: &mut App) {
+    app.add_systems(PostStartup, setup.after(super::setup))
+        .add_systems(FixedUpdate, tick.after(crate::character::tick))
+        .add_systems(Update, draw.after(super::camera));
+}
+
+#[derive(Resource)]
+struct FootFx {
+    table: Foot,
+    feet: Feet,
+    court: usize,
+    /// The court's dust colour (1 = the game's 128).
+    dust: [f32; 3],
+    /// Last tick was in the serve, to clear everything as a point starts.
+    serving: bool,
+    wet: bool,
+    dry_puffs: Handle<Mesh>,
+    wet_puffs: Handle<Mesh>,
+    prints: Handle<Mesh>,
+}
+
+fn setup(
+    mut commands: Commands,
+    args: Res<Args>,
+    root: Query<Entity, With<crate::GameSpace>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Ok(root) = root.single() else { return };
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
+    let game = hst_data::exe::Game::new(&cnf, &bin).expect("game program");
+    let court = args.stage.map_or(args.court, |s| s as usize);
+    let looks = game.bounce_looks();
+    let dust = looks.get(court).unwrap_or(&looks[10]).dust.map(|v| v / 128.0);
+    let mut mesh = |tex: &str| {
+        let m = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
+        let material = look(&mut iso, tex, &mut materials, &mut images).expect("footstep texture");
+        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(material), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+        commands.entity(root).add_child(view);
+        m
+    };
+    let (dry_puffs, wet_puffs, prints) = (mesh("run/kemuri_00"), mesh("run/spray"), mesh("run/e_footprint"));
+    commands.insert_resource(FootFx { table: game.foot(), feet: Feet::default(), court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints });
+}
+
+/// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim.
+// ponytail: the toes are the last drawn pose (one frame behind the motion), as the swing trails
+fn tick(
+    fx: Option<ResMut<FootFx>>,
+    g: Res<Game>,
+    w: Option<Res<Weather>>,
+    q: Query<(&Figure, &Rig, &Motion, &GlobalTransform)>,
+    joints: Query<&GlobalTransform>,
+    root: Query<&GlobalTransform, With<crate::GameSpace>>,
+) {
+    let (Some(mut fx), Ok(root)) = (fx, root.single()) else { return };
+    let fx = &mut *fx;
+    let to_game = root.affine().inverse();
+    // the game clears the run object as a point is set up
+    if g.phase == Phase::Serve && !fx.serving {
+        fx.feet = Feet::default();
+    }
+    fx.serving = g.phase == Phase::Serve;
+    fx.feet.after_point = g.phase == Phase::Post;
+    fx.wet = w.is_some_and(|w| hst_sim::weather::rain(w.today().weather));
+    let mut runners: Vec<(usize, Runner)> = q
+        .iter()
+        .filter_map(|(f, rig, m, gt)| {
+            let toe = |n: &str| rig.data.joint(n).and_then(|j| joints.get(rig.joints[j]).ok()).map(|t| to_game.transform_point3(t.translation()).extend(1.0).to_array());
+            let pm = Mat4::from(to_game * gt.affine());
+            Some((
+                f.0,
+                Runner {
+                    character: g.chars[f.0] as usize,
+                    motion: m.id as i32,
+                    // ponytail: the motion's sub-state (it only stops steps late in a high motion past the point) is 0
+                    sub: 0,
+                    toes: [toe("Bip01RToe0")?, toe("Bip01LToe0")?],
+                    m: [pm.x_axis, pm.y_axis, pm.z_axis, pm.w_axis].map(|c| c.to_array()),
+                    // ponytail: the player's state byte (1 running, 2 swinging, 0 else) from the motion id
+                    slide: (3..=0x1f).contains(&m.id),
+                },
+            ))
+        })
+        .collect();
+    runners.sort_by_key(|(i, _)| *i);
+    let runners: Vec<Runner> = runners.into_iter().map(|(_, r)| r).collect();
+    let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
+    let dusty = fx.table.courts[c].dusty && !fx.wet;
+    // ponytail: no wind drift (the weather's wind vector is not ported to the scene)
+    fx.feet.tick(&fx.table, c, dusty, fx.wet, [0.0; 4], &runners, true);
+}
+
+/// Puffs face the camera, pushed 0.5 toward it, `size` either side and twice that tall; footprints lie on the court.
+fn draw(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
+    let (Some(fx), Ok(cam)) = (fx, cam.single()) else { return };
+    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
+    let (right, up, ahead) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y), game(cam.rotation * Vec3::NEG_Z));
+    let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
+    let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 4])>| {
+        let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+        for (corners, c) in quads {
+            let n = pos.len() as u32;
+            pos.extend(corners.map(|v| v.to_array()));
+            uv.extend([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]]);
+            colour.extend([c; 4]);
+            index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
+        }
+        fill(mesh, pos, uv, colour, index);
+    };
+    // ponytail: the game pulls the puff by its view matrix's third row × 0.5; taken as 0.5 along the view toward the camera
+    let [r, g, b] = if fx.wet { [1.0; 3] } else { fx.dust };
+    let puffs = fx
+        .feet
+        .puffs
+        .iter()
+        .map(|p| {
+            let (foot, w, h) = (v3(p.pos) - ahead * 0.5, right * p.size, up * 2.0 * p.size);
+            ([foot - w + h, foot + w + h, foot - w, foot + w], [r, g, b, p.alpha / 128.0])
+        })
+        .collect();
+    let (shown, empty) = if fx.wet { (&fx.wet_puffs, &fx.dry_puffs) } else { (&fx.dry_puffs, &fx.wet_puffs) };
+    if let Some(mut mesh) = meshes.get_mut(shown) {
+        put(&mut mesh, puffs);
+    }
+    if let Some(mut mesh) = meshes.get_mut(empty) {
+        put(&mut mesh, vec![]);
+    }
+    let c = fx.table.courts.get(fx.court).unwrap_or(&fx.table.courts[10]);
+    let [r, g, b] = c.print_rgb[fx.wet as usize].map(|v| v / 128.0);
+    let prints = fx
+        .feet
+        .prints
+        .iter()
+        .map(|p| {
+            let (at, s, f) = (v3(p.m[3]), v3(p.m[0]) * 0.1, v3(p.m[2]) * 0.2);
+            ([at - s - f, at + s - f, at - s + f, at + s + f], [r, g, b, p.alpha / 128.0])
+        })
+        .collect();
+    if let Some(mut mesh) = meshes.get_mut(&fx.prints) {
+        put(&mut mesh, prints);
+    }
+}
