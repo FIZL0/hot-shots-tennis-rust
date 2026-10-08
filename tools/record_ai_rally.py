@@ -20,7 +20,8 @@ then a variable tail; exit tag |0x100):
 +0x3d70, 0x520 partner +0x12b0 (0x10), 0x530 partner +0x13f0 (0x10); 0x540 the ball (*(gm+0x88)) +0xe0 (0x10),
 0x550 +0x220 (0x10); 0x560 the path object (*(gm+0xa4)) +0x50..+0x130 (shot records at +0x70, 0x30 per player);
 0x640 the seen flags 0x427050 (0xc0); 0x700 the character record +0..+0x10; 0x710 the ball +0x8c0..+0x8d0; 0x720
-partner +0x3fa0 (0x10); 0x730 the caller's stack quad at sp-0x20 (the NET/BASE stand scratch, read uninitialised).
+partner +0x3fa0 (0x10); 0x730 the caller's stack quad at sp-0x20 (the NET/BASE stand scratch, read uninitialised;
+taken last in the entry stub).
 Tail: entry records the path object's entries from its start (+0x58) to its end (+0x54), at most 180, 0x30 each;
 exit records the AI's path copy 0x424e90, ai+0x3c entries."""
 import os, struct, sys, time
@@ -175,6 +176,9 @@ def entry(tag, first, second):
     p += [lw("t2", s + 0x14, "t4"), lw("t3", s + 0x18, "t4"), sll("t6", "t3", 3), sll("t3", "t3", 2), addu("t6", "t6", "t3"),
           br(4, "t6", "zero", "nopath"), 0, *li("t5", SCRATCH + 0x8000 * (tag & 3) + REC)]
     p += copyn("t2", "t6", 0) + ["nopath"]
+    # the stack quad again, last: a vsync interrupt during the copies above writes below sp, so the routine reads what
+    # is there now (P11k8)
+    p += [*li("t5", SCRATCH + 0x8000 * (tag & 3)), addiu("t6", "sp", -0x20)] + copy("t6", 4, 0x730)
     p += [lw(r, s + 4 + 4 * k, "t4") for k, r in enumerate(ARGS[:3])]
     p += [*li("ra", exit_at(tag)), first, second, j(HOOKS[tag] + 8), 0]
     p += ["bad", sw("a0", D + 0x20, "t4"), sw("ra", D + 0x24, "t4"), sw("a1", D + 0x28, "t4"), sw("sp", D + 0x2c, "t4"),
@@ -294,6 +298,33 @@ def drive():
     elif idle > (25 if serving else 60):
         idle = 0
         send("press circle 60")
+# HST_PROBE=1 (P11k8): 0x362090 called from the doubles NET routine (ra 0x3d0c9c) appends (vsync, a0, sp, 0, the
+# quad at a1 = the routine's uninitialised stand scratch) to PROBE..PROBE_END, kept in out + ".probe"
+PROBE, PROBE_END, PPTR = 0x1e0d000, 0x1e10000, DATA + 0x60
+probes = []
+if os.environ.get("HST_PROBE") == "1":
+    p.write32(PPTR, PROBE)
+    def probe(a, b):
+        return [lui("t4", DATA >> 16), *li("t6", 0x3d0c9c), br(5, "ra", "t6", "skip"), 0, lw("t5", PPTR & 0xffff, "t4"),
+                *li("t6", PROBE_END), sltu("t6", "t5", "t6"), br(4, "t6", "zero", "skip"), 0,
+                *li("t6", VSYNC), lw("t6", 0, "t6"), sw("t6", 0, "t5"), sw("a0", 4, "t5"), sw("sp", 8, "t5"), sw("zero", 12, "t5")] + [
+                x for k in range(4) for x in (lw("t6", 4 * k, "a1"), sw("t6", 0x10 + 4 * k, "t5"))] + [
+                addiu("t5", "t5", 0x20), sw("t5", PPTR & 0xffff, "t4"), "skip", a, b, j(0x362090 + 8), 0]
+    patch(0x362090, CODE + 0x2000 * 5, probe)
+    # and 0x35e560 called right after it returned nonzero (ra 0x3d0cc4): (vsync, a0, a1, 1, the record's first quad)
+    def probe2(a, b):
+        return [lui("t4", DATA >> 16), *li("t6", 0x3d0cc4), br(5, "ra", "t6", "skip"), 0, lw("t5", PPTR & 0xffff, "t4"),
+                *li("t6", PROBE_END), sltu("t6", "t5", "t6"), br(4, "t6", "zero", "skip"), 0,
+                *li("t6", VSYNC), lw("t6", 0, "t6"), sw("t6", 0, "t5"), sw("a0", 4, "t5"), sw("a1", 8, "t5"),
+                addiu("t6", "zero", 1), sw("t6", 12, "t5"),
+                sll("t7", "a1", 1), addu("t7", "t7", "a1"), sll("t7", "t7", 4), addu("t7", "t7", "a0")] + [
+                x for k in range(4) for x in (lw("t6", 0x70 + 4 * k, "t7"), sw("t6", 0x10 + 4 * k, "t5"))] + [
+                addiu("t5", "t5", 0x20), sw("t5", PPTR & 0xffff, "t4"), "skip", a, b, j(0x35e560 + 8), 0]
+    patch(0x35e560, CODE + 0x2000 * 5 + 0x800, probe2)
+    def pdrain():
+        end = p.read32(PPTR)
+        probes.append(p.read_block(PROBE, end - PROBE) if end > PROBE else b"")
+        p.write32(PPTR, PROBE)
 p.resume()
 v0 = p.read32(VSYNC)
 chunks = []
@@ -304,6 +335,7 @@ try:
         if p.read32(PTR) > BUF + (END - BUF) // 3:
             p.pause()
             chunks.append(drain())
+            if probes or os.environ.get("HST_PROBE") == "1": pdrain()
             p.resume()
 finally:
     p.pause()
@@ -314,6 +346,9 @@ finally:
 if DRIVE: send("release")
 time.sleep(0.2)
 chunks.append(drain())
+if os.environ.get("HST_PROBE") == "1":
+    pdrain()
+    open(out + ".probe", "wb").write(b"".join(probes))
 data = b"".join(chunks)
 open(out, "wb").write(b"AIRL" + bytes(4) + p.read_block(SNAP, 0x9c8) + data)
 print("unhooked calls (last a0 ra a1 sp, count, busy):", [hex(p.read32(DATA + 0x20 + 4 * k)) for k in range(8)])
