@@ -11,7 +11,7 @@
 //!   ray cast down at the court model ([`ball_height`]). The players are never shaded. The scale multiplies the
 //!   model's directional light colour (VU1), not the ambient.
 
-use crate::{mesh, ps2};
+use crate::{mesh, ps2, vu0};
 
 /// Bits per map row (game z) and rows (game x).
 pub const COLS: usize = 0x500;
@@ -380,6 +380,32 @@ pub fn build(f: &Frame, dir: [f32; 3], casters: &[Caster], ground: &[[[f32; 3]; 
         }
     }
     map
+}
+
+/// A caster's texture matrix in the game's EE floats: each row of its light matrix `light` (game point → (u, v)
+/// in −1..1, w ≈ 1; the row-vector form, translation last) times the bias that takes u, v to 0.5u + 0.5, 0.5v + 0.5
+/// and leaves the third component the light's w. The game first multiplies the receiver node's matrix in; the
+/// court's hole nodes are identity, which leaves `light` bit for bit.
+///
+/// ponytail: `light` is taken as the game builds it at load (its own box/sun setup in EE floats isn't ported).
+pub fn tex_matrix(light: &[vu0::V4; 4]) -> [vu0::V4; 4] {
+    const B: [vu0::V4; 4] = [[0.5, 0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0; 4], [0.5, 0.5, 1.0, 1.0]];
+    // the EE sums the products as ((r1·b1 + r0·b0) + r2·b2) + r3·b3
+    light.map(|r| std::array::from_fn(|j| ps2::madd(ps2::madd(ps2::madd(ps2::mul(r[1], B[1][j]), r[0], B[0][j]), r[2], B[2][j]), r[3], B[3][j])))
+}
+
+/// One shade receiver vertex as the game's VU1 program sends it to the GS: screen X, Y (12.4 fixed point) and
+/// S, T, Q. `item` is the receiver model's matrix (court hole: y flattened), `vp` the shade camera's world →
+/// screen matrix (40°, straight down), `tex` the caster's [`tex_matrix`], `p` the model-space vertex. The (s, t, w)
+/// the game precomputes per vertex at load (VU0) are multiplied by Q = 1/w of the screen position, so Q itself
+/// carries the light's w (1 ± an ulp or two).
+pub fn receiver_vertex(item: &[vu0::V4; 4], vp: &[vu0::V4; 4], tex: &[vu0::V4; 4], p: [f32; 3]) -> ([u16; 2], [f32; 3]) {
+    let v = [p[0], p[1], p[2], 1.0];
+    let clip = vu0::transform(&item.map(|r| vu0::transform(vp, r)), v);
+    let q = vu0::div(1.0, clip[3]);
+    let st = vu0::transform(tex, v);
+    let ftoi4 = |x: f32| (vu0::mul(x, q) * 16.0) as i32 as u16; // FTOI4 truncates
+    ([ftoi4(clip[0]), ftoi4(clip[1])], [vu0::mul(st[0], q), vu0::mul(st[1], q), vu0::mul(st[2], q)])
 }
 
 #[cfg(test)]
