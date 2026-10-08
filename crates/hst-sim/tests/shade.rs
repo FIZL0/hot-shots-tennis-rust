@@ -6,7 +6,7 @@
 //! Also the sun-shade map built from the disc's court 10 against the game's (`context/p17l/map05.bin`, slot 5).
 
 use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
-use hst_sim::court;
+use hst_sim::{court, ps2};
 use hst_sim::shade::{self, Caster, Frame, Shape};
 
 #[test]
@@ -236,4 +236,58 @@ fn shadow_textures_match_the_game() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
     assert_eq!(n, 16);
+}
+
+/// The 17 court 10 casters' light matrices built from the disc (plant records, model boxes, the sun from the
+/// court's time-of-day row 0 at hour 1) against the game's (`context/p17v/rcv.txt` `L` rows, slot 5). Skips when
+/// absent.
+#[test]
+fn light_matrices_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(txt), Ok(mut iso)) = (std::fs::read_to_string(format!("{root}/context/p17v/rcv.txt")), Iso::open(format!("{root}/Hot Shots Tennis (USA).iso"))) else {
+        eprintln!("recording or disc missing, skipped");
+        return;
+    };
+    let mut models = std::collections::HashMap::new();
+    let mut read = |xb: &str, suffix: &str| {
+        let d = iso.read(&format!("COURT/10/{xb}")).unwrap();
+        let arc = Archive::parse(&d).unwrap();
+        for e in arc.entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) {
+            if let Ok(m) = mdl::parse(&arc.read(e).unwrap()) {
+                models.insert(e.name[..e.name.len() - 4].rsplit('\\').next().unwrap().to_ascii_lowercase(), m);
+            }
+        }
+        arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).map(|e| arc.read(e).unwrap())
+    };
+    let list = layout::entries(&String::from_utf8_lossy(&read("CMN.XB", "entry_c10.txt").unwrap()));
+    let envir = read("CMN.XB", "envir_c10.dat").unwrap();
+    let hole = read("GRD01.XB", "envir_c10_h01.dat").unwrap();
+    let plants = layout::plants(&read("HOL01.XB", "plant_c10_h01_0.dat").unwrap()).unwrap();
+    let f = |d: &[u8], o: usize| f32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+    let (_, sun) = shade::sun(f(&envir, 0x14), f(&envir, 0x18), f(&envir, 0x1c), f(&hole, 0x58), 1);
+    let axes = shade::sun_axes(sun);
+    let built: Vec<[[u32; 4]; 4]> = plants
+        .iter()
+        .filter(|p| p.code[3] != b'0' && (17..=19).contains(&p.category))
+        .map(|p| {
+            let m = &models[&layout::resolve(&list, p, 0).unwrap().stem];
+            let (mut item, _) = hst_sim::world::place(p.category, p.pos, p.yaw, p.code);
+            if p.scale != 1.0 {
+                item[..3].iter_mut().for_each(|r| r[..3].iter_mut().for_each(|x| *x = hst_sim::vu0::mul(*x, p.scale)));
+            }
+            let centre = [0, 1, 2].map(|k| ps2::mul(ps2::add(m.lo[k], m.hi[k]), 0.5));
+            let half = [0, 1, 2].map(|k| ps2::mul(ps2::sub(m.hi[k], m.lo[k]), 0.5));
+            shade::light_matrix(&item, p.scale, centre, half, &axes).map(|r| r.map(f32::to_bits))
+        })
+        .collect();
+    let want: Vec<[[u32; 4]; 4]> = txt
+        .lines()
+        .filter(|l| l.starts_with("L "))
+        .map(|l| {
+            let w: Vec<u32> = l.split_whitespace().skip(2).map(|h| u32::from_str_radix(h, 16).unwrap()).collect();
+            std::array::from_fn(|i| std::array::from_fn(|j| w[4 * i + j]))
+        })
+        .collect();
+    assert_eq!(want.len(), 17);
+    assert_eq!(built, want);
 }
