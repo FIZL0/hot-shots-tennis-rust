@@ -51,6 +51,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- B7: one-sided court materials back-face culled as VU1 does (MDL material +0x24 = 0; winding from the third vertex's UV w); court 1's near school fence no longer blocks the camera (mdl.rs, gs.rs; tests/winding.rs; journal 2026-10-07-b7-camera-blocked).
 - P18: upscaled and moddable textures — PCSX2 pack hash names computed from the disc GS data (XXH3 of swizzled blocks + CLUT), lookup mods/textures → replacements/ → disc, `--dump-textures`, hot reload (hst-data texhash.rs, hst textures.rs; journal 2026-10-07-p18-textures/README.md).
 - P17h: court model mipmaps — TEX1 MXL from MTL header +0xf, K from MDL material header +4, level ⌊log2(view depth)+K+½⌋ (journal 2026-10-07-p17-court-rendering/6-MIPMAPS-FINAL.md).
 - P7c: reach and contact heights — `hst_sim::player::ReachStats::from_tparam` (the game's strtok/decimal parser) bit-exact against RAM records for all 14 characters (tests/player.rs reach_stats_from_tparam); play.rs gives each player its own contact-search reach.
