@@ -478,9 +478,9 @@ fn trigger_engine_matches_the_game() {
 /// The startled creatures against `context/fixtures/prox_cNN.bin` (tools/record_npc.py with `prox`, HST_POKE moving a
 /// still creature next to a player or the ball; not in git, skipped when absent): courts 1 (types 0, 1), 2 (5) and
 /// 11 (48), any of 7, 8, 9 too. Every tick of every creature of those types from the recorded state before, with that
-/// tick's players' and ball's positions and the type flags, must give the game's state after bit for bit, startled
-/// latch and 48's scrub too, a startle must set its type's flag and a one-shot path's end clear it (steering rows
-/// too). Skipped: message ticks, a poke's tick (moved while standing) and a new leg (the path manager is not
+/// tick's players' and ball's positions, must give the game's state after bit for bit, startled latch and 48's scrub
+/// too. The type flags are computed (from the first sample, set by a startle, cleared by a one-shot path's end and a
+/// reset message) and must match the game's after every tick. Skipped: message ticks, a poke's tick (moved while standing) and a new leg (the path manager is not
 /// ported); a stalled recording's catch-up of up to three ticks is stepped as such.
 #[test]
 fn startled_creatures_match_the_game() {
@@ -509,21 +509,23 @@ fn startled_creatures_match_the_game() {
             ..Default::default()
         };
         let (mut ticks, mut startles, mut turns, mut blocked) = (0, 0, 0, 0);
-        for k in 0..n {
-            let o = wo(k);
-            let ty = samples[0][o + 0x50];
-            if !matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48) {
-                continue;
-            }
-            let row = game.trigger(ty);
-            let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, o + a + 4 * c)) };
-            let state = |s: &[u8]| npc::Trigger {
-                startled: s[o + 0x278] != 0,
-                scrub: if ty == 48 { (u(s, x + 0x90 + 8 * k) as i32, u(s, x + 0x94 + 8 * k) as i32) } else { (0, 0) },
-                ..trigger_at(s, o, &row, v(s, 0x160), v(s, 0x150), 0)
-            };
-            for i in 1..samples.len() {
-                let (a, b) = (samples[i - 1], samples[i]);
+        let kinds: Vec<(usize, u8)> = (0..n)
+            .map(|k| (k, samples[0][wo(k) + 0x50]))
+            .filter(|&(_, ty)| matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48))
+            .collect();
+        // the type flags are carried from the first sample on, set and cleared only by the creatures' ticks
+        let mut flags = near(samples[0]).flags;
+        for i in 1..samples.len() {
+            let (a, b) = (samples[i - 1], samples[i]);
+            for &(k, ty) in &kinds {
+                let o = wo(k);
+                let row = game.trigger(ty);
+                let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, o + a + 4 * c)) };
+                let state = |s: &[u8]| npc::Trigger {
+                    startled: s[o + 0x278] != 0,
+                    scrub: if ty == 48 { (u(s, x + 0x90 + 8 * k) as i32, u(s, x + 0x94 + 8 * k) as i32) } else { (0, 0) },
+                    ..trigger_at(s, o, &row, v(s, 0x160), v(s, 0x150), 0)
+                };
                 let (mut before, after) = (state(a), state(b));
                 // a poke moved it before the tick (HST_POKE): it starts from there
                 let poked = !before.moving && before.world[3] != after.world[3];
@@ -531,6 +533,12 @@ fn startled_creatures_match_the_game() {
                     before.world[3] = after.world[3];
                 }
                 if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || before.target != after.target {
+                    // not stepped; a reset message (0xc a game's end, 0xe a point's end, 0x1a) clears its type's flag
+                    if before.msg != after.msg && matches!(after.msg, 0xc | 0xe | 0x1a) {
+                        let mut seen = npc::Near { flags, ..near(b) };
+                        before.clone().reset_near(&row, &mut seen, &mut || 0);
+                        flags = seen.flags;
+                    }
                     continue;
                 }
                 let mut rng = Mt::of(&a[mt..]);
@@ -541,7 +549,7 @@ fn startled_creatures_match_the_game() {
                 let found = [1, 0, 2, 3].into_iter().find_map(|steps| {
                     (0..=out.len()).find_map(|j| {
                         let (mut t, mut it, mut seen) = (before.clone(), out[j..].iter(), near(b));
-                        seen.flags = near(a).flags;
+                        seen.flags = flags;
                         for _ in 0..steps {
                             t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0));
                         }
@@ -551,23 +559,21 @@ fn startled_creatures_match_the_game() {
                 });
                 let Some((t, seen)) = found else {
                     let (mut t, mut seen) = (before.clone(), near(b));
-                    seen.flags = near(a).flags;
+                    seen.flags = flags;
                     t.step_near(&row, &mut seen, &mut || out[0]);
                     panic!("court {court} vsync {} creature {k} type {ty}:\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0))
                 };
-                if seen.flags[ty as usize] && !near(a).flags[ty as usize] {
-                    assert!(near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag not set", u(b, 0));
-                }
-                if !seen.flags[ty as usize] && near(a).flags[ty as usize] {
-                    assert!(!near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag not cleared", u(b, 0));
-                }
                 startles += (t.startled && !before.startled) as usize;
                 turns += (t.scrub.0 != before.scrub.0) as usize;
-                blocked += (!t.startled && near(a).flags[ty as usize] && near(b).pos.iter().any(|p| {
+                blocked += (!t.startled && flags[ty as usize] && near(b).pos.iter().any(|p| {
                     let d: [f32; 4] = std::array::from_fn(|c| p[c] - t.world[3][c]);
                     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < 2.0
                 })) as usize;
+                flags = seen.flags;
                 ticks += 1;
+            }
+            for &(_, ty) in &kinds {
+                assert_eq!(flags[ty as usize], near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag", u(b, 0));
             }
         }
         eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag");
