@@ -99,3 +99,46 @@ Fixtures (context/fixtures, not in git): p7_carol_s04.bin (420 samples, slot 4, 
   On PCSX2 copy 2, vpad's "circle" reaches the menus as cancel. So the script picks through "cross" (it wraps
   pick.py's `vpad`; pick.py itself is unchanged, and on copy 2 it backs out to the main menu).
   The p7b_c*.bin fixtures were copied from the s5 slot's context/fixtures.
+
+## P7f — bot stick and the AI's step toward a point
+
+- **The bot's stick is bytes.** For a computer player (+0x84 ≠ 0, play state < 2, not in replay), the player update
+  calls AI vtable[5] (3467b0, around 0x3468ac). The AI fills a float (x, z) stick, and each axis is turned into
+  a byte:
+  - byte = cvt.w(0.5·sign + 127·f) + 0x80, where sign is −1 for f < 0, otherwise +1 (so −0 counts as +).
+  - The byte is clamped to 1..=255 and stored at +0x17d4 as (x << 8 | z). At rest it reads 0x8080.
+  - The bytes are read back as (b − 0x80)/127. If the length is over 1, the vector is scaled by 1/len.
+  - Outside phases 2–4 the direction is zeroed (and the buttons too).
+  - The decoded stick then goes through the same run code as a human's stick (`Body::step` normalises it).
+  - Port: `player::bot_stick`, `player::stick_dir`.
+- **The AI's step toward a point** (35c970). All the AI routines (serve, receive, both rally styles) call it with a
+  target and a "keep" flag:
+  - d = target − pos, with y = 0. An axis under 0.001 is zeroed.
+  - len ≤ 0 → no direction, arrived.
+  - Otherwise the direction is d/len. It is zeroed when len ≤ ⅔ of the next frame's run step, unless "keep" is set.
+  - The step is `run_speed` with the run count and stamina the coming frame will have: mode 1 adds 1 to the run
+    count and applies the 60-frame drain; modes 0 and 2 reset the run count to 0.
+  - Returns "arrived" when len − step ≤ 0.
+  - Port: `Body::toward`. Ponytail: modes 0 and 1 only.
+- **What the AI steers to.**
+  - The receive state and the rally's contact chase use AI +0x70, the locked contact point, with keep on.
+  - The rally spot is AI +0xc0/+0xc8, used once the AI is inside its radius +0x1c.
+  - The rest of the rally targets come from spot helpers (361af0, 3621d0, 361e70, 361eb0) that keep their results
+    on the stack. These are P11e/f.
+  - Stops (the stick back to 0x8080) come from the AI's own radius and state checks, never from the ⅔ rule in this
+    recording.
+  - The press auto-approach (34d040, +0x3f24..) was already ported in N5. +0x12cc is on for every player in slots 3–5.
+- **The P11e3 "right-guess run boost"** is not a run. It scales the stored stick +0xa0, which is the shot aim at the
+  search. So it belongs with the shot aim, not with P7f.
+- **Fixture** `context/fixtures/p7f_s05.bin` = `research/p7f_record.py 5 3000` (slot 5, no missed frames). It holds
+  per frame, for each player: the stick bytes, position, run target, motion/stamina/run, velocity, play state/mode,
+  and the first 0x280 bytes of the AI.
+- **Tests** in tests/player.rs:
+  - `p7f_bot_stick` checks:
+    - Run target and velocity decoded from the bytes are bit-exact on all 1730 run frames.
+    - All 54 receive-state steps equal `bot_stick(toward(+0x70, keep))`.
+    - 1327 rally steps are exact for +0x70 or +0xc0.
+    - 67 serve-walk frames have a full ±x stick.
+  - `toward_stops_short` covers the ⅔/step rule and the byte rounding.
+- **In the app.** `play.rs` `bot_run` sends the bot's goal through `toward` → `bot_stick` → `stick_dir`. This
+  replaces the 0.1 m stop. The goals themselves are still the stand-in AI's (P11).

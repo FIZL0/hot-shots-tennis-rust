@@ -576,3 +576,125 @@ fn serve_walk_replay() {
         assert_eq!(bad, 0, "{file}");
     }
 }
+
+/// `research/p7f_record.py 5 3000` (slot 5, all four players computer): per frame the stick bytes the AI left at
+/// +0x17d4, the position, run target, motion/stamina/run, velocity, play state/mode and the AI object.
+struct BotFrame {
+    phase: u8,
+    players: i32,
+    p: Vec<BotPlayer>,
+}
+#[derive(Clone)]
+struct BotPlayer {
+    stick: [u8; 2],
+    pos: [f32; 3],
+    target: [f32; 4],
+    st: i32,
+    tick: i32,
+    run: i32,
+    vel: [f32; 3],
+    mode: u8,
+    ai: Vec<u8>,
+}
+
+fn bot_frames(d: &[u8]) -> Vec<BotFrame> {
+    let n = u32::from_le_bytes(d[0..4].try_into().unwrap()) as usize;
+    let (pp, mut o) = (0x2d8, 4 + n * 0x48);
+    let size = 4 + 0x180 + 0x60 + n * pp;
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let mut out = vec![];
+    while o + size <= d.len() {
+        let g = &d[o + 4..];
+        let p = (0..n)
+            .map(|k| {
+                let r = &d[o + 0x1e4 + k * pp..o + 0x1e4 + (k + 1) * pp];
+                let s = u16::from_le_bytes([r[4], r[5]]);
+                BotPlayer {
+                    stick: [(s >> 8) as u8, s as u8],
+                    pos: [0, 4, 8].map(|x| f(r, 0x10 + x)),
+                    target: [0, 4, 8, 12].map(|x| f(r, 0x20 + x)),
+                    st: i(r, 0x34),
+                    tick: i(r, 0x38),
+                    run: i(r, 0x3c),
+                    vel: [0, 4, 8].map(|x| f(r, 0x40 + x)),
+                    mode: r[0x51],
+                    ai: r[0x58..].to_vec(),
+                }
+            })
+            .collect();
+        out.push(BotFrame { phase: g[0x180 + 0x55], players: i(g, 0x24), p });
+        o += size;
+    }
+    out
+}
+
+/// The computer players' stick: the bytes the AI leaves decode to the run target and velocity bit-exact on every
+/// run frame; in the receive state every run step is the step toward the AI's contact point (+0x70, kept on to
+/// the end) as bytes, and in the rally the step toward that point or the AI's court spot (+0xc0) accounts for most
+/// (the rest head for spots the rally routines work out on the fly, P11e/f); the serve walk is a full ±x stick.
+#[test]
+fn p7f_bot_stick() {
+    use hst_sim::player::{bot_stick, stick_dir};
+    use hst_sim::ps2::{div, madd, mul, sqrt};
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(data) = std::fs::read(format!("{dir}/p7f_s05.bin")) else {
+        return eprintln!("p7f_s05.bin absent, skipped");
+    };
+    let fr = bot_frames(&data);
+    let (mut runs, mut bad_dir, mut bad_vel, mut receive, mut rally, mut walks) = (0, 0, 0, 0, 0, 0);
+    for k in 1..fr.len() {
+        for p in 0..4 {
+            let (a, b, phase) = (&fr[k - 1].p[p], &fr[k].p[p], fr[k].phase);
+            let (spe, agi, sta, costs) = STATS[p];
+            let s = Stats::new(spe, agi, sta, costs, 0);
+            if b.mode == 1 && a.mode <= 1 {
+                runs += 1;
+                let v = stick_dir(b.stick, phase);
+                let inv = div(1.0, sqrt(madd(mul(v[1], v[1]), v[0], v[0])));
+                let d = [mul(v[0], inv), mul(v[1], inv)];
+                let snapped = b.target[0] == 0.0 && b.target[2].abs() == 1.0; // straight ahead: ±forward
+                bad_dir += (!snapped && [b.target[0], b.target[2]].map(f32::to_bits) != d.map(f32::to_bits)) as i32;
+                let vel = run_velocity([d[0], 0.0, d[1]], run_speed(&s, b.run, b.st, 100));
+                bad_vel += (vel.map(f32::to_bits) != b.vel.map(f32::to_bits)) as i32;
+            }
+            if b.stick == [0x80, 0x80] || a.mode > 1 || !(2..=4).contains(&phase) {
+                continue;
+            }
+            let body = Body { pos: a.pos, running: a.mode == 1, run: a.run, stamina: a.st, stamina_tick: a.tick, ..Body::default() };
+            let go = |o: usize, keep: bool| bot_stick(body.toward(&s, [f(&b.ai, o), f(&b.ai, o + 8)], fr[k].players, phase, keep).0);
+            match b.ai[0x54] {
+                1 => walks += (b.stick[1] == 0x80 && [1, 255].contains(&b.stick[0])) as i32,
+                2 => {
+                    assert_eq!(go(0x70, true), b.stick, "receive k{k} p{p}");
+                    receive += 1;
+                }
+                _ => rally += (go(0x70, true) == b.stick || go(0xc0, false) == b.stick) as i32,
+            }
+        }
+    }
+    eprintln!("runs {runs}, receive steps {receive}, rally steps {rally}, serve walk {walks}");
+    assert_eq!((bad_dir, bad_vel), (0, 0), "of {runs} run frames");
+    assert!(runs > 1500 && receive > 50 && rally > 1300 && walks > 60);
+}
+
+#[test]
+fn toward_stops_short() {
+    use hst_sim::player::{bot_stick, stick_dir};
+    let s = Stats::new(10, 40, 40, [8, 4, 7], 0);
+    let b = Body { stamina: 40, ..Body::default() };
+    let step = run_speed(&s, 0, 40, 100);
+    let to = |t: [f32; 2], keep| { let (d, there) = b.toward(&s, t, 4, 3, keep); (bot_stick(d), there) };
+    // within ⅔ of a step: no direction (unless kept on); within a step: there, still running
+    assert_eq!(to([0.0, step * 0.6], false), ([0x80, 0x80], true));
+    assert_eq!(to([0.0, step * 0.6], true), ([0x80, 255], true));
+    assert_eq!(to([0.0, step * 0.9], false), ([0x80, 255], true));
+    assert_eq!(to([3.0, 4.0], false), ([0x80 + 76, 0x80 + 102], false));
+    // an axis within 1 mm is dropped
+    assert_eq!(b.toward(&s, [0.0009, 4.0], 4, 3, false).0[0], 0.0);
+    // bytes: half away from zero, clamped; back to a unit at most
+    assert_eq!(bot_stick([0.6, -0.8]), [0x80 + 76, 0x80 - 102]);
+    assert_eq!(bot_stick([1.0, -1.0]), [255, 1]);
+    assert_eq!(bot_stick([-0.0, 0.0]), [0x80, 0x80]);
+    assert_eq!(stick_dir([255, 0x80], 3), [1.0, 0.0]);
+    assert_eq!(stick_dir([255, 0x80], 1), [0.0, 0.0]);
+}

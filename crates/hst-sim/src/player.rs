@@ -587,6 +587,28 @@ pub fn serve_walk(x: f32, dir: [f32; 2], end: f32, side: i32, doubles: bool, han
     (x, crate::motion::serve_walk(dir[0], end, hand))
 }
 
+/// A computer player's stick as the game passes it on: each axis of the AI's wanted direction (x, z) rounded half
+/// away from zero to a byte, 0x80 ± 127, clamped to 1..=255.
+pub fn bot_stick(v: [f32; 2]) -> [u8; 2] {
+    v.map(|f| {
+        let sign = if f < 0.0 { -1.0 } else { 1.0 };
+        ((madd(mul(0.5, sign), 127.0, f) as i32 + 0x80).clamp(1, 255)) as u8
+    })
+}
+
+/// The run input a computer player's stick bytes give: (b − 0x80)/127 per axis, cut to unit length when longer;
+/// none outside the serve, rally and point-over phases (2–4).
+pub fn stick_dir(b: [u8; 2], phase: u8) -> [f32; 2] {
+    if !(2..=4).contains(&phase) {
+        return [0.0, 0.0];
+    }
+    let [x, z] = b.map(|b| div((b as i32 - 0x80) as f32, 127.0));
+    let len = sqrt(madd(mul(z, z), x, x));
+    if len <= 1.0 { [x, z] } else { let n = div(1.0, len); [mul(x, n), mul(z, n)] }
+}
+
+const NEAR: f32 = f32::from_bits(0x3a83_126f); // 0.001
+
 /// What a standing or running player sees of the match this frame.
 pub struct Scene {
     pub players: i32,
@@ -655,6 +677,38 @@ impl Body {
         let now = self.motion.clamp(0, pelvis.len() as i32 - 1) as usize;
         let from = start.clamp(0, pelvis.len() as i32 - 1) as usize;
         turn(&mut self.face, self.target, sc.forward, sc.hand, from, base_motion(start), now, pelvis);
+    }
+
+    /// The computer player's run toward `target` (x, z): the unit direction (an axis within 1 mm counts as there),
+    /// zeroed when the target is within ⅔ of next frame's run step (`run_speed` with the run count and stamina
+    /// as `step` will have them; `keep` runs on regardless). Returns the direction and whether it is there: no
+    /// direction, or the target within one step. ponytail: modes 0/1 only (`running`); a stroke (mode 2) would
+    /// count the run from 0, the drain floor is `step`'s 0.
+    pub fn toward(&self, s: &Stats, target: [f32; 2], players: i32, phase: u8, keep: bool) -> ([f32; 2], bool) {
+        let mut x = sub(target[0], self.pos[0]);
+        let mut z = sub(target[1], self.pos[2]);
+        if x.abs() < NEAR {
+            x = 0.0;
+        }
+        if z.abs() < NEAR {
+            z = 0.0;
+        }
+        let len = sqrt(madd(mul(z, z), x, x));
+        if len <= 0.0 {
+            return ([0.0, 0.0], true);
+        }
+        let inv = div(1.0, len);
+        let dir = [mul(x, inv), mul(z, inv)];
+        let (run, stamina) = if self.running {
+            (self.run + 1, drain(s, self.stamina, self.stamina_tick, players, phase == 3, 0).0)
+        } else {
+            (0, self.stamina)
+        };
+        let step = run_speed(s, run, stamina, 100);
+        if !keep && len <= div(mul(2.0, step), 3.0) {
+            return ([0.0, 0.0], true);
+        }
+        (dir, sub(len, step) <= 0.0)
     }
 
     fn stance(&self, sc: &Scene) -> i32 {
