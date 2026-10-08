@@ -101,6 +101,7 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
             corner: cutaway::corner_frame([p.pos[0], 0.0, p.pos[2], 1.0]),
             shown: [cutaway::subject_frames(&s.0, &s.1), cutaway::subject_frames(&o.0, &o.1)],
             head: cutaway::IDENTITY,
+            spot: [p.pos[0], p.pos[1], p.pos[2], 1.0],
         };
         let n = cutaway::pick(
             &d.lists,
@@ -122,6 +123,7 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
     // the shown player's live head
     if let Some((_, m)) = q.iter().find(|(f, _)| f.0 == *shown) {
         let p = &g.players[*shown];
+        frames.spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         if let Some(h) = bone(p, &g.data[*shown], m.id, m.clock.sampled, [p.pos[0], p.pos[1], p.pos[2], 1.0], "Bip01Head") {
             frames.head = cutaway::head_frame(&h, p.hand < 0.0);
         }
