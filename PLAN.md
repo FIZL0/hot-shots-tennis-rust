@@ -206,7 +206,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs, timing.rs | j: 2026-10-07-p3-timing-grades — DONE: per-character grades/bias, timing error, scatter, table mode/variants (up1/dw1/dw2/dw3, lob POW), late lift wired into strike (`play/timing.rs`); 211 recorded launches, grades/error/target exact, scattered velocity ~1e-4 off; mis-hits, reactions and slices left
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
-- [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
+- [~] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs BLOCKED: no recorded let serve (round1's 4 cord serves were net faults); turned serves/effects done | j: 2026-10-08-p6-serve-details
 - [x] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
 - [ ] **P17b** Court fog (FGE): far court and props haze toward the court's fog colour as in the original (compare court 10, slot 5, against PCSX2) → `gs.rs` gs.wgsl · `main.rs` load | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering/4-FOG-FINAL.md
