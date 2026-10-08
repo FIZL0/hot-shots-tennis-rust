@@ -41,6 +41,10 @@ struct Npcs {
     decided: bool,
     /// The players' and ball's positions the creatures startle at, and the types already startled this point.
     near: npc::Near,
+    /// Changing ends last tick (court 4's passing ball rolls when it starts).
+    ends: bool,
+    /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
+    uncull: Vec<Entity>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -85,7 +89,8 @@ fn setup(
     };
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default() };
+    let mut hidden = Vec::new();
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut roll = || rng.next();
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
@@ -114,14 +119,23 @@ fn setup(
                 // ponytail: no path (the creatures that move along one stand at their home); a two-clip creature
                 // plays its first
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
-                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, len, ..default() };
+                let routes = game.ball_routes();
+                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, len, routes, ..default() };
                 tr.reset(&row, &mut roll);
-                npcs.triggers.push((place(&data, &c.world, c.scale), tr, row));
+                let e = place(&data, &c.world, c.scale);
+                if t == 15 {
+                    hidden.push(e); // the passing ball waits off until a change of ends rolls it
+                }
+                npcs.triggers.push((e, tr, row));
             }
             // ponytail: court 5's own creatures are not drawn (their models are not found yet)
             npc::Kind::Court5(_) => {}
         }
     }
+    for &e in &hidden {
+        commands.entity(e).insert(Visibility::Hidden);
+    }
+    npcs.uncull = hidden;
     commands.insert_resource(npcs);
 }
 
@@ -147,12 +161,21 @@ fn step(
     npcs: Option<ResMut<Npcs>>,
     mut q: Query<(&character::Rig, &mut Motion)>,
     mut turn: Query<&mut Transform, With<character::Rig>>,
+    mut shown: Query<&mut Visibility, With<character::Rig>>,
+    mut commands: Commands,
+    children: Query<&Children>,
 ) {
     let Some(mut npcs) = npcs else { return };
     let npcs = &mut *npcs;
+    for e in std::mem::take(&mut npcs.uncull) {
+        for &part in children.get(e).into_iter().flatten() {
+            commands.entity(part).insert(bevy::camera::visibility::NoFrustumCulling);
+        }
+    }
     let at = |p: [f32; 3]| [p[0], p[1], p[2], 1.0];
     npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
+    let ends = matches!(g.phase, Phase::ChangeEnds(_));
     // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
     let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
     let rng = &mut g.rng.court;
@@ -182,6 +205,15 @@ fn step(
             t.reset_near(row, &mut npcs.near, &mut roll);
         }
     }
+    // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
+    if ends && !npcs.ends {
+        (npcs.near.ends, npcs.near.players) = (true, players);
+        for (_, t, row) in npcs.triggers.iter_mut().filter(|(_, t, _)| t.ty == 15) {
+            t.reset_near(row, &mut npcs.near, &mut roll);
+        }
+        npcs.near.ends = false;
+    }
+    npcs.ends = ends;
     if let Some((e, a)) = &mut npcs.umpire {
         if let Ok((rig, mut m)) = q.get_mut(*e) {
             let len = rig.data.motions.get(&(motion as usize)).map_or(0.0, |c| c.length);
@@ -213,6 +245,17 @@ fn step(
         t.step_near(row, &mut npcs.near, &mut roll);
         if let Ok((_, mut m)) = q.get_mut(*e) {
             m.clock.sampled = t.frame;
+        }
+        // the passing ball: drawn while on with its fade (+0x274) above 0, from where its route starts
+        // ponytail: the fade's alpha over its last 10 frames is not drawn; the other types' `on` is not used to hide them
+        if t.ty == 15 {
+            if let Ok(mut v) = shown.get_mut(*e) {
+                *v = if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+            }
+            if let Ok(mut tf) = turn.get_mut(*e) {
+                let scale = tf.scale;
+                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
+            }
         }
     }
 }

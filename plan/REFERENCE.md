@@ -53,6 +53,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- B24a: court 4's passing ball (trigger type 15): rolled once a match at a change of ends, route, animation, bounce sounds and fade bit-exact against a recording (route 0); drawn in play (journal 2026-10-08-b24-court-events).
 - P2d: the rally aim returns its nudge (±5/±10), short-only flag and the smash's held depth (`shot::Aim`) into the launch; the smash launch gets the original's timing scatter (`swing::smash_scatter`/`smash_scale`); aim.rs checks all three per recorded aim and that ×0.6 would miss a sweet incoming slice in singles and doubles, timing.rs 28 smash launches bit for bit (journal 2026-10-08-p2d-aim-leftovers).
 - B21: timing balloons sit just above the head (neck anchor) at the original's size and timing; singles players show the swirl on losing a point.
 - P22: widescreen HUD on a centred 4:3 screen (play/widescreen.rs; the 3D view was already Hor+, F0 already uncapped), rebindable keys/pad buttons in `controls.txt` and hot-plug-stable controller slots (play/controls.rs); render/input only, hst-sim untouched, full test suite passes.

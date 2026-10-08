@@ -370,6 +370,12 @@ pub struct Trigger {
     pub scrub: (i32, i32),
     /// Types 27–29: the ball touched it this tick (the game's message 0x14 to the match).
     pub struck: bool,
+    /// Type 15 (court 4's passing ball): playing, its route (0 from home, 1–3 from `routes`), and played once this
+    /// match (it stays away until a new one).
+    pub playing: bool,
+    pub route: u32,
+    pub routes: [[[f32; 4]; 2]; 3],
+    pub done: bool,
 }
 
 /// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
@@ -378,11 +384,14 @@ pub struct Trigger {
 pub struct Near {
     pub pos: Vec<[f32; 4]>,
     pub flags: [bool; 64],
+    /// The match is changing ends (its state 1; type 15 only rolls then) and how many play.
+    pub ends: bool,
+    pub players: u32,
 }
 
 impl Default for Near {
     fn default() -> Near {
-        Near { pos: Vec::new(), flags: [false; 64] }
+        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0 }
     }
 }
 
@@ -431,13 +440,18 @@ impl Trigger {
 
     /// [`Trigger::reset`] with what the startled creatures watch (their reset clears their type's flag).
     pub fn reset_near(&mut self, row: &TriggerRow, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
-        // ponytail: types whose row keeps them off after their first reset (row byte +0x6c), and those whose model
-        // starts animating, are not modelled
+        // its one go played (type 15; the startled types' go is not kept): off until a new match unless the row rearms it
+        if self.done && !row.rearm {
+            self.active = false;
+            return Vec::new();
+        }
+        // ponytail: those whose model starts animating are not modelled
         let o = std::mem::take(self);
         *self = Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
-            counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub, ..Trigger::default()
+            counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
+            playing: o.playing, route: o.route, routes: o.routes, done: o.done, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -779,6 +793,41 @@ impl Trigger {
                 self.counter = self.counter.wrapping_add(1);
             }
             (37, 4) => self.counter = 0,
+            // the change of ends' resets: once a match, one in two rolls it off along a route (its animation
+            // carries it); it plays on through the next reset
+            (15, 4) => {
+                if near.ends && 2 <= near.players && !self.done && roll() >> 16 & 1 == 0 {
+                    self.route = roll() >> 16 & 3;
+                    if self.route == 0 {
+                        self.world = self.home; // ponytail: the facing angles it also sets are not kept
+                    } else {
+                        let [p0, p1] = self.routes[self.route as usize - 1];
+                        let (x, z) = (ps2::sub(p1[0], p0[0]), ps2::sub(p1[2], p0[2]));
+                        let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(x, x), z, z)));
+                        let (f, u) = ([ps2::mul(x, q), 0.0, ps2::mul(z, q), 0.0], [0.0, 1.0, 0.0, 0.0]);
+                        let cross = |a: usize, b: usize| ps2::sub(ps2::mul(u[a], f[b]), ps2::mul(u[b], f[a]));
+                        let m = [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], u, f, [0.0, 0.0, 0.0, 1.0]];
+                        self.world = world::mat_mul(&m, &world::rot_y(world::PI));
+                        self.world[3] = [p0[0], p0[1], p0[2], 1.0];
+                    }
+                    (self.speed, self.playing) = (1.0, true);
+                    self.restart_anim();
+                }
+                (self.on, self.animating) = (self.playing, true);
+                self.moving &= self.playing;
+            }
+            // a bounce sound at four frames; it fades out (+0x274, its alpha) over the last 10 and is gone
+            (15, 2) if self.playing => {
+                if [86.0, 147.0, 200.0, 240.0].contains(&self.frame) {
+                    sounds.push(row.sound);
+                }
+                if ps2::sub(self.len, self.frame) <= 10.0 {
+                    self.speed = ps2::sub(self.speed, 0.1);
+                }
+                if self.len <= self.frame {
+                    (self.playing, self.on, self.done) = (false, false, true);
+                }
+            }
             (44, 2) if self.on => {
                 // ponytail: unrecorded (deciding set only); ported from the game's code
                 self.gap -= 1;
@@ -851,6 +900,10 @@ impl Default for Trigger {
             startled: false,
             scrub: (0, 0),
             struck: false,
+            playing: false,
+            route: 0,
+            routes: [[[0.0; 4]; 2]; 3],
+            done: false,
         }
     }
 }
