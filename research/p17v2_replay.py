@@ -41,6 +41,14 @@ def addr8(x, y, bp, bw):  # byte address
     return bp * 256 + page * 8192 + BT8[(y >> 4) & 3][(x >> 4) & 7] * 256 + CT8[y & 15][x & 15]
 
 
+def texel_round(st, q):
+    """PCSX2 GSState's texel coordinate rounding (STQ, all Z of the draw equal): S or T loses its low 9 mantissa bits,
+    more by the exponent it is below Q's."""
+    b, e = struct.unpack("<I", struct.pack("<f", st))[0], struct.unpack("<I", struct.pack("<f", q))[0] >> 23 & 0xff
+    es = b >> 23 & 0xff
+    return f32(b & ~((1 << min(9 + max(es, e) - es, 23)) - 1))
+
+
 f32 = lambda v: struct.unpack("<f", struct.pack("<I", v & 0xffffffff))[0]
 
 
@@ -109,9 +117,9 @@ class Gs:
         return clut[[[self.nib(x, y, tbp, tbw) for x in range(tw)] for y in range(th)]]
 
     # --- drawing ------------------------------------------------------------------------------------------------
-    def kick(self, x, y, draw):
+    def kick(self, x, y, z, draw):
         st = self.r.get(2, 0)
-        self.verts.append((x, y, f32(st), f32(st >> 32), self.q, self.r.get(1, 0), self.r.get(3, 0)))
+        self.verts.append((x, y, f32(st), f32(st >> 32), self.q, self.r.get(1, 0), self.r.get(3, 0), z))
         prim = self.r.get(0, 0)
         n = NVERT[prim & 7]
         if len(self.verts) >= n:
@@ -175,7 +183,7 @@ class Gs:
         if prim & 7 == 6:  # sprite (FST)
             assert prim & 0x110 == 0x110 or not prim & 0x10
             p = [(F(F(x - ox) * F(1 / 16)), F(F(y - oy) * F(1 / 16))) for x, y, *_ in vs]
-            t = [(F(F(uv & 0x3fff) * F(4096)) - F(0x8000), F(F((uv >> 16) & 0x3fff) * F(4096)) - F(0x8000)) for *_, uv in vs]
+            t = [(F(F(v[6] & 0x3fff) * F(4096)) - F(0x8000), F(F((v[6] >> 16) & 0x3fff) * F(4096)) - F(0x8000)) for v in vs]
             if p[1] < p[0]:
                 p, t = p[::-1], t[::-1]
             l, tp = max(int(np.ceil(p[0][0])), scis[0]), max(int(np.ceil(p[0][1])), scis[1])
@@ -197,7 +205,9 @@ class Gs:
             return
         assert prim & 7 == 4
         out = []
-        for x, y, s, t, q, rgba, uv in vs:
+        if prim & 0x10 and len({v[7] for v in vs}) == 1:  # ponytail: PCSX2 asks for equal Z over the whole batch; the shadow strips are flat
+            vs = [(*v[:2], texel_round(v[2], v[4]), texel_round(v[3], v[4]), *v[4:]) for v in vs]
+        for x, y, s, t, q, rgba, uv, _ in vs:
             px, py = F(F(x - ox) * F(1 / 16)), F(F(y - oy) * F(1 / 16))
             out.append((px, py, F(F(F(s) * tsz[0]) - F(0x8000)), F(F(F(t) * tsz[1]) - F(0x8000)), F(q), F(((rgba >> 24) & 0xff) << 7)))
         if prim & 0x10:
@@ -291,7 +301,7 @@ class Gs:
         if a == 0x01:
             self.q = f32(v >> 32)
         if a in (0x04, 0x05, 0x0c, 0x0d):
-            self.kick(v & 0xffff, (v >> 16) & 0xffff, a in (0x04, 0x05))
+            self.kick(v & 0xffff, (v >> 16) & 0xffff, (v >> 32) & (0xffffff if a in (0x04, 0x0c) else 0xffffffff), a in (0x04, 0x05))
             return
         if a in (0x00, 0x06, 0x08, 0x14, 0x18, 0x40, 0x47, 0x4c):
             self.flush()
@@ -327,7 +337,7 @@ class Gs:
                             self.q = f32(b)
                         elif r in (4, 5):
                             adc = (b >> 47) & 1
-                            self.kick(a & 0xFFFF, (a >> 32) & 0xFFFF, not adc)
+                            self.kick(a & 0xFFFF, (a >> 32) & 0xFFFF, (b >> 4) & 0xffffff if r == 4 else b & 0xffffffff, not adc)
                         elif r == 0xF:
                             pass
                         else:
