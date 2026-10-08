@@ -23,9 +23,53 @@ User note (2026-10-08): the in-game Data menu's Costumes tab shows each characte
 ## Not verified / not 1:1
 
 - The select itself: B40's character select (play/main_menu.rs) doesn't exist yet, so the done criterion (a `--shot` of the select with every slot hovered) can't be met. The previews run in the `--inspect` viewer only → B40b1.
-- UVA eye UV animation (`pcNN_pose.UVA`) isn't ported → B40b2.
+- UVA eye UV animation (`pcNN_pose.UVA`): done in B40b2 (below).
 - Chars 5 and 13 draw gu/di through another path in the original (object +0x840 = 1); not ported. The gu_set root path isn't applied, and the crossfade (if any) on button presses isn't verified → B40b3.
 - The zero-colour third light is ignored (no visible effect).
 - Brightness/colour: matched by eye on the side-by-sides only, not pixel-compared.
 - Costumes other than 0: not compared against the original's Costumes tab; umpire previews not done → B40b4.
 - Mods: donor pose on a rerigged skeleton checked by eye for 3 Fore! mods only; their face channels doki_eye/doki_mouth are missing (mod side warning).
+
+## B40b2: eye UV animation
+
+What was built:
+
+- `character.rs`: `disc_motions` loads each motion's `.UVA` next to its `.MOR`, the pose's too (`pcNN_pose.UVA`), into `Face::uv`.
+  - Tracks are bound to a skeleton node by name.
+  - `uv_length` is the last key over all UVA tracks.
+- `CharacterData::part_nodes` lists, per part, the nodes its packets' palettes hold, plus the part's `uv_swap`. A UVA track named after a node drives every packet holding that node, as in `court_anim`.
+- `inspect.rs`: the UVA plays on its own clock, `UvClock`.
+  - Pose: held at the pose frame, wrapped into the UVA length (looping, speed 0).
+  - R2/L2: from 0 at speed 1, clamped at the end.
+  - A motion without a UVA draws no offset.
+  - `uv_offsets` writes the sampled (x, y), or (y, x) for swapped parts, into each part's `GsMaterial.uv_offset`, second draws included.
+- `main.rs`: `--inspect` no longer also opens the main menu (the `menu` condition ignored `roster`).
+
+Findings in the original (menu overlay decompilation):
+
+- The anim object has six controller slots; slot 1 plays the UVA.
+- The pose start selects UVA 0 with loop on and sets its time to the pose frame. The set-time call wraps or clamps like `hst_sim::pose::wrap`. Speed stays 0, so the time is held.
+- gu/di select their UVA with loop off, time 0, speed 1.
+- Switching to an index with no file unhooks the old bindings, so the offset goes back to 0.
+- The menu `taguchi` gu_set/di_set files are byte-identical to PCANI's. UVAs exist for gu_set of characters 1, 2, 3, 4, 8, 10 and 12, and di_set of 3 and 8.
+- Bindings, costume 0: every pose UVA has a single eye track.
+  - It names one node (`s_me`, `eye`, `oki_eye`, `mai_me`, `eyes`, `eye1`, `c_me`), covering whole materials.
+  - No eye packet is stored swapped.
+  - pc07's track names a node its model lacks, so it binds nothing (in the original too: no match, no hook).
+  - pc13 has no pose UVA.
+
+Verified on PCSX2 copy 3, slot 9 (Items screen, Ashley's pose preview):
+
+- EE RAM holds Ashley's eye packet's VIF unpack (V4-32, double-buffered at two addresses) carrying (−0.02, 0.02, 0, 0), bits 0xbca3d70a / 0x3ca3d70a.
+- That is exactly what the port samples at the held frame 69, in the same (x, y) order.
+- The test `inspect_poses_bind_and_hold_the_games_frames` asserts those bits and that every pose but pc07's and pc13's binds a UV track.
+
+## Not verified / not 1:1 (B40b2)
+
+- Only character 0's held value was read live. The others are computed the same way from their files, but not compared against RAM.
+- R2/L2 UVA playback (characters 1, 2, 3, 4, 8, 10, 12) was not recorded live; its timing follows the decompilation only.
+- The sampler cursor restarts at key 0 each sample. The game keeps a cursor, which only matters when a sample lands exactly on a key; the port takes the segment before it.
+- Each part gets one swap flag, from its first packet. All eye packets are unswapped, so this has no effect today.
+- Mods get no UV binding (`part_nodes` is empty for mods): a rerigged mod has no packet palettes.
+- In-match per-motion UVAs are loaded into `Face::uv` but only the inspect previews play them; the in-match face path is unchanged.
+- `tools/check.sh`: `mods::tests::rerigged_mod_plays_forehand_and_run` fails on the sway assertion (`noise`: mod None vs disc Some(3, 126)). This diff doesn't touch sway. The local `context/mods/test_pc00` fixture is likely an export from before M1d's sway; not re-exported.

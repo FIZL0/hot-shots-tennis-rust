@@ -5,7 +5,9 @@
 //! camera sees 30° across the 4:3 frame's 640 pixels, its axis at pixel (520, 176) of 640×448 (the model stands
 //! right of the text); a preview shows a crop of that frame ([`CROP`] by default) widened to its rectangle's aspect.
 //! R2 plays the win reaction (`gu_set`, 0x2e), L2 the loss (`di_set`, 0x2f) from frame 0 to its end and holds there,
-//! △ goes back to the pose; each sets the yaw at once (the loss: 140° for Lola, 135° for Will).
+//! △ goes back to the pose; each sets the yaw at once (the loss: 140° for Lola, 135° for Will). The face's `.UVA`
+//! (the eyes' texture offset) plays on its own clock ([`UvClock`]): held at the pose frame wrapped into its own
+//! length (looping), or from 0 at speed 1 clamped to its end for R2/L2; a motion without one draws no offset.
 //!
 //! B40's select spawns one per slot with [`spawn`] and moves it with [`Preview::rect`]; `--inspect` shows the
 //! roster side by side.
@@ -23,6 +25,7 @@ use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::motion::Clock;
 
 use crate::character::{self, CharacterData, Motion, POSE};
+use crate::gs::GsMaterial;
 
 /// The part of the original's 640×448 frame a slot shows (x0, y0, x1, y1): the model's column, head to feet.
 pub const CROP: Rect = Rect { min: Vec2::new(440.0, 100.0), max: Vec2::new(600.0, 410.0) };
@@ -42,7 +45,7 @@ fn loss_yaw(n: usize) -> f32 {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Update, (place, act));
+    app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(FixedUpdate, tick_uv).add_systems(Update, (place, act, uv_offsets));
 }
 
 /// A preview's camera: where it draws (logical window pixels), which part of the original's frame it shows, and
@@ -71,7 +74,8 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand:
     let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(PI)), Visibility::default(), Propagate(layers.clone()))).id();
     let rig = character::spawn(commands, data, space);
     let t = character::pose_frame(n, data.motions.get(&POSE).map_or(0.0, |c| c.length));
-    commands.entity(rig).insert((Transform { translation: Vec3::new(0.0, 1.5, 8.0), rotation: Quat::from_rotation_y(PI), scale: Vec3::new(hand, 1.0, 1.0) }, held(t), crate::shade::FixedLight(LIGHT)));
+    let uv = uv_held(t, data);
+    commands.entity(rig).insert((Transform { translation: Vec3::new(0.0, 1.5, 8.0), rotation: Quat::from_rotation_y(PI), scale: Vec3::new(hand, 1.0, 1.0) }, held(t), uv, crate::shade::FixedLight(LIGHT)));
     commands
         .spawn((
             Camera3d::default(),
@@ -106,11 +110,24 @@ fn held(t: f32) -> Motion {
     Motion { id: POSE, clock, prev: t, face: POSE, face_clock: clock, ..default() }
 }
 
-/// Do `act` on preview `p`'s character.
-pub fn apply(p: &Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform)>, lengths: impl Fn(usize) -> f32) {
-    let Ok((mut m, mut t)) = rigs.get_mut(p.rig) else { return };
+/// A preview's `.UVA` clock (the face's UV player, `CharacterData::faces`' `uv`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct UvClock(pub Clock);
+
+/// The pose's UV clock held at frame `t`: the inspect screen sets the time (wrapped into the `.UVA`'s own length,
+/// looping) and never advances it.
+fn uv_held(t: f32, data: &CharacterData) -> UvClock {
+    let t = hst_sim::pose::wrap(t, data.faces.get(&POSE).map_or(0.0, |f| f.uv_length), true);
+    UvClock(Clock { time: t, sampled: t, speed: 0.0, looping: true, hold: None })
+}
+
+/// Do `act` on preview `p`'s character `data`.
+pub fn apply(p: &Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform, &mut UvClock)>, data: &CharacterData) {
+    let Ok((mut m, mut t, mut uv)) = rigs.get_mut(p.rig) else { return };
+    let pose = character::pose_frame(p.n, data.motions.get(&POSE).map_or(0.0, |c| c.length));
+    *uv = if act == Act::Pose { uv_held(pose, data) } else { UvClock(Clock::start(1.0, false, None)) };
     let (motion, yaw) = match act {
-        Act::Pose => (held(character::pose_frame(p.n, lengths(POSE))), PI),
+        Act::Pose => (held(pose), PI),
         Act::Win | Act::Loss => {
             let id = if act == Act::Win { 0x2e } else { 0x2f };
             let mut m = *m;
@@ -161,7 +178,7 @@ fn act(
     pads: Query<&Gamepad>,
     keys: Res<ButtonInput<KeyCode>>,
     cams: Query<&Preview>,
-    mut rigs: Query<(&mut Motion, &mut Transform)>,
+    mut rigs: Query<(&mut Motion, &mut Transform, &mut UvClock)>,
     data: Query<&character::Rig>,
 ) {
     let pressed = |b: GamepadButton, k: KeyCode| keys.just_pressed(k) || pads.iter().any(|p| p.just_pressed(b));
@@ -177,7 +194,44 @@ fn act(
     for p in &cams {
         let Ok(rig) = data.get(p.rig) else { continue };
         let d = rig.data.clone();
-        apply(p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
+        apply(p, act, &mut rigs, &d);
+    }
+}
+
+/// One frame of every preview's UV clock, in its face's `.UVA` length.
+fn tick_uv(mut rigs: Query<(&character::Rig, &Motion, &mut UvClock)>) {
+    for (rig, m, mut uv) in &mut rigs {
+        uv.0.tick(rig.data.faces.get(&m.face).map_or(0.0, |f| f.uv_length));
+    }
+}
+
+/// The texture offset of each preview's parts: every `.UVA` track at the UV clock's sampled time, on the parts whose
+/// palette holds its node (the later track wins; (y, x) for swapped parts); parts no track reaches draw none.
+fn uv_offsets(
+    rigs: Query<(Entity, &character::Rig, &Motion, &UvClock)>,
+    children: Query<&Children>,
+    parts: Query<(&Mesh3d, &MeshMaterial3d<GsMaterial>)>,
+    mut gs: ResMut<Assets<GsMaterial>>,
+) {
+    for (root, rig, m, uv) in &rigs {
+        let d = &rig.data;
+        let mut offset = vec![Vec2::ZERO; d.parts.len()];
+        if let Some(face) = d.faces.get(&m.face) {
+            let t = hst_sim::ps2::mul(uv.0.sampled, 80.0);
+            for (node, ticks, values) in &face.uv {
+                // ponytail: the key cursor restarts from 0 each sample, as the face's (≤1 ulp after a wrap)
+                let [x, y, ..] = hst_sim::face::sample(ticks, values, t, &mut 0, true);
+                for (k, (_, swap)) in d.part_nodes.iter().enumerate().filter(|(_, (n, _))| n.contains(node)) {
+                    offset[k] = if *swap { Vec2::new(y, x) } else { Vec2::new(x, y) };
+                }
+            }
+        }
+        for (mesh, mat) in parts.iter_many(children.iter_descendants(root)) {
+            let o = d.parts.iter().position(|p| p.0.id() == mesh.0.id()).map_or(Vec2::ZERO, |k| offset[k]);
+            if gs.get(&mat.0).is_some_and(|g| g.uniform.uv_offset != o) {
+                gs.get_mut(&mat.0).unwrap().uniform.uv_offset = o;
+            }
+        }
     }
 }
 

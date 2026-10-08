@@ -604,7 +604,7 @@ pub fn load(
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     let noise = (!swaying.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, stance_ball, skeleton, noise, gs, texture_face })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes: Vec::new(), stance_ball, skeleton, noise, gs, texture_face })
 }
 
 /// A mesh's `extras.noise` deformers (period, rate, amplitudes), as a `.NOI` gives them.
