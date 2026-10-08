@@ -56,3 +56,35 @@ fn character_models_skin() {
     }
 }
 
+
+/// Skinned triangles wind by their closing vertex's UV `w` (as rigid ones): every character's triangles then face
+/// the way their vertex normals point, which strip parity breaks (Cody's face lost a third of its triangles to the
+/// back-face cull).
+#[test]
+fn skinned_triangles_face_their_normals() {
+    let Some(mut iso) = iso() else { return eprintln!("no ISO, skipped") };
+    for c in 0..14 {
+        let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        let body = |n: &str| n.rsplit(['\\', '/']).next().is_some_and(|f| f.starts_with(&format!("pc{c:02}_t")) && f.ends_with("_c00.mdl"));
+        let e = arc.entries.iter().find(|e| body(&e.name.to_ascii_lowercase())).unwrap();
+        let m = mdl::parse(&arc.read(e).unwrap()).unwrap();
+        let (mut along, mut against) = (0, 0);
+        for (_, verts, tris, _) in m.skinned() {
+            for t in tris {
+                let [a, b, c] = t.map(|i| verts[i as usize].pos);
+                let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                let vn = t.iter().fold([0.0; 3], |s, &i| {
+                    let x = &verts[i as usize].normals;
+                    [s[0] + x[0][0] + x[1][0], s[1] + x[0][1] + x[1][1], s[2] + x[0][2] + x[1][2]]
+                });
+                let d = n[0] * vn[0] + n[1] * vn[1] + n[2] * vn[2];
+                if d > 0.0 { along += 1 } else if d < 0.0 { against += 1 }
+            }
+        }
+        eprintln!("character {c}: {along} along, {against} against");
+        // ponytail: a few slivers disagree with their smoothed normals (≤ 18 of ~2500); parity gave ~half
+        assert!(against * 50 < along, "character {c}: {against} of {} triangles face away from their normals", along + against);
+    }
+}
