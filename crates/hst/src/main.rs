@@ -298,25 +298,7 @@ fn load(
                 commands.insert_resource(Clouds { list, degrees, speed, ticks: 0.0 });
             }
         }
-        // background figures where the game makes them; stand-in capsules (walkers grey, trigger creatures
-        // green, court 5's own blue) until their models and motion are ported. The umpire is P13's.
-        let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
-        let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
-        let figure = meshes.add(Capsule3d::new(0.25, 1.1));
-        let players = if args.singles { 2 } else { 4 };
-        for npc in hst_sim::npc::spawn(&list, &plants, &game.npc_roster(n), &game.walkers(n), players) {
-            let colour = match npc.kind {
-                hst_sim::npc::Kind::Walker(_) => Color::srgb(0.6, 0.6, 0.6),
-                hst_sim::npc::Kind::Trigger(_) => Color::srgb(0.3, 0.7, 0.3),
-                hst_sim::npc::Kind::Court5(_) => Color::srgb(0.3, 0.4, 0.8),
-                hst_sim::npc::Kind::Umpire => continue,
-            };
-            let [x, y, z, _] = npc.world[3];
-            // game space is Y-down: the capsule's centre sits 0.8 m above the feet
-            let t = Transform::from_matrix(Mat4::from_cols_array_2d(&npc.world)).with_translation(Vec3::new(x, y - 0.8, z));
-            let e = commands.spawn((t, Visibility::default(), Mesh3d(figure.clone()), MeshMaterial3d(materials.add(colour)))).id();
-            commands.entity(root).add_child(e);
-        }
+        // the background figures are `play::npcs`'s
         bounds = (Vec3::splat(-20.0), Vec3::splat(20.0));
     }
     for path in &args.archives {

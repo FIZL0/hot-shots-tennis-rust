@@ -371,6 +371,64 @@ pub fn load_disc(
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton })
 }
 
+/// Build a background figure (umpire, spectator, creature) from a court archive: the model `{stem}.MDL` with its
+/// MTL/MTI and the clips `anims` (motion k = the kth file; a missing file leaves k unset). Paths are matched
+/// case-blind against the archive's names, ending in `stem`.
+pub fn load_npc(
+    arc: &Archive,
+    stem: &str,
+    anims: &[String],
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Option<CharacterData> {
+    let find = |name: &str| {
+        let name = name.to_ascii_lowercase();
+        arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)).and_then(|e| arc.read(e).ok())
+    };
+    let model = mdl::parse(&find(&format!("{stem}.mdl"))?).ok()?;
+    let mats = mtl::parse(&find(&format!("{stem}.mtl"))?, find(&format!("{stem}.mti")).as_deref()).ok()?;
+    let handles = materials_of(&mats, images, materials);
+    // their texture alpha is coverage: TEST mode 10..19 keeps A ≥ 0x40, 20..29 blends (the ground shadow quad)
+    // ponytail: mode 20..29's A ≥ 0x70 half writes Z on the PS2; drawn blended without it
+    for (m, h) in mats.materials.iter().zip(&handles) {
+        let mode = i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]);
+        if let (10..=29, Some(mut mat)) = (mode, materials.get_mut(h)) {
+            mat.alpha_mode = if mode < 20 { AlphaMode::Mask(0.5) } else { AlphaMode::Blend };
+        }
+    }
+    let joints: Vec<Joint> = (0..model.node_count)
+        .map(|i| Joint {
+            name: model.node_names[i].clone(),
+            parent: model.node_parent[i],
+            rest: Transform::from_matrix(mat(&model.node_local[i])),
+            inverse_bind: mat(&model.node_bind[i]).inverse(),
+        })
+        .collect();
+    let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+    let motions = anims
+        .iter()
+        .enumerate()
+        .filter_map(|(k, a)| Some((k, Clip::new(&skeleton, &ani::parse(&find(a)?).ok()?))))
+        .collect();
+    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    Some(CharacterData {
+        parts: skinned_parts(&model, &handles, meshes),
+        joints,
+        racket: Vec::new(),
+        motions,
+        paths: HashMap::new(),
+        binds,
+        pelvis: Vec::new(),
+        arm: None,
+        morph_targets: model.morph_names.len(),
+        faces: HashMap::new(),
+        stance_ball: None,
+        skeleton,
+    })
+}
+
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
 pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity) -> Entity {
     let weights = bevy::mesh::morph::MorphWeights::new(vec![0.0; data.morph_targets], None).unwrap_or_default();
