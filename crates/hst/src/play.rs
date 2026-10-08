@@ -569,6 +569,28 @@ pub fn plugin(app: &mut App) {
             )
                 .chain(),
         );
+    app.add_systems(FixedUpdate, flare_tick.after(play_sounds));
+}
+
+/// The sun's lens flare's `rand()` draws each tick it shows (clear or cloudy).
+fn flare_tick(game: Option<ResMut<Game>>) {
+    if let Some(mut g) = game
+        && crate::weather::now() < 2
+    {
+        g.rng.flare_tick();
+    }
+}
+
+static EFFECTS_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// The match's effects seed (`Rngs::setup_rand`), drawn when main.rs sets the match up.
+pub fn set_effects_seed(s: u32) {
+    EFFECTS_SEED.store(s as u64, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The effects seed, once the match setup has drawn it.
+pub fn effects_seed() -> Option<u32> {
+    u32::try_from(EFFECTS_SEED.load(std::sync::atomic::Ordering::Relaxed)).ok()
 }
 
 /// Character `c`'s trajectory tables `tr_pc<c>_<name><k><suffix>.dat`, k in 0..n, from its archive `TRAJ<c><ab>.XB`.
@@ -1137,7 +1159,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
-    (match_rng, pads): (Option<Res<MatchRng>>, Res<Pads>),
+    (match_rng, pads, weather): (Option<Res<MatchRng>>, Res<Pads>, Option<Res<crate::weather::Weather>>),
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -1250,6 +1272,7 @@ fn setup(
     let Ok(root) = root.single() else { return };
     // the characters on court, from the disc (each loaded once)
     let mut voices = Vec::new();
+    let mut banks = Vec::new();
     let mut loaded: std::collections::HashMap<(usize, usize), std::sync::Arc<CharacterData>> =
         Default::default();
     for i in 0..n {
@@ -1296,8 +1319,11 @@ fn setup(
         }));
         game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         game.smash_spins.push(std::array::from_fn(|k| params::spin(shot_params.record(3, k, params::record_of(c)))));
-        // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
-        voices.push(voice_bank(&mut iso, c, n, game.rng.shared.r15() % 100 >= 70).map(std::sync::Arc::new));
+        // the a/b voice pick: 70/30 at random, players of one character kept apart (`rng::voice_bank`)
+        let line_up: Vec<u32> = (0..n).map(|k| args.chars.get(k).copied().unwrap_or([6, 1, 2, 3][k]) as u32).collect();
+        let drawn = game.rng.shared.r15() % 100 >= 70;
+        banks.push(hst_sim::rng::voice_bank(&line_up, i, &banks, drawn));
+        voices.push(voice_bank(&mut iso, c, n, game.stage as u32, banks[i]).map(std::sync::Arc::new));
         // a CPU gets an AI object, and so does a human beside a CPU partner; making one restarts the AI generator
         // ponytail: who is human is taken from the pads at setup
         let cpu = |k: usize| pads.slot_of(k, n).is_none();
@@ -1341,6 +1367,10 @@ fn setup(
     commands.insert_resource(crate::audio::GalleryBank(gallery.map(std::sync::Arc::new)));
     // the match starts (the sound manager's reseed), then its first point
     reseed_sound(&mut game);
+    // the intro's lens flare ticks
+    if weather.is_some_and(|w| w.today().weather < 2) {
+        (0..Rngs::INTRO_TICKS).for_each(|_| game.rng.flare_tick());
+    }
     game.rng.new_point();
     placement_draws(&mut game, false);
     commands.insert_resource(game);
