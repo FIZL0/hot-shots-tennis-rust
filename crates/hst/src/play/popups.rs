@@ -29,7 +29,7 @@ use super::{Game, Pads, Phase};
 use crate::Args;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Tex {
+pub(super) enum Tex {
     Pill,
     Slot,
     Rank,
@@ -57,12 +57,12 @@ enum Tex {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Quad {
-    tex: Tex,
-    src: [f32; 4],
-    dst: [f32; 4],
-    rgb: [f32; 3],
-    alpha: f32,
+pub(super) struct Quad {
+    pub(super) tex: Tex,
+    pub(super) src: [f32; 4],
+    pub(super) dst: [f32; 4],
+    pub(super) rgb: [f32; 3],
+    pub(super) alpha: f32,
 }
 
 struct View {
@@ -88,6 +88,49 @@ struct View {
     /// The board's grow and shrink steps.
     rise: i32,
     drop: i32,
+    /// The match's final board on the result page instead.
+    fin: Option<Final>,
+}
+
+/// The match's final board on the result page (the original's board mode 2): every set settled (a set lost at half
+/// alpha, none on the bright sheet), a highlight pulsing over the winner's stripes and the winner's sets count
+/// pulsing in scale, the whole board `dx` across and 40 up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Final {
+    pub(super) highlight: i32,
+    pub(super) scale: f32,
+    pub(super) dx: f32,
+}
+
+/// The final board for the match just over, won by `winner`.
+pub(super) fn final_board(g: &Game, slots: [usize; 4], pill: [[u8; 3]; 4], winner: usize, fin: Final) -> Vec<Quad> {
+    let mut out = Vec::new();
+    board(
+        &View {
+            players: g.players.len(),
+            slots,
+            ranks: [None; 4],
+            pill,
+            rank_rgb: [[0; 3]; 4],
+            points: [0; 2],
+            scorer: winner,
+            deuce: false,
+            advantage: false,
+            deuce_count: 0,
+            swapped: false,
+            show: ShowState { event: Event::Set, stage: 3, t: 0, n: 0, fading_out: false },
+            set_games: g.score.set_games,
+            set: g.score.set,
+            sets: g.score.sets,
+            sets_to_win: g.rules.sets,
+            match_over: true,
+            rise: 1,
+            drop: 1,
+            fin: Some(fin),
+        },
+        &mut out,
+    );
+    out
 }
 
 /// Points cells (column, row) by point index; 4 is Deuce, 5 Advantage.
@@ -281,7 +324,7 @@ fn tiebreak_points(v: &View, a: i32, out: &mut Vec<Quad>) {
 fn board(v: &View, out: &mut Vec<Quad>) {
     let st = v.show;
     let game = st.event == Event::Game;
-    if !game && v.match_over {
+    if !game && v.match_over && v.fin.is_none() {
         return; // the match's last set has its own finish
     }
     // the fade: in over 14 ticks, out over 5 (t has already counted down this tick)
@@ -331,6 +374,9 @@ fn board(v: &View, out: &mut Vec<Quad>) {
             q(b0, [0, [56, 80][side], 88, 24], rect(stripe_x[side], diag_y, 88, 24), WHITE, a);
         }
     }
+    if let Some(f) = v.fin {
+        q(b0, [96, 16, 4, 4], rect(stripe_x[v.scorer], y0, 88, rows * 16), WHITE, f.highlight);
+    }
     // the frame, nine pieces
     let bottom = top + 16 + edge_h;
     for (u, x, w) in [(0, x0, 16), (16, x0 + 16, mid_w), (40, x0 + 16 + mid_w, 16)] {
@@ -363,12 +409,13 @@ fn board(v: &View, out: &mut Vec<Quad>) {
     for team in 0..2 {
         for col in 0..cols {
             let y = games_y + 32 * col;
-            let sheet = Tex::Board(if col == cur { 2 } else { 1 });
+            let live = col == cur && v.fin.is_none();
+            let sheet = Tex::Board(if live { 2 } else { 1 });
             if col <= cur {
                 let c = col.min(4) as usize;
                 let now = col == cur && team == v.scorer;
                 let g = v.set_games[team][c] - (game && phase == 0 && now) as i32;
-                let alpha = if col == cur || v.set_games[team ^ 1][c] < g { a } else { a / 2 };
+                let alpha = if live || v.set_games[team ^ 1][c] < g { a } else { a / 2 };
                 let s = if game && now { scale } else { 1.0 };
                 q(sheet, [g * 32, 0, 32, 32], grown([272, 336][team], y, 32, s), WHITE, alpha);
                 if game && phase == 1 && now {
@@ -387,12 +434,18 @@ fn board(v: &View, out: &mut Vec<Quad>) {
             let x = [192, 400][team];
             let won = team == v.scorer;
             let sets = v.sets[team] - (phase == 0 && won) as i32;
-            let s = if won { scale } else { 1.0 };
+            let s = if won { v.fin.map_or(scale, |f| f.scale) } else { 1.0 };
             q(Tex::Board(3), [288, 0, 56, 24], rect(x - 4, y + 48, 56, 24), WHITE, a);
             q(Tex::Board(3), [sets * 48, 0, 48, 48], grown(x, y, 48, s), WHITE, a);
             if phase == 1 && won {
                 q(Tex::Board(3), [sets * 48, 48, 48, 48], grown(x, y, 48, s), WHITE, flash);
             }
+        }
+    }
+    if let Some(f) = v.fin {
+        for q in out.iter_mut() {
+            q.dst[0] += f.dx;
+            q.dst[1] -= 40.0;
         }
     }
     // the original queues each sheet and draws them in turn
@@ -405,7 +458,7 @@ fn board(v: &View, out: &mut Vec<Quad>) {
 
 /// The sheets the panel doesn't load, in `ART` order.
 #[derive(Resource)]
-struct Art([Handle<Image>; 13]);
+pub(super) struct Art(pub(super) [Handle<Image>; 13]);
 const ART: [&str; 13] = [
     "/inpane_kihontokuten01.tm2",
     "/inpane_duce00.tm2",
@@ -440,11 +493,11 @@ const CALL_MODELS: [&str; 6] = ["i_let_00", "i_out_00", "i_net_00", "i_fault_00"
 const CALL_MODEL: [usize; 6] = [0, 1, 3, 4, 0, 2];
 const CHANGE_SIDES: usize = 5;
 /// The overlay camera's render layer: it sees only the call models.
-const CALL_LAYER: usize = 7;
+pub(super) const CALL_LAYER: usize = 7;
 /// The overlay camera's horizontal half-angle (its 50° field of view), the model's distance in front of it and the
 /// uniform scale the scoreboard gives each call model when it loads them.
-const CALL_FOV_DEG: f32 = 25.0;
-const CALL_DISTANCE: f32 = 10.0;
+pub(super) const CALL_FOV_DEG: f32 = 25.0;
+pub(super) const CALL_DISTANCE: f32 = 10.0;
 const CALL_SCALE: f32 = 5.7;
 
 /// The camera drawing the call models over the match.
@@ -616,6 +669,7 @@ fn draw(
                 match_over: g.score.match_over,
                 rise: g.board.game_rise,
                 drop: g.board.game_drop,
+                fin: None,
             })
         }
         None => Vec::new(),
@@ -780,6 +834,7 @@ mod tests {
             match_over: false,
             rise: 6,
             drop: 10,
+            fin: None,
         }
     }
 
