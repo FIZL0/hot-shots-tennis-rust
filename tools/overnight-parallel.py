@@ -175,7 +175,9 @@ belong). Then tools/check.sh; fix what the merge broke, never the task's own wor
 (ticked, part, blocked) and anything the human must do.
 5. Commit every change you made in main, so `git status` shows only the user's popped-back edits (context/ is \
 gitignored, so master.md stays uncommitted).
-Never push, never touch the worktrees, never do task work yourself. When the runner says `RUN DONE`, finish \
+6. If tools/check.sh passed, `git push origin main` (never force; if rejected, `git pull --no-rebase`, re-run \
+tools/check.sh, push again, or note why it couldn't).
+Never touch the worktrees, never do task work yourself. When the runner says `RUN DONE`, finish \
 master.md with a short summary for the human at the top."""
 
 
