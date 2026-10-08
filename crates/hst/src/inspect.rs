@@ -7,16 +7,18 @@
 //! R2 plays the win reaction (`gu_set`, 0x2e), L2 the loss (`di_set`, 0x2f) from frame 0 to its end and holds there,
 //! △ goes back to the pose; each sets the yaw at once (the loss: 140° for Lola, 135° for Will).
 //!
-//! B40's select spawns one per slot with [`spawn`] and moves it with [`Preview::rect`]; `--inspect` shows the
-//! roster side by side.
+//! `--inspect` shows the roster side by side, each preview straight on the window ([`spawn`]); B40's select draws
+//! each card's into an image ([`spawn_into`]) that a UI node shows through [`PreviewMaterial`], so the card's text
+//! stays on top of it.
 
 use std::f32::consts::PI;
 use std::sync::Arc;
 
 use bevy::app::{HierarchyPropagatePlugin, Propagate};
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{CameraOutputMode, SubCameraView, Viewport};
-use bevy::render::render_resource::BlendState;
+use bevy::camera::{CameraOutputMode, ImageRenderTarget, RenderTarget, SubCameraView, Viewport};
+use bevy::render::render_resource::{AsBindGroup, BlendState, TextureFormat};
+use bevy::shader::ShaderRef;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use hst_data::{iso::Iso, xb::Archive};
@@ -42,7 +44,37 @@ fn loss_yaw(n: usize) -> f32 {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Update, (place, act));
+    bevy::asset::embedded_asset!(app, "inspect.wgsl");
+    app.add_plugins((HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), UiMaterialPlugin::<PreviewMaterial>::default())).add_systems(Update, place);
+}
+
+/// A preview drawn into an image ([`spawn_into`]) on a UI node: the image holds the GS's encoded values (as the scene
+/// image, `hud_gamma.rs`), decoded here so the sRGB HUD stores them back as they are; alpha is −1 where nothing drew
+/// (the model's own alpha is its texels', VU1's specular in places, so not coverage).
+#[derive(AsBindGroup, Asset, TypePath, Clone)]
+pub struct PreviewMaterial {
+    #[texture(0)]
+    #[sampler(1)]
+    pub image: Handle<Image>,
+}
+
+impl UiMaterial for PreviewMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://hst/inspect.wgsl".into()
+    }
+}
+
+/// A float image of `size` physical pixels for [`spawn_into`].
+pub fn target(images: &mut Assets<Image>, size: UVec2) -> Handle<Image> {
+    images.add(Image::new_target_texture(size.x.max(1), size.y.max(1), TextureFormat::Rgba16Float, None))
+}
+
+/// [`spawn`] drawing into `image` ([`target`]) instead of the window, cleared to alpha −1 (see [`PreviewMaterial`]).
+/// ponytail: no MSAA, so edges don't average with the −1 clear; the GS doesn't antialias either.
+pub fn spawn_into(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand: f32, layer: usize, image: Handle<Image>) -> Entity {
+    let cam = spawn(commands, data, n, hand, layer, Rect::default());
+    commands.entity(cam).insert((RenderTarget::Image(ImageRenderTarget { handle: image, scale_factor: 1.0 }), bevy::camera::Hdr, Msaa::Off));
+    cam
 }
 
 /// A preview's camera: where it draws (logical window pixels), which part of the original's frame it shows, and
@@ -123,11 +155,18 @@ pub fn apply(p: &Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transfor
 }
 
 /// Each preview's viewport and crop for its rectangle; a preview camera clears nothing (`hud_gamma` gives every scene
-/// camera its clear colour, which would wipe the others).
-fn place(window: Query<&Window, With<PrimaryWindow>>, mut cams: Query<(&Preview, &mut Camera)>) {
+/// camera its clear colour, which would wipe the others). One drawing into its own image fills it, cleared to −1 alpha.
+fn place(window: Query<&Window, With<PrimaryWindow>>, images: Res<Assets<Image>>, mut cams: Query<(&Preview, &mut Camera, &RenderTarget)>) {
     let Ok(w) = window.single() else { return };
     let s = w.scale_factor();
-    for (p, mut cam) in &mut cams {
+    for (p, mut cam, target) in &mut cams {
+        if let RenderTarget::Image(t) = target {
+            let Some(image) = images.get(&t.handle) else { continue };
+            cam.clear_color = ClearColorConfig::Custom(Color::linear_rgba(0.0, 0.0, 0.0, -1.0));
+            cam.viewport = None;
+            cam.sub_camera_view = Some(sub_view(p.crop, image.size().as_vec2()));
+            continue;
+        }
         cam.clear_color = ClearColorConfig::None;
         let (pos, size) = ((p.rect.min * s).as_uvec2(), (p.rect.size() * s).max(Vec2::ONE).as_uvec2());
         cam.viewport = Some(Viewport { physical_position: pos, physical_size: size, ..default() });
@@ -156,7 +195,7 @@ fn sub_view(crop: Rect, size: Vec2) -> SubCameraView {
     SubCameraView { full_size: full.as_uvec2(), offset: (c - origin) * k, size: (e * k).as_uvec2() }
 }
 
-/// The inspect screen's buttons on any pad (R2, L2, △), and 1/2/3 on the keyboard, for every preview.
+/// The inspect screen's buttons on any pad (R2, L2, △), and 1/2/3 on the keyboard, for every preview (`--inspect`).
 fn act(
     pads: Query<&Gamepad>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -205,7 +244,7 @@ pub fn viewer(app: &mut App) {
         // the inspect screen's panel pink, so blended edges read as there
         .add_systems(Startup, |mut c: ResMut<ClearColor>| c.0 = Color::srgb_u8(215, 135, 135))
         .add_systems(FixedUpdate, character::tick)
-        .add_systems(Update, (character::animate, lay_out));
+        .add_systems(Update, (character::animate, lay_out, act));
 }
 
 #[allow(clippy::too_many_arguments)]
