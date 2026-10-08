@@ -29,7 +29,7 @@ use hst_sim::player::{self as loco, Stats};
 use hst_sim::pose::{ArmIk, contact_solve};
 use hst_sim::score::{Event, Rules, Score};
 use hst_sim::serve::{self, Balloon, ServeData, Toss};
-use hst_sim::shot::{Bounds, Table, launch, lookup};
+use hst_sim::shot::{Bounds, Table, lookup};
 use hst_sim::sound;
 use hst_sim::swing::{self, PathPoint, Reach};
 use hst_sim::umpire::Umpire;
@@ -240,9 +240,11 @@ struct Game {
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
-    serve_tables: Vec<[Vec<(Table, f32)>; 2]>,
+    serve_tables: Vec<[Vec<(Table, f32, f32)>; 2]>,
     /// Per player: the character's smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
     smash_tables: Vec<Vec<Table>>,
+    /// Per player: the spin of the character's smash records, smash kinds 0 and 1.
+    smash_spins: Vec<[f32; 2]>,
     /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
     rally_tables: Vec<[Vec<Table>; 2]>,
     /// Per player: the character's stroke and volley shot records (classes 1, 2) by kind, for their spins.
@@ -587,6 +589,13 @@ fn rally_lookup(g: &Game, who: usize, class: u8, kind: i32, at: V3, target: V3) 
         Bounds::stroke(kind, at[2])
     };
     lookup(&g.rally_tables[who][volley as usize][k], &bounds, at, target)
+}
+
+/// A stroke's, volley's or smash's launch off its table lookup: no side angle, and the bend of the special
+/// shots isn't modelled (P6).
+fn rally_launch(class: u8, at: V3, target: V3, l: &hst_sim::shot::Lookup) -> hst_sim::shot::Launch {
+    let (at, target) = ([at[0], at[1], at[2], 1.0], [target[0], target[1], target[2], 1.0]);
+    hst_sim::shot::launch_turned(class, at, target, l.elevation, l.speed, 0.0, 0.0, 0.0, false, l.frames)
 }
 
 /// TParam.csv's row for character 0 as cells (header cells hold quoted line breaks; character rows are plain).
@@ -953,18 +962,21 @@ fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut u32) -> Vec<npc::Em
     .collect()
 }
 
-/// Character `c`'s serve tables and spins (see `Game::serve_tables`): the weak toss serves by the `dw1`
-/// variant tables and records (every character's serve variants are weighted −0.5 on disc).
-fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32)>; 2] {
+/// Character `c`'s serve tables, spins and side angles (see `Game::serve_tables`): the weak toss serves by the
+/// `dw1` variant tables and records (every character's serve variants are weighted −0.5 on disc).
+fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32, f32)>; 2] {
     let r = params::record_of(c);
+    let turn = |rec: &[f32]| (params::spin(rec), hst_sim::ps2::mul(rec[10], 0.017453292));
     let base = character_tables(iso, c, "A", "serv", "", 4)
         .into_iter()
         .enumerate()
-        .map(|(k, t)| (t, params::spin(params.record(0, k, r))));
+        .map(|(k, t)| (t, turn(params.record(0, k, r))))
+        .map(|(t, (spin, side))| (t, spin, side));
     let weak = character_tables(iso, c, "B", "serv", "_dw1", 3)
         .into_iter()
         .enumerate()
-        .map(|(k, t)| (t, params::spin(&params.variant(0, k, r, -0.5))));
+        .map(|(k, t)| (t, turn(&params.variant(0, k, r, -0.5))))
+        .map(|(t, (spin, side))| (t, spin, side));
     [base.collect(), weak.collect()]
 }
 
@@ -986,6 +998,7 @@ fn setup(
         rules,
         serve_tables: Vec::new(),
         smash_tables: Vec::new(),
+        smash_spins: Vec::new(),
         rally_tables: Vec::new(),
         rally_records: Vec::new(),
         serve_data: Vec::new(),
@@ -1112,6 +1125,7 @@ fn setup(
             std::array::from_fn(|k| shot_params.record(v + 1, k, params::record_of(c)).try_into().unwrap())
         }));
         game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
+        game.smash_spins.push(std::array::from_fn(|k| params::spin(shot_params.record(3, k, params::record_of(c)))));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.serve_data.push(serve_data(&mut iso, &data));
@@ -1464,8 +1478,8 @@ fn strike(
         let doubles = g.rules.players > 2;
         g.margins.inside(class, kind, false, doubles, g.chars[src] as usize, false, at, target)
     };
-    let (vel, frames) = if class == 0 {
-        let (table, _) = &g.serve_tables[who][weak][kind as usize];
+    let launched = if class == 0 {
+        let (table, spin, side) = &g.serve_tables[who][weak][kind as usize];
         serve::launch(
             table,
             kind == 3,
@@ -1473,6 +1487,7 @@ fn strike(
             at,
             target,
             g.serving.scatter,
+            (*spin, *side, g.players[who].hand < 0.0),
         )
     } else {
         let l = if class == 3 {
@@ -1485,19 +1500,14 @@ fn strike(
         } else {
             rally_lookup(g, src, class, kind, at, target)
         };
-        (launch(at, target, l.elevation, l.speed), l.frames)
+        rally_launch(class, at, target, &l)
     };
-    let dir = Vec3::new(vel[0], 0.0, vel[2]).normalize_or(Vec3::Z);
-    let side = Vec3::Y.cross(dir).normalize();
-    let frame = [
-        side.to_array(),
-        [0.0, 1.0, 0.0],
-        side.cross(Vec3::Y).normalize().to_array(),
-    ];
+    let vel = launched.vel;
     g.shot = Shot {
         class,
         kind,
-        curve_frames: frames + 1,
+        curve_frames: launched.frames,
+        wind: [launched.wind[0], launched.wind[1], launched.wind[2]],
         ..Shot::default()
     };
     g.shots += 1;
@@ -1536,13 +1546,12 @@ fn strike(
     } else {
         (false, g.whistle.1)
     };
-    // every recorded smash spins 5°, △ smashes too (lob_smash_s05)
     let spin = match class {
-        0 => g.serve_tables[who][weak][kind as usize].1,
-        3 => 5f32.to_radians(),
+        0 => launched.spin,
+        3 => g.smash_spins[who][kind as usize],
         _ => rally_spin(g, src, class, kind, at, target),
     };
-    g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
+    g.flight = Flight::new(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
     ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);

@@ -191,6 +191,70 @@ pub fn launch(hit: V3, target: V3, elevation: f32, speed: f32) -> V3 {
     std::array::from_fn(|k| crate::ps2::mul(ahead[k], speed))
 }
 
+/// A launch with its side angle (record field 10, nonzero only on slice serves) and the frames it flies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Launch {
+    pub vel: V3,
+    /// The ball's spin frame.
+    pub frame: M4,
+    /// Per-frame pull that bends the flight onto the target (w included).
+    pub wind: [f32; 4],
+    /// Spin, made positive when the side angle turned it.
+    pub spin: f32,
+    pub frames: i32,
+}
+
+/// The launch of `launch_frame` with the record's `spin` and `side` angle (radians), the table's flight
+/// `frames`, and the shot's `bend` (0 until the special shots, P6). A lefty hitter's side-angled shot spins the
+/// other way. With a side angle the velocity heads off the target line by the spin (as a yaw) and the wind
+/// brings the ball back onto the target over the flight; the spin frame is turned a quarter about Z and by the
+/// side angle about Y, toward the spin's sign. Off a serve (`class` 0) clear of the 2.0575 m line the flight
+/// gets one frame less or more, by which side of that line the ball crosses to.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_turned(class: u8, hit: [f32; 4], target: [f32; 4], elevation: f32, speed: f32, spin: f32, side: f32, bend: f32, lefty: bool, frames: i32) -> Launch {
+    use crate::ps2::{add, div, mul, sub};
+    let frame = launch_frame([hit[0], hit[1], hit[2]], [target[0], target[1], target[2]], elevation);
+    let mut spin = if side != 0.0 && lefty { mul(spin, -1.0) } else { spin };
+    let mut n = frames + 1;
+    if side != 0.0 || bend != 0.0 {
+        let mut step = 0;
+        if class == 0 {
+            let toward = if target[2] < 0.0 { -1.0 } else { 1.0 };
+            if sub(target[0].abs(), 2.0575).abs() > 1.0 {
+                let past = mul(target[0], toward);
+                step = if mul(hit[0], toward) > 0.0 { if past < -2.0575 { 1 } else { -1 } } else if past < 2.0575 { 1 } else { -1 };
+                if spin < 0.0 || bend < 0.0 {
+                    step = -step;
+                }
+            }
+        }
+        n += step;
+    }
+    let ahead = frame[2];
+    if side == 0.0 {
+        let vel = std::array::from_fn(|k| mul(ahead[k], speed));
+        return Launch { vel, frame, wind: [0.0; 4], spin, frames: n };
+    }
+    // ponytail: the yaw is never past ±π (a record's spin is a few tens of degrees), so the game's wrap is left out
+    let d = [sub(target[0], hit[0]), sub(target[1], hit[1]), sub(target[2], hit[2]), 1.0];
+    let turned = world::mat_mul(&[frame[0], frame[1], frame[2], d], &world::rot_y(spin));
+    let inv = div(1.0, n as f32);
+    let back = |k: usize| mul(sub(target[k], add(turned[3][k], hit[k])), inv);
+    let wind = [back(0), back(1), back(2), mul(sub(target[3], 1.0), inv)];
+    let vel = std::array::from_fn(|k| mul(turned[2][k], speed));
+    let (quarter, side) = if spin >= 0.0 { (world::HALF_PI, side) } else { spin = -spin; (-world::HALF_PI, -side) };
+    let frame = world::mat_mul(&world::mat_mul(&world::IDENTITY, &rot_z(quarter)), &frame);
+    let frame = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_y(side)), &frame);
+    Launch { vel, frame, wind, spin, frames: n }
+}
+
+/// Rotation about Z (rows (c, s, 0), (−s, c, 0), (0, 0, 1)), built like `world::rot_x`.
+fn rot_z(t: f32) -> M4 {
+    let (s, c) = world::sincos(t);
+    let z = 0.0;
+    [[vu0::add(z, c), vu0::add(z, s), z, z], [vu0::sub(z, s), vu0::add(z, c), z, z], [z, z, vu0::add(z, 1.0), z], [z, z, z, vu0::add(z, 1.0)]]
+}
+
 /// The shot buttons give three kinds: ✕ topspin (0), ○ slice (1), △ lob (3). Flat (2) and drop (4) have no
 /// button: at contact the stick (court x, z) turns a topspin into a flat shot when it points within 60° of
 /// `facing` (the hitter's end, +1 toward +z) and a slice into a drop shot when it points within 45° of straight
