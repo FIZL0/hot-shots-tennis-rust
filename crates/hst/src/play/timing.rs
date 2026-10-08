@@ -68,6 +68,15 @@ pub fn error(g: &Game, i: usize, c: &Contact, branch: u8, lob: bool) -> TimingEr
     swing::timing_error(&t.stats, branch, lob, bias, c.offset, -c.swing.ball[1], right, forehand, c.swing.body, [0.0; 2], p.end)
 }
 
+/// Player `i`'s smash scatter (`swing::smash_scatter`) at contact `c`, `plain` (not the △ smash), from its aim's
+/// nudge and held depth (`Game::aim`).
+pub fn smash(g: &Game, i: usize, c: &Contact, plain: bool) -> (f32, f32) {
+    let t = &g.timing[i];
+    let bias = t.bias.get((c.offset + SWEET_FRAME) as usize).copied().unwrap_or(0);
+    let scale = swing::smash_scale(plain, c.offset, g.players[i].aim_from[1]);
+    swing::smash_scatter(&t.stats, c.grade, bias, -c.swing.ball[1], g.aim.nudge, scale, g.aim.held)
+}
+
 /// A timed launch: the scattered target, the table lookup and the variant's shot record
 /// when the mode picked one.
 pub struct Timed {
@@ -103,13 +112,12 @@ pub fn wild(g: &mut Game, who: usize) -> (V3, f32, f32) {
 /// What timing error `e` does to player `who`'s stroke (class 1) or volley (class 2) of `kind` from `at` toward the
 /// pulled-in aim `target`: from `src`'s tables (the incoming hitter's on a `counter`, blend 0 then). A framed hit
 /// launches with its own (side, depth) error instead, blend 0.
-// ponytail: the aim's random nudge and its short-only flag are left at 0 / off
 #[allow(clippy::too_many_arguments)]
 pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, grade): (u8, u8), e: TimingError, framed: Option<(f32, f32)>, counter: bool, at: V3, target: V3) -> Timed {
     let (t, s) = (&g.timing[who], &g.timing[src]);
     let (sx, sz, mut blend) = match framed {
         Some((side, depth)) => (side, depth, 0.0),
-        None => swing::timing_launch(&t.stats, branch, kind, grade, e, 0, false),
+        None => swing::timing_launch(&t.stats, branch, kind, grade, e, g.aim.nudge, g.aim.short_only),
     };
     if branch == 1 && class == 2 {
         blend = swing::high_blend(&t.stats);

@@ -281,6 +281,10 @@ struct Game {
     timing_error: Option<swing::TimingError>,
     /// The mis-hit roll of the stroke, volley or dive being struck, set at its contact.
     mis_hit: Option<swing::MisHit>,
+    /// The last human aim's leftovers for the launch (nudge, short-only, a smash's held depth).
+    aim: hst_sim::shot::Aim,
+    /// The smash being struck's timing scatter (`timing::smash`), set at its contact.
+    smash_scatter: Option<(f32, f32)>,
     /// Per player: the serve (see `serve_data`).
     serve_data: Vec<ServeData>,
     /// The serve in progress (server's toss and swing).
@@ -1130,6 +1134,8 @@ fn setup(
         timing: Vec::new(),
         timing_error: None,
         mis_hit: None,
+        aim: Default::default(),
+        smash_scatter: None,
         serve_data: Vec::new(),
         serving: Serving::default(),
         reach,
@@ -1609,6 +1615,9 @@ fn strike(
         timing::launch(g, who, src, class, kind, (branch, grade), e, framed.map(|f| (f.1, f.2)), power_gap.is_some(), at, target)
     });
     let target = timed.as_ref().map_or(target, |t| t.target);
+    // a smash's timing scatter, its table looked up from the aim (see `timing::smash`)
+    let smash = g.smash_scatter.take().filter(|_| class == 3).map(|(sx, sz)| (target, serve::scatter_along(sx, sz, at, target)));
+    let target = smash.map_or(target, |(t, sc)| [hst_sim::ps2::add(t[0], sc[0]), t[1], hst_sim::ps2::add(t[2], sc[2])]);
     let sent = if class == 0 {
         let s = g.serving.scatter;
         [hst_sim::ps2::add(target[0], s[0]), target[1], hst_sim::ps2::add(target[2], s[2])]
@@ -1633,7 +1642,9 @@ fn strike(
             effect.0,
         )
     } else {
-        let l = if class == 3 {
+        let l = if let Some((aim, sc)) = smash {
+            lookup(&g.smash_tables[who][kind as usize], &Bounds::smash(kind), [hst_sim::ps2::sub(at[0], sc[0]), at[1], hst_sim::ps2::sub(at[2], sc[2])], aim)
+        } else if class == 3 {
             lookup(
                 &g.smash_tables[who][kind as usize],
                 &Bounds::smash(kind),
@@ -2032,13 +2043,14 @@ fn pad_run(g: &Game, stick: Vec2, dpad: u16) -> Vec2 {
 
 /// Analog aim on the court (x, z direction from `pad_run`, or a bot's random pick): sideways spans the court,
 /// +z moves the target toward +z (deeper for the −z team, shorter for the other); centred is a deep middle ball.
-fn aim_target(g: &Game, i: usize, stick: Vec2, branch: u8, kind: i32, offset: i32, body: bool, height: f32) -> V3 {
+fn aim_target(g: &mut Game, i: usize, stick: Vec2, branch: u8, kind: i32, offset: i32, body: bool, height: f32) -> V3 {
     let p = &g.players[i];
     let h = hst_sim::shot::Hitter { end: p.end, branch, kind, offset, body, from: p.aim_from, height };
     // the ball being struck was a slice (not a smash) in a rally under way: the angle narrows
     let incoming = (g.shots > 0 && g.shot.class != 3 && g.shot.kind == 1).then_some(g.last_sweet);
     // ponytail: bots aim through this too with a random stick; the original AI's own aim is P11
-    hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming)
+    g.aim = hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming, &mut ai_roll(&mut g.rng));
+    g.aim.target
 }
 
 /// The ball's predicted path for the contact search: this frame's ball, then one step per frame. As the
@@ -2383,6 +2395,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 (if branch == 2 { 2 } else { 1 }, kind)
             };
             g.timing_error = (branch < 3).then(|| timing::error(g, i, &c, branch, g.players[i].kind == 3));
+            g.smash_scatter = (branch == 4).then(|| timing::smash(g, i, &c, kind == 0));
             g.mis_hit = (1..4).contains(&branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.anim, c.swing.forehand));
             strike(
                 g,

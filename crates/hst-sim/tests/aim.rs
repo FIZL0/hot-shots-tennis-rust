@@ -1,7 +1,8 @@
 //! P1's rally aims (`context/fixtures/aim_singles.bin`, `aim_doubles.bin`; tools/record_aim.py, skipped
 //! when missing): every aim `shot::aim` gives from the stick, the hitter and the incoming shot's record is the
 //! game's +0x3e90 bit for bit, sweet-spot corner shots and both incoming-slice scales
-//! (each fixture ends with AIM_INCOMING=1 aims) included.
+//! (each fixture ends with AIM_INCOMING=1 aims, singles then AIM_INCOMING=sweet ones) included, and the aim's
+//! nudge, short-only flag and held smash depth.
 
 use hst_sim::player::pad_dir;
 use hst_sim::replay::{Frame, SAMPLE_LIVE};
@@ -22,6 +23,7 @@ fn human_aims() {
             continue;
         };
         let (mut n, mut corners, mut bad, mut slices) = (0, 0, Vec::new(), [0; 2]); // slices: incoming off-sweet, sweet
+        let (mut nudges, mut helds, mut swapped) = (0, 0, 0);
         for pair in data.chunks_exact(2 * (SAMPLE_LIVE + EXTRA)) {
             let (pre, cur) = (Frame(&pair[..SAMPLE_LIVE]), Frame(&pair[SAMPLE_LIVE + EXTRA..2 * SAMPLE_LIVE + EXTRA]));
             let x = &pair[SAMPLE_LIVE..SAMPLE_LIVE + EXTRA];
@@ -61,8 +63,24 @@ fn human_aims() {
             if let Some(sw) = incoming {
                 slices[sw as usize] += 1;
             }
-            let got = aim(&h, &stats, stick, players == 4, false, incoming);
+            // the nudge's two coins, read back from what they gave (bit 16: 5 rather than 10, then positive)
+            let nudge = pi(0x3ed4);
+            let mut coins = [(nudge.abs() == 5) as u32, (nudge > 0) as u32].into_iter().map(|b| b << 16);
+            let got = aim(&h, &stats, stick, players == 4, false, incoming, &mut || coins.next().unwrap());
+            let extras = (got.nudge, got.short_only, got.held.to_bits());
+            let want_extras = (nudge, cur.player_f32(0, 0x3ec8).to_bits().to_le_bytes()[2] != 0, pi(0x3edc) as u32);
+            if extras != want_extras {
+                bad.push(format!("vsync {}: {h:?} stick {stick:?}: nudge, short-only, held {extras:?} vs {want_extras:?}", cur.vsync()));
+            }
+            nudges += (nudge != 0) as usize;
+            helds += (want_extras.2 != 0) as usize;
+            let got = got.target;
             let want = [cur.player_f32(0, 0x3e90), 0.0, cur.player_f32(0, 0x3e98)];
+            // the sweet incoming slice's ×0.45: with the off-sweet ×0.6 instead the aim must differ somewhere
+            if incoming == Some(true) {
+                let six = aim(&h, &stats, stick, players == 4, false, Some(false), &mut || 0).target;
+                swapped += (six[0].to_bits() != want[0].to_bits() || six[2].to_bits() != want[2].to_bits()) as usize;
+            }
             let sweet = h.offset.abs() < 2 && !h.body && branch != 3;
             if sweet && sx != 0.0 && sx.abs() == sz.abs() {
                 corners += 1;
@@ -75,11 +93,12 @@ fn human_aims() {
             }
             n += 1;
         }
-        eprintln!("{name}: {n} aims, {corners} sweet full-diagonal, incoming slices {slices:?} (off-sweet, sweet)");
+        eprintln!("{name}: {n} aims, {corners} sweet full-diagonal, incoming slices {slices:?} (off-sweet, sweet), {swapped} sweet ones off with ×0.6, {nudges} nudged, {helds} smashes held");
         assert!(bad.is_empty(), "{name}: {} of {n} aims differ:\n{}", bad.len(), bad.join("\n"));
         assert!(n > 0 && corners > 0, "{name}: no sweet corner aims recorded");
         // AIM_INCOMING=1 recordings appended: both `incoming` scales are checked in each mode
         assert!(slices[0] > 0 && slices[1] > 0, "{name}: incoming slices {slices:?} (off-sweet, sweet): both needed");
+        assert!(swapped > 0, "{name}: no sweet incoming slice where ×0.45 matters");
     }
 }
 

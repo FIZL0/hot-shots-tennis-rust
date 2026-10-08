@@ -53,6 +53,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- P2d: the rally aim returns its nudge (±5/±10), short-only flag and the smash's held depth (`shot::Aim`) into the launch; the smash launch gets the original's timing scatter (`swing::smash_scatter`/`smash_scale`); aim.rs checks all three per recorded aim and that ×0.6 would miss a sweet incoming slice in singles and doubles, timing.rs 28 smash launches bit for bit (journal 2026-10-08-p2d-aim-leftovers).
 - B21: timing balloons sit just above the head (neck anchor) at the original's size and timing; singles players show the swirl on losing a point.
 - P22: widescreen HUD on a centred 4:3 screen (play/widescreen.rs; the 3D view was already Hor+, F0 already uncapped), rebindable keys/pad buttons in `controls.txt` and hot-plug-stable controller slots (play/controls.rs); render/input only, hst-sim untouched, full test suite passes.
 - B7: one-sided court materials back-face culled as VU1 does (MDL material +0x24 = 0; winding from the third vertex's UV w); court 1's near school fence no longer blocks the camera (mdl.rs, gs.rs; tests/winding.rs; journal 2026-10-07-b7-camera-blocked).

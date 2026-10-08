@@ -408,14 +408,7 @@ pub fn timing_error(
         1 => (s.stroke_height, 1.0, s.stroke_miss),
         _ => (s.volley_height, 0.5, s.volley_miss),
     };
-    let off = sub(height, ideal);
-    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
-    let steps = match cm - from {
-        n if n < 0 => 0,
-        n if n < step => n / 10,
-        n => step / 10 + (n - step) / 10 * 2,
-    };
-    e.depth += mul(steps as f32, scale) as i32 * if off > 0.0 { 1 } else { -1 };
+    e.depth += height_steps(height, ideal, [from, step], scale);
     let mut down = match branch {
         1 if !forehand => s.back_down,
         3 => 10,
@@ -430,6 +423,45 @@ pub fn timing_error(
     // the lob button keeps its tables
     e.mode = if lob { 0 } else { -down };
     e
+}
+
+/// The depth error (tenths) of a contact `height` off the `ideal`: whole 10 cm past `from` cm count one each, past
+/// `step` cm two, × `scale`, signed by the side of the ideal.
+fn height_steps(height: f32, ideal: f32, [from, step]: [i32; 2], scale: f32) -> i32 {
+    let off = sub(height, ideal);
+    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
+    let steps = match cm - from {
+        n if n < 0 => 0,
+        n if n < step => n / 10,
+        n => step / 10 + (n - step) / 10 * 2,
+    };
+    mul(steps as f32, scale) as i32 * if off > 0.0 { 1 } else { -1 }
+}
+
+/// A smash's timing scatter as the original sets it up at the swing and the launch: (side, depth) in metres
+/// before `serve::scatter_along`'s 1.5. The depth error is the timing `bias` plus the contact `height` off the
+/// ideal smash height (ground stroke thresholds), dropped on a clean `grade` (1, 2); the side error is only the
+/// aim's `nudge`; each held to ±1 m. A short error counts double, then the whole depth × the reach `scale`
+/// (`smash_scale`) less the aim's `held` pull.
+// ponytail: the smash's mode blend isn't taken; its launch reads the base smash table
+pub fn smash_scatter(s: &crate::player::ReachStats, grade: u8, bias: i32, height: f32, nudge: i32, scale: f32, held: f32) -> (f32, f32) {
+    let clean = grade == 1 || grade == 2;
+    let depth = if clean { 0 } else { bias + height_steps(height, s.smash[1], s.stroke_miss, 1.0) }.clamp(-10, 10);
+    let side = nudge.clamp(-10, 10);
+    let mut sz = div(depth as f32, 10.0);
+    if sz < 0.0 {
+        sz = mul(sz, 2.0);
+    }
+    (div(div(side as f32, 10.0), 2.0), sub(mul(sz, scale), held))
+}
+
+/// A smash's depth scale: 1, or for a `plain` (not △) one off its timing (offset beyond ±1) 1 at 1.5 m from the
+/// net growing to 2 at the baseline, by where the swing started (`from_z`).
+pub fn smash_scale(plain: bool, offset: i32, from_z: f32) -> f32 {
+    if !plain || offset.abs() < 2 {
+        return 1.0;
+    }
+    add(div(sub(from_z.abs().clamp(1.5, 11.885), 1.5), 10.385), 1.0)
 }
 
 /// See `timing_error`.
