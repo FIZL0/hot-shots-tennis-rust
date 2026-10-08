@@ -73,6 +73,13 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// A character's shot effects (one 0x7c-byte row per character).
+    pub fn shot_effects(&self, character: usize) -> ShotEffects {
+        let row = 0x40_40d0 + character as u32 * 0x7c;
+        let f = |o: u32| self.f32(row + o);
+        ShotEffects { bend: [f(0x24), f(0x28), f(0x2c)], curve: f(0x30), up1_slice: f(0x38) != 0.0, turn: f(0x40) }
+    }
+
     /// Tolerance the line calls add to every court line (metres).
     pub fn line_margin(&self) -> f32 {
         self.f32(0x40_3bec)
@@ -411,6 +418,20 @@ pub struct ShotVariant {
     pub kind: usize,
     pub weight: f32,
     pub uses: [u8; 4],
+}
+
+/// A character's special-shot effects, applied when the shot is hit under the special condition
+/// (`hst_sim::shot::special`). ponytail: the row's enable byte is set for every character, so it isn't read.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShotEffects {
+    /// Sideways bend of the topspin serve, the slice serve and the rally slice.
+    pub bend: [f32; 3],
+    /// Vertical curve of the rally lob.
+    pub curve: f32,
+    /// The slice serve flies by its `up1` variant table and record.
+    pub up1_slice: bool,
+    /// The topspin serve's turn at its first bounce, in degrees.
+    pub turn: f32,
 }
 
 /// One row of the collision material table.

@@ -250,6 +250,9 @@ struct Game {
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
     serve_tables: Vec<[Vec<(Table, f32, f32)>; 2]>,
+    /// Per player: the character's special-shot effects and, when its special slice serve flies by the `up1`
+    /// variant, that table with its spin and side angle (see `serve_specials`).
+    specials: Vec<(hst_data::exe::ShotEffects, Option<(Table, f32, f32)>)>,
     /// Per player: the character's smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
     smash_tables: Vec<Vec<Table>>,
     /// Per player: the spin of the character's smash records, smash kinds 0 and 1.
@@ -624,8 +627,8 @@ fn rally_lookup(g: &Game, who: usize, class: u8, kind: i32, at: V3, target: V3) 
     lookup(&g.rally_tables[who][volley as usize][k], &bounds, at, target)
 }
 
-/// A stroke's, volley's or smash's launch off its table lookup: no side angle, and the bend of the special
-/// shots isn't modelled (P6).
+/// A stroke's, volley's or smash's launch off its table lookup: no side angle (a special shot's bend, set by
+/// `shot_effect`, only moves a serve's flight frames).
 fn rally_launch(class: u8, at: V3, target: V3, l: &hst_sim::shot::Lookup) -> hst_sim::shot::Launch {
     let (at, target) = ([at[0], at[1], at[2], 1.0], [target[0], target[1], target[2], 1.0]);
     hst_sim::shot::launch_turned(class, at, target, l.elevation, l.speed, 0.0, 0.0, 0.0, false, l.frames)
@@ -1010,9 +1013,10 @@ fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut u32) -> Vec<npc::Em
 }
 
 /// Character `c`'s serve tables, spins and side angles (see `Game::serve_tables`): the weak toss serves by the
-/// `dw1` variant tables and records (every character's serve variants are weighted −0.5 on disc).
+/// `dw1` variant tables and records (weighted −0.5 on disc, −0.4545 for character 10).
 fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32, f32)>; 2] {
     let r = params::record_of(c);
+    let dw1 = serve_variant_weights(iso, c, 1);
     let turn = |rec: &[f32]| (params::spin(rec), hst_sim::ps2::mul(rec[10], 0.017453292));
     let base = character_tables(iso, c, "A", "serv", "", 4)
         .into_iter()
@@ -1022,9 +1026,62 @@ fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f3
     let weak = character_tables(iso, c, "B", "serv", "_dw1", 3)
         .into_iter()
         .enumerate()
-        .map(|(k, t)| (t, turn(&params.variant(0, k, r, -0.5))))
+        .map(|(k, t)| (t, turn(&params.variant(0, k, r, dw1[k]))))
         .map(|(t, (spin, side))| (t, spin, side));
     [base.collect(), weak.collect()]
+}
+
+/// Character `c`'s serve variant weights by kind for variant table `v` (0 `up1`, 1 `dw1`; 0 where none).
+fn serve_variant_weights(iso: &mut Iso, c: usize, v: usize) -> [f32; 4] {
+    let (cnf, bin) = (
+        iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),
+        iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"),
+    );
+    let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
+    let mut w = [0.0; 4];
+    for e in game.shot_variants(c).iter().filter(|e| e.class == 0 && e.uses[v] != 0) {
+        w[e.kind] = e.weight;
+    }
+    w
+}
+
+/// Character `c`'s shot effects, and its special slice serve's `up1` table, spin and side angle when it has one.
+fn serve_specials(iso: &mut Iso, params: &ShotParams, c: usize) -> (hst_data::exe::ShotEffects, Option<(Table, f32, f32)>) {
+    let (cnf, bin) = (
+        iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),
+        iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"),
+    );
+    let effects = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").shot_effects(c);
+    let up1 = effects.up1_slice.then(|| {
+        let data = iso.read(&format!("TRAJ/TRAJ{c:02}B.XB")).expect("trajectory archive on disc");
+        let arc = Archive::parse(&data).expect("xb archive");
+        let file = format!("tr_pc{c:02}_serv1_up1.dat");
+        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&file)).expect("up1 slice serve table");
+        let rec = params.variant(0, 1, params::record_of(c), serve_variant_weights(iso, c, 0)[1]);
+        let table = Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table");
+        (table, params::spin(&rec), hst_sim::ps2::mul(rec[10], 0.017453292))
+    });
+    (effects, up1)
+}
+
+/// The serve bends (the character bends this kind and the special condition holds): its aim keeps the box
+/// margins unscaled.
+// ponytail: the kind before the stick turns a topspin flat; the original's order there is unchecked
+fn serve_bent(g: &Game, who: usize, toss: Toss, kind: i32, grade: u8, offset: i32) -> bool {
+    let bend = g.specials[who].0.bend;
+    kind < 2 && bend[kind as usize] != 0.0 && hst_sim::shot::special(0, kind, toss == Toss::Strong, grade, offset)
+}
+
+/// The character's special-shot effect on this hit, as launched: (bend, curve, first-bounce turn). `src` is the
+/// character whose shot is launched (a counter's is the incoming hitter's), `target` where the ball is sent.
+fn shot_effect(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, grade, offset): (u8, u8, i32), hit: V3, target: V3) -> (f32, f32, f32) {
+    let strong = g.serving.toss == Some(Toss::Strong);
+    if !hst_sim::shot::special(class, kind, strong, grade, offset) {
+        return (0.0, 0.0, 0.0);
+    }
+    // a backhand ground stroke or volley bends the other way
+    let flip = (branch == 1 || branch == 2) && g.players[who].backhand;
+    hst_sim::shot::effect(&g.specials[src].0, class, kind, hit, target, g.players[who].hand < 0.0, flip)
 }
 
 fn setup(
@@ -1044,6 +1101,7 @@ fn setup(
     let mut game = Game {
         rules,
         serve_tables: Vec::new(),
+        specials: Vec::new(),
         smash_tables: Vec::new(),
         smash_spins: Vec::new(),
         rally_tables: Vec::new(),
@@ -1173,6 +1231,7 @@ fn setup(
         game.reaches.push(character_reach(&game.reach, &mut iso, c, game.players[i].hand));
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
+        game.specials.push(serve_specials(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
         game.timing.push(timing::load(&mut iso, &shot_params, c));
         game.rally_records.push(std::array::from_fn(|v| {
@@ -1534,8 +1593,19 @@ fn strike(
         timing::launch(g, who, src, class, kind, (branch, grade), e, power_gap.is_some(), at, target)
     });
     let target = timed.as_ref().map_or(target, |t| t.target);
+    let sent = if class == 0 {
+        let s = g.serving.scatter;
+        [hst_sim::ps2::add(target[0], s[0]), target[1], hst_sim::ps2::add(target[2], s[2])]
+    } else {
+        target
+    };
+    let effect = shot_effect(g, who, src, class, kind, (branch, grade, offset), at, sent);
     let launched = if class == 0 {
-        let (table, spin, side) = &g.serve_tables[who][weak][kind as usize];
+        // the special slice serve flies by its up1 table
+        let (table, spin, side) = match &g.specials[who].1 {
+            Some(up1) if kind == 1 && effect.0 != 0.0 => up1,
+            _ => &g.serve_tables[who][weak][kind as usize],
+        };
         serve::launch(
             table,
             kind == 3,
@@ -1544,6 +1614,7 @@ fn strike(
             target,
             g.serving.scatter,
             (*spin, *side, g.players[who].hand < 0.0),
+            effect.0,
         )
     } else {
         let l = if class == 3 {
@@ -1568,6 +1639,9 @@ fn strike(
         wind: [launched.wind[0], launched.wind[1], launched.wind[2]],
         ..Shot::default()
     };
+    (g.shot.bend, g.shot.curve, g.shot.bounce_turn) = effect;
+    let side = hst_sim::shot::side_axis(at, sent);
+    g.shot.side = [side[0], side[1], side[2]];
     g.shots += 1;
     g.rally.on_hit(
         g.shots,
@@ -1790,7 +1864,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             coins,
         );
         let hit = g.flight.ball.pos;
-        let target = serve::inside(pos[0], hit, target);
+        let target = serve::inside(pos[0], hit, target, serve_bent(g, i, toss, sw.kind, sw.grade, sw.offset));
         let error = serve::depth_error(
             d,
             toss,
