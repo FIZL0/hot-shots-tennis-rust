@@ -8,7 +8,11 @@ weather block (gm+0x84) +0x130..+0x140 and +0x1a20..+0x1a30, then per player (4)
 motion object 0xa0, right toe bone 0x40, left toe bone 0x40. With `extras`, then: the shared MT19937 (*(manager +0x740))
 0x9c8, run object +0x9ec0..+0xa0b0 (dash matrices and flags, puff flags, burst latches), and per player (4): +0x3f80
 0x10, +0x3ec0 0x10, Bip01Pelvis, Bip01Spine1 and Bip01Head world matrices 0x40 each.
-FOOT_POKE=dusty|wet forces the run object's court flags (+0xa090) every frame, for dive rings on any court."""
+FOOT_POKE=dusty|wet forces the run object's court flags (+0xa090) every frame, for dive rings on any court.
+FOOT_DEBRIS=grass|dirt (with `extras`) forces an instant replay (only replays throw debris) of every point, by setting
+the replay decision (gm+0x32e, +0x350, +0x35c) once the point is over (gm+0x346); dirt forces the court table's clay
+byte; FOOT_FROM=vsync skips the samples before it. It appends: the debris slots (run object +0x71c0, 0x2d00), the C library
+rand() state (8) and per player (4) the motion object's +0x84 matrix 0x40."""
 import os, struct, sys, time
 from pine import Pine
 
@@ -38,8 +42,15 @@ if len(sys.argv) > 4:
             return s[:-1]
         head = next(nodes + 0x120 * k for k in range(p.read32(mdl + 0x60)) if name(k) == b"Bip01Head")
         r += [(pl + 0x3f80, 0x10), (pl + 0x3ec0, 0x10), (p.read32(pl + 0x17f0 + 4 * 6), 0x40), (p.read32(pl + 0x17f0 + 4 * 4), 0x40), (head, 0x40)]
+DEBRIS = os.environ.get("FOOT_DEBRIS")
+if DEBRIS and len(sys.argv) > 4:
+    r += [(run + 0x71c0, 0x2d00), (p.read32(0x1b80f0) + 0xa8, 8)]
+    r += [(p.read32(p.read32(p.read32(gm + 0xa8 + 4 * i) + 0x54) + 0x84), 0x40) for i in range(4)]
+    if DEBRIS == "dirt":  # the court's grass byte off, clay byte on
+        ct = 0x415080 + 0x90 * p.read32(COURT)
+        p.write32(ct, p.read32(ct) & 0xff0000ff | 0x10000)
 out.write(struct.pack("<II", p.read32(COURT), p.read32(NPL)))
-n = 0
+n, armed = 0, True
 while n < want:
     v = p.next_frame(last)
     if v != last + 1:
@@ -47,9 +58,19 @@ while n < want:
     last = v
     if os.environ.get("FOOT_POKE"):
         p.write32(run + 0xa090, 1 if os.environ["FOOT_POKE"] == "dusty" else 0x100)
+    if DEBRIS:  # once per point, while the replay hasn't started
+        f = p.read32(gm + 0x344)
+        if f & 0xff0000 and not f & 0xff and armed:
+            p.write32(gm + 0x32c, p.read32(gm + 0x32c) & 0xff00ffff | 0x10000)
+            p.write32(gm + 0x350, 1)
+            p.write32(gm + 0x35c, p.read32(gm + 0x35c) & ~0xff | 1)
+            armed = False
+        armed = armed or bool(f & 0xff)
     a = p.settle(r, v)
     if a is None:
         print(f"missed frame {v} (it ticked mid-read)", flush=True)
+        continue
+    if v < int(os.environ.get("FOOT_FROM", 0)):
         continue
     out.write(struct.pack("<I", v) + a)
     n += 1

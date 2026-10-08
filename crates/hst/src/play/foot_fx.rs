@@ -1,7 +1,8 @@
 //! Footstep puffs and footprints (`hst_sim::foot`): each player's toes (`Bip01RToe0`, `Bip01LToe0`) in game space
 //! feed the sim every tick; puffs are drawn as camera-facing quads (`run/kemuri_00` dust in the court's dust colour,
 //! `run/spray` grey in rain), footprints as ground quads (`run/e_footprint` in the court's print colour); and each
-//! player's `run/dash` streak model at the hips through a dive.
+//! player's `run/dash` streak model at the hips through a dive. An instant replay's dive debris: clods
+//! (`par/tuti`, camera-facing, with a ground shadow) or grass blades (`par/siba`, lying in their turn).
 
 use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
@@ -19,7 +20,7 @@ use crate::Args;
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(crate::character::tick))
-        .add_systems(Update, (draw.after(super::camera), draw_dash));
+        .add_systems(Update, (draw.after(super::camera), draw_dash, draw_bits.after(super::camera)));
 }
 
 #[derive(Resource)]
@@ -42,6 +43,8 @@ struct FootFx {
     /// The dive rings' random draws.
     // ponytail: its own generator, not the match's shared one
     mt: Mt,
+    /// Debris: clods, blades.
+    bits: [Handle<Mesh>; 2],
 }
 
 fn setup(
@@ -68,11 +71,12 @@ fn setup(
         m
     };
     let (dry_puffs, wet_puffs, prints) = (mesh("run/kemuri_00"), mesh("run/spray"), mesh("run/e_footprint"));
+    let bits = [mesh("par/tuti"), mesh("par/siba")];
     let arc = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT.XB0");
     let arc = Archive::parse(&arc).expect("EFFCT.XB0");
     let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
     let (table, feet, mt) = (game.foot(), Feet::default(), Mt::new(1));
-    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], mt });
+    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], mt, bits });
 }
 
 /// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim.
@@ -122,6 +126,8 @@ fn tick(
                     lunge: dive.map_or(0.0, |d| d.slide),
                     // ponytail: the game's own end-of-dive byte taken as the dive being over
                     dive_over: dive.is_none(),
+                    // ponytail: where the motion set off, taken as a step back along the dive (the player hasn't moved yet)
+                    anchor: dive.map_or([0.0; 4], |d| [pm.w_axis.x - d.dir[0], pm.w_axis.y, pm.w_axis.z - d.dir[1], pm.w_axis.w]),
                     ..Runner::default()
                 },
             ))
@@ -135,6 +141,8 @@ fn tick(
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;
     let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));
+    // ponytail: no instant replay yet (P0b4d), so dives throw no debris
+    fx.feet.replay = false;
     let mt = &mut fx.mt;
     fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true, &mut || mt.next());
     // the streak plays from each dive's start while it shows
@@ -216,5 +224,46 @@ fn draw_dash(fx: Option<Res<FootFx>>, mut q: Query<(&mut Visibility, &mut MorphW
                 }
             }
         }
+    }
+}
+
+/// Debris, all in group 0's look: a clod faces the camera (`size` each way, the court's clod colour) over a dark
+/// shadow on the court; a blade lies in its turn's rows 0 and 2 in its own colour. Each shows one 32-pixel cell.
+fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
+    let (Some(fx), Ok(cam)) = (fx, cam.single()) else { return };
+    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
+    let (right, up) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y));
+    let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
+    let f = &fx.feet;
+    let blades = f.kinds[0] == 1;
+    let c = fx.table.courts.get(fx.court).unwrap_or(&fx.table.courts[10]);
+    let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+    for s in f.bits[..f.groups].iter().flatten().filter(|s| s.alive) {
+        // ponytail: both sheets are 64 pixels square (the cells sit at 0 and 32)
+        let [u0, v0] = s.cell.map(|c| (c as f32 + 0.5) / 64.0);
+        let [u1, v1] = s.cell.map(|c| (c as f32 + 31.5) / 64.0);
+        let at = v3(s.m[3]);
+        let mut quad = |(a, b): (Vec3, Vec3), at: Vec3, c: [f32; 4]| {
+            let n = pos.len() as u32;
+            pos.extend([at - a + b, at + a + b, at - a - b, at + a - b].map(|v| v.to_array()));
+            uv.extend([[u0, v0], [u1, v0], [u0, v1], [u1, v1]]);
+            colour.extend([c; 4]);
+            index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
+        };
+        if blades {
+            let [r, g, b] = s.rgb.map(|v| v / 128.0);
+            quad((v3(s.m[0]) * s.size, v3(s.m[2]) * s.size), at, [r, g, b, 1.0]);
+        } else {
+            let [r, g, b] = c.clod_rgb.map(|v| v / 128.0);
+            quad((right * s.size, up * s.size), at, [r, g, b, 1.0]);
+            quad((Vec3::X * s.size, Vec3::Z * s.size), Vec3::new(at.x, -0.01, at.z), [0.25, 0.25, 0.25, 90.0 / 128.0]);
+        }
+    }
+    let [shown, empty] = if blades { [&fx.bits[1], &fx.bits[0]] } else { [&fx.bits[0], &fx.bits[1]] };
+    if let Some(mut mesh) = meshes.get_mut(shown) {
+        fill(&mut mesh, pos, uv, colour, index);
+    }
+    if let Some(mut mesh) = meshes.get_mut(empty) {
+        fill(&mut mesh, vec![], vec![], vec![], vec![]);
     }
 }

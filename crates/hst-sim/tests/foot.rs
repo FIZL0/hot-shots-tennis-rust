@@ -3,7 +3,7 @@
 //! (the first 32) and footprints match the game bit for bit.
 
 use hst_data::exe;
-use hst_sim::foot::{Feet, Print, Puff, Runner};
+use hst_sim::foot::{Bit, Feet, Print, Puff, Runner};
 
 fn f(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
@@ -246,6 +246,7 @@ fn foot_extras_s05() {
                     dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
                     lunge: f(x, 0),
                     dive_over: x[0x10 + 9] != 0,
+                    ..Runner::default()
                 }
             })
             .collect();
@@ -305,4 +306,129 @@ fn foot_extras_s05() {
     }
     eprintln!("puffs born by kind {kinds:?}, {rings} dive frames, {dashes} streaks");
     assert!(kinds[1] >= 10 && kinds[2] >= 4 && dashes > 0);
+}
+
+// `foot_s05g.bin` / `foot_s05c.bin` (`FOOT_DEBRIS=grass|dirt FOOT_FROM=11450 record_foot.py 5 120 … extras`): an
+// instant replay forced on every point (the third has a dive), the dirt one with the court made clay. Each frame as
+// `foot_s05x`, then the debris slots 0x2d00, the C `rand()` state 8 and per player the motion's start matrix 0x40.
+const DB: usize = EX + 4 * EXSZ;
+const ANCHOR: usize = DB + 0x2d00 + 8;
+
+fn debris(fr: &[u8], feet: &mut Feet) {
+    feet.bits = std::array::from_fn(|g| {
+        std::array::from_fn(|s| {
+            let o = DB + 0x90 * (20 * g + s);
+            Bit { alive: fr[o] != 0, m: m4(fr, o + 0x10), vel: v4(fr, o + 0x50), size: f(fr, o + 0x60), cell: [i(fr, o + 0x64), i(fr, o + 0x68)], spin: v4(fr, o + 0x70), rgb: [f(fr, o + 0x80), f(fr, o + 0x84), f(fr, o + 0x88)] }
+        })
+    });
+    feet.groups = i(fr, DASH) as usize;
+    feet.kinds = std::array::from_fn(|k| i(fr, DASH + 4 + 4 * k));
+    feet.crand = hst_sim::weather::Rand(u64::from_le_bytes(fr[DB + 0x2d00..DB + 0x2d08].try_into().unwrap()));
+}
+
+/// The live fields of every bit alive in `want` (by its group's kind), and every alive flag.
+fn debris_key(a: &Feet, want: &Feet) -> (usize, [i32; 3], Vec<Vec<u32>>) {
+    let mut v = vec![];
+    for g in 0..3 {
+        for (s, w) in a.bits[g].iter().zip(&want.bits[g]) {
+            v.push(vec![s.alive as u32]);
+            if w.alive {
+                v.push(bits(&[s.m[3].as_slice(), &s.vel, &[s.size, f32::from_bits(s.cell[0] as u32), f32::from_bits(s.cell[1] as u32)]].concat()));
+                if want.kinds[g] == 1 {
+                    v.push(bits(&[s.m[..3].concat().as_slice(), &s.spin, &s.rgb].concat()));
+                }
+            }
+        }
+    }
+    (a.groups, [a.kinds[0], a.kinds[1], a.kinds[2]], v)
+}
+
+#[test]
+fn foot_debris_s05() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")), std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN"))) else {
+        return eprintln!("disc absent, skipped");
+    };
+    let t = exe::Game::new(&cnf, &bin).unwrap().foot();
+    let mut thrown = [0; 2];
+    for (name, kind) in [("g", 1), ("c", 0)] {
+        let Ok(data) = std::fs::read(format!("{root}/context/fixtures/foot_s05{name}.bin")) else {
+            eprintln!("foot_s05{name}.bin absent, skipped");
+            continue;
+        };
+        let mut t = t.clone();
+        let court = i(&data, 0) as usize;
+        // the dirt recording turns the court's grass off and clay on
+        (t.courts[court].grass, t.courts[court].clay) = (kind == 1, kind == 0);
+        let frames: Vec<&[u8]> = data[8..].chunks_exact(ANCHOR + 0x100).collect();
+        let (mut alive, mut skipped) = (0, 0);
+        for k in 1..frames.len() {
+            let (fr, prev, h) = (frames[k], frames[k - 1], &frames[k][RUN..]);
+            assert_eq!(i(fr, 0), i(prev, 0) + 1, "frame {k}: gap");
+            let mut feet = state(prev);
+            feet.dash = std::array::from_fn(|p| (prev[DASH + 0x50 + 0x50 * p] != 0).then(|| m4(prev, DASH + 0x10 + 0x50 * p)));
+            feet.burst = std::array::from_fn(|p| prev[DASH + 0x1dd + p] != 0);
+            feet.replay = true;
+            debris(prev, &mut feet);
+            let mut want = state(fr);
+            debris(fr, &mut want);
+            let runners: Vec<Runner> = (0..4)
+                .map(|p| {
+                    let (b, x) = (&fr[PL + PLSZ * p..], &fr[EX + EXSZ * p..]);
+                    Runner {
+                        character: i(h, 0x7c + 4 * p) as usize,
+                        motion: i(b, 0x50 + 0x20),
+                        sub: i(b, 0x48),
+                        toes: [v4(b, 0xf0 + 0x30), v4(b, 0x130 + 0x30)],
+                        m: m4(b, 0),
+                        slide: b[0x41] != 0,
+                        pelvis: m4(x, 0x20),
+                        spine: m4(x, 0x60),
+                        head: v4(x, 0xa0 + 0x30),
+                        dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
+                        lunge: f(x, 0),
+                        dive_over: x[0x10 + 9] != 0,
+                        anchor: v4(fr, ANCHOR + 0x40 * p + 0x30),
+                    }
+                })
+                .collect();
+            let wkey = debris_key(&want, &want);
+            let diving = runners.iter().any(|r| r.dive);
+            // other `rand()` callers draw first in the frame: a blade group's 60 draws end at the recorded state
+            let mut r = feet.crand;
+            let n = (0..5000usize).find(|_| r.0 == want.crand.0 || r.next() == u32::MAX).unwrap_or(0);
+            for _ in 0..n.saturating_sub(60) {
+                feet.crand.next();
+            }
+            let tick = |skip: usize| {
+                let mut g = mt(prev);
+                (0..skip).for_each(|_| {
+                    g.next();
+                });
+                let mut one = feet.clone();
+                one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
+                one
+            };
+            if let Some(one) = (0..if diving { 400 } else { 1 }).map(tick).find(|one| debris_key(one, &want) == wkey) {
+                thrown[kind] += diving as usize;
+                alive += one.bits.iter().flatten().filter(|s| s.alive).count();
+                continue;
+            }
+            // the game sometimes skips the update a frame
+            if debris_key(&feet, &want) == wkey {
+                skipped += 1;
+                continue;
+            }
+            let (got, w) = (debris_key(&tick(0), &want), wkey);
+            eprintln!("groups {} {:?} vs {} {:?}", got.0, got.1, w.0, w.1);
+            for (n, (a, b)) in got.2.iter().zip(&w.2).enumerate().filter(|(_, (a, b))| a != b).take(6) {
+                let fl = |v: &Vec<u32>| v.iter().map(|&b| f32::from_bits(b)).collect::<Vec<_>>();
+                eprintln!("{n}: got  {:?}\n{n}: want {:?}", fl(a), fl(b));
+            }
+            panic!("{name} frame {k} (vsync {}): debris differs", i(fr, 0));
+        }
+        eprintln!("{name}: {} frames ({skipped} without an update), {alive} bit-frames", frames.len());
+        assert!(alive > 100, "{name}: no debris");
+    }
+    eprintln!("dives throwing [clods, blades] {thrown:?}");
 }

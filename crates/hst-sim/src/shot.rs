@@ -313,7 +313,7 @@ pub fn launch_turned(class: u8, hit: [f32; 4], target: [f32; 4], elevation: f32,
 }
 
 /// Rotation about Z (rows (c, s, 0), (−s, c, 0), (0, 0, 1)), built like `world::rot_x`.
-fn rot_z(t: f32) -> M4 {
+pub(crate) fn rot_z(t: f32) -> M4 {
     let (s, c) = world::sincos(t);
     let z = 0.0;
     [[vu0::add(z, c), vu0::add(z, s), z, z], [vu0::sub(z, s), vu0::add(z, c), z, z], [z, z, vu0::add(z, 1.0), z], [z, z, z, vu0::add(z, 1.0)]]

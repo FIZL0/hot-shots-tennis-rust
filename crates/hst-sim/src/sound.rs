@@ -162,10 +162,28 @@ pub const SWING: Play = play(0, 4, 0, 0x80);
 
 /// The thud of a dive (court bank program 3 at 0x80, at the diver's model origin), played as the dive starts, whether
 /// it reaches the ball or not, and again `dive_echo` ticks later; key 3 in weather 2 and 3 (court +0x135), else 0.
-/// ponytail: the walking footstep (0x69) only sounds behind a close-up camera (mode 0x56..0x59) the match never
-/// uses, so it is left out.
 pub fn dive_thud(weather: u8) -> Play {
     play(0, 3, if weather.wrapping_sub(2) < 2 { 3 } else { 0 }, 0x80)
+}
+
+/// A footfall (`foot::Feet::stepped`) in an instant replay of a singles match, by a running player, while the
+/// camera is a close-up one (mode 0x56..0x59) that [`step_heard`]: the dive thud's program and key at 0x69.
+// ponytail: unchecked against a recording (no singles replay with that camera captured yet)
+pub fn step(weather: u8) -> Play {
+    play(0, 3, if weather.wrapping_sub(2) < 2 { 3 } else { 0 }, 0x69)
+}
+
+/// The camera at `eye` looking along `look` hears a footfall at the player's origin `at`: level bearing within 50°
+/// of the look, and within 5° or its depth through `view` near enough that `focal` over it passes 125.
+pub fn step_heard(eye: [f32; 4], look: [f32; 4], view: &[[f32; 4]; 4], focal: f32, at: [f32; 4]) -> bool {
+    let unit = |x: f32, z: f32| {
+        let q = div(1.0, sqrt(madd(mul(x, x), z, z)));
+        (mul(x, q), mul(z, q))
+    };
+    let (lx, lz) = unit(look[0], look[2]);
+    let (dx, dz) = unit(sub(at[0], eye[0]), sub(at[2], eye[2]));
+    let cos = madd(madd(mul(dz, lz), dx, lx), 0.0, 0.0);
+    cos >= f32::from_bits(0x3f24_8dbb) && (cos >= f32::from_bits(0x3f7f_069e) || 125.0 < div(focal, crate::vu0::transform(view, at)[2]))
 }
 
 /// Ticks between a dive's two thuds with `players` in the game: the game counts 5 down once per player per frame.
