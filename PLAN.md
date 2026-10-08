@@ -152,7 +152,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P11e4** Strong-side run-round (in P11e) → `ai.rs` · `play.rs` intercept | t: ai.rs | j: 2026-10-07-p11-ai
 - [x] **P11f** Target choice (in P11) → `ai.rs` · `play.rs` bot
 - [x] **P11g** Shot and serve type choice (in P11) → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
-- [ ] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5
+- [x] **P11h** Dive and verification (in P11) → `ai.rs` · `play.rs` draw_due | t: slot 5 | j: 2026-10-07-p11-ai
 - [ ] **P11i** Record a bot-only match (singles and doubles) and match the AI logic against it frame by frame: kind lock, serve toss/swing/aim, quick serve, singles return-of-serve chooser (unchecked so far; see 8-P11G) (in P11). Singles bot match recorded (user 2026-10-08): `context/recordings/bots_singles.p2m2` + `bots_singles.p2m2_SaveState.p2s`; doubles still to record. For each bot match, write down (journal + test header) the characters on each side and their costume, which sets the AI difficulty (AIParam row) → `ai.rs` · `play.rs` bot/bot_serve | t: ai.rs | j: 2026-10-07-p11-ai
 
 ### Match

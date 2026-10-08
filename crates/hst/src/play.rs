@@ -2688,7 +2688,10 @@ fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
     });
     g.players[i].surprised |= g.players[i].ai_timing.reacted;
     let dive = shots.is_none() && g.players[i].ai_dove.take().unwrap_or(true);
+    let kept = g.players[i].ai_picks.dive;
     g.players[i].ai_picks = g.players[i].ai.picks(dive, &mut ai_roll(&mut g.rng));
+    // an undrawn dive chance keeps the last one
+    g.players[i].ai_picks.dive = g.players[i].ai_picks.dive.or(kept);
     if shots.is_none() {
         // no opponent's hit to react to: no reaction, no guess
         (g.players[i].ai_hold, g.players[i].ai_guess) = (0, None);
@@ -2843,15 +2846,17 @@ fn bot(g: &mut Game, i: usize) {
             let mate = i ^ 2;
             mate >= g.players.len() || d(i) < d(mate) || (d(i) == d(mate) && i < mate)
         });
-        // ponytail: the original decides a few frames into the shot (its AI, P11); this calls at once
+        // the original hands the ball over once its reaction has run down, from the second shot on, and calls
+        // only while the partner isn't swinging or diving
         if plan.is_some()
             && mine.is_none()
             && g.players.len() == 4
             && g.shots >= 2
+            && g.players[i].ai_hold == 0
             && g.players[i].bot_left != g.shots
         {
             g.players[i].bot_left = g.shots;
-            if rand(&mut g.rng) < 0.25 {
+            if !ai_mate_busy(g, i) && rand(&mut g.rng) < 0.25 {
                 let call = sound::call_out(i, rand(&mut g.rng) < 0.5);
                 g.whooshes.push((0, i, call));
             }
@@ -2882,7 +2887,8 @@ fn bot(g: &mut Game, i: usize) {
             }
             // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
             let t = g.players[i].ai_timing;
-            if !ai_lets_go(g, i) && find_contact(g, i).is_some_and(|c| {
+            let go = ai_lets_go(g, i);
+            if !go && find_contact(g, i).is_some_and(|c| {
                 let err = match c.swing.branch {
                     swing::Branch::Ground => t.stroke,
                     swing::Branch::Volley => t.volley,
@@ -2893,12 +2899,34 @@ fn bot(g: &mut Game, i: usize) {
                 let kind = ai_press_kind(g, i);
                 press(g, i, kind);
                 g.players[i].bot_due = None;
+            } else if !go && ai_dives(g, i) {
+                let kind = ai_press_kind(g, i);
+                press(g, i, kind);
+                g.players[i].bot_due = None;
             }
         } else {
             g.players[i].bot_due = None;
         }
     }
     advance_stroke(g, i, |g| ai_contact_stick(g, i));
+}
+
+/// Whether a computer player dives for its ball: it drew the dive chance (`AiParams::picks`), nothing it can
+/// stroke is in reach, and the dive search would find the ball (the original's check runs the same scan as
+/// the dive itself, on its own path and frame count, capped at the dive's 16).
+/// ponytail: "nothing in reach" is the app's press search and 20-frame approach; the original's own contact
+/// search per level (P11i) decides it
+fn ai_dives(g: &Game, i: usize) -> bool {
+    g.players[i].ai_picks.dive == Some(true)
+        && find_contact(g, i).is_none()
+        && approach(g, i).is_none()
+        && find_dive(g, i).is_some()
+}
+
+/// Whether `i`'s partner is mid-stroke or diving (its locomotion state past running): no call-out then.
+fn ai_mate_busy(g: &Game, i: usize) -> bool {
+    let m = &g.players[i ^ 2];
+    m.contact.is_some() || m.pending.is_some() || m.swing.is_some() || m.whiff.is_some() || m.dive.is_some()
 }
 
 /// The x a computer player runs to for ball `b`: the side of it the AI's contact search keeps (`hst_sim::ai::stand_side`,

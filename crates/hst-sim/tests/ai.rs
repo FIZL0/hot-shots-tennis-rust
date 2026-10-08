@@ -622,3 +622,64 @@ fn singles_aims_match_the_game() {
     // so `receive_aim` stays checked by hand only; record a human-served game to cover it
     assert!(seen[1].iter().sum::<i32>() > 0, "{seen:?}");
 }
+
+/// Slot 5's bots, every frame (`tools/record_ai_dive.py 5 15000`): each dive a computer player starts is one it drew
+/// the dive chance for, started from a run, and the dive search finds the ball on that frame's path (with the
+/// previous frame's player, as the game's check reads it) within the AI's own path frames; and each call-out flag
+/// clears with a hand-off to the partner or while the partner is mid-stroke or diving, after its reaction hold.
+#[test]
+fn ai_dives_match_the_game() {
+    use hst_sim::swing::{DIVE_HORIZON, PathPoint, Reach, dive};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/fixtures/ai_dive_s05.bin")) else {
+        return eprintln!("ai_dive_s05.bin absent, skipped");
+    };
+    const PL: [(usize, usize); 7] = [(0x12b0, 8), (0x13a8, 0x18), (0x3d60, 0x20), (0x3e00, 0x10), (0x3f58, 8), (0x3f80, 0x10), (0x3fa4, 8)];
+    let (pls, path0) = (PL.iter().map(|r| r.1).sum::<usize>(), 4 + 0x18);
+    let n = word(&d, 0);
+    let (hdr, size) = (4 + 8 * n, path0 + 0x300 + n * (pls + 0x280));
+    let frames: Vec<&[u8]> = d[hdr..].chunks_exact(size).collect();
+    let base = |p: usize| path0 + 0x300 + p * (pls + 0x280);
+    let at = |o: usize| PL.iter().scan(0, |s, &(a, n)| { *s += n; Some((a, n, *s - n)) }).find(|&(a, n, _)| (a..a + n).contains(&o)).map(|(a, _, s)| s + o - a).unwrap();
+    let f = |fr: &[u8], p: usize, o: usize| f32::from_le_bytes(fr[base(p) + at(o)..][..4].try_into().unwrap());
+    let ai = |fr: &[u8], p: usize, o: usize| fr[base(p) + pls + o];
+    let ai32 = |fr: &[u8], p: usize, o: usize| i32::from_le_bytes(fr[base(p) + pls + o..][..4].try_into().unwrap());
+    let (mut dives, mut calls) = (0, 0);
+    for k in 1..frames.len() {
+        let (a, b) = (frames[k - 1], frames[k]);
+        let vsync = word(b, 0);
+        for p in 0..n {
+            if b[base(p) + at(0x3f58)] == 1 && a[base(p) + at(0x3f58)] == 0 && ai(b, p, 0x9a) == 4 {
+                assert_eq!(ai(a, p, 0x245), 1, "vsync {vsync} p{p}: dive without the dive chance");
+                assert_eq!(a[base(p) + at(0x3fa5)], 1, "vsync {vsync} p{p}: dive not from a run");
+                let reach = Reach {
+                    base: f(a, p, 0x13ac), reach: f(a, p, 0x13b0), stroke_height: f(a, p, 0x13b8), volley_height: f(a, p, 0x13bc),
+                    smash_top: 0.0, smash_bottom: 0.0, ahead: 0.0, smash_ahead: 0.0, body_low: 0.0, body_high: 0.0,
+                    grades: vec![], hand: 1.0, shoulder: [0.0; 3], tip: [0.0; 3],
+                };
+                // the AI's path starts at step 5 (the search skips 0..5) with y up; bounces only pick hit or miss
+                let len = (ai32(a, p, 0x3c).max(0) as usize).min(DIVE_HORIZON);
+                let path: Vec<PathPoint> = (0..len)
+                    .map(|s| {
+                        let o = path0 + s.saturating_sub(5) * 0x30;
+                        let v = |i: usize| f32::from_le_bytes(b[o + 4 * i..][..4].try_into().unwrap());
+                        PathPoint { pos: [v(0), -v(1), v(2)], bounces: 0 }
+                    })
+                    .collect();
+                let pos = [f(a, p, 0x3d70), f(a, p, 0x3d74), f(a, p, 0x3d78)];
+                let face = [f(a, p, 0x3d60), f(a, p, 0x3d68)];
+                let vel = [f(a, p, 0x3e00), f(a, p, 0x3e08)];
+                assert!(dive(&reach, &path, pos, f(a, p, 0x12b0), face, vel).is_some(), "vsync {vsync} p{p}: dive search finds nothing");
+                dives += 1;
+            }
+            if ai(a, p, 0xdc) == 1 && ai(b, p, 0xdc) == 0 {
+                let handoff = ai(a, p, 0xd4) == 0 && ai(b, p, 0xd4) == 1;
+                assert!(handoff || b[base(p ^ 2) + at(0x3fa5)] > 1, "vsync {vsync} p{p}: call-out flag cleared without a hand-off");
+                assert_eq!(ai32(a, p, 0x248), 0, "vsync {vsync} p{p}: hand-off during the reaction hold");
+                calls += 1;
+            }
+        }
+    }
+    eprintln!("{} frames, {dives} AI dives, {calls} call-out checks", frames.len());
+    assert!(dives > 0 && calls > 0);
+}
