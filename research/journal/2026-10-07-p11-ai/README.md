@@ -75,3 +75,10 @@ See 8-P11G-SHOTKIND-FINAL.md. Done: `AiParams::picks` (checked on all 155 timing
 See 9-P11H-DIVE-FINAL.md. Done: the AI dive (drawn chance, `swing::dive` on its own path, the kept draw) and call-out
 timing (after the reaction hold, from shot 2, not while the partner swings), test `ai_dives_match_the_game` (fixture
 `ai_dive_s05.bin` from `tools/record_ai_dive.py`); `play.rs` `ai_dives` / `ai_mate_busy` / `bot`.
+
+## P11i (bot matches: kind lock, serve, pick)
+
+See 10-P11I-BOTS-FINAL.md. Done: tests `singles_serves_and_kind_lock` / `doubles_serves`
+(`crates/hst-sim/tests/ai_serve.rs`). Fixtures `ai_serve_singles.bin` (Carol vs Lola, costume 9, rows 48/52) and
+`ai_serve_s05.bin` (slot 5), both from `tools/record_ai_serve.py`. New `AiParams::serve_aim_singles` (the serve's net
+dash) and `serve::ai_pick`; the level-2 serve lanes are fixed. The return-of-serve chooser doesn't run in bot-only play.

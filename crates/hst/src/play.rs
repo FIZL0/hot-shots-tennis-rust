@@ -159,6 +159,8 @@ struct Player {
     /// and the branch of the swing it last had on (its after-hit reads it).
     ai_single: Option<hst_sim::position::Single>,
     ai_branch: Option<swing::Branch>,
+    /// A singles bot's net dash off its own serve (`AiParams::serve_aim_singles`): the spot it dashes to.
+    ai_serve_dash: Option<[f32; 2]>,
     /// The AI object (`hst_sim::ai::Mind`), kept across points (None until the match's first point); this point's
     /// messages heard so far (0 none, 1 the reset, 2 the point over, 3 the players' reaction); its serve spot (x)
     /// and the frames it still waits there before the toss.
@@ -3012,10 +3014,9 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
 /// A singles bot's goal while the ball isn't its own (`hst_sim::position::Single`): its centre (10 back for a net
 /// player, 11 otherwise), walked to once the centre roll passes and until it's inside the centre radius, or its dash
 /// spot in at the net. After each of its shots a net player picks the centre from the shot's zone and may dash; a
-/// volley or smash (a baseliner: a smash) dashes, so does a net player seeing a smash and a net-dash roll on its
-/// serve. The dash is off once the ball passes it on its own side. None in doubles and before the serve is hit.
-/// ponytail: the original also dashes off a wide serve aim (P11's serve aim isn't ported), its serve-dash x is the
-/// serve's own target (the middle here), the ALL style's coin is drawn once a point (the game re-draws it every few
+/// volley or smash (a baseliner: a smash) dashes, so does a net player seeing a smash and one its serve aim sent in
+/// (`ai_serve_dash`). The dash is off once the ball passes it on its own side. None in doubles and before the serve
+/// is hit. ponytail: the ALL style's coin is drawn once a point (the game re-draws it every few
 /// shots) and shot choice 10's deeper dash spot waits for P11's shot choice.
 fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
     use hst_sim::position::{Court, Single};
@@ -3050,8 +3051,8 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
                 s.go_in(&c);
             }
         } else if g.shots == 1 {
-            if (roll() >> 16 & 0x7fff) % 100 < p.ai.net_dash_rate.max(0) as u32 {
-                s.go_in(&c);
+            if let Some(d) = p.ai_serve_dash {
+                s.dash.get_or_insert(d);
             }
         } else {
             let dash = match p.ai_branch {
@@ -3213,8 +3214,17 @@ fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
     let mut roll = ai_roll(&mut g.rng);
     let swing = p.ai.serve_swing(toss, &mut roll);
     let ad = g.score.side == 1;
-    let s = p.ai.serve_aim(p.ai_picks.serve_level, swing, ad, p.hand < 0.0, p.end, &mut roll);
+    let (s, dash) = if g.players.len() == 2 {
+        // the app's AI is always level 3
+        let reach = hst_sim::ai::Choice::new(0, 0, false).reach;
+        let (s, dash, spot) =
+            p.ai.serve_aim_singles(p.ai_picks.serve_level, swing, ad, p.hand < 0.0, p.end, reach, &mut roll);
+        (s, dash.then(|| spot.unwrap_or([0.0, -reach * p.end])))
+    } else {
+        (p.ai.serve_aim(p.ai_picks.serve_level, swing, ad, p.hand < 0.0, p.end, &mut roll), None)
+    };
     drop(roll);
+    g.players[i].ai_serve_dash = dash;
     g.serving.bot_aim = Vec2::new(s[0], s[2]);
     button_kind(hst_sim::aim::button(swing))
 }
