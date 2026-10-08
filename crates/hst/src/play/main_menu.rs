@@ -27,6 +27,8 @@ use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
 
+mod previews;
+
 /// Characters on the select screen.
 const CHARS: usize = 14;
 /// Costumes per character (`--outfits` 0..9).
@@ -517,6 +519,8 @@ enum Tex {
     Sheet(usize),
     /// A portrait sheet: costume 0 (characters 0–7, 8–13), costume 9 (same), costumes 1..8.
     Shots(usize),
+    /// Player `p`'s 3D preview (`previews.rs`), in place of the portrait.
+    Preview(usize),
 }
 
 const SHEETS: [(&str, &str); 14] = [
@@ -869,8 +873,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // a card nobody is picking on yet is dark
         d.q(CARD, [u, v, 140.0, 164.0], [x, y, 144.0, 168.0], if picking || pl.ready { WHITE } else { [55.0; 3] }, 128.0);
         if picking || pl.ready {
-            let (sheet, src) = portrait(c, pl.costume);
-            d.q(sheet, src, [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
+            d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
             if pl.card {
                 d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
                 for (k, g) in text.grades[c].iter().enumerate() {
@@ -1120,7 +1123,7 @@ fn draw(
     let quads = layout(&menu, &art.2, &bind, &pads, hand_x);
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
-        let Some(quad) = quads.get(*i) else {
+        let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
             continue;
         };
@@ -1130,6 +1133,7 @@ fn draw(
             Tex::Hand => art.0[2].clone(),
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 1 + 5 + k].clone(),
+            Tex::Preview(_) => continue,
         };
         let [u, v, w, h] = quad.src;
         img.rect = (quad.tex != Tex::Solid).then(|| Rect::new(u, v, u + w, v + h));
@@ -1147,6 +1151,7 @@ fn draw(
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin)).add_systems(Startup, setup).add_systems(Update, (step, draw).chain());
+    previews::plugin(app);
 }
 
 #[cfg(test)]

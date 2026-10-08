@@ -29,3 +29,37 @@ User note (2026-10-08): the in-game Data menu's Costumes tab shows each characte
 - Brightness/colour: matched by eye on the side-by-sides only, not pixel-compared.
 - Costumes other than 0: not compared against the original's Costumes tab; umpire previews not done → B40b4.
 - Mods: donor pose on a rerigged skeleton checked by eye for 3 Fore! mods only; their face channels doki_eye/doki_mouth are missing (mod side warning).
+
+# B40b1 — previews in the select (2026-10-08)
+
+## What was built
+- `inspect.rs`: `spawn_into` draws a preview into its own float image (`target`) instead of the window; a UI node
+  shows it through `PreviewMaterial` (`inspect.wgsl`), which decodes the GS-encoded values for the sRGB HUD, so the
+  card's text (style, name, Ready) stays on top as over the original's portrait. The image clears to alpha −1:
+  coverage = alpha + 1 (the model's own alpha is its texels' / VU1 specular, not coverage). `act` (any pad) now
+  belongs to the `--inspect` viewer only; `plugin` is placement + material.
+- `play/main_menu/previews.rs` (new): each card a player is picking on emits `Tex::Preview(p)` in place of the
+  portrait; `sync` spawns/respawns that card's preview on hover or costume change (loaded characters cached by
+  (character, costume)), places it on the card's 128×160 rect and stacks it by quad order (every slot's `ZIndex` =
+  its layout index). `buttons` routes each seated player's own R2 / L2 / △ (keyboard: 1, 2, the attributes key) to
+  `inspect::apply`. `HST_SELECT=c,c,c,c` (with `HST_MENU=chars`) seats all four players hovering those characters.
+- `main_menu.rs`: only the `Tex::Preview` variant, the card's portrait quad swapped for it, and `draw` skipping it.
+
+## Verification
+`tools/shot.sh` (`--shot` works on the menu window now) with `HST_MENU=chars HST_SELECT=…`, four shots covering all
+14 characters: `context/b40b1/sel_{a,b,c,d}.png`; each card cropped beside the original's inspect screen
+(`orig_cNN.png`, B40b's PCSX2 captures): `context/b40b1/side0.png`, `side1.png`. Every pose, facing, racket hand
+and light matches by eye. `tools/check.sh -p hst` passes.
+
+## Not verified / not 1:1
+- R2 / L2 / △ in the select: wired per seat but not pressed in a live run (shots are non-interactive); `apply`
+  itself is B40b's, checked in `--inspect`.
+- Mods: the select doesn't list B40a's mods yet (B40a blocked); `spawn_into` takes a mod's `CharacterData` and donor
+  as `--inspect` does, so B40a only has to feed its picks to `sync`.
+- The card shows the inspect screen's model column (`inspect::CROP`, head to feet) widened to the card's aspect,
+  not the original select's hand-made portrait crop (a deliberate change: the user asked for models here).
+- Translucent model draws over the −1 clear come out as 2a − 1 (alpha) over black: their edges can darken a little;
+  no MSAA on select previews (the GS doesn't antialias; the `--inspect` viewer keeps Bevy's MSAA).
+- The preview image is sized for the window when spawned; a window resize keeps the old resolution until the next
+  hover/costume change.
+- Costumes other than 0 aren't compared against the original (B40b4).
