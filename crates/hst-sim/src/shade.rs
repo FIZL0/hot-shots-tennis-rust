@@ -433,6 +433,186 @@ pub fn receiver_vertex(item: &[vu0::V4; 4], vp: &[vu0::V4; 4], tex: &[vu0::V4; 4
     ([ftoi4(clip[0]), ftoi4(clip[1])], [vu0::mul(st[0], q), vu0::mul(st[1], q), vu0::mul(st[2], q)])
 }
 
+/// A vertex of the shadow texture pass: position in the 256² target (12.4 fixed point), texture coordinates (STQ
+/// with Q = 1) and alpha (0x80 opaque).
+#[derive(Clone, Copy, Debug)]
+pub struct PassVertex {
+    pub xy: [i32; 2],
+    pub st: [f32; 2],
+    pub a: u8,
+}
+
+/// How a texture coordinate past the texture's edge reads: wrapped, or clamped to the texels min..=max.
+#[derive(Clone, Copy, Debug)]
+pub enum Wrap {
+    Repeat,
+    Clamp(i32, i32),
+}
+
+/// A texture the pass reads: its alpha per texel (row-major, PS2 0x80 opaque), log2 width and height, wrap per axis.
+pub struct PassTexture {
+    pub alpha: Vec<u8>,
+    pub log2: [u32; 2],
+    pub wrap: [Wrap; 2],
+}
+
+/// One draw of the pass, one GS state over its triangles: solid (each triangle's last vertex alpha, flat) or
+/// textured with bilinear filtering, the texture's alpha as is (HIGHLIGHT2) or times the Gouraud vertex alpha
+/// (`modulate`). Pixels are written where the target's alpha is below 0x80 (destination alpha test) and the new
+/// alpha is at least `aref`.
+pub struct PassDraw {
+    pub tris: Vec<[PassVertex; 3]>,
+    pub tex: Option<PassTexture>,
+    pub modulate: bool,
+    pub aref: u8,
+}
+
+/// Target side and the scissor every caster draw keeps inside (texels 4..=251).
+const TARGET: usize = 256;
+const SCISSOR: [i32; 4] = [4, 4, 252, 252];
+/// Pixels per scanline step of the software GS (its 128-bit code path).
+const LANES: i32 = 4;
+
+/// A caster's 128² shadow texture (palette index 0..15) as the game's load pass draws it, bit for bit with PCSX2's
+/// software GS: the 256² target's alpha cleared to 0, every draw in order, the four bilinear sprites that halve the
+/// target in place (each texel the mean of its 2 × 2, 4-bit weights), and the copy of alpha's top nibble into the
+/// texture. The arithmetic is SSE's single floats (round to nearest), as PCSX2's x86 renderer does it.
+///
+/// ponytail: the draws are taken as the GS receives them (`research/p17v2_fixture.py`); building them from the
+/// casters' models and light matrices in game floats is P17v7.
+pub fn pass_texture(draws: &[PassDraw]) -> Vec<u8> {
+    let mut target = vec![0u8; TARGET * TARGET];
+    for d in draws {
+        for t in &d.tris {
+            pass_tri(&mut target, d, t);
+        }
+    }
+    let half = |p: usize, q: usize| p as i32 + ((q as i32 - p as i32) * 8 >> 4);
+    (0..TEX * TEX)
+        .map(|i| {
+            let (x, y) = (2 * (i % TEX), 2 * (i / TEX));
+            let at = |dx: usize, dy: usize| target[x + dx + (y + dy) * TARGET] as usize;
+            let (r0, r1) = (half(at(0, 0), at(1, 0)), half(at(0, 1), at(1, 1)));
+            ((r0 + ((r1 - r0) * 8 >> 4)) >> 4) as u8
+        })
+        .collect()
+}
+
+/// The GS's texel coordinate rounding (as PCSX2 applies it when the draw's Z is constant): S and T lose their low 9
+/// mantissa bits, more by how far their exponent is below Q's (1.0 here).
+fn texel_round(st: f32) -> f32 {
+    let (b, e) = (st.to_bits(), (st.to_bits() >> 23 & 0xff) as i32);
+    f32::from_bits(b & !((1u32 << (9 + e.max(127) - e).min(23)) - 1))
+}
+
+/// Integer coordinates along a span from `left`: truncated at the span start, then per lane its truncated offset
+/// from the aligned group of [`LANES`] at or before `left` and whole truncated group steps.
+fn pass_lanes(t0: f32, d: f32, left: i32, n: i32) -> impl Iterator<Item = i32> {
+    let (skip, step) = (left % LANES, (d * LANES as f32) as i32);
+    (skip..skip + n).map(move |j| (t0 as i32).wrapping_add((d * (j % LANES - skip) as f32) as i32).wrapping_add(j / LANES * step))
+}
+
+/// The Gouraud channel (8.7 fixed point) along a span: 16-bit lanes from the truncated start, kept ≥ 0 per group step.
+fn pass_colour(c0: f32, d: f32, left: i32, n: i32) -> Vec<i32> {
+    let (skip, step) = (left % LANES, (d * LANES as f32) as i32 & 0xffff);
+    let mut c: Vec<i32> = (0..LANES).map(|k| (c0 as i32 + ((d * (k - skip) as f32) as i32 & 0xffff)) & 0xffff).collect();
+    let mut out = Vec::new();
+    for j in skip..skip + n {
+        if j % LANES == 0 && j > 0 {
+            c.iter_mut().for_each(|c| *c = if (*c + step) & 0xffff >= 0x8000 { 0 } else { (*c + step) & 0xffff });
+        }
+        out.push(c[(j % LANES) as usize]);
+    }
+    out
+}
+
+/// The bilinear alpha (4-bit weights) at 16.16 texel coordinates u, v (half texel already taken off).
+fn pass_sample(t: &PassTexture, u: i32, v: i32) -> i32 {
+    let ax = |c: i32, k: usize| {
+        let n = 1 << t.log2[k];
+        [c >> 16, (c >> 16) + 1].map(|b| match t.wrap[k] {
+            Wrap::Repeat => b & (n - 1),
+            Wrap::Clamp(lo, hi) => b.clamp(lo, hi),
+        })
+    };
+    let ([x0, x1], [y0, y1], uf, vf) = (ax(u, 0), ax(v, 1), (u & 0xffff) >> 12, (v & 0xffff) >> 12);
+    let at = |x: i32, y: i32| t.alpha[(x + (y << t.log2[0])) as usize] as i32;
+    let r0 = at(x0, y0) + ((at(x1, y0) - at(x0, y0)) * uf >> 4);
+    let r1 = at(x0, y1) + ((at(x1, y1) - at(x0, y1)) * uf >> 4);
+    r0 + ((r1 - r0) * vf >> 4)
+}
+
+/// One triangle into the target with PCSX2's software setup: vertices sorted by y, the edge and scan gradients from
+/// the cross product, spans from ceil(edge x) at each row, and (s, t, colour) at the span start interpolated from the
+/// top vertex of its section.
+fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
+    let tsz = d.tex.as_ref().map_or([0.0; 2], |x| x.log2.map(|l| (0x10000u32 << l) as f32));
+    let v: [[f32; 5]; 3] = t.map(|p| {
+        let st = p.st.map(texel_round);
+        [p.xy[0] as f32 * (1.0 / 16.0), p.xy[1] as f32 * (1.0 / 16.0), st[0] * tsz[0] - 32768.0, st[1] * tsz[1] - 32768.0, ((p.a as u32) << 7) as f32]
+    });
+    let flat = t[2].a as i32;
+    let ys = [v[0][1], v[1][1], v[2][1]];
+    let m1 = (ys[0] > ys[1]) as usize | ((ys[0] > ys[2]) as usize) << 1 | ((ys[1] > ys[2]) as usize) << 2;
+    let [i0, i1, i2] = [[0, 1, 2], [1, 0, 2], [0; 3], [1, 2, 0], [0, 2, 1], [0; 3], [2, 0, 1], [2, 1, 0]][m1];
+    let (v0, v1, v2) = (v[i0], v[i1], v[i2]);
+    if v0[1] == v1[1] && v1[1] == v2[1] {
+        return;
+    }
+    let sub = |a: [f32; 5], b: [f32; 5]| -> [f32; 5] { std::array::from_fn(|k| a[k] - b[k]) };
+    let (dv0, dv1, dv2) = (sub(v1, v0), sub(v2, v0), sub(v2, v1));
+    let cross = dv0[1] * dv1[0] - dv0[0] * dv1[1];
+    if cross == 0.0 {
+        return;
+    }
+    let m2 = cross < 0.0;
+    let slope = |a: [f32; 5]| if a[1] != 0.0 { a[0] / a[1] } else { f32::INFINITY };
+    let dd = [slope(dv0), dv1[0] / dv1[1], slope(dv2)];
+    let c = [dv0[0], dv0[1], dv1[0], dv1[1]].map(|x| x / cross);
+    let dscan: [f32; 5] = std::array::from_fn(|k| dv1[k] * c[1] - dv0[k] * c[3]);
+    let dedge: [f32; 5] = std::array::from_fn(|k| dv0[k] * c[2] - dv1[k] * c[0]);
+    let ceil = |y: f32| y.ceil() as i32;
+    let mut section = |top: i32, bottom: i32, ex: [f32; 2], dex: [f32; 2], p0: [f32; 5]| {
+        for y in top.max(SCISSOR[1])..bottom.min(SCISSOR[3]) {
+            let dy = y as f32 - p0[1];
+            let left = ceil(ex[0] + dex[0] * dy).max(SCISSOR[0]);
+            let right = ceil(ex[1] + dex[1] * dy).min(SCISSOR[2]);
+            if right <= left {
+                continue;
+            }
+            let pre = left as f32 - p0[0];
+            let tc: [f32; 5] = std::array::from_fn(|k| (p0[k] + dedge[k] * dy) + dscan[k] * pre);
+            let n = right - left;
+            let at: Vec<i32> = match &d.tex {
+                None => vec![flat; n as usize],
+                Some(tex) => {
+                    let s = pass_lanes(tc[2], dscan[2], left, n).zip(pass_lanes(tc[3], dscan[3], left, n)).map(|(u, v)| pass_sample(tex, u, v));
+                    if d.modulate {
+                        s.zip(pass_colour(tc[4], dscan[4], left, n)).map(|(a, g)| ((a << 2) * g >> 16).min(255)).collect()
+                    } else {
+                        s.collect()
+                    }
+                }
+            };
+            for (x, a) in (left..right).zip(at) {
+                let dst = &mut target[x as usize + y as usize * TARGET];
+                if *dst < 0x80 && a >= d.aref as i32 {
+                    *dst = a as u8;
+                }
+            }
+        }
+    };
+    if v0[1] == v1[1] {
+        let (a, b, e) = if m2 { (v0, v1, [dd[1], dd[2]]) } else { (v1, v0, [dd[2], dd[1]]) };
+        section(ceil(v0[1]), ceil(v2[1]), [a[0], b[0]], e, a);
+    } else {
+        let e = if m2 { [dd[1], dd[0]] } else { [dd[0], dd[1]] };
+        section(ceil(v0[1]), ceil(v1[1]), [v0[0]; 2], e, v0);
+        let x = e.map(|s| v0[0] + s * dv0[1]);
+        section(ceil(v1[1]), ceil(v2[1]), x, if m2 { [dd[1], dd[2]] } else { [dd[2], dd[1]] }, v1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
