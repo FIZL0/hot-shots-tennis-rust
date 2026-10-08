@@ -1,4 +1,4 @@
-// The HUD (premultiplied, linear) over the scene, blended on the sRGB-encoded values as the GS does.
+// The HUD (premultiplied, linear) over the scene (gamma-encoded), blended on the encoded values as the GS does.
 #import bevy_ui::ui_vertex_output::UiVertexOutput
 
 @group(1) @binding(0) var scene: texture_2d<f32>;
@@ -18,5 +18,5 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let b = textureLoad(scene, p, 0).rgb;
     let h = textureLoad(hud, p, 0);
     let c = select(vec3(0.0), h.rgb / h.a, h.a > 0.0);
-    return vec4(dec(enc(c) * h.a + enc(b) * (1.0 - h.a)), 1.0);
+    return vec4(dec(enc(c) * h.a + b * (1.0 - h.a)), 1.0);
 }

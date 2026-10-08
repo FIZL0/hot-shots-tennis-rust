@@ -21,10 +21,6 @@ struct Gs {
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var gs_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var gs_sampler: sampler;
 
-fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
-}
-
 // 1 lit, 0 in shadow: the first directional light that casts shadows (the match's sun)
 fn sun_visibility(in: VertexOutput) -> f32 {
     for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
@@ -111,5 +107,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if gs.shadow > 0.0 {
         rgb *= 1.0 - gs.shadow * (1.0 - sun_visibility(in));
     }
-    return vec4(srgb_to_linear(rgb), clamp(a, 0.0, 1.0));
+    // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs)
+    return vec4(rgb, clamp(a, 0.0, 1.0));
 }
