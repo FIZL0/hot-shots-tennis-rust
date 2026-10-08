@@ -9,7 +9,6 @@ use bevy::prelude::*;
 use hst_data::{exe::Foot, iso::Iso, xb::Archive};
 use hst_sim::effect::Effect;
 use hst_sim::foot::{Feet, Runner};
-use hst_sim::weather::Mt;
 
 use super::{Figure, Game, Phase};
 use crate::character::{Motion, Rig};
@@ -40,9 +39,6 @@ struct FootFx {
     dash: Vec<(Effect, Shown)>,
     /// A dive was under way last tick, per player.
     diving: [bool; 4],
-    /// The dive rings' random draws.
-    // ponytail: its own generator, not the match's shared one
-    mt: Mt,
     /// Debris: clods, blades.
     bits: [Handle<Mesh>; 2],
 }
@@ -75,15 +71,17 @@ fn setup(
     let arc = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT.XB0");
     let arc = Archive::parse(&arc).expect("EFFCT.XB0");
     let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
-    let (table, feet, mt) = (game.foot(), Feet::default(), Mt::new(1));
-    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], mt, bits });
+    let (table, feet) = (game.foot(), Feet::default());
+    commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, diving: [false; 4], bits });
 }
 
-/// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim.
+/// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim. The run
+/// object updates after the players (it takes their hit events the same frame), so the dive rings draw from the
+/// match's shared generator after the frame's strokes.
 // ponytail: the toes are the last drawn pose (one frame behind the motion), as the swing trails
 fn tick(
     fx: Option<ResMut<FootFx>>,
-    g: Res<Game>,
+    mut g: ResMut<Game>,
     w: Option<Res<Weather>>,
     q: Query<(&Figure, &Rig, &Motion, &GlobalTransform)>,
     joints: Query<&GlobalTransform>,
@@ -143,7 +141,7 @@ fn tick(
     let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));
     // ponytail: no instant replay yet (P0b4d), so dives throw no debris
     fx.feet.replay = false;
-    let mt = &mut fx.mt;
+    let mt = &mut g.rng.shared;
     fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true, &mut || mt.next());
     // the streak plays from each dive's start while it shows
     for (p, (e, _)) in fx.dash.iter_mut().enumerate() {

@@ -256,19 +256,15 @@ fn foot_extras_s05() {
         let mut wkey = key(&want);
         wkey.2 = dash(fr).map(|d| d.map(|m| bits(&m.concat())));
         let diving = runners.iter().any(|r| r.dive);
-        // the dive rings draw from the shared generator somewhere in the frame's draws: find where
+        // the dive rings draw from the shared generator after the frame's strokes; a dive's start frame has no
+        // others, so its draws are the frame's first and last
         let mut found = None;
-        for skip in 0..if diving { 400 } else { 1 } {
-            let mut g = mt(frames[k - 1]);
-            (0..skip).for_each(|_| {
-                g.next();
-            });
-            let mut one = feet.clone();
-            one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
-            if key(&one) == wkey {
-                found = Some(one);
-                break;
-            }
+        let mut g = mt(frames[k - 1]);
+        let mut one = feet.clone();
+        one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
+        if key(&one) == wkey {
+            assert!(!diving || g == mt(fr), "frame {k}: the rings aren't the dive frame's only shared draws");
+            found = Some(one);
         }
         if found.is_none() && !diving {
             // or catches up with two
