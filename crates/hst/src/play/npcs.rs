@@ -35,6 +35,8 @@ struct Npcs {
     /// The umpire's motion last tick; a decided point since the last serve.
     motion: u8,
     decided: bool,
+    /// The players' and ball's positions the creatures startle at, and the types already startled this point.
+    near: npc::Near,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -79,7 +81,7 @@ fn setup(
     };
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng);
     let mut roll = || {
         rand(rng);
@@ -132,6 +134,8 @@ fn show(m: &mut Motion, id: usize, frame: f32, looping: bool) {
 fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&character::Rig, &mut Motion)>) {
     let Some(mut npcs) = npcs else { return };
     let npcs = &mut *npcs;
+    let at = |p: [f32; 3]| [p[0], p[1], p[2], 1.0];
+    npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
     let rng = &mut g.rng;
     let mut roll = || {
@@ -155,7 +159,7 @@ fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&characte
             w.new_point(players >= 3);
         }
         for (_, t, row) in &mut npcs.triggers {
-            t.reset(row, &mut roll);
+            t.reset_near(row, &mut npcs.near, &mut roll);
         }
     }
     if let Some((e, a)) = &mut npcs.umpire {
@@ -184,8 +188,9 @@ fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&characte
     }
     npcs.tick += 1;
     for (e, t, row) in &mut npcs.triggers {
-        // ponytail: their sounds are not played (the sound-only creatures are `Game::emitters`)
-        t.step(row, &mut roll);
+        // ponytail: their sounds and a hit's message (`struck`) are not played; a type's startled flag stays set
+        // until the next point (the original clears it sooner, from code not found)
+        t.step_near(row, &mut npcs.near, &mut roll);
         if let Ok((_, mut m)) = q.get_mut(*e) {
             m.clock.sampled = t.frame;
         }

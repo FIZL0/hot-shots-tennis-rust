@@ -358,55 +358,9 @@ fn trigger_engine_matches_the_game() {
         let o = wo(k);
         let ty = samples[0][o + 0x50];
         let row = game.trigger(ty);
-        let f = |s: &[u8], a: usize| f32::from_bits(u(s, o + a));
-        let h = |s: &[u8], a: usize| i16::from_le_bytes([s[o + a], s[o + a + 1]]);
-        let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, a + 4 * c)) };
-        let m = |s: &[u8], a: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| v(s, a + 16 * r)) };
+        let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f32::from_bits(u(s, o + a + 4 * c))) };
         let (anchor, target) = (v(samples[0], 0x160), v(samples[0], 0x150));
-        let state = |s: &[u8], counter: i32| npc::Trigger {
-            ty,
-            msg: u(s, o + 0xc0),
-            anchor: if row.mode == 6 { target } else { anchor },
-            path: if s[o + 0x135] != 0 { vec![anchor, target] } else { vec![] },
-            start: 0,
-            home: m(s, 0x70),
-            world: m(s, 0x1b0),
-            active: s[o + 0x12c] != 0,
-            on: s[o + 0x281] != 0,
-            moving: s[o + 0x135] != 0,
-            node: h(s, 0x130),
-            prev: h(s, 0x132),
-            reverse: s[o + 0x134] != 0,
-            left: h(s, 0x136),
-            total: h(s, 0x138),
-            every: h(s, 0x13a),
-            pause: h(s, 0x13c),
-            wait: h(s, 0x13e),
-            vel: v(s, 0x140),
-            target: v(s, 0x150),
-            from: v(s, 0x160),
-            to: v(s, 0x170),
-            snap: h(s, 0x180),
-            orient: s[o + 0x182] != 0,
-            clockwise: s[o + 0x194] != 0,
-            angle: f(s, 0x198),
-            radius: f(s, 0x19c),
-            repeat: h(s, 0x1a0),
-            paused: s[o + 0x270] != 0,
-            animating: s[o + 0x271] != 0,
-            speed: f(s, 0x274),
-            stage: h(s, 0x27a),
-            frame: f(s, 0x290 + 0x38),
-            next: f(s, 0x290 + 0x3c),
-            len: if u(s, o + 0x5c) == 0 { 0.0 } else { f(s, 0x2d0 + 0x2c) },
-            timer: u(s, o + 200) as i32,
-            sweep: h(s, 0xd0),
-            pan: f(s, 0xd4),
-            down: s[o + 0xd8] != 0,
-            counter,
-            gap: 0,
-            voice: (-1, 0),
-        };
+        let state = |s: &[u8], counter: i32| trigger_at(s, o, &row, anchor, target, counter);
         let still = |i: usize| i > 0 && samples[i][4..] == samples[i - 1][4..];
         let (mut ticks, mut draws, mut resets, mut late, mut counter) = (0, 0, 0, 0, None);
         for i in 1..samples.len() {
@@ -456,4 +410,161 @@ fn trigger_engine_matches_the_game() {
         courts.push(court);
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}
+
+
+/// The startled creatures against `context/fixtures/prox_cNN.bin` (tools/record_npc.py with `prox`, HST_POKE moving a
+/// still creature next to a player or the ball; not in git, skipped when absent): courts 1 (types 0, 1), 2 (5) and
+/// 11 (48), any of 7, 8, 9 too. Every tick of every creature of those types from the recorded state before, with that
+/// tick's players' and ball's positions and the type flags, must give the game's state after bit for bit, startled
+/// latch and 48's scrub too, and a startle must set its type's flag. Skipped: message ticks, a poke's tick (moved
+/// while standing), a new leg (the path manager is not ported) and a flag the game cleared on its own.
+#[test]
+fn startled_creatures_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let mut courts = Vec::new();
+    for court in [1, 2, 7, 8, 9, 11] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/prox_c{court:02}.bin")) else {
+            eprintln!("prox_c{court:02}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+        let n = u(&d, 0) as usize;
+        let (mt, wo) = (4 + 0x180, |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300);
+        let x = wo(n);
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(x + 0x90 + 8 * n).collect();
+        // the players' positions, then the ball's; the type flags
+        let near = |s: &[u8]| npc::Near {
+            pos: (1..=u(s, 4 + 0x24) as usize).chain([0]).map(|i| std::array::from_fn(|c| f(s, x + 0x10 * i + 4 * c))).collect(),
+            flags: std::array::from_fn(|t| s[x + 0x50 + t] != 0),
+        };
+        let (mut ticks, mut startles, mut turns, mut blocked) = (0, 0, 0, 0);
+        for k in 0..n {
+            let o = wo(k);
+            let ty = samples[0][o + 0x50];
+            if !matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48) {
+                continue;
+            }
+            let row = game.trigger(ty);
+            let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, o + a + 4 * c)) };
+            let state = |s: &[u8]| npc::Trigger {
+                startled: s[o + 0x278] != 0,
+                scrub: if ty == 48 { (u(s, x + 0x90 + 8 * k) as i32, u(s, x + 0x94 + 8 * k) as i32) } else { (0, 0) },
+                ..trigger_at(s, o, &row, v(s, 0x160), v(s, 0x150), 0)
+            };
+            for i in 1..samples.len() {
+                let (a, b) = (samples[i - 1], samples[i]);
+                let (mut before, after) = (state(a), state(b));
+                // a poke moved it before the tick (HST_POKE): it starts from there
+                let poked = !before.moving && before.world[3] != after.world[3];
+                if poked {
+                    before.world[3] = after.world[3];
+                }
+                // ponytail: a startled steering creature's walk (row `steer`) is not ported: those ticks are skipped
+                let steering = row.steer != 0.0 && before.moving;
+                if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || steering || before.target != after.target {
+                    continue;
+                }
+                let mut rng = Mt::of(&a[mt..]);
+                let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+                while rng != end && out.len() < 2000 {
+                    out.push(rng.next());
+                }
+                let found = [1, 0, 2].into_iter().find_map(|steps| {
+                    (0..=out.len()).find_map(|j| {
+                        let (mut t, mut it, mut seen) = (before.clone(), out[j..].iter(), near(b));
+                        seen.flags = near(a).flags;
+                        for _ in 0..steps {
+                            t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0));
+                        }
+                        let want = npc::Trigger { struck: t.struck, path: t.path.clone(), ..after.clone() };
+                        (t == want).then_some((t, seen))
+                    })
+                });
+                let Some((t, seen)) = found else {
+                    let (mut t, mut seen) = (before.clone(), near(b));
+                    seen.flags = near(a).flags;
+                    t.step_near(&row, &mut seen, &mut || out[0]);
+                    panic!("court {court} vsync {} creature {k} type {ty}:\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0))
+                };
+                if seen.flags[ty as usize] && !near(a).flags[ty as usize] {
+                    assert!(near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag not set", u(b, 0));
+                }
+                startles += (t.startled && !before.startled) as usize;
+                turns += (t.scrub.0 != before.scrub.0) as usize;
+                blocked += (!t.startled && near(a).flags[ty as usize] && near(b).pos.iter().any(|p| {
+                    let d: [f32; 4] = std::array::from_fn(|c| p[c] - t.world[3][c]);
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < 2.0
+                })) as usize;
+                ticks += 1;
+            }
+        }
+        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag");
+        assert!(startles + turns > 0, "court {court}: nothing startled");
+        courts.push(court);
+    }
+    assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}
+
+/// A trigger creature's engine state from its recorded object at `o` in sample `s` (`trig` layout); the path is the
+/// recorded leg (`anchor` its start, `target` its end) while it moves, the type's own counter given.
+fn trigger_at(s: &[u8], o: usize, row: &hst_data::exe::TriggerRow, anchor: [f32; 4], target: [f32; 4], counter: i32) -> npc::Trigger {
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let f = |s: &[u8], a: usize| f32::from_bits(u(s, o + a));
+    let h = |s: &[u8], a: usize| i16::from_le_bytes([s[o + a], s[o + a + 1]]);
+    let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, a + 4 * c)) };
+    let m = |s: &[u8], a: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| v(s, a + 16 * r)) };
+    npc::Trigger {
+        ty: s[o + 0x50],
+        msg: u(s, o + 0xc0),
+        anchor: if row.mode == 6 { target } else { anchor },
+        path: if s[o + 0x135] != 0 { vec![anchor, target] } else { vec![] },
+        start: 0,
+        home: m(s, 0x70),
+        world: m(s, 0x1b0),
+        active: s[o + 0x12c] != 0,
+        on: s[o + 0x281] != 0,
+        moving: s[o + 0x135] != 0,
+        node: h(s, 0x130),
+        prev: h(s, 0x132),
+        reverse: s[o + 0x134] != 0,
+        left: h(s, 0x136),
+        total: h(s, 0x138),
+        every: h(s, 0x13a),
+        pause: h(s, 0x13c),
+        wait: h(s, 0x13e),
+        vel: v(s, 0x140),
+        target: v(s, 0x150),
+        from: v(s, 0x160),
+        to: v(s, 0x170),
+        snap: h(s, 0x180),
+        orient: s[o + 0x182] != 0,
+        clockwise: s[o + 0x194] != 0,
+        angle: f(s, 0x198),
+        radius: f(s, 0x19c),
+        repeat: h(s, 0x1a0),
+        paused: s[o + 0x270] != 0,
+        animating: s[o + 0x271] != 0,
+        speed: f(s, 0x274),
+        stage: h(s, 0x27a),
+        frame: f(s, 0x290 + 0x38),
+        next: f(s, 0x290 + 0x3c),
+        len: if u(s, o + 0x5c) == 0 { 0.0 } else { f(s, 0x2d0 + 0x2c) },
+        timer: u(s, o + 200) as i32,
+        sweep: h(s, 0xd0),
+        pan: f(s, 0xd4),
+        down: s[o + 0xd8] != 0,
+        counter,
+        gap: 0,
+        voice: (-1, 0),
+        startled: false,
+        scrub: (0, 0),
+        struck: false,
+    }
 }

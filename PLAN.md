@@ -238,7 +238,11 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
 
 - [x] **P14c1** Trigger creature engine: type parameter table, path/waypoint motion, idle-animation timer, sound timer; idle animators 18, 34, 37, 44 → `hst-sim/src/npc.rs` · `exe.rs` | t: npc.rs
-- [ ] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [x] **P14c3** Proximity-startled creatures (player/ball within reach: path + one-shot animation) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c3a** Steering creatures walk (row `steer`, e.g. court 1's startled type 1) (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c3b** Startled-type flags cleared like the original (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c3c** Types 27–29 against a recording (court 7) (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c3d** Startled creatures' sounds and leftovers (in P14c3) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs

@@ -351,6 +351,26 @@ pub struct Trigger {
     pub counter: i32,
     pub gap: i32,
     pub voice: (i32, i32),
+    /// Startled (types 0–1, 5, 27–29, 31–32, 39: once, until the next motion reset).
+    pub startled: bool,
+    /// Type 48's scrub: 0 still, 1 forward, 2 back; and the frame it shows next.
+    pub scrub: (i32, i32),
+    /// Types 27–29: the ball touched it this tick (the game's message 0x14 to the match).
+    pub struck: bool,
+}
+
+/// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
+/// all creatures of a type share (set by the first one startled, cleared by the type's reset).
+#[derive(Clone, Debug)]
+pub struct Near {
+    pub pos: Vec<[f32; 4]>,
+    pub flags: [bool; 64],
+}
+
+impl Default for Near {
+    fn default() -> Near {
+        Near { pos: Vec::new(), flags: [false; 64] }
+    }
 }
 
 /// `n` ticks scaled by `1 − jitter·random` (no draw without jitter).
@@ -385,16 +405,26 @@ impl Trigger {
         (self.frame, self.next) = (0.0, 0.0);
     }
 
+    /// Show frame `t` (held within the animation) and next.
+    fn set_frame(&mut self, t: f32) {
+        (self.frame, self.next) = (t.clamp(0.0, self.len), t.clamp(0.0, self.len));
+    }
+
     /// The motion reset (a new point, or a loop's end): back to the start, a direction bit with `reverse_roll`,
     /// the first leg and the pause before it.
     pub fn reset(&mut self, row: &TriggerRow, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        self.reset_near(row, &mut Near::default(), roll)
+    }
+
+    /// [`Trigger::reset`] with what the startled creatures watch (their reset clears their type's flag).
+    pub fn reset_near(&mut self, row: &TriggerRow, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         // ponytail: types whose row keeps them off after their first reset (row byte +0x6c), and those whose model
         // starts animating, are not modelled
         let o = std::mem::take(self);
         *self = Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
-            counter: o.counter, gap: o.gap, voice: o.voice, ..Trigger::default()
+            counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -413,7 +443,7 @@ impl Trigger {
             self.wait = if self.msg == 6 { 0 } else { self.pause };
         }
         self.speed = 1.0;
-        self.callback(row, 4, roll)
+        self.callback(row, 4, near, roll)
     }
 
     /// Next waypoint: the leg's target, pause, velocity; `first` (from a reset) also turns to face it.
@@ -494,6 +524,11 @@ impl Trigger {
 
     /// One tick; the sounds started.
     pub fn step(&mut self, row: &TriggerRow, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        self.step_near(row, &mut Near::default(), roll)
+    }
+
+    /// [`Trigger::step`] with what the startled creatures watch.
+    pub fn step_near(&mut self, row: &TriggerRow, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         if !self.active {
             return Vec::new();
         }
@@ -602,15 +637,105 @@ impl Trigger {
                 self.down = roll() >> 16 & 1 != 0;
             }
         }
-        sounds.extend(self.callback(row, 2, roll));
+        sounds.extend(self.callback(row, 2, near, roll));
         sounds
     }
 
     /// The type's own behaviour on message `msg` (2 each tick, 4 at a reset); the sounds started.
-    fn callback(&mut self, row: &TriggerRow, msg: u8, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+    fn callback(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         let mut sounds = Vec::new();
         let u = |r: u32| ps2::mul(2.3283064e-10, ps2::utof(r));
+        let pos = self.pos();
+        let within = |r: f32| near.pos.iter().map(|&p| ps2::sqrt(dist2(minus(p, pos))) < r).collect::<Vec<_>>();
+        let ty = self.ty as usize;
         match (self.ty, msg) {
+            // startled within 2.0 (the first of its type this point): off along its path with a one-shot animation
+            (0 | 1 | 5 | 31 | 32 | 39, 2) if !self.startled => {
+                for near_by in within(2.0) {
+                    if near_by && !near.flags[ty] {
+                        self.startled = true;
+                        self.moving |= ty != 31;
+                        if ty == 1 || ty == 31 {
+                            self.timer = 1;
+                        }
+                        (self.on, self.animating) = (true, true);
+                        self.restart_anim();
+                        // ponytail: its byte +0xbc (set here) is not kept
+                        near.flags[ty] = true;
+                    }
+                }
+            }
+            (0 | 1 | 5 | 31 | 32 | 39, 2) => {
+                // 31 sets off at frame 35; the animation's end holds on a type's frame
+                if ty == 31 && self.frame == 35.0 {
+                    self.moving = true;
+                }
+                if self.len <= self.frame {
+                    self.set_frame(match ty {
+                        0 => 28.0,
+                        31 => 36.0,
+                        _ => 32.0,
+                    });
+                }
+            }
+            (0 | 1 | 5 | 31 | 32 | 39, 0 | 4) => {
+                // ponytail: 32 stays on with its controller at speed 1 (the others at 0): the controller speed and
+                // the facing angles are not kept
+                (self.on, self.animating, self.moving, self.world) = (ty == 32, false, false, self.home);
+                self.set_frame(0.0);
+                near.flags[ty] = false;
+            }
+            // within 4.0: the animation once; the ball's box (±0.2) on its own tells the match (message 0x14)
+            (27..=29, 2) => {
+                self.struck = false;
+                if self.startled {
+                    return sounds;
+                }
+                let last = near.pos.len().wrapping_sub(1);
+                for (i, near_by) in within(4.0).into_iter().enumerate() {
+                    if near_by {
+                        (self.startled, self.animating) = (true, true);
+                        self.restart_anim();
+                    }
+                    let b = near.pos[i];
+                    let (lo, hi) = (|v: f32| ps2::sub(v, 0.2), |v: f32| ps2::add(0.2, v));
+                    if i == last && (0..3).all(|c| lo(b[c]) < hi(pos[c]) && !(hi(b[c]) <= lo(pos[c]))) {
+                        (self.startled, self.struck) = (true, true);
+                    }
+                }
+            }
+            (27..=29, 4) => (self.on, self.moving, self.world, self.animating) = (true, false, self.home, false),
+            // scrubs forward while someone is within 1.0, to the end; then back to 0 the next time
+            (48, 2) => {
+                let (mut s, mut f) = self.scrub;
+                let far = || within(1.0).iter().all(|&n| !n);
+                match s {
+                    0 if !far() => s = if f != 0 { 2 } else { 1 },
+                    1 => {
+                        self.set_frame(f as f32);
+                        f += 1;
+                        if self.len <= f as f32 && far() {
+                            s = 0;
+                        }
+                        f = (f as f32).min(self.len) as i32;
+                    }
+                    2 => {
+                        self.set_frame(f as f32);
+                        f -= 1;
+                        if f < 1 && far() {
+                            s = 0;
+                        }
+                        f = f.max(0); // ponytail: the game's floor is a global, 0 in every state seen
+                    }
+                    _ => {}
+                }
+                self.scrub = (s, f);
+            }
+            (48, 4) => {
+                (self.on, self.moving, self.world, self.startled, self.animating) = (true, false, self.home, false, false);
+                self.restart_anim();
+                self.scrub = (0, self.frame as i32);
+            }
             (34, 2) if !self.animating => {
                 self.counter -= 1;
                 if self.counter < 0 {
@@ -710,6 +835,9 @@ impl Default for Trigger {
             counter: 0,
             gap: 0,
             voice: (-1, 0),
+            startled: false,
+            scrub: (0, 0),
+            struck: false,
         }
     }
 }
