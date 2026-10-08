@@ -69,3 +69,9 @@ See 7-P11F-TARGET-FINAL.md. Done: `hst_sim::aim` (doubles `pair_aim`/`aim_at`, s
 See 8-P11G-SHOTKIND-FINAL.md. Done: `AiParams::picks` (checked on all 155 timing draws in `ai_s05.bin`),
 `aim::button`, the singles kind lock, serve toss/swing/aim and the quick-serve contact pick; `play.rs`
 `ai_press_kind` / `ai_contact_stick` / `ai_toss_kind` / `ai_serve_kind`.
+
+## P11h (dive and call-out)
+
+See 9-P11H-DIVE-FINAL.md. Done: the AI dive (drawn chance, `swing::dive` on its own path, the kept draw) and call-out
+timing (after the reaction hold, from shot 2, not while the partner swings), test `ai_dives_match_the_game` (fixture
+`ai_dive_s05.bin` from `tools/record_ai_dive.py`); `play.rs` `ai_dives` / `ai_mate_busy` / `bot`.
