@@ -2,7 +2,7 @@
 # Unattended runner: keeps starting `claude "continue"` (= do the next open prompt in PLAN.md) until no
 # unchecked prompts remain. Any exit — finished prompt, error, usage limit — just waits and starts again.
 # It's the normal TUI, so attach to watch or type to it; it can't ask questions (AskUserQuestion disabled), and
-# tools/overnight-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
+# tools/agent-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
 #
 #   tmux new -s hst tools/single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
 #   HST_IDLE=90 HST_PAUSE=60 tools/single.sh
@@ -37,7 +37,7 @@ while grep -q '^- \[ \]' PLAN.md; do
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' PLAN.md | cut -c1-100)" | tee -a "$log"
   id=$(uuidgen)
   claude "$prompt" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
-    --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}]}}"
+    --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it
   t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1)

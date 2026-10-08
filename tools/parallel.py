@@ -7,7 +7,7 @@ sessions going, each on its own PLAN.md task in its own git worktree, and merges
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
 runner's session (the master has its own window): watch or type to any of them. Panes are found by their @hst option, so
-join/break/swap them freely. Like single.sh, tools/overnight-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
+join/break/swap them freely. Like single.sh, tools/agent-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
 into a finished session cancels that, so /exit it yourself or the runner never merges it.
 
 Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split parents, `(after X)` while X is open,
@@ -163,7 +163,7 @@ def start(n, task):
     since = out.tell()
     out.write(f'\n=== {datetime.now().isoformat(timespec="seconds")} {tid} session {sid}\n')
     out.close()
-    stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/overnight-stop.sh')}]}]
+    stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/agent-stop.sh')}]}]
     cmd = shlex.join(['claude', PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
     p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}'])
