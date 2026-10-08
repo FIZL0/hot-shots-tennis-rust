@@ -1138,6 +1138,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     (match_rng, pads): (Option<Res<MatchRng>>, Res<Pads>),
+    mut gallery_used: Local<[bool; 4]>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -1335,8 +1336,8 @@ fn setup(
             .map(|(b, mid)| (std::sync::Arc::new(b), mid)),
     });
     // the hit-spark table and the gallery bank (slot 6), drawn before the sound manager is made
-    // ponytail: one match per run, so all four banks are unused; the game keeps them used across matches
-    let pick = game.rng.setup_gallery(&mut [false; 4]);
+    // the used banks live as long as the sound manager (the whole run), so a later setup skips the banks played
+    let pick = game.rng.setup_gallery(&mut gallery_used);
     let gallery = crate::audio::gallery_bank(&mut iso, game.stage as usize, pick);
     commands.insert_resource(crate::audio::GalleryBank(gallery.map(std::sync::Arc::new)));
     // the match starts (the sound manager's reseed), then its first point
