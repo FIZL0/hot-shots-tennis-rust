@@ -111,6 +111,22 @@ impl Rngs {
     pub fn change_ends(&mut self) {
         self.sound = Mt::new(self.rand.next());
     }
+
+    /// The match setup's shared draws after the players' (each player's voice-bank pick, AI reseed and placement):
+    /// the hit-spark table (25 sparks × 4, lost to the sound manager's own roll), then the gallery bank (0..3) among
+    /// those `used` doesn't hold, which it then holds (all four used: all freed first).
+    pub fn setup_gallery(&mut self, used: &mut [bool; 4]) -> usize {
+        for _ in 0..100 {
+            self.shared.next();
+        }
+        if used.iter().all(|&u| u) {
+            *used = [false; 4];
+        }
+        let free: Vec<usize> = (0..4).filter(|&k| !used[k]).collect();
+        let pick = free[self.shared.r15() as usize % free.len()];
+        used[pick] = true;
+        pick
+    }
 }
 
 #[cfg(test)]

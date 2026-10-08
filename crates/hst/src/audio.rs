@@ -338,14 +338,15 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     let n = args.stage.map_or(args.court, |s| s as usize);
     let court = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd"));
     commands.insert_resource(CourtBank(court.map(Arc::new)));
-    // the gallery (slot 6): one of four per match, archive A (`galsg`) or B (`galdv`), crowd a or b
-    // ponytail: the clock picks it; the game draws without repeats until all four have played
-    let v = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() >> 10 & 3);
-    let (xb, set) = if v < 2 { ('A', "sg") } else { ('B', "dv") };
-    let crowd = if v & 1 == 0 { 'a' } else { 'b' };
-    let gallery = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}{xb}.XB0"), &format!("data/sound/VOICE/GALLERY/gal{set}{n:02}{crowd}.hd"));
-    commands.insert_resource(GalleryBank(gallery.map(Arc::new)));
     commands.insert_resource(sound);
+}
+
+/// Court `n`'s gallery bank (slot 6) for the setup's pick 0..3 (`Rngs::setup_gallery`): archive A (`galsg`) below
+/// 2, else B (`galdv`); crowd a or b by its low bit.
+pub fn gallery_bank(iso: &mut Iso, n: usize, pick: usize) -> Option<SoundBank> {
+    let (xb, set) = if pick < 2 { ('A', "sg") } else { ('B', "dv") };
+    let crowd = if pick & 1 == 0 { 'a' } else { 'b' };
+    SoundBank::load(iso, &format!("SND/COURT/C_SND{n:02}{xb}.XB0"), &format!("data/sound/VOICE/GALLERY/gal{set}{n:02}{crowd}.hd"))
 }
 
 /// The players' voice banks (slots 1 and up), from `play.rs`'s line-up.

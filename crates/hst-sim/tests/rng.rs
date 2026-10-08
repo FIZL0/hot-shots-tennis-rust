@@ -538,3 +538,68 @@ fn reaction_views_like_the_game() {
     eprintln!("{seen} in close view, {voiced} voiced");
     assert!(seen >= 2 && voiced == 1);
 }
+
+/// The match setup's shared draws against `context/p3d3/setup_ram.bin` (research/p3d3_setup_ram.py over save states
+/// of singles and doubles matches on several courts): from the seed whose weather schedule RAM shows (found by
+/// walking `rand()` back from its saved state, past the first point's seed when one was drawn), each player draws
+/// its voice bank (`% 100 >= 70` → b), an AI reseed when it has an AI object and a placement, then the hit sparks'
+/// 100 and the gallery pick (`Rngs::setup_gallery`): every state's voice flags, AI generator and pick follow.
+#[test]
+fn setup_draws_like_the_game() {
+    use hst_sim::rng::{Rand, Rngs};
+    use hst_sim::weather::{Odds, Wind, schedule};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(d), Ok(mut iso)) = (
+        std::fs::read(format!("{root}/context/p3d3/setup_ram.bin")),
+        hst_data::iso::Iso::open(&format!("{root}/Hot Shots Tennis (USA).iso")),
+    ) else {
+        return eprintln!("setup_ram.bin or the ISO missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let exe = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    // rand()'s step backwards: its multiplier's inverse mod 2⁶⁴ is a^(2⁶³ − 1)
+    const A: u64 = 0x5851_f42d_4c95_7f2d;
+    let inv = (0..63).fold((1u64, A), |(x, b), _| (x.wrapping_mul(b), b.wrapping_mul(b))).0;
+    const SIZE: usize = 20 + 8 + 32 + 8 + 0x9d0 + 68 + 65 * 8;
+    assert!(d.len() >= SIZE * 5);
+    for s in d.chunks_exact(SIZE) {
+        let u = |o: usize| u32::from_le_bytes(s[o..o + 4].try_into().unwrap());
+        let (court, players, games, sets, match_seed) = (u(0), u(4) as usize, u(8), u(12), u(16));
+        let (pick, used) = (u(60) as usize, &s[64..68]);
+        let ai = Mt::from_ram(&s[68..]);
+        let (weathers, wind) = (&s[68 + 0x9d0..][..65], &s[68 + 0x9d0 + 68..]);
+        let o = exe.weather_odds(court);
+        let odds = Odds { cloudy: o[0], cloudy_len: [o[1], o[2]], rain: o[3], rain_len: [o[4], o[5]], no_border: o[7] != 0, heavy: o[8] != 0 };
+        let ((directions, speed), (chance, kind)) = (exe.wind(court), exe.gusts(court));
+        let wnd = Wind { chance, kind, directions, speed };
+        let mut st = u64::from_le_bytes(s[20..28].try_into().unwrap());
+        let mut past_point = match_seed == 0;
+        let shared = (0..400_000)
+            .find_map(|_| {
+                let out = (st >> 32) as u32 & 0x7fff_ffff;
+                st = st.wrapping_sub(1).wrapping_mul(inv);
+                past_point |= out == match_seed;
+                let mut mt = Mt::new(out);
+                let sch = schedule(&odds, &wnd, games as i32, sets as i32, players as i32, || mt.next());
+                let degrees = |k: usize| i32::from_le_bytes(wind[8 * k + 4..8 * k + 8].try_into().unwrap());
+                (past_point && sch.iter().enumerate().all(|(k, g)| g.weather == weathers[k] && g.degrees as i32 == degrees(k)))
+                    .then_some(mt)
+            })
+            .unwrap_or_else(|| panic!("court {court}: no seed gives RAM's weather"));
+        let mut r = Rngs::new(Rand(0), shared);
+        let mut ai_seen = None;
+        for i in 0..players {
+            assert_eq!(r.shared.r15() % 100 >= 70, u(28 + 8 * i) != 0, "court {court} player {i} voice bank");
+            if u(32 + 8 * i) != 0 {
+                r.new_ai();
+                ai_seen = Some(r.ai.clone());
+            }
+            r.shared.next();
+        }
+        let ai_seen = ai_seen.expect("an AI object");
+        assert!(reach(&ai_seen, &ai, 200_000).is_some(), "court {court}: AI generator");
+        // the flags RAM shows after the pick, less the pick's own
+        let mut before = std::array::from_fn(|k| k != pick && used[k] != 0);
+        assert_eq!(r.setup_gallery(&mut before), pick, "court {court}: gallery");
+    }
+}
