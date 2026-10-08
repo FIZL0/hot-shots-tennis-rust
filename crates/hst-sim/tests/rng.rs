@@ -679,7 +679,7 @@ fn rand_draws_like_the_game() {
 /// The match setup's `rand()` calls against `context/p3f/setup_rand.bin` (research/p3f_setup_seq.py --fixture over
 /// two research/p3f_menu_log.py logs: court 4 doubles, clear): from the match seed, `Rngs::setup_rand` (20 clouds)
 /// must draw the effects seed where the game does, and with the sound manager's second reseed and the intro's
-/// `Rngs::INTRO_TICKS` flare ticks land where the first point's shared reseed draws. Each record holds the state's
+/// `Rngs::intro_ticks(4)` flare ticks land where the first point's shared reseed draws. Each record holds the state's
 /// low word only: the full state is found by stepping from boot.
 #[test]
 fn setup_rand_like_the_game() {
@@ -699,8 +699,31 @@ fn setup_rand_like_the_game() {
         assert_eq!(fx, at.next(), "the effects seed");
         assert_eq!(g.rand, at, "rand() after the effects seed");
         g.change_ends();
-        (0..Rngs::INTRO_TICKS).for_each(|_| g.flare_tick());
+        (0..Rngs::intro_ticks(4)).for_each(|_| g.flare_tick());
         assert_eq!(low(&g.rand), point, "rand() at the first point");
     }
     assert_eq!(d.len(), 24);
+}
+
+/// The intro's length per court against `context/p3f2/intro.bin` (research/p3f2_intro_log.py --fixture over 20 logs:
+/// courts 1–11, singles and doubles, clear): from the intro's first flare tick, `Rngs::intro_ticks` flare ticks must
+/// land where the first point's shared reseed draws. Records: court, players, the state's low word at both.
+#[test]
+fn intro_ticks_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/p3f2/intro.bin")) else {
+        return eprintln!("intro.bin missing, skipped");
+    };
+    let low = |r: &Rand| r.0 as u32;
+    for rec in d.chunks_exact(16) {
+        let [court, players, start, point] = std::array::from_fn(|k| u32::from_le_bytes(rec[4 * k..4 * k + 4].try_into().unwrap()));
+        let mut r = Rand::default();
+        while low(&r) != start {
+            r.next();
+        }
+        let mut g = Rngs::new(r, Mt::new(0));
+        (0..Rngs::intro_ticks(court)).for_each(|_| g.flare_tick());
+        assert_eq!(low(&g.rand), point, "court {court}, {players} players");
+    }
+    assert_eq!(d.len(), 20 * 16);
 }
