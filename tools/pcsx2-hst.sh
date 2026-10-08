@@ -4,7 +4,7 @@
 #                                     HST_REALTIME=1 slowed to 0.25 for real-time tools
 #   tools/pcsx2-hst.sh stop           close this instance only
 #   tools/pcsx2-hst.sh status         is this instance up (pid); the game's own state: tools/pine.py
-# HST_PCSX2=N (parallel runs, set by tools/overnight-parallel.py): copy N of the user's PCSX2 config,
+# HST_PCSX2=N (parallel runs, set by tools/parallel.py): copy N of the user's PCSX2 config,
 # ../<repo>-slots/pcsx2/sN (own PINE slot 28011+N, save states, memory cards), seeing only virtual pad N.
 # Unset: the user's own PCSX2 config, which never sees the parallel pads.
 set -e

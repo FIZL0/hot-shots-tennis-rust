@@ -2,17 +2,16 @@
 # Unattended runner: keeps starting `claude "continue"` (= do the next open prompt in PLAN.md) until no
 # unchecked prompts remain. Any exit — finished prompt, error, usage limit — just waits and starts again.
 # It's the normal TUI, so attach to watch or type to it; it can't ask questions (AskUserQuestion disabled), and
-# tools/overnight-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
+# tools/agent-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
 #
-#   tmux new -s hst tools/overnight.sh        # detach: Ctrl-b d · reattach: tmux attach -t hst
-#   HST_IDLE=90 HST_PAUSE=60 tools/overnight.sh
+#   tmux new -s hst tools/single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
+#   HST_IDLE=90 HST_PAUSE=60 tools/single.sh
 #
 # Runs with permission prompts bypassed: review the work in the morning (git log), and keep your backup.
-# Like the parallel runner's agents it gets its own PCSX2 copy (HST_PCSX2=6, ../<repo>-slots/pcsx2/s6; the 5-slot run
-# uses 1..5), so your own PCSX2 stays yours.
+# Like the parallel runner's agents it gets its own PCSX2 copy (HST_PCSX2=6, ../<repo>-slots/pcsx2/s6; parallel runs use 1..N), so your own PCSX2 stays yours.
 set -u
 cd "$(dirname "$(realpath "$0")")/.."
-pgrep -f '^python3 .*[o]vernight-parallel\.py' >/dev/null && { echo "a parallel run is going; wait for it to end"; exit 1; }
+pgrep -f '^python3 .*([o]vernight-parallel|tools/[p]arallel)\.py' >/dev/null && { echo "a parallel run is going; wait for it to end"; exit 1; }
 export HST_PCSX2=6 HST_PCSX2_MAX_HOLD=${HST_PCSX2_MAX_HOLD:-1200}
 cfg=../$(basename "$PWD")-slots/pcsx2/s6/PCSX2
 [ -d "$cfg" ] || { echo "no PCSX2 copy at $cfg (needs its own PINESlot 28017)"; exit 1; }
@@ -38,7 +37,7 @@ while grep -q '^- \[ \]' PLAN.md; do
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' PLAN.md | cut -c1-100)" | tee -a "$log"
   id=$(uuidgen)
   claude "$prompt" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
-    --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/overnight-stop.sh\"}]}]}}"
+    --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it
   t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1)

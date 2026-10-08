@@ -116,6 +116,9 @@ pub struct Model {
     pub node_bind: Vec<[[f32; 4]; 4]>,
     /// Per node (pre-order), its name (3ds Max Biped names on characters: `Bip01Pelvis`, …, `Racket`).
     pub node_names: Vec<String>,
+    /// Root node bounding box corners (header +0, +0x10).
+    pub lo: [f32; 4],
+    pub hi: [f32; 4],
     /// Root node bounding sphere: centre (w = 1) and radius (header +0x20, +0x30).
     pub center: [f32; 4],
     pub radius: f32,
@@ -255,6 +258,8 @@ fn tree_item(c: &mut Cursor, depth: u32, parent: Option<usize>, model: &mut Mode
     }
     let h = c.take(0x40)?;
     if depth == 0 {
+        model.lo = std::array::from_fn(|k| f32_at(h, 4 * k));
+        model.hi = std::array::from_fn(|k| f32_at(h, 0x10 + 4 * k));
         model.center = std::array::from_fn(|k| f32_at(h, 0x20 + 4 * k));
         model.radius = f32_at(h, 0x30);
     }

@@ -6,7 +6,7 @@
 //! Also the sun-shade map built from the disc's court 10 against the game's (`context/p17l/map05.bin`, slot 5).
 
 use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
-use hst_sim::court;
+use hst_sim::{court, ps2};
 use hst_sim::shade::{self, Caster, Frame, Shape};
 
 #[test]
@@ -238,6 +238,48 @@ fn shadow_textures_match_the_game() {
     assert_eq!(n, 16);
 }
 
+/// The receiver pass bit for bit with the reds the game read back: `context/p17v/rcv_pass.txt`
+/// (`research/p17v3_fixture.py`: the receiver draws and shadow textures of `context/p17v/cap0.gs`, the reds of
+/// `cap0.red`; slot 5, court 10, the 4 tiles the dump holds). Skips when absent.
+#[test]
+fn receiver_tiles_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(txt) = std::fs::read_to_string(format!("{root}/context/p17v/rcv_pass.txt")) else {
+        eprintln!("rcv_pass.txt missing, skipped");
+        return;
+    };
+    let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let mut texs = Vec::new();
+    let mut draws: Vec<(usize, Vec<[shade::ReceiverVertex; 3]>)> = Vec::new();
+    let (mut tile, mut n, mut bad) = (String::new(), 0, Vec::new());
+    for line in txt.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w[0] {
+            "X" => texs.push(shade::PassTexture { alpha: hex(w[2]), log2: [7, 7], wrap: [shade::Wrap::Clamp(0, 127); 2] }),
+            "T" => (tile, draws) = (line.to_string(), Vec::new()),
+            "D" => draws.push((w[1].parse().unwrap(), Vec::new())),
+            "V" => {
+                let t = std::array::from_fn(|k| {
+                    let f = &w[1 + 5 * k..];
+                    let bits = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+                    shade::ReceiverVertex { xy: [f[0].parse().unwrap(), f[1].parse().unwrap()], stq: [bits(f[2]), bits(f[3]), bits(f[4])] }
+                });
+                draws.last_mut().unwrap().1.push(t);
+            }
+            _ => {
+                let d: Vec<shade::ReceiverDraw> = draws.iter().map(|(i, t)| shade::ReceiverDraw { tex: &texs[*i], tris: t.clone() }).collect();
+                let diff = shade::receiver_tile(&d).iter().zip(hex(w[1])).filter(|(a, b)| **a != *b).count();
+                if diff > 0 {
+                    bad.push(format!("{tile}: {diff} reds differ"));
+                }
+                n += 1;
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    assert_eq!(n, 4);
+}
+
 /// The ball model's draw scale and its outline billboard against the game, frame by frame:
 /// `context/fixtures/b36b_ball.bin` (slot 5, court 10, 900 frames from the serve set-up into the rally; made by
 /// `research/b36b_ball_rec.py`). Skips when the recording is absent.
@@ -269,4 +311,58 @@ fn ball_scale_and_outline_match_the_game() {
     eprintln!("{grown} frames grown");
     assert!(bad.is_empty(), "{} frames differ:\n{}", bad.len(), bad[..bad.len().min(8)].join("\n"));
     assert!(grown > 50);
+}
+
+/// The 17 court 10 casters' light matrices built from the disc (plant records, model boxes, the sun from the
+/// court's time-of-day row 0 at hour 1) against the game's (`context/p17v/rcv.txt` `L` rows, slot 5). Skips when
+/// absent.
+#[test]
+fn light_matrices_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(txt), Ok(mut iso)) = (std::fs::read_to_string(format!("{root}/context/p17v/rcv.txt")), Iso::open(format!("{root}/Hot Shots Tennis (USA).iso"))) else {
+        eprintln!("recording or disc missing, skipped");
+        return;
+    };
+    let mut models = std::collections::HashMap::new();
+    let mut read = |xb: &str, suffix: &str| {
+        let d = iso.read(&format!("COURT/10/{xb}")).unwrap();
+        let arc = Archive::parse(&d).unwrap();
+        for e in arc.entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) {
+            if let Ok(m) = mdl::parse(&arc.read(e).unwrap()) {
+                models.insert(e.name[..e.name.len() - 4].rsplit('\\').next().unwrap().to_ascii_lowercase(), m);
+            }
+        }
+        arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).map(|e| arc.read(e).unwrap())
+    };
+    let list = layout::entries(&String::from_utf8_lossy(&read("CMN.XB", "entry_c10.txt").unwrap()));
+    let envir = read("CMN.XB", "envir_c10.dat").unwrap();
+    let hole = read("GRD01.XB", "envir_c10_h01.dat").unwrap();
+    let plants = layout::plants(&read("HOL01.XB", "plant_c10_h01_0.dat").unwrap()).unwrap();
+    let f = |d: &[u8], o: usize| f32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+    let (_, sun) = shade::sun(f(&envir, 0x14), f(&envir, 0x18), f(&envir, 0x1c), f(&hole, 0x58), 1);
+    let axes = shade::sun_axes(sun);
+    let built: Vec<[[u32; 4]; 4]> = plants
+        .iter()
+        .filter(|p| p.code[3] != b'0' && (17..=19).contains(&p.category))
+        .map(|p| {
+            let m = &models[&layout::resolve(&list, p, 0).unwrap().stem];
+            let (mut item, _) = hst_sim::world::place(p.category, p.pos, p.yaw, p.code);
+            if p.scale != 1.0 {
+                item[..3].iter_mut().for_each(|r| r[..3].iter_mut().for_each(|x| *x = hst_sim::vu0::mul(*x, p.scale)));
+            }
+            let centre = [0, 1, 2].map(|k| ps2::mul(ps2::add(m.lo[k], m.hi[k]), 0.5));
+            let half = [0, 1, 2].map(|k| ps2::mul(ps2::sub(m.hi[k], m.lo[k]), 0.5));
+            shade::light_matrix(&item, p.scale, centre, half, &axes).map(|r| r.map(f32::to_bits))
+        })
+        .collect();
+    let want: Vec<[[u32; 4]; 4]> = txt
+        .lines()
+        .filter(|l| l.starts_with("L "))
+        .map(|l| {
+            let w: Vec<u32> = l.split_whitespace().skip(2).map(|h| u32::from_str_radix(h, 16).unwrap()).collect();
+            std::array::from_fn(|i| std::array::from_fn(|j| w[4 * i + j]))
+        })
+        .collect();
+    assert_eq!(want.len(), 17);
+    assert_eq!(built, want);
 }

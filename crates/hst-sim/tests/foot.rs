@@ -90,19 +90,31 @@ fn steps0(a: &Feet) -> impl Iterator<Item = &Puff> {
 
 #[test]
 fn footsteps_s05() {
+    footsteps("");
+}
+
+/// `foot_s05r.bin` (`FOOT_RAIN=2 record_foot.py 5 3000 …`): the same match with the weather byte made rain. From the
+/// first point's reset on, the run object's court flags are the app's (`weather::rain`: wet, no dust) and every
+/// step throws spray with the wet footprint look, drifting with the court's wind.
+#[test]
+fn footsteps_rain_s05() {
+    footsteps("r");
+}
+
+fn footsteps(name: &str) {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let (Ok(data), Ok(cnf), Ok(bin)) = (
-        std::fs::read(format!("{root}/context/fixtures/foot_s05.bin")),
+        std::fs::read(format!("{root}/context/fixtures/foot_s05{name}.bin")),
         std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
         std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
     ) else {
-        return eprintln!("foot_s05.bin or disc absent, skipped");
+        return eprintln!("foot_s05{name}.bin or disc absent, skipped");
     };
     let t = exe::Game::new(&cnf, &bin).unwrap().foot();
     let court = i(&data, 0) as usize;
     let frames: Vec<&[u8]> = data[8..].chunks_exact(SIZE).collect();
     let mut feet = state(frames[0]);
-    let (mut steps, mut prints, mut checked, mut skipped, mut doubled, mut resets) = (0, 0, 0, 0, 0, 0);
+    let (mut steps, mut prints, mut checked, mut skipped, mut doubled, mut resets, mut wets, mut stalls) = (0, 0, 0, 0, 0, 0, 0, 0);
     for k in 1..frames.len() {
         let (fr, h) = (frames[k], &frames[k][RUN..]);
         assert_eq!(i(fr, 0), i(frames[k - 1], 0) + 1, "frame {k}: gap");
@@ -113,9 +125,15 @@ fn footsteps_s05() {
             feet = state(fr);
             continue;
         }
+        // the reset takes the court's flags from the weather byte (gm+0x84 → +0x135)
+        if resets > 0 {
+            let wet = hst_sim::weather::rain(fr[WIND - 0x10 + 5]);
+            assert_eq!((fr[FLAGS] != 0, fr[FLAGS + 1] != 0), (t.courts[court].dusty && !wet, wet), "frame {k}: court flags");
+            wets += wet as usize;
+        }
         feet.after_point = h[0xc0] != 0;
-        let runners: Vec<Runner> = (0..4)
-            .map(|p| {
+        let runners = |fr: &[u8]| -> Vec<Runner> {
+            (0..4).map(|p| {
                 let b = &fr[PL + PLSZ * p..];
                 Runner {
                     character: i(h, 0x7c + 4 * p) as usize,
@@ -127,7 +145,8 @@ fn footsteps_s05() {
                     ..Runner::default()
                 }
             })
-            .collect();
+            .collect()
+        };
         let before = feet.prints.len();
         let want = state(fr);
         let full = i(h, 0x11c) <= 32;
@@ -137,20 +156,33 @@ fn footsteps_s05() {
                 && (!full || steps0(a).map(puff_key).eq(want.puffs.iter().map(puff_key)))
         };
         // the game sometimes skips the update a frame and catches up with two the next
-        let tick = |a: &mut Feet| a.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || unreachable!());
+        let tick = |a: &mut Feet, fr: &[u8]| a.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners(fr), h[0x120] != 0, &mut || unreachable!());
         let mut one = feet.clone();
-        tick(&mut one);
+        tick(&mut one, fr);
         if !same(&one) && same(&feet) {
             skipped += 1;
             continue;
         }
         if !same(&one) {
-            let mut two = one.clone();
-            tick(&mut two);
-            if same(&two) {
-                doubled += 1;
-                one = two;
+            // the missed update ran on this frame's inputs or, less often, the last frame's
+            for first in [fr, frames[k - 1]] {
+                let mut two = feet.clone();
+                tick(&mut two, first);
+                tick(&mut two, fr);
+                if same(&two) {
+                    doubled += 1;
+                    one = two;
+                    break;
+                }
             }
+        }
+        // after a stall (the toes held over the last frames) the game catches up through poses it never showed: the
+        // missed updates' inputs aren't in the recording
+        let toes = |fr: &[u8]| (0..4).map(|p| v4(fr, PL + PLSZ * p + 0x120)).collect::<Vec<_>>();
+        if !same(&one) && k >= 2 && toes(frames[k - 1]) == toes(frames[k - 2]) && toes(fr) != toes(frames[k - 1]) {
+            stalls += 1;
+            feet = want;
+            continue;
         }
         feet = one;
         assert_eq!((feet.armed, feet.cooldown), (want.armed, want.cooldown), "frame {k}: step state");
@@ -162,8 +194,9 @@ fn footsteps_s05() {
         steps += feet.puffs.iter().filter(|u| u.timer == t.puffs[0].fade_in && u.phase == 0).count();
         prints += (feet.prints.len() > before) as usize;
     }
-    eprintln!("{} frames ({skipped} without an update, {doubled} with two, {resets} points), {checked} puff frames, {steps} puffs, {prints} footprint frames", frames.len());
-    assert!(steps > 100 && prints > 100);
+    eprintln!("{} frames ({skipped} without an update, {doubled} with two, {resets} points, {wets} wet, {stalls} after a stall), {checked} puff frames, {steps} puffs, {prints} footprint frames", frames.len());
+    assert!(steps > 100 && prints > 100 && stalls < 5);
+    assert!(name != "r" || wets > 1000);
 }
 
 // `foot_s05x.bin` (`record_foot.py 5 5000 … extras`): each frame as above, then the sound manager's MT 0x9c8, run object
