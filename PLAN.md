@@ -162,7 +162,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Presentation
 
-- [~] **P16** Camera (court views, pick, wiring, other modes open) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
+- [~] **P16** Camera (other modes open; court views P16c, pick and wiring P16a) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
 - [ ] **P17** (split into P17a–h) Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [x] **P17a** Court material GS state: blend, alpha test, Z write, TFX, PRIM, wrap (in P17) → new `hst/src/gs.rs` gs.wgsl · `main.rs` gs_models · `mdl.rs` Packet.prim | t: gs.rs | j: 2026-10-07-p17-court-rendering
 - [x] **P17b** Fog (FGE) (in P17) → `gs.rs` gs.wgsl · `main.rs` load/gs_models_anim | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering
@@ -186,7 +186,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [x] **P25** Ball-hits-player pop-ups (user 2026-10-07): when the ball hits a player it sometimes shows a sound-word pop-up ("thwip", "bonk", …); port when it shows and which one, drawn exactly as the original (sprite, place, scale, timing, fade), checked against frame-stepped screenshots → `play.rs` balloons · `ball.rs` player hit · `plan/P25.md`
 - [ ] **P25a** Body hit, the rest (split from P25): the ball's own course after it hits a player (it flies on through now), the hit player's motion 0x2b and voice at the moment of the hit, the bone test on the game's crossfaded pose, pop-up alpha between ticks, practice's message 0x15 → `play/bodyhit.rs` · `hst-sim/src/bodyhit.rs` `ball.rs` · `play.rs` react · `plan/P25a.md` | t: bodyhit.rs | j: 2026-10-07-p25-body-hit-popups
 - [x] **P16a** Post-point cut-aways in play (low priority, user 2026-10-06) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
-- [ ] **P16c** Cut-away court views 0x0c/0x0d/0x11: the players-framing yaw (record block 0x48..0x70) → `hst-sim/src/cutaway.rs` | t: cutaway.rs | j: 2026-10-06-p16-cutaway/2-DIRECTOR-FINAL.md
+- [x] **P16c** Cut-away court views 0x0c/0x0d/0x11: the players-framing yaw (record block 0x48..0x70) → `hst-sim/src/cutaway.rs` | t: cutaway.rs | j: 2026-10-06-p16-cutaway/2-DIRECTOR-FINAL.md
 
 ### Confirmations
 

@@ -251,6 +251,9 @@ pub struct Shot {
     /// The view this frame: rows right, down, forward and the eye; horizontal half-angle.
     pub cam: M4,
     pub fov: f32,
+    /// Framing: the yaw the view has been held back by so far, and this frame's share of it.
+    yaw_held: f32,
+    yaw_over: f32,
 }
 
 impl Shot {
@@ -258,7 +261,7 @@ impl Shot {
     pub fn new(shots: &[CameraShot], number: u8, mirror: bool) -> Self {
         let s = &shots[number as usize];
         let channels = compile(&s.script, mirror).into_iter().map(Channel::new).collect();
-        Shot { number, record: s.record.clone(), channels, cam: IDENTITY, fov: 0.0 }
+        Shot { number, record: s.record.clone(), channels, cam: IDENTITY, fov: 0.0, yaw_held: 0.0, yaw_over: 0.0 }
     }
 
     fn byte(&self, o: usize) -> u8 {
@@ -282,6 +285,9 @@ impl Shot {
     pub fn step(&mut self, frame: impl Fn(u8) -> M4) {
         for c in &mut self.channels[5..] {
             c.step();
+        }
+        if self.byte(0x4c) != 0 && self.byte(0x4d) != 0 {
+            self.yaw_held += self.yaw_over;
         }
         self.build(&frame);
     }
@@ -369,6 +375,82 @@ impl Shot {
                 }
             }
         }
+        if self.byte(0x4a) != 0 || self.byte(0x4c) != 0 {
+            self.frame_target(frame);
+        }
+    }
+
+    /// Turn toward the record's target frame (the cut-aways' 9 is the shown player's spot, 19): pitch and yaw
+    /// each follow the target past a dead zone (a fraction of the half-angle, record 0x54.. / 0x64..) with an
+    /// eased pull. The yaw left over once the pull is at its limit is held for the next frames (record 0x4d).
+    fn frame_target(&mut self, frame: &impl Fn(u8) -> M4) {
+        use std::f32::consts::{PI, TAU};
+        let wrap = |a: f32| if PI < a { a - TAU } else if a < -PI { a + TAU } else { a };
+        let sign = |a: f32| if a < 0.0 { -1.0 } else { 1.0 };
+        // ponytail: the record 0x14 blend of these from (4, 1, 1) over 90 frames and the eye move of record 0x49
+        // are left out: no cut-away sets them
+        let (p_off, p_dead, p_scale, p_ease) = (self.float(0x50), self.float(0x54), self.float(0x58), self.float(0x5c));
+        let (y_off, y_dead, y_scale, y_ease) = (self.float(0x60), self.float(0x64), self.float(0x68), self.float(0x6c));
+        let target = frame(match self.byte(0x48) {
+            9 => 19,
+            b => b,
+        })[3];
+        // the reference: this view, its yaw moved by what was held back
+        let mut r = self.cam;
+        if self.byte(0x4c) != 0 && self.byte(0x4d) != 0 {
+            let f = r[2];
+            let eye = r[3];
+            r = mul(&rot_y(wrap(f[0].atan2(f[2]) + self.yaw_held)), &rot_x(pitch(f)));
+            r[3] = eye;
+        }
+        let (fov, vfov) = (self.fov, self.vfov());
+        let d = [target[0] - r[3][0], target[1] - r[3][1], target[2] - r[3][2], target[3] - r[3][3]];
+        self.yaw_over = 0.0;
+        let mut yaw = wrap(y_off * fov + r[2][0].atan2(r[2][2]));
+        let (mut ey, mut pull_y) = (0.0, 0.0);
+        if self.byte(0x4c) != 0 {
+            ey = diff(d[0].atan2(d[2]), yaw);
+            if y_dead != 0.0 {
+                pull_y = (y_dead * fov.tan()).atan();
+                let lim = pull_y * y_scale;
+                if self.byte(0x70) != 0 && 1.0 < ey.abs() / lim {
+                    ey = lim * sign(ey);
+                }
+                let mut t = (ey.abs() / lim).min(1.0);
+                if t == 1.0 {
+                    self.yaw_over = diff(ey, lim * sign(ey));
+                }
+                if y_ease != 0.0 {
+                    t = 1.0 - (1.0 - t).powf(y_ease);
+                }
+                pull_y = -pull_y * t * sign(ey);
+                ey += pull_y;
+            }
+            yaw = wrap(yaw + wrap(ey));
+        }
+        let mut pch = wrap(p_off * vfov + pitch(r[2]));
+        let mut ep = 0.0;
+        if self.byte(0x4a) != 0 {
+            let e = diff(pitch(d), pch);
+            if self.byte(0x4b) == 0 || 0.0 <= e {
+                let mut pull = 0.0;
+                if p_dead != 0.0 {
+                    let a = (p_dead * vfov.tan()).atan();
+                    let mut t = (e.abs() / (a * p_scale)).min(1.0);
+                    if p_ease != 0.0 {
+                        t = 1.0 - (1.0 - t).powf(p_ease);
+                    }
+                    pull = ((-a * t * sign(e)).tan() * pull_y.cos()).atan();
+                }
+                ep = wrap(e + pull);
+            }
+            pch = wrap(pch + ep);
+        }
+        if ep == 0.0 && ey == 0.0 {
+            return;
+        }
+        self.cam = mul(&rot_y(yaw), &rot_x(pch));
+        self.cam[3] = r[3];
     }
 
     /// The subject frame: the record's frame (turned round, kept upright on request, moved to another frame's
@@ -513,6 +595,8 @@ pub struct Frames {
     pub shown: [[M4; 4]; 2],
     /// The shown player's live head (frame 35): [`head_frame`].
     pub head: M4,
+    /// The shown player's live ground spot (frame 19, the court views' target).
+    pub spot: [f32; 4],
 }
 
 impl Frames {
@@ -522,6 +606,7 @@ impl Frames {
             6 => self.corner,
             29 | 30 | 45 | 46 | 61 | 62 | 77 | 78 => self.shown[(i as usize - 29) % 2][(i as usize - 29) / 16],
             35 => self.head,
+            19 => [IDENTITY[0], IDENTITY[1], IDENTITY[2], self.spot],
             _ => IDENTITY,
         }
     }

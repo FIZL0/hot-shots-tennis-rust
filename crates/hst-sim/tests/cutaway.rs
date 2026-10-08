@@ -29,7 +29,7 @@ fn cutaway_s05() {
     let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
     let vsync = |s: &[u8]| u32::from_le_bytes(s[0..4].try_into().unwrap());
     let (mut shot, mut prev): (Option<Shot>, Option<Shot>) = (None, None);
-    let (mut n, mut worst, mut stale, mut skipped) = (0, 0.0f32, 0, std::collections::BTreeSet::new());
+    let (mut n, mut worst, mut stale, mut court) = (0, 0.0f32, 0, 0.0f32);
     for (k, s) in frames.iter().enumerate() {
         let number = s[CAM + 0x114];
         let new_run = k == 0 || vsync(s) != vsync(frames[k - 1]) + 1 || number != frames[k - 1][CAM + 0x114];
@@ -60,11 +60,6 @@ fn cutaway_s05() {
             stale += 1;
             continue;
         }
-        // the court views (0x0c, 0x0d, 0x11) frame several players (not ported yet)
-        if matches!(number, 0x0c | 0x0d | 0x11) {
-            skipped.insert(number);
-            continue;
-        }
         for c in [5, 6, 11, 13, 14] {
             let want = f(s, CAM + 0x2d58 + c * 0x1c);
             assert!((sh.ch(c) - want).abs() < 1e-4, "frame {k} shot {number:#x} channel {c}: {} vs {want}", sh.ch(c));
@@ -73,13 +68,14 @@ fn cutaway_s05() {
         let want: Vec<f32> = (0..12).map(|i| f(s, CAM + 0x60 + 16 * (i / 3) + 4 * (i % 3))).collect();
         let got: Vec<f32> = v.rot.iter().chain(std::iter::once(&v.eye)).flatten().copied().collect();
         let err = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold((v.fov - f(s, CAM + 0xa4)).abs(), f32::max);
+        if matches!(number, 0x0c | 0x0d | 0x11) { court = court.max(err); }
         if err > worst {
             worst = err;
             eprintln!("frame {k} shot {number:#x}: err {err:.6}");
         }
         n += 1;
     }
-    eprintln!("{n} frames checked, worst {worst}; {stale} stale samples; court views skipped: {skipped:x?}");
+    eprintln!("{n} frames checked, worst {worst} (court views {court}); {stale} stale samples");
     assert!(n > 1000 && stale < 5 && worst < 1e-3, "worst {worst}");
 }
 
