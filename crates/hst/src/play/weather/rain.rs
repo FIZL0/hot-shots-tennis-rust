@@ -7,7 +7,7 @@
 //! Their random source is the game's effects LCG, restarted from the match's seed at every serve.
 //! Rain also plays its ambience: court sound program 1 key 2 from four bearings (90, 135, 225, 270).
 //! Each rain voice sweeps ±45° about its bearing, a degree every 5 ticks.
-//! ponytail: the game draws these in the court's fogged pass; here they're unfogged.
+//! They're drawn in the court's fogged pass: GS materials, unlit, under the court's fog (`weather::apply`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -19,6 +19,7 @@ use hst_data::iso::Iso;
 use super::super::{Game, Phase};
 use crate::effects::{fill, look};
 use crate::weather::Weather;
+use crate::gs::{GsKey, GsMaterial, GsUniform, NO_FOG, Test};
 use crate::{Args, Orbit};
 
 pub fn plugin(app: &mut App) {
@@ -236,19 +237,25 @@ struct Particles {
     views: Vec<(Handle<Mesh>, Entity)>,
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut standard: ResMut<Assets<StandardMaterial>>, mut materials: ResMut<Assets<GsMaterial>>, mut images: ResMut<Assets<Image>>) {
     let Some(court) = args.stage else { return };
     let Ok(mut iso) = Iso::open(&args.iso) else { return };
     let mut views = vec![];
     for name in ["rain00", "groundrain"].into_iter().map(String::from).chain((0..9).map(|k| format!("leaf{k:02}"))) {
-        let Ok(m) = look(&mut iso, &format!("hatsuyama/efct/{name}"), &mut materials, &mut images) else { return };
-        if name == "rain00"
-            && let Some(mut img) = materials.get(&m).and_then(|m| m.base_color_texture.clone()).and_then(|h| images.get_mut(&h))
-        {
-            img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
+        let Ok(m) = look(&mut iso, &format!("hatsuyama/efct/{name}"), &mut standard, &mut images) else { return };
+        let texture = standard.remove(&m).and_then(|m| m.base_color_texture);
+        if let Some(mut img) = texture.as_ref().and_then(|h| images.get_mut(h)) {
+            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+            if name == "rain00" {
+                img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
+            }
         }
+        // ponytail: blended without a Z write (`Test::Never`), as they were as standard materials
+        let uniform = GsUniform { color: Vec4::ONE, shininess: 1.0, highlight: 0.0, shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: Vec4::ZERO, light_color: Vec4::ZERO, ambient: Vec4::ONE };
+        let key = GsKey { textured: true, modulate: true, test: Test::Never, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false };
+        let m = materials.add(GsMaterial { uniform, texture, key });
         let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-        let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling)).id();
+        let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling, bevy::light::NotShadowCaster)).id();
         views.push((mesh, e));
     }
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);

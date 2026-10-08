@@ -48,14 +48,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour × its
     // diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
-    // Schlick's t/(k − (k − 1)t) for t^k
+    // Schlick's t/(k − (k − 1)t) for t^k. Meshes without normals (the weather's particles) go unlit.
+    var spec = 0.0;
+#ifdef VERTEX_NORMALS
     let flip = vec3(1.0, -1.0, -1.0);
     let n = normalize(in.world_normal) * flip;
     let diffuse = max(-dot(n, gs.light_dir.xyz), 0.0);
     let forward = -view_bindings::view.world_from_view[2].xyz * flip;
     let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
-    let spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
+    spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
     f = vec4(f.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), f.a);
+#endif
     var rgb = min(f.rgb, vec3(255.0 / 128.0));
     var a = min(f.a, 255.0 / 128.0);
 #ifdef GS_TEXTURED
