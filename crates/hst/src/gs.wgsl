@@ -19,6 +19,7 @@ struct Gs {
     light2_dir: vec4<f32>,
     light2_color: vec4<f32>,
     glare: f32,
+    unlit: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -96,12 +97,14 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #endif
     let flip = vec3(1.0, -1.0, -1.0);
     n *= flip;
-    let diffuse = max(-dot(n, gs.light_dir.xyz), 0.0);
+    // unlit (object flag bit 1): VU1 skips the normal transform, N' = (1, 0, 0): full light, no second light or highlight
+    let lit = 1.0 - gs.unlit;
+    let diffuse = select(max(-dot(n, gs.light_dir.xyz), 0.0), 1.0, gs.unlit != 0.0);
     let forward = -view_bindings::view.world_from_view[2].xyz * flip;
-    let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
+    let h = lit * max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
     out.spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
     let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
-    let diffuse2 = max(-dot(n, gs.light2_dir.xyz), 0.0);
+    let diffuse2 = lit * max(-dot(n, gs.light2_dir.xyz), 0.0);
     c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
 #endif
     // FTOI0 to the GS's 8 bits

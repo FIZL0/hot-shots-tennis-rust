@@ -91,6 +91,10 @@ pub(crate) fn apply(
             (m.uniform.light2_dir, m.uniform.light2_color) = (-sun.light.extend(0.0), second);
             // the sky's light block has no glare; none in rain
             m.uniform.glare = (w < 2 && !look.skies.contains(&id)) as u8 as f32;
+            // every sky and background draw has VU1's unlit flag (set at load, not in the file)
+            if look.skies.contains(&id) || look.bg.contains(&id) {
+                m.uniform.unlit = 1.0;
+            }
         }
         if look.holes.contains(&id) {
             m.uniform.shadow = darken;
