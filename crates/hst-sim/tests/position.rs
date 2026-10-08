@@ -108,3 +108,51 @@ fn formation_matches_the_game() {
     eprintln!("{starts} starts, {repicks} re-picks, {holds} holds, {stops} arrivals");
     assert!(starts >= 8 && repicks >= 30 && holds >= 3 && stops >= 30);
 }
+
+/// One JSON line's integer list `key` (research/p3d2_formation.py writes flat lines).
+fn list(line: &str, key: &str) -> Vec<u32> {
+    let s = &line[line.find(&format!("\"{key}\": [")).unwrap() + key.len() + 5..];
+    s[..s.find(']').unwrap()].split(", ").map(|v| v.parse().unwrap()).collect()
+}
+
+/// Slot 5's new points with the first-point flag forced, the controller words, setup bytes and row bytes poked
+/// (`context/fixtures/p3d2_formation_h{-1,0}.jsonl`: four bots, player 0 human; research/p3d2_formation.py; skipped
+/// when missing): every player's +0x13f4 is `Team::pick` from the point's four placement draws in player order,
+/// players 2 and 3 their partner's. A pick that didn't run (0x77) and each run's first line (its +0x13f4 not yet
+/// marked: slot 5's first point can keep the state's placement) are left out. With player 2 poked human mid-match
+/// (h2) about one point in ten takes the draws in another order: not a real setup, left out.
+#[test]
+fn formation_pick_matches_the_game() {
+    use hst_sim::rng::Mt;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut checked = 0;
+    for h in ["-1", "0"] {
+        let Ok(d) = std::fs::read_to_string(format!("{root}/context/fixtures/p3d2_formation_h{h}.jsonl")) else {
+            return eprintln!("p3d2_formation_h{h}.jsonl missing, skipped");
+        };
+        for line in d.lines().skip(1) {
+            let words = list(line, "words");
+            let mut mt = Mt(std::array::from_fn(|k| words.get(k).copied().unwrap_or(0)), 0);
+            let draws: Vec<u32> = (0..4).map(|_| mt.next()).collect();
+            let (ctl, setup, row, got) = (list(line, "ctl"), list(line, "setup"), list(line, "row"), list(line, "formation"));
+            let mut want = [0u8; 4];
+            for i in 0..4 {
+                let m = i ^ 2;
+                want[i] = if i < 2 {
+                    let humans = (ctl[i] < 0x20, ctl[m] < 0x20);
+                    Team::pick(humans, (row[i] as u8, row[m] as u8), setup[i] as u8, draws[i])
+                } else {
+                    // the partner's byte as it stands (0x77 when its pick didn't run)
+                    got[m] as u8
+                };
+            }
+            for i in 0..4 {
+                if got[i] != 0x77 {
+                    assert_eq!(got[i], want[i] as u32, "run h{h}, player {i}: {line}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked >= 60, "{checked} picks checked");
+}

@@ -55,6 +55,21 @@ impl Team {
             _ => -1,
         }
     }
+
+    /// A doubles player's formation byte as the match's first point places it (players 0 and 1; 2 and 3 take
+    /// their partner's). `humans`: (me, my partner) on a pad; `rows`: (my, my partner's) AIParam formation;
+    /// `setup`: the third byte of my match-setup word (`ai::Choice::strategy`); `draw`: my placement draw. Beside
+    /// a human both take the computer player's row; two humans have no AI and keep 0; two computer players take
+    /// the setup byte, staggered one time in five.
+    pub fn pick(humans: (bool, bool), rows: (u8, u8), setup: u8, draw: u32) -> u8 {
+        match humans {
+            (true, true) => 0,
+            (true, false) => rows.1,
+            (false, true) => rows.0,
+            (false, false) if (draw >> 16 & 0x7fff) % 100 < 20 => 0,
+            (false, false) => setup,
+        }
+    }
 }
 
 /// x · sign of z (−z is the near side): which way across a point lies, seen from its own end.
