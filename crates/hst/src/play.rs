@@ -3691,8 +3691,9 @@ fn camera(
             .single()
             .map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
         p.fov = 2.0 * (fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
-        // the camera stays ~40 m out: a far near plane keeps depth precision for the layered character models
-        p.near = 5.0;
+        // the cut-aways come within a metre of the players; Bevy's reverse-Z float depth keeps the layered character
+        // models apart at 40 m all the same (a 5 m near plane cut the near ground and players out of the cut-aways)
+        p.near = 0.1;
     }
 }
 
