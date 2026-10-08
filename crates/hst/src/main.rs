@@ -16,6 +16,7 @@ mod character;
 mod court_anim;
 mod effects;
 mod gs;
+mod hud_gamma;
 mod play;
 mod sandbox;
 mod shadow;
@@ -108,7 +109,7 @@ fn main() {
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin));
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
