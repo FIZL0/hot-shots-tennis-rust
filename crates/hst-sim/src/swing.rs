@@ -2,7 +2,7 @@
 //! path for the frame to hit it on, which branch (smash, volley, ground stroke) and which swing (forehand,
 //! backhand, body shot). Ported operation for operation; the path is the predictor's (court plane only).
 
-use crate::ps2::{add, div, mul, sqrt, sub};
+use crate::ps2::{add, div, madd, mul, sqrt, sub, utof};
 
 /// One predicted ball frame: position in game space (Y down) and bounces so far.
 #[derive(Clone, Copy, Debug)]
@@ -525,9 +525,90 @@ pub fn lob_variant(s: &crate::player::ReachStats, grade: u8) -> Option<usize> {
     }
 }
 
-/// What a grade-4 (SLOW) flat or topspin ground stroke does to its table elevation when it isn't a mis-hit, as
-/// the original: 0.95 of it.
-// ponytail: the low-contact mis-hits (random elevation scale or a wild shot from the game's RNG) are not ported.
-pub fn late_lift(grade: u8, branch: u8, kind: i32) -> f32 {
-    if grade == 4 && branch == 1 && (kind == 0 || kind == 2) { 0.95 } else { 1.0 }
+/// A grade-4 (SLOW) contact's mis-hit roll at the launch, as the original.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MisHit {
+    /// The table elevation's scale.
+    pub scale: f32,
+    /// A dull hit (+0x3f0c): the elevation drops to a random 0.9/0.85/0.8 (contact at 0.2 or lower) or
+    /// 0.95/0.9/0.85 (at 0.4 or lower), a volley's by only 1/2.2 of the drop.
+    pub dull: bool,
+    /// A framed hit (+0x3f06): a lob to a random spot (`wild_aim`).
+    pub wild: bool,
+}
+
+/// The mis-hit roll of a `grade`-4 ground stroke (`branch` 1, flat/topspin/slice `kind`), volley (2) or dive (3)
+/// at contact `height`: a 20% chance at 0.2 or lower, 35% at 0.4 or lower (a slice 15 points less), 20 more when
+/// `tired` (stamina below 10; 10 for a slice) and 10 more on an `awkward` swing (the body-shot swing or the
+/// other-hand side); a dive 20 more and nothing else. A mis-hit is framed one time in two (three in ten when
+/// tired or diving), a slice's always dull. With no mis-hit a slow flat or topspin ground stroke still drops its
+/// elevation to 0.95. `roll` draws from the game's RNG.
+pub fn mis_hit(grade: u8, branch: u8, kind: i32, tired: bool, awkward: bool, height: f32, mut roll: impl FnMut() -> u32) -> MisHit {
+    let mut m = MisHit { scale: 1.0, dull: false, wild: false };
+    if grade != 4 {
+        return m;
+    }
+    let mut draw = |n: u32| (roll() >> 16 & 0x7fff) % n;
+    if (branch == 1 && kind <= 2) || branch == 2 || branch == 3 {
+        let slice = kind == 1 && branch != 3;
+        let (mut chance, mut framed) = if branch == 3 { (20, 20) } else if slice { (-15, 0) } else { (0, 0) };
+        if branch != 3 && tired {
+            chance += if slice { 10 } else { 20 };
+            framed = 20;
+        }
+        if branch != 3 && awkward {
+            chance += 10;
+        }
+        let low = if height <= 0.2 { Some((20, [0.9, 0.85, 0.8])) } else if height <= 0.4 { Some((35, [0.95, 0.9, 0.85])) } else { None };
+        if let Some((base, scales)) = low
+            && (draw(100) as i32) < chance + base
+        {
+            if slice || draw(100) >= framed + 50 {
+                m.dull = true;
+                m.scale = scales[draw(3) as usize];
+            } else {
+                m.wild = true;
+            }
+        }
+    }
+    if m.scale == 1.0 && !m.wild && branch == 1 && (kind == 0 || kind == 2) {
+        m.scale = 0.95;
+    }
+    if m.scale < 1.0 && branch == 2 {
+        m.scale = sub(1.0, div(sub(1.0, m.scale), 2.2));
+    }
+    m
+}
+
+/// A framed hit's lob: (aim, side, depth error in metres before the 1.5 scale) for a hitter at `end` (+1 hitting
+/// toward +z), as the original draws it from `roll` (the game's RNG). 15%: a sideline corner (singles or doubles
+/// line) 3..6.4 m deep; 50%: anywhere across, 3..6.4 deep; else a third of the time the baseline anywhere across
+/// with a depth error, or a sideline 3..11.885 deep with a side error, either side.
+pub fn wild_aim(doubles: bool, end: f32, mut roll: impl FnMut() -> u32) -> ([f32; 3], f32, f32) {
+    let u = |r: u32| mul(2.3283064e-10, utof(r));
+    let line = if doubles { 5.485 } else { 4.115 };
+    let across = |r: u32| madd(add(0.0, -line), add(line, line), u(r));
+    let off = |r: u32| div(madd(add(0.0, -0.66), 1.66, u(r)), 1.5);
+    let (mut side, mut depth) = (0.0, 0.0);
+    let pick = roll() >> 16 & 0x7fff;
+    let (x, z) = if pick % 100 < 15 {
+        let x = if roll() >> 16 & 1 != 0 { -line } else { line };
+        (x, madd(add(0.0, 3.0), 3.4, u(roll())))
+    } else if pick % 100 < 65 {
+        let x = across(roll());
+        (x, madd(add(0.0, 3.0), 3.4, u(roll())))
+    } else {
+        let pick = (roll() >> 16 & 0x7fff) % 100;
+        if pick < 33 {
+            let x = across(roll());
+            depth = off(roll());
+            (x, 11.885)
+        } else {
+            let (x, e) = if pick < 66 { (line, end) } else { (-line, -end) };
+            let z = madd(add(0.0, 3.0), 8.885, u(roll()));
+            side = mul(off(roll()), e);
+            (x, z)
+        }
+    };
+    ([x, 0.0, mul(z, end)], side, depth)
 }

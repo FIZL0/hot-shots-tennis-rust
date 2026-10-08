@@ -276,6 +276,8 @@ struct Game {
     timing: Vec<timing::Timing>,
     /// The timing error of the stroke or volley being struck, set at its contact.
     timing_error: Option<swing::TimingError>,
+    /// The mis-hit roll of the stroke, volley or dive being struck, set at its contact.
+    mis_hit: Option<swing::MisHit>,
     /// Per player: the serve (see `serve_data`).
     serve_data: Vec<ServeData>,
     /// The serve in progress (server's toss and swing).
@@ -1123,6 +1125,7 @@ fn setup(
         rally_records: Vec::new(),
         timing: Vec::new(),
         timing_error: None,
+        mis_hit: None,
         serve_data: Vec::new(),
         serving: Serving::default(),
         reach,
@@ -1576,7 +1579,11 @@ fn strike(
     );
     let at = g.flight.ball.pos;
     let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data[who])) as usize;
-    // ponytail: framed/dull mis-hits are not modelled (P3); the counter's swing-start z is taken at the strike
+    // a slow contact's mis-hit roll; a framed hit lobs to a wild spot
+    let miss = g.mis_hit.take().filter(|_| class == 1 || class == 2);
+    let framed = miss.filter(|m| m.wild).map(|_| timing::wild(g, who));
+    let (kind, target) = framed.map_or((kind, target), |f| (3, f.0));
+    // ponytail: the counter's swing-start z is taken at the strike
     let inside_high = kind < 2 && g.players[who].pos[2].abs() < 6.4 && at[1] >= 0.6;
     let power_gap = g.finish.strike(who, branch, kind, offset, g.players.len(), inside_high);
     // a counter launches from the incoming hitter's tables and shot record, as the original
@@ -1592,8 +1599,9 @@ fn strike(
         let doubles = g.rules.players > 2;
         g.margins.inside(class, kind, false, doubles, g.chars[src] as usize, false, at, target)
     };
-    let timed = g.timing_error.take().filter(|_| class == 1 || class == 2).map(|e| {
-        timing::launch(g, who, src, class, kind, (branch, grade), e, power_gap.is_some(), at, target)
+    let error = g.timing_error.take().or(framed.map(|_| swing::TimingError::default()));
+    let timed = error.filter(|_| class == 1 || class == 2).map(|e| {
+        timing::launch(g, who, src, class, kind, (branch, grade), e, framed.map(|f| (f.1, f.2)), power_gap.is_some(), at, target)
     });
     let target = timed.as_ref().map_or(target, |t| t.target);
     let sent = if class == 0 {
@@ -1632,6 +1640,7 @@ fn strike(
         } else {
             rally_lookup(g, src, class, kind, at, target)
         };
+        let l = hst_sim::shot::Lookup { elevation: hst_sim::ps2::mul(l.elevation, miss.map_or(1.0, |m| m.scale)), ..l };
         rally_launch(class, at, target, &l)
     };
     let vel = launched.vel;
@@ -1663,6 +1672,8 @@ fn strike(
         strong_toss: g.serving.toss == Some(Toss::Strong),
         solo: g.rules.players == 1,
         random_bit: rand(&mut g.rng) < 0.5,
+        framed: framed.is_some(),
+        dull: miss.is_some_and(|m| m.dull),
         ..default()
     };
     g.sounds
@@ -2363,6 +2374,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 (if branch == 2 { 2 } else { 1 }, kind)
             };
             g.timing_error = (branch < 3).then(|| timing::error(g, i, &c, branch, g.players[i].kind == 3));
+            g.mis_hit = (1..4).contains(&branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.anim, c.swing.forehand));
             strike(
                 g,
                 i,
@@ -2465,6 +2477,7 @@ fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
         let kind = hst_sim::shot::stick_kind(3, g.players[i].kind, [stick.x, stick.y], end);
         let offset = d.frame as i32 - SWEET_FRAME;
         let target = aim_target(g, i, stick, 3, kind, offset, false, 0.0);
+        g.mis_hit = Some(timing::mis_hit(g, i, (3, if offset.abs() < 2 { 2 } else { 4 }, kind), 0, true));
         strike(
             g,
             i,

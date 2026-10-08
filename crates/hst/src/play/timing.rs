@@ -1,7 +1,7 @@
 //! Timing grade effects on a rally launch (`hst_sim::swing`'s timing): per player its character's timing stats and
 //! the variant trajectory tables (up1/dw1/dw2/dw3) with their shot records; per stroke or volley the timing error
-//! set up at contact, which at the launch scatters the aim, picks the table mode and, on a slow ground stroke,
-//! drops the elevation.
+//! set up at contact, which at the launch scatters the aim and picks the table mode; per slow contact the mis-hit
+//! roll (a dull hit's lower elevation, a framed hit's wild lob).
 
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ball::V3;
@@ -68,7 +68,7 @@ pub fn error(g: &Game, i: usize, c: &Contact, branch: u8, lob: bool) -> TimingEr
     swing::timing_error(&t.stats, branch, lob, bias, c.offset, -c.swing.ball[1], right, forehand, c.swing.body, [0.0; 2], p.end)
 }
 
-/// A timed launch: the scattered target, the table lookup (elevation already lifted) and the variant's shot record
+/// A timed launch: the scattered target, the table lookup and the variant's shot record
 /// when the mode picked one.
 pub struct Timed {
     pub target: V3,
@@ -76,14 +76,41 @@ pub struct Timed {
     pub record: Option<[f32; 13]>,
 }
 
+/// Player `who`'s mis-hit roll as it strikes a `grade` ground stroke (`branch` 1), volley (2) or dive (3) of `kind`
+/// (swing animation `anim`, `forehand` side) from the ball where it is: tired by its stamina after the stroke's
+/// cost, awkward on the body-shot swing or the other-hand side.
+pub fn mis_hit(g: &mut Game, who: usize, (branch, grade, kind): (u8, u8, i32), anim: u8, forehand: bool) -> swing::MisHit {
+    let p = &g.players[who];
+    let rally = g.phase == super::Phase::Rally && g.players.len() > 1;
+    let stamina = if rally { hst_sim::player::stroke_stamina(&p.stats, p.body.stamina, branch, forehand, 0) } else { p.body.stamina };
+    let height = -g.flight.ball.pos[1];
+    let rng = &mut g.rng;
+    swing::mis_hit(grade, branch, kind, stamina < 10, anim & 1 != 0 || anim == 0x1a, height, || {
+        super::rand(rng);
+        *rng
+    })
+}
+
+/// A framed hit's lob for player `who`: (aim, side, depth error), as `swing::wild_aim`.
+pub fn wild(g: &mut Game, who: usize) -> (V3, f32, f32) {
+    let (doubles, end, rng) = (g.rules.players > 2, g.players[who].end, &mut g.rng);
+    swing::wild_aim(doubles, end, || {
+        super::rand(rng);
+        *rng
+    })
+}
+
 /// What timing error `e` does to player `who`'s stroke (class 1) or volley (class 2) of `kind` from `at` toward the
-/// pulled-in aim `target`: from `src`'s tables (the incoming hitter's on a `counter`, blend 0 then).
-// ponytail: the aim's random nudge and its short-only flag are left at 0 / off; mis-hits (the RNG's elevation scale
-// or wild shot on a low slow contact) and the reactions they set off are not ported
+/// pulled-in aim `target`: from `src`'s tables (the incoming hitter's on a `counter`, blend 0 then). A framed hit
+/// launches with its own (side, depth) error instead, blend 0.
+// ponytail: the aim's random nudge and its short-only flag are left at 0 / off
 #[allow(clippy::too_many_arguments)]
-pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, grade): (u8, u8), e: TimingError, counter: bool, at: V3, target: V3) -> Timed {
+pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, grade): (u8, u8), e: TimingError, framed: Option<(f32, f32)>, counter: bool, at: V3, target: V3) -> Timed {
     let (t, s) = (&g.timing[who], &g.timing[src]);
-    let (sx, sz, mut blend) = swing::timing_launch(&t.stats, branch, kind, grade, e, 0, false);
+    let (sx, sz, mut blend) = match framed {
+        Some((side, depth)) => (side, depth, 0.0),
+        None => swing::timing_launch(&t.stats, branch, kind, grade, e, 0, false),
+    };
     if branch == 1 && class == 2 {
         blend = swing::high_blend(&t.stats);
     }
@@ -96,7 +123,6 @@ pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, g
     let picked = variant.and_then(|v| s.variants.iter().find(|x| x.0 == (class as usize, kind as usize, v)));
     let table = picked.map_or(&g.rally_tables[src][base][kind as usize], |x| &x.1);
     let sc = hst_sim::serve::scatter_along(sx, sz, at, target);
-    let mut l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], ps2::sub(at[2], sc[2])], target);
-    l.elevation = ps2::mul(l.elevation, swing::late_lift(grade, branch, kind));
+    let l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], ps2::sub(at[2], sc[2])], target);
     Timed { target: [ps2::add(target[0], sc[0]), target[1], ps2::add(target[2], sc[2])], lookup: l, record: picked.map(|x| x.2) }
 }
