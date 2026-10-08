@@ -25,3 +25,15 @@
 - Tornado: starts on the hit frame, not the latch; slow-motion interpolation and the flash quad not ported;
   its look (port: clearly visible white streaks; original screenshots: faint) not verified frame-matched.
 - No wet-court capture test.
+
+## P17o progress (2026-10-08, PART: usage limit hit mid-task)
+- Done: puff wind drift from the weather wind. The game sets weather block +0x1a20 at each game as row 2 of
+  rot_y(deg·π/180, wrapped ±π) × speed/60 (`hst_sim::weather::wind`). Bit-exact for 315°, speed 2 (0xbcc1165e, 0, 0x3cc11653).
+- Found, not wired yet:
+  - State byte +0x3fa5 is set by the mode setter. It is 0 stand, 1 run, 2 stroke/dive/whiff, 3 body hit. Port: 2 if
+    `swing`/`dive`/`whiff`, else 1 if `body.running`, else 0. Footsteps only test ≠ 0.
+  - The "sub-state" is player +0x3db0: the reaction motion. Port: `root.map_or(0, |r| r.motion)`.
+  - The view row: 0x1e7f30 is camera→world (rows right, down, forward, eye). Row 2 is `g.cam.view.rot[2]`.
+  - Toes: `character::animate` samples in Update. Factor the pose out and sample at `clock.sampled` in the tick.
+  - Wet capture: message 0xe sets +0xa091 from weather byte gm+0x84→+0x135 (2/3). Record slot 5 with that byte
+    poked to 2 each frame (`record_foot.py`). Start PCSX2 copy 3 again first (tools/pcsx2-hst.sh).

@@ -78,7 +78,7 @@ fn tick(
     }
     fx.serving = g.phase == Phase::Serve;
     fx.feet.after_point = g.phase == Phase::Post;
-    fx.wet = w.is_some_and(|w| hst_sim::weather::rain(w.today().weather));
+    fx.wet = w.as_ref().is_some_and(|w| hst_sim::weather::rain(w.today().weather));
     let mut runners: Vec<(usize, Runner)> = q
         .iter()
         .filter_map(|(f, rig, m, gt)| {
@@ -103,8 +103,8 @@ fn tick(
     let runners: Vec<Runner> = runners.into_iter().map(|(_, r)| r).collect();
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;
-    // ponytail: no wind drift (the weather's wind vector is not ported to the scene)
-    fx.feet.tick(&fx.table, c, dusty, fx.wet, [0.0; 4], &runners, true);
+    let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));
+    fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true);
 }
 
 /// Puffs face the camera, pushed 0.5 toward it, `size` either side and twice that tall; footprints lie on the court.

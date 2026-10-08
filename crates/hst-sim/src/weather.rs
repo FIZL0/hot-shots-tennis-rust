@@ -219,6 +219,19 @@ pub fn shows(weather: u8) -> (bool, bool, bool) {
     (weather != 3 && weather != 5, weather < 2, weather < 2)
 }
 
+/// The wind as the game sets it at each game: the row of a turn about Y by `degrees` (wrapped into ±π) that points
+/// where it blows, times `speed` / 60 (metres a frame). Footstep puffs drift by it.
+pub fn wind(degrees: f32, speed: f32) -> [f32; 4] {
+    let mut a = ps2::mul(degrees, 0.017453292);
+    if 3.1415927 < a {
+        a = ps2::sub(a, 6.2831855);
+    } else if a < -3.1415927 {
+        a = ps2::add(a, 6.2831855);
+    }
+    let s = ps2::mul(speed, 0.016666668);
+    crate::world::rot_y(a)[2].map(|v| ps2::mul(v, s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +276,11 @@ mod tests {
         // no match: clear throughout, calm if the court has no wind
         let s = schedule(&odds, &Wind::default(), 4, 1, 1, &mut rand);
         assert!(s.iter().all(|g| *g == Game::default()));
+    }
+
+    #[test]
+    fn wind_vector() {
+        // slot 5 (court 10, 315°, speed 2): the game's +0x1a20 row as recorded in foot_s05.bin
+        assert_eq!(wind(315.0, 2.0).map(f32::to_bits), [0xbcc1_165e, 0, 0x3cc1_1653, 0]);
     }
 }
