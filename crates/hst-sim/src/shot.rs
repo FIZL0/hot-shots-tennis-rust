@@ -275,6 +275,137 @@ pub fn stick_kind(branch: u8, kind: i32, stick: [f32; 2], facing: f32) -> i32 {
     }
 }
 
+/// The character values a human's aim reads (TParam): the widest angle off straight per contact, in degrees
+/// (strokes, volleys/dives/smashes, serves), its share in % for a body shot (stroke, volley) and for a stroke
+/// or volley taken under `under` metres (rising ball).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AimStats {
+    pub con: [i32; 3],
+    pub body: [i32; 2],
+    pub rising: i32,
+    pub under: f32,
+}
+
+/// The hitter at the moment of the shot.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Hitter {
+    /// The player's end: +1 hits toward +z.
+    pub end: f32,
+    /// 0 serve, 1 ground, 2 volley, 3 dive, 4 smash.
+    pub branch: u8,
+    /// After `stick_kind` (0 topspin, 1 slice, 2 flat, 3 lob, 4 drop; a smash's 3 is the △ smash).
+    pub kind: i32,
+    /// Timing offset in frames from the sweet frame.
+    pub offset: i32,
+    /// A body shot (the ball too close sideways).
+    pub body: bool,
+    /// Where the swing started (x, z) and the contact height.
+    pub from: [f32; 2],
+    pub height: f32,
+}
+
+/// A human's aim for a rally shot (before the court margins and the timing scatter): a base point mid-way down
+/// the far half (shorter and narrower off the sweet spot) plus the stick (court x, z) mapped square onto the
+/// half (a full diagonal reaches the singles' or, with four players, the doubles' corner), then the
+/// character's widest angle off straight, the dip of an angled drive back onto the straight line's depth and
+/// a 3 m (drop 2 m) minimum past the net. `button` is the original's 0x20 aim (deep), which only the AI sets;
+/// `incoming` is Some(was sweet) when the ball being struck is a slice (not a smash) in a rally under way.
+/// ponytail: the centred-stick ±5/±10 timing nudge (P3) and the smash's held depth value aren't returned
+pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>) -> V3 {
+    use crate::libm::{acosf, tanf};
+    use ps2::{add, div, mul, sub, sqrt};
+    let (end, b) = (h.end, h.branch);
+    let rally = (1..=3).contains(&b);
+    let kind = |k: i32| rally && h.kind == k;
+    let drop = kind(4);
+    let plain_smash = b == 4 && h.kind != 3;
+    let sweet = b != 3 && !h.body && h.offset.abs() < 2;
+    // depth of the target band and its near edge
+    let (long, near) = if drop {
+        (9.885, 2.0)
+    } else {
+        (8.885, 3.0)
+    };
+    let long = if sweet { long } else { sub(long, if kind(3) { 0.5 } else { 1.0 }) };
+    let half = div(long, 2.0);
+    let base_z = mul(add(near, half), end);
+    let width = if four { 5.485 } else { 4.115 };
+    let width = if sweet { width } else { sub(width, 0.5) };
+    // the stick's circle stretched onto the square
+    let (mut ox, mut oz) = (0.0, 0.0);
+    let len = sqrt(add(mul(stick[0], stick[0]), mul(stick[1], stick[1])));
+    if len > 0.0 {
+        let inv = div(1.0, len);
+        let (nx, nz) = (mul(stick[0], inv), mul(stick[1], inv));
+        let m = div(1.0, if nx.abs() <= nz.abs() { nz.abs() } else { nx.abs() });
+        ox = mul(mul(mul(nx, m), len), width);
+        oz = mul(mul(mul(nz, m), len), half);
+    }
+    if button {
+        oz = mul(half, end);
+    } else {
+        if plain_smash && mul(oz, end) < 0.0 {
+            oz = 0.0;
+        }
+        if drop {
+            oz = mul(-half, end);
+        }
+    }
+    let (mut tx, mut tz) = (ox, add(base_z, oz));
+    // the widest angle off straight
+    let mut a = if four { 3.0 } else { 0.0 };
+    a = add(a, s.con[match b {
+        0 => 2,
+        1 => 0,
+        _ => 1,
+    }] as f32);
+    if plain_smash && h.offset.abs() > 1 {
+        let z = h.from[1].abs().clamp(3.0, 11.885);
+        a = mul(a, ps2::msub(1.0, 0.4, div(sub(z, 3.0), 8.885)));
+    }
+    if (b == 1 && (h.kind == 1 || h.kind == 3)) || kind(3) {
+        a = 90.0;
+    } else {
+        if incoming.is_none() {
+            if h.body {
+                a = div(mul(a, s.body[(b != 1) as usize] as f32), 100.0);
+            }
+            if (b == 1 || b == 2) && h.height < s.under {
+                a = div(mul(a, s.rising as f32), 100.0);
+            }
+        }
+        a = match incoming {
+            Some(false) => mul(a, 0.6),
+            Some(true) => mul(a, 0.45),
+            None if drop => mul(a, 0.5),
+            None => a,
+        };
+    }
+    let a = mul(a.max(0.0), 0.017453292);
+    let (dx, dz) = (sub(tx, h.from[0]), sub(tz, h.from[1]));
+    let inv = div(1.0, sqrt(add(mul(dz, dz), mul(dx, dx))));
+    if a < acosf(mul(end, mul(dz, inv)).clamp(-1.0, 1.0)) {
+        let w = mul(sub(tz, h.from[1]).abs(), tanf(a));
+        tx = if h.from[0] < tx { add(h.from[0], w) } else { sub(h.from[0], w) };
+    }
+    // an angled drive keeps the straight line's depth
+    if plain_smash || (rally && h.kind < 2) {
+        let (dx, dz) = (sub(tx, h.from[0]), sub(tz, h.from[1]));
+        let r = div(sqrt(mul(dz, dz)), sqrt(add(mul(dz, dz), mul(dx, dx))));
+        tx = add(h.from[0], mul(dx, r));
+        tz = add(h.from[1], mul(dz, r));
+    }
+    let short = sub(near, tz.abs());
+    if short > 0.0 {
+        let (dx, dz) = (sub(tx, h.from[0]), sub(tz, h.from[1]));
+        tz = mul(near, end);
+        if dx != 0.0 {
+            tx = add(tx, div(mul(short, dx), dz.abs()));
+        }
+    }
+    [tx, 0.0, tz]
+}
+
 /// The court margins `inside` pulls a rally shot's aim by (`hst_data::exe::Game::court_margins`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Margins {
