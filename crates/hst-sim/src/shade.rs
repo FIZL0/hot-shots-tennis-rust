@@ -89,21 +89,46 @@ pub fn ball(map: &[u8], f: &Frame, x: f32, z: f32, height: f32) -> f32 {
     if h <= s { s } else { h }
 }
 
-/// The ball's height above the ground for [`ball`], from its game position (y down). On the court (|x| ≤ 10.685,
-/// |z| ≤ 19.885) the ground is y 0; off it the game casts a ray 200 units straight down against the court model
-/// (`court`), and `None` when it misses (the ball keeps its last light scale).
+/// The ball's height above the ground for [`ball`], from its game position (y down), over [`ground`].
 pub fn ball_height(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Option<f32> {
-    let [x, y, z, _] = pos;
-    let ground = if x.abs() <= 10.685 && z.abs() <= 19.885 {
-        0.0
-    } else {
-        let mut hit = mesh::Hit::NONE;
-        if !court.ray(models, &mut hit, pos, [x, ps2::add(y, 200.0), z, pos[3]]) {
-            return None;
-        }
-        hit.centre[1]
-    };
-    Some(-ps2::sub(y, ground))
+    ground(court, models, pos).map(|(g, _)| -ps2::sub(pos[1], g[1]))
+}
+
+/// The ground under the ball (game position, y down) and its normal (towards the ball), which the ball's light and
+/// its shadow use. On the court (|x| ≤ 10.685, |z| ≤ 19.885) the point (x, 0, z) and straight up; off it the game
+/// casts a ray 200 units straight down at the court model (`court`); `None` when it misses (the game keeps the
+/// last light scale and shadow).
+pub fn ground(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Option<([f32; 4], [f32; 4])> {
+    let [x, y, z, w] = pos;
+    if x.abs() <= 10.685 && z.abs() <= 19.885 {
+        return Some(([x, 0.0, z, w], [-0.0, -1.0, -0.0, -0.0]));
+    }
+    let mut hit = mesh::Hit::NONE;
+    court.ray(models, &mut hit, pos, [x, ps2::add(y, 200.0), z, w]).then_some((hit.centre, hit.normal))
+}
+
+/// The ball shadow's placement (game space, row vectors: across, the ground's down axis, towards the camera, then
+/// the position) on the ground `point` with `normal` from [`ground`], seen from the camera at `eye`: turned about
+/// the normal to face the camera (or along game z on ground steeper than 0.1 from vertical), 0.005 above the ground.
+pub fn ball_shadow(point: [f32; 4], normal: [f32; 4], eye: [f32; 4]) -> [[f32; 4]; 4] {
+    let down = normal.map(|v| -v);
+    let to_eye = if down[1] > 0.1 { std::array::from_fn(|k| ps2::sub(eye[k], point[k])) } else { [0.0, -1.0, 0.0, 0.0] };
+    let y = vu0::normalize(down);
+    let x = vu0::normalize(vu0::cross(y, to_eye));
+    let z = vu0::normalize(vu0::cross(x, y));
+    [x, y, z, std::array::from_fn(|k| if k == 3 { point[3] } else { ps2::add(point[k], ps2::mul(normal[k], 0.005)) })]
+}
+
+/// How far the ball shadow is drawn stretched along its towards-the-camera axis: 1 within 10 units (across the
+/// ground) of the camera `eye`, rising to 3 at 50 and beyond, so it keeps its size on screen.
+pub fn ball_shadow_stretch(pos: [f32; 4], eye: [f32; 4]) -> f32 {
+    let (dx, dz) = (ps2::sub(pos[0], eye[0]), ps2::sub(pos[2], eye[2]));
+    let d = ps2::sqrt(ps2::add(ps2::mul(dx, dx), ps2::mul(dz, dz)));
+    if d <= 10.0 {
+        return 1.0;
+    }
+    let t = ps2::div(ps2::sub(d, 10.0), ps2::sub(50.0, 10.0)).clamp(0.0, 1.0);
+    ps2::add(ps2::mul(t, ps2::sub(3.0, 1.0)), 1.0)
 }
 
 /// A shadow caster: its model's triangles (model space) drawn solid, those of its alpha-tested materials drawn

@@ -42,6 +42,7 @@ use crate::character::{self, CharacterData, Motion};
 use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
+mod ball_shadow;
 mod bodyhit;
 mod controls;
 mod cutaway;
@@ -82,7 +83,7 @@ const CALLS: [&str; 7] = [
     "Out",
     "Illegal hit",
 ];
-/// Ball (and shadow) drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
+/// Ball drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
 /// ponytail: the original draws `ball1.mdl` at scale 1 (ball object matrix in s03–s05); this is the remaster's look.
 const BALL_DRAW_SCALE: f32 = 2.4;
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
@@ -517,6 +518,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(bodyhit::plugin);
     app.add_plugins(controls::plugin);
     app.add_plugins(cutaway::plugin);
+    app.add_plugins(ball_shadow::plugin);
     app.add_plugins(foot_fx::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(match_stats::plugin);
@@ -3837,10 +3839,9 @@ fn draw(
         t.scale = Vec3::new(p.hand, 1.0, 1.0);
     }
     for (v, mut t) in &mut ball {
-        t.translation = Vec3::from(g.prev_ball).lerp(Vec3::from(g.flight.ball.pos), a);
-        // ponytail: the shadow lies on the flat court (y 0); the stage's floor height under the ball if it shows
-        if v.0 {
-            t.translation.y = 0.0;
+        // the shadow: ball_shadow
+        if !v.0 {
+            t.translation = Vec3::from(g.prev_ball).lerp(Vec3::from(g.flight.ball.pos), a);
         }
     }
 }

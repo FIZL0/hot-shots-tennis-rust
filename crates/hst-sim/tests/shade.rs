@@ -143,3 +143,42 @@ fn receiver_vertices_match_the_game() {
     assert!(bad.is_empty(), "{} of {n} differ:\n{}", bad.len(), bad[..bad.len().min(20)].join("\n"));
     assert!(n > 1700);
 }
+
+/// The ball shadow's placement against the game, frame by frame: `context/fixtures/b36_shadow.bin` (slot 5, court
+/// 10, 1500 frames; per frame the ball's position, the camera's eye, the shadow's ground normal and matrix; made by
+/// `research/b36_shadow_rec.py`). Skips when the recording or the disc is absent.
+#[test]
+fn ball_shadow_matches_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(rec), Ok(mut iso)) = (std::fs::read(format!("{root}/context/fixtures/b36_shadow.bin")), Iso::open(format!("{root}/Hot Shots Tennis (USA).iso"))) else {
+        eprintln!("recording or disc missing, skipped");
+        return;
+    };
+    let world = court::world(&mut iso, 10);
+    let (mut exact, mut off, mut bad) = (0, 0, Vec::new());
+    for r in rec.chunks_exact(0x80) {
+        let f: Vec<f32> = r[0x10..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let v = |k: usize| [f[k], f[k + 1], f[k + 2], f[k + 3]];
+        let (pos, eye, normal) = (v(0), v(4), v(8));
+        let want: Vec<u32> = f[12..28].iter().map(|x| x.to_bits()).collect();
+        if normal == [0.0; 4] {
+            continue; // the state's first frame: no shadow placed yet
+        }
+        let Some((point, n)) = shade::ground(&world.court, &world.models, pos) else { continue };
+        if pos[0].abs() > 10.685 || pos[2].abs() > 19.885 {
+            off += 1;
+        }
+        let got: Vec<u32> = shade::ball_shadow(point, n, eye).as_flattened().iter().map(|x| x.to_bits()).collect();
+        if got == want && n.map(f32::to_bits) == normal.map(f32::to_bits) {
+            exact += 1;
+        } else {
+            bad.push(format!("pos {pos:?} eye {eye:?} n {normal:?}/{n:?}\n  game {:?}\n  port {:?}", &f[12..28], got.iter().map(|b| f32::from_bits(*b)).collect::<Vec<_>>()));
+        }
+    }
+    eprintln!("{exact} frames bit-exact, {off} off the court");
+    assert!(bad.is_empty(), "{} frames differ:\n{}", bad.len(), bad[..bad.len().min(8)].join("\n"));
+    assert!(off > 20 && exact > 1300);
+    assert_eq!(shade::ball_shadow_stretch([0.0, 0.0, -30.0, 1.0], [0.0, -12.0, -39.0, 1.0]), 1.0);
+    assert_eq!(shade::ball_shadow_stretch([0.0, 0.0, 11.0, 1.0], [0.0, -12.0, -39.0, 1.0]), 3.0);
+    assert_eq!(shade::ball_shadow_stretch([0.0, 0.0, -9.0, 1.0], [0.0, -12.0, -39.0, 1.0]), 2.0);
+}
