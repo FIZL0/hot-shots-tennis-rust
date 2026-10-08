@@ -42,4 +42,4 @@
 - **Types 27–29 (court 7) are unrecorded.** Their callback, including the ball box and message 0x14, is ported from code only. The court's menu move was not found.
 - **(Resolved in 7 and 8.) Something outside the callback clears the type flags** 1–230 ticks after a startle; this was not found. The test reads the flags from the recording, and play keeps them set until the next point.
 - **Steering (row `steer`) is still not ported**, so a startled type 1 walks with it. The test skips moving ticks of steering rows. That code is in the generic tick's `steer ≠ 0` branch: per-axis angle easing at +0x184/+0x188 toward the target, then a rotation matrix and a step of speed × forward.
-- Sounds, +0xbc, controller speed (type 32 runs at 1) and facing angles are not kept (`ponytail:` in npc.rs).
+- **(Resolved in 10.)** Sounds, +0xbc, controller speed (type 32 runs at 1) and facing angles are not kept (`ponytail:` in npc.rs).

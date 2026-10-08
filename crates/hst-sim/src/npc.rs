@@ -490,12 +490,16 @@ pub struct Trigger {
     pub scrub: (i32, i32),
     /// Types 27–29: the ball touched it this tick (the game's message 0x14 to the match).
     pub struck: bool,
-    /// Type 15 (court 4's passing ball): playing, its route (0 from home, 1–3 from `routes`), and played once this
-    /// match (it stays away until a new one).
+    /// Type 15 (court 4's passing ball): playing, its route (0 from home, 1–3 from `routes`).
     pub playing: bool,
     pub route: u32,
     pub routes: [[[f32; 4]; 2]; 3],
+    /// Had its go (type 15 played, a startled type startled): a reset leaves it off until a new match unless its
+    /// row rearms it.
     pub done: bool,
+    /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others (it scales the
+    /// model's sub-meshes when drawn).
+    pub weight: f32,
 }
 
 /// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
@@ -628,7 +632,7 @@ impl Trigger {
 
     /// [`Trigger::reset`] with what the startled creatures watch (their reset clears their type's flag).
     pub fn reset_near(&mut self, row: &TriggerRow, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
-        // its one go played (type 15; the startled types' go is not kept): off until a new match unless the row rearms it
+        // its one go played: off until a new match unless the row rearms it
         if self.done && !row.rearm {
             self.active = false;
             return Vec::new();
@@ -639,7 +643,7 @@ impl Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
-            playing: o.playing, route: o.route, routes: o.routes, done: o.done, ..Trigger::default()
+            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -919,8 +923,7 @@ impl Trigger {
                         }
                         (self.on, self.animating) = (true, true);
                         self.restart_anim();
-                        // ponytail: its byte +0xbc (set here) is not kept
-                        near.flags[ty] = true;
+                        (near.flags[ty], self.done) = (true, true);
                     }
                 }
             }
@@ -938,8 +941,7 @@ impl Trigger {
                 }
             }
             (0 | 1 | 5 | 31 | 32 | 39, 0 | 4) => {
-                // ponytail: 32 stays on with its controller at speed 1 (the others at 0): the controller speed is not kept
-                (self.on, self.animating, self.moving, self.world) = (ty == 32, false, false, self.home);
+                (self.on, self.weight, self.animating, self.moving, self.world) = (ty == 32, (ty == 32) as u8 as f32, false, false, self.home);
                 (self.pitch, self.yaw) = heading(self.home[2]);
                 self.set_frame(0.0, row);
                 near.flags[ty] = false;
@@ -963,7 +965,10 @@ impl Trigger {
                     }
                 }
             }
-            (27..=29, 4) => (self.on, self.moving, self.world, self.animating) = (true, false, self.home, false),
+            (27..=29, 4) => {
+                (self.on, self.moving, self.world, self.animating) = (true, false, self.home, false);
+                (self.pitch, self.yaw) = heading(self.home[2]);
+            }
             // scrubs forward while someone is within 1.0, to the end; then back to 0 the next time
             (48, 2) => {
                 let (mut s, mut f) = self.scrub;
@@ -1008,8 +1013,8 @@ impl Trigger {
                 self.animating = false;
             }
             (34, 4) => {
-                // ponytail: the facing angles it also sets are not kept
                 (self.world, self.on, self.moving, self.animating) = (self.home, true, false, false);
+                (self.pitch, self.yaw) = heading(self.home[2]);
                 self.counter = ps2::madd(300.0, 300.0, u(roll())) as i32;
             }
             (37, 2) if self.speed == 0.0 => self.counter = 0,
@@ -1031,7 +1036,8 @@ impl Trigger {
                 if near.ends && 2 <= near.players && !self.done && roll() >> 16 & 1 == 0 {
                     self.route = roll() >> 16 & 3;
                     if self.route == 0 {
-                        self.world = self.home; // ponytail: the facing angles it also sets are not kept
+                        self.world = self.home;
+                        (self.pitch, self.yaw) = heading(self.home[2]);
                     } else {
                         let [p0, p1] = self.routes[self.route as usize - 1];
                         let (x, z) = (ps2::sub(p1[0], p0[0]), ps2::sub(p1[2], p0[2]));
@@ -1151,6 +1157,7 @@ impl Default for Trigger {
             route: 0,
             routes: [[[0.0; 4]; 2]; 3],
             done: false,
+            weight: 0.0,
         }
     }
 }
