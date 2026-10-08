@@ -633,8 +633,8 @@ fn draw(
                     players: n,
                     slots,
                     pill: colours.0,
-                    // ponytail: COM rank row 0, as the panel
-                    ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then_some(0)),
+                    // COM players show their AI row's rank, as the panel; humans none
+                    ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then(|| g.players[i].ai.rank as usize)),
                     rank_rgb: colours.1,
                     pulse: screen.alpha,
                 });
