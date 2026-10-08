@@ -265,6 +265,19 @@ pub fn follow_over(after: u32, recover: u32, played: bool, input: bool) -> bool 
     played || (input && after >= recover + 2)
 }
 
+/// Frames after a serve's contact before the stick may break off its follow-through: 15 after a weak or underhand
+/// toss (`strong` false) or a slice (`kind` 1, kinds 0..3 topspin, slice, flat, underhand), else 30.
+pub fn serve_recovery(strong: bool, kind: i32) -> u32 {
+    if !strong || kind == 1 || kind == 3 { 15 } else { 30 }
+}
+
+/// Whether the server's follow-through, `after` frames past contact (1 the frame after), hands off this frame to
+/// standing or running: past `recover`, with the stick held (`stick`; a shot press doesn't count) or its motion
+/// `played` to the end (as of the last tick). The server stays put through it.
+pub fn serve_over(after: u32, recover: u32, played: bool, stick: bool) -> bool {
+    after >= recover && (stick || played)
+}
+
 /// Serve: stance 0x20, walking the baseline (`serve_r` 0x22 when the stick points along the player's forward ×
 /// x, `serve_l` 0x21 otherwise, swapped for left-handers), the toss (0x24 underhand, else 0x23) and the swing
 /// (0x26 underhand, else 0x25, at speed 8 / frames to contact).

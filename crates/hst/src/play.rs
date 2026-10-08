@@ -104,6 +104,8 @@ struct Player {
     after: Option<u32>,
     recover: u32,
     played: bool,
+    /// The server's follow-through after the serve's contact: frames since contact (it stays put, `serve_follow`).
+    served: Option<u32>,
     swung: bool,
     backhand: bool,
     /// Serve animation progress (0..1) while this player serves.
@@ -1888,6 +1890,11 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         g.players[i].serve_anim = None;
         g.players[i].stance = pos[0].abs();
         strike(g, i, 0, sw.kind, target, (0, sw.grade, sw.offset));
+        let p = &mut g.players[i];
+        p.served = Some(0);
+        p.recover = motion::serve_recovery(toss == Toss::Strong, sw.kind);
+        // the swing plays on at speed 1 from contact
+        set_motion(p, motion::serve_swing(toss == Toss::Under, 1).0, 1.0, false, None);
         g.serving = Serving::default();
         return;
     }
@@ -2494,6 +2501,23 @@ fn follow_through(p: &mut Player, input: bool) {
     }
 }
 
+/// One frame of the server's follow-through: past its recovery the stick (`stick`; presses are ignored) or the
+/// swing's end hands off to standing or running from the next frame. Whether the server is still held this frame.
+fn serve_follow(p: &mut Player, stick: bool) -> bool {
+    let Some(a) = p.served.map(|a| a + 1) else {
+        return false;
+    };
+    p.prev = p.pos;
+    p.served = (!motion::serve_over(a, p.recover, p.played, stick)).then_some(a);
+    if p.served.is_none() {
+        debug!(
+            "serve follow-through over {a} frames after contact ({})",
+            if p.played { "played out" } else { "broken off" }
+        );
+    }
+    true
+}
+
 /// Whether each player's motion has played to its end, as of this tick (the game's end-of-motion test).
 fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>) {
     for (f, m, rig) in &q {
@@ -2637,6 +2661,10 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         return;
     }
     let moved = pad.stick != Vec2::ZERO || pad.dpad != 0;
+    let stick = pad_run(g, pad.stick, pad.dpad) != Vec2::ZERO;
+    if serve_follow(&mut g.players[i], stick) {
+        return;
+    }
     follow_through(&mut g.players[i], shot.is_some() || moved);
     whiff_frame(g, i, moved);
     if let Some(kind) = shot {
@@ -2814,6 +2842,12 @@ fn bot(g: &mut Game, i: usize) {
     let mind = ai_update(g, i);
     if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
+    }
+    // the AI leaves its stick still through its serve's follow-through until the serve is returned
+    // ponytail: the original's stick then is its rally routine's; the stand-in moves as soon as it is past recovery
+    let returned = g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1;
+    if serve_follow(&mut g.players[i], returned) {
+        return;
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
     follow_through(&mut g.players[i], true);
@@ -3549,6 +3583,8 @@ fn react(g: &mut Game, event: Event) {
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
         (p.whiff, p.pending, p.approach) = (None, None, None);
+        // the reaction ends a serve's follow-through
+        p.served = None;
         // the ball's target keeps the 0x2b it has played since the hit, in place
         // ponytail: one the reaction finds unfinished isn't snapped to its end (in a match it has long ended by then)
         if bodyhit::standing(g, i) {
@@ -3756,8 +3792,11 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             }
             continue;
         }
-        // a finished serve swing plays out before running
-        if (m.id == 0x25 || m.id == 0x26) && m.clock.time < 30.0 {
+        // the serve swing plays on (at speed 1) through the server's follow-through
+        if p.served.is_some() {
+            m.serial = p.cmd.serial;
+            m.clock.speed = 1.0;
+            m.face_clock.speed = 1.0;
             continue;
         }
         let c = p.cmd;

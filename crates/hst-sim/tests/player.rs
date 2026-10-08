@@ -705,3 +705,77 @@ fn toward_stops_short() {
     assert_eq!(stick_dir([255, 0x80], 3), [1.0, 0.0]);
     assert_eq!(stick_dir([255, 0x80], 1), [0.0, 0.0]);
 }
+
+/// The server's follow-through after the serve's contact (play state 1, sub-state 3): the server stays put until it
+/// hands off to standing or running on exactly the frame `serve_over` says, with the recovery `serve_recovery` gives
+/// for its toss (+0x3ea0: 1 strong) and kind (+0x3ee4 bits: 2 slice, 4 underhand). The computer servers of
+/// `anim_s05.bin` keep the stick still and play the swing out; the human P1 of the pad recordings breaks it off
+/// with the stick (on the first frame allowed whenever it is held).
+#[test]
+fn serve_follow_through() {
+    use hst_sim::motion::{serve_over, serve_recovery};
+    use hst_sim::replay::frames;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let recovery = |toss: i32, bits: i32| serve_recovery(toss == 1, match bits { 2 => 1, 4 => 3, 8 => 2, _ => 0 });
+    let (mut played_out, mut broken, mut held) = (0, 0, 0);
+    if let Ok(data) = std::fs::read(format!("{dir}/anim_s05.bin")) {
+        // per frame: 4 + 0x100 bytes, then per player its +0x3c00..0x4000 and its motion object (time +0x38)
+        const S: usize = 4 + 0x100 + 4 * 0x484;
+        let blk = |k: usize, p: usize| &data[k * S + 0x104 + p * 0x484..][..0x484];
+        let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let pl = |b: &[u8], o: usize| i(b, o - 0x3c00);
+        let played = |b: &[u8]| f(b, 0x480) <= f(b, 0x438);
+        for p in 0..4 {
+            for k in 2..data.len() / S {
+                let (a, b) = (blk(k - 1, p), blk(k, p));
+                let after = pl(b, 0x3f00) as u32;
+                if a[0x3fa4 - 0x3c00] != 1 || a[0x3fa6 - 0x3c00] != 3 || pl(b, 0x3ec4) != -1 || pl(a, 0x3f00) as u32 + 1 != after {
+                    continue;
+                }
+                let rec = pl(b, 0x3e50) as u32;
+                assert_eq!(recovery(pl(b, 0x3ea0), pl(b, 0x3ee4)), rec, "anim_s05 k={k} p={p}");
+                let left = b[0x3fa4 - 0x3c00] != 1;
+                assert_eq!(serve_over(after, rec, played(a), false), left, "anim_s05 k={k} p={p} after {after}");
+                assert_eq!([pl(a, 0x3d70), pl(a, 0x3d78)], [pl(b, 0x3d70), pl(b, 0x3d78)], "anim_s05 k={k} p={p} moved");
+                played_out += left as i32;
+            }
+        }
+    }
+    for name in ["1p3goodcpus.bin", "round1.bin", "p7_carol_s04.bin", "p7_kaito_s04.bin", "p5_presses_s04.bin"]
+        .into_iter()
+        .map(String::from)
+        .chain((0..14).map(|c| format!("p7b_c{c:02}.bin")))
+    {
+        let Ok(data) = std::fs::read(format!("{dir}/{name}")) else {
+            eprintln!("{name} absent, skipped");
+            continue;
+        };
+        let fr = if data.len() % hst_sim::replay::SAMPLE_LIVE == 0 { frames_live(&data) } else { frames(&data) };
+        for k in 1..fr.len() {
+            let (a, b) = (fr[k - 1], fr[k]);
+            let after = p_i32(b, 0, 0x3f00) as u32;
+            if p_u8(a, 0, 0x3fa4) != 1 || p_u8(a, 0, 0x3fa6) != 3 || p_i32(b, 0, 0x3ec4) != -1 || after == 0 {
+                continue;
+            }
+            // one game tick per sample (some recordings' tails run several)
+            if p_i32(a, 0, 0x3f00) as u32 + 1 != after {
+                continue;
+            }
+            let rec = p_i32(b, 0, 0x3e50) as u32;
+            assert_eq!(recovery(p_i32(b, 0, 0x3ea0), p_i32(b, 0, 0x3ee4)), rec, "{name} k={k}");
+            let pad = b.pad(0);
+            let stick = pad_dir(pad.buttons, pad.lx, pad.ly, b.gm()[0x55]) != [0.0, 0.0];
+            let left = p_u8(b, 0, 0x3fa4) != 1;
+            // the shortest serve swing plays out 53 frames after contact: before that only the stick ends it
+            if after < 50 {
+                assert_eq!(serve_over(after, rec, false, stick), left, "{name} k={k} after {after} rec {rec}");
+                broken += left as i32;
+                held += (left && after == rec) as i32;
+            }
+            let (pa, pb) = (p_v3(a, 0, 0x3d70), p_v3(b, 0, 0x3d70));
+            assert_eq!([pa[0], pa[2]].map(f32::to_bits), [pb[0], pb[2]].map(f32::to_bits), "{name} k={k} moved");
+        }
+    }
+    eprintln!("serve follow-through: {played_out} computer serves played out, {broken} human break-offs ({held} on the first frame allowed)");
+    assert!(played_out > 10 && broken > 5 && held > 3);
+}
