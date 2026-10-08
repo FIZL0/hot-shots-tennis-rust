@@ -94,7 +94,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **B50** Match point sound and HUD (user 2026-10-08): add the original's match point sound effects and HUD elements (and check set point too), when and how the original shows/plays them → `play/popups.rs` · `play/panel.rs` · `play/audio` · `hst-sim/src/flow.rs`
 - [ ] **B40e1** The menu hand's swing from the MENU overlay (in B40e; also B40i's old item 9) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 - [ ] **B40e2** Menu screens' slide-in/out (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
-- [ ] **B40e3** Description bar font and which lengths scroll (in B40e) → `play/main_menu.rs` | t: main_menu.rs ticker_as_measured | j: 2026-10-08-b40-menus
+- [x] **B40e3** Description bar font and which lengths scroll (in B40e) → `play/main_menu.rs` | t: main_menu.rs ticker_as_measured | j: 2026-10-08-b40-menus — DONE: `ascii.bmp` bar font, the overlay's scroll test (n·11 > 616)
 - [ ] **B40e4** Select extras: BEG/INT/EXP frames, key hints, handedness (Select), COM Lv pills (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 - [ ] **B40e5** Confirm extras: COM play style + Lv, umpire face/name, surface, ball icons, random court/umpire (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 - [~] **B40g** More pre-match settings (B40 gap): an M7 cameras on/off setting once M7 lands (Set Handicap and Offbeat Rules moved to stretch B40g1/B40g2, user 2026-10-08) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus — BLOCKED: M7 not landed; add the setting with M7

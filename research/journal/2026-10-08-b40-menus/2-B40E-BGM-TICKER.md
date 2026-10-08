@@ -33,12 +33,8 @@ Glyph records (x, y f32, …, 0x28 bytes each) of the bar's text; per frame by l
   changed. Test `ticker_as_measured`. Shots: `context/b40e/r_settings.png`, `r_chars.png`.
 
 ## Not verified / not 1:1
-
-- The bar's font: the original uses a small monospace font (≈9×14 px glyphs) not found yet; the remaster squeezes
-  `word.tm2` glyphs (18 px high, ≤10 px wide) into the 11 px cells → B40e3.
-- Which lengths scroll: 37 glyphs hold, the long lines scroll; the threshold (here: the text must fit 16..624) is a
-  guess → B40e3.
-- The bar's y and box (kept from B40, 404..436, text at 411) → B40i (1).
+- The bar's font and which lengths scroll: done in B40e3 (`3-B40E3-BAR-FONT-FINAL.md`).
+- The bar's y and box (kept from B40, 404..436; the text is at 408 since B40e3) → B40i (1).
 - The menu BGM's state while a match runs is not comparable (the original runs the match in the same process); the
   remaster mutes it and restarts the screen's track from its top on return.
 - `bgmm_03` / `bgmm_07..10` (other modes' screens) are not used: those screens aren't in the remaster.
