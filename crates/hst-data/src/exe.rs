@@ -364,6 +364,10 @@ impl<'a> Game<'a> {
 
     /// Court 4's passing ball (trigger type 15): its routes 1–3 as (start, a point it heads toward); route 0 is its
     /// home. ponytail: where its four bounce sounds play (by route, at 0x41ccd0) is left until creature sounds play.
+    pub fn court5_marks(&self) -> Vec<[f32; 4]> {
+        self.f32s(0x41_3270, 93 * 4).chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
+    }
+
     pub fn ball_routes(&self) -> [[[f32; 4]; 2]; 3] {
         let v = self.f32s(0x41_cc70, 24);
         std::array::from_fn(|r| std::array::from_fn(|p| std::array::from_fn(|c| v[8 * r + 4 * p + c])))

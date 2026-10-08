@@ -224,13 +224,24 @@ pub fn cheerers(count: usize, roll: &mut impl FnMut() -> u32) -> [bool; 6] {
 }
 
 /// The gallery's cheer marks: a cheering walker registers one at its position, held for `slot` × 3 ticks; then
-/// every 5th tick the mark jumps to a random offset from it (three draws). The gallery clears them at a new point,
-/// a change of ends and a new match. The manager keeps six.
-/// ponytail: the sprite drawn at each mark (and court 5 reading its marks 0x120 bytes on) is not ported
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Cheers(pub Vec<Cheer>);
-
+/// every 5th tick the mark jumps to a random offset from it (three draws). The gallery forgets them (its count goes
+/// to 0, the slots keep their state) at a new point and a change of ends.
+///
+/// The manager keeps 6 slots for the walkers' marks and 93 more for court 5's own ([`Cheers::court5`]). On court 5
+/// it steps and draws the marks 6 slots on from the ones counted: court 5's while they are set, and after the count
+/// is cleared, as many of court 5's (from where they stopped) as walkers have cheered since. A walker cheering
+/// while court 5's 93 are set writes over the 88th and switches the sprite to the walkers'.
 #[derive(Clone, Debug, PartialEq)]
+pub struct Cheers {
+    pub slots: Vec<Cheer>,
+    pub count: usize,
+    /// The sprite drawn at each mark: 0 the walkers', 1 court 5's.
+    pub kind: u8,
+    /// The court is court 5 (the marks read 6 slots on).
+    pub court5: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cheer {
     pub pos: [f32; 3],
     pub base: [f32; 3],
@@ -240,18 +251,55 @@ pub struct Cheer {
 
 /// The offsets a cheer mark jumps by on each axis.
 const CHEER_JUMP: [f32; 6] = [0.05, 0.2, 0.1, -0.04, -0.21, -0.1];
+/// The slots after the walkers' 6 that court 5's marks take.
+const COURT5_MARKS: usize = 93;
+
+impl Default for Cheers {
+    fn default() -> Cheers {
+        Cheers { slots: vec![Cheer::default(); 6 + COURT5_MARKS], count: 0, kind: 0, court5: false }
+    }
+}
 
 impl Cheers {
-    /// Walker `slot` at `pos` cheers.
+    /// The marks of a match on `court`.
+    pub fn new(court: u8) -> Cheers {
+        Cheers { court5: court == 5, ..Cheers::default() }
+    }
+
+    /// Walker `slot` at `pos` cheers (written at the count even when the count is full).
     pub fn add(&mut self, pos: [f32; 3], slot: u32) {
-        if self.0.len() < 6 {
-            self.0.push(Cheer { pos, base: pos, delay: slot as i32 * 3, n: 0 });
+        self.slots[self.count] = Cheer { pos, base: pos, delay: slot as i32 * 3, n: 0 };
+        self.kind = 0;
+        if self.count < 6 {
+            self.count += 1;
         }
+    }
+
+    /// A new point or a change of ends: the count goes to 0.
+    pub fn clear(&mut self) {
+        self.count = 0;
+    }
+
+    /// Court 5's own marks (`exe::Game::court5_marks`) set: at a two-or-more-player match's start, and when the
+    /// umpire calls a point that wins a game (or an ace or a return winner) in a plain voice.
+    pub fn court5(&mut self, marks: &[[f32; 4]]) {
+        for (c, m) in self.slots[6..].iter_mut().zip(marks) {
+            let p = [m[0], m[1], m[2]];
+            *c = Cheer { pos: p, base: p, delay: 3, n: 0 };
+        }
+        (self.kind, self.count) = (1, COURT5_MARKS);
+    }
+
+    /// The marks stepped and drawn.
+    pub fn shown(&self) -> &[Cheer] {
+        let at = if self.court5 { 6 } else { 0 };
+        &self.slots[at..at + self.count]
     }
 
     /// The gallery's tick (after its cheer and reactions).
     pub fn step(&mut self, roll: &mut impl FnMut() -> u32) {
-        for c in &mut self.0 {
+        let at = if self.court5 { 6 } else { 0 };
+        for c in &mut self.slots[at..at + self.count] {
             if c.delay < 1 {
                 if c.n % 5 == 0 && c.n != 0 {
                     c.pos = std::array::from_fn(|i| ps2::add(c.base[i], CHEER_JUMP[(roll() >> 16 & 0x7fff) as usize % 6]));
@@ -429,11 +477,13 @@ pub struct Near {
     pub players: u32,
     /// A tiebreak in the deciding set (type 44's crowd animates and calls only then).
     pub deciding: bool,
+    /// The gallery's manager paused (set by type 44's reset).
+    pub paused: bool,
 }
 
 impl Default for Near {
     fn default() -> Near {
-        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false }
+        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false, paused: false }
     }
 }
 
@@ -880,13 +930,15 @@ impl Trigger {
                     (self.playing, self.on, self.done) = (false, false, true);
                 }
             }
-            // the reset: in the deciding set its idle countdown, else its call's countdown (a voiced one only)
-            // ponytail: the fixed matrix it takes in the deciding set, and the gallery's manager it pauses then
-            // (resumes otherwise), are not ported (P3e4)
+            // the reset: in the deciding set its idle countdown, turned to the court centre where it stands, and the
+            // gallery's manager paused (`Near::paused`); else the manager resumed and its call's countdown (a voiced
+            // one only)
             (44, 4) => {
                 (self.on, self.animating) = (near.deciding, false);
+                near.paused = near.deciding;
                 if self.on {
                     self.counter = ps2::mul(row.idle.0 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                    self.world = walker_facing(self.home[3], 0.0);
                 } else if self.voice.1 != 0 {
                     self.gap = ps2::mul(self.voice.1 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
                 }
@@ -979,5 +1031,24 @@ mod tests {
         // draws 1, 1 (again), 4, 1, 0: picks 1, 4, 0
         let mut draws = [1u32, 1, 4, 1, 0].into_iter().map(|d| d << 16);
         assert_eq!(super::cheerers(5, &mut || draws.next().unwrap()), [true, true, false, false, true, false]);
+    }
+
+    #[test]
+    fn court5_marks_alias_the_walkers_slots() {
+        let marks: Vec<[f32; 4]> = (0..93).map(|i| [i as f32, 0.0, 0.0, 1.0]).collect();
+        let mut c = super::Cheers::new(5);
+        c.court5(&marks);
+        assert_eq!((c.kind, c.shown().len(), c.shown()[0].pos[0]), (1, 93, 0.0));
+        // a walker's mark on the full count lands in slot 93: court 5's 88th
+        c.add([-1.0; 3], 2);
+        assert_eq!((c.kind, c.shown().len(), c.shown()[87].pos, c.shown()[87].delay), (0, 93, [-1.0; 3], 6));
+        // after a clear, walkers write slots 0.. while court 5 still reads its own from slot 6
+        c.clear();
+        c.add([-2.0; 3], 0);
+        assert_eq!(c.shown()[0].pos, [0.0; 3]);
+        // elsewhere the walkers' own
+        let mut c = super::Cheers::new(1);
+        c.add([-2.0; 3], 0);
+        assert_eq!(c.shown()[0].pos, [-2.0; 3]);
     }
 }

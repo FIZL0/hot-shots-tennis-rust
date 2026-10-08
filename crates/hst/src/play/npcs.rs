@@ -51,6 +51,8 @@ struct Npcs {
     uncull: Vec<Entity>,
     /// The gallery's cheer marks (where a walker started cheering); stepped after the walkers.
     cheers: npc::Cheers,
+    /// Court 5's own cheer marks about its stands (empty on the other courts).
+    marks: Vec<[f32; 4]>,
     /// The trigger creatures and the sound emitters (`Game::emitters`, `None`) in spawn order.
     figures: Vec<Option<usize>>,
 }
@@ -98,7 +100,14 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: default(), figures: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new() };
+    // court 5 shows its own marks from the match's start (with more than one player)
+    if g.stage == 5 {
+        npcs.marks = game.court5_marks();
+        if players > 1 {
+            npcs.cheers.court5(&npcs.marks);
+        }
+    }
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -187,7 +196,11 @@ fn step(
         let rng = &mut g.rng.court;
         let mut roll = || rng.next();
         applaud(&mut g.gallery, &mut g.applause, &mut roll);
-        g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
+        if matches!(crate::weather::now(), 2 | 3) {
+            g.gallery.idle();
+        } else {
+            g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
+        }
         for k in 0..g.emitters.len() {
             emit(&mut g.emitters[k], &mut g.sounds, &mut roll);
         }
@@ -214,6 +227,12 @@ fn step(
     let decided = motion != 0 && npcs.motion == 0;
     let cheer = if decided { npc::cheerers(npcs.walkers.len(), &mut roll) } else { [false; 6] };
     applaud(&mut g.gallery, &mut g.applause, &mut roll);
+    // court 5 shows its own marks again after a game or set won
+    // ponytail: only without a call, and also after an ace or a return winner (the scoreboard's point kind), in
+    // the original; neither is known here (P3e7)
+    if decided && g.stage == 5 && g.gallery_game {
+        npcs.cheers.court5(&npcs.marks);
+    }
     if decided {
         for (e, w, home) in &mut npcs.walkers {
             w.react();
@@ -225,7 +244,7 @@ fn step(
     if npcs.decided && serve {
         npcs.decided = false;
         npcs.tick = 0;
-        npcs.cheers = default();
+        npcs.cheers.clear();
         for (e, w, home) in &mut npcs.walkers {
             // the serve placement turns them back to the court centre
             face(&mut turn, *e, *home, 0.0);
@@ -239,7 +258,7 @@ fn step(
     // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
     if ends && !npcs.ends {
         (npcs.near.ends, npcs.near.players) = (true, players);
-        npcs.cheers = default();
+        npcs.cheers.clear();
         for (_, t, row) in npcs.triggers.iter_mut().filter(|(_, t, _)| t.ty == 15) {
             t.reset_near(row, &mut npcs.near, &mut roll);
         }
@@ -275,9 +294,14 @@ fn step(
             show(&mut m, w.anim as usize, w.frame, matches!(w.anim, 3 | 5));
         }
     }
-    g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
-    npcs.cheers.step(&mut roll);
-    npcs.tick += 1;
+    // the gallery's manager: paused by type 44 in the deciding set, silent in the rain
+    if npcs.near.paused || matches!(crate::weather::now(), 2 | 3) {
+        g.gallery.idle();
+    } else {
+        g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
+        npcs.cheers.step(&mut roll);
+        npcs.tick += 1;
+    }
     let mut emitters = 0..g.emitters.len();
     for &f in &npcs.figures {
         let Some(k) = f else {
@@ -295,6 +319,13 @@ fn step(
         }
         // the passing ball: drawn while on with its fade (+0x274) above 0, from where its route starts
         // ponytail: the fade's alpha over its last 10 frames is not drawn; the other types' `on` is not used to hide them
+        // type 44 stands turned to the court centre in the deciding set
+        if t.ty == 44 {
+            if let Ok(mut tf) = turn.get_mut(*e) {
+                let scale = tf.scale;
+                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
+            }
+        }
         if t.ty == 15 {
             if let Ok(mut v) = shown.get_mut(*e) {
                 *v = if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden };
