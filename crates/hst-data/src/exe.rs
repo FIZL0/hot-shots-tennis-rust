@@ -696,3 +696,34 @@ pub struct CameraShot {
     pub record: Vec<u8>,
     pub script: Vec<(u8, f32)>,
 }
+
+/// The MENU overlay: "MWo3", overlay id 3, 0x71e00 bytes, loaded where GAME.BIN loads.
+const MENU_SIZE: usize = 0x7_1e00;
+
+/// The MENU overlay of the supported disc (`ZZBIN/MENU.BIN`).
+pub struct Menu<'a> {
+    bin: &'a [u8],
+}
+
+impl<'a> Menu<'a> {
+    pub fn new(system_cnf: &[u8], menu_bin: &'a [u8]) -> Result<Self, Error> {
+        if !String::from_utf8_lossy(system_cnf).contains(BOOT) {
+            return Err(Error("unsupported disc: only Hot Shots Tennis USA (SCUS-97610) is known".into()));
+        }
+        let ok = menu_bin.len() == MENU_SIZE
+            && menu_bin.get(..4) == Some(b"MWo3")
+            && menu_bin.get(4..8) == Some(&3u32.to_le_bytes())
+            && menu_bin.get(8..12) == Some(&GAME_LOAD.to_le_bytes());
+        if !ok {
+            return Err(Error("MENU.BIN does not match the supported US 1.00 overlay".into()));
+        }
+        Ok(Self { bin: menu_bin })
+    }
+
+    /// The character select's attribute grades per character (0..13): Serve, Stroke, Volley, Impact, Footwork, each
+    /// 0..5 shown as the letter `"ABCDEF"[5 - v]`. A character's grades are the same in every costume.
+    pub fn grades(&self) -> [[u8; 5]; 14] {
+        let o = (0x38_d310 - GAME_LOAD) as usize;
+        std::array::from_fn(|c| self.bin[o + 5 * c..o + 5 * c + 5].try_into().unwrap())
+    }
+}
