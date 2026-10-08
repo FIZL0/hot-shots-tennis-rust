@@ -316,7 +316,15 @@ impl<'a> Game<'a> {
             stages: h(0x50),
             idle: (h(0x54), f(0x58)),
             sound: i32::from_le_bytes(self.at(0x41_c6e4 + 0x18 * ty as u32, 4).try_into().unwrap()),
+            rearm: r[0x6c] != 0,
         }
+    }
+
+    /// Court 4's passing ball (trigger type 15): its routes 1–3 as (start, a point it heads toward); route 0 is its
+    /// home. ponytail: where its four bounce sounds play (by route, at 0x41ccd0) is left until creature sounds play.
+    pub fn ball_routes(&self) -> [[[f32; 4]; 2]; 3] {
+        let v = self.f32s(0x41_cc70, 24);
+        std::array::from_fn(|r| std::array::from_fn(|p| std::array::from_fn(|c| v[8 * r + 4 * p + c])))
     }
 
     /// The deciding-set crowd voices (trigger type 44), in the order the creatures are made (later ones are
@@ -455,6 +463,8 @@ pub struct TriggerRow {
     pub idle: (i16, f32),
     /// Its sound (−1 none).
     pub sound: i32,
+    /// A reset brings it back after it has played its one go (else the reset leaves it inactive).
+    pub rearm: bool,
 }
 
 /// Scoreboard timing after a point (frames unless noted).

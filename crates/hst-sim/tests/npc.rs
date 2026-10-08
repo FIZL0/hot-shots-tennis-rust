@@ -505,6 +505,7 @@ fn startled_creatures_match_the_game() {
         let near = |s: &[u8]| npc::Near {
             pos: (1..=u(s, 4 + 0x24) as usize).chain([0]).map(|i| std::array::from_fn(|c| f(s, x + 0x10 * i + 4 * c))).collect(),
             flags: std::array::from_fn(|t| s[x + 0x50 + t] != 0),
+            ..Default::default()
         };
         let (mut ticks, mut startles, mut turns, mut blocked) = (0, 0, 0, 0);
         for k in 0..n {
@@ -628,5 +629,88 @@ fn trigger_at(s: &[u8], o: usize, row: &hst_data::exe::TriggerRow, anchor: [f32;
         startled: false,
         scrub: (0, 0),
         struck: false,
+        ..Default::default()
     }
+}
+
+/// Court 4's passing ball (type 15) against `context/fixtures/ball_c04.bin` (research/b24_rec15.py, an all-computer
+/// doubles match from its first change of ends; not in git, skipped when absent): every tick from the recorded state
+/// before, through the change of ends' reset that rolls it off, its play with the bounce sounds and the fade, to the
+/// reset that leaves it inactive, must give the game's state after bit for bit.
+#[test]
+fn passing_ball_matches_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let Ok(d) = std::fs::read(format!("{root}/context/fixtures/ball_c04.bin")) else {
+        return eprintln!("ball_c04.bin missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let (row, routes) = (game.trigger(15), game.ball_routes());
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    // a sample: vsync, match state, the object, its buffer (playing, route), controller, animation header, generator
+    let samples: Vec<&[u8]> = d[4..].chunks_exact(5 + 0x290 + 8 + 0x40 + 0x30 + 0x9d0).collect();
+    let mt = 5 + 0x290 + 8 + 0x40 + 0x30;
+    let state = |s: &[u8]| {
+        // the object, controller and header as tools/record_npc.py lays them out
+        let rec = [&s[5..5 + 0x290], &s[5 + 0x298..mt]].concat();
+        let f = |a: usize| f32::from_bits(u(&rec, a));
+        let v = |a: usize| -> [f32; 4] { std::array::from_fn(|c| f(a + 4 * c)) };
+        let buf = &s[5 + 0x290..];
+        npc::Trigger {
+            playing: buf[0] != 0,
+            route: u(buf, 4),
+            routes,
+            done: rec[0xbc] != 0,
+            // the animation's length (the game's controller has none until it first plays)
+            len: 240.0,
+            // ponytail: its path (the path manager is not ported; it stands still, its animation carries it)
+            path: vec![],
+            moving: false,
+            target: [0.0; 4],
+            from: [0.0; 4],
+            to: [0.0; 4],
+            left: 0,
+            ..trigger_at(&rec, 0, &row, v(0x160), v(0x150), 0)
+        }
+    };
+    let (mut ticks, mut resets, mut sounds, mut rolled) = (0, 0, 0, false);
+    for i in 1..samples.len() {
+        let (a, b) = (samples[i - 1], samples[i]);
+        assert_eq!(u(b, 0), u(a, 0) + 1, "a sample missed at {i}");
+        let (before, after) = (state(a), state(b));
+        let mut rng = Mt::of(&a[mt..]);
+        let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+        while rng != end && out.len() < 2000 {
+            out.push(rng.next());
+        }
+        // a message before the tick: 0xc (a game's end), 0xe (a point's end, the change of ends) and 0x1a reset it;
+        // only the change of ends' reset rolls
+        let reset = after.msg != before.msg && matches!(after.msg, 0xc | 0xe | 0x1a);
+        let near = |s: &[u8]| npc::Near { ends: s[4] == 1, players: 4, ..Default::default() };
+        let found = (0..=out.len()).find_map(|j| {
+            let (mut t, mut it, mut heard) = (before.clone(), out[j..].iter(), Vec::new());
+            let mut roll = || *it.next().unwrap_or(&0);
+            t.msg = after.msg;
+            if reset {
+                t.reset_near(&row, &mut near(b), &mut roll);
+            }
+            heard.extend(t.step_near(&row, &mut near(b), &mut roll));
+            (t == after).then_some((t, heard))
+        });
+        let Some((t, heard)) = found else {
+            let mut t = npc::Trigger { msg: after.msg, ..before.clone() };
+            if reset {
+                t.reset_near(&row, &mut near(b), &mut || out.first().copied().unwrap_or(0));
+            }
+            t.step_near(&row, &mut near(b), &mut || out.first().copied().unwrap_or(0));
+            panic!("vsync {} (reset {reset}):\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0))
+        };
+        rolled |= t.playing && !before.playing;
+        (ticks, resets, sounds) = (ticks + 1, resets + reset as usize, sounds + heard.len());
+    }
+    eprintln!("{ticks} ticks, {resets} resets, {sounds} bounce sounds");
+    assert!(rolled && sounds == 4, "the ball did not play through");
 }
