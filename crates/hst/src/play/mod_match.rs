@@ -29,8 +29,8 @@ pub(super) fn load(
 
 /// Player `i`'s TParam.csv row: the mod's in its slot, else character `c`'s.
 pub(super) fn row(iso: &mut Iso, mm: Option<&MatchMod>, i: usize, c: usize) -> Vec<String> {
-    match mm.filter(|m| m.slot == i) {
-        Some(m) => mods::tparam(iso, &m.m).unwrap_or_else(|e| panic!("mod {}: {e}", m.m.id)),
+    match mm.and_then(|m| m.get(i)) {
+        Some(m) => mods::tparam(iso, m).unwrap_or_else(|e| panic!("mod {}: {e}", m.id)),
         None => super::tparam(iso, c),
     }
 }
@@ -81,7 +81,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
-        app.insert_resource(MatchMod { slot: 1, m: m.clone() });
+        app.insert_resource(MatchMod(vec![None, Some(m.clone())]));
         app.init_resource::<super::super::Pads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         app.add_systems(Startup, super::super::setup);
@@ -96,7 +96,7 @@ mod tests {
             assert_eq!((g.chars[1], p.hand, p.stats.speed), (0, -1.0, stats_of(&row).speed));
             assert_eq!(g.reaches[1].reach, loco::ReachStats::from_tparam(&row.join(",")).reach);
             assert_ne!(g.reaches[1].reach, character_reach(&g.reach, &mut iso, 0, -1.0).reach, "the override didn't reach the contact search");
-            assert_eq!(g.data[1].joints.len(), mods::load(&mut iso, &m, 0, &mut default(), &mut default(), &mut default(), &mut default()).unwrap().joints.len());
+            assert_eq!(g.data[1].joints.len(), mods::load(&mut iso, &m, 0, &mut Assets::<Mesh>::default(), &mut Assets::<StandardMaterial>::default(), &mut Assets::<Image>::default(), &mut Assets::<SkinnedMeshInverseBindposes>::default()).unwrap().joints.len());
         }
         // a rally: three shots or more in one point, the mod striking one of them
         let (mut best, mut mod_hit) = (0, false);

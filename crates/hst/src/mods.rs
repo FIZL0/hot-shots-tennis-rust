@@ -2,8 +2,6 @@
 //! costumes, read into the same [`CharacterData`] as a disc character. The body comes from the mod; motions,
 //! `.MOR` faces, arm table and (by `donor`) the game logic's tables come from the donor character on the disc.
 //! A model that fails §7's conformance (`modding/tools/check.py`, ported) is rejected with the failed checks.
-// ponytail: the match setup (M1c) and the character select (B40) read the manifest, TParam row and voices
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +14,7 @@ use bevy::prelude::*;
 use hst_data::{iso::Iso, mtl, xb::Archive};
 use hst_sim::pose::Skeleton;
 
-use crate::character::{self, CharacterData, Joint, Motions};
+use crate::character::{self, CharacterData, Joint, Motions, Store};
 
 /// The skeleton every mod is rigged to (names, parents, HST pc00's bind frames).
 const SKELETON: &str = include_str!("../../../modding/hst_skeleton.json");
@@ -46,11 +44,22 @@ pub struct Mod {
     pub voice: String,
 }
 
-/// The mod playing in a match slot (`--mod DIR`, `--mod-slot N`) until the character select lists mods (B40a).
-#[derive(Resource)]
-pub struct MatchMod {
-    pub slot: usize,
-    pub m: Mod,
+/// The mods playing in a match, by match slot (`--slot-mod N DIR` from the character select, or `--mod DIR
+/// --mod-slot N`); `None` slots play their disc character.
+#[derive(Resource, Default)]
+pub struct MatchMod(pub Vec<Option<Mod>>);
+
+impl MatchMod {
+    pub fn get(&self, slot: usize) -> Option<&Mod> {
+        self.0.get(slot)?.as_ref()
+    }
+
+    pub fn set(&mut self, slot: usize, m: Mod) {
+        if self.0.len() <= slot {
+            self.0.resize(slot + 1, None);
+        }
+        self.0[slot] = Some(m);
+    }
 }
 
 /// Reads and checks `dir/mod.json`.
@@ -112,8 +121,9 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
 
 /// Every mod under `root` (the select's custom roster, sorted by folder); a broken one is left out with its
 /// `<path>: <reason>` logged.
+/// Folders without a `mod.json` (`texture-replacements`, `textures-src`) aren't mods and are skipped quietly.
 pub fn list(root: &Path) -> Vec<Mod> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|d| d.is_dir()).collect();
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|d| d.join("mod.json").is_file()).collect();
     dirs.sort();
     dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }
@@ -314,8 +324,8 @@ fn target_names(mesh: &gltf::Mesh) -> Vec<String> {
 fn materials_of(
     doc: &gltf::Document,
     blob: &[u8],
-    images: &mut Assets<Image>,
-    materials: &mut Assets<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    materials: &mut impl Store<StandardMaterial>,
     gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
 ) -> Result<Vec<Handle<StandardMaterial>>, String> {
     let sampler = || ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, address_mode_v: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::linear() });
@@ -369,8 +379,8 @@ fn texture_face(
     dir: &Path,
     doc: &gltf::Document,
     handles: &[Handle<StandardMaterial>],
-    images: &mut Assets<Image>,
-    materials: &mut Assets<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    materials: &mut impl Store<StandardMaterial>,
     gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
     names: &mut Vec<String>,
 ) -> Result<character::TextureFace, String> {
@@ -411,7 +421,7 @@ fn texture_face(
     }
     for name in wanted {
         let i = doc.materials().position(|m| m.name() == Some(name)).ok_or_else(|| err(format!("no material `{name}` in the costume")))?;
-        if let Some(mut m) = materials.get_mut(&handles[i]) {
+        if let Some(m) = materials.get_mut(&handles[i]) {
             m.base_color_texture = Some(neutral.0.clone());
         }
         for d in gs.get_mut(&handles[i].id()).into_iter().flatten() {
@@ -463,10 +473,10 @@ pub fn load(
     iso: &mut Iso,
     m: &Mod,
     costume: usize,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    images: &mut Assets<Image>,
-    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    meshes: &mut impl Store<Mesh>,
+    materials: &mut impl Store<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
 ) -> Result<CharacterData, String> {
     let file = m.dir.join(m.costumes.get(costume).ok_or_else(|| format!("{}: no costume {costume}", m.id))?);
     let ctx = |e: String| format!("{}: {e}", file.display());
