@@ -36,4 +36,4 @@
   - The view row: 0x1e7f30 is camera→world (rows right, down, forward, eye). Row 2 is `g.cam.view.rot[2]`.
   - Toes: `character::animate` samples in Update. Factor the pose out and sample at `clock.sampled` in the tick.
   - Wet capture: message 0xe sets +0xa091 from weather byte gm+0x84→+0x135 (2/3). Record slot 5 with that byte
-    poked to 2 each frame (`record_foot.py`). PCSX2 copy 3 is running.
+    poked to 2 each frame (`record_foot.py`). Start PCSX2 copy 3 again first (tools/pcsx2-hst.sh).
