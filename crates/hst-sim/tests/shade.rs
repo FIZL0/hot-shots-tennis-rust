@@ -143,3 +143,58 @@ fn receiver_vertices_match_the_game() {
     assert!(bad.is_empty(), "{} of {n} differ:\n{}", bad.len(), bad[..bad.len().min(20)].join("\n"));
     assert!(n > 1700);
 }
+
+/// The casters' shadow textures bit for bit: `context/p17v/pass.txt` (`research/p17v2_fixture.py`: the load pass's
+/// draws from `context/p17v/load10.gs` and the 16 static textures the game left in `context/p17v/cap0.gs`; slot 5,
+/// court 10). Skips when absent.
+#[test]
+fn shadow_textures_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(txt) = std::fs::read_to_string(format!("{root}/context/p17v/pass.txt")) else {
+        eprintln!("pass.txt missing, skipped");
+        return;
+    };
+    let (mut draws, mut n, mut bad) = (Vec::<shade::PassDraw>::new(), 0, Vec::new());
+    let wrap = |w: &str| match w {
+        "r" => shade::Wrap::Repeat,
+        c => {
+            let (a, b) = c[1..].split_once(',').unwrap();
+            shade::Wrap::Clamp(a.parse().unwrap(), b.parse().unwrap())
+        }
+    };
+    for line in txt.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w[0] {
+            "T" => draws.clear(),
+            "D" => draws.push(shade::PassDraw {
+                tris: Vec::new(),
+                aref: w[1].parse().unwrap(),
+                modulate: w[2] == "1",
+                tex: (w.len() > 3).then(|| shade::PassTexture {
+                    log2: [w[3].parse().unwrap(), w[4].parse().unwrap()],
+                    wrap: [wrap(w[5]), wrap(w[6])],
+                    alpha: (0..w[7].len()).step_by(2).map(|i| u8::from_str_radix(&w[7][i..i + 2], 16).unwrap()).collect(),
+                }),
+            }),
+            "V" => {
+                let t = std::array::from_fn(|k| {
+                    let f = &w[1 + 5 * k..];
+                    let bits = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+                    shade::PassVertex { xy: [f[0].parse().unwrap(), f[1].parse().unwrap()], st: [bits(f[2]), bits(f[3])], a: f[4].parse().unwrap() }
+                });
+                draws.last_mut().unwrap().tris.push(t);
+            }
+            _ => {
+                let want: Vec<u8> = w[1].bytes().map(|c| (c as char).to_digit(16).unwrap() as u8).collect();
+                let got = shade::pass_texture(&draws);
+                let diff = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+                if diff > 0 {
+                    bad.push(format!("texture {n}: {diff} texels differ"));
+                }
+                n += 1;
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    assert_eq!(n, 16);
+}
