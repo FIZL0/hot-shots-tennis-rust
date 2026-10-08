@@ -16,6 +16,9 @@ struct Gs {
     light_dir: vec4<f32>,
     light_color: vec4<f32>,
     ambient: vec4<f32>,
+    light2_dir: vec4<f32>,
+    light2_color: vec4<f32>,
+    glare: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -74,8 +77,8 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #else
     var c = gs.color;
 #endif
-    // VU1 lighting, per vertex in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour
-    // × its diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
+    // VU1 lighting, per vertex in game space (y down; GameSpace turns it 180° about X): ambient + each light's colour
+    // × its diffuse term (the first dimmed with the ambient when the camera looks near it, `glare`), and a specular term on the half vector between the light and the camera's forward axis,
     // Schlick's t/(k − (k − 1)t) for t^k. A skinned vertex's normal is the sum of its bones' pre-weighted normals
     // (|n| = the weight), each turned by its bone, not normalised; the second bone's rides in the tangent slot
     // (character.rs). Meshes without normals (the weather's particles) go unlit.
@@ -97,7 +100,9 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let forward = -view_bindings::view.world_from_view[2].xyz * flip;
     let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
     out.spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
-    c = vec4(c.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), c.a);
+    let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
+    let diffuse2 = max(-dot(n, gs.light2_dir.xyz), 0.0);
+    c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
 #endif
     // FTOI0 to the GS's 8 bits
     out.color = floor(min(c * 128.0, vec4(255.0)) + 1e-3) / 128.0;
