@@ -4,6 +4,8 @@
 //! ball-lost log and the draw count as the game did.
 //!
 //! `context/fixtures/ai_rally_s05.bin`, `ai_rally_s05_all.bin`: save slot 5, the bot-only doubles match.
+//! `ai_rally_singles*.bin`: the singles routines (`HST_SINGLES=1`), `bots_singles` in slot 8; the AI fields 0x234..0x260
+//! sit 0x10 lower there.
 
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::ai::{AiParams, Mind, Play};
@@ -79,7 +81,13 @@ fn balls(b: &[u8], n: usize) -> Vec<Ball> {
 
 const A: usize = 0x80;
 
-fn rally(e: &[u8]) -> Rally {
+/// A doubles AI offset in the singles AI: its receive fields (0x234..0x260) sit 0x10 lower.
+fn shift(o: usize, singles: bool) -> usize {
+    if singles && (0x234..0x260).contains(&o) { o - 0x10 } else { o }
+}
+
+fn rally(e: &[u8], singles: bool) -> Rally {
+    let at = |o| shift(o, singles);
     let a = &e[A..A + 0x280];
     Rally {
         level: a[0x10],
@@ -100,14 +108,14 @@ fn rally(e: &[u8]) -> Rally {
         plan: a[0xb2],
         swing: i32_at(a, 0xb4),
         lead: i32_at(a, 0xb8),
-        leads: [i32_at(a, 0x234), i32_at(a, 0x238), i32_at(a, 0x23c)],
-        dive: a[0x245] != 0,
-        wait: i32_at(a, 0x248),
-        body: a[0x24c] != 0,
-        low: a[0x24d] != 0,
-        push: a[0x24e] != 0,
-        guess: a[0x24f],
-        from: [f32_at(a, 0x250), f32_at(a, 0x258)],
+        leads: [i32_at(a, at(0x234)), i32_at(a, at(0x238)), i32_at(a, at(0x23c))],
+        dive: a[at(0x245)] != 0,
+        wait: i32_at(a, at(0x248)),
+        body: a[at(0x24c)] != 0,
+        low: a[at(0x24d)] != 0,
+        push: a[at(0x24e)] != 0,
+        guess: a[at(0x24f)],
+        from: [f32_at(a, at(0x250)), f32_at(a, at(0x258))],
         sub: a[0x57],
         volley_level: a[0x5d],
         rate: i32_at(a, 0x18),
@@ -129,6 +137,10 @@ fn rally(e: &[u8]) -> Rally {
         mind: Mind { net_left: i32_at(a, 0x26c), net_rate: i32_at(a, 0x270), net: a[0x274] != 0, ..Mind::default() },
         defer: a[0x275] != 0,
         stash: quad(e, 0x730),
+        reach: f32_at(a, 0x14),
+        dash: a[0x256] != 0 && singles,
+        last: quad(a, 0x130),
+        return_level: a[0x5e],
     }
 }
 
@@ -140,7 +152,8 @@ fn flag(a: &mut [u8], o: usize, v: bool) {
 }
 
 /// The AI's bytes with the port's fields written over the entry's.
-fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
+fn bytes(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
+    let at = |o| shift(o, singles);
     let mut a = e[A..A + 0x280].to_vec();
     let mut w = |o: usize, v: u32| a[o..o + 4].copy_from_slice(&v.to_le_bytes());
     w(0x3c, r.len as u32);
@@ -153,7 +166,7 @@ fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
     w(0x94, r.index as u32);
     w(0xb4, r.swing as u32);
     w(0xb8, r.lead as u32);
-    w(0x248, r.wait as u32);
+    w(at(0x248), r.wait as u32);
     for k in 0..4 {
         w(0xc0 + 4 * k, r.spot[k].to_bits());
     }
@@ -165,8 +178,8 @@ fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
     flag(&mut a, 0x98, r.fresh);
     a[0x9a] = r.kind;
     a[0xb2] = r.plan;
-    flag(&mut a, 0x24e, r.push);
-    a[0x24f] = r.guess;
+    flag(&mut a, at(0x24e), r.push);
+    a[at(0x24f)] = r.guess;
     a[0x57] = r.sub;
     flag(&mut a, 0x99, r.chase);
     flag(&mut a, 0xbc, r.held);
@@ -181,6 +194,9 @@ fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
     flag(&mut a, 0x268, r.forward);
     flag(&mut a, 0x274, r.mind.net);
     flag(&mut a, 0x275, r.defer);
+    if singles {
+        flag(&mut a, 0x256, r.dash);
+    }
     a
 }
 
@@ -236,6 +252,7 @@ fn body(e: &[u8]) -> Body {
         opp: [quad(e, 0x500), quad(e, 0x510)],
         mate_voice: e[0x725],
         mark: e[0x4d6],
+        target_x: f32_at(e, 0x4f0),
     }
 }
 
@@ -266,6 +283,7 @@ fn world(e: &[u8]) -> World {
 
 /// Replays every call with `tag` (1 receive, 2 NET, 3 BASE) of a fixture; returns (calls, per substate on entry).
 fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
+    let singles = name.contains("singles");
     let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).ok()?;
     let table = table()?;
     assert_eq!(&d[..4], b"AIRL");
@@ -296,7 +314,7 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
             s => panic!("{name}: routine {} called in state {s}", u32_at(e, 0)),
         };
         assert_eq!(u32_at(e, 0), want, "{name}: dispatch");
-        let mut r = rally(e);
+        let mut r = rally(e, singles);
         let state = if tag == 1 { r.state } else { r.sub };
         if let Some(s) = states.get_mut(state as usize) {
             *s += 1;
@@ -329,7 +347,7 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         if used != u32_at(x, 0xc) - before {
             errs.push(format!("draws {used} vs {}", u32_at(x, 0xc) - before));
         }
-        let (got, want) = (bytes(e, &r), &x[A..A + 0x280]);
+        let (got, want) = (bytes(e, &r, singles), &x[A..A + 0x280]);
         let diff: Vec<String> = (0..0x280 / 4)
             .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
             .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
@@ -373,7 +391,7 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         if !errs.is_empty() {
             fails += 1;
             if fails <= 15 {
-                eprintln!("{at} state {state} kind {} guess {}: {}", e[A + 0x9a], e[A + 0x24f], errs.join("; "));
+                eprintln!("{at} state {state} kind {} guess {}: {}", e[A + 0x9a], e[A + shift(0x24f, singles)], errs.join("; "));
             }
         }
     }
@@ -401,5 +419,13 @@ fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {
         let Some(n) = replay("ai_net_s05.bin", tag) else { return eprintln!("fixture or disc missing, skipped") };
         eprintln!("{what}: calls, per substate {n:?}");
+    }
+}
+
+#[test]
+fn singles_receive_matches_the_game() {
+    for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin"] {
+        let Some(n) = replay(name, 1) else { return eprintln!("fixture or disc missing, skipped") };
+        eprintln!("{name}: calls, per substate {n:?}");
     }
 }

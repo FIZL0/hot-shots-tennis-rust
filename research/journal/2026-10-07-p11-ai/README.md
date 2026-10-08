@@ -108,3 +108,9 @@ pointer in every earlier fixture; the receive was re-checked on `ai_rally_s05_fi
 
 See 14-P11K3-DISPATCH-FINAL.md. Done: the dispatcher's state choice checked on every recorded call (ai_rally.rs). The
 receive and NET/BASE now drive doubles bots in the app (`play/doubles_ai.rs`, one hook in `bot`). Wiring gaps: P11k6.
+
+## P11l1 (singles receive)
+
+See 15-P11L1-SINGLES-RECEIVE-FINAL.md. The work is done: `Rally::receive` with `singles` set calls the singles return aim (`singles_aim`, 0x3cdd00) and uses the stroke-over dash spot.
+- Test: `singles_receive_matches_the_game`, on fixtures `ai_rally_singles*.bin` (`HST_SINGLES=1 tools/record_ai_rally.py`, slot 8 = `bots_singles`).
+- Branches no recording has reached: P11l4.

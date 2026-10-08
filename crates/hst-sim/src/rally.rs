@@ -122,9 +122,11 @@ pub struct Body {
     pub opp: [[f32; 4]; 2],
     pub mate_voice: u8,
     pub mark: u8,
+    /// Singles: its shot's target x (the net dash's stand spot after a return).
+    pub target_x: f32,
 }
 
-/// The doubles AI's rally state.
+/// The rally AI state (doubles, or singles with `singles`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rally {
     pub level: u8,
@@ -188,6 +190,12 @@ pub struct Rally {
     pub defer: bool,
     /// The caller's stack quad the bounce picks start from (the game leaves it uninitialised).
     pub stash: [f32; 4],
+    /// Singles: the net reach (the dash's depth), the net dash, the opponent's last shot's spot, the return level
+    /// pick (0..=2, the row's `return_level` mix).
+    pub reach: f32,
+    pub dash: bool,
+    pub last: [f32; 4],
+    pub return_level: u8,
 }
 
 /// What a call leaves for the player: the run target or stick, and the button.
@@ -696,6 +704,108 @@ impl Rally {
         self.stick = row.aim(zone, b.side, roll);
     }
 
+    /// The singles return's aim: the plan, the stick and maybe the net dash.
+    fn singles_aim(&mut self, row: &AiParams, b: &Body, w: &World, roll: &mut impl FnMut() -> u32) {
+        const W: f32 = 4.115;
+        let deuce = w.court == 0;
+        let opp = b.opp[0];
+        let (ol, od) = crate::position::zone_in([opp[0], opp[2]], W, Some(&mut *roll));
+        let out = mul(sub(abs(b.pos[0]), 5.485), 100.0);
+        if 0.0 < out {
+            let p = if out <= 50.0 { out } else { 50.0 };
+            if chance(roll, div(p, 2.5) as i32) {
+                let lane = crate::position::zone_in([b.pos[0], b.pos[2]], W, None).0;
+                let (mut x, d) = if chance(roll, 50) {
+                    self.plan = 10;
+                    (if lane != 0 { 0 } else { 2 }, 2)
+                } else {
+                    self.plan = 11;
+                    (if lane == 0 { 2 } else { 0 }, 0)
+                };
+                if chance(roll, 30) {
+                    x = draw(roll, 3) as u8;
+                }
+                self.stick = row.aim((x, d), b.side, roll);
+                return;
+            }
+        }
+        if chance(roll, row.special_return_rate) {
+            let x = match ol {
+                0 => 2,
+                2 => 0,
+                _ if chance(roll, 50) => 0,
+                _ => 2,
+            };
+            self.stick = row.aim((x, 2), b.side, roll);
+            self.plan = 10;
+            return;
+        }
+        // the net dash: NET 20%, ALL 10%
+        let dash = |roll: &mut dyn FnMut() -> u32| match row.style {
+            1 => chance(roll, 20),
+            3 => chance(roll, 10),
+            _ => false,
+        };
+        match self.return_level {
+            2 => {
+                if chance(roll, 60) {
+                    self.plan = 7;
+                    self.stick = row.aim((if deuce { 0 } else { 2 }, 2), b.side, roll);
+                    if self.level == 3 && abs(opp[2]) < 7.4 && chance(roll, [5, 10, 5, 20][row.style as usize & 3]) {
+                        self.plan = 10;
+                    }
+                    if dash(roll) {
+                        self.dash = true;
+                    }
+                    return;
+                }
+                let (x, d) = if ol == 2 || ol == 0 {
+                    (1, 0)
+                } else {
+                    (if deuce { 2 } else { 0 }, chance(roll, 90) as u8)
+                };
+                self.plan = 7;
+                self.stick = row.aim((x, d), b.side, roll);
+                if ol == 1 && od == 2 && d == 0 && dash(roll) {
+                    self.dash = true;
+                }
+            }
+            1 => {
+                let x = if chance(roll, 50) { 0 } else { 2 };
+                self.plan = 7;
+                self.stick = row.aim((x, 2), b.side, roll);
+                if match row.style {
+                    1 => chance(roll, 30),
+                    3 => chance(roll, 15),
+                    _ => false,
+                } {
+                    self.plan = 8;
+                    self.dash = true;
+                }
+            }
+            0 => {
+                let (mut x, _) = crate::position::zone_in([self.last[0], self.last[2]], W, Some(&mut *roll));
+                let d = match row.style {
+                    1 => 1 + chance(roll, 50) as u8,
+                    2 => 1 + chance(roll, 90) as u8,
+                    3 => 1 + chance(roll, 70) as u8,
+                    _ => 1,
+                };
+                if (x == 2 || x == 0) && chance(roll, 10) {
+                    x = 1;
+                } else if x == 1 && chance(roll, 50) {
+                    x = if deuce { 2 } else { 0 };
+                }
+                self.plan = 7;
+                self.stick = row.aim((x, d), b.side, roll);
+                if d == 1 {
+                    self.stick[2] = 0.0;
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// One frame of the doubles receive. `out` is the run target or stick (as the caller passed it), the button
     /// set when it presses; true once the stroke is over.
     #[allow(clippy::too_many_arguments)]
@@ -854,7 +964,11 @@ impl Rally {
         }
         if s == 2 {
             if self.swing + self.lead < 9 {
-                self.aim(row, b, w, roll);
+                if self.singles {
+                    self.singles_aim(row, b, w, roll);
+                } else {
+                    self.aim(row, b, w, roll);
+                }
                 out.button = Some(button(self.plan));
                 self.set_state(3, roll);
             }
@@ -874,6 +988,11 @@ impl Rally {
                 out.stick = self.stick;
             }
             done = b.stroke == 0;
+            if done && self.singles && self.dash {
+                // singles: the net dash goes in to the shot's line at the net reach
+                self.stand[0] = b.target_x;
+                self.stand[2] = mul(-self.reach, b.side);
+            }
             if b.swing < 0 && w.hitter >= 0 && (w.hitter & 1) != (b.team & 1) && self.wait > 0 {
                 self.wait -= 1;
             }

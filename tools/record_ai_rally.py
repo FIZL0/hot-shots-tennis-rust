@@ -23,7 +23,7 @@ then a variable tail; exit tag |0x100):
 partner +0x3fa0 (0x10); 0x730 the caller's stack quad at sp-0x20 (the NET/BASE stand scratch, read uninitialised).
 Tail: entry records the path object's entries from its start (+0x58) to its end (+0x54), at most 180, 0x30 each;
 exit records the AI's path copy 0x424e90, ai+0x3c entries."""
-import struct, sys, time
+import os, struct, sys, time
 from pine import Pine
 
 VSYNC, GM_PTR, MT = 0x1d5780, 0x422f80, 0x427130
@@ -35,6 +35,10 @@ R = dict(zero=0, at=1, v0=2, v1=3, a0=4, a1=5, a2=6, a3=7, t0=8, t1=9, t2=10, t3
 ARGS = ["a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3"]
 REC, CACHE, MAXPATH = 0x780, 0x424e90, 180
 HOOKS = {1: 0x3cf7b0, 2: 0x3d02c0, 3: 0x3d1320}
+# HST_SINGLES=1 (P11l): the singles routines (receive 0x3c9a40, NET 0x3ca4e0, BASE 0x3cb130). The opponent
+# (*(ai+0xd4)) +0x3d70 goes to 0x500, the player's +0x3e90 (0x10) to 0x4f0; no partner (0x510..0x530, 0x720 zero).
+SINGLES = os.environ.get("HST_SINGLES") == "1"
+if SINGLES: HOOKS = {1: 0x3c9a40, 2: 0x3ca4e0, 3: 0x3cb130}
 # (at, source: list of (base, offsets to load through), first offset, bytes)
 PLAYER = [(0x340, 0x12b0, 0x20), (0x360, 0x1370, 0x20), (0x380, 0x13f0, 0x10), (0x390, 0x3050, 0x10),
           (0x3a0, 0x38f0, 0x10), (0x3b0, 0x3a90, 0xd0), (0x480, 0x3d60, 0x20), (0x4a0, 0x3df0, 0x20),
@@ -47,6 +51,9 @@ REGIONS = ([(0x40, ("abs", 0x423040), 0, 0x30), (0x80, ("ai",), 0, 0x280), (0x30
               (0x560, ("abs", GM_PTR, 0, 0xa4), 0x50, 0xe0), (0x640, ("abs", 0x427050), 0, 0xc0),
               (0x700, ("ai", 8), 0, 0x10), (0x710, ("abs", GM_PTR, 0, 0x88), 0x8c0, 0x10),
               (0x720, ("ai", 0xec), 0x3fa0, 0x10), (0x730, ("sp",), -0x20, 0x10)])
+if SINGLES:
+    REGIONS = [r for r in REGIONS if not (r[1][0] == "ai" and r[1][1:2] and r[1][1] in (0xe4, 0xe8, 0xec))] + [
+        (0x4f0, ("ai", 4), 0x3e90, 0x10), (0x500, ("ai", 0xd4), 0x3d70, 0x10)]
 
 
 def i(op, rs, rt, imm): return op << 26 | R[rs] << 21 | R[rt] << 16 | imm & 0xffff
@@ -139,7 +146,7 @@ def entry(tag, first, second):
     p = [lui("t4", DATA >> 16), lw("t6", busy, "t4"), br(5, "t6", "zero", "bad"), 0]
     # a nested call (busy) or one whose pointers aren't in RAM runs unhooked and is counted
     p += ram_check("a0", "bad")
-    for o in (4, 8, 0xe4, 0xe8, 0xec):
+    for o in (4, 8, 0xd4) if SINGLES else (4, 8, 0xe4, 0xe8, 0xec):
         p += [lw("t7", o, "a0")] + ram_check("t7", "bad")
     for o in (0x88, 0xa4):
         p += [*li("t7", GM_PTR), lw("t7", 0, "t7"), lw("t7", o, "t7")] + ram_check("t7", "bad")
@@ -231,7 +238,7 @@ for tag in tags:
 patch(0x19f5c0, CODE, counter)
 for tag in tags:
     patch(HOOKS[tag], CODE + 0x2000 * tag, lambda a, b, tag=tag: entry(tag, a, b))
-for k in range(4):
+for k in range(p.read32(0x422fa4)):
     if slow != 1.0:
         pl = p.read32(gm0 + 0xa8 + 4 * k)
         p.write32(pl + 0x1374, struct.unpack("<I", struct.pack("<f", struct.unpack("<f", struct.pack("<I", p.read32(pl + 0x1374)))[0] * slow))[0])

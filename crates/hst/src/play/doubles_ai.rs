@@ -97,6 +97,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         opp: opp.map(|j| up(g.players[j].pos)),
         mate_voice: 0,
         mark: 0,
+        target_x: 0.0,
     };
     let mut w = World {
         frame: g.doubles_ai.frame,
