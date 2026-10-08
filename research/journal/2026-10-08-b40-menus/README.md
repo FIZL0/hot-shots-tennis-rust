@@ -42,3 +42,9 @@ the original's for comparison `context/b40/00_charsel.png`, `05_setup.png`, `2x_
   hints and the CPU level on the confirm screen are missing (B40e/B40g).
 - M7 cameras have no setting yet (B40g); only two humans; keyboard is 1P only (B40h).
 - Menu ↔ match is a child process, not an in-process state change (B40f).
+
+## Follow-up (user 2026-10-08)
+- 4-player support is TOP PRIORITY: B40h (four humans, any device on any slot).
+- Every guessed or by-eye detail above gets taken from the original, not guessed: B40i lists each one (sprite rects
+  and positions, font spacing, sound keys, costume 9 sheet, court→stage order, play-style/grade mapping, umpire
+  order, sets mapping, hand motion, pad numbering). Each value goes in this journal with its source.
