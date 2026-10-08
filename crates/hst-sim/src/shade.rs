@@ -765,10 +765,10 @@ pub fn pass_texture(draws: &[PassDraw]) -> Vec<u8> {
 }
 
 /// The GS's texel coordinate rounding (as PCSX2 applies it when the draw's Z is constant): S and T lose their low 9
-/// mantissa bits, more by how far their exponent is below Q's (1.0 here).
-fn texel_round(st: f32) -> f32 {
+/// mantissa bits, more by how far their exponent is below Q's (`q`'s biased exponent; 127 for Q = 1).
+fn texel_round(st: f32, q: i32) -> f32 {
     let (b, e) = (st.to_bits(), (st.to_bits() >> 23 & 0xff) as i32);
-    f32::from_bits(b & !((1u32 << (9 + e.max(127) - e).min(23)) - 1))
+    f32::from_bits(b & !((1u32 << (9 + e.max(q) - e).min(23)) - 1))
 }
 
 /// Integer coordinates along a span from `left`: truncated at the span start, then per lane its truncated offset
@@ -808,16 +808,42 @@ fn pass_sample(t: &PassTexture, u: i32, v: i32) -> i32 {
     r0 + ((r1 - r0) * vf >> 4)
 }
 
-/// One triangle into the target with PCSX2's software setup: vertices sorted by y, the edge and scan gradients from
-/// the cross product, spans from ceil(edge x) at each row, and (s, t, colour) at the span start interpolated from the
-/// top vertex of its section.
+/// One triangle into the target: the vertices' (s, t, colour) as the GS's software setup takes them, then
+/// [`gs_tri`]'s spans sampled and written where the destination alpha test and the alpha reference pass.
 fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
     let tsz = d.tex.as_ref().map_or([0.0; 2], |x| x.log2.map(|l| (0x10000u32 << l) as f32));
     let v: [[f32; 5]; 3] = t.map(|p| {
-        let st = p.st.map(texel_round);
+        let st = p.st.map(|c| texel_round(c, 127));
         [p.xy[0] as f32 * (1.0 / 16.0), p.xy[1] as f32 * (1.0 / 16.0), st[0] * tsz[0] - 32768.0, st[1] * tsz[1] - 32768.0, ((p.a as u32) << 7) as f32]
     });
     let flat = t[2].a as i32;
+    gs_tri(v, SCISSOR, |y, left, right, tc, dscan| {
+        let n = right - left;
+        let at: Vec<i32> = match &d.tex {
+            None => vec![flat; n as usize],
+            Some(tex) => {
+                let s = pass_lanes(tc[2], dscan[2], left, n).zip(pass_lanes(tc[3], dscan[3], left, n)).map(|(u, v)| pass_sample(tex, u, v));
+                if d.modulate {
+                    s.zip(pass_colour(tc[4], dscan[4], left, n)).map(|(a, g)| ((a << 2) * g >> 16).min(255)).collect()
+                } else {
+                    s.collect()
+                }
+            }
+        };
+        for (x, a) in (left..right).zip(at) {
+            let dst = &mut target[x as usize + y as usize * TARGET];
+            if *dst < 0x80 && a >= d.aref as i32 {
+                *dst = a as u8;
+            }
+        }
+    });
+}
+
+/// One triangle with PCSX2's software setup: vertices (x, y, then three attributes) sorted by y, the edge and scan
+/// gradients from the cross product, spans [left, right) from ceil(edge x) at each row inside the scissor, and the
+/// attributes at the span start interpolated from the top vertex of its section, handed to `span` with the scan
+/// gradient.
+fn gs_tri(v: [[f32; 5]; 3], scissor: [i32; 4], mut span: impl FnMut(i32, i32, i32, [f32; 5], [f32; 5])) {
     let ys = [v[0][1], v[1][1], v[2][1]];
     let m1 = (ys[0] > ys[1]) as usize | ((ys[0] > ys[2]) as usize) << 1 | ((ys[1] > ys[2]) as usize) << 2;
     let [i0, i1, i2] = [[0, 1, 2], [1, 0, 2], [0; 3], [1, 2, 0], [0, 2, 1], [0; 3], [2, 0, 1], [2, 1, 0]][m1];
@@ -839,33 +865,16 @@ fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
     let dedge: [f32; 5] = std::array::from_fn(|k| dv0[k] * c[2] - dv1[k] * c[0]);
     let ceil = |y: f32| y.ceil() as i32;
     let mut section = |top: i32, bottom: i32, ex: [f32; 2], dex: [f32; 2], p0: [f32; 5]| {
-        for y in top.max(SCISSOR[1])..bottom.min(SCISSOR[3]) {
+        for y in top.max(scissor[1])..bottom.min(scissor[3]) {
             let dy = y as f32 - p0[1];
-            let left = ceil(ex[0] + dex[0] * dy).max(SCISSOR[0]);
-            let right = ceil(ex[1] + dex[1] * dy).min(SCISSOR[2]);
+            let left = ceil(ex[0] + dex[0] * dy).max(scissor[0]);
+            let right = ceil(ex[1] + dex[1] * dy).min(scissor[2]);
             if right <= left {
                 continue;
             }
             let pre = left as f32 - p0[0];
             let tc: [f32; 5] = std::array::from_fn(|k| (p0[k] + dedge[k] * dy) + dscan[k] * pre);
-            let n = right - left;
-            let at: Vec<i32> = match &d.tex {
-                None => vec![flat; n as usize],
-                Some(tex) => {
-                    let s = pass_lanes(tc[2], dscan[2], left, n).zip(pass_lanes(tc[3], dscan[3], left, n)).map(|(u, v)| pass_sample(tex, u, v));
-                    if d.modulate {
-                        s.zip(pass_colour(tc[4], dscan[4], left, n)).map(|(a, g)| ((a << 2) * g >> 16).min(255)).collect()
-                    } else {
-                        s.collect()
-                    }
-                }
-            };
-            for (x, a) in (left..right).zip(at) {
-                let dst = &mut target[x as usize + y as usize * TARGET];
-                if *dst < 0x80 && a >= d.aref as i32 {
-                    *dst = a as u8;
-                }
-            }
+            span(y, left, right, tc, dscan);
         }
     };
     if v0[1] == v1[1] {
@@ -877,6 +886,71 @@ fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
         let x = e.map(|s| v0[0] + s * dv0[1]);
         section(ceil(v1[1]), ceil(v2[1]), x, if m2 { [dd[1], dd[2]] } else { [dd[2], dd[1]] }, v1);
     }
+}
+
+/// A receiver vertex as the GS gets it: x, y in 12.4 relative to the tile's XYOFFSET, and S, T, Q.
+#[derive(Clone, Copy, Debug)]
+pub struct ReceiverVertex {
+    pub xy: [i32; 2],
+    pub stq: [f32; 3],
+}
+
+/// One draw (one GS batch) of the receiver pass: a caster's 128² shadow texture, its red through the CLUT in
+/// `alpha` and clamped at its edges, over the hole triangles it shades.
+pub struct ReceiverDraw<'a> {
+    pub tex: &'a PassTexture,
+    pub tris: Vec<[ReceiverVertex; 3]>,
+}
+
+/// One 640 × 224 tile of the shade map's 1280 × 896 frame: the receiver pass's reds as PCSX2's software GS draws them.
+/// Each draw's bilinear red is added to the frame, clamped at 255 (ALPHA Cs + Cd, COLCLAMP). Before the
+/// setup the GS rounds S, T and Q (the draw's Z is constant); when Q is the same over the whole batch, S/Q and T/Q are
+/// taken per vertex and stepped as integers like the texture pass's, else divided per pixel, Q stepped per group of
+/// [`LANES`].
+pub fn receiver_tile(draws: &[ReceiverDraw]) -> Vec<u8> {
+    let mut fb = vec![0u8; 640 * 224];
+    for d in draws {
+        let q0 = d.tris[0][0].stq[2];
+        let const_q = d.tris.iter().flatten().all(|p| p.stq[2] == q0);
+        for t in &d.tris {
+            let v: [[f32; 5]; 3] = t.map(|p| {
+                let qe = (p.stq[2].to_bits() >> 23 & 0xff) as i32;
+                let [s, t] = [p.stq[0], p.stq[1]].map(|c| texel_round(c, qe));
+                let q = f32::from_bits(p.stq[2].to_bits() & !0xff);
+                let tsz = (0x10000u32 << 7) as f32;
+                let (x, y) = (p.xy[0] as f32 * (1.0 / 16.0), p.xy[1] as f32 * (1.0 / 16.0));
+                match (const_q, q != 1.0) {
+                    (true, true) => [x, y, s / q * tsz - 32768.0, t / q * tsz - 32768.0, q],
+                    (true, false) => [x, y, s * tsz - 32768.0, t * tsz - 32768.0, q],
+                    (false, _) => [x, y, s * tsz, t * tsz, q],
+                }
+            });
+            gs_tri(v, [0, 0, 640, 224], |y, left, right, tc, ds| {
+                let n = right - left;
+                let uv: Vec<(i32, i32)> = if const_q {
+                    pass_lanes(tc[2], ds[2], left, n).zip(pass_lanes(tc[3], ds[3], left, n)).collect()
+                } else {
+                    let skip = left % LANES;
+                    let mut g: [[f32; 3]; 4] = std::array::from_fn(|k| std::array::from_fn(|c| tc[2 + c] + ds[2 + c] * (k as i32 - skip) as f32));
+                    let step: [f32; 3] = std::array::from_fn(|c| ds[2 + c] * LANES as f32);
+                    let mut out = Vec::new();
+                    for j in skip..skip + n {
+                        if j % LANES == 0 && j > 0 {
+                            g.iter_mut().for_each(|l| (0..3).for_each(|c| l[c] += step[c]));
+                        }
+                        let [s, t, q] = g[(j % LANES) as usize];
+                        out.push(((s / q) as i32 - 0x8000, (t / q) as i32 - 0x8000));
+                    }
+                    out
+                };
+                for (x, (u, v)) in (left..right).zip(uv) {
+                    let dst = &mut fb[x as usize + y as usize * 640];
+                    *dst = (*dst as i32 + pass_sample(d.tex, u, v)).min(255) as u8;
+                }
+            });
+        }
+    }
+    fb
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 Usage: p17v_gssim.py dump.gs prims.pkl ref.red  (prims.pkl from p17v_gsprims.py, ref.red from p17v_rebuild.py)
 
 Takes the game's own vertices (12.4 XY, S/T/Q) and the shadow textures from the dump's VRAM, rasterizes every
-receiver triangle with PCSX2 SW's float scanline setup (AVX2 path: 8 lanes, truncating conversions), samples the
+receiver triangle with PCSX2 SW's float scanline setup (128-bit path: 4 lanes, truncating conversions; GSState's texel rounding first), samples the
 PSMT4 texture bilinearly (16.16 uv, 4-bit fraction, clamp), adds the reds (ALPHA Cs + Cd, FIX 0x80, clamped) and
 compares each tile with the red bytes the game read back."""
 import pickle, struct, sys
@@ -12,6 +12,7 @@ import numpy as np
 
 F = np.float32
 VRAM = 1 << 22
+L = 4  # lanes per scanline step: copy 5 runs the 128-bit SW JIT
 
 # PCSX2 GSTables.cpp: block and column swizzles
 BT32 = [[0, 1, 4, 5, 16, 17, 20, 21], [2, 3, 6, 7, 18, 19, 22, 23], [8, 9, 12, 13, 24, 25, 28, 29],
@@ -64,6 +65,18 @@ def texture(vm, tex0):
     return t
 
 
+def texel_round(s, t, q):
+    """GSState::FlushPrim's texel coordinate rounding (TME, STQ, Z constant over the draw): S and T lose their low 9
+    mantissa bits plus however far their exponent is below Q's, Q its low 8."""
+    b = [int(np.array(c, F).view(np.uint32)) for c in (s, t, q)]
+    eq = (b[2] >> 23) & 0xff
+    for i in 0, 1:
+        e = (b[i] >> 23) & 0xff
+        b[i] &= ~((1 << min(9 + max(e, eq) - e, 23)) - 1)
+    b[2] &= ~0xff
+    return [F(np.uint32(c).view(F)) for c in b]
+
+
 def trunc(a):  # cvttps2dq
     return np.trunc(np.asarray(a, F)).astype(np.int64)
 
@@ -114,24 +127,24 @@ def draw_tri(fb, tex, v, fst, scis):
 
 
 def span(fb, tex, y, left, right, tc, ds, fst):
-    skip = left & 7
+    skip = left & (L - 1)
     base = left - skip
     n = right - base
-    nv = (n + 7) // 8
-    lane = np.arange(8)
-    k = np.repeat(np.arange(nv), 8)
+    nv = (n + L - 1) // L
+    lane = np.arange(L)
+    k = np.repeat(np.arange(nv), L)
     off = np.tile(lane - skip, nv).astype(F)
     if fst:
-        u = trunc(tc[0]) + np.tile(trunc(ds[0] * off[:8]), nv) + k * trunc(ds[0] * F(8))
-        v = trunc(tc[1]) + np.tile(trunc(ds[1] * off[:8]), nv) + k * trunc(ds[1] * F(8))
+        u = trunc(tc[0]) + np.tile(trunc(ds[0] * off[:L]), nv) + k * trunc(ds[0] * F(L))
+        v = trunc(tc[1]) + np.tile(trunc(ds[1] * off[:L]), nv) + k * trunc(ds[1] * F(L))
     else:
-        s = np.empty(nv * 8, F); t = np.empty(nv * 8, F); q = np.empty(nv * 8, F)
-        s0 = (tc[0] + (ds[0] * off[:8]).astype(F)).astype(F)
-        t0 = (tc[1] + (ds[1] * off[:8]).astype(F)).astype(F)
-        q0 = (tc[2] + (ds[2] * off[:8]).astype(F)).astype(F)
-        st8 = (ds * F(8)).astype(F)
+        s = np.empty(nv * L, F); t = np.empty(nv * L, F); q = np.empty(nv * L, F)
+        s0 = (tc[0] + (ds[0] * off[:L]).astype(F)).astype(F)
+        t0 = (tc[1] + (ds[1] * off[:L]).astype(F)).astype(F)
+        q0 = (tc[2] + (ds[2] * off[:L]).astype(F)).astype(F)
+        st8 = (ds * F(L)).astype(F)
         for j in range(nv):
-            s[j * 8:j * 8 + 8], t[j * 8:j * 8 + 8], q[j * 8:j * 8 + 8] = s0, t0, q0
+            s[j * L:j * L + L], t[j * L:j * L + L], q[j * L:j * L + L] = s0, t0, q0
             s0, t0, q0 = (s0 + st8[0]).astype(F), (t0 + st8[1]).astype(F), (q0 + st8[2]).astype(F)
         u = trunc(s / q) - 0x8000
         v = trunc(t / q) - 0x8000
@@ -176,13 +189,14 @@ def main():
         for vs in tris:
             out = []
             for x, y, z, s, t, q, rgba, uv in vs:
+                s, t, q = texel_round(s, t, q)
                 px, py = F(x - ox) * F(1 / 16), F(y - oy) * F(1 / 16)
-                if eqq and q != 1.0:
-                    ss, tt = F(F(s) / F(q)) * F(1 << 23) - F(0x8000), F(F(t) / F(q)) * F(1 << 23) - F(0x8000)
-                    out.append((px, py, ss, tt, F(q)))
+                if eqq:  # constant Q: S/Q, T/Q per vertex (no divide when Q is 1), the bilinear half texel taken off
+                    ss, tt = (F(s) / F(q), F(t) / F(q)) if q != 1.0 else (s, t)
+                    out.append((px, py, F(ss) * F(1 << 23) - F(0x8000), F(tt) * F(1 << 23) - F(0x8000), F(q)))
                 else:
                     out.append((px, py, F(s) * F(1 << 23), F(t) * F(1 << 23), F(q)))
-            draw_tri(fb, texs[tex0], out, eqq and vs[0][5] != 1.0, scis)
+            draw_tri(fb, texs[tex0], out, eqq, scis)
     for f, fb in sorted(tiles.items()):
         # tile f: the 640×224 window at XYOFFSET − (1728, 1936) of the 1280×896 frame
         xyo = next(k[2] for k, _, _ in runs if k[0] == f)
