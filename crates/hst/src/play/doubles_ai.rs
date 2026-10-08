@@ -199,6 +199,11 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             x.rally(net, &row, &mut b, &mut w, c, seen, &mut out, &mut roll);
         }
     }
+    if singles {
+        // the singles dispatcher's kind lock on the routine's button (its stick lock waits for the contact,
+        // `ai_contact_stick`)
+        out.button = out.button.map(|bt| row.lock_button(bt as u8, &mut roll) as u32);
+    }
     let (net, net_rate, net_left, aim) = (x.mind.net, x.mind.net_rate, x.mind.net_left, x.stick);
     (me.lost, me.lost_log) = (b.lost, b.lost_log);
     g.doubles_ai.records = w.records;

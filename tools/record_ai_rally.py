@@ -244,6 +244,14 @@ for k in range(p.read32(0x422fa4)):
     if slow != 1.0:
         pl = p.read32(gm0 + 0xa8 + 4 * k)
         p.write32(pl + 0x1374, struct.unpack("<I", struct.pack("<f", struct.unpack("<f", struct.pack("<I", p.read32(pl + 0x1374)))[0] * slow))[0])
+# HST_AI=k:row:level[,...] (P11k4/P11l4/P11l5): player k's AI (player +0x80) takes table row `row` (+0xc; singles
+# rows are character + 14 * level, doubles +0x54) and level byte +0x10, to reach other styles' and levels' branches
+for spec in filter(None, os.environ.get("HST_AI", "").split(",")):
+    k, row, level = map(int, spec.split(":"))
+    ai = p.read32(p.read32(gm0 + 0xa8 + 4 * k) + 0x80)
+    assert ai, f"player {k} has no AI object"
+    p.write32(ai + 0xc, 0x3174c0 + row * 0x118)
+    p.write32(ai + 0x10, p.read32(ai + 0x10) & ~0xff | level)
 p.resume()
 v0 = p.read32(VSYNC)
 chunks = []
