@@ -661,6 +661,8 @@ fn clouds(
                 let mut mat = materials.get(mat).expect("cloud material").clone();
                 mat.key.modulate = true;
                 mat.uniform.fog = gs::NO_FOG;
+                // the game builds each cloud with object flags 3: alpha and VU1's unlit path
+                mat.uniform.unlit = 1.0;
                 commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(materials.add(mat))));
             }
             commands.entity(sky.root).add_child(e);
