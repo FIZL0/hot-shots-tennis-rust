@@ -23,6 +23,7 @@ use hst_sim::flow::{CHANGE_ENDS, Next, PostPoint, serve_placement};
 use hst_sim::judge::{BallState, Lines, Rally};
 use hst_sim::mesh::World;
 use hst_sim::motion;
+use hst_sim::rng::{Mt, Rand, Rngs};
 use hst_sim::npc;
 use hst_sim::params::{self, ShotParams};
 use hst_sim::player::{self as loco, Stats};
@@ -326,7 +327,8 @@ struct Game {
     world: (World, Vec<Material>),
     court: usize,
     message: String,
-    rng: u32,
+    /// The game's generators (`hst_sim::rng`): every draw the app shares with the original comes from one.
+    rng: Rngs,
     /// Sounds due this tick, at a game-space position.
     sounds: Vec<(sound::Play, V3)>,
     /// Swing whooshes and dive thuds waiting to play: ticks left, the player (played at their position) and the sound.
@@ -1009,8 +1011,8 @@ fn disc(
 }
 
 /// Court `n`'s ambient sound emitters: the trigger creatures that only play sounds, each drawing its first gap.
-// ponytail: they draw from our rng, not the game's shared MT (not ported to the app)
-fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut u32) -> Vec<npc::Emitter> {
+/// They draw from the court's generator.
+fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut Mt) -> Vec<npc::Emitter> {
     let Some((list, plants)) = crate::court_layout(iso, n) else {
         return Vec::new();
     };
@@ -1019,10 +1021,7 @@ fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut u32) -> Vec<npc::Em
         iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"),
     );
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let mut roll = || rng.next();
     npc::spawn(
         &list,
         &plants,
@@ -1121,6 +1120,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    (match_rng, pads): (Option<Res<MatchRng>>, Res<Pads>),
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -1181,7 +1181,7 @@ fn setup(
         world,
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
-        rng: 0x2468_ace1,
+        rng: match_rng.map_or_else(|| Rngs::new(Rand::default(), Mt::new(1)), |r| r.0.clone()),
         sounds: Vec::new(),
         whooshes: Vec::new(),
         bounces: default(),
@@ -1220,7 +1220,7 @@ fn setup(
         &mut iso,
         args.stage.map_or(args.court, |s| s as usize),
         rules.players as u32,
-        &mut game.rng,
+        &mut game.rng.court,
     );
     let n = game.players.len();
 
@@ -1274,7 +1274,13 @@ fn setup(
         game.smash_tables.push(character_tables(&mut iso, c, "B", "smsh", "", 2));
         game.smash_spins.push(std::array::from_fn(|k| params::spin(shot_params.record(3, k, params::record_of(c)))));
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
-        voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
+        voices.push(voice_bank(&mut iso, c, n, game.rng.shared.r15() % 100 >= 70).map(std::sync::Arc::new));
+        // a CPU gets an AI object, and so does a human beside a CPU partner; making one restarts the AI generator
+        // ponytail: who is human is taken from the pads at setup
+        let cpu = |k: usize| pads.slot_of(k, n).is_none();
+        if cpu(i) || n == 4 && cpu(i ^ 2) {
+            game.rng.new_ai();
+        }
         game.serve_data.push(serve_data(&mut iso, &data));
         serve_character(&mut iso, c, game.aim_stats[i], game.serve_data.last_mut().unwrap());
         game.data.push(data.clone());
@@ -1303,6 +1309,9 @@ fn setup(
             .flatten()
             .map(|(b, mid)| (std::sync::Arc::new(b), mid)),
     });
+    // the match starts (the sound manager's reseed), then its first point
+    game.rng.change_ends();
+    game.rng.new_point();
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(
@@ -1495,12 +1504,9 @@ fn base_yaw(end: f32) -> f32 {
     if end > 0.0 { std::f32::consts::PI } else { 0.0 }
 }
 
-fn rand(state: &mut u32) -> f32 {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    (*state >> 8) as f32 / (1 << 24) as f32
-}
+/// The match's generators as the match setup leaves them (main.rs draws the weather schedule from the shared one).
+#[derive(Resource)]
+pub struct MatchRng(pub Rngs);
 
 fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -1692,7 +1698,7 @@ fn strike(
         hits: g.shots,
         strong_toss: g.serving.toss == Some(Toss::Strong),
         solo: g.rules.players == 1,
-        random_bit: rand(&mut g.rng) < 0.5,
+        random_bit: g.rng.sound.bit(),
         framed: framed.is_some(),
         dull: miss.is_some_and(|m| m.dull),
         ..default()
@@ -1700,10 +1706,12 @@ fn strike(
     g.sounds
         .extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
     let n = g.players.len() as u32;
+    // the launch's fresh random (+0x3b9c, read only by the close-up camera's quiet-stroke shout)
+    g.rng.shared.next();
     if let Some(program) =
-        sound::stroke_shout(&hit, g.chars[who], n, || (rand(&mut g.rng) * 100.0) as u32)
+        sound::stroke_shout(&hit, g.chars[who], n, || g.rng.shared.r15() % 100)
     {
-        let r = (rand(&mut g.rng) * 32768.0) as u32;
+        let r = g.rng.shared.r15();
         let shout = g.voices[who].shout(who, program, n, r);
         g.whooshes.push((0, who, shout));
     }
@@ -1723,6 +1731,8 @@ fn strike(
             None => rally_spin(g, src, class, kind, at, target),
         },
     };
+    // the ball launch's two uniforms (kept on the ball; nothing ported reads them)
+    (g.rng.shared.next(), g.rng.shared.next());
     g.flight = Flight::new(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
     ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
@@ -1860,7 +1870,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                     None => {
                         // a missed serve swing shouts with its miss motion, never muted by an earlier whiff
                         s.whiffed = true;
-                        let r = (rand(&mut g.rng) * 32768.0) as u32;
+                        let r = g.rng.shared.r15();
                         let shout =
                             g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
                         g.whooshes.push((0, i, shout));
@@ -1887,7 +1897,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         } else {
             g.serving.bot_aim
         };
-        let coins = [(); 3].map(|_| rand(&mut g.rng) < 0.5);
+        let coins = [(); 3].map(|_| g.rng.shared.bit());
         let d = &g.serve_data[i];
         let (target, miss) = serve::target(
             d,
@@ -2054,7 +2064,7 @@ fn aim_target(g: &mut Game, i: usize, stick: Vec2, branch: u8, kind: i32, offset
     // the ball being struck was a slice (not a smash) in a rally under way: the angle narrows
     let incoming = (g.shots > 0 && g.shot.class != 3 && g.shot.kind == 1).then_some(g.last_sweet);
     // ponytail: bots aim through this too with a random stick; the original AI's own aim is P11
-    g.aim = hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming, &mut ai_roll(&mut g.rng));
+    g.aim = hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming, &mut || g.rng.shared.next());
     g.aim.target
 }
 
@@ -2333,7 +2343,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 (0, i, thud),
                 (sound::dive_echo(g.players.len() as u32), i, thud),
             ]);
-            let r = (rand(&mut g.rng) * 32768.0) as u32;
+            let r = g.rng.shared.r15();
             let shout = g.voices[i].shout(i, sound::DIVE_SHOUT, g.players.len() as u32, r);
             g.whooshes.push((0, i, shout));
             let p = &mut g.players[i];
@@ -2648,7 +2658,7 @@ fn whiff_frame(g: &mut Game, i: usize, stick: bool) {
         set_motion(p, m, 1.0, false, None);
         p.missed = true;
         if !w.quiet {
-            let r = (rand(&mut g.rng) * 32768.0) as u32;
+            let r = g.rng.shared.r15();
             let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
             g.whooshes.push((0, i, shout));
         }
@@ -2746,11 +2756,8 @@ fn intercept(g: &Game, i: usize) -> Option<(V3, u32)> {
 fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
     let (receiver, first) = (g.score.receiver == i as i32, !g.players[i].ai_hit);
     let third = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-    let rng = &mut g.rng;
-    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, third, &mut || {
-        rand(rng);
-        *rng
-    });
+    let rng = &mut g.rng.ai;
+    g.players[i].ai_timing = g.players[i].ai.timing(shots.as_ref(), receiver, first, third, &mut || rng.next());
     g.players[i].surprised |= g.players[i].ai_timing.reacted;
     let dive = shots.is_none() && g.players[i].ai_dove.take().unwrap_or(true);
     let kept = g.players[i].ai_picks.dive;
@@ -2799,11 +2806,8 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
 /// ponytail: the app has no special serves yet, so the special-serve part never comes in.
 fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
     let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let rng = &mut g.rng.ai;
+    let mut roll = || rng.next();
     let p = &mut g.players[i];
     let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
     p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, false, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
@@ -2838,8 +2842,7 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
     g.players[i].ai_guess = None;
     match q.verdict(p.end, from, [b[0], b[2]]) {
         Verdict::Right => {
-            rand(&mut g.rng);
-            let e = (g.rng >> 16 & 0x7fff) as i32 % 3 - 1;
+            let e = g.rng.ai.r15() as i32 % 3 - 1;
             let t = &mut g.players[i].ai_timing;
             (t.stroke, t.volley, t.smash) = (e, e, e);
             None
@@ -2943,8 +2946,8 @@ fn bot(g: &mut Game, i: usize) {
             && g.players[i].bot_left != g.shots
         {
             g.players[i].bot_left = g.shots;
-            if !ai_mate_busy(g, i) && rand(&mut g.rng) < 0.25 {
-                let call = sound::call_out(i, rand(&mut g.rng) < 0.5);
+            if !ai_mate_busy(g, i) && g.rng.ai.r15() % 100 < 25 {
+                let call = sound::call_out(i, g.rng.ai.bit());
                 g.whooshes.push((0, i, call));
             }
         }
@@ -3029,11 +3032,8 @@ fn ai_stand_x(g: &mut Game, i: usize, b: V3) -> f32 {
         Some((shot, minus)) if shot == g.shots => minus,
         _ => {
             let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
-            let rng = &mut g.rng;
-            let run = p.ai.run_round(beside_human, &mut || {
-                rand(rng);
-                *rng
-            });
+            let rng = &mut g.rng.ai;
+            let run = p.ai.run_round(beside_human, &mut || rng.next());
             let width = run.then(|| p.ai.run_round_width(g.players.len() == 2));
             // the strong side is TParam's hand (the game's +0x12dc ignores the select-screen hand toggle)
             let strong = if g.reaches[i].hand >= 0.0 { 1 } else { 2 };
@@ -3069,11 +3069,8 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
     };
     let t = Team { side: p.end, formation, lean: Team::lean(formation, !human_mate, p.ai.style, m.ai.style) };
     let at = |q: &Player| [q.pos[0], q.pos[2]];
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let rng = &mut g.rng.ai;
+    let mut roll = || rng.next();
     let pl = &mut g.players[i];
     if pl.ai_form.lane == 0 {
         let starter = g.score.server == i as i32 || g.score.receiver == i as i32;
@@ -3117,11 +3114,8 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
     let reach = hst_sim::ai::Choice::new(0, 0, false).reach;
     let c = Court { side: p.end, reach, rate: p.ai.singles_center_rate, radius: p.ai.singles_center_radius };
     let (target, ball) = (g.marks.red.unwrap_or(at(&o)), [g.flight.ball.pos[0], g.flight.ball.pos[2]]);
-    let rng = &mut g.rng;
-    let mut roll = || {
-        rand(rng);
-        *rng
-    };
+    let rng = &mut g.rng.ai;
+    let mut roll = || rng.next();
     let pl = &mut g.players[i];
     let mut s = match pl.ai_single {
         Some(s) => s,
@@ -3344,12 +3338,9 @@ fn ai_lets_go(g: &Game, i: usize) -> bool {
     false
 }
 
-/// The AI's draws on the game's generator stand-in.
-fn ai_roll(rng: &mut u32) -> impl FnMut() -> u32 + '_ {
-    move || {
-        rand(rng);
-        *rng
-    }
+/// The AI's draws on its generator.
+fn ai_roll(rng: &mut Rngs) -> impl FnMut() -> u32 + '_ {
+    move || rng.ai.next()
 }
 
 /// The AI object's per-frame update (`hst_sim::ai::Mind`), ahead of the routine `bot` runs for it: the point
@@ -3421,22 +3412,16 @@ fn simulate(mut g: ResMut<Game>) {
     // ponytail: she steps first, so this tick's phase messages reach her a tick later than in the original
     let playing = g2.umpire_voice != 0;
     g2.umpire.step(playing, g2.flight.ball.pos);
-    let rng = &mut g2.rng;
+    let rng = &mut g2.rng.court;
     let cheers = g2.gallery.step(
         g2.stage,
         g2.players.len() as u32,
         g2.gallery_game,
-        &mut || {
-            rand(rng);
-            *rng
-        },
+        &mut || rng.next(),
     );
     g2.cheers.extend(cheers);
     for e in &mut g2.emitters {
-        if e.step(&mut || {
-            rand(rng);
-            *rng
-        }) {
+        if e.step(&mut || rng.next()) {
             debug!("emitter type {} sound {}", e.ty, e.row.sound);
             g2.sounds.push((
                 sound::Play {
@@ -3487,6 +3472,7 @@ fn simulate(mut g: ResMut<Game>) {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g, true),
                 Some(Next::ChangeEnds) => {
+                    g.rng.change_ends();
                     g.gallery.hush();
                     g.umpire.start(true, g.flight.ball.pos);
                     // the change-ends tune, cued as the phase is entered
@@ -3591,11 +3577,8 @@ fn simulate(mut g: ResMut<Game>) {
         g.smashed && g.last_hitter & 1 == team as i32
     };
     if let Some(r) = sound::reaction(verdict.call, g.gallery_game, applause, &mut g.errors) {
-        let rng = &mut g.rng;
-        g.gallery.point(r, &mut || {
-            rand(rng);
-            *rng
-        });
+        let rng = &mut g.rng.court;
+        g.gallery.point(r, &mut || rng.next());
     }
     let who = format!("team {}", team + 1);
     g.message = match event {
@@ -3635,7 +3618,7 @@ fn react(g: &mut Game, event: Event) {
             false,
         );
         let id = if n == 4 {
-            let draw = |m: u32| (rand(&mut g.rng) * m as f32) as u32;
+            let draw = |m: u32| g.rng.shared.r15() % m;
             let id = motion::team_reaction(base, g.chars[i], &taken, draw);
             if id >= 0x30 {
                 taken.push(id - 0x30);
@@ -3685,6 +3668,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.message.clear();
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
+    g.rng.new_point();
 }
 
 /// Orbit rig parameters that put the eye at `eye` looking along `forward` (game space).

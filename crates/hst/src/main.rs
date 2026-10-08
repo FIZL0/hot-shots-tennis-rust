@@ -229,14 +229,16 @@ fn load(
             // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
             // directly (slot 5's was 0x28c7c4a1)
             // ponytail: the menus' `rand()` calls before the match aren't ported; a clock-picked count stands in for them
+            let mut r = hst_sim::weather::Rand::default();
             let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
-                let mut r = hst_sim::weather::Rand::default();
                 let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
                 (0..skip).for_each(|_| _ = r.next());
                 r.next()
             });
             let mut mt = hst_sim::weather::Mt::new(seed);
             let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || mt.next());
+            // the match goes on drawing from the same generators (with a given seed, `rand()` is taken as at boot)
+            commands.insert_resource(play::MatchRng(hst_sim::rng::Rngs::new(r, mt)));
             let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
             let w = weather::Weather { schedule, game: 0, fixed };
             let today = w.today();
