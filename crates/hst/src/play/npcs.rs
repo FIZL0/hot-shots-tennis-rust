@@ -29,7 +29,8 @@ use crate::{Args, GameSpace};
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds));
+        .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
+        .add_systems(Update, draw_cheers.after(super::camera));
 }
 
 #[derive(Resource)]
@@ -55,6 +56,9 @@ struct Npcs {
     marks: Vec<[f32; 4]>,
     /// The trigger creatures and the sound emitters (`Game::emitters`, `None`) in spawn order.
     figures: Vec<Option<usize>>,
+    /// The cheer marks' sprites (`npc/clap`) and their sizes by kind (`exe::Game::cheer_sprites`).
+    sprites: Handle<Mesh>,
+    sizes: [[f32; 5]; 2],
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -100,7 +104,7 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites() };
     // court 5 shows its own marks from the match's start (with more than one player)
     if g.stage == 5 {
         npcs.marks = game.court5_marks();
@@ -161,6 +165,11 @@ fn setup(
         commands.entity(e).insert(Visibility::Hidden);
     }
     npcs.uncull = hidden;
+    if let Ok(look) = crate::effects::look(&mut iso, "npc/clap", &mut materials, &mut images) {
+        npcs.sprites = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
+        let view = commands.spawn((Mesh3d(npcs.sprites.clone()), MeshMaterial3d(look), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+        commands.entity(root).add_child(view);
+    }
     commands.insert_resource(npcs);
 }
 
@@ -336,6 +345,41 @@ fn step(
             }
         }
     }
+}
+
+/// The cheer marks' sprites, drawn while the gallery's manager runs and it isn't raining: each faces the camera,
+/// pulled 0.5 toward it and hung `sizes[3]` above the mark, `size` either side and `size` tall, at a size that
+/// keeps it about the same on screen up close and grows with distance far off; hidden when a metre there would
+/// show `sizes[4]` pixels or more (too near the camera).
+// ponytail: the original also needs a flag (never set in any dump) to be clear on courts other than 5
+fn draw_cheers(npcs: Option<Res<Npcs>>, g: Res<Game>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
+    let (Some(npcs), Ok(cam)) = (npcs, cam.single()) else { return };
+    let Some(mut mesh) = meshes.get_mut(&npcs.sprites) else { return };
+    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
+    let (right, up, ahead, eye) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y), game(cam.rotation * Vec3::NEG_Z), game(cam.translation));
+    let t = &npcs.sizes[npcs.cheers.kind.min(1) as usize];
+    let tan = g.cam.view.fov.tan();
+    let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
+    if !npcs.near.paused && !matches!(crate::weather::now(), 2 | 3) {
+        for c in npcs.cheers.shown() {
+            let mut at = Vec3::from(c.pos) - ahead * 0.5;
+            let half = (at - eye).dot(ahead) * tan;
+            let size = t[0] * (t[1] * half).max(1.0) * (t[2] * half).min(1.0);
+            at.y -= t[3];
+            // a metre at the mark spans 240 / (tan · depth) of the picture's 480 lines
+            let z = (at - eye).dot(ahead);
+            if 0.0 < t[4] && (z <= 0.001 || t[4] <= 240.0 / tan / z) {
+                continue;
+            }
+            let (w, h) = (right * size, up * size);
+            let n = pos.len() as u32;
+            pos.extend([at - w + h, at + w + h, at - w, at + w].map(|v| v.to_array()));
+            uv.extend([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]]);
+            colour.extend([[1.0f32; 4]; 4]);
+            index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
+        }
+    }
+    crate::effects::fill(&mut mesh, pos, uv, colour, index);
 }
 
 /// The decided point's gallery reaction (`simulate` leaves it for the cheerers to come first).
