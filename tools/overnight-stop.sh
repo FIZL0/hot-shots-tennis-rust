@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop/StopFailure hook for ./single.sh and ./parallel.sh: once Claude has been idle for HST_IDLE seconds (no background
+# Stop/StopFailure hook for tools/single.sh and tools/parallel.sh: once Claude has been idle for HST_IDLE seconds (no background
 # tasks, no new user/tool-result entries in the transcript — i.e. you didn't type anything), end the session so the loop starts the next run.
 in=$(cat)
 # background tasks normally end and wake the session (a new transcript entry); one that never ends (a Monitor

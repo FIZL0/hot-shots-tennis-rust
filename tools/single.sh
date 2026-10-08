@@ -4,13 +4,13 @@
 # It's the normal TUI, so attach to watch or type to it; it can't ask questions (AskUserQuestion disabled), and
 # tools/overnight-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
 #
-#   tmux new -s hst ./single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
-#   HST_IDLE=90 HST_PAUSE=60 ./single.sh
+#   tmux new -s hst tools/single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
+#   HST_IDLE=90 HST_PAUSE=60 tools/single.sh
 #
 # Runs with permission prompts bypassed: review the work in the morning (git log), and keep your backup.
 # Like the parallel runner's agents it gets its own PCSX2 copy (HST_PCSX2=6, ../<repo>-slots/pcsx2/s6; parallel runs use 1..N), so your own PCSX2 stays yours.
 set -u
-cd "$(dirname "$(realpath "$0")")"
+cd "$(dirname "$(realpath "$0")")/.."
 pgrep -f '^python3 .*([o]vernight-parallel|tools/[p]arallel)\.py' >/dev/null && { echo "a parallel run is going; wait for it to end"; exit 1; }
 export HST_PCSX2=6 HST_PCSX2_MAX_HOLD=${HST_PCSX2_MAX_HOLD:-1200}
 cfg=../$(basename "$PWD")-slots/pcsx2/s6/PCSX2

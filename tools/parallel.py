@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Unattended runner, several tasks at once: like ./single.sh, but keeps N (3) Claude
+"""Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own PLAN.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst ./parallel.sh [N] [p|d]      # e.g. 5 p; progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d]      # e.g. 5 p; progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -36,7 +36,7 @@ _args = sys.argv[1:]
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
 MODE = next((a for a in _args if a in ('p', 'd')), 'd')
 if any(a not in ('p', 'd') and not a.isdigit() for a in _args) or SLOTS < 1:
-    raise SystemExit('usage: ./parallel.sh [N] [p|d]   (N sessions, p = priority order, d = different files)')
+    raise SystemExit('usage: tools/parallel.sh [N] [p|d]   (N sessions, p = priority order, d = different files)')
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 WATCH = 600  # seconds between match-over checks of a slot's game while a capture drives it
@@ -171,7 +171,7 @@ def start(n, task):
     return p, sid, since
 
 
-MASTER = """You are the master of a parallel unattended run (./parallel.sh): nobody will answer \
+MASTER = """You are the master of a parallel unattended run (tools/parallel.sh): nobody will answer \
 questions. Up to {slots} agents work on PLAN.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
 runner clears your context and sends you these instructions with one message at a time: `REPORT <ID> slot <n>: \
 <session, its commits>` as each one ends. Earlier reports' outcomes are at the end of context/notes/master.md. Handle the \
@@ -317,7 +317,7 @@ def watch(n):
 
 def main():
     if not os.environ.get('TMUX'):
-        raise SystemExit('run me inside tmux: tmux new -s hst ./parallel.sh [N] [p|d]')
+        raise SystemExit('run me inside tmux: tmux new -s hst tools/parallel.sh [N] [p|d]')
     others = [p for p in sp.run(['pgrep', '-f', r'^(python3 \S*(overnight-parallel|tools/parallel)\.py|bash \S*(overnight|single)\.sh)( |$)'], capture_output=True, text=True).stdout.split()
               if int(p) != os.getpid()]
     if others:  # two parallel runners would share worktrees s1..sN; overnight.sh commits on main under the master

@@ -33,7 +33,7 @@
   Not automated yet: choosing the COM characters (each COM cursor starts on a different character), the costume
   (L1), the switch-hand toggle, singles, P1 receiving.
 - Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
-- `./single.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
+- `tools/single.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
 
 ## Play it now
 
