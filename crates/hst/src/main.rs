@@ -159,6 +159,7 @@ fn main() {
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);
+    app.add_systems(Update, character::texture_faces.after(character::animate));
     if menu {
         app.add_plugins(play::main_menu::plugin);
     } else if play {
@@ -459,7 +460,7 @@ fn load(
         Projection::Perspective(PerspectiveProjection { far: 20_000.0, ..default() }),
         Transform::default(),
         // play mode: broadcast view from behind the near (your) baseline
-        if args.play { Orbit { focus: Vec3::new(0.0, 0.0, 2.0), radius: 24.0, yaw: std::f32::consts::PI, pitch: -0.38 } } else { Orbit { focus, radius, yaw: 0.6, pitch: -0.4 } },
+        if args.play { Orbit { focus: Vec3::new(0.0, 0.0, 2.0), radius: 24.0, yaw: std::f32::consts::PI, pitch: -0.38 } } else { Orbit { focus, radius, yaw: std::env::var("HST_VIEW_YAW").ok().and_then(|y| y.parse().ok()).unwrap_or(0.6), pitch: -0.4 } },
     ));
 }
 

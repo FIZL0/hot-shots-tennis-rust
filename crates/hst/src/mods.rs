@@ -363,6 +363,64 @@ fn materials_of(
     Ok(out)
 }
 
+/// A texture face (§4b) from `dir/face.json`: each channel with a texture becomes a morph weight (after the model's
+/// own targets, so the donor's `.MOR` tracks drive it by name) and the listed glTF materials start on the neutral face.
+fn texture_face(
+    dir: &Path,
+    doc: &gltf::Document,
+    handles: &[Handle<StandardMaterial>],
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
+    names: &mut Vec<String>,
+) -> Result<character::TextureFace, String> {
+    let at = dir.join("face.json");
+    let err = |m: String| format!("{}: {m}", at.display());
+    let text = std::fs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
+    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
+    // one image pair per file (an emotion's eye and mouth channels share one)
+    let mut loaded: HashMap<String, (Handle<Image>, Handle<Image>)> = HashMap::new();
+    let mut image = |p: &str| -> Result<(Handle<Image>, Handle<Image>), String> {
+        if let Some(t) = loaded.get(p) {
+            return Ok(t.clone());
+        }
+        let bytes = std::fs::read(dir.join(p)).map_err(|e| err(format!("`{p}`: {e}")))?;
+        let ext = Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("png");
+        let sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, address_mode_v: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::linear() });
+        let img = Image::from_buffer(&bytes, ImageType::Extension(ext), CompressedImageFormats::NONE, true, sampler, RenderAssetUsages::RENDER_WORLD).map_err(|e| err(format!("`{p}`: {e}")))?;
+        let mut raw = img.clone();
+        raw.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+        let t = (images.add(img), images.add(raw));
+        loaded.insert(p.to_string(), t.clone());
+        Ok(t)
+    };
+    let neutral = image(j["neutral"].as_str().ok_or_else(|| err("`neutral` must be an image path".into()))?)?;
+    let mut channels = Vec::new();
+    for (k, v) in j["channels"].as_object().into_iter().flatten() {
+        // null: the channel has no face of its own (a mask), it stays neutral
+        let Some(p) = v.as_str() else { continue };
+        let t = names.iter().position(|n| n == k).unwrap_or_else(|| {
+            names.push(k.clone());
+            names.len() - 1
+        });
+        channels.push((t, image(p)?));
+    }
+    let wanted: Vec<&str> = j["materials"].as_array().into_iter().flatten().filter_map(|m| m.as_str()).collect();
+    if wanted.is_empty() {
+        return Err(err("`materials` must list the face's glTF material names".into()));
+    }
+    for name in wanted {
+        let i = doc.materials().position(|m| m.name() == Some(name)).ok_or_else(|| err(format!("no material `{name}` in the costume")))?;
+        if let Some(mut m) = materials.get_mut(&handles[i]) {
+            m.base_color_texture = Some(neutral.0.clone());
+        }
+        for d in gs.get_mut(&handles[i].id()).into_iter().flatten() {
+            d.texture = Some(neutral.1.clone());
+        }
+    }
+    Ok(character::TextureFace { neutral, channels })
+}
+
 /// One primitive's vertices.
 #[derive(Default)]
 struct Prim {
@@ -454,17 +512,39 @@ pub fn load(
     for mesh in doc.meshes() {
         names.extend(target_names(&mesh).into_iter().filter(|t| !names.contains(t)).collect::<Vec<_>>());
     }
+    let texture_face = if m.texture_face { Some(texture_face(&m.dir, &doc, &handles, images, materials, &mut gs, &mut names)?) } else { None };
     let mut parts = Vec::new();
     let mut deformers = Vec::new();
     let mut swaying = Vec::new();
-    for n in doc.nodes().filter(|n| n.skin().is_some()) {
+    // a mesh without a skin rides the nearest joint at or above its node (Get a Grip's heads and faces), whole
+    let rides = |n: &gltf::Node| {
+        let mut p = Some(n.index());
+        while let Some(i) = p.filter(|i| !index.contains_key(i)) {
+            p = up[i];
+        }
+        p.map(|i| index[&i])
+    };
+    for (n, rigid) in doc.nodes().filter_map(|n| match n.skin() {
+        Some(_) => Some((n, None)),
+        None => n.mesh().and(rides(&n)).map(|j| (n, Some(j))),
+    }) {
         let mesh = n.mesh().unwrap();
         let tn = target_names(&mesh);
         // the mesh's noise deformers (`extras.noise`, a disc `.NOI`'s), numbered across meshes
         let first = deformers.len();
         deformers.extend(noise_deformers(&mesh));
         for p in mesh.primitives() {
-            let v = prim(&p, &blob, &tn).map_err(ctx)?;
+            let mut v = prim(&p, &blob, &tn).map_err(ctx)?;
+            if let Some(j) = rigid {
+                // into game space at bind, all on joint j
+                let to = space * w[n.index()];
+                let nm = Mat3::from_mat4(to).inverse().transpose();
+                v.pos.iter_mut().for_each(|q| *q = to.transform_point3(Vec3::from(*q)).into());
+                v.nrm.iter_mut().for_each(|q| *q = (nm * Vec3::from(*q)).normalize_or_zero().into());
+                v.morph.iter_mut().flat_map(|t| t.1.iter_mut()).for_each(|d| *d = to.transform_vector3(Vec3::from(*d)).into());
+                v.joints.fill([j as u16, 0, 0, 0]);
+                v.weights.fill([1.0, 0.0, 0.0, 0.0]);
+            }
             let count = v.pos.len();
             let moved = moved(&v, first, deformers.len(), &joints);
             // VU1's per-bone normals from one glTF normal: the first joint's share in the normal slot, the rest in the
@@ -524,7 +604,7 @@ pub fn load(
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     let noise = (!swaying.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, stance_ball, skeleton, noise, gs })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, stance_ball, skeleton, noise, gs, texture_face })
 }
 
 /// A mesh's `extras.noise` deformers (period, rate, amplitudes), as a `.NOI` gives them.
@@ -623,6 +703,40 @@ mod tests {
         assert_eq!(draws(&c), draws(&disc));
         let row = tparam(&mut iso, &m).unwrap();
         assert_eq!((&row[12][..], &row[40][..], &row[57][..], &row[13][..]), ("4", "10", "170", "4"));
+    }
+
+    /// Get a Grip's Emi (a texture face, §4b): her face material starts neutral, the donor's `.MOR` tracks drive
+    /// face.json's channels by name, and over the donor's faces some frames show an expression texture.
+    #[test]
+    fn texture_face_follows_the_donors_faces() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        if !Path::new(MODS).join("getagrip_pc00_emi").is_dir() {
+            return eprintln!("no context/mods/getagrip_pc00_emi, skipped");
+        }
+        let mut s = Stores(default(), default(), default(), default());
+        let (_, c) = load_mod(&mut iso, &mut s, "getagrip_pc00_emi").unwrap();
+        let f = c.texture_face.as_ref().expect("texture face");
+        assert_eq!(f.channels.len(), 9);
+        assert_eq!(c.morph_targets, 9);
+        // joy_eye and joy_mouth (weights 5, 6: channels by name) share zero_face5.png: one image
+        let joy: Vec<_> = f.channels.iter().filter(|(t, _)| [5, 6].contains(t)).map(|c| c.1.0.id()).collect();
+        assert!(joy.len() == 2 && joy[0] == joy[1], "{joy:?}");
+        let face = c.parts.iter().filter_map(|p| s.1.get(&p.1)?.base_color_texture.clone()).filter(|t| *t == f.neutral.0).count();
+        assert!(face > 0, "no part starts on the neutral face");
+        assert!(c.gs.values().flatten().any(|d| d.texture.as_ref() == Some(&f.neutral.1)));
+        // sample every face the way `character::animate` does; some frames must leave neutral
+        let mut shown = 0;
+        for face in c.faces.values() {
+            for k in 0..(face.length as i32) {
+                let mut w = vec![0.0; c.morph_targets];
+                let t = hst_sim::ps2::mul(k as f32, 80.0);
+                for (target, ticks, values) in &face.tracks {
+                    w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
+                }
+                shown += (f.pick(&w).0 != f.neutral.0) as usize;
+            }
+        }
+        assert!(shown > 0, "the donor's faces never show an expression");
     }
 
     /// A packaged rerig.py mod (Fore!'s Phoebe on donor 6) plays the forehand and run without breaking up.
