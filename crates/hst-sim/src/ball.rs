@@ -238,6 +238,8 @@ struct FrameFlags {
     special_first: bool,
     /// Touches of the ghost material.
     ghosts: i32,
+    /// A plane step (`Flight::step_plane`): responds as a first special touch.
+    plane: bool,
 }
 
 /// Constants of the original's contact code (exact bit patterns).
@@ -310,6 +312,36 @@ impl Flight {
             let ignore: &[u32] = if ghosts == 0 { &[] } else { &[GHOST] };
             world.sweep(pos, target, r, ignore).map(|h| (h.contact(), [h.point[0], h.point[1], h.point[2]], materials[h.material as usize], h.material == GHOST))
         });
+    }
+
+    /// The extra step the original gives the ball when it hits a player: no acceleration, wind or curve; the step
+    /// is swept once against the plane through its end point facing back along the ball's heading (`material`,
+    /// the table's material 0), and responds as a first special touch. The ball stays where it is; only its
+    /// velocity (and spin, frame, counts) change. No line calls.
+    // ponytail: the ball model's extra spin turn in this step is not carried (the app turns it from `spin` each tick)
+    pub fn step_plane(&mut self, shot: &Shot, surface: &Surface, material: Material) {
+        use crate::ps2::{add, div, madd, mul, sqrt};
+        let v = self.ball.vel;
+        let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[0], v[0])));
+        let n: V4 = [-mul(v[0], inv), -0.0, -mul(v[2], inv), -0.0];
+        let pos: V4 = [self.ball.pos[0], self.ball.pos[1], self.ball.pos[2], 1.0];
+        let d: V4 = [v[0], v[1], v[2], 0.0];
+        let end: V4 = std::array::from_fn(|k| madd(add(0.0, pos[k]), d[k], 1.0));
+        if let Some(h) = crate::contact::sweep(pos, end, shot.params.radius, end, n, f32::MAX) {
+            let mut f = FrameFlags { plane: true, ..Default::default() };
+            let d = self.respond(shot, surface, d, h.normal, material, false, &mut f);
+            if f.counted {
+                // the record holds the ball's centre at the contact
+                let c = crate::contact::contact_point(Some(&h), pos, end, shot.params.radius);
+                self.landing = ([c[0], c[1], c[2]], material);
+            }
+            let d = if self.in_play && !self.rolling && self.bounces == 1 && shot.bounce_turn != 0.0 { turn(d, 0.0, shot.bounce_turn) } else { d };
+            self.ball.vel = [d[0], d[1], d[2]];
+            if f.special {
+                self.ball.vel[2] = add(self.ball.vel[2], mul(pos[2].signum(), NET_PUSH));
+            }
+        }
+        self.frame += 1;
     }
 
     /// The frame itself; `query(start, end, ghost touches so far)` finds the nearest contact of a sub-step: the
@@ -397,7 +429,7 @@ impl Flight {
             f.special_first = self.special_contacts == 0;
             self.special_contacts += 1;
         }
-        let (special, special_first) = (f.special, f.special_first);
+        let (special, special_first) = (f.special, f.special_first || f.plane);
         let sq = |v: V4| madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2]);
         let dot = madd(madd(mul(d[1], n[1]), d[0], n[0]), d[2], n[2]);
         let mut vn: V4 = n.map(|c| mul(c, dot));

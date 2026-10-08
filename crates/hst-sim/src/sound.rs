@@ -209,6 +209,11 @@ pub fn call_out(player: usize, bit: bool) -> Play {
     play(1 + player as u8, 6, 3 + bit as u8, 0x80)
 }
 
+/// The cry of a player the ball hits (program 5 key 0, 0x80 at the player), as the ball touches them.
+pub fn hit_cry(player: usize) -> Play {
+    play(1 + player as u8, 5, 0, 0x80)
+}
+
 /// One player's voice: the last key of programs 1 and 2 (no shout repeats its program's last key).
 #[derive(Clone, Copy, Debug)]
 pub struct Voice([i32; 2]);
