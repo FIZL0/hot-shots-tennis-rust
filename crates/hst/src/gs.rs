@@ -165,6 +165,77 @@ fn light_rgb(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, usize)> {
     Some((rgb, row))
 }
 
+/// The hole model's colour shift the court load applies (hue °, saturation %, lightness %): `envir_cNN.dat`
+/// +0x4e8/+0x4ec/+0x4f0 + `envir_cNN_h01.dat` +0x60/+0x64/+0x68, hue mod 360 (C remainder), the others clamped to
+/// ±100; None when it is no shift.
+pub fn hole_hsl(envir: &[u8], hole: &[u8]) -> Option<[i32; 3]> {
+    let i = |d: &[u8], o: usize| Some(i32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?));
+    let k = [(0x4e8, 0x60), (0x4ec, 0x64), (0x4f0, 0x68)].map(|(a, b)| Some(i(envir, a)? + i(hole, b)?));
+    let [h, s, l] = [k[0]?, k[1]?, k[2]?];
+    let hsl = [h % 360, s.clamp(-100, 100), l.clamp(-100, 100)];
+    (hsl != [0; 3]).then_some(hsl)
+}
+
+/// A vertex colour shifted by `hsl` ([`hole_hsl`]) as the game does it: to HSL from byte/255, hue + hue/360 (wrapped),
+/// saturation and lightness + /100 (clamped to 0..1), back to RGB, each channel ×255 truncated.
+pub fn hsl_shift(c: [u8; 3], [hue, sat, light]: [i32; 3]) -> [u8; 3] {
+    use hst_sim::ps2::{add, div, msub, mul, sub};
+    const S6: f32 = 0.16666667;
+    const T1: f32 = 0.33333334;
+    const T2: f32 = 0.6666667;
+    let [r, g, b] = c.map(|x| div(x as f32, 255.0));
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let l = div(add(mx, mn), 2.0);
+    let (mut h, mut s) = (0.0, 0.0);
+    if mx != mn {
+        let d = sub(mx, mn);
+        s = if l <= 0.5 { div(d, add(mx, mn)) } else { div(d, sub(sub(2.0, mx), mn)) };
+        let k = |x: f32| div(mul(sub(mx, x), S6), d);
+        let (dr, dg, db) = (k(r), k(g), k(b));
+        h = if r == mx { sub(db, dg) } else if g == mx { sub(add(dr, T1), db) } else { sub(add(dg, T2), dr) };
+        if h < 0.0 {
+            h = add(h, 1.0);
+        }
+        if h > 1.0 {
+            h = sub(h, 1.0);
+        }
+    }
+    h = add(h, div(hue as f32, 360.0));
+    while h >= 1.0 {
+        h = sub(h, 1.0);
+    }
+    while h < 0.0 {
+        h = add(h, 1.0);
+    }
+    let s = add(s, div(sat as f32, 100.0)).clamp(0.0, 1.0);
+    let l = add(l, div(light as f32, 100.0)).clamp(0.0, 1.0);
+    let rgb = if s == 0.0 {
+        [l; 3]
+    } else {
+        let q = if l <= 0.5 { mul(l, add(s, 1.0)) } else { msub(add(l, s), l, s) };
+        let p = sub(mul(l, 2.0), q);
+        let ch = |mut t: f32| {
+            if t < 0.0 {
+                t = add(t, 1.0);
+            }
+            if t > 1.0 {
+                t = sub(t, 1.0);
+            }
+            if t < S6 {
+                add(p, div(mul(t, sub(q, p)), S6))
+            } else if t < 0.5 {
+                q
+            } else if t < T2 {
+                add(p, div(mul(sub(T2, t), sub(q, p)), S6))
+            } else {
+                p
+            }
+        };
+        [ch(add(h, T1)), ch(h), ch(sub(h, T1))]
+    };
+    rgb.map(|x| mul(x, 255.0) as u8)
+}
+
 /// Fog parameters that leave every pixel as it is.
 pub const NO_FOG: Vec4 = Vec4::new(255.0, 255.0, 0.0, 1.0);
 
@@ -340,6 +411,20 @@ impl Material for GsMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hole_hsl_shift() {
+        // court 4's hole model: lightness +8 (vertex colours read back from slot 4's RAM)
+        for (c, want) in [([39, 39, 39], [59, 59, 59]), ([0, 2, 0], [0, 42, 0]), ([70, 60, 49], [93, 80, 65]), ([94, 98, 110], [112, 117, 131]), ([102, 105, 128], [121, 124, 148])] {
+            assert_eq!(hsl_shift(c, [0, 0, 8]), want, "{c:?}");
+        }
+        let (mut envir, mut hole) = (vec![0; 0x4f4], vec![0; 0x6c]);
+        assert_eq!(hole_hsl(&envir, &hole), None);
+        envir[0x4e8..0x4ec].copy_from_slice(&350i32.to_le_bytes());
+        hole[0x60..0x64].copy_from_slice(&20i32.to_le_bytes());
+        hole[0x68..0x6c].copy_from_slice(&150i32.to_le_bytes());
+        assert_eq!(hole_hsl(&envir, &hole), Some([10, 0, 100]));
+    }
 
     fn material(name: &str, mode: i16, alpha: f32) -> mtl::Material {
         let mut header = [0; 0x30];

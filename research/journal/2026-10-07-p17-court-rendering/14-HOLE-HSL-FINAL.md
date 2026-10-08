@@ -1,4 +1,4 @@
-# P17s4 notes (in progress): the ground's vertex colours get an HSL shift at load
+# P17s4: the ground's vertex colours get an HSL shift at load
 
 - The court-4 "ground" in `context/p17s2/s4.gs` is the hole model `GRD01.XB/.../hole/park_h01_s1111.mdl`. Its
   colours in RAM differ from the file. With RAM's vertex colours it fits the court light block exactly
@@ -17,11 +17,12 @@
     Each channel is truncated after ×255; alpha is kept.
 - Court 4: envir row 0 is (0, 0, 0) and h01 is (0, 0, 8), so the shift is lightness +8 %. Examples:
   grey 39 → 59, (0, 2, 0) → (0, 42, 0), (70, 60, 49) → (93, 80, 65), (94, 98, 110) → (112, 117, 131).
-- A float32 (round-to-nearest) Python model matches 4702 of 4710 vertices. The 8 misses are off by 1, so the port
-  must use `hst_sim::ps2` operations (chop rounding; div rounds to nearest).
-- Port plan: put a pure function in gs.rs with a test of the pairs above, and apply it to the `hole`-dir model's mesh
-  colours in main.rs's court spawn loop.
-- Not explained yet (new gap):
+- A float32 (round-to-nearest) Python model matches 4702 of 4710 vertices; the 8 misses are off by 1. With
+  `hst_sim::ps2` operations (chop rounding; div rounds to nearest), the Rust port matches all 4710 (805 distinct
+  colours) against slot 4's RAM.
+- Ported: `gs::hole_hsl` (the parameters) and `gs::hsl_shift` (one colour), tested by gs.rs `hole_hsl_shift`.
+  main.rs's `shift_colours` applies them to the `hole`-dir model's mesh colours before it is spawned.
+- Not explained yet (gap P17s5):
   - The net (`znet`, `netmoto`) wire and pole draw at a constant ⌊vc·1.8⌋ for every normal. 1.8 is the models
     block's A + L, as if d = 1.
   - `house` and `light4` fit neither the court block nor the models block, even with a fitted rotation and normal
