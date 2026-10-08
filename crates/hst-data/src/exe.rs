@@ -125,6 +125,11 @@ impl<'a> Game<'a> {
         std::array::from_fn(|k| i32::from_le_bytes(self.at(0x41_e410 + 4 * k as u32, 4).try_into().unwrap()))
     }
 
+    /// The strong toss's serve mistiming error (cm) per skill level 0..2: depth, along the stick, random sideways.
+    pub fn serve_miss(&self) -> [[i32; 3]; 3] {
+        std::array::from_fn(|l| std::array::from_fn(|k| i32::from_le_bytes(self.at(0x3f_c760 + 12 * l as u32 + 4 * k as u32, 4).try_into().unwrap())))
+    }
+
     /// Metres the analog stick moves the aim point at full deflection.
     pub fn stick_reach(&self) -> f32 {
         self.f32(0x40_3bd0)

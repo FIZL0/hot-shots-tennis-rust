@@ -383,13 +383,10 @@ pub struct Hitter {
 /// `incoming` is Some(was sweet) when the ball being struck is a slice (not a smash) in a rally under way.
 /// ponytail: the centred-stick ±5/±10 timing nudge (P3) and the smash's held depth value aren't returned
 pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>) -> V3 {
-    use crate::libm::{acosf, tanf};
-    use ps2::{add, div, mul, sub, sqrt};
+    use ps2::{add, div, mul, sub};
     let (end, b) = (h.end, h.branch);
-    let rally = (1..=3).contains(&b);
-    let kind = |k: i32| rally && h.kind == k;
+    let kind = |k: i32| (1..=3).contains(&b) && h.kind == k;
     let drop = kind(4);
-    let plain_smash = b == 4 && h.kind != 3;
     let sweet = b != 3 && !h.body && h.offset.abs() < 2;
     // depth of the target band and its near edge
     let (long, near) = if drop {
@@ -402,6 +399,21 @@ pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, 
     let base_z = mul(add(near, half), end);
     let width = if four { 5.485 } else { 4.115 };
     let width = if sweet { width } else { sub(width, 0.5) };
+    aim_from(h, s, stick, four, button, incoming, [0.0, base_z], width, half)
+}
+
+/// `aim` from its base point (x, z), the stick's full reach across (`width`) and along (`half`): the stick, the
+/// widest angle, the straight line's depth and the minimum past the net. The serve's aim shares it (branch 0).
+#[allow(clippy::too_many_arguments)]
+pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>, base: [f32; 2], width: f32, half: f32) -> V3 {
+    use crate::libm::{acosf, tanf};
+    use ps2::{add, div, mul, sub, sqrt};
+    let (end, b) = (h.end, h.branch);
+    let rally = (1..=3).contains(&b);
+    let kind = |k: i32| rally && h.kind == k;
+    let drop = kind(4);
+    let plain_smash = b == 4 && h.kind != 3;
+    let near = if drop { 2.0 } else { 3.0 };
     // the stick's circle stretched onto the square
     let (mut ox, mut oz) = (0.0, 0.0);
     let len = sqrt(add(mul(stick[0], stick[0]), mul(stick[1], stick[1])));
@@ -422,7 +434,7 @@ pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, 
             oz = mul(-half, end);
         }
     }
-    let (mut tx, mut tz) = (ox, add(base_z, oz));
+    let (mut tx, mut tz) = (add(ox, base[0]), add(oz, base[1]));
     // the widest angle off straight
     let mut a = if four { 3.0 } else { 0.0 };
     a = add(a, s.con[match b {

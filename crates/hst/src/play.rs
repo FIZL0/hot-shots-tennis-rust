@@ -1266,6 +1266,7 @@ fn setup(
         // ponytail: the a/b voice pick is 70/30 at random; the game's rules for two players of one character are left out
         voices.push(voice_bank(&mut iso, c, n, rand(&mut game.rng) < 0.3).map(std::sync::Arc::new));
         game.serve_data.push(serve_data(&mut iso, &data));
+        serve_character(&mut iso, c, game.aim_stats[i], game.serve_data.last_mut().unwrap());
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
         commands
@@ -4038,4 +4039,15 @@ fn play_sounds(
 /// A human's face-button press while the point is over: it ends the phase once the new score has settled.
 fn post_press(g: &mut Game, pressed: bool) {
     g.post_press |= pressed && g.phase == Phase::Post;
+}
+
+/// The serve values `serve_data` leaves at character 0's: the strong toss's mistiming error by the character's
+/// skill level (the game program's table) and the serve angle (TParam Serv CON).
+fn serve_character(iso: &mut Iso, n: usize, aim: hst_sim::shot::AimStats, d: &mut ServeData) {
+    let (cnf, bin) = (
+        iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),
+        iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"),
+    );
+    d.miss = serve::miss_of(hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").serve_miss(), n);
+    d.max_angle = aim.con[2] as f32;
 }
