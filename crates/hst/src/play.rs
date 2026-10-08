@@ -118,6 +118,8 @@ struct Player {
     home: V3,
     /// The ball where the racket meets it (game space), while a stroke is locked.
     hit_at: Option<V3>,
+    /// Where the swing (or dive) started (x, z): the aim's angle is measured from it.
+    aim_from: [f32; 2],
     /// The timing balloon over this player's head and its age in frames.
     balloon: Option<(Balloon, u32)>,
     /// The AI was caught off guard this tick (a change-of-pace or fast-ball reaction, a wrong guess): `surprise`.
@@ -272,6 +274,10 @@ struct Game {
     rally: Rally,
     /// Shots this rally (1 = the serve).
     shots: i32,
+    /// The last shot was on the sweet spot (not a dive, |offset| < 2): its record's flag the next aim reads.
+    last_sweet: bool,
+    /// Per player: the character's aim values (see `aim_stats`).
+    aim_stats: Vec<hst_sim::shot::AimStats>,
     /// Line tolerance from the game program.
     line_margin: f32,
     /// How far inside the lines a rally shot's aim is pulled, from the game program.
@@ -647,6 +653,19 @@ fn character_stats(iso: &mut Iso, n: usize) -> Stats {
         [costs[0], costs[1], costs[2]],
         0,
     )
+}
+
+/// A character's aim values from TParam.csv: Strk/Voley/Serv CON (columns 20–22), Body/Vbdy ADJ (23, 24),
+/// Rizing ADJ (26) and the underhand limit in cm (62).
+fn aim_stats(iso: &mut Iso, n: usize) -> hst_sim::shot::AimStats {
+    let row = tparam(iso, n);
+    let cell = |i: usize| row[i].split('/').next().unwrap().parse::<i32>().expect("TParam aim value");
+    hst_sim::shot::AimStats {
+        con: [cell(20), cell(21), cell(22)],
+        body: [cell(23), cell(24)],
+        rising: cell(26),
+        under: hst_sim::ps2::div(cell(62) as f32, 100.0),
+    }
 }
 
 /// A computer player's AIParam.csv row: character `n` in `outfit`, as an exhibition match picks it (outfits 4 and 9
@@ -1037,6 +1056,8 @@ fn setup(
         score: Score::new(),
         rally: Rally::default(),
         shots: 0,
+        last_sweet: false,
+        aim_stats: Vec::new(),
         line_margin,
         margins,
         post: None,
@@ -1118,6 +1139,7 @@ fn setup(
         };
         game.players[i].hand = character_hand(&mut iso, c);
         game.players[i].stats = character_stats(&mut iso, c);
+        game.aim_stats.push(aim_stats(&mut iso, c));
         game.players[i].ai = ai_params(&mut iso, c, outfit, n == 4);
         game.players[i].body.stamina = game.players[i].stats.stamina;
         game.pelvis[i] = data.pelvis.clone();
@@ -1548,6 +1570,7 @@ fn strike(
         g.whooshes.push((0, who, shout));
     }
     g.smashed = branch == 4 && g.rules.players > 1;
+    g.last_sweet = branch != 3 && offset.abs() < 2;
     g.whistle = if kind == 3 {
         (true, g.whistle.1 + 1)
     } else {
@@ -1876,10 +1899,13 @@ fn pad_run(g: &Game, stick: Vec2) -> Vec2 {
 
 /// Analog aim on the court (x, z direction from `pad_run`, or a bot's random pick): sideways spans the court,
 /// +z moves the target toward +z (deeper for the −z team, shorter for the other); centred is a deep middle ball.
-fn aim_target(g: &Game, stick: Vec2, end: f32) -> V3 {
-    let width = if g.rules.players > 2 { 4.4 } else { 3.4 };
-    let x = stick.x.clamp(-1.0, 1.0) * width;
-    [x, 0.0, end * 8.0 + stick.y.clamp(-1.0, 1.0) * 2.8] // 5.2 .. 10.8 m past the net
+fn aim_target(g: &Game, i: usize, stick: Vec2, branch: u8, kind: i32, offset: i32, body: bool, height: f32) -> V3 {
+    let p = &g.players[i];
+    let h = hst_sim::shot::Hitter { end: p.end, branch, kind, offset, body, from: p.aim_from, height };
+    // the ball being struck was a slice (not a smash) in a rally under way: the angle narrows
+    let incoming = (g.shots > 0 && g.shot.class != 3 && g.shot.kind == 1).then_some(g.last_sweet);
+    // ponytail: bots aim through this too with a random stick; the original AI's own aim is P11
+    hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming)
 }
 
 /// The ball's predicted path for the contact search: this frame's ball, then one step per frame. As the
@@ -2103,6 +2129,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.pending = None;
             p.contact = Some(c);
             p.hit_at = Some(c.swing.ball);
+            p.aim_from = [p.pos[0], p.pos[2]];
             p.wind = c.frames.max(1);
             let (m, speed, wait) = motion::stroke_start(
                 branch_code(c.swing.branch),
@@ -2146,6 +2173,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             );
             p.pending = None;
             p.dive = Some(d);
+            p.aim_from = [p.pos[0], p.pos[2]];
             // ponytail: clear weather (see Stats), so the thud's key is 0
             let thud = sound::dive_thud(0);
             g.whooshes.extend([
@@ -2211,7 +2239,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             let branch = branch_code(c.swing.branch);
             let kind =
                 hst_sim::shot::stick_kind(branch, g.players[i].kind, [stick.x, stick.y], end);
-            let target = aim_target(g, stick, end);
+            let target = aim_target(g, i, stick, branch, kind, c.offset, c.swing.body, c.swing.ball[1]);
             // a smash has its own class and kinds: △ (the lob button) smashes kind 1, the others kind 0
             let (class, kind) = if branch == 4 {
                 (3, (kind == 3) as i32)
@@ -2318,8 +2346,8 @@ fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
     if d.contact && n == d.frame {
         let stick = aim(g);
         let kind = hst_sim::shot::stick_kind(3, g.players[i].kind, [stick.x, stick.y], end);
-        let target = aim_target(g, stick, end);
         let offset = d.frame as i32 - SWEET_FRAME;
+        let target = aim_target(g, i, stick, 3, kind, offset, false, 0.0);
         strike(
             g,
             i,
