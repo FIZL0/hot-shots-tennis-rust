@@ -8,7 +8,11 @@
 //!
 //! The points are seen from the game's state: a decided point is the umpire turning (`point_over` sets her
 //! motion only then), a new point the next serve after it. The walkers react and the gallery picks who cheers
-//! ([`npc::cheerers`]) on the tick after the point, one tick after the original.
+//! ([`npc::cheerers`]) in the tick the point is decided.
+//!
+//! The court generator's draws come in the game's order each tick: the decided point's cheerers, the gallery's
+//! applause and the walkers' reactions; the walkers' step (adding cheer marks); the gallery's manager (its cheer,
+//! its marks, its tick); then the trigger creatures and sound emitters in the order they were spawned.
 //!
 //! The walkers stand at their home facing the court centre (each serve placement turns them there) and turn to the
 //! middle of the winners' half when they react ([`npc::walker_facing`]).
@@ -17,7 +21,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, layout, xb::Archive};
-use hst_sim::npc;
+use hst_sim::{npc, sound};
 
 use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
@@ -25,7 +29,7 @@ use crate::{Args, GameSpace};
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, step.after(character::tick));
+        .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds));
 }
 
 #[derive(Resource)]
@@ -47,6 +51,8 @@ struct Npcs {
     uncull: Vec<Entity>,
     /// The gallery's cheer marks (where a walker started cheering); stepped after the walkers.
     cheers: npc::Cheers,
+    /// The trigger creatures and the sound emitters (`Game::emitters`, `None`) in spawn order.
+    figures: Vec<Option<usize>>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -92,7 +98,7 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: default() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: default(), figures: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -116,6 +122,9 @@ fn setup(
                 npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
             }
             npc::Kind::Trigger(t) => {
+                if npc::EMITTERS.contains(&t) {
+                    npcs.figures.push(None);
+                }
                 let Some((model, base, clips)) = game.trigger_model(t) else { continue };
                 let Some(data) = load(layout::trigger_files(&model, &base, clips)) else { continue };
                 let row = game.trigger(t);
@@ -132,6 +141,7 @@ fn setup(
                 if t == 15 {
                     hidden.push(e); // the passing ball waits off until a change of ends rolls it
                 }
+                npcs.figures.push(Some(npcs.triggers.len()));
                 npcs.triggers.push((e, tr, row));
             }
             // ponytail: court 5's own creatures are not drawn (their models are not found yet)
@@ -171,7 +181,18 @@ fn step(
     mut commands: Commands,
     children: Query<&Children>,
 ) {
-    let Some(mut npcs) = npcs else { return };
+    let Some(mut npcs) = npcs else {
+        // no court figures: the gallery and the emitters still step
+        let g = &mut *g;
+        let rng = &mut g.rng.court;
+        let mut roll = || rng.next();
+        applaud(&mut g.gallery, &mut g.applause, &mut roll);
+        g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
+        for k in 0..g.emitters.len() {
+            emit(&mut g.emitters[k], &mut g.sounds, &mut roll);
+        }
+        return;
+    };
     let npcs = &mut *npcs;
     for e in std::mem::take(&mut npcs.uncull) {
         for &part in children.get(e).into_iter().flatten() {
@@ -186,19 +207,20 @@ fn step(
     npcs.near.deciding = g.score.tiebreak && played + 1 == 2 * g.rules.sets - 1;
     // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
     let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
+    let g = &mut *g;
     let rng = &mut g.rng.court;
     let mut roll = || rng.next();
-    // a decided point: the walkers react, some cheering
-    let cheer = if motion != 0 && npcs.motion == 0 {
+    // a decided point: some cheering, the gallery's applause, then the walkers react
+    let decided = motion != 0 && npcs.motion == 0;
+    let cheer = if decided { npc::cheerers(npcs.walkers.len(), &mut roll) } else { [false; 6] };
+    applaud(&mut g.gallery, &mut g.applause, &mut roll);
+    if decided {
         for (e, w, home) in &mut npcs.walkers {
             w.react();
             face(&mut turn, *e, *home, side);
         }
         npcs.decided = true;
-        npc::cheerers(npcs.walkers.len(), &mut roll)
-    } else {
-        [false; 6]
-    };
+    }
     // the serve after it: a new point
     if npcs.decided && serve {
         npcs.decided = false;
@@ -253,10 +275,18 @@ fn step(
             show(&mut m, w.anim as usize, w.frame, matches!(w.anim, 3 | 5));
         }
     }
-    // ponytail: the gallery's cheer steps before the walkers (in `simulate`), the game's after them (P3e3)
+    g.cheers.extend(g.gallery.step(g.stage, g.players.len() as u32, g.gallery_game, &mut roll));
     npcs.cheers.step(&mut roll);
     npcs.tick += 1;
-    for (e, t, row) in &mut npcs.triggers {
+    let mut emitters = 0..g.emitters.len();
+    for &f in &npcs.figures {
+        let Some(k) = f else {
+            if let Some(k) = emitters.next() {
+                emit(&mut g.emitters[k], &mut g.sounds, &mut roll);
+            }
+            continue;
+        };
+        let (e, t, row) = &mut npcs.triggers[k];
         // ponytail: their sounds and a hit's message (`struck`) are not played; a type's startled flag stays set
         // until the next point (the original clears it sooner, from code not found)
         t.step_near(row, &mut npcs.near, &mut roll);
@@ -274,5 +304,20 @@ fn step(
                 *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
             }
         }
+    }
+}
+
+/// The decided point's gallery reaction (`simulate` leaves it for the cheerers to come first).
+fn applaud(gallery: &mut sound::Gallery, applause: &mut Option<sound::Reaction>, roll: &mut impl FnMut() -> u32) {
+    if let Some(r) = applause.take() {
+        gallery.point(r, roll);
+    }
+}
+
+/// An emitter's step, cueing its sound when due.
+fn emit(e: &mut npc::Emitter, sounds: &mut Vec<(sound::Play, [f32; 3])>, roll: &mut impl FnMut() -> u32) {
+    if e.step(roll) {
+        debug!("emitter type {} sound {}", e.ty, e.row.sound);
+        sounds.push((sound::Play { slot: 0, program: 7, key: e.row.sound as u8, volume: 0x40, speed: 1.0 }, e.pos));
     }
 }
