@@ -1,6 +1,7 @@
 //! P1's rally aims (`context/fixtures/aim_singles.bin`, `aim_doubles.bin`; tools/record_aim.py, skipped
 //! when missing): every aim `shot::aim` gives from the stick, the hitter and the incoming shot's record is the
-//! game's +0x3e90 bit for bit, sweet-spot corner shots included.
+//! game's +0x3e90 bit for bit, sweet-spot corner shots and both incoming-slice scales
+//! (each fixture ends with AIM_INCOMING=1 aims) included.
 
 use hst_sim::player::pad_dir;
 use hst_sim::replay::{Frame, SAMPLE_LIVE};
@@ -20,7 +21,7 @@ fn human_aims() {
             eprintln!("skipping {name}: no recording");
             continue;
         };
-        let (mut n, mut corners, mut bad) = (0, 0, Vec::new());
+        let (mut n, mut corners, mut bad, mut slices) = (0, 0, Vec::new(), [0; 2]); // slices: incoming off-sweet, sweet
         for pair in data.chunks_exact(2 * (SAMPLE_LIVE + EXTRA)) {
             let (pre, cur) = (Frame(&pair[..SAMPLE_LIVE]), Frame(&pair[SAMPLE_LIVE + EXTRA..2 * SAMPLE_LIVE + EXTRA]));
             let x = &pair[SAMPLE_LIVE..SAMPLE_LIVE + EXTRA];
@@ -57,6 +58,9 @@ fn human_aims() {
             let pad = cur.pad(0);
             let [sx, sz] = pad_dir(pad.buttons, pad.lx, pad.ly, cur.gm()[0x55]);
             let stick = if end < 0.0 { [-sx, -sz] } else { [sx, sz] };
+            if let Some(sw) = incoming {
+                slices[sw as usize] += 1;
+            }
             let got = aim(&h, &stats, stick, players == 4, false, incoming);
             let want = [cur.player_f32(0, 0x3e90), 0.0, cur.player_f32(0, 0x3e98)];
             let sweet = h.offset.abs() < 2 && !h.body && branch != 3;
@@ -71,8 +75,10 @@ fn human_aims() {
             }
             n += 1;
         }
-        eprintln!("{name}: {n} aims, {corners} sweet full-diagonal");
+        eprintln!("{name}: {n} aims, {corners} sweet full-diagonal, incoming slices {slices:?} (off-sweet, sweet)");
         assert!(bad.is_empty(), "{name}: {} of {n} aims differ:\n{}", bad.len(), bad.join("\n"));
         assert!(n > 0 && corners > 0, "{name}: no sweet corner aims recorded");
+        // AIM_INCOMING=1 recordings appended: both `incoming` scales are checked in each mode
+        assert!(slices[0] > 0 && slices[1] > 0, "{name}: incoming slices {slices:?} (off-sweet, sweet): both needed");
     }
 }
