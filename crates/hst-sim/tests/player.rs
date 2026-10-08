@@ -779,3 +779,92 @@ fn serve_follow_through() {
     eprintln!("serve follow-through: {played_out} computer serves played out, {broken} human break-offs ({held} on the first frame allowed)");
     assert!(played_out > 10 && broken > 5 && held > 3);
 }
+
+/// A computer server's stick through its follow-through (`ai_serve_stick`), frame by frame against a lock-step
+/// capture of the original (`serve_ai.bin`, research/b27b/serve_ai_step.py over new_recording): per frame the
+/// globals +0x423048.., then per player its AI's +0x50.. and +0x248 (reaction frames), its +0x3d70.., +0x3e50..,
+/// +0x3f00.. and +0x3f94... It stands still (serve state, then rally sub-state 0) until the frame it moves (sub-state
+/// 1; the rally routine's own move up to a frame after its wait), and the reaction frames drawn on the return count
+/// down as the original's. In the recordings (`round1.bin`, `new_recording.bin`) no computer server breaks off before
+/// a frame after the return.
+#[test]
+fn ai_serve_stick() {
+    use hst_sim::motion::ai_serve_stick;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(d) = std::fs::read(format!("{dir}/serve_ai.bin")) else {
+        eprintln!("serve_ai.bin absent, skipped");
+        return;
+    };
+    const S: usize = 4 + 32 + 4 * 80 + 18;
+    let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let shots = |b: &[u8]| i(b, 4 + 0x18);
+    let (mut frames, mut moves, mut counted) = (0, 0, 0);
+    for p in 0..4 {
+        let o = 36 + p * 80;
+        let (mut hold, mut free) = (None, 0);
+        for k in 1..d.len() / S {
+            let (a, b) = (&d[(k - 1) * S..k * S], &d[k * S..(k + 1) * S]);
+            // (play state 2 on: the point is over and the game walks it)
+            if ![1, 3].contains(&b[o + 4]) || b[o + 72] > 1 {
+                hold = None;
+                continue;
+            }
+            // its follow-through starts (play state 1, sub-state 3, the frame after contact)
+            if b[o + 72] == 1 && b[o + 74] == 3 && i(a, o + 48) == 0 && i(b, o + 48) == 1 {
+                (hold, free) = (Some(i(a, o + 16)), 0);
+            }
+            let Some(h) = hold.as_mut() else { continue };
+            let fresh = shots(b) != shots(a);
+            if fresh {
+                *h = i(b, o + 16); // drawn on the return, before the port's AI sees it
+            }
+            let moved = b[o + 7] != 0 || a[o + 24..o + 28] != b[o + 24..o + 28] || a[o + 32..o + 36] != b[o + 32..o + 36];
+            if free > 0 {
+                // the rally routine's own move then: up to a frame later
+                assert!(moved || free < 2, "k={k} p={p}: still {free} frames after its wait");
+                free += 1;
+            } else {
+                let stick = ai_serve_stick(i(b, o + 48) as u32, i(b, o + 40) as u32, shots(b), fresh, h);
+                assert_eq!(*h, i(b, o + 16), "k={k} p={p} reaction frames");
+                assert!(stick || !moved, "k={k} p={p} moved while it waits");
+                counted += (!fresh && shots(b) >= 2 && !stick) as i32;
+                free = stick as i32;
+            }
+            frames += 1;
+            moves += moved as i32;
+            if moved || shots(b) > 2 {
+                hold = None;
+            }
+        }
+    }
+    // the recordings' computer servers (players 1-3): never off before the return and a frame of reaction; one that
+    // ends within a frame of its unreturned serves' longest (its swing played out) is no break-off
+    let mut returned = 0;
+    for name in ["round1.bin", "new_recording.bin"] {
+        let Ok(data) = std::fs::read(format!("{dir}/{name}")) else { continue };
+        let fr = if data.len() % hst_sim::replay::SAMPLE_LIVE == 0 { frames_live(&data) } else { hst_sim::replay::frames(&data) };
+        let (mut ret, mut ends) = (0, vec![]);
+        for k in 1..fr.len() {
+            let (a, b) = (fr[k - 1], fr[k]);
+            if b.global(0x423060) == 2 && a.global(0x423060) != 2 {
+                ret = b.vsync();
+            }
+            for p in 1..4 {
+                if p_u8(a, p, 0x3fa4) == 1 && p_u8(a, p, 0x3fa6) == 3 && p_i32(b, p, 0x3ec4) == -1 && p_u8(b, p, 0x3fa4) != 1 {
+                    ends.push((k, p, p_i32(b, p, 0x3f00), b.global(0x423060) >= 2, b.vsync() - ret));
+                }
+            }
+        }
+        for &(k, p, after, back, since) in &ends {
+            let longest = ends.iter().filter(|e| e.1 == p && !e.3).map(|e| e.2).max().unwrap_or(i32::MAX);
+            if back && after < longest - 1 {
+                assert!(since >= 2, "{name} k={k} p={p} off {since} frames after the return");
+                returned += 1;
+            } else {
+                assert!(after >= longest - 1, "{name} k={k} p={p} off after {after} unreturned");
+            }
+        }
+    }
+    eprintln!("ai serve stick: {frames} frames, {counted} counting down, {moves} moves; {returned} recorded off after the return");
+    assert!(moves >= 2 && counted >= 8);
+}
