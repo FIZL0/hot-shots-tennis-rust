@@ -131,6 +131,35 @@ pub fn ball_shadow_stretch(pos: [f32; 4], eye: [f32; 4]) -> f32 {
     ps2::add(ps2::mul(t, ps2::sub(3.0, 1.0)), 1.0)
 }
 
+/// tan of half the camera's full field of view `fov` (degrees), as the ball draw works it out each frame.
+pub fn half_fov_tan(fov: f32) -> f32 {
+    crate::libm::tanf(ps2::mul(ps2::mul(fov, 0.5), 0.017453292))
+}
+
+/// The ball model's draw scale for its object scale `scale` (2.0) at view depth `depth` with `t` from
+/// [`half_fov_tan`]: in the serve, the rally and after the point (`grow`, match phase above 1) it grows with depth
+/// beyond 1/(0.13·t), so it keeps a least size on screen.
+pub fn ball_scale(scale: f32, depth: f32, t: f32, grow: bool) -> f32 {
+    if !grow {
+        return scale;
+    }
+    ps2::mul(scale, ps2::mul(0.13, ps2::mul(depth, t)).max(1.0))
+}
+
+/// The ball's outline billboard (a second `ballshadow.mdl`, drawn only at full ball alpha): scale 2 × the ball's
+/// draw scale `ball` × 0.4·depth·t clamped to 0.8..1, and its placement (game space, row vectors) at the ball `pos`
+/// seen from `eye`: across = normalize((pos − eye) × down), then normalize(down × across), down (the camera's
+/// down axis), so its xz quad stands facing the camera.
+pub fn ball_outline(ball: f32, depth: f32, t: f32, pos: [f32; 4], eye: [f32; 4], down: [f32; 4]) -> (f32, [[f32; 4]; 4]) {
+    let s = ps2::mul(0.4, ps2::mul(depth, t));
+    let s = if s < 0.8 { 0.8 } else { s.min(1.0) };
+    let d = vu0::normalize(down);
+    let to = std::array::from_fn(|k| ps2::sub(pos[k], eye[k]));
+    let x = vu0::normalize(vu0::cross(to, d));
+    let y = vu0::normalize(vu0::cross(d, x));
+    (ps2::mul(ps2::mul(ball, 2.0), s), [x, y, d, pos])
+}
+
 /// A shadow caster: its model's triangles (model space) drawn solid, those of its alpha-tested materials drawn
 /// through their texture ([`Shape::new`]), and its placement, model axes (scaled, game space) and position.
 pub struct Caster {
