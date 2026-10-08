@@ -83,9 +83,6 @@ const CALLS: [&str; 7] = [
     "Out",
     "Illegal hit",
 ];
-/// Ball drawn this much larger than its physical size, toon style, so it reads at broadcast distance.
-/// ponytail: the original draws `ball1.mdl` at scale 1 (ball object matrix in s03–s05); this is the remaster's look.
-const BALL_DRAW_SCALE: f32 = 2.4;
 /// The contact is graded against this frame after the press (the timing table's sweet spot).
 const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// The game's field of view is the horizontal half-angle of its 4:3 picture; shown, the vertical is this much
@@ -1451,14 +1448,14 @@ fn setup(
     )
     .expect("bounce effects");
     commands.insert_resource(bounce);
-    // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`), drawn large, the ball with an
-    // inverted hull (front faces culled) for the black outline
+    // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`); their scales, and the outline,
+    // are ball_shadow's
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
     let mut part = |name: &str, view| {
         let e = commands
             .spawn((
                 view,
-                Transform::from_scale(Vec3::splat(BALL_DRAW_SCALE)),
+                Transform::default(),
                 Visibility::default(),
             ))
             .id();
@@ -1476,16 +1473,6 @@ fn setup(
     let ball = part("ball1.mdl", BallView(false));
     part("ballshadow.mdl", BallView(true));
     commands.entity(ball).insert(crate::shade::Ball);
-    let ink = materials.add(StandardMaterial {
-        base_color: Color::BLACK,
-        unlit: true,
-        cull_mode: Some(bevy::render::render_resource::Face::Front),
-        ..default()
-    });
-    commands.entity(ball).with_child((
-        Mesh3d(meshes.add(Sphere::new(0.0325 * 1.22).mesh().ico(4).unwrap())),
-        MeshMaterial3d(ink),
-    ));
     commands.spawn((
         DirectionalLight {
             illuminance: 9000.0,

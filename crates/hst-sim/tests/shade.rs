@@ -237,3 +237,36 @@ fn shadow_textures_match_the_game() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
     assert_eq!(n, 16);
 }
+
+/// The ball model's draw scale and its outline billboard against the game, frame by frame:
+/// `context/fixtures/b36b_ball.bin` (slot 5, court 10, 900 frames from the serve set-up into the rally; made by
+/// `research/b36b_ball_rec.py`). Skips when the recording is absent.
+#[test]
+fn ball_scale_and_outline_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(rec) = std::fs::read(format!("{root}/context/fixtures/b36b_ball.bin")) else {
+        eprintln!("recording missing, skipped");
+        return;
+    };
+    let (mut grown, mut bad) = (0, Vec::new());
+    for r in rec.chunks_exact(0x130) {
+        let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let v = |o: usize| std::array::from_fn::<f32, 4, _>(|k| f(o + 4 * k));
+        let (pos, eye, down, fov) = (v(0x10), v(0x20), v(0x40), f(0x50));
+        let view: [[f32; 4]; 4] = std::array::from_fn(|k| v(0x60 + 0x10 * k));
+        let (phase, scale) = (r[0xa5], f(0xb4));
+        let depth = hst_sim::vu0::transform(&view, pos)[2];
+        let t = shade::half_fov_tan(fov);
+        let ball = shade::ball_scale(scale, depth, t, phase > 1);
+        let (s, m) = shade::ball_outline(ball, depth, t, pos, eye, down);
+        let want: Vec<u32> = (0..16).map(|k| f(0xe0 + 4 * k).to_bits()).collect();
+        let got: Vec<u32> = m.as_flattened().iter().map(|x| x.to_bits()).collect();
+        grown += (ball != scale) as usize;
+        if ball.to_bits() != f(0xd0).to_bits() || s.to_bits() != f(0x120).to_bits() || got != want {
+            bad.push(format!("phase {phase} depth {depth} scale {ball}/{} outline {s}/{}\n  game {:?}\n  port {:?}", f(0xd0), f(0x120), &want, &got));
+        }
+    }
+    eprintln!("{grown} frames grown");
+    assert!(bad.is_empty(), "{} frames differ:\n{}", bad.len(), bad[..bad.len().min(8)].join("\n"));
+    assert!(grown > 50);
+}
