@@ -10,8 +10,10 @@
 //!   an illegal hit (a serve returned by the receiver's partner, a ball hit twice by one team): over the player who
 //!   hit last (the server if nobody hit), with a "..." balloon (`A_fukidasi_11`) over their partner. Both hold until
 //!   the next point is set up.
+//! - **Swirl** (`e_guruguru`), the upset pop-up in singles on the same calls, over the same player: five 80-px cells
+//!   side by side, the next every 3 frames, held until the next point is set up.
 //!
-//! Both are camera-facing quads drawn like the timing balloons: same size and anchor over the head.
+//! All are camera-facing quads drawn like the timing balloons: same anchor over the head, the swirl a little bigger.
 
 /// Which pop-up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +21,7 @@ pub enum Popup {
     Bang,
     Sweat,
     Dots,
+    Swirl,
 }
 
 impl Popup {
@@ -28,6 +31,7 @@ impl Popup {
             Popup::Bang => "burefukidashi.tm2",
             Popup::Sweat => "A_fukidasi_10.tm2",
             Popup::Dots => "A_fukidasi_11.tm2",
+            Popup::Swirl => "e_guruguru.tm2",
         }
     }
 
@@ -35,8 +39,13 @@ impl Popup {
     pub fn frames(self) -> [i32; 3] {
         match self {
             Popup::Bang => [3, 30, 3],
-            Popup::Sweat | Popup::Dots => [3, 60, 3],
+            Popup::Sweat | Popup::Dots | Popup::Swirl => [3, 60, 3],
         }
+    }
+
+    /// The per-kind base half-width (m) of the quad.
+    pub fn size(self) -> f32 {
+        if self == Popup::Swirl { 0.35 } else { 0.3 }
     }
 }
 
@@ -48,18 +57,27 @@ pub struct Pop {
     stage: u8,
     t: i32,
     pub alpha: i32,
+    /// Frames aged, and the swirl's cell (0..5, the next every third frame).
+    n: u32,
+    pub cell: u8,
 }
 
 impl Pop {
     /// A new pop-up; `tick` it the same frame (the list ages right after spawning, before drawing).
     pub fn new(popup: Popup, player: usize) -> Self {
-        Pop { popup, player, stage: 0, t: popup.frames()[0], alpha: 128 }
+        Pop { popup, player, stage: 0, t: popup.frames()[0], alpha: 128, n: 0, cell: 0 }
     }
 
     /// One frame of ageing; false once it's gone (the list drops it before drawing).
     pub fn tick(&mut self) -> bool {
         let [fade_in, hold, fade_out] = self.popup.frames();
         self.alpha = 128;
+        if self.popup == Popup::Swirl {
+            self.n += 1;
+            if self.n % 3 == 0 {
+                self.cell = (self.cell + 1) % 5;
+            }
+        }
         match self.stage {
             0 => {
                 self.t -= 1;
@@ -97,6 +115,11 @@ pub fn sweat(players: usize, call: u8, shots: i32, hitter: i32, server: i32) -> 
     Some((who, if who < 2 { who + 2 } else { who - 2 }))
 }
 
+/// The swirl's player when a singles point ends on `call` (as [`sweat`]).
+pub fn swirl(players: usize, call: u8, shots: i32, hitter: i32, server: i32) -> Option<usize> {
+    (players == 2 && matches!(call, 1 | 3 | 5 | 6)).then_some(if shots != 0 { hitter } else { server } as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +155,17 @@ mod tests {
         assert_eq!(sweat(4, 3, 0, -1, 2), Some((2, 0)));
         assert_eq!(sweat(4, 2, 1, 0, 0), None);
         assert_eq!(sweat(2, 1, 4, 1, 0), None);
+        assert_eq!(swirl(2, 1, 4, 1, 0), Some(1));
+        assert_eq!(swirl(2, 3, 0, -1, 0), Some(0));
+        assert_eq!(swirl(2, 2, 4, 1, 0), None);
+        assert_eq!(swirl(4, 1, 4, 1, 0), None);
+    }
+
+    /// The swirl turns a cell every third frame from the spawn frame's ageing, through five cells.
+    #[test]
+    fn swirl_cells() {
+        let mut p = Pop::new(Popup::Swirl, 0);
+        let cells: Vec<u8> = (0..16).map(|_| (p.tick(), p.cell).1).collect();
+        assert_eq!(cells, [0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 0, 0]);
     }
 }

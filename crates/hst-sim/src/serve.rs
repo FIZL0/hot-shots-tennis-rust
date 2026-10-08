@@ -354,10 +354,10 @@ impl Balloon {
     }
 }
 
-/// Fade in, hold, fade out (frames), and height above the head (m).
+/// Fade in, hold, fade out (frames), and the height of the balloon's bottom edge over the neck joint (m).
 pub const BALLOON_FRAMES: [u32; 3] = [3, 45, 3];
 pub const BALLOON_LIFT: f32 = 0.5;
-/// Half-size of the balloon (m) up close; it grows only beyond ~38 m from the camera.
+/// Half-size of the balloon (m) in the middle distance band (it shrinks near the camera, grows beyond ~38 m).
 pub const BALLOON_SIZE: f32 = 0.3;
 
 /// Which balloon a hit shows: `grade` the timing table's value at the contact frame, `offset` the contact
@@ -372,18 +372,23 @@ pub fn balloon(grade: u8, offset: i32, dive: bool) -> Option<Balloon> {
     }
 }
 
-/// Balloon opacity 0..1 at `age` frames.
+/// Balloon opacity 0..1 after `age` frames of the original's pop-up ageing (the first on the frame it comes up, 0
+/// before): fade-in 43, 86, then 48 frames opaque, fade-out 85, 42, a last frame at 0, gone (None).
 pub fn balloon_alpha(age: u32) -> Option<f32> {
-    let [fade_in, hold, fade_out] = BALLOON_FRAMES;
-    if age < fade_in {
-        Some((age + 1) as f32 / fade_in as f32)
-    } else if age < fade_in + hold {
-        Some(1.0)
-    } else if age < fade_in + hold + fade_out {
-        Some((fade_in + hold + fade_out - age) as f32 / fade_out as f32)
+    let [fade_in, hold, fade_out] = BALLOON_FRAMES.map(|x| x as i32);
+    let k = age as i32 - 1;
+    let a = if k < 0 {
+        0
+    } else if k < fade_in {
+        128 - (fade_in - 1 - k) * 128 / fade_in
+    } else if k <= fade_in + 1 + hold {
+        128
+    } else if k < fade_in + 2 + hold + fade_out {
+        (fade_in + 1 + hold + fade_out - k) * 128 / fade_out
     } else {
-        None
-    }
+        return None;
+    };
+    Some(a as f32 / 128.0)
 }
 
 #[cfg(test)]
@@ -445,6 +450,16 @@ mod tests {
         // the weak toss's dw1 variant: low power covering under 40 % of the serve power keeps the base tables
         assert!(dw1(&d));
         assert!(!dw1(&ServeData { power: 10, low_power: 4, ..d }));
+    }
+
+    #[test]
+    fn balloon_fade() {
+        let a: Vec<i32> = (1..).map_while(balloon_alpha).map(|x| (x * 128.0) as i32).collect();
+        assert_eq!(a.len(), 53);
+        assert_eq!(a[..3], [43, 86, 128]);
+        assert!(a[2..50].iter().all(|&x| x == 128));
+        assert_eq!(a[50..], [85, 42, 0]);
+        assert_eq!(balloon_alpha(0), Some(0.0));
     }
 
     #[test]
