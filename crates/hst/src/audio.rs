@@ -13,11 +13,12 @@ use std::sync::{Arc, Mutex};
 /// Output samples per 60 Hz frame.
 const FRAME: usize = 48_000 / 60;
 
-/// A sound bank: `.hd` header and `.bd` samples, or a mod's voice takes (`wav`, by program; empty on disc banks).
+/// A sound bank: `.hd` header and `.bd` samples, or a mod's voice takes (`wav`, by program: mono samples and their
+/// rate; empty on disc banks).
 pub struct SoundBank {
     pub hd: Vec<u8>,
     pub bd: Vec<u8>,
-    pub wav: std::collections::HashMap<usize, Vec<Arc<[i16]>>>,
+    pub wav: std::collections::HashMap<usize, Vec<(Arc<[i16]>, u32)>>,
 }
 
 impl SoundBank {
@@ -38,13 +39,13 @@ impl SoundBank {
     /// A mod's voice (standard §5): `dir/<program>_<key>.wav`, keys in order; `None` if there is none.
     #[allow(dead_code)]
     pub fn wavs(dir: &std::path::Path) -> Option<Self> {
-        let mut wav: std::collections::HashMap<usize, Vec<(usize, Arc<[i16]>)>> = Default::default();
+        let mut wav: std::collections::HashMap<usize, Vec<(usize, (Arc<[i16]>, u32))>> = Default::default();
         for e in std::fs::read_dir(dir).ok()?.flatten() {
             let name = e.file_name().to_string_lossy().to_ascii_lowercase();
             let Some((p, k)) = name.strip_suffix(".wav").and_then(|s| s.split_once('_')) else { continue };
             let (Ok(p), Ok(k)) = (p.parse(), k.parse()) else { continue };
-            match std::fs::read(e.path()).ok().and_then(|d| pcm48(&d)) {
-                Some(pcm) => wav.entry(p).or_default().push((k, pcm.into())),
+            match std::fs::read(e.path()).ok().and_then(|d| pcm(&d)) {
+                Some((pcm, rate)) => wav.entry(p).or_default().push((k, (pcm.into(), rate))),
                 None => warn!("{}: not a PCM16 wav, skipped", e.path().display()),
             }
         }
@@ -53,9 +54,9 @@ impl SoundBank {
     }
 }
 
-/// A RIFF PCM16 wav as 48 kHz mono samples (channels averaged).
-// ponytail: linear resampling; PCM16 only (what the mod tools write)
-fn pcm48(d: &[u8]) -> Option<Vec<i16>> {
+/// A RIFF PCM16 wav as mono samples (channels averaged) and its sample rate.
+// ponytail: PCM16 only (what the mod tools write)
+fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
     if d.get(0..4)? != b"RIFF" || d.get(8..12)? != b"WAVE" {
         return None;
     }
@@ -72,14 +73,19 @@ fn pcm48(d: &[u8]) -> Option<Vec<i16>> {
     }
     let ((1, ch @ 1.., rate @ 1.., 16), Some(data)) = (fmt?, data) else { return None };
     let ch = ch as usize;
-    let mono: Vec<f32> = data.chunks_exact(2 * ch).map(|f| f.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as f32).sum::<f32>() / ch as f32).collect();
-    let n = (mono.len() as u64 * 48_000 / rate as u64) as usize;
-    Some((0..n).map(|i| {
-        let x = i as f64 * rate as f64 / 48_000.0;
-        let (j, f) = (x as usize, (x.fract()) as f32);
-        let (a, b) = (mono[j.min(mono.len() - 1)], mono[(j + 1).min(mono.len() - 1)]);
-        (a + (b - a) * f).round() as i16
-    }).collect())
+    let mono = data.chunks_exact(2 * ch).map(|f| (f.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as i32).sum::<i32>() / ch as i32) as i16);
+    Some((mono.collect(), rate))
+}
+
+/// The tone every disc voice take keys on (all 14 characters' banks): set volume 127, tone volume 127, centred,
+/// attack 0x80ff, release 0x9fe0. A mod's take plays through it at velocity 127.
+const VOICE_TONE: snd::Tone = snd::Tone { raw: [0, 0, 0, 0, 0, 0, 0xff, 0x80, 0xe0, 0x9f, 1, 127, 64, 0, 0, 0] };
+
+/// The SPU pitch register that plays `rate` Hz samples at play-speed word `scale` (0x1000 = as recorded), scaled
+/// like a disc tone's (`snd::pitch`).
+fn wav_pitch(rate: u32, scale: u32) -> u16 {
+    let base = (rate as u64 * 4096 + 24_000) / 48_000;
+    ((scale & 0xffff) as u64 * base >> 12) as u16
 }
 
 /// The MIDI file in archive `xb`.
@@ -118,10 +124,8 @@ struct Mix {
     stereo: [Vec<i32>; 2],
     bank_volumes: Vec<u32>,
     // ponytail: every key-on gets its own voice; the driver's 48-voice allocation by priority is not ported
-    /// Each voice with its bank, play id, note, pitch word and level (for `Sound::update`).
+    /// Each voice with its bank, play id, note, pitch word (a wav take's: its rate) and level (for `Sound::update`).
     voices: Vec<(Voice, Arc<SoundBank>, u64, u8, u32, Level)>,
-    /// A mod's wav takes playing: samples, next sample, play id, level.
-    pcm: Vec<(Arc<[i16]>, usize, u64, Level)>,
     playing: Vec<Playing>,
     music: Option<Music>,
     ids: u64,
@@ -153,24 +157,16 @@ impl Mix {
             }
             self.music = Some(m);
         }
-        let pcm: Vec<[i16; 2]> = self.pcm.iter().map(|p| p.3.volume(&self.pan)).collect();
         for _ in 0..FRAME {
             let mut s = [0; 2];
             for (v, b, ..) in &mut self.voices {
                 let [l, r] = v.tick(&b.bd);
                 s = [s[0] + l, s[1] + r];
             }
-            // a wav take as a voice at full envelope: sample·(vol << 1) >> 15
-            for ((w, at, ..), vol) in self.pcm.iter_mut().zip(&pcm) {
-                let x = w.get(*at).copied().unwrap_or(0) as i32;
-                *at += 1;
-                s = [s[0] + (x * ((vol[0] as i32) << 1) >> 15), s[1] + (x * ((vol[1] as i32) << 1) >> 15)];
-            }
             // ponytail: dry voices only — no core/master volume or reverb
             out.extend(s.map(|x| x.clamp(-0x8000, 0x7fff) as f32 / 32768.0));
         }
         self.voices.retain(|v| v.0.phase != 0);
-        self.pcm.retain(|p| p.1 < p.0.len());
     }
 
     /// One MIDI message of the BGM, as the sound driver takes it.
@@ -234,14 +230,16 @@ impl Sound {
     /// Returns the play's id for `update` and `stop` (0 if the bank has no such sequence).
     pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32) -> u64 {
         if !bank.wav.is_empty() {
-            // a mod's take: full tone and velocity (a sequence's 127s), centred tone pan
-            // ponytail: no play-speed pitch; a key past the takes wraps round them
-            let Some(w) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) else { return 0 };
+            // a mod's take: a voice keyed on at once with the disc voices' tone at velocity 127, at the wav's rate
+            // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)
+            let Some((w, rate)) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) else { return 0 };
             let mut m = self.0.lock().unwrap();
             m.ids += 1;
             let id = m.ids;
-            let level = Level { tone: 100, velocity: 127, pan: [level.pan[0], level.pan[1], 0x40], ..level };
-            m.pcm.push((w.clone(), 0, id, level));
+            let mut level = Level { velocity: 127, ..level };
+            level.tone(127, VOICE_TONE, &m.gain);
+            let voice = Voice::key_on_pcm(w.clone(), VOICE_TONE.adsr(), wav_pitch(*rate, scale), level.volume(&m.pan));
+            m.voices.push((voice, bank.clone(), id, 0, *rate, level));
             return id;
         }
         let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return 0 };
@@ -285,11 +283,10 @@ impl Sound {
         for q in m.playing.iter_mut().filter(|q| q.id == id) {
             (q.level.seq, q.scale) = (seq, scale);
         }
-        m.pcm.iter_mut().filter(|q| q.2 == id).for_each(|q| q.3.seq = seq);
         for (v, .., word, level) in m.voices.iter_mut().filter(|v| v.2 == id) {
             level.seq = seq;
             v.volume = level.volume(&m.pan);
-            v.pitch = snd::pitch(&m.pitch, *word, 0x0100_0000 | scale);
+            v.pitch = if v.pcm.is_some() { wav_pitch(*word, scale) } else { snd::pitch(&m.pitch, *word, 0x0100_0000 | scale) };
         }
     }
 
@@ -304,14 +301,13 @@ impl Sound {
     /// The play `id` still has key-ons to come or voices sounding.
     pub fn playing(&self, id: u64) -> bool {
         let m = self.0.lock().unwrap();
-        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id) || m.pcm.iter().any(|v| v.2 == id)
+        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id)
     }
 
     /// Ends the play `id`: no more key-ons, its voices released.
     pub fn stop(&self, id: u64) {
         let mut m = self.0.lock().unwrap();
         m.playing.retain(|q| q.id != id);
-        m.pcm.retain(|q| q.2 != id);
         m.voices.iter_mut().filter(|v| v.2 == id).for_each(|v| v.0.key_off());
     }
 
@@ -328,7 +324,6 @@ impl Sound {
         let m = &mut *m;
         let seq = sound::stereo(volume, angle, &m.stereo).map(|x| x as u32);
         m.playing.iter_mut().filter(|q| q.id == id).for_each(|q| q.level.seq = seq);
-        m.pcm.iter_mut().filter(|q| q.2 == id).for_each(|q| q.3.seq = seq);
         for (v, .., level) in m.voices.iter_mut().filter(|v| v.2 == id) {
             level.seq = seq;
             v.volume = level.volume(&m.pan);
@@ -460,7 +455,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), pcm: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
 }
 
 #[cfg(test)]
@@ -533,7 +528,7 @@ mod tests {
         assert!(loud > 0.01 && m.voices.is_empty() && m.playing.is_empty());
     }
 
-    /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono 48 kHz), play at the sequence's full
+    /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono), play at the sequence's full
     /// level and end; a key past the takes wraps round them.
     #[test]
     fn plays_mod_wavs() {
@@ -554,7 +549,7 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"x").unwrap();
         let bank = Arc::new(SoundBank::wavs(&dir).unwrap());
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!((bank.wav[&1].len(), bank.wav[&3].len(), bank.wav[&1][0].len()), (2, 1, 4800));
+        assert_eq!((bank.wav[&1].len(), bank.wav[&3].len(), bank.wav[&1][0].0.len(), bank.wav[&1][0].1), (2, 1, 2205, 22050));
         let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
         assert_eq!(sound.play(&bank, 2, 0, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000), 0);
         let id = sound.play(&bank, 1, 7, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000);
@@ -567,5 +562,72 @@ mod tests {
         let peak = out.iter().fold(0f32, |a, x| a.max(x.abs()));
         eprintln!("wav peak {peak}, {frames} frames");
         assert!(frames == 6 && peak > 0.1 && peak < 1.0);
+    }
+
+    /// Each of character 0's disc voice takes that keys on at once at full velocity and tone volume, written out as
+    /// a mono wav at the rate its voice plays it, sounds sample for sample like the disc take through `Sound::play`:
+    /// as recorded, at a slower play speed, and stopped part-way (the release).
+    #[test]
+    fn wav_from_a_disc_take_plays_like_it() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let disc = Arc::new(voice_bank(&mut iso, 0, 2, 1, false).unwrap());
+        let b = Bank::parse(&disc.hd).unwrap();
+        let mix = mix(&mut iso);
+        let dir = std::env::temp_dir().join(format!("hst-take-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut takes = Vec::new();
+        for (p, k) in (0..16).flat_map(|p| (0..8).map(move |k| (p, k))) {
+            let Some(&[e]) = b.key_ons(p, k).as_deref() else { continue };
+            let t = b.tone(e.set as usize, e.note).unwrap();
+            if e.frame != 0 || e.velocity != 127 || t.volume() != 127 || b.set_volume(e.set as usize) != Some(127) {
+                continue;
+            }
+            assert_eq!((t.adsr(), t.centre(), t.pan()), (VOICE_TONE.adsr(), true, 64));
+            let word = (t.root() as u32) << 24 | (e.note as u32) << 16 | (t.fine() as u8 as u32) << 8 | 0x40;
+            let pitch = snd::pitch(&mix.pitch, word, 0x0100_1000) as u32;
+            let rate = (pitch * 48_000 + 2048) / 4096;
+            assert_eq!(wav_pitch(rate, 0x1000) as u32, pitch);
+            let pcm = snd::adpcm(&disc.bd, t.sample());
+            let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+            wav.extend([16u32.to_le_bytes(), [1, 0, 1, 0], rate.to_le_bytes(), (rate * 2).to_le_bytes(), [2, 0, 16, 0]].concat());
+            wav.extend(b"data");
+            wav.extend((pcm.len() as u32 * 2).to_le_bytes());
+            wav.extend(pcm.iter().flat_map(|x| x.to_le_bytes()));
+            std::fs::write(dir.join(format!("{p}_{}.wav", takes.len())), &wav).unwrap();
+            takes.push((p, k, takes.len()));
+        }
+        let mods = Arc::new(SoundBank::wavs(&dir).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+        eprintln!("{} takes", takes.len());
+        assert!(takes.len() >= 5);
+        let level = Level { seq: [100, 60], bank: 127, pan: [0x40; 3], ..default() };
+        let run = |bank: &Arc<SoundBank>, p, k, scale, stop: u32| {
+            let sound = Sound(Arc::new(Mutex::new(mix_clone(&mix))));
+            let id = sound.play(bank, p, k, level, scale);
+            let mut out = Vec::new();
+            for f in 0..600 {
+                if f == stop {
+                    sound.stop(id);
+                }
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            assert!(!sound.playing(id));
+            out
+        };
+        for &(p, k, w) in &takes {
+            // a key wraps round the program's takes: find this take's index among program p's
+            let wk = takes.iter().filter(|t| t.0 == p && t.2 < w).count();
+            for (scale, stop) in [(0x1000, u32::MAX), (0x0c00, u32::MAX), (0x1000, 10)] {
+                let (a, b) = (run(&disc, p, k, scale, stop), run(&mods, p, wk, scale, stop));
+                assert!(a.iter().any(|&x| x != 0.0));
+                assert!(a == b, "take {p}/{k} at {scale:#x}, stop {stop}: first difference at {:?}", a.iter().zip(&b).position(|(x, y)| x != y));
+            }
+        }
+    }
+
+    fn mix_clone(m: &Mix) -> Mix {
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
     }
 }
