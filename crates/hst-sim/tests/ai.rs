@@ -36,7 +36,8 @@ fn table_equals_ram() {
 /// `context/fixtures/1p3goodcpus_ee.bin`): Carol, Will, 2 and 10 in outfits 9, 9, 4, 9, the hardest block.
 #[test]
 fn bots_get_their_rows() {
-    let Some((s05, _)) = load() else { return eprintln!("RAM dump or disc missing, skipped") };
+    let Some((s05, csv)) = load() else { return eprintln!("RAM dump or disc missing, skipped") };
+    let table = AiParams::table(&csv);
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let good = std::fs::read(format!("{root}/context/fixtures/1p3goodcpus_ee.bin"));
     if good.is_err() {
@@ -57,6 +58,10 @@ fn bots_get_their_rows() {
             assert_eq!(c.level, ram[ai + 16], "player {i} level");
             assert_eq!(c.strategy, ram[ai + 17], "player {i} strategy");
             assert_eq!(c.reach.to_bits(), word(&ram, ai + 20) as u32, "player {i} reach");
+            // the serve panel's rank label row (0x11 none) by its slot label (4 = COM): the row's rank for COMs
+            let com = word(&ram, 0x422fe8 + 4 * i) == 4;
+            let rank = if com { table[c.row].rank as usize } else { 17 };
+            assert_eq!(rank, word(&ram, 0x423018 + 4 * i), "player {i} panel rank");
         }
     }
 }

@@ -585,8 +585,8 @@ fn draw(
     let view = View {
         players: n,
         slots: std::array::from_fn(|i| if i < n { slot(i) } else { 4 }),
-        // ponytail: COM players show rank row 0 ("Lv 5"); the original takes it from the opponent's profile
-        ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then_some(0)),
+        // COM players show their AI row's rank (AIParam.csv 段位); humans none (the game stores 17 = no label)
+        ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then(|| g.players[i].ai.rank as usize)),
         pill: colours.0,
         rank_rgb: colours.1,
         points: s.points,
