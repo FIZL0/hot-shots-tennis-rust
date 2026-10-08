@@ -4,7 +4,8 @@
 //! ball-lost log and the draw count as the game did.
 //!
 //! `context/fixtures/ai_rally_s05.bin`, `ai_rally_s05_all.bin`: save slot 5, the bot-only doubles match.
-//! `ai_rally_singles*.bin`: the singles routines (`HST_SINGLES=1`), `bots_singles` in slot 8; the AI fields 0x234..0x260
+//! `ai_rally_singles*.bin`: the singles routines (`HST_SINGLES=1`), `bots_singles` in slot 8 (`_rows`: rows 45 level 3 and 16
+//! level 1, both NET, set with `HST_AI=0:45:3,1:16:1`); the AI fields 0x234..0x260
 //! sit 0x10 lower there.
 
 use hst_data::{iso::Iso, xb::Archive};
@@ -443,7 +444,7 @@ fn net_and_base_match_the_game() {
 
 #[test]
 fn singles_receive_matches_the_game() {
-    for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin"] {
+    for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin", "ai_rally_singles_rows.bin"] {
         let Some(n) = replay(name, 1) else { return eprintln!("fixture or disc missing, skipped") };
         eprintln!("{name}: calls, per substate {n:?}");
     }
@@ -451,8 +452,10 @@ fn singles_receive_matches_the_game() {
 
 #[test]
 fn singles_net_and_base_match_the_game() {
-    for (tag, what) in [(2, "NET"), (3, "BASE")] {
-        let Some(n) = replay("ai_rally_singles_net.bin", tag) else { return eprintln!("fixture or disc missing, skipped") };
-        eprintln!("{what}: calls, per substate {n:?}");
+    for name in ["ai_rally_singles_net.bin", "ai_rally_singles_rows.bin"] {
+        for (tag, what) in [(2, "NET"), (3, "BASE")] {
+            let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
+            eprintln!("{name} {what}: calls, per substate {n:?}");
+        }
     }
 }
