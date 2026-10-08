@@ -107,14 +107,14 @@ pub fn toss_setup(sk: &Skeleton, toss: &Clip, swing: &Clip) -> ([f32; 4], M4) {
 
 /// A serve's aim pulled inside the receiving service box, as the original before the scatter: the box's
 /// sidelines (singles, the centre line on the server's own half; `server_x` the serve spot's x) and service line,
-/// less a margin of 0.15 m across and 0.1 m along, each scaled by the share of the contact→aim direction along it.
-pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
+/// less a margin of 0.15 m across and 0.1 m along, each scaled by the share of the contact→aim direction along it
+/// (unscaled when the serve is `bent`: the character bends it and the special condition holds).
+pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3], bent: bool) -> [f32; 3] {
     use crate::ps2::{add, div, madd, mul, sqrt, sub};
     let (mut lo, mut hi) = (-4.115, 4.115);
     if server_x < 0.0 { lo = 0.0 } else { hi = 0.0 }
     let (mut mx, mut mz) = (0.15, 0.1);
-    // ponytail: the special serves (characters 10–12, 37e240) keep the margins unscaled; not ported (aim pull only)
-    if (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi) {
+    if !bent && (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi) {
         let (dz, dx) = (sub(aim[2], hit[2]), sub(aim[0], hit[0]));
         let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
         mx = mul(mx, mul(dx, inv).abs());
@@ -298,12 +298,12 @@ pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f3
 /// A serve's launch, as the original: the trajectory table is looked up as if from the contact point less the
 /// scatter toward the aim, and the ball flies to aim + scatter. `turn` is the shot record's spin and side angle
 /// (radians; only slice serves have a side angle) and whether the server is left-handed (see
-/// `shot::launch_turned`).
-pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool)) -> shot::Launch {
+/// `shot::launch_turned`), and `bend` the special serve's (`shot::effect`).
+pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool), bend: f32) -> shot::Launch {
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [hit[0] - scatter[0], hit[1], hit[2] - scatter[2]], aim);
     let target = [crate::ps2::add(aim[0], scatter[0]), aim[1], crate::ps2::add(aim[2], scatter[2]), 1.0];
     let (spin, side, lefty) = turn;
-    shot::launch_turned(0, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, 0.0, lefty, l.frames)
+    shot::launch_turned(0, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, bend, lefty, l.frames)
 }
 
 /// The balloon over a hitter's head.

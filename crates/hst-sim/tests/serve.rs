@@ -304,7 +304,9 @@ fn anim_s05_held_ball() {
 /// Every serve's launch against the game's, bit for bit (velocity, spin frame, wind, flight frames and spin): the
 /// server's own trajectory table (the `dw1` variant for a weak toss), looked up from the contact less the
 /// scatter toward the aim, and the spin and side angle of the character's shot record (the variant's for a weak
-/// toss); a slice serve (kind 1) leaves off the target line and its wind brings it back.
+/// toss); a slice serve (kind 1) leaves off the target line and its wind brings it back. The shot effects too
+/// (bend, curve, first-bounce turn, side axis), though no serve of these matches meets a bending character's
+/// special condition (`round1_turned_serves` has those).
 #[test]
 fn serves_launch_like_the_game() {
     use hst_sim::params::{ShotParams, record_of, spin};
@@ -333,12 +335,15 @@ fn serves_launch_like_the_game() {
             let c = character(&ram, p);
             let weak = pi(w[1], p, 0x3ea0) == 2;
             let hit = v3(b, 0x70);
-            let aim = serve::inside(w[1].player_pos(p)[0], hit, [0x3e90, 0x3e94, 0x3e98].map(|o| w[1].player_f32(p, o)));
+            let aim = serve::inside(w[1].player_pos(p)[0], hit, [0x3e90, 0x3e94, 0x3e98].map(|o| w[1].player_f32(p, o)), false);
             let scatter = [f(b, 0x80) - aim[0], 0.0, f(b, 0x88) - aim[2]];
-            let rec = if weak { params.variant(0, kind as usize, record_of(c), -0.5) } else { params.record(0, kind as usize, record_of(c)).try_into().unwrap() };
+            let rec = if weak { params.variant(0, kind as usize, record_of(c), dw1_weight(&game, c, kind)) } else { params.record(0, kind as usize, record_of(c)).try_into().unwrap() };
             let turn = (spin(&rec), hst_sim::ps2::mul(rec[10], 0.017453292), hand(&ram, p) < 0.0);
-            let l = serve::launch(&table(c, kind, weak), kind == 3, Params::default().radius, hit, aim, scatter, turn);
+            let target = v3(b, 0x80);
+            let effect = served_effect(&game, w[1], p, c, kind, hit, target, hand(&ram, p) < 0.0);
+            let l = serve::launch(&table(c, kind, weak), kind == 3, Params::default().radius, hit, aim, scatter, turn, effect.0);
             let at = format!("{name} vsync {} player {p} (character {c}, hand {}) kind {kind}", w[1].vsync(), hand(&ram, p));
+            assert_effect(b, effect, hit, target, &at);
             assert_eq!(l.vel, v3(b, 0x130), "{at}: velocity");
             assert_eq!(l.frame, std::array::from_fn(|r| std::array::from_fn(|k| f(b, 0x160 + 16 * r + 4 * k))), "{at}: frame");
             assert_eq!(l.wind, std::array::from_fn(|k| f(b, 0x240 + 4 * k)), "{at}: wind");
@@ -377,7 +382,7 @@ fn serves_scatter_like_the_game() {
             let (k, grade) = ((pi(fr, p, 0x3fa0) + serve::SWEET_FRAME) as usize, pu8(fr, p, 0x3ee8));
             let hit = v3(b, 0x70);
             let raw = [0x3e90, 0x3e94, 0x3e98].map(|o| fr.player_f32(p, o));
-            let aim = serve::inside(fr.player_pos(p)[0], hit, raw);
+            let aim = serve::inside(fr.player_pos(p)[0], hit, raw, false);
             pulled += (aim != raw) as usize;
             let at = format!("{name} vsync {} player {p} {toss:?}", fr.vsync());
             assert_eq!(d.bias(toss)[k], pi(fr, p, 0x3f98), "{at}");
@@ -398,5 +403,98 @@ fn serves_scatter_like_the_game() {
         // 1p3goodcpus: Carol's aims at the box's corners, pulled inside before the launch
         let (n, o, l) = if name == "match_s05.bin" { (31, 11, 0) } else { (5, 0, 5) };
         assert!(serves >= n && off >= o && lefty >= l && pulled >= l && under >= 1, "{name}: {serves} serves, {off} off, {pulled} pulled, {lefty} left-handed, {under} underhand");
+    }
+}
+
+/// Character `c`'s weak-toss (`dw1`) variant weight for serve `kind`.
+fn dw1_weight(game: &hst_data::exe::Game, c: usize, kind: i32) -> f32 {
+    game.shot_variants(c).iter().find(|v| v.class == 0 && v.kind == kind as usize && v.uses[1] != 0).unwrap().weight
+}
+
+/// The serve's effect (bend, curve, turn) from server `p`'s toss and timing in `fr`.
+#[allow(clippy::too_many_arguments)]
+fn served_effect(game: &hst_data::exe::Game, fr: Frame, p: usize, c: usize, kind: i32, hit: [f32; 3], target: [f32; 3], lefty: bool) -> (f32, f32, f32) {
+    let special = hst_sim::shot::special(0, kind, pi(fr, p, 0x3ea0) == 1, pu8(fr, p, 0x3ee8), pi(fr, p, 0x3fa0));
+    if !special {
+        return (0.0, 0.0, 0.0);
+    }
+    hst_sim::shot::effect(&game.shot_effects(c), 0, kind, hit, target, lefty, false)
+}
+
+fn assert_effect(b: &[u8], (bend, curve, turn): (f32, f32, f32), hit: [f32; 3], target: [f32; 3], at: &str) {
+    assert_eq!([bend, curve, turn].map(f32::to_bits), [0x250, 0x254, 0x1b0].map(|o| f(b, o).to_bits()), "{at}: bend, curve, turn");
+    assert_eq!(hst_sim::shot::side_axis(hit, target)[..3].iter().map(|x| x.to_bits()).collect::<Vec<_>>(), [0x90, 0x94, 0x98].map(|o| f(b, o).to_bits()), "{at}: side axis");
+}
+
+/// The doubles recording `round1.bin` (characters 6, 4, 3 and 11): Will (11, left-handed in TParam.csv) bends
+/// and turns his topspin serve when the strong toss is hit within a frame of the sweet spot. Every serve's
+/// effect and side axis against the shot recorded at launch (the path predictor's copy, some frames ahead), and the two turned
+/// ones (vsync 25558, 28213) among them.
+#[test]
+fn round1_turned_serves() {
+    use hst_sim::replay::frames;
+    let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let (Ok(cnf), Ok(bin), Ok(data)) = (std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")), std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN")), std::fs::read(format!("{ctx}/fixtures/round1.bin"))) else {
+        return eprintln!("the extracted disc or round1.bin absent, skipped");
+    };
+    let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    const LEFTY: [bool; 4] = [false, false, false, true];
+    let (mut serves, mut turned) = (0, 0);
+    for w in frames(&data).windows(2) {
+        let (a, b) = (w[0].ball(), w[1].ball());
+        if b[0x58] != 0 || a[0x70..0x90] == b[0x70..0x90] {
+            continue;
+        }
+        let Some(p) = (0..4).find(|&p| pu8(w[1], p, 0x3ec1) == 0 && pu8(w[1], p, 0x3fa6) == 3) else { continue };
+        let c = w[1].global(0x422fa8 + 4 * p) as usize;
+        let (hit, target, kind) = (v3(b, 0x70), v3(b, 0x80), i(b, 0x5c));
+        let effect = served_effect(&game, w[1], p, c, kind, hit, target, LEFTY[p]);
+        assert_effect(b, effect, hit, target, &format!("round1 vsync {} player {p} (character {c}) kind {kind}", w[1].vsync()));
+        serves += 1;
+        turned += (effect.2 != 0.0) as i32;
+    }
+    eprintln!("round1: {serves} serves, {turned} turned");
+    assert!(serves >= 10 && turned == 2);
+}
+
+/// Every stroke's and volley's effect against the game's in the live doubles matches and `round1.bin`: every
+/// lob's curve (character row × distance, clean timing) bit-exact, and Kaito's (3) two slice bends in round1
+/// up to the sign. The game mirrors the bend of a backhand (the swing's motion, not recorded): both of
+/// those are mirrored.
+#[test]
+fn rally_effects_like_the_game() {
+    use hst_sim::replay::frames;
+    let ctx = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+    let (Ok(cnf), Ok(bin)) = (std::fs::read(format!("{ctx}/iso/SYSTEM.CNF")), std::fs::read(format!("{ctx}/iso/ZZBIN/GAME.BIN"))) else {
+        return eprintln!("the extracted disc absent, skipped");
+    };
+    let game = hst_data::exe::Game::new(&cnf, &bin).unwrap();
+    for (m, live) in [("match_s05.bin", true), ("1p3goodcpus.bin", true), ("round1.bin", false)] {
+        let Ok(data) = std::fs::read(format!("{ctx}/fixtures/{m}")) else { eprintln!("{m} absent, skipped"); continue };
+        let fr = if live { frames_live(&data) } else { frames(&data) };
+        let (mut curves, mut bends, mut flipped) = (0, 0, 0);
+        for w in fr.windows(2) {
+            let (a, b) = if live { (w[0].live_ball(), w[1].live_ball()) } else { (w[0].ball(), w[1].ball()) };
+            if !(b[0x58] == 1 || b[0x58] == 2) || a[0x70..0x90] == b[0x70..0x90] {
+                continue;
+            }
+            let p = w[1].global(0x423058) as usize;
+            let c = w[1].global(0x422fa8 + 4 * p) as usize;
+            let (class, kind) = (b[0x58], i(b, 0x5c));
+            let special = hst_sim::shot::special(class, kind, false, pu8(w[1], p, 0x3ee8), pi(w[1], p, 0x3fa0));
+            // Carol (6) and Will (11) are left-handed (TParam.csv; nobody switched hands in these matches)
+            let e = if special { hst_sim::shot::effect(&game.shot_effects(c), class, kind, v3(b, 0x70), v3(b, 0x80), c == 6 || c == 11, false) } else { (0.0, 0.0, 0.0) };
+            let at = format!("{m} vsync {} player {p} (character {c}) class {class} kind {kind}", w[1].vsync());
+            let flip = f(b, 0x250) != e.0;
+            assert_eq!([if flip { -e.0 } else { e.0 }, e.1, e.2].map(f32::to_bits), [0x250, 0x254, 0x1b0].map(|o| f(b, o).to_bits()), "{at}");
+            curves += (e.1 != 0.0) as i32;
+            bends += (e.0 != 0.0) as i32;
+            flipped += flip as i32;
+        }
+        eprintln!("{m}: {curves} curved lobs, {bends} bent slices ({flipped} mirrored)");
+        assert!(curves >= 1);
+        if m == "round1.bin" {
+            assert_eq!((bends, flipped), (2, 2));
+        }
     }
 }

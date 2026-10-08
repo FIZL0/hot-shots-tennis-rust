@@ -186,6 +186,58 @@ pub fn launch_frame(hit: V3, target: V3, elevation: f32) -> M4 {
     world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(elevation)), &frame)
 }
 
+/// The shot's sideways axis (the ball's +0x90, the bend's direction): up × the flat unit vector to the target.
+/// Unlike `launch_frame`'s row 0, the game renormalizes the flat vector on the VU first.
+pub fn side_axis(hit: V3, target: V3) -> vu0::V4 {
+    use crate::ps2::{div, madd, mul, sqrt, sub};
+    let (dx, dz) = (sub(target[0], hit[0]), sub(target[2], hit[2]));
+    let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
+    let ahead = vu0::normalize([mul(dx, inv), 0.0, mul(dz, inv), 0.0]);
+    vu0::normalize(vu0::cross(vu0::normalize([0.0, 1.0, 0.0, 0.0]), ahead))
+}
+
+/// The special condition the shot effects need: a strong-tossed topspin or slice serve hit within a frame of the
+/// sweet spot (timing `offset`), any other shot hit with a clean timing `grade` (1 or 2).
+pub fn special(class: u8, kind: i32, strong: bool, grade: u8, offset: i32) -> bool {
+    if class == 0 && strong && kind < 2 { offset.abs() < 2 } else { grade == 1 || grade == 2 }
+}
+
+/// A special shot's effect, as launched: (`Shot::bend`, `Shot::curve`, `Shot::bounce_turn`). The character's
+/// bend and curve grow with the flat distance up to a court's length (23.77 m); a left-hander's bend and turn
+/// are mirrored, and so is the bend of a shot hit with `flip`.
+// ponytail: the game's debug switch that forces every effect, and its practice-only exception (one player on
+// court, player 1 hitting, gets row 0's lob curve and no bend or turn), are left out
+pub fn effect(e: &hst_data::exe::ShotEffects, class: u8, kind: i32, hit: V3, target: V3, lefty: bool, flip: bool) -> (f32, f32, f32) {
+    use crate::ps2::{div, madd, mul, sqrt, sub};
+    let (mut bend, mut curve, mut turn) = match (class, kind) {
+        (0, 0) => (e.bend[0], 0.0, mul(e.turn, 0.017453292)),
+        (0, 1) => (e.bend[1], 0.0, 0.0),
+        (1, 1) => (e.bend[2], 0.0, 0.0),
+        (1, 3) => (0.0, e.curve, 0.0),
+        _ => (0.0, 0.0, 0.0),
+    };
+    if bend != 0.0 || curve != 0.0 {
+        let (dx, dz) = (sub(target[0], hit[0]), sub(target[2], hit[2]));
+        let s = div(sqrt(madd(mul(dz, dz), dx, dx)), 23.77).clamp(0.0, 1.0);
+        if bend != 0.0 {
+            bend = mul(bend, s);
+            if flip {
+                bend = mul(bend, -1.0);
+            }
+            if lefty {
+                bend = mul(bend, -1.0);
+            }
+        }
+        if curve != 0.0 {
+            curve = mul(curve, s);
+        }
+    }
+    if turn != 0.0 && lefty {
+        turn = mul(turn, -1.0);
+    }
+    (bend, curve, turn)
+}
+
 /// Launch velocity: along the launch frame's row 2 at `speed` per frame.
 pub fn launch(hit: V3, target: V3, elevation: f32, speed: f32) -> V3 {
     let ahead = launch_frame(hit, target, elevation)[2];
