@@ -1573,6 +1573,16 @@ fn reset_positions(g: &mut Game) {
     g.prev_ball = ball;
 }
 
+/// Entering the change-ends phase puts everyone where the next serve has them, as the original's placement on
+/// that phase's entry: the score and rally are advanced on copies, as `next_point` does when the phase ends.
+fn change_ends_placement(g: &mut Game) {
+    let (score, rally) = (g.score.clone(), g.rally);
+    g.score.next_point(&g.rules);
+    g.rally.next_point();
+    reset_positions(g);
+    (g.score, g.rally) = (score, rally);
+}
+
 /// Figure yaw squarely facing the other end (yaw 0 faces −z).
 fn base_yaw(end: f32) -> f32 {
     if end > 0.0 { std::f32::consts::PI } else { 0.0 }
@@ -3616,6 +3626,7 @@ fn simulate(mut g: ResMut<Game>) {
                     g.umpire.start(true, g.flight.ball.pos);
                     // the change-ends tune, cued as the phase is entered
                     g.jingle = Some(0);
+                    change_ends_placement(g);
                     return g.phase = Phase::ChangeEnds(CHANGE_ENDS);
                 }
                 Some(Next::MatchOver) => {
