@@ -524,6 +524,18 @@ pub fn turn(f: &mut Facing, target: [f32; 4], forward: f32, hand: f32, start: us
     f.cross = cross(t, f.dir);
 }
 
+/// The pad driver's deadzone, on every stick axis byte (both sticks) before anything reads it: 0x51..=0xae → 0x80.
+pub fn pad_deadzone(b: u8) -> u8 {
+    if (0x51..=0xae).contains(&b) { 0x80 } else { b }
+}
+
+/// A stick axis byte as the pad's held direction (what menus read beside the d-pad): −1 toward 0x00 (left/up),
+/// +1 toward 0xff, 0 inside |48| on the same −127..127 scale as `pad_dir`.
+pub fn pad_held(b: u8) -> i32 {
+    let i = b as i32 - (b >= 0x81) as i32 - 0x7f;
+    if i.abs() < 48 { 0 } else { i.signum() }
+}
+
 /// A human's run direction (game x, z) from the pad: the left stick (`lx`, `ly` bytes, 0x80 centre; bytes ≥ 0x81 drop
 /// by one, so the centre itself reads a hair right/down) rescaled past a 48/127 dead square, or the d-pad (`buttons`
 /// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit inside |48|; then
@@ -773,5 +785,12 @@ mod tests {
         assert!(((p[0] * p[0] + (p[2] + 4.0) * (p[2] + 4.0)).sqrt() - 1.0).abs() < 1e-5, "{p:?}");
         // far apart: a plain step, clamped to the court
         assert_eq!(mover([8.6, 0.0, -17.8], [0.2, 0.0, -0.2], 1.0, Some([0.0, 0.0, -4.0]), false), [8.685, 0.0, -17.885]);
+    }
+
+    #[test]
+    fn pad_bytes() {
+        assert_eq!([0x50, 0x51, 0x7f, 0xae, 0xaf].map(pad_deadzone), [0x50, 0x80, 0x80, 0x80, 0xaf]);
+        // menus: one past the driver's deadzone is still inside |48|
+        assert_eq!([0x00, 0x4f, 0x50, 0x80, 0xaf, 0xb0, 0xff].map(pad_held), [-1, -1, 0, 0, 0, 1, 1]);
     }
 }

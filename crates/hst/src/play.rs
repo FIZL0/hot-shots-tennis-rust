@@ -1420,7 +1420,7 @@ fn read_input(
     list.sort_by_key(|(e, _)| *e);
     for (slot, (_, g)) in list.iter().take(2).enumerate() {
         let s = &mut now[slot];
-        s.stick += deadzone(g.left_stick()) + g.dpad();
+        s.stick += pad_stick(g.left_stick()) + g.dpad();
         let buttons = [
             (GamepadButton::South, 0),
             (GamepadButton::East, 1),
@@ -1431,7 +1431,7 @@ fn read_input(
             .find(|(b, _)| g.just_pressed(*b))
             .map(|(_, k)| k));
         cycle |= g.just_pressed(GamepadButton::Select);
-        turn += deadzone(g.right_stick()).x;
+        turn += pad_stick(g.right_stick()).x;
     }
     pads.connected = list.len();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
@@ -1770,10 +1770,21 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     }
 }
 
-/// Radial stick deadzone: worn or off-centre sticks rest a little off zero and would creep the player along.
-fn deadzone(v: Vec2) -> Vec2 {
-    const DEADZONE: f32 = 0.2; // ponytail: fixed; make it a setting if some pads need more
-    if v.length() < DEADZONE { Vec2::ZERO } else { v }
+/// A stick axis (−1..1, +1 right/up) as the pad's byte (0x00 full left/up, 0x80 centre, 0xff full right/down;
+/// pass −y for a vertical axis).
+pub(crate) fn stick_byte(v: f32) -> u8 {
+    (128.0 + v.clamp(-1.0, 1.0) * if v < 0.0 { 128.0 } else { 127.0 }).round() as u8
+}
+
+/// A stick through the original's pad driver: each axis as its byte, the driver's deadzone
+/// (`hst_sim::player::pad_deadzone`), and back. Everything after it (running, aim, the camera turn) reads this, as
+/// the game reads the bytes; `pad_run` takes the run/aim dead square from there.
+fn pad_stick(v: Vec2) -> Vec2 {
+    let axis = |v: f32| {
+        let b = hst_sim::player::pad_deadzone(stick_byte(v)) as f32 - 128.0;
+        b / if b < 0.0 { 128.0 } else { 127.0 }
+    };
+    Vec2::new(axis(v.x), -axis(-v.y))
 }
 
 /// Whether player `i`'s serve aim comes from a stick (humans) rather than the stand-in AI's pick.
@@ -1842,15 +1853,6 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
     }
 }
 
-/// A stick direction on screen as a direction on the court (x, z): right along the camera's right, up along its
-/// forward.
-fn screen(g: &Game, stick: Vec2) -> Vec2 {
-    let r = g.cam.view.rot;
-    let right = Vec2::new(r[0][0], r[0][2]).normalize_or(Vec2::X);
-    let up = Vec2::new(r[2][0], r[2][2]).normalize_or(Vec2::Y);
-    right * stick.x + up * stick.y
-}
-
 /// The run direction the original gives a human's stick (`hst_sim::player::pad_dir`): the stick as pad bytes, its
 /// dead square, rescale and ×1.2 clip, on world axes, turned by π when the camera looks from the +z side.
 /// ponytail: the app's stick already merges d-pad and keys into one vector, so the d-pad's own (faster diagonal)
@@ -1872,7 +1874,7 @@ fn pad_run(g: &Game, stick: Vec2) -> Vec2 {
     }
 }
 
-/// Analog aim on the court (x, z direction from `screen`, or a bot's random pick): sideways spans the court,
+/// Analog aim on the court (x, z direction from `pad_run`, or a bot's random pick): sideways spans the court,
 /// +z moves the target toward +z (deeper for the −z team, shorter for the other); centred is a deep middle ball.
 fn aim_target(g: &Game, stick: Vec2, end: f32) -> V3 {
     let width = if g.rules.players > 2 { 4.4 } else { 3.4 };
@@ -2487,7 +2489,8 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     g.players[i].aim = pad.stick;
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         let press = shot.or(serve_press.then_some(0));
-        let stick = screen(g, pad.stick);
+        // the serve aims with the run direction, as the original (its dead square, ×1.2 clip, camera flip)
+        let stick = pad_run(g, pad.stick);
         serve_turn(g, i, stick, press);
         return;
     }
@@ -2503,8 +2506,8 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
         let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick));
         locomote(g, i, dir);
     }
-    // the stick at the moment of contact aims the shot
-    let aim = screen(g, pad.stick);
+    // the stick at the moment of contact aims the shot: the run direction, as the original
+    let aim = pad_run(g, pad.stick);
     advance_stroke(g, i, move |_| aim);
 }
 
