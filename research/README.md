@@ -11,9 +11,10 @@ game lives in `context/`, which is git-ignored and must never be shared.
 |---|---|
 | `journal/` | Research notes per task (`YYYY-MM-DD-<slug>/N-TOPIC-STATE.md`). `-FINAL` done, `-PART` in progress, `-READY` needs the human. `TODO.md` links each item to its entry. |
 | `fn.sh <addr>` | Prints one function from the decompilation dump, e.g. `research/fn.sh 34afc0`. |
+| `xr.sh <addr>` | Lists every reference to an address from the xref dump (callers, reads, writes), e.g. `research/xr.sh 34afc0`. |
 | `mkoverlay_elf.py` | Builds one ELF per program overlay (GAME, MENU, MOVIE) from the disc's boot ELF, so Ghidra sees the overlay code at its load address. |
 | `mkirx_elf.py` | Turns an IOP module (`.IRX`, e.g. the sound driver `MODULES2/SG2IOPM1.IRX`) into a plain MIPS ELF with function-start symbols for Ghidra. |
-| `ghidra_scripts/` | `DumpDecomp.java` decompiles every function to one `.c` file. `DumpAsm.java` prints the instructions of chosen functions. |
+| `ghidra_scripts/` | `DumpDecomp.java` decompiles every function to one `.c` file. `DumpAsm.java` prints the instructions of chosen functions. `DumpXrefs.java` writes every non-branch reference to one `.xrefs.tsv`. |
 | `tools/` | Python analysis scripts: format walkers (`mdlwalk`, `mtlwalk`, `mdlvif`, `vifwalk`), the PS2 FPU model (`ps2fpu`), a VU0 disassembler, ball-flight and shot-table models, and the generators for test recordings (`fixture_*.py`). |
 
 The scripts that drive the live game are in the top-level `tools/` (PINE client, recorders, virtual pad,
@@ -50,6 +51,11 @@ for p in game menu movie; do
     -postScript DumpDecomp.java "$PWD/context/decomp"
 done
 # → context/decomp/hst_{game,menu,movie}.c and .funcs.tsv; research/fn.sh <addr> reads hst_game.c
+
+# Every reference except branches, from the existing project (seconds; no re-analysis):
+/opt/ghidra/support/analyzeHeadless context/ghidra hst -process -readOnly -noanalysis \
+  -scriptPath research/ghidra_scripts -postScript DumpXrefs.java "$PWD/context/decomp"
+# → context/decomp/hst_{game,menu,movie}.xrefs.tsv (to, from, function, type); research/xr.sh <addr> reads the game one
 
 # Instructions of a few functions, from the existing project (no re-analysis):
 /opt/ghidra/support/analyzeHeadless context/ghidra hst -process hst_game.elf -readOnly -noanalysis \
