@@ -57,7 +57,9 @@ fn sparks_s05() {
             bursts += 1;
             kinds[kind as usize] += 1;
         }
-        sp.tick(|r| *r = rolls(s));
+        // the game's own rerolls (the sound generator isn't recorded here; `sound_draws_like_the_game` checks them)
+        sp.tick(&mut hst_sim::rng::Mt::new(1));
+        sp.rolls = rolls(s);
         for k in 0..SPARKS {
             let (active, want) = spark(s, k);
             let got = &sp.sparks[k];

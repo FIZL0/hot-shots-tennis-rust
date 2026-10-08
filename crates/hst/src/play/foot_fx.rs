@@ -77,7 +77,7 @@ fn setup(
 
 /// One game frame: the players' toes and matrices (game space, from the last drawn pose) step the sim. The run
 /// object updates after the players (it takes their hit events the same frame), so the dive rings draw from the
-/// match's shared generator after the frame's strokes.
+/// sound manager's generator after the frame's strokes.
 // ponytail: the toes are the last drawn pose (one frame behind the motion), as the swing trails
 fn tick(
     fx: Option<ResMut<FootFx>>,
@@ -137,7 +137,7 @@ fn tick(
     let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));
     // ponytail: no instant replay yet (P0b4d), so dives throw no debris
     fx.feet.replay = false;
-    let mt = &mut g.rng.shared;
+    let mt = &mut g.rng.sound;
     fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true, &mut || mt.next());
     // the streak plays from each dive's start while it shows
     for (p, (e, _)) in fx.dash.iter_mut().enumerate() {

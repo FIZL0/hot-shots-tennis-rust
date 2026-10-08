@@ -12,6 +12,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
 use hst_sim::effect::{Bounce, Contact, Effect, Puff, Roll, SPARK_FADE, SPARKS, Sparks, Trail, impact_matrix, impact_scale, FLIGHT_POINTS, Flight, GLOW_FRAMES, Glow};
+use hst_sim::rng::Mt;
 
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
@@ -184,23 +185,10 @@ pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>
 #[derive(Resource)]
 pub struct HitSparks {
     sparks: Sparks,
-    rng: u32,
     mesh: Handle<Mesh>,
     view: Entity,
     /// `*tubu00` for top … drop, then smash.
     looks: [Handle<StandardMaterial>; 6],
-}
-
-// ponytail: the port's own generator, not the game's MT19937; the rolls' ranges are the game's
-fn rand(state: &mut u32) -> f32 {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    (*state >> 8) as f32 / (1 << 24) as f32
-}
-
-fn roll(rng: &mut u32) -> Roll {
-    Roll::new(rand(rng) * std::f32::consts::PI, [rand(rng), rand(rng), rand(rng)])
 }
 
 /// `yumoto/<name>.tm2` (or `<dir>/<name>.tm2`) from the effect archive as an unlit, alpha-blended, two-sided material.
@@ -238,26 +226,26 @@ pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshe
     let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling)).id();
     commands.entity(parent).add_child(view);
-    let mut rng = 0x5eed_5a4c;
-    let rolls = std::array::from_fn(|_| roll(&mut rng));
-    Ok(HitSparks { sparks: Sparks::new(rolls), rng, mesh, view, looks: looks.try_into().unwrap() })
+    // the table is rolled by the match start's reseed (`HitSparks::restart`)
+    let rolls = [Roll::new(0.0, [0.0; 3]); SPARKS];
+    Ok(HitSparks { sparks: Sparks::new(rolls), mesh, view, looks: looks.try_into().unwrap() })
 }
 
 impl HitSparks {
-    /// Throw a burst for this hit, then play the frame (the game moves a burst the frame it starts).
-    pub fn frame(&mut self, hit: Option<Hit>, commands: &mut Commands) {
+    /// A reseed message: the whole table rolled from `rng` (the sound generator before the reseed); the burst stops.
+    pub fn restart(&mut self, rng: &mut Mt) {
+        self.sparks.restart(rng);
+    }
+
+    /// Throw a burst for this hit, then play the frame (the game moves a burst the frame it starts); a burst dying
+    /// out rerolls from `rng`, the sound generator.
+    pub fn frame(&mut self, hit: Option<Hit>, rng: &mut Mt, commands: &mut Commands) {
         if let Some(h) = hit {
             let look = if h.smash { 5 } else { h.kind.clamp(0, 4) as usize };
             commands.entity(self.view).insert(MeshMaterial3d(self.looks[look].clone()));
             self.sparks.start(h.kind, h.smash, [h.pos[0], h.pos[1], h.pos[2], 1.0], [h.vel[0], h.vel[1], h.vel[2], 0.0]);
         }
-        let rng = &mut self.rng;
-        self.sparks.tick(|rolls| {
-            // every fourth roll anew, from one of the first four
-            for r in rolls.iter_mut().skip((rand(rng) * 4.0) as usize).step_by(4) {
-                *r = roll(rng);
-            }
-        });
+        self.sparks.tick(rng);
     }
 }
 

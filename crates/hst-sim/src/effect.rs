@@ -296,10 +296,25 @@ pub struct Roll {
 }
 
 impl Roll {
-    /// A turn by `angle` about z (rows x, y) and the three uniforms.
+    /// A turn by `angle` about z (rows x, y; the game's sincos keeps sin ≥ 0 for angle ≥ 0, so it turns by under
+    /// half a circle) and the three uniforms.
     pub fn new(angle: f32, u: [f32; 3]) -> Roll {
-        let (s, c) = (crate::libm::sinf(angle), crate::libm::cosf(angle));
-        Roll { turn: [[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], u }
+        Roll { turn: crate::world::mat_mul(&crate::world::IDENTITY, &crate::shot::rot_z(angle)), u }
+    }
+
+    /// One roll from four uniform draws: the angle (a unit times 2π), then the uniforms.
+    pub fn draw(rng: &mut crate::rng::Mt) -> Roll {
+        let angle = ps2::mul(rng.unit(), 6.283_185_5);
+        Roll::new(angle, [rng.unit(), rng.unit(), rng.unit()])
+    }
+
+    /// Roll the table afresh from the sound generator: `all` (the reseed messages) redoes every roll, otherwise
+    /// (a burst has died out) every fourth from a random one of the first four.
+    pub fn reroll(rolls: &mut [Roll; SPARKS], all: bool, rng: &mut crate::rng::Mt) {
+        let (start, step) = if all { (0, 1) } else { ((rng.next() >> 16 & 3) as usize, 4) };
+        for r in rolls.iter_mut().skip(start).step_by(step) {
+            *r = Roll::draw(rng);
+        }
     }
 }
 
@@ -344,6 +359,13 @@ impl Sparks {
         Sparks { sparks: [Spark::default(); SPARKS], rolls, live: false }
     }
 
+    /// A reseed message (match start, change of ends, a new point after a point's end): every roll anew from `rng`
+    /// and the burst stops.
+    pub fn restart(&mut self, rng: &mut crate::rng::Mt) {
+        Roll::reroll(&mut self.rolls, true, rng);
+        self.live = false;
+    }
+
     /// Throw a burst for shot kind `kind` (`smash`: the hitter's smash branch) from the ball at `pos` moving
     /// `vel`: sparks 0..n restart, any older ones past n play on.
     pub fn start(&mut self, kind: i32, smash: bool, pos: [f32; 4], vel: [f32; 4]) {
@@ -380,9 +402,9 @@ impl Sparks {
         }
     }
 
-    /// One frame: every spark ages, moves and slows; when none is left the burst ends and `reroll` gets the
-    /// table to roll afresh (the game redoes every fourth roll from a random one of the first four).
-    pub fn tick(&mut self, reroll: impl FnOnce(&mut [Roll; SPARKS])) {
+    /// One frame: every spark ages, moves and slows; when none is left the burst ends and a quarter of the table
+    /// is rolled afresh from `rng` (the sound generator).
+    pub fn tick(&mut self, rng: &mut crate::rng::Mt) {
         use ps2::{add, mul};
         if !self.live {
             return;
@@ -399,7 +421,7 @@ impl Sparks {
         }
         if !any {
             self.live = false;
-            reroll(&mut self.rolls);
+            Roll::reroll(&mut self.rolls, false, rng);
         }
     }
 }

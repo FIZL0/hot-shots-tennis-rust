@@ -332,6 +332,8 @@ struct Game {
     message: String,
     /// The game's generators (`hst_sim::rng`): every draw the app shares with the original comes from one.
     rng: Rngs,
+    /// The sound generator as a reseed found it: the hit sparks roll their table afresh from it.
+    respark: Option<Mt>,
     /// Sounds due this tick, at a game-space position.
     sounds: Vec<(sound::Play, V3)>,
     /// Swing whooshes and dive thuds waiting to play: ticks left, the player (played at their position) and the sound.
@@ -1189,6 +1191,7 @@ fn setup(
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
         rng: match_rng.map_or_else(|| Rngs::new(Rand::default(), Mt::new(1)), |r| r.0.clone()),
+        respark: None,
         sounds: Vec::new(),
         whooshes: Vec::new(),
         bounces: default(),
@@ -1319,7 +1322,7 @@ fn setup(
             .map(|(b, mid)| (std::sync::Arc::new(b), mid)),
     });
     // the match starts (the sound manager's reseed), then its first point
-    game.rng.change_ends();
+    reseed_sound(&mut game);
     game.rng.new_point();
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
@@ -3480,7 +3483,7 @@ fn simulate(mut g: ResMut<Game>) {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g, true),
                 Some(Next::ChangeEnds) => {
-                    g.rng.change_ends();
+                    reseed_sound(g);
                     g.gallery.hush();
                     g.umpire.start(true, g.flight.ball.pos);
                     // the change-ends tune, cued as the phase is entered
@@ -3677,6 +3680,17 @@ fn next_point(g: &mut Game, fresh: bool) {
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
     g.rng.new_point();
+    // a point's end leaves for the next point (or match): the sound manager reseeds as on a change of ends
+    if fresh {
+        reseed_sound(g);
+    }
+}
+
+/// The sound manager's reseed messages (match start, change of ends, a new point after a point): the hit sparks
+/// roll their whole table from the generator as it was (those draws are lost), then it takes a fresh `rand()` seed.
+fn reseed_sound(g: &mut Game) {
+    g.respark = Some(g.rng.sound.clone());
+    g.rng.change_ends();
 }
 
 /// Orbit rig parameters that put the eye at `eye` looking along `forward` (game space).
@@ -3791,7 +3805,10 @@ fn start_effects(
     if let Some(h) = hit {
         fx.start(h, &mut transforms);
     }
-    sparks.frame(hit, &mut commands);
+    if let Some(mut mt) = g.respark.take() {
+        sparks.restart(&mut mt);
+    }
+    sparks.frame(hit, &mut g.rng.sound, &mut commands);
     let dead = !matches!(g.phase, Phase::Serve | Phase::Rally);
     flight.frame(
         hit,

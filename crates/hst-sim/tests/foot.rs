@@ -166,7 +166,7 @@ fn footsteps_s05() {
     assert!(steps > 100 && prints > 100);
 }
 
-// `foot_s05x.bin` (`record_foot.py 5 5000 … extras`): each frame as above, then the shared MT 0x9c8, run object
+// `foot_s05x.bin` (`record_foot.py 5 5000 … extras`): each frame as above, then the sound manager's MT 0x9c8, run object
 // +0x9ec0..+0xa0a0, per player +0x3f80 0x10, +0x3ec0 0x10 and the pelvis, spine and head world matrices.
 const MT: usize = SIZE;
 const DASH: usize = MT + 0x9c8;
@@ -256,14 +256,14 @@ fn foot_extras_s05() {
         let mut wkey = key(&want);
         wkey.2 = dash(fr).map(|d| d.map(|m| bits(&m.concat())));
         let diving = runners.iter().any(|r| r.dive);
-        // the dive rings draw from the shared generator after the frame's strokes; a dive's start frame has no
+        // the dive rings draw from the sound generator after the frame's strokes; a dive's start frame has no
         // others, so its draws are the frame's first and last
         let mut found = None;
         let mut g = mt(frames[k - 1]);
         let mut one = feet.clone();
         one.tick(&t, court, fr[FLAGS] != 0, fr[FLAGS + 1] != 0, v4(fr, WIND), &runners, h[0x120] != 0, &mut || g.next());
         if key(&one) == wkey {
-            assert!(!diving || g == mt(fr), "frame {k}: the rings aren't the dive frame's only shared draws");
+            assert!(!diving || g == mt(fr), "frame {k}: the rings aren't the dive frame's only sound draws");
             found = Some(one);
         }
         if found.is_none() && !diving {

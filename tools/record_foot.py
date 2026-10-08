@@ -5,7 +5,7 @@ tornado object) every frame from a save-state load (bot games: slot 5). PINE pad
 Header: u32 court, u32 players. Sample: u32 vsync, manager +0x740..+0x780, run object 0x130 (head) + 0x1000 (first 32
 puffs) + 0xc80 (40 footprints) + 4 (footprint count) + 0x10 (+0xa090 flags), tornado object 0x100, ball 0x290,
 weather block (gm+0x84) +0x130..+0x140 and +0x1a20..+0x1a30, then per player (4): player +0x3d40 0x40, +0x3fa4 4, +0x3db0 4,
-motion object 0xa0, right toe bone 0x40, left toe bone 0x40. With `extras`, then: the shared MT19937 (*(manager +0x740))
+motion object 0xa0, right toe bone 0x40, left toe bone 0x40. With `extras`, then: the sound manager's MT19937 (*(manager +0x740))
 0x9c8, run object +0x9ec0..+0xa0b0 (dash matrices and flags, puff flags, burst latches), and per player (4): +0x3f80
 0x10, +0x3ec0 0x10, Bip01Pelvis, Bip01Spine1 and Bip01Head world matrices 0x40 each.
 FOOT_POKE=dusty|wet forces the run object's court flags (+0xa090) every frame, for dive rings on any court.
