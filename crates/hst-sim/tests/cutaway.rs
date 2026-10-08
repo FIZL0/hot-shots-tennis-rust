@@ -136,7 +136,10 @@ fn director_s05() {
     for (j, w) in runs.windows(2).enumerate() {
         let (s, last) = (samples[w[0]], samples[w[1] - 1]);
         let pl = |i: usize| PL + 0x170 * i;
-        let (shown, other) = (i32_(s, TAB + 0x1800 + 0x1a0) as usize, i32_(s, TAB + 0x1800 + 0x1a4) as usize);
+        // who: from the roles (last hitter, the one before), the last hitter, game end and the point's winner
+        let ab = [i32_(s, TAB + 0x1800 + 0x198) as usize, i32_(s, TAB + 0x1800 + 0x19c) as usize];
+        let [shown, other] = cutaway::roles(ab, i32_(s, X + 0x18), i32_(s, X + 0x78) > 0, i32_(s, X + 0x68));
+        assert_eq!([shown, other], [0x1a0, 0x1a4].map(|o| i32_(s, TAB + 0x1800 + o) as usize), "cut-away {j} roles");
         let lost = shown as i32 & 1 != i32_(s, X + 0x68) & 1;
         let number = cutaway::pick(&lists, &mut counters, &PickInput {
             team: i32_(s, pl(shown) + 0x110) >= 0x30,

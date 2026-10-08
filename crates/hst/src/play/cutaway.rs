@@ -55,10 +55,14 @@ fn bone(p: &Player, data: &CharacterData, id: usize, t: f32, pos: [f32; 4], name
 }
 
 /// Player `i`'s head and Spine2 as their reaction will leave them `t` frames in: a team reaction (and `gu_set`)
-/// carries the player along its root path.
-fn predicted(g: &Game, i: usize, t: f32) -> Option<(M4, M4)> {
+/// carries the player along its root path. One without a reaction (a body-hit player standing) holds `motion`, its
+/// current one, where it stands.
+fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M4)> {
     let (p, data) = (&g.players[i], &g.data[i]);
-    let r = p.root?;
+    let Some(r) = p.root else {
+        let (id, pos) = (motion?, [p.pos[0], p.pos[1], p.pos[2], 1.0]);
+        return Some((bone(p, data, id, t, pos, "Bip01Head")?, bone(p, data, id, t, pos, "Bip01Spine2")?));
+    };
     let len = data.motions.get(&r.motion)?.length;
     let pos = match data.paths.get(&r.motion) {
         Some(path) if r.motion == 0x2e || r.motion >= 0x30 => {
@@ -86,14 +90,13 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
     let d = &mut *d;
     if d.shot.is_none() {
         let game_end = matches!(event, Event::Game | Event::Set);
-        let [a, b] = d.roles;
         let winner = |i: usize| i as i32 & 1 == g.post_winner & 1;
-        let swap = if game_end { !winner(a) } else { g.last_hitter >= 0 && a as i32 & 1 != g.last_hitter & 1 };
-        let (shown, other) = if swap { (b, a) } else { (a, b) };
+        let [shown, other] = cutaway::roles(d.roles, g.last_hitter, game_end, g.post_winner);
         // ponytail: 117 frames in, as every rally point recorded; the game adds 93 or 99 instead of 97 to its 20 under
         // two flags not traced yet
         let t = if game_end { 378.0 } else { 117.0 };
-        let (Some(s), Some(o)) = (predicted(&g, shown, t), predicted(&g, other, t)) else {
+        let motion = |i: usize| q.iter().find(|(f, _)| f.0 == i).map(|(_, m)| m.id);
+        let (Some(s), Some(o)) = (predicted(&g, shown, t, motion(shown)), predicted(&g, other, t, motion(other))) else {
             return;
         };
         let p = &g.players[shown];
