@@ -53,6 +53,7 @@ mod menu;
 mod npcs;
 mod panel;
 mod popups;
+mod reaction_voices;
 mod surprise;
 mod timing;
 mod tornado;
@@ -517,6 +518,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(npcs::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
+    app.add_plugins(reaction_voices::plugin);
     app.add_plugins(surprise::plugin);
     app.add_plugins(tornado::plugin);
     app.add_plugins(weather::plugin);
