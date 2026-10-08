@@ -628,13 +628,13 @@ fn draw(
             *vis = Visibility::Hidden;
             continue;
         };
-        // the panel's texture order: pill, slot, …, points (3), …, rank (6), …, faces from 10
+        // the panel's texture order: pill, slot, …, points (3), …, rank (6), …, then the faces
         let handle = match quad.tex {
             Tex::Pill => &panel_art.0[0],
             Tex::Slot => &panel_art.0[1],
             Tex::Points => &panel_art.0[3],
             Tex::Rank => &panel_art.0[6],
-            Tex::Face(p) => &panel_art.0[10 + p],
+            Tex::Face(p) => &panel_art.0[panel::FACES + p],
             Tex::PointsWhite => &art.0[0],
             Tex::Deuce => &art.0[1],
             Tex::DeuceRed => &art.0[2],

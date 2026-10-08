@@ -462,6 +462,8 @@ fn game_info(s: &Score, r: &Rules, human: [bool; 2]) -> Option<(usize, usize)> {
 /// The panel's textures: `TEXTURES` in order, then each player's face.
 #[derive(Resource)]
 pub(super) struct Art(pub(super) Vec<Handle<Image>>);
+/// Where the faces start in `Art`.
+pub(super) const FACES: usize = TEXTURES.len();
 /// The pool of screen rectangles, drawn in order.
 #[derive(Component)]
 pub(super) struct Slot(usize);

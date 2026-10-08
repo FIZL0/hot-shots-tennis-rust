@@ -8,8 +8,8 @@
 //! A red dot marks where the ball will bounce.
 //!
 //! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, L lob, J/Space serve, C camera
-//! (original / free), arrow keys turn the free camera.
-//! Gamepad: left stick or d-pad move/aim, A (✕) topspin, B (○) slice, Y (△) lob, A/Start serve, Select camera,
+//! (original / free), arrow keys turn the free camera, Esc pause (`play/menu.rs`).
+//! Gamepad: left stick or d-pad move/aim, A (✕) topspin, B (○) slice, Y (△) lob, A serve, Start pause, Select camera,
 //! right stick turns the free camera. As the original, there is no flat or drop button: the stick toward the
 //! net at contact makes a topspin flat, pulled back makes a slice a drop shot (`shot::stick_kind`).
 
@@ -42,6 +42,7 @@ use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
 mod markers;
+mod menu;
 mod panel;
 mod popups;
 
@@ -443,6 +444,7 @@ struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
     app.add_plugins(markers::plugin);
+    app.add_plugins(menu::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -1403,7 +1405,6 @@ fn read_input(
             .into_iter()
             .find(|(b, _)| g.just_pressed(*b))
             .map(|(_, k)| k));
-        s.serve |= g.just_pressed(GamepadButton::Start);
         cycle |= g.just_pressed(GamepadButton::Select);
         turn += deadzone(g.right_stick()).x;
     }
