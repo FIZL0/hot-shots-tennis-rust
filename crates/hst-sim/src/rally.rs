@@ -3,7 +3,7 @@
 //! ready check and the stroke-frame pickers it calls; and the NET and BASE rally routines (waiting in the formation
 //! between shots, the shot records the partners leave each other, the volley search).
 
-use crate::ai::{AiParams, PathBall, Runner, Searcher};
+use crate::ai::{AiParams, Mind, PathBall, Runner, Searcher};
 use crate::aim::Pair;
 use crate::position::{Cue, Formation, Return, Team};
 use crate::player::{self, ReachStats, Stats};
@@ -182,10 +182,9 @@ pub struct Rally {
     pub lane: u8,
     pub front: bool,
     pub forward: bool,
-    /// Giving way to the partner: the rounds before the roll is retaken, the rate, the roll, the flag.
-    pub rounds: i32,
-    pub defer_rate: i32,
-    pub defer_roll: bool,
+    /// The ALL-style net pick (re-picked on each return to substate 0).
+    pub mind: Mind,
+    /// Giving way to the partner.
     pub defer: bool,
     /// The caller's stack quad the bounce picks start from (the game leaves it uninitialised).
     pub stash: [f32; 4],
@@ -932,10 +931,7 @@ impl Rally {
                     self.back = Return::new(self.rate, roll);
                 }
                 w.put(b.team, -2, 0, b.pos, [0.0; 4]);
-                if self.rounds <= 0 {
-                    self.defer_roll = chance(roll, self.defer_rate);
-                    self.rounds = draw(roll, 3) as i32 + 2;
-                }
+                self.mind.rally(roll);
                 self.defer = false;
             }
             1 => w.put(b.team, self.index, self.kind as i32, b.pos, self.stand),

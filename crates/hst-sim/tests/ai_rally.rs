@@ -6,7 +6,7 @@
 //! `context/fixtures/ai_rally_s05.bin`, `ai_rally_s05_all.bin`: save slot 5, the bot-only doubles match.
 
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::ai::AiParams;
+use hst_sim::ai::{AiParams, Mind, Play};
 use hst_sim::player::{ReachStats, Stats};
 use hst_sim::position::Return;
 use hst_sim::rally::{Ball, Body, Out, PathCopy, Rally, Shot, World, SEEN};
@@ -126,9 +126,7 @@ fn rally(e: &[u8]) -> Rally {
         lane: a[0x266],
         front: a[0x267] != 0,
         forward: a[0x268] != 0,
-        rounds: i32_at(a, 0x26c),
-        defer_rate: i32_at(a, 0x270),
-        defer_roll: a[0x274] != 0,
+        mind: Mind { net_left: i32_at(a, 0x26c), net_rate: i32_at(a, 0x270), net: a[0x274] != 0, ..Mind::default() },
         defer: a[0x275] != 0,
         stash: quad(e, 0x730),
     }
@@ -162,7 +160,7 @@ fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
     w(0xd0, r.next as u32);
     w(0xd8, r.tick as u32);
     w(0x260, r.back.wait as u32);
-    w(0x26c, r.rounds as u32);
+    w(0x26c, r.mind.net_left as u32);
     a[0x56] = r.state;
     flag(&mut a, 0x98, r.fresh);
     a[0x9a] = r.kind;
@@ -181,7 +179,7 @@ fn bytes(e: &[u8], r: &Rally) -> Vec<u8> {
     a[0x266] = r.lane;
     flag(&mut a, 0x267, r.front);
     flag(&mut a, 0x268, r.forward);
-    flag(&mut a, 0x274, r.defer_roll);
+    flag(&mut a, 0x274, r.mind.net);
     flag(&mut a, 0x275, r.defer);
     a
 }
@@ -288,6 +286,16 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         n += 1;
         let at = format!("{name} v{} #{n}", u32_at(e, 8));
         let row = &table[((u32_at(e, A + 0xc) - TABLE) / RECORD) as usize];
+        // the dispatcher: receive in state 2, NET/BASE by style in state 3
+        let want = match e[A + 0x54] {
+            2 => 1,
+            3 => match (Mind { net: e[A + 0x274] != 0, ..Mind::default() }).play(row.style) {
+                Play::Net => 2,
+                Play::Base => 3,
+            },
+            s => panic!("{name}: routine {} called in state {s}", u32_at(e, 0)),
+        };
+        assert_eq!(u32_at(e, 0), want, "{name}: dispatch");
         let mut r = rally(e);
         let state = if tag == 1 { r.state } else { r.sub };
         if let Some(s) = states.get_mut(state as usize) {
