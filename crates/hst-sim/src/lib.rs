@@ -30,6 +30,7 @@ pub mod umpire;
 pub mod npc;
 pub mod ai;
 pub mod aim;
+pub mod rally;
 pub mod position;
 pub mod clouds;
 pub mod surprise;
