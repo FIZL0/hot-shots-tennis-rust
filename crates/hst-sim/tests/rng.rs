@@ -339,8 +339,9 @@ fn ai_draws_like_the_game() {
 ///   - the two uniforms, which must be the ball's
 /// - a dive's start (branch 3): its shout key
 /// - the doubles team reactions (`motion::team_reaction`), which must pick the recorded motions
-/// - the reaction voice of a player in the post-point camera's close view (its voice key +0x3d38 set): one key draw,
-///   taken from the recording, as the app leaves it out with that view
+/// - the reaction voice of a player on their reaction's 5th frame in the post-point camera's close view
+///   (`sound::reaction_view`, `reaction_voice`, `Voice::react`), from `context/p3d1/view_s05.bin`
+///   (`research/p3d1_view.py`)
 #[test]
 fn shared_draws_like_the_game() {
     use hst_sim::replay::{Frame, frames_live};
@@ -361,6 +362,9 @@ fn shared_draws_like_the_game() {
     let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let chars: Vec<i32> = (0..4).map(|p| at(rng[0].0).global(0x422fa8 + 4 * p)).collect();
     let mut voices = [sound::Voice::default(); 4];
+    let Ok(view) = std::fs::read(format!("{root}/context/p3d1/view_s05.bin")).map(|d| post_views(&d)) else {
+        return eprintln!("view_s05.bin missing (research/p3d1_view.py), skipped");
+    };
     let mut g = rng[0].2.clone();
     // reseeds, placements, tosses, strokes, dives, team reactions, reaction voices
     let mut tally = [0usize; 7];
@@ -427,13 +431,110 @@ fn shared_draws_like_the_game() {
             }
             tally[5] += 1;
         }
-        // the post-point close-view test isn't ported (its own PLAN task): the key's draw is taken as recorded
-        for _ in (0..4).filter(|&p| pi(a, p, 0x3d38) == -1 && pi(b, p, 0x3d38) != -1) {
-            draw();
-            tally[6] += 1;
+        if let Some(c) = view.get(&(v + 1)) {
+            for p in (0..4).filter(|&p| c.players[p].count == 5 && view.get(v).is_some_and(|c| c.players[p].count == 4)) {
+                let (q, f) = (&c.players[p], |a: [f32; 4]| [a[0], a[1], a[2], 1.0]);
+                if !sound::reaction_view(c.eye, c.look, &c.view, c.focal, f(q.origin), f(q.spot)) {
+                    continue;
+                }
+                let lost = q.side != c.winners;
+                let Some(rv) = sound::reaction_voice(c.players_n, q.motion, lost, c.replay, || (draw() >> 16 & 0x7fff) % 100) else { continue };
+                let key = voices[p].react(p, rv, || draw() >> 16 & 0x7fff);
+                // spu_s05 hears player 1's program 7 key 1 (bank 0) from 8551, the bank's sequence's key-on
+                assert_eq!((p, key.map(|k| (k.slot, k.program, k.key))), (1, Some((2, 7, 1))), "vsync {v}: player {p}'s reaction voice");
+                tally[6] += 1;
+            }
         }
         assert!(g == *after, "vsync {v}: the shared generator after {n} draws, {:?} short", reach(&g, after, 400).map(|k| k as i32).or(reach(after, &start, 400).map(|k| -(k as i32))));
     }
     eprintln!("{} frames: {tally:?} (reseeds, placements, tosses, strokes, dives, team reactions, reaction voices)", rng.len());
     assert_eq!(tally, [2, 2, 2, 13, 1, 1, 1]);
+}
+
+/// One player in a `research/p3d1_view.py` sample.
+struct PostPlayer {
+    /// The reaction's frame count (+0x3ba0).
+    count: i32,
+    motion: i32,
+    side: u32,
+    /// Model origin (bone matrix translation) and the spot the size test uses.
+    origin: [f32; 4],
+    spot: [f32; 4],
+    /// The voice's sound handle (+0x3d38).
+    handle: i32,
+}
+
+/// A `research/p3d1_view.py` sample: the post-point camera and the four players.
+struct PostView {
+    players_n: u32,
+    winners: u32,
+    replay: bool,
+    eye: [f32; 4],
+    look: [f32; 4],
+    view: [[f32; 4]; 4],
+    focal: f32,
+    players: Vec<PostPlayer>,
+}
+
+/// `research/p3d1_view.py`'s samples by vsync.
+fn post_views(d: &[u8]) -> std::collections::HashMap<u32, PostView> {
+    const H: usize = 4 + 24 + 0x20 + 0x80 + 8;
+    const PL: usize = 0x70;
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let v4 = |b: &[u8], o: usize| -> [f32; 4] { std::array::from_fn(|k| f32::from_bits(u(b, o + 4 * k))) };
+    d.chunks_exact(H + 4 * PL)
+        .map(|r| {
+            let players = (0..4)
+                .map(|k| {
+                    let q = &r[H + k * PL..];
+                    let spot = if u(q, 28) == 0xd { 32 } else { 48 };
+                    PostPlayer { count: u(q, 0) as i32 * (q[11] == 1) as i32, motion: u(q, 16) as i32, side: u(q, 24) & 1, origin: v4(q, 64), spot: v4(q, spot), handle: u(q, 80) as i32 }
+                })
+                .collect();
+            let view = PostView {
+                players_n: u(r, 4),
+                winners: u(r, 12),
+                replay: u(r, 20) != 0,
+                eye: v4(r, 28),
+                look: v4(r, 44),
+                view: std::array::from_fn(|i| v4(r, 60 + 16 * i)),
+                focal: f32::from_bits(u(r, 124)),
+                players,
+            };
+            (u(r, 0), view)
+        })
+        .collect()
+}
+
+/// At every reaction's 5th frame of `view_s05.bin` (`research/p3d1_view.py`, three points' ends): a player out of
+/// the post-point camera's close view (`sound::reaction_view`) keeps their voice handle (+0x3d38); one in it has it
+/// cleared, or set when `sound::reaction_voice` gives them a voice.
+#[test]
+fn reaction_views_like_the_game() {
+    use hst_sim::sound;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/p3d1/view_s05.bin")) else {
+        return eprintln!("view_s05.bin missing (research/p3d1_view.py), skipped");
+    };
+    let views = post_views(&d);
+    let (mut seen, mut voiced) = (0, 0);
+    for (v, c) in &views {
+        let Some(a) = views.get(&(v - 1)) else { continue };
+        for (p, (q, was)) in c.players.iter().zip(&a.players).enumerate().filter(|(_, (q, was))| q.count == 5 && was.count == 4) {
+            let f = |a: [f32; 4]| [a[0], a[1], a[2], 1.0];
+            let seen_now = sound::reaction_view(c.eye, c.look, &c.view, c.focal, f(q.origin), f(q.spot));
+            // a 30% roll would draw; none of these players reaches it (assert below)
+            let voice = seen_now.then(|| sound::reaction_voice(c.players_n, q.motion, q.side != c.winners, c.replay, || unreachable!())).flatten();
+            let ok = match (seen_now, voice) {
+                (false, _) => q.handle == was.handle,
+                (true, None) => q.handle == -1,
+                (true, Some(_)) => q.handle >= 0,
+            };
+            assert!(ok, "vsync {v}: player {p} (motion {:#x}) seen {seen_now}, handle {} from {}", q.motion, q.handle, was.handle);
+            seen += seen_now as usize;
+            voiced += voice.is_some() as usize;
+        }
+    }
+    eprintln!("{seen} in close view, {voiced} voiced");
+    assert!(seen >= 2 && voiced == 1);
 }
