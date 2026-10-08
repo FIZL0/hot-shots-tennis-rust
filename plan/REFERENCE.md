@@ -53,6 +53,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 
 ## Done (ported and verified against the original)
 
+- B21: timing balloons sit just above the head (neck anchor) at the original's size and timing; singles players show the swirl on losing a point.
 - P22: widescreen HUD on a centred 4:3 screen (play/widescreen.rs; the 3D view was already Hor+, F0 already uncapped), rebindable keys/pad buttons in `controls.txt` and hot-plug-stable controller slots (play/controls.rs); render/input only, hst-sim untouched, full test suite passes.
 - B7: one-sided court materials back-face culled as VU1 does (MDL material +0x24 = 0; winding from the third vertex's UV w); court 1's near school fence no longer blocks the camera (mdl.rs, gs.rs; tests/winding.rs; journal 2026-10-07-b7-camera-blocked).
 - P18: upscaled and moddable textures — PCSX2 pack hash names computed from the disc GS data (XXH3 of swizzled blocks + CLUT), lookup mods/textures → replacements/ → disc, `--dump-textures`, hot reload (hst-data texhash.rs, hst textures.rs; journal 2026-10-07-p18-textures/README.md).

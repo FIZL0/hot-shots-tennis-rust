@@ -22,7 +22,7 @@ use crate::Args;
 
 /// Added to the marker's sort distance (metres) so it draws after every other blended mesh. Bevy also applies it
 /// as a constant GPU depth bias (in depth-buffer units: ~0.1 % of the view depth, a few cm at court range).
-const LAST: f32 = 1e4;
+pub(super) const LAST: f32 = 1e4;
 
 /// One player's marker quad (its own material: tint and cell).
 #[derive(Component)]

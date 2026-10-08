@@ -3675,18 +3675,16 @@ fn age_balloons(mut g: ResMut<Game>) {
     }
 }
 
-/// Each player's balloon: a billboard facing the camera, its tail just above the head.
+/// Each player's balloon: its texture, fade and visibility (`surprise` places it over the neck as its pop-ups).
 fn balloons(
     g: Res<Game>,
     art: Res<BalloonArt>,
     time: Res<Time<Fixed>>,
-    cam: Query<&Transform, (With<crate::Orbit>, Without<BalloonView>)>,
-    mut q: Query<(&BalloonView, &mut Transform, &mut Visibility)>,
+    mut q: Query<(&BalloonView, &mut Visibility)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Ok(cam) = cam.single() else { return };
     let a = time.overstep_fraction();
-    for (view, mut t, mut vis) in &mut q {
+    for (view, mut vis) in &mut q {
         let p = &g.players[view.0];
         let Some((b, age)) = p.balloon else {
             *vis = Visibility::Hidden;
@@ -3704,14 +3702,8 @@ fn balloons(
         if let Some(mut m) = materials.get_mut(&view.1) {
             m.base_color_texture = Some(art.0[balloon_index(b)].clone());
             m.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
+            m.depth_bias = markers::LAST;
         }
-        let at = Vec3::from(p.prev).lerp(Vec3::from(p.pos), a);
-        // game space → world: (x, -y, -z); the figure's head centre stands 1.77 m up
-        let size = 2.0 * serve::BALLOON_SIZE;
-        let up = 1.77 + serve::BALLOON_LIFT + size * 0.5;
-        t.translation = Vec3::new(at.x, up, -at.z);
-        t.rotation = cam.rotation;
-        t.scale = Vec3::splat(size);
         *vis = Visibility::Visible;
     }
 }
