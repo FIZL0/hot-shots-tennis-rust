@@ -411,12 +411,19 @@ pub struct Voice {
     /// Last sample after the envelope.
     pub out: i32,
     block: Option<[i16; 28]>,
+    /// PCM samples played in place of SPU RAM (a mod's wav take; `next` then counts samples from 0).
+    pub pcm: Option<std::sync::Arc<[i16]>>,
 }
 
 impl Voice {
     pub fn key_on(start: u32, adsr: (u16, u16), pitch: u16, volume: [i16; 2]) -> Self {
         let (phase, level, counter, prev, sp, write, read, flags, out) = (1, 0, 0, [0; 2], 0, 0, 0, 0, 0);
-        Self { adsr, pitch, volume, loop_start: start, next: start | 1, phase, level, counter, prev, sp, write, read, fifo: [0; 32], flags, out, block: None }
+        Self { adsr, pitch, volume, loop_start: start, next: start | 1, phase, level, counter, prev, sp, write, read, fifo: [0; 32], flags, out, block: None, pcm: None }
+    }
+
+    /// A voice playing `pcm` as if it were decoded sample data: same queue, interpolation and envelope.
+    pub fn key_on_pcm(pcm: std::sync::Arc<[i16]>, adsr: (u16, u16), pitch: u16, volume: [i16; 2]) -> Self {
+        Self { next: 0, pcm: Some(pcm), ..Self::key_on(0, adsr, pitch, volume) }
     }
 
     pub fn key_off(&mut self) {
@@ -435,6 +442,20 @@ impl Voice {
     pub fn tick(&mut self, ram: &[u8]) -> [i32; 2] {
         if self.phase == 0 {
             return [0; 2];
+        }
+        if let Some(pcm) = &self.pcm {
+            // 4 samples a fill like a block's quad; past the last fill the voice ends, as at an end-flagged block
+            if (self.write.wrapping_sub(self.read) as i32) <= 12 {
+                for k in 0..4 {
+                    self.fifo[(self.write as usize + k) % 32] = pcm.get(self.next as usize + k).copied().unwrap_or(0) as i32;
+                }
+                self.write += 4;
+                self.next += 4;
+                if self.next as usize >= pcm.len() {
+                    self.stop();
+                }
+            }
+            return self.sound();
         }
         let at = (self.next & !7) as usize * 2;
         let Some(b) = ram.get(at..at + 16) else {
@@ -464,6 +485,11 @@ impl Voice {
                 self.block = None;
             }
         }
+        self.sound()
+    }
+
+    /// The queue's next interpolated sample through the envelope and volume.
+    fn sound(&mut self) -> [i32; 2] {
         if self.phase == 0 {
             return [0; 2];
         }
@@ -513,6 +539,18 @@ impl Voice {
         }
         self.phase <= 4
     }
+}
+
+/// The PS-ADPCM sample at byte `start` of `bd`, decoded up to and including its end-flagged block.
+pub fn adpcm(bd: &[u8], start: usize) -> Vec<i16> {
+    let (mut out, mut prev) = (Vec::new(), [0; 2]);
+    for b in bd.get(start..).unwrap_or_default().chunks_exact(16) {
+        out.extend(decode(b, &mut prev));
+        if b[1] & 1 != 0 {
+            break;
+        }
+    }
+    out
 }
 
 /// One 16-byte PS-ADPCM block to 28 samples; `prev` is the filter history, newest first.
