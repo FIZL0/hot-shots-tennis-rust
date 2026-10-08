@@ -1,0 +1,1679 @@
+{
+ "about": "HST player skeleton (game space: metres, Y down, feet at y=0, facing +Z). Canonical frames from pc00; see modding/HST-CHARACTER-STANDARD.md.",
+ "joints": [
+  {
+   "name": "Bip01",
+   "parent": null,
+   "bind_position": [
+    -0.0,
+    -0.82758,
+    -0.01835
+   ],
+   "bind_rotation": [
+    0.0,
+    0.707106,
+    0.0,
+    0.707107
+   ],
+   "rest_translation": [
+    -0.0,
+    -0.82758,
+    -0.01835
+   ],
+   "rest_rotation": [
+    0.0,
+    0.707106,
+    0.0,
+    0.707107
+   ]
+  },
+  {
+   "name": "Bip01Pelvis",
+   "parent": "Bip01",
+   "bind_position": [
+    0.0,
+    -0.82758,
+    -0.02091
+   ],
+   "bind_rotation": [
+    0.707106,
+    0.707107,
+    1e-06,
+    1e-06
+   ],
+   "rest_translation": [
+    0.00256,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.499999,
+    0.5,
+    0.5,
+    0.500001
+   ]
+  },
+  {
+   "name": "Bip01Spine",
+   "parent": "Bip01Pelvis",
+   "bind_position": [
+    -0.0,
+    -0.88215,
+    -0.02514
+   ],
+   "bind_rotation": [
+    0.707101,
+    0.707101,
+    0.002803,
+    -0.002804
+   ],
+   "rest_translation": [
+    -0.05456,
+    -0.0,
+    0.00422
+   ],
+   "rest_rotation": [
+    2e-06,
+    0.003965,
+    1e-06,
+    0.999992
+   ]
+  },
+  {
+   "name": "Bip01Spine1",
+   "parent": "Bip01Spine",
+   "bind_position": [
+    -0.0,
+    -0.96701,
+    -0.02588
+   ],
+   "bind_rotation": [
+    0.707082,
+    0.707082,
+    0.005888,
+    -0.005889
+   ],
+   "rest_translation": [
+    -0.08487,
+    0.0,
+    7e-05
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.004363,
+    -0.0,
+    0.99999
+   ]
+  },
+  {
+   "name": "Bip01Spine2",
+   "parent": "Bip01Spine1",
+   "bind_position": [
+    -0.0,
+    -1.05485,
+    -0.02742
+   ],
+   "bind_rotation": [
+    0.707082,
+    0.707082,
+    0.005888,
+    -0.005889
+   ],
+   "rest_translation": [
+    -0.08785,
+    0.0,
+    7e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01Neck",
+   "parent": "Bip01Spine2",
+   "bind_position": [
+    -0.0,
+    -1.14655,
+    -0.029
+   ],
+   "bind_rotation": [
+    0.707101,
+    0.707101,
+    0.002803,
+    -0.002804
+   ],
+   "rest_translation": [
+    -0.09171,
+    0.0,
+    6e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.004363,
+    0.0,
+    0.99999
+   ]
+  },
+  {
+   "name": "Bip01Head",
+   "parent": "Bip01Neck",
+   "bind_position": [
+    -0.0,
+    -1.22417,
+    -0.02962
+   ],
+   "bind_rotation": [
+    0.706777,
+    0.706777,
+    -0.021594,
+    0.021593
+   ],
+   "rest_translation": [
+    -0.07763,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.034501,
+    0.0,
+    0.999405
+   ]
+  },
+  {
+   "name": "Bip01LClavicle",
+   "parent": "Bip01Neck",
+   "bind_position": [
+    -0.02516,
+    -1.13535,
+    -0.04163
+   ],
+   "bind_rotation": [
+    0.008699,
+    0.000681,
+    -0.078101,
+    0.996907
+   ],
+   "rest_translation": [
+    0.0111,
+    -0.02516,
+    0.01271
+   ],
+   "rest_rotation": [
+    0.649712,
+    0.760166,
+    -0.003095,
+    -0.003619
+   ]
+  },
+  {
+   "name": "Bip01LUpperArm",
+   "parent": "Bip01LClavicle",
+   "bind_position": [
+    -0.09437,
+    -1.12444,
+    -0.04144
+   ],
+   "bind_rotation": [
+    0.0,
+    -1e-06,
+    0.006367,
+    0.99998
+   ],
+   "rest_translation": [
+    -0.07007,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.008703,
+    -0.000626,
+    0.084446,
+    0.99639
+   ]
+  },
+  {
+   "name": "Bip01LForearm",
+   "parent": "Bip01LUpperArm",
+   "bind_position": [
+    -0.35971,
+    -1.12782,
+    -0.04144
+   ],
+   "bind_rotation": [
+    3e-05,
+    -0.00472,
+    0.006367,
+    0.999969
+   ],
+   "rest_translation": [
+    -0.26536,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.00472,
+    0.0,
+    0.999989
+   ]
+  },
+  {
+   "name": "Bip01LHand",
+   "parent": "Bip01LForearm",
+   "bind_position": [
+    -0.55824,
+    -1.13035,
+    -0.04331
+   ],
+   "bind_rotation": [
+    0.706824,
+    0.001161,
+    0.00784,
+    0.707345
+   ],
+   "rest_translation": [
+    -0.19856,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.706825,
+    -0.0,
+    0.0,
+    0.707388
+   ]
+  },
+  {
+   "name": "Bip01LFinger0",
+   "parent": "Bip01LHand",
+   "bind_position": [
+    -0.59209,
+    -1.11953,
+    0.01707
+   ],
+   "bind_rotation": [
+    -0.025147,
+    0.214554,
+    -0.264736,
+    0.939813
+   ],
+   "rest_translation": [
+    -0.03314,
+    0.06071,
+    -0.0112
+   ],
+   "rest_rotation": [
+    0.680081,
+    0.036253,
+    0.346309,
+    -0.645171
+   ]
+  },
+  {
+   "name": "Bip01LFinger01",
+   "parent": "Bip01LFinger0",
+   "bind_position": [
+    -0.6316,
+    -1.09337,
+    0.03714
+   ],
+   "bind_rotation": [
+    -0.025147,
+    0.214554,
+    -0.264736,
+    0.939813
+   ],
+   "rest_translation": [
+    -0.05146,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger02",
+   "parent": "Bip01LFinger01",
+   "bind_position": [
+    -0.65325,
+    -1.07904,
+    0.04813
+   ],
+   "bind_rotation": [
+    -0.025147,
+    0.214554,
+    -0.264736,
+    0.939813
+   ],
+   "rest_translation": [
+    -0.02819,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger1",
+   "parent": "Bip01LHand",
+   "bind_position": [
+    -0.67209,
+    -1.1318,
+    0.00916
+   ],
+   "bind_rotation": [
+    0.699621,
+    0.102617,
+    -0.0937,
+    0.700871
+   ],
+   "rest_translation": [
+    -0.11336,
+    0.05354,
+    4e-05
+   ],
+   "rest_rotation": [
+    0.000394,
+    5.7e-05,
+    -0.143493,
+    0.989651
+   ]
+  },
+  {
+   "name": "Bip01LFinger11",
+   "parent": "Bip01LFinger1",
+   "bind_position": [
+    -0.71419,
+    -1.13233,
+    0.02119
+   ],
+   "bind_rotation": [
+    0.699621,
+    0.102617,
+    -0.0937,
+    0.700871
+   ],
+   "rest_translation": [
+    -0.04379,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger12",
+   "parent": "Bip01LFinger11",
+   "bind_position": [
+    -0.74749,
+    -1.13276,
+    0.03072
+   ],
+   "bind_rotation": [
+    0.699621,
+    0.102617,
+    -0.0937,
+    0.700871
+   ],
+   "rest_translation": [
+    -0.03464,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger2",
+   "parent": "Bip01LHand",
+   "bind_position": [
+    -0.67183,
+    -1.13179,
+    -0.02483
+   ],
+   "bind_rotation": [
+    0.70703,
+    0.01042,
+    -0.001416,
+    0.707105
+   ],
+   "rest_translation": [
+    -0.11341,
+    0.01955,
+    2e-05
+   ],
+   "rest_rotation": [
+    0.000398,
+    5e-06,
+    -0.01309,
+    0.999914
+   ]
+  },
+  {
+   "name": "Bip01LFinger21",
+   "parent": "Bip01LFinger2",
+   "bind_position": [
+    -0.72622,
+    -1.13248,
+    -0.02392
+   ],
+   "bind_rotation": [
+    0.70703,
+    0.01042,
+    -0.001416,
+    0.707105
+   ],
+   "rest_translation": [
+    -0.05441,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger22",
+   "parent": "Bip01LFinger21",
+   "bind_position": [
+    -0.76843,
+    -1.13302,
+    -0.02321
+   ],
+   "bind_rotation": [
+    0.70703,
+    0.01042,
+    -0.001416,
+    0.707105
+   ],
+   "rest_translation": [
+    -0.04222,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger3",
+   "parent": "Bip01LHand",
+   "bind_position": [
+    -0.67155,
+    -1.13179,
+    -0.06486
+   ],
+   "bind_rotation": [
+    0.706347,
+    -0.032762,
+    0.041754,
+    0.705873
+   ],
+   "rest_translation": [
+    -0.11352,
+    -0.02048,
+    -2e-05
+   ],
+   "rest_rotation": [
+    0.000398,
+    -1.9e-05,
+    0.047978,
+    0.998848
+   ]
+  },
+  {
+   "name": "Bip01LFinger31",
+   "parent": "Bip01LFinger3",
+   "bind_position": [
+    -0.72054,
+    -1.13241,
+    -0.07004
+   ],
+   "bind_rotation": [
+    0.706347,
+    -0.032762,
+    0.041754,
+    0.705873
+   ],
+   "rest_translation": [
+    -0.04927,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger32",
+   "parent": "Bip01LFinger31",
+   "bind_position": [
+    -0.75533,
+    -1.13286,
+    -0.07373
+   ],
+   "bind_rotation": [
+    0.706347,
+    -0.032762,
+    0.041754,
+    0.705873
+   ],
+   "rest_translation": [
+    -0.03498,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger4",
+   "parent": "Bip01LHand",
+   "bind_position": [
+    -0.67127,
+    -1.13178,
+    -0.10377
+   ],
+   "bind_rotation": [
+    0.703354,
+    -0.072755,
+    0.081705,
+    0.70237
+   ],
+   "rest_translation": [
+    -0.1136,
+    -0.05939,
+    -5e-05
+   ],
+   "rest_rotation": [
+    0.000396,
+    -4.2e-05,
+    0.104528,
+    0.994522
+   ]
+  },
+  {
+   "name": "Bip01LFinger41",
+   "parent": "Bip01LFinger4",
+   "bind_position": [
+    -0.70687,
+    -1.13224,
+    -0.11169
+   ],
+   "bind_rotation": [
+    0.703354,
+    -0.072755,
+    0.081705,
+    0.70237
+   ],
+   "rest_translation": [
+    -0.03648,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LFinger42",
+   "parent": "Bip01LFinger41",
+   "bind_position": [
+    -0.73131,
+    -1.13255,
+    -0.11712
+   ],
+   "bind_rotation": [
+    0.703354,
+    -0.072755,
+    0.081705,
+    0.70237
+   ],
+   "rest_translation": [
+    -0.02504,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RClavicle",
+   "parent": "Bip01Neck",
+   "bind_position": [
+    0.02516,
+    -1.13535,
+    -0.04163
+   ],
+   "bind_rotation": [
+    -0.000682,
+    -0.008699,
+    0.996907,
+    -0.078101
+   ],
+   "rest_translation": [
+    0.0111,
+    0.02516,
+    0.01271
+   ],
+   "rest_rotation": [
+    -0.649712,
+    0.760166,
+    0.003093,
+    -0.003621
+   ]
+  },
+  {
+   "name": "Bip01RUpperArm",
+   "parent": "Bip01RClavicle",
+   "bind_position": [
+    0.09437,
+    -1.12444,
+    -0.04143
+   ],
+   "bind_rotation": [
+    -1e-06,
+    -0.0,
+    0.99998,
+    0.006367
+   ],
+   "rest_translation": [
+    -0.07007,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.008703,
+    -0.000626,
+    -0.084446,
+    0.99639
+   ]
+  },
+  {
+   "name": "Bip01RForearm",
+   "parent": "Bip01RUpperArm",
+   "bind_position": [
+    0.35971,
+    -1.12782,
+    -0.04143
+   ],
+   "bind_rotation": [
+    0.004719,
+    -3e-05,
+    0.999969,
+    0.006367
+   ],
+   "rest_translation": [
+    -0.26536,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.00472,
+    0.0,
+    0.999989
+   ]
+  },
+  {
+   "name": "Bip01RHand",
+   "parent": "Bip01RForearm",
+   "bind_position": [
+    0.55824,
+    -1.13035,
+    -0.04331
+   ],
+   "bind_rotation": [
+    -0.001162,
+    -0.706824,
+    0.707345,
+    0.007839
+   ],
+   "rest_translation": [
+    -0.19856,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.706825,
+    -0.0,
+    -0.0,
+    0.707388
+   ]
+  },
+  {
+   "name": "Bip01RFinger0",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.59209,
+    -1.11953,
+    0.01707
+   ],
+   "bind_rotation": [
+    -0.214555,
+    0.025147,
+    0.939813,
+    -0.264736
+   ],
+   "rest_translation": [
+    -0.03314,
+    -0.06071,
+    -0.0112
+   ],
+   "rest_rotation": [
+    0.680081,
+    -0.036253,
+    0.346309,
+    0.645171
+   ]
+  },
+  {
+   "name": "Bip01RFinger01",
+   "parent": "Bip01RFinger0",
+   "bind_position": [
+    0.6316,
+    -1.09337,
+    0.03714
+   ],
+   "bind_rotation": [
+    -0.214555,
+    0.025147,
+    0.939813,
+    -0.264736
+   ],
+   "rest_translation": [
+    -0.05146,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger02",
+   "parent": "Bip01RFinger01",
+   "bind_position": [
+    0.65325,
+    -1.07904,
+    0.04814
+   ],
+   "bind_rotation": [
+    -0.214555,
+    0.025147,
+    0.939813,
+    -0.264736
+   ],
+   "rest_translation": [
+    -0.02819,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger1",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.67209,
+    -1.1318,
+    0.00916
+   ],
+   "bind_rotation": [
+    -0.102618,
+    -0.699621,
+    0.700871,
+    -0.093701
+   ],
+   "rest_translation": [
+    -0.11336,
+    -0.05354,
+    4e-05
+   ],
+   "rest_rotation": [
+    -0.000394,
+    5.7e-05,
+    0.143493,
+    0.989651
+   ]
+  },
+  {
+   "name": "Bip01RFinger11",
+   "parent": "Bip01RFinger1",
+   "bind_position": [
+    0.71419,
+    -1.13233,
+    0.0212
+   ],
+   "bind_rotation": [
+    -0.102618,
+    -0.699621,
+    0.700871,
+    -0.093701
+   ],
+   "rest_translation": [
+    -0.04379,
+    -0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger12",
+   "parent": "Bip01RFinger11",
+   "bind_position": [
+    0.74749,
+    -1.13276,
+    0.03072
+   ],
+   "bind_rotation": [
+    -0.102618,
+    -0.699621,
+    0.700871,
+    -0.093701
+   ],
+   "rest_translation": [
+    -0.03464,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger2",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.67183,
+    -1.13179,
+    -0.02483
+   ],
+   "bind_rotation": [
+    -0.010421,
+    -0.70703,
+    0.707105,
+    -0.001417
+   ],
+   "rest_translation": [
+    -0.11341,
+    -0.01955,
+    2e-05
+   ],
+   "rest_rotation": [
+    -0.000398,
+    5e-06,
+    0.01309,
+    0.999914
+   ]
+  },
+  {
+   "name": "Bip01RFinger21",
+   "parent": "Bip01RFinger2",
+   "bind_position": [
+    0.72622,
+    -1.13249,
+    -0.02392
+   ],
+   "bind_rotation": [
+    -0.010421,
+    -0.70703,
+    0.707105,
+    -0.001417
+   ],
+   "rest_translation": [
+    -0.05441,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger22",
+   "parent": "Bip01RFinger21",
+   "bind_position": [
+    0.76843,
+    -1.13302,
+    -0.02321
+   ],
+   "bind_rotation": [
+    -0.010421,
+    -0.70703,
+    0.707105,
+    -0.001417
+   ],
+   "rest_translation": [
+    -0.04222,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger3",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.67155,
+    -1.13179,
+    -0.06486
+   ],
+   "bind_rotation": [
+    -0.032761,
+    0.706348,
+    -0.705873,
+    -0.041753
+   ],
+   "rest_translation": [
+    -0.11352,
+    0.02048,
+    -2e-05
+   ],
+   "rest_rotation": [
+    -0.000398,
+    -1.9e-05,
+    -0.047978,
+    0.998848
+   ]
+  },
+  {
+   "name": "Bip01RFinger31",
+   "parent": "Bip01RFinger3",
+   "bind_position": [
+    0.72054,
+    -1.13241,
+    -0.07004
+   ],
+   "bind_rotation": [
+    -0.032761,
+    0.706348,
+    -0.705873,
+    -0.041753
+   ],
+   "rest_translation": [
+    -0.04927,
+    -0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger32",
+   "parent": "Bip01RFinger31",
+   "bind_position": [
+    0.75533,
+    -1.13286,
+    -0.07372
+   ],
+   "bind_rotation": [
+    -0.032761,
+    0.706348,
+    -0.705873,
+    -0.041753
+   ],
+   "rest_translation": [
+    -0.03498,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger4",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.67127,
+    -1.13179,
+    -0.10376
+   ],
+   "bind_rotation": [
+    -0.072754,
+    0.703354,
+    -0.702371,
+    -0.081704
+   ],
+   "rest_translation": [
+    -0.1136,
+    0.05939,
+    -5e-05
+   ],
+   "rest_rotation": [
+    -0.000396,
+    -4.2e-05,
+    -0.104528,
+    0.994522
+   ]
+  },
+  {
+   "name": "Bip01RFinger41",
+   "parent": "Bip01RFinger4",
+   "bind_position": [
+    0.70687,
+    -1.13224,
+    -0.11168
+   ],
+   "bind_rotation": [
+    -0.072754,
+    0.703354,
+    -0.702371,
+    -0.081704
+   ],
+   "rest_translation": [
+    -0.03648,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01RFinger42",
+   "parent": "Bip01RFinger41",
+   "bind_position": [
+    0.73131,
+    -1.13255,
+    -0.11712
+   ],
+   "bind_rotation": [
+    -0.072754,
+    0.703354,
+    -0.702371,
+    -0.081704
+   ],
+   "rest_translation": [
+    -0.02504,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    -0.0,
+    -0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Bip01LThigh",
+   "parent": "Bip01Spine",
+   "bind_position": [
+    -0.07033,
+    -0.82758,
+    -0.02091
+   ],
+   "bind_rotation": [
+    0.710084,
+    -0.704108,
+    0.003554,
+    -0.000301
+   ],
+   "rest_translation": [
+    0.0546,
+    -0.07033,
+    -0.00379
+   ],
+   "rest_rotation": [
+    -0.006265,
+    0.00271,
+    0.999968,
+    0.004237
+   ]
+  },
+  {
+   "name": "Bip01LCalf",
+   "parent": "Bip01LThigh",
+   "bind_position": [
+    -0.07329,
+    -0.47686,
+    -0.02253
+   ],
+   "bind_rotation": [
+    0.710064,
+    -0.704103,
+    0.006399,
+    0.00252
+   ],
+   "rest_translation": [
+    -0.35074,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    -0.0,
+    0.004007,
+    0.0,
+    0.999992
+   ]
+  },
+  {
+   "name": "Bip01LFoot",
+   "parent": "Bip01LCalf",
+   "bind_position": [
+    -0.07608,
+    -0.14446,
+    -0.02674
+   ],
+   "bind_rotation": [
+    -0.707107,
+    0.707107,
+    -0.0,
+    1e-06
+   ],
+   "rest_translation": [
+    -0.33244,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    -0.002742,
+    -0.006307,
+    0.004215,
+    0.999967
+   ]
+  },
+  {
+   "name": "Bip01LToe0",
+   "parent": "Bip01LFoot",
+   "bind_position": [
+    -0.07608,
+    0.00025,
+    0.09076
+   ],
+   "bind_rotation": [
+    -0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "rest_translation": [
+    -0.14471,
+    0.0,
+    -0.11749
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.707107,
+    -0.0,
+    0.707107
+   ]
+  },
+  {
+   "name": "Bip01RThigh",
+   "parent": "Bip01Spine",
+   "bind_position": [
+    0.07033,
+    -0.82758,
+    -0.02091
+   ],
+   "bind_rotation": [
+    -0.704108,
+    0.710084,
+    0.0003,
+    -0.003553
+   ],
+   "rest_translation": [
+    0.0546,
+    0.07033,
+    -0.00379
+   ],
+   "rest_rotation": [
+    -0.006265,
+    -0.002707,
+    0.999968,
+    -0.004237
+   ]
+  },
+  {
+   "name": "Bip01RCalf",
+   "parent": "Bip01RThigh",
+   "bind_position": [
+    0.07329,
+    -0.47686,
+    -0.02253
+   ],
+   "bind_rotation": [
+    -0.704103,
+    0.710064,
+    -0.002521,
+    -0.006398
+   ],
+   "rest_translation": [
+    -0.35074,
+    0.0,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.004007,
+    -0.0,
+    0.999992
+   ]
+  },
+  {
+   "name": "Bip01RFoot",
+   "parent": "Bip01RCalf",
+   "bind_position": [
+    0.07608,
+    -0.14446,
+    -0.02674
+   ],
+   "bind_rotation": [
+    -0.707107,
+    0.707107,
+    -0.0,
+    1e-06
+   ],
+   "rest_translation": [
+    -0.33244,
+    0.0,
+    -0.0
+   ],
+   "rest_rotation": [
+    0.002742,
+    -0.006307,
+    -0.004215,
+    0.999967
+   ]
+  },
+  {
+   "name": "Bip01RToe0",
+   "parent": "Bip01RFoot",
+   "bind_position": [
+    0.07608,
+    0.00025,
+    0.09076
+   ],
+   "bind_rotation": [
+    -0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "rest_translation": [
+    -0.14471,
+    0.0,
+    -0.11749
+   ],
+   "rest_rotation": [
+    0.0,
+    -0.707107,
+    -0.0,
+    0.707107
+   ]
+  },
+  {
+   "name": "Racket",
+   "parent": "Bip01RHand",
+   "bind_position": [
+    0.64266,
+    -1.09073,
+    -0.12872
+   ],
+   "bind_rotation": [
+    0.098264,
+    0.690142,
+    0.713567,
+    -0.06979
+   ],
+   "rest_translation": [
+    -0.08471,
+    0.08458,
+    -0.04075
+   ],
+   "rest_rotation": [
+    0.993224,
+    -0.114255,
+    -0.013694,
+    0.016267
+   ]
+  }
+ ],
+ "face_channels": [
+  "blink_eye",
+  "joy_eye",
+  "joy_mouth",
+  "anger_eye",
+  "anger_mouth",
+  "sorrow_eye",
+  "sorrow_mouth",
+  "doki_eye",
+  "doki_mouth"
+ ],
+ "characters": [
+  {
+   "index": 0,
+   "name": "Ashley",
+   "bip01_height": 0.8276,
+   "head_height": 1.2242,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 1,
+   "name": "Cody",
+   "bip01_height": 0.9048,
+   "head_height": 1.3317,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 2,
+   "name": "Jun",
+   "bip01_height": 0.8276,
+   "head_height": 1.2242,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "smile_eye",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 3,
+   "name": "Kaito",
+   "bip01_height": 0.9127,
+   "head_height": 1.4596,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "niya_eye",
+    "niya_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 4,
+   "name": "Momoko",
+   "bip01_height": 0.8276,
+   "head_height": 1.2242,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "smile_eye",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 5,
+   "name": "JJ",
+   "bip01_height": 0.4599,
+   "head_height": 0.89,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth",
+    "tukare_eye",
+    "tukare_mouth"
+   ]
+  },
+  {
+   "index": 6,
+   "name": "Carol",
+   "bip01_height": 0.7589,
+   "head_height": 1.1224,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy2_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth",
+    "wink_eye"
+   ]
+  },
+  {
+   "index": 7,
+   "name": "Big Chief",
+   "bip01_height": 0.8087,
+   "head_height": 1.4955,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 8,
+   "name": "Miranda",
+   "bip01_height": 0.8576,
+   "head_height": 1.2676,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_mouth",
+    "wink_eye"
+   ]
+  },
+  {
+   "index": 9,
+   "name": "Kent",
+   "bip01_height": 0.9048,
+   "head_height": 1.3317,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "smile_eye",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_eye2",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 10,
+   "name": "Lola",
+   "bip01_height": 0.9463,
+   "head_height": 1.3715,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "kiss_mouth",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_mouth",
+    "wink_eye"
+   ]
+  },
+  {
+   "index": 11,
+   "name": "Will",
+   "bip01_height": 0.9278,
+   "head_height": 1.4452,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  },
+  {
+   "index": 12,
+   "name": "Gloria",
+   "bip01_height": 0.8554,
+   "head_height": 1.2638,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "blink_eye",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "smile_eye",
+    "smile_mouth",
+    "sorrow_eye",
+    "sorrow_mouth",
+    "wink_eye"
+   ]
+  },
+  {
+   "index": 13,
+   "name": "Suzuki",
+   "bip01_height": 0.6382,
+   "head_height": 1.191,
+   "face_targets": [
+    "anger_eye",
+    "anger_mouth",
+    "doki_eye",
+    "doki_mouth",
+    "joy_eye",
+    "joy_mouth",
+    "sorrow_eye",
+    "sorrow_mouth"
+   ]
+  }
+ ]
+}

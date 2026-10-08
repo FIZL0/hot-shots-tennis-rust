@@ -2954,6 +2954,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hst-gltf"
+version = "0.1.0"
+dependencies = [
+ "hst-data",
+ "hst-sim",
+ "png",
+ "serde_json",
+]
+
+[[package]]
 name = "hst-sim"
 version = "0.1.0"
 dependencies = [
