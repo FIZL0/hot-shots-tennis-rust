@@ -250,6 +250,7 @@ fn load(
             season,
             sky: None,
             looks: exe.weather_looks(),
+            players: exe.player_light(n),
             bg: Default::default(),
             skies: Default::default(),
             holes: Default::default(),

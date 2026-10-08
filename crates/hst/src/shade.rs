@@ -4,7 +4,7 @@
 //! the court's collision model; a miss keeps its last scale. The players are never shaded.
 //!
 //! The ball and characters are drawn VU1-lit ([`GsMaterial`]): ambient + the light scale × the directional light,
-//! the match's model light (`gs::model_light`, the sun's direction).
+//! the match's model light (`gs::model_light`; the players' own, `gs::player_light`), the sun's direction.
 //!
 //! `HST_SHADE_DUMP=<file>` writes the built map (the game's bit layout) for comparing with a capture.
 
@@ -133,7 +133,8 @@ fn light(
         lit.1 = Some((s, w));
         let court = look.as_deref().zip(w).map(|(look, w)| {
             let l = look.looks.get(w as usize).map_or(hst_sim::weather::Look::CLEAR, |r| hst_sim::weather::look(w, *r));
-            (gs::model_light(&look.envir, look.season, &l), gs::court_fog(&look.envir, look.season, &l))
+            let light = if player { gs::player_light(&look.envir, look.season, &l, look.players) } else { gs::model_light(&look.envir, look.season, &l) };
+            (light, gs::court_fog(&look.envir, look.season, &l))
         });
         let (mut dir, mut colour, mut ambient) = gs::DEFAULT_LIGHT;
         if let (Some((Some((c, a)), _)), Some(sun)) = (court, sun.as_deref()) {

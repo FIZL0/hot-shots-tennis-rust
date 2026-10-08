@@ -296,6 +296,12 @@ impl<'a> Game<'a> {
         std::array::from_fn(|k| i32::from_le_bytes(row[4 * k..4 * k + 4].try_into().unwrap()))
     }
 
+    /// Court `court`'s (1..11) light for the players: ambient and light factors (× the court light's RGB), the third
+    /// light's factor and a fog value.
+    pub fn player_light(&self, court: u32) -> [f32; 4] {
+        self.f32s(0x41_dac0 + court * 16, 4).try_into().unwrap()
+    }
+
     /// Each weather's (0..5) look row: sky, bg and far fog amounts, fog z range (−1 = the court's own), light scale.
     pub fn weather_looks(&self) -> [[f32; 6]; 6] {
         let v = self.f32s(0x3f_c060, 36);
