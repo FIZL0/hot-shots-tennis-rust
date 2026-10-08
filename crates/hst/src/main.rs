@@ -17,6 +17,7 @@ mod court_anim;
 mod effects;
 mod gs;
 mod hud_gamma;
+mod noise;
 mod play;
 mod sandbox;
 mod shadow;
@@ -111,6 +112,7 @@ fn main() {
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins(noise::plugin);
     if play {
         app.add_plugins(play::plugin);
     } else if viewer_char.is_some() {
@@ -215,13 +217,17 @@ fn load(
             let wind = hst_sim::weather::Wind { chance, kind, directions, speed };
             // a match: 4 games, 1 set (`play` keeps `Weather::game` on the games played)
             let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
-            let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
-            let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || {
-                seed ^= seed << 13;
-                seed ^= seed >> 17;
-                seed ^= seed << 5;
-                seed
+            // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
+            // directly (slot 5's was 0x28c7c4a1)
+            // ponytail: the menus' `rand()` calls before the match aren't ported; a clock-picked count stands in for them
+            let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
+                let mut r = hst_sim::weather::Rand::default();
+                let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
+                (0..skip).for_each(|_| _ = r.next());
+                r.next()
             });
+            let mut mt = hst_sim::weather::Mt::new(seed);
+            let schedule = hst_sim::weather::schedule(&odds, &wind, 4, 1, players, || mt.next());
             let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
             let w = weather::Weather { schedule, game: 0, fixed };
             let today = w.today();

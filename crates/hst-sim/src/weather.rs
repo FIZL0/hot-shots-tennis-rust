@@ -5,6 +5,8 @@
 //! Rain (2 and 3) also makes running slower to pick up (`player::Stats::new`) and the dive thud wet
 //! (`sound::dive_thud`).
 
+use crate::ps2;
+
 /// Games in a schedule; the game counter wraps around it.
 pub const GAMES: usize = 65;
 
@@ -42,14 +44,63 @@ pub struct Game {
     pub degrees: f32,
 }
 
+/// The C library's `rand()`: a 64-bit LCG whose state is 1 at boot (the game never reseeds it); each call returns
+/// bits 32..62 of the stepped state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rand(pub u64);
+
+impl Default for Rand {
+    fn default() -> Self {
+        Rand(1)
+    }
+}
+
+impl Rand {
+    pub fn next(&mut self) -> u32 {
+        self.0 = self.0.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+        (self.0 >> 32) as u32 & 0x7fff_ffff
+    }
+}
+
+/// The game's shared MT19937 (the match object's generator): seeded with a `rand()` output when the match is set
+/// up, and the weather schedule is its first draws.
+#[derive(Clone, Debug)]
+pub struct Mt([u32; 624], usize);
+
+impl Mt {
+    pub fn new(seed: u32) -> Mt {
+        let mut m = [0u32; 624];
+        m[0] = seed;
+        for i in 1..624 {
+            m[i] = (i as u32).wrapping_add((m[i - 1] ^ (m[i - 1] >> 30)).wrapping_mul(0x6c07_8965));
+        }
+        Mt(m, 624)
+    }
+
+    pub fn next(&mut self) -> u32 {
+        if self.1 >= 624 {
+            for k in 0..624 {
+                let y = (self.0[k] & 0x8000_0000) | (self.0[(k + 1) % 624] & 0x7fff_ffff);
+                self.0[k] = self.0[(k + 397) % 624] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908_b0df } else { 0 };
+            }
+            self.1 = 0;
+        }
+        let mut y = self.0[self.1];
+        self.1 += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^ (y >> 18)
+    }
+}
+
 fn r15(rand: &mut impl FnMut() -> u32) -> i32 {
     ((rand() >> 16) & 0x7fff) as i32
 }
 
 /// The match's schedule: `games` and `sets` are the games and sets needed to win, `players` 2 or 4 (1 = no match:
 /// clear and the base wind throughout). `rand` is the game's random source (its 32-bit output; the 15-bit draws
-/// are bits 16..30).
-/// ponytail: the game draws from its own Mersenne twister seeded at boot; any 32-bit source gives the same odds.
+/// are bits 16..30): the game's is `Mt::new(seed).next()`.
 pub fn schedule(odds: &Odds, wind: &Wind, games: i32, sets: i32, players: i32, mut rand: impl FnMut() -> u32) -> [Game; GAMES] {
     let mut out = [Game::default(); GAMES];
     let (per_set, sets) = ((games * 2 + 1).max(1) as usize, (sets * 2 - 1).max(1) as usize);
@@ -89,7 +140,13 @@ pub fn schedule(odds: &Odds, wind: &Wind, games: i32, sets: i32, players: i32, m
         for s in 0..sets {
             if r15(&mut rand) % 100 < wind.chance {
                 for g in out.iter_mut().skip(s * per_set).take(per_set) {
-                    g.speed = if r15(&mut rand) % 100 < full { 9.0 } else { (5.0 - wind.speed) * rand() as f32 * 2.3283064e-10 + wind.speed };
+                    g.speed = if r15(&mut rand) % 100 < full {
+                        9.0
+                    } else {
+                        // adda base; madd (5 − base)·(2⁻³²·u)
+                        let u = ps2::mul(2.328_306_4e-10, ps2::utof(rand()));
+                        ps2::madd(ps2::add(0.0, wind.speed), ps2::sub(5.0, wind.speed), u)
+                    };
                     g.degrees = dirs[r15(&mut rand) as usize % dirs.len()];
                 }
             }

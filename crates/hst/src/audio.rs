@@ -252,6 +252,18 @@ impl Sound {
         self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed))
     }
 
+    /// The play `id` (a `play_toward` one) turned to `angle`: its voices re-panned at sequence volume `volume`.
+    pub fn turn(&self, id: u64, volume: i32, angle: i32) {
+        let mut m = self.0.lock().unwrap();
+        let m = &mut *m;
+        let seq = sound::stereo(volume, angle, &m.stereo).map(|x| x as u32);
+        m.playing.iter_mut().filter(|q| q.id == id).for_each(|q| q.level.seq = seq);
+        for (v, .., level) in m.voices.iter_mut().filter(|v| v.2 == id) {
+            level.seq = seq;
+            v.volume = level.volume(&m.pan);
+        }
+    }
+
     /// A sound from the fixed `angle` (whole degrees) at its full volume, as the gallery plays its stands.
     pub fn play_toward(&self, bank: &Arc<SoundBank>, p: sound::Play, angle: i32) -> u64 {
         let level = {

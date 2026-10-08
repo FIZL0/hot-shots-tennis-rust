@@ -6,8 +6,8 @@
 //!
 //! Their random source is the game's effects LCG, restarted from the match's seed at every serve.
 //! Rain also plays its ambience: court sound program 1 key 2 from four bearings (90, 135, 225, 270).
-//! ponytail: the game draws these in the court's fogged pass; here they're unfogged. Its rain voices also sweep
-//! ±45° (a degree every 5 frames); here they stay put.
+//! Each rain voice sweeps ±45° about its bearing, a degree every 5 ticks.
+//! They're drawn in the court's fogged pass: GS materials, unlit, under the court's fog (`weather::apply`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -19,10 +19,11 @@ use hst_data::iso::Iso;
 use super::super::{Game, Phase};
 use crate::effects::{fill, look};
 use crate::weather::Weather;
+use crate::gs::{GsKey, GsMaterial, GsUniform, NO_FOG, Test};
 use crate::{Args, Orbit};
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, setup).add_systems(FixedUpdate, tick).add_systems(Update, (draw, ambience));
+    app.add_systems(Startup, setup).add_systems(FixedUpdate, (tick, ambience)).add_systems(Update, draw);
 }
 
 /// The game's effects random source: an LCG giving 15-bit draws in [0, 1).
@@ -236,19 +237,25 @@ struct Particles {
     views: Vec<(Handle<Mesh>, Entity)>,
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
+fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut standard: ResMut<Assets<StandardMaterial>>, mut materials: ResMut<Assets<GsMaterial>>, mut images: ResMut<Assets<Image>>) {
     let Some(court) = args.stage else { return };
     let Ok(mut iso) = Iso::open(&args.iso) else { return };
     let mut views = vec![];
     for name in ["rain00", "groundrain"].into_iter().map(String::from).chain((0..9).map(|k| format!("leaf{k:02}"))) {
-        let Ok(m) = look(&mut iso, &format!("hatsuyama/efct/{name}"), &mut materials, &mut images) else { return };
-        if name == "rain00"
-            && let Some(mut img) = materials.get(&m).and_then(|m| m.base_color_texture.clone()).and_then(|h| images.get_mut(&h))
-        {
-            img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
+        let Ok(m) = look(&mut iso, &format!("hatsuyama/efct/{name}"), &mut standard, &mut images) else { return };
+        let texture = standard.remove(&m).and_then(|m| m.base_color_texture);
+        if let Some(mut img) = texture.as_ref().and_then(|h| images.get_mut(h)) {
+            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+            if name == "rain00" {
+                img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
+            }
         }
+        // ponytail: blended without a Z write (`Test::Never`), as they were as standard materials (P17n)
+        let uniform = GsUniform { color: Vec4::ONE, shininess: 1.0, highlight: 0.0, shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: Vec4::ZERO, light_color: Vec4::ZERO, ambient: Vec4::ONE };
+        let key = GsKey { textured: true, modulate: true, test: Test::Never, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false };
+        let m = materials.add(GsMaterial { uniform, texture, key });
         let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-        let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling)).id();
+        let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling, bevy::light::NotShadowCaster)).id();
         views.push((mesh, e));
     }
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
@@ -332,15 +339,60 @@ fn tick(fx: Option<ResMut<Particles>>, g: Res<Game>, w: Option<Res<Weather>>, ca
     fx.tick = fx.tick.wrapping_add(1);
 }
 
-/// The rain voices: started when the rain starts (and again if they run out), stopped when it ends.
-fn ambience(fx: Option<Res<Particles>>, sound: Option<Res<crate::audio::Sound>>, bank: Option<Res<crate::audio::CourtBank>>, mut ids: Local<Vec<u64>>) {
-    let (Some(fx), Some(sound), Some(Some(bank))) = (fx, sound, bank.map(|b| b.0.clone())) else { return };
-    if !fx.rain || ids.iter().all(|&id| !sound.playing(id)) {
-        ids.drain(..).for_each(|id| sound.stop(id));
+/// One rain voice: its play, bearing (whole degrees), which way it turns, and its step and turn-back counters.
+#[derive(Clone, Copy)]
+struct Voice {
+    id: u64,
+    angle: i32,
+    back: bool,
+    step: i32,
+    left: i32,
+}
+
+impl Voice {
+    /// A degree every 5 ticks; the first turn-back after 45 degrees, then every 90 (a ±45° sweep about the start).
+    fn tick(&mut self) -> bool {
+        self.step += 1;
+        if self.step % 5 != 0 {
+            return false;
+        }
+        self.step = 0;
+        self.angle = (self.angle + if self.back { -1 } else { 1 }).rem_euclid(360);
+        self.left -= 1;
+        if self.left < 1 {
+            (self.left, self.back) = (90, !self.back);
+        }
+        true
     }
-    if fx.rain && ids.is_empty() {
-        let p = hst_sim::sound::Play { slot: 0, program: 1, key: 2, volume: 0x80, speed: 1.0 };
-        *ids = [90, 135, 225, 270].map(|a| sound.play_toward(&bank, p, a)).to_vec();
+}
+
+#[test]
+fn voice_sweeps_45_each_way() {
+    let mut v = Voice { id: 0, angle: 90, back: false, step: 0, left: 45 };
+    let angles: Vec<i32> = (0..5 * 180).filter_map(|_| v.tick().then_some(v.angle)).collect();
+    assert_eq!((angles[0], angles[44], angles[45], angles[134], angles[179]), (91, 135, 134, 45, 90));
+}
+
+/// The rain voices: started when the rain starts (and again if they run out), stopped when it ends; each starts
+/// turning a random way (bit 16 of a draw).
+/// ponytail: the game draws that bit from the court's generator (shared with the NPCs, reseeded each point); here
+/// from one of its own seeded from the effects seed, until the NPCs draw from the game's generators too (P3b).
+fn ambience(fx: Option<Res<Particles>>, sound: Option<Res<crate::audio::Sound>>, bank: Option<Res<crate::audio::CourtBank>>, mut voices: Local<Vec<Voice>>, mut mt: Local<Option<hst_sim::weather::Mt>>) {
+    let (Some(fx), Some(sound), Some(Some(bank))) = (fx, sound, bank.map(|b| b.0.clone())) else { return };
+    if !fx.rain || voices.iter().all(|v| !sound.playing(v.id)) {
+        voices.drain(..).for_each(|v| sound.stop(v.id));
+    }
+    let volume = 0x80;
+    if fx.rain && voices.is_empty() {
+        let mt = mt.get_or_insert_with(|| hst_sim::weather::Mt::new(fx.seed));
+        let p = hst_sim::sound::Play { slot: 0, program: 1, key: 2, volume, speed: 1.0 };
+        *voices = [90, 135, 225, 270].map(|angle| Voice { back: mt.next() >> 16 & 1 != 0, id: sound.play_toward(&bank, p, angle), angle, step: 0, left: 45 }).to_vec();
+        return;
+    }
+    for v in voices.iter_mut() {
+        if v.tick() {
+            sound.turn(v.id, volume, v.angle);
+        }
     }
 }
 
@@ -373,7 +425,8 @@ fn draw(fx: Option<Res<Particles>>, w: Option<Res<Weather>>, cam: Query<&Transfo
         for q in fx.streaks.map(|q| eye + (q - eye) * FAR) {
             sets[0].push([q + b - a, q + b + a, q - b - a, q - b + a], [[0.0, 0.0], [20.0, 0.0], [0.0, 0.8], [20.0, 0.8]], 0.5);
         }
-        // each cell is 2 × 2 tiles, each showing the next of the texture's four frames
+        // each cell is 2 × 2 tiles, each showing the next of the texture's four frames; the right-hand tiles are
+        // mirrored in U and the far ones in V, so the four meet edge to edge
         let base = fx.tick / FRAME;
         let half = CELL / 2.0;
         let origin = Vec3::new(fx.ground.x - CELL * CELLS[0] as f32 / 2.0, -0.01, fx.ground.y - CELL * CELLS[1] as f32 / 2.0);
@@ -382,10 +435,11 @@ fn draw(fx: Option<Res<Particles>>, w: Option<Res<Weather>>, cam: Query<&Transfo
             let (u, v) = ((f & 1) as f32 * 0.5, (f >> 1) as f32 * 0.5);
             let p = origin + Vec3::new(cx as f32 * CELL + (k & 1) as f32 * half, 0.0, cz as f32 * CELL + (k >> 1) as f32 * half);
             let (dx, dz) = (Vec3::X * half, Vec3::Z * half);
-            sets[1].push([p, p + dx, p + dz, p + dx + dz], [[u, v], [u + 0.5, v], [u, v + 0.5], [u + 0.5, v + 0.5]], 0.5);
+            let (u0, u1) = if k & 1 == 0 { (u, u + 0.5) } else { (u + 0.5, u) };
+            let (v0, v1) = if k & 2 == 0 { (v, v + 0.5) } else { (v + 0.5, v) };
+            sets[1].push([p, p + dx, p + dz, p + dx + dz], [[u0, v0], [u1, v0], [u0, v1], [u1, v1]], 0.5);
         }
     }
-    // ponytail: the game mirrors some tiles' frames; plain tiles here
     let a = wrap_pi(today.degrees.to_radians());
     let a2 = wrap_pi(a + FRAC_PI_2);
     for wind in fx.winds.iter().filter(|w| w.on) {
