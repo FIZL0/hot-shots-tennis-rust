@@ -1,0 +1,4 @@
+widescreen = on
+uncapped_fps = on
+upscaled_textures = on
+music = off
