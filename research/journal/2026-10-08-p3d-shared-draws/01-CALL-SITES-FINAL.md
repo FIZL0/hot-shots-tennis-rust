@@ -42,7 +42,7 @@ Callers of 0x19f5c0 with gm+0x80 (xref plus a scan for `lw a0, 0x80(gm)`):
 | 0x353000 | second aim writer; strong-toss side coin | serves / net volleys | `serve::target`, `shot::aim` |
 | 0x345ad0, 0x35edb0 | voice bank pick, AI object reseed | setup | `voice_bank`, `Rngs::new_ai` |
 | 0x348a00 | singles new-point reaction (msg 0xe: 50% program-6 animation + voice) | singles only | **not ported (P3d3)** |
-| 0x354050 → 0x3553d0 | post-point reaction voice (programs 7–10) for a player in the camera's close view | every point end | **not ported (P3d1)** |
+| 0x354050 → 0x3553d0 | post-point reaction voice (programs 7–10) for a player in the camera's close view | every point end | `sound::reaction_view`, `reaction_voice`, `Voice::react` (P3d1) |
 | 0x354940 | doubles team reactions | doubles point end | `motion::team_reaction` |
 | 0x3553d0 | shout key (all shouts) | – | `Voice::shout` |
 | 0x3bf880, 0x3bfcb0, 0x3c13c0, 0x3c3310, 0x3c3770, 0x3c3ba0, 0x3d9c10, 0x3ea390, 0x3ea4f0, 0x3ebef0, 0x3ed080, 0x3ed140, 0x3ee240, 0x3ee790 | the one-player practice objects (feeder, coach, drills), built only when 0x422fa4 == 1 | practice only | no practice mode in the app |
@@ -70,7 +70,7 @@ the next match sample:
   - Then the two uniforms, which must equal the ball's +0x258/+0x25c bit for bit.
 - **Dive start (branch → 3):** its shout key.
 - **Team reactions (+0x3db0 set):** `team_reaction`, which must give the recorded motions.
-- **Reaction voice (+0x3d38 set):** one draw, taken from the recording (P3d1).
+- **Reaction voice:** the port's view test and voice table from `context/p3d1/view_s05.bin` (P3d1).
 
 The generator lands on rng_s05's every frame: 2 reseeds, 2 tosses, 13 strokes, 1 dive, 1 team reaction and
 1 reaction voice.

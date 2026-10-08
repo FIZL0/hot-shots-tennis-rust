@@ -15,6 +15,7 @@ fn u(b: &[u8], o: usize) -> u32 {
 }
 
 struct Sample<'a> {
+    vsync: u32,
     ball: &'a [u8],
     /// The rally block from 0x3165f0 (serve faults at +0x18).
     rally: &'a [u8],
@@ -39,7 +40,7 @@ fn samples(d: &[u8], extra: usize) -> Vec<Sample<'_>> {
             break;
         }
         let cmds = (0..n).map(|i| std::array::from_fn(|k| u(d, c + 16 * i + 4 * k))).collect();
-        out.push(Sample { ball: &d[o + 4..o + 4 + 0x290], rally: &d[o + 4 + 0x520..CONTACTS + o], contacts: &d[o + CONTACTS..o + FIX], play: std::array::from_fn(|k| u(d, o + FIX + 4 * k) as i32), hit: &d[o + FIX + 12..c - 4], cmds });
+        out.push(Sample { vsync: u(d, o), ball: &d[o + 4..o + 4 + 0x290], rally: &d[o + 4 + 0x520..CONTACTS + o], contacts: &d[o + CONTACTS..o + FIX], play: std::array::from_fn(|k| u(d, o + FIX + 4 * k) as i32), hit: &d[o + FIX + 12..c - 4], cmds });
         o = c + 16 * n;
     }
     out
@@ -395,19 +396,23 @@ fn dive_thuds_match_the_game() {
 /// `sound::stroke_shout`'s program on the hitter's own bank that frame or the next — always where the shout is
 /// certain, never where it cannot be, by chance otherwise — and every dive program 3 as it starts (that frame or the next); each
 /// key is in its range and programs 1 and 2 never repeat a player's last key; every player on their own character's
-/// bank. No other stroke or dive shouts.
+/// bank. No other stroke or dive shouts. Slot 5's one reaction voice is the one `rng::shared_draws_like_the_game` ports.
 #[test]
 fn shouts_match_the_game() {
-    let Some((sure, banks, dives, whiffs, calls)) = shouts("hits_s05.bin", "spu_s05.csv") else { return };
+    let Some((sure, banks, dives, whiffs, calls, reactions)) = shouts("hits_s05.bin", "spu_s05.csv") else { return };
     assert!(sure >= 10 && banks == 4 && dives == 2 && whiffs == 1 && calls == 3);
+    // the one reaction voice `rng::shared_draws_like_the_game` draws from the port: player 1's program 7 key 1 on
+    // frame 8539, heard in the next sample (its sequence keys on 11 frames in)
+    assert_eq!(reactions, [(8540, 1, 7, 1)]);
     // slot 4: characters 3, 4, 6 and 11 (doubles, voice a)
-    let Some((sure, banks, _, whiffs, _)) = shouts("hits_s04.bin", "spu_s04.csv") else { return };
+    // ponytail: slot 4's reaction voices (8088, 8613, 9152) unchecked, no view recording of that run
+    let Some((sure, banks, _, whiffs, _, _)) = shouts("hits_s04.bin", "spu_s04.csv") else { return };
     assert!(sure >= 3 && banks == 4 && whiffs == 6);
 }
 
 /// The shouts of `recording` (doubles, `tools/record_sound.py … hits`) on the voice banks `spu` lists: certain,
 /// players heard on their own bank, dive shouts, whiff shouts and call-outs, each checked as `shouts_match_the_game` says.
-fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize)> {
+fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, Vec<(u32, usize, u8, u8)>)> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let csv = std::fs::read_to_string(format!("{root}/context/fixtures/{spu}")).ok()?;
     let (data, _) = Court::load(recording)?;
@@ -531,8 +536,16 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize)>
         let c = i(s[0].hit, 0x50 + 4 * p);
         assert!(b.is_none_or(|b| banks[b].0.contains(&format!("_vc{c:02}"))), "player {p} (character {c}) on {b:?}");
     }
-    // ponytail: the reaction voices after points (programs 7–10, frame 1029) are left out (see sound::call_out)
-    Some((sure, bank_of.iter().flatten().count(), dives, shouted, calls.len()))
+    // the reaction voices: player, program, key and the frame the sequence started (its key-on frame back)
+    let mut reactions = Vec::new();
+    for k in 0..s.len() {
+        for (b, program, key) in heard(k).into_iter().filter(|v| v.1 >= 7) {
+            let bank = Bank::parse(&banks[b].1).unwrap();
+            let start = s[k].vsync - bank.key_ons(program as usize, key as usize).unwrap()[0].frame;
+            reactions.push((start, bank_of.iter().position(|&x| x == Some(b)).unwrap(), program, key));
+        }
+    }
+    Some((sure, bank_of.iter().flatten().count(), dives, shouted, calls.len(), reactions))
 }
 
 /// The umpire's score calls (slot 5, umpire 4 voice a: `gag_vc04a` at SPU 870656 in slot 5): after each of

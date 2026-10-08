@@ -176,14 +176,70 @@ pub fn step(weather: u8) -> Play {
 /// The camera at `eye` looking along `look` hears a footfall at the player's origin `at`: level bearing within 50°
 /// of the look, and within 5° or its depth through `view` near enough that `focal` over it passes 125.
 pub fn step_heard(eye: [f32; 4], look: [f32; 4], view: &[[f32; 4]; 4], focal: f32, at: [f32; 4]) -> bool {
+    let cos = bearing_cos(eye, look, at);
+    cos >= COS_50 && (cos >= COS_5 || 125.0 < div(focal, crate::vu0::transform(view, at)[2]))
+}
+
+/// cos 50° and cos 5°, the close views' bearing limits.
+const COS_50: f32 = f32::from_bits(0x3f24_8dbb);
+const COS_5: f32 = f32::from_bits(0x3f7f_069e);
+
+/// The cosine of the level bearing from `eye` to `at` against the level `look`.
+fn bearing_cos(eye: [f32; 4], look: [f32; 4], at: [f32; 4]) -> f32 {
     let unit = |x: f32, z: f32| {
         let q = div(1.0, sqrt(madd(mul(x, x), z, z)));
         (mul(x, q), mul(z, q))
     };
     let (lx, lz) = unit(look[0], look[2]);
     let (dx, dz) = unit(sub(at[0], eye[0]), sub(at[2], eye[2]));
-    let cos = madd(madd(mul(dz, lz), dx, lx), 0.0, 0.0);
-    cos >= f32::from_bits(0x3f24_8dbb) && (cos >= f32::from_bits(0x3f7f_069e) || 125.0 < div(focal, crate::vu0::transform(view, at)[2]))
+    madd(madd(mul(dz, lz), dx, lx), 0.0, 0.0)
+}
+
+/// The post-point camera (eye, level `look`, world→camera `view`, projection scale `focal` = 240 / tan of the
+/// horizontal half-angle) has a reacting player in close view: their model origin `origin` lies more than a
+/// millimetre ahead and not so near that `focal` over its depth reaches 1000, and their spot `at` lies within 50° of
+/// the look and near enough that `focal` over its depth passes 125 (80 within 5°).
+pub fn reaction_view(eye: [f32; 4], look: [f32; 4], view: &[[f32; 4]; 4], focal: f32, origin: [f32; 4], at: [f32; 4]) -> bool {
+    let z = crate::vu0::transform(view, origin)[2];
+    if !(0.001 < z && div(mul(1.0, focal), z) < 1000.0) {
+        return false;
+    }
+    let cos = bearing_cos(eye, look, at);
+    cos >= COS_50 && if cos >= COS_5 { 80.0 } else { 125.0 } < div(focal, crate::vu0::transform(view, at)[2])
+}
+
+/// A reaction voice: program, key range and the voice's key-memory slot (`Voice::key`).
+pub type ReactionVoice = (u8, i32, i32, Option<usize>);
+
+/// The voice a player in [`reaction_view`] gives on their reaction's 5th frame, by reaction motion: the cheers 0x2c
+/// / 0x2e and groans 0x2d / 0x2f voice programs 7 / 9 / 8 / 10; any other motion (a team reaction, a body-hit's)
+/// voices program 8 for a player of the side that lost the point, in singles only 30% of the time (`roll` draws
+/// 0..99). Singles keys: 7 1..2 (0 in an instant replay), 8 0..1 (2), 9 and 10 0..1; doubles: 7 0..1, the rest 0,
+/// the loser's 8 1 (singles 3..4). With three players nobody voices.
+pub fn reaction_voice(players: u32, motion: i32, lost: bool, replay: bool, roll: impl FnOnce() -> u32) -> Option<ReactionVoice> {
+    if players < 3 {
+        match motion {
+            0x2e => Some((9, 0, 1, Some(4))),
+            0x2f => Some((10, 0, 1, Some(5))),
+            0x2c if replay => Some((7, 0, 0, None)),
+            0x2c => Some((7, 1, 2, None)),
+            0x2d if replay => Some((8, 2, 2, None)),
+            0x2d => Some((8, 0, 1, None)),
+            _ if lost && roll() < 30 => Some((8, 3, 4, Some(3))),
+            _ => None,
+        }
+    } else if players == 4 {
+        match motion {
+            0x2e => Some((9, 0, 0, None)),
+            0x2f => Some((10, 0, 0, None)),
+            0x2c => Some((7, 0, 1, None)),
+            0x2d => Some((8, 0, 0, None)),
+            _ if lost => Some((8, 1, 1, None)),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 /// Ticks between a dive's two thuds with `players` in the game: the game counts 5 down once per player per frame.
@@ -221,8 +277,6 @@ pub const WHIFF_SHOUT: u8 = 4;
 
 /// A doubles CPU player's call (program 6 key 3 or 4 by a random bit, 0x80 at the player) as it leaves an incoming
 /// ball to its partner, one time in four.
-/// ponytail: the reaction voices after a point (programs 7–10 by reaction motion) only play for a player the
-/// post-point camera has in close view; left out with that check.
 pub fn call_out(player: usize, bit: bool) -> Play {
     play(1 + player as u8, 6, 3 + bit as u8, 0x80)
 }
@@ -232,13 +286,14 @@ pub fn hit_cry(player: usize) -> Play {
     play(1 + player as u8, 5, 0, 0x80)
 }
 
-/// One player's voice: the last key of programs 1 and 2 (no shout repeats its program's last key).
+/// The last key of each of the player's six key-memory slots (programs 1 and 2's shouts in 0 and 1, the reaction
+/// voices in 3–5).
 #[derive(Clone, Copy, Debug)]
-pub struct Voice([i32; 2]);
+pub struct Voice([i32; 6]);
 
 impl Default for Voice {
     fn default() -> Self {
-        Self([-1; 2])
+        Self([-1; 6])
     }
 }
 
@@ -248,16 +303,29 @@ impl Voice {
     /// players, else 1; the whiff's hi is 1 with exactly two players, else 0.
     pub fn shout(&mut self, player: usize, program: u8, players: u32, r: u32) -> Play {
         let hi = if program == WHIFF_SHOUT { (players == 2) as i32 } else if players > 2 { 1 } else if program == 1 { 4 } else { 2 };
-        let last = match program {
-            1 | 2 => Some(&mut self.0[program as usize - 1]),
-            _ => None,
-        };
-        let keys: Vec<i32> = (0..=hi).filter(|&k| last.as_ref().is_none_or(|l| **l != k)).collect();
-        let key = keys[r as usize % keys.len()];
-        if let Some(l) = last {
-            *l = key;
-        }
+        let slot = matches!(program, 1 | 2).then(|| program as usize - 1);
+        let key = self.key(0, hi, slot, || r).expect("a shout has keys");
         play(1 + player as u8, program, key as u8, 0x80)
+    }
+
+    /// A random key from `lo..=hi` other than the last one `slot` remembers (which then keeps it), by `draw` (a
+    /// random draw); `None`, with no draw taken, when that leaves none.
+    pub fn key(&mut self, lo: i32, hi: i32, slot: Option<usize>, draw: impl FnOnce() -> u32) -> Option<i32> {
+        let keys: Vec<i32> = (lo..=hi).filter(|&k| slot.is_none_or(|s| self.0[s] != k)).collect();
+        if keys.is_empty() {
+            return None;
+        }
+        let key = keys[draw() as usize % keys.len()];
+        if let Some(s) = slot {
+            self.0[s] = key;
+        }
+        Some(key)
+    }
+
+    /// Player `player`'s reaction voice (`reaction_voice`), on bank slot 1 + player at 0x80.
+    pub fn react(&mut self, player: usize, (program, lo, hi, slot): ReactionVoice, draw: impl FnOnce() -> u32) -> Option<Play> {
+        let key = self.key(lo, hi, slot, draw)?;
+        Some(play(1 + player as u8, program, key as u8, 0x80))
     }
 }
 
