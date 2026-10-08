@@ -560,6 +560,7 @@ pub fn plugin(app: &mut App) {
                 effects::draw_marks,
                 balloons,
                 character::animate,
+                check_match_over,
             )
                 .chain(),
         )
@@ -592,6 +593,17 @@ fn flare_tick(game: Option<ResMut<Game>>) {
         g.rng.flare_tick();
     }
 }
+
+/// Check if the match is over and set the MatchOver resource.
+fn check_match_over(g: Res<Game>, mut match_over: ResMut<MatchOver>) {
+    if g.score.match_over && !match_over.0 {
+        match_over.0 = true;
+    }
+}
+
+/// Whether the match is over (set when the match ends naturally).
+#[derive(Resource)]
+pub struct MatchOver(pub bool);
 
 static EFFECTS_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
 
@@ -3661,6 +3673,7 @@ fn simulate(mut g: ResMut<Game>) {
                     g.score = Score::new();
                     g.first_serve = true;
                     g.players.iter_mut().for_each(|p| p.stance = 3.0);
+
                     return next_point(g, true);
                 }
             }

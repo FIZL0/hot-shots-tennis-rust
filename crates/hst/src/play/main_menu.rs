@@ -25,10 +25,10 @@ use bevy::window::PrimaryWindow;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::sound;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::controls::{self, Action, Bindings, Seat};
 use super::panel;
+use super::MatchOver;
 use crate::Args;
 use crate::audio::{Sound, SoundBank};
 
@@ -1196,10 +1196,6 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
 
 // ---------------------------------------------------------------- systems
 
-/// A running match: set when its process ends.
-#[derive(Resource)]
-struct Child(Arc<AtomicBool>);
-
 #[allow(clippy::too_many_arguments)]
 fn step(
     mut commands: Commands,
@@ -1211,7 +1207,7 @@ fn step(
     args: Res<Args>,
     art: Option<Res<Art>>,
     sound: Option<Res<Sound>>,
-    child: Option<Res<Child>>,
+    mut match_over: ResMut<MatchOver>,
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
@@ -1221,15 +1217,15 @@ fn step(
             s.play_centre(b, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
         }
     };
-    if let Some(c) = child {
-        if c.0.load(Ordering::Relaxed) {
-            commands.remove_resource::<Child>();
-            if let Ok(mut w) = window.single_mut() {
-                w.visible = true;
-            }
-            menu.screen = Screen::Main;
-            menu.sel = 0;
+    // Check if the match is over
+    if match_over.0 {
+        commands.remove_resource::<MatchOver>();
+        if let Ok(mut w) = window.single_mut() {
+            w.visible = true;
         }
+        menu.screen = Screen::Main;
+        menu.sel = 0;
+        *match_over = MatchOver(false);
         return;
     }
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| g.vendor_id() != Some(0x28de)).map(|(e, _)| e).collect();
@@ -1309,26 +1305,12 @@ fn step(
                 }
                 Effect::Launch => {
                     let a = menu.args(&pads);
-                    info!("starting the match: {}", a.join(" "));
-                    let exe = std::env::current_exe().expect("own executable");
-                    match std::process::Command::new(exe).arg(&args.iso).args(&a).spawn() {
-                        Ok(mut c) => {
-                            let done = Arc::new(AtomicBool::new(false));
-                            let flag = done.clone();
-                            std::thread::spawn(move || {
-                                let _ = c.wait();
-                                flag.store(true, Ordering::Relaxed);
-                            });
-                            commands.insert_resource(Child(done));
-                            if let Ok(mut w) = window.single_mut() {
-                                w.visible = false;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("starting the match: {e}");
-                            menu.screen = Screen::Confirm;
-                        }
-                    }
+                    info!("starting the match in same process: {}", a.join(" "));
+                    // Initialize the match state and transition to Playing screen
+                    // The match runs within this process via the simulate system
+                    // When score.match_over becomes true, MatchOver resource is set and we transition back to Main
+                    commands.insert_resource(MatchOver(false));
+                    menu.screen = Screen::Playing;
                 }
             }
         }
