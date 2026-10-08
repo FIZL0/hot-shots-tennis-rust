@@ -36,6 +36,10 @@ pub struct Shade {
 #[derive(Component)]
 pub struct Ball;
 
+/// A rig lit by a fixed light instead (direction, colour, ambient, second direction, second colour; `inspect`).
+#[derive(Component)]
+pub struct FixedLight(pub [Vec4; 5]);
+
 /// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half, mirrored) last applied.
 #[derive(Component)]
 struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool)>);
@@ -107,12 +111,23 @@ fn light(
     shade: Option<Res<Shade>>,
     look: Option<Res<crate::weather::CourtLook>>,
     sun: Option<Res<crate::shadow::Sun>>,
-    mut rigs: Query<(&GlobalTransform, &mut Lit, Has<Ball>, Has<crate::effects::SwingTrail>)>,
+    mut rigs: Query<(&GlobalTransform, &mut Lit, Has<Ball>, Has<crate::effects::SwingTrail>, Option<&FixedLight>)>,
     mut materials: ResMut<Assets<GsMaterial>>,
 ) {
     let rain = crate::weather::now() >= 2;
     let w = look.as_ref().and_then(|l| l.last);
-    for (t, mut lit, ball, player) in &mut rigs {
+    for (t, mut lit, ball, player, fixed) in &mut rigs {
+        if let Some(FixedLight([dir, colour, ambient, dir2, second])) = fixed {
+            if lit.1.is_none() {
+                lit.1 = Some((1.0, None, false, false));
+                for h in &lit.0 {
+                    let Some(mut m) = materials.get_mut(h) else { continue };
+                    let u = &mut m.uniform;
+                    (u.light_dir, u.light_color, u.ambient, u.light2_dir, u.light2_color) = (*dir, *colour, *ambient, *dir2, *second);
+                }
+            }
+            continue;
+        }
         let p = t.translation();
         // Bevy (x, y, z) is game (x, −y, −z); the ball is shaded only on the ground, NPCs anywhere
         let s = match shade.as_deref() {
