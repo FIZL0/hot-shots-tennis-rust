@@ -113,7 +113,7 @@ fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, q: Query<(&Figure, &Motio
 /// Every node's local matrix as the motion player last posed it: the clip at its sampled time, mid-crossfade mixed
 /// with the other motion over the first 23 tracks by this tick's weight (as `character::animate` draws it).
 // ponytail: a node the base clip doesn't key mixes from the other clip's own value (the game's from what it last held)
-fn posed(data: &crate::character::CharacterData, m: &Motion) -> Option<Vec<[[f32; 4]; 4]>> {
+pub(super) fn posed(data: &crate::character::CharacterData, m: &Motion) -> Option<Vec<[[f32; 4]; 4]>> {
     let (sk, new) = (&data.skeleton, data.motions.get(&m.id)?);
     let old = data.motions.get(&(m.fade.id as usize)).filter(|_| m.fade.clip);
     let (base, t, over) = match (m.mix, old) {
