@@ -259,6 +259,11 @@ fn load(
             last: None,
         };
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
+        // the court load shifts the hole model's vertex colours in HSL by the court's and the hole's envir
+        let hole_hsl = envir.as_deref().zip(iso.read(&format!("{dir}/GRD01.XB")).ok().and_then(|d| {
+            let arc = Archive::parse(&d).ok()?;
+            arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}_h01.dat")))?).ok()
+        })).and_then(|(c, h)| gs::hole_hsl(c, &h));
         // ground, skies and clouds stand at the origin; props are placed from the plant records
         // the entry list names every hole variant; this layout is hole 01
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
@@ -278,6 +283,9 @@ fn load(
                 shade_frame = Some((hst_sim::shade::Frame::new(lo, hi, 1.0, [0.0; 3]), e.stem.clone()));
             }
             if let Some(parts) = library.get(&e.stem) {
+                if let Some(hsl) = hole_hsl.filter(|_| e.dir == "hole") {
+                    shift_colours(parts, &mut meshes, hsl);
+                }
                 let id = spawn(&mut commands, parts, Transform::default());
                 let set = if e.dir == "hole" { &mut look.holes } else if e.stem.contains("_sky") { &mut look.skies } else { &mut look.bg };
                 set.extend(parts.iter().map(|(_, m)| m.id()));
@@ -542,6 +550,18 @@ fn gs_models_anim(
         out.push((stem, parts, anim));
     });
     out
+}
+
+/// [`gs::hsl_shift`] on these parts' vertex colours (PS2 units, 0x80 = 1.0), each mesh once.
+fn shift_colours(parts: &[(Handle<Mesh>, Handle<gs::GsMaterial>)], meshes: &mut Assets<Mesh>, hsl: [i32; 3]) {
+    let mut done = std::collections::HashSet::new();
+    for (m, _) in parts.iter().filter(|(m, _)| done.insert(m.id())) {
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(col)) = meshes.get_mut(m).and_then(|m| m.into_inner().attribute_mut(Mesh::ATTRIBUTE_COLOR)) else { continue };
+        for c in col {
+            let rgb = gs::hsl_shift(std::array::from_fn(|i| (c[i] * 128.0) as u8), hsl);
+            c[..3].copy_from_slice(&rgb.map(|x| x as f32 / 128.0));
+        }
+    }
 }
 
 fn image(t: &mtl::Texture) -> Image {
