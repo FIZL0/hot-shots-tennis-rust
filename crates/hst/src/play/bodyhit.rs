@@ -38,6 +38,7 @@ fn setup(
     mut commands: Commands,
     args: Res<Args>,
     g: Res<Game>,
+    match_mod: Option<Res<crate::mods::MatchMod>>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -45,7 +46,7 @@ fn setup(
     let mut iso = Iso::open(&args.iso).expect("open iso");
     // `HST_BODY_SIZE=<m>`: every player's collision size (research/bodyhit_rec.py pokes the game's the same way)
     let size = std::env::var("HST_BODY_SIZE").ok().and_then(|v| v.parse::<f32>().ok());
-    let radius = g.chars.iter().map(|&c| size.unwrap_or_else(|| ReachStats::from_tparam(&super::tparam(&mut iso, c as usize).join(",")).collision)).collect();
+    let radius = g.chars.iter().enumerate().map(|(i, &c)| size.unwrap_or_else(|| ReachStats::from_tparam(&super::mod_match::row(&mut iso, match_mod.as_deref(), i, c as usize).join(",")).collision)).collect();
     commands.insert_resource(Hits { radius, pop: None, made: false, last: [0.0; 3], alpha: 0.0 });
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
