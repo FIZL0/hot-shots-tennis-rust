@@ -262,7 +262,7 @@ fn load(
         // the hole's ground model is the one shadow receiver
         // the game loads every in-season sky but draws only the first; its colour also clears the screen
         let mut sky = None;
-        let (mut shade_frame, mut shade_tris) = (None, Vec::new());
+        let (mut shade_frame, mut shade_casters) = (None, Vec::new());
         for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole).filter(|e| layout::in_season(&e.stem, season)) {
             if e.stem.contains("_sky") {
                 if sky.is_some() {
@@ -309,11 +309,12 @@ fn load(
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
-                shade_tris.extend(tris.into_iter().flatten().map(|tri| tri.map(|v| t.transform_point(Vec3::from(v)).to_array())));
+                let axes = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| (t.rotation * a * t.scale).to_array());
+                shade_casters.push(hst_sim::shade::Caster { axes, pos: p.pos, tris: tris.cloned().unwrap_or_default() });
             }
         }
         if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
-            commands.insert_resource(shade::build(frame, sun.dir, shade_tris, model_tris.remove(&hole).unwrap_or_default()));
+            commands.insert_resource(shade::build(frame, sun.dir, &shade_casters, &model_tris.remove(&hole).unwrap_or_default()));
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {

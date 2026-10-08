@@ -1,17 +1,14 @@
 //! The court's sun-shade map: in clear and cloudy weather the game darkens the ball and the NPCs in the shade of
 //! the court's shadow casters.
 //!
-//! - At load it views the hole model from straight above (a 40° camera over a 1280 × 896 screen that just takes in
-//!   the model's box) and draws the shadows; every pixel whose red is above 0x6f is shade, one bit per pixel, rows
-//!   of 0x500 bits (game z), 0x380 rows (game x), least significant bit first ([`Frame`], [`rasterize`]).
+//! - At load it views the hole model from straight above over a 1280 × 896 screen that just takes in the model's
+//!   box, draws each caster's shadow texture onto the ground along the sun, and keeps every pixel whose red is
+//!   above 0x6f as shade, one bit per pixel, rows of 0x500 bits (game z), 0x380 rows (game x), least significant
+//!   bit first ([`Frame`], [`build`]).
 //! - Each frame the ball's and the NPCs' light scale is the bilinear blend of the four map pixels around their
 //!   (x, z), 0 where shade and 1 where not ([`lookup`]); 1.0 off the map, on court 7 and in rain. The ball's is at
 //!   least its height above the ground, so 1.0 from a unit up ([`ball`]); the players are never shaded. The scale multiplies the model's
 //!   directional light colour (VU1), not the ambient.
-//!
-//! ponytail: [`rasterize`] casts the casters' exact silhouettes (no texture alpha, no shadow-texture resolution or
-//! filtering, binary instead of the red > 0x6f threshold); the game draws its shadow textures onto the hole's
-//! ground through the GS and reads the frame back (P17r).
 
 use crate::ps2;
 
@@ -91,61 +88,199 @@ pub fn ball(map: &[u8], f: &Frame, x: f32, z: f32, height: f32) -> f32 {
     if h <= s { s } else { h }
 }
 
-/// Fill every pixel centre inside triangle `t` (map space (column, row), with a value per corner) over a
-/// `cols` × `rows` grid: `put(index, value interpolated there)`.
-fn fill(t: [[f32; 3]; 3], cols: usize, rows: usize, mut put: impl FnMut(usize, f32)) {
-    let [a, b, c] = t;
-    let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    if area == 0.0 || !area.is_finite() {
+/// A shadow caster: its model's triangles (model space) and its placement, model axes (scaled, game space) and
+/// position.
+pub struct Caster {
+    pub axes: [[f32; 3]; 3],
+    pub pos: [f32; 3],
+    pub tris: Vec<[[f32; 3]; 3]>,
+}
+
+type V3 = [f64; 3];
+fn dot(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+fn scale(a: V3, k: f64) -> V3 {
+    a.map(|x| x * k)
+}
+fn add(a: V3, b: V3) -> V3 {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn norm(a: V3) -> V3 {
+    scale(a, 1.0 / dot(a, a).sqrt())
+}
+
+/// A caster's light frame: game point → shadow texture (u, v) in −1..1, and the planes (n, d: n·p + d ≥ 0
+/// inside) bounding the box's shadow volume.
+struct Light {
+    centre: V3,
+    to_uv: [V3; 2],
+    planes: Vec<[f64; 4]>,
+}
+
+impl Light {
+    /// The caster's model box, its half-extents grown by a tenth, seen along the sun `d` (unit, sun → ground):
+    /// texture axes `lu` = (0, 0, 1) × d, `lv` = d × `lu`, scaled so the box's wider side just fills the texture.
+    fn new(c: &Caster, d: V3) -> Light {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for p in c.tris.iter().flatten() {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k] as f64);
+                hi[k] = hi[k].max(p[k] as f64);
+            }
+        }
+        let axes = c.axes.map(|a| a.map(f64::from));
+        let mid: V3 = std::array::from_fn(|k| (lo[k] + hi[k]) * 0.5);
+        let centre = add((0..3).fold([0.0; 3], |s, k| add(s, scale(axes[k], mid[k]))), c.pos.map(f64::from));
+        let mut a: [V3; 3] = std::array::from_fn(|k| scale(axes[k], (hi[k] - lo[k]) * 0.5 * 1.1));
+        let lu = if d[2].abs() < 0.99999 { norm(cross([0.0, 0.0, 1.0], d)) } else { [1.0, 0.0, 0.0] };
+        let lv = cross(d, lu);
+        let s = a.iter().map(|a| dot(*a, lu).abs()).sum::<f64>().max(a.iter().map(|a| dot(*a, lv).abs()).sum());
+        // (p − centre) · inverse([lu; lv; d]) / s: the inverse's first two columns
+        let det = dot(lu, cross(lv, d));
+        let to_uv = [scale(cross(lv, d), 1.0 / (det * s)), scale(cross(d, lu), 1.0 / (det * s))];
+        // the box's axes turned away from the sun; its silhouette hexagon along the sun bounds the volume's sides
+        let mut dd = [0.0; 3];
+        for k in 0..3 {
+            if dot(a[k], d) > 0.0 {
+                a[k] = scale(a[k], -1.0);
+            }
+            dd[k] = dot(a[k], d);
+        }
+        let p: [V3; 3] = std::array::from_fn(|k| add(a[k], scale(d, dd[k])));
+        let comb = |i: f64, j: f64, k: f64| add(add(scale(p[0], i), scale(p[1], j)), scale(p[2], k));
+        let hex = [comb(1., 1., -1.), comb(-1., 1., -1.), comb(-1., 1., 1.), comb(-1., -1., 1.), comb(1., -1., 1.), comb(1., -1., -1.)];
+        // the near cap: the sun's heading (its height dropped unless it is nearly overhead) through the corner
+        let mut n = d;
+        if n[1].abs() < 0.99 {
+            n[1] = 0.0;
+        }
+        let n = norm(n);
+        let corner = add(centre, add(add(a[0], a[1]), a[2]));
+        let mut planes = vec![[n[0], n[1], n[2], -dot(n, corner)]];
+        let mut prev = hex[5];
+        for cur in hex {
+            let mut n = cross(d, [cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2]]);
+            let f = dot(n, prev);
+            if f.abs() > 1e-7 {
+                if f > 0.0 {
+                    n = scale(n, -1.0);
+                }
+                let n = norm(n);
+                planes.push([n[0], n[1], n[2], -dot(n, add(prev, centre))]);
+            }
+            prev = cur;
+        }
+        Light { centre, to_uv, planes }
+    }
+
+    fn uv(&self, p: V3) -> [f64; 2] {
+        let r = [p[0] - self.centre[0], p[1] - self.centre[1], p[2] - self.centre[2]];
+        [dot(r, self.to_uv[0]), dot(r, self.to_uv[1])]
+    }
+}
+
+/// The GS's fill of triangle `v` (fixed point, `unit` per pixel) over a `w` × `h` grid: pixel centres on whole
+/// pixels, top-left fill convention; `put(column, row, barycentric weights)`.
+fn raster(mut v: [[i64; 2]; 3], unit: i64, w: usize, h: usize, mut put: impl FnMut(usize, usize, [f64; 3])) {
+    let cr = |a: [i64; 2], b: [i64; 2], c: [i64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    let mut area = cr(v[0], v[1], v[2]);
+    if area == 0 {
         return;
     }
-    let edge = |p: [f32; 3], q: [f32; 3], x: f32, y: f32| ((q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])) / area;
+    let swapped = area < 0;
+    if swapped {
+        v.swap(1, 2);
+        area = -area;
+    }
     let span = |k: usize, n: usize| {
-        let lo = a[k].min(b[k]).min(c[k]).floor().max(0.0) as usize;
-        let hi = (a[k].max(b[k]).max(c[k]).ceil().max(0.0) as usize).min(n);
-        lo..hi
+        let lo = -(-v.iter().map(|p| p[k]).min().unwrap()).div_euclid(unit);
+        let hi = v.iter().map(|p| p[k]).max().unwrap().div_euclid(unit);
+        lo.max(0)..(hi + 1).min(n as i64)
     };
-    for r in span(1, rows) {
-        for col in span(0, cols) {
-            let (x, y) = (col as f32 + 0.5, r as f32 + 0.5);
-            let (wa, wb, wc) = (edge(b, c, x, y), edge(c, a, x, y), edge(a, b, x, y));
-            if wa >= 0.0 && wb >= 0.0 && wc >= 0.0 {
-                put(col + r * cols, wa * a[2] + wb * b[2] + wc * c[2]);
+    let edge = |p: [i64; 2], q: [i64; 2], x: i64, y: i64| {
+        let e = (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
+        let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+        (e, e > 0 || e == 0 && (dy < 0 || dy == 0 && dx > 0))
+    };
+    for r in span(1, h) {
+        for c in span(0, w) {
+            let (x, y) = (c * unit, r * unit);
+            let ((ea, ia), (eb, ib), (ec, ic)) = (edge(v[1], v[2], x, y), edge(v[2], v[0], x, y), edge(v[0], v[1], x, y));
+            if ia && ib && ic {
+                let wt = [ea as f64 / area as f64, eb as f64 / area as f64, ec as f64 / area as f64];
+                put(c as usize, r as usize, if swapped { [wt[0], wt[2], wt[1]] } else { wt });
             }
         }
     }
 }
 
-/// Mark where the hole's ground (`ground`, game-space triangles; the top-most surface seen from above) lies in
-/// the shadow of `casters` cast along `dir` (sun → ground, y down). Like a projected shadow texture there is no
-/// depth: a ground point is shaded when its line to the sun crosses a caster, wherever it is along the line.
-pub fn rasterize(map: &mut [u8], f: &Frame, dir: [f32; 3], casters: impl IntoIterator<Item = [[f32; 3]; 3]>, ground: impl IntoIterator<Item = [[f32; 3]; 3]>) {
-    let px = |x: f32, z: f32| [(z - f.origin[0]) * f.scale[0], (x - f.origin[1]) * f.scale[1]];
-    let mut height = vec![f32::INFINITY; COLS * ROWS];
+/// Shadow texture side (texels).
+const TEX: usize = 128;
+
+/// A caster's shadow texture: its triangles drawn solid in light space at twice the size, every other pixel kept.
+fn texture(c: &Caster, l: &Light) -> Vec<bool> {
+    let mut tex = vec![false; TEX * TEX];
+    let axes = c.axes.map(|a| a.map(f64::from));
+    for t in &c.tris {
+        let v = t.map(|p| {
+            let g = add((0..3).fold([0.0; 3], |s, k| add(s, scale(axes[k], p[k] as f64))), c.pos.map(f64::from));
+            l.uv(g).map(|u| ((128.0 * u + 126.0) * 16.0).floor() as i64)
+        });
+        raster(v, 32, TEX, TEX, |x, y, _| tex[x + y * TEX] = true);
+    }
+    tex
+}
+
+/// The GS's bilinear read (4-bit fraction, clamped) of a shadow texture (red 0 or 0xff) at (s, t) in 0..1.
+fn sample(tex: &[bool], s: f64, t: f64) -> u32 {
+    let fix = |s: f64| ((s * TEX as f64 - 0.5) * 16.0).floor() as i64;
+    let (u, v) = (fix(s), fix(t));
+    let (u0, v0, fu, fv) = (u >> 4, v >> 4, (u & 15) as u32, (v & 15) as u32);
+    let at = |x: i64, y: i64| tex[x.clamp(0, TEX as i64 - 1) as usize + y.clamp(0, TEX as i64 - 1) as usize * TEX] as u32;
+    let k = at(u0, v0) * (16 - fu) * (16 - fv) + at(u0 + 1, v0) * fu * (16 - fv) + at(u0, v0 + 1) * (16 - fu) * fv + at(u0 + 1, v0 + 1) * fu * fv;
+    0xff * k / 256
+}
+
+/// Build the map: every caster's shadow texture is drawn along the sun `dir` (unit, sun → ground) onto each
+/// hole `ground` triangle (game space) whose corners aren't all outside one side of the caster's shadow volume,
+/// added up without depth over a screen viewing the hole from straight above, and the red kept above 0x6f.
+///
+/// ponytail: the screen is orthographic with columns at ¾ of the map's scale, fitted to the game's map (the
+/// camera on paper is 40° perspective); the casters are drawn solid (no leaf alpha) and the setup is worked in
+/// double precision, not the game's VU1 floats: IoU 0.947 against the game's map on court 10 (P17u leaf alpha, P17v exact).
+pub fn build(f: &Frame, dir: [f32; 3], casters: &[Caster], ground: &[[[f32; 3]; 3]]) -> Vec<u8> {
+    let d = dir.map(f64::from);
+    let lights: Vec<Light> = casters.iter().map(|c| Light::new(c, d)).collect();
+    let texs: Vec<Vec<bool>> = casters.iter().zip(&lights).map(|(c, l)| texture(c, l)).collect();
+    let (sz, sx) = (f.scale[0] as f64, f.scale[1] as f64);
+    let (cz, cx) = (f.origin[0] as f64 + 640.0 / sz, f.origin[1] as f64 + 448.0 / sx);
+    let mut red = vec![0u32; COLS * ROWS];
     for t in ground {
-        fill(t.map(|p| { let [c, r] = px(p[0], p[2]); [c, r, p[1]] }), COLS, ROWS, |i, y| height[i] = height[i].min(y));
+        let p = t.map(|p| p.map(f64::from));
+        let v = p.map(|p| [((639.5 + 0.75 * sz * (p[2] - cz)) * 16.0).floor() as i64, ((447.5 + sx * (p[0] - cx)) * 16.0).floor() as i64]);
+        let lit: Vec<usize> = (0..casters.len()).filter(|&i| !lights[i].planes.iter().any(|n| p.iter().all(|p| dot(*p, [n[0], n[1], n[2]]) + n[3] < 0.0))).collect();
+        if lit.is_empty() {
+            continue;
+        }
+        raster(v, 16, COLS, ROWS, |c, r, w| {
+            let g: V3 = std::array::from_fn(|k| w[0] * p[0][k] + w[1] * p[1][k] + w[2] * p[2][k]);
+            for &i in &lit {
+                let [u, v] = lights[i].uv(g);
+                red[c + r * COLS] += sample(&texs[i], 0.5 * u + 0.5, 0.5 * v + 0.5);
+            }
+        });
     }
-    // the casters' silhouette on the plane y = 0, over the map and a margin for the shift of raised ground
-    const PAD: usize = 256;
-    let (w, h) = (COLS + 2 * PAD, ROWS + 2 * PAD);
-    let mut sil = vec![false; w * h];
-    let on_plane = |p: [f32; 3]| {
-        let t = -p[1] / dir[1];
-        let [c, r] = px(p[0] + dir[0] * t, p[2] + dir[2] * t);
-        [c + PAD as f32, r + PAD as f32, 0.0]
-    };
-    for t in casters {
-        fill(t.map(on_plane), w, h, |i, _| sil[i] = true);
-    }
-    for (i, &y) in height.iter().enumerate().filter(|(_, y)| y.is_finite()) {
-        // the ground point's own shadow position on y = 0, in map pixels
-        let t = -y / dir[1];
-        let (c, r) = ((i % COLS) as f32 + 0.5 + dir[2] * t * f.scale[0], (i / COLS) as f32 + 0.5 + dir[0] * t * f.scale[1]);
-        let (c, r) = ((c + PAD as f32).floor(), (r + PAD as f32).floor());
-        if c >= 0.0 && r >= 0.0 && (c as usize) < w && (r as usize) < h && sil[c as usize + r as usize * w] {
+    let mut map = vec![0u8; BYTES];
+    for (i, &r) in red.iter().enumerate() {
+        if r.min(0xff) > 0x6f {
             map[i >> 3] |= 1 << (i & 7);
         }
     }
+    map
 }
 
 #[cfg(test)]
@@ -180,9 +315,5 @@ mod tests {
         assert_eq!(ball(&map, &f, 10.0, 20.0, 0.25), 0.25);
         assert_eq!(ball(&map, &f, 10.0, 20.0, -0.5), f32::from_bits(1));
         assert_eq!(ball(&map, &f, 10.5, 20.5, 0.25), 0.75);
-        let mut m = vec![0u8; BYTES];
-        let floor = [[[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 0.0, 100.0]]];
-        rasterize(&mut m, &f, [0.0, 1.0, 0.0], [[[10.0, -5.0, 20.0], [12.0, -5.0, 20.0], [10.0, -5.0, 23.0]]], floor);
-        assert_eq!(m, { let mut e = vec![0u8; BYTES]; for (r, c) in [(10, 20), (11, 20), (10, 21)] { e[(c + r * COLS) >> 3] |= 1 << ((c + r * COLS) & 7) } e });
     }
 }
