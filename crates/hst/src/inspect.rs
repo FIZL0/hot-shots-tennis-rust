@@ -5,7 +5,9 @@
 //! camera sees 30° across the 4:3 frame's 640 pixels, its axis at pixel (520, 176) of 640×448 (the model stands
 //! right of the text); a preview shows a crop of that frame ([`CROP`] by default) widened to its rectangle's aspect.
 //! R2 plays the win reaction (`gu_set`, 0x2e), L2 the loss (`di_set`, 0x2f) from frame 0 to its end and holds there,
-//! △ goes back to the pose; each sets the yaw at once (the loss: 140° for Lola, 135° for Will).
+//! △ goes back to the pose; each sets the yaw at once (the loss: 140° for Lola, 135° for Will). Each is a cut (no
+//! crossfade), and no root path moves the model; but once Brad (5) or Michael (13) has played either reaction, the
+//! model is drawn with `Bip01Pelvis` over its spot ([`pelvis_centre`]), the pose too, until the preview is respawned.
 //!
 //! B40's select spawns one per slot with [`spawn`] and moves it with [`Preview::rect`]; `--inspect` shows the
 //! roster side by side.
@@ -21,6 +23,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::motion::Clock;
+use hst_sim::pose::{Clip, Skeleton};
 
 use crate::character::{self, CharacterData, Motion, POSE};
 
@@ -42,7 +45,7 @@ fn loss_yaw(n: usize) -> f32 {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Update, (place, act));
+    app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Update, (place, act, centre.after(character::animate)));
 }
 
 /// A preview's camera: where it draws (logical window pixels), which part of the original's frame it shows, and
@@ -53,6 +56,8 @@ pub struct Preview {
     pub crop: Rect,
     pub n: usize,
     pub rig: Entity,
+    /// Draw the model with its pelvis over its spot ([`pelvis_centre`]).
+    pub centre: bool,
 }
 
 /// What the inspect screen's buttons do.
@@ -86,7 +91,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand:
             Projection::Perspective(PerspectiveProjection { fov: 2.0 * (AXIS.y.max(448.0 - AXIS.y) / FOCAL.y).atan(), near: 0.01, far: 3072.0, ..default() }),
             Transform::default(),
             layers,
-            Preview { rect, crop: CROP, n, rig },
+            Preview { rect, crop: CROP, n, rig, centre: false },
         ))
         .id()
 }
@@ -107,7 +112,7 @@ fn held(t: f32) -> Motion {
 }
 
 /// Do `act` on preview `p`'s character.
-pub fn apply(p: &Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform)>, lengths: impl Fn(usize) -> f32) {
+pub fn apply(p: &mut Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform)>, lengths: impl Fn(usize) -> f32) {
     let Ok((mut m, mut t)) = rigs.get_mut(p.rig) else { return };
     let (motion, yaw) = match act {
         Act::Pose => (held(character::pose_frame(p.n, lengths(POSE))), PI),
@@ -115,11 +120,36 @@ pub fn apply(p: &Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transfor
             let id = if act == Act::Win { 0x2e } else { 0x2f };
             let mut m = *m;
             m.set(id, 1.0, false, None, m.serial);
+            p.centre |= p.n == 5 || p.n == 13;
             (m, if act == Act::Win { PI } else { loss_yaw(p.n) })
         }
     };
     *m = motion;
     t.rotation = Quat::from_rotation_y(yaw);
+}
+
+/// The model's (x, z) that puts `Bip01Pelvis` over its spot (0, 8) at frame `t` of `clip`, yawed `yaw` and
+/// mirrored by `hand`: the original poses the skeleton at the spot, then moves the model by the spot minus the
+/// pelvis's world x/z.
+pub fn pelvis_centre(sk: &Skeleton, clip: &Clip, t: f32, yaw: f32, hand: f32) -> Option<Vec2> {
+    let pelvis = sk.names.iter().position(|n| n == "Bip01Pelvis")?;
+    let (s, c) = yaw.sin_cos();
+    let player = [[hand * c, 0.0, -hand * s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 1.5, 8.0, 1.0]];
+    let w = hst_sim::pose::node_world(sk, &clip.locals(sk, t), pelvis, &player)[3];
+    Some(Vec2::new(-w[0], 8.0 + (8.0 - w[2])))
+}
+
+/// Centred previews' models moved to [`pelvis_centre`] for the frame drawn (`character::animate`'s time).
+fn centre(time: Res<Time<Fixed>>, cams: Query<&Preview>, mut rigs: Query<(&character::Rig, &Motion, &mut Transform)>) {
+    for p in cams.iter().filter(|p| p.centre) {
+        let Ok((rig, m, mut tf)) = rigs.get_mut(p.rig) else { continue };
+        let Some(clip) = rig.data.motions.get(&m.id) else { continue };
+        let t = clip.wrap(m.prev + (m.clock.sampled - m.prev) * time.overstep_fraction(), false);
+        let (_, yaw, _) = tf.rotation.to_euler(EulerRot::YXZ);
+        if let Some(c) = pelvis_centre(&rig.data.skeleton, clip, t, yaw, tf.scale.x) {
+            (tf.translation.x, tf.translation.z) = (c.x, c.y);
+        }
+    }
 }
 
 /// Each preview's viewport and crop for its rectangle; a preview camera clears nothing (`hud_gamma` gives every scene
@@ -160,7 +190,7 @@ fn sub_view(crop: Rect, size: Vec2) -> SubCameraView {
 fn act(
     pads: Query<&Gamepad>,
     keys: Res<ButtonInput<KeyCode>>,
-    cams: Query<&Preview>,
+    mut cams: Query<&mut Preview>,
     mut rigs: Query<(&mut Motion, &mut Transform)>,
     data: Query<&character::Rig>,
 ) {
@@ -174,10 +204,10 @@ fn act(
     } else {
         return;
     };
-    for p in &cams {
+    for mut p in &mut cams {
         let Ok(rig) = data.get(p.rig) else { continue };
         let d = rig.data.clone();
-        apply(p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
+        apply(&mut p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
     }
 }
 
@@ -249,5 +279,39 @@ fn lay_out(window: Query<&Window, With<PrimaryWindow>>, mut cams: Query<(&Camera
     let size = Vec2::new(w.width() / cams.len().max(1) as f32, w.height());
     for (k, (_, mut p)) in cams.into_iter().enumerate() {
         p.rect = Rect::from_corners(Vec2::new(size.x * k as f32, 0.0), Vec2::new(size.x * (k + 1) as f32, size.y));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hst_data::mdl;
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// Brad's model x/z with the pelvis over the spot, against the original's root matrix (PCSX2, inspect screen,
+    /// research/b40b3_probe.py: context/b40b3/c5_r2.tsv): the held pose after △, then gu_set (R2) as it plays.
+    #[test]
+    fn pelvis_centre_matches_the_game() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let data = iso.read("PC/PC05C00.XB").unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).unwrap();
+        let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
+        let sk = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+        let m = character::disc_motions(&mut iso, 5, &sk, |_| None).unwrap();
+        // (motion, frame drawn, root x, root z); the game's motion clock reads one frame on (it ticks after the draw)
+        let game = [
+            (POSE, 66.0, -0.00028384244, 8.001564),
+            (0x2e, 0.0, -2.0148352e-06, 7.8515825),
+            (0x2e, 12.0, -2.0148425e-06, 7.7896185),
+            (0x2e, 15.0, -2.1597882e-06, 7.8467035),
+            (0x2e, 59.0, 4.2081205e-09, 7.888503),
+            (0x2e, 120.0, -1.2543314e-11, 7.960661),
+        ];
+        for (id, t, x, z) in game {
+            let c = pelvis_centre(&sk, &m.motions[&id], t, PI, 1.0).unwrap();
+            assert!((c.x - x).abs() < 1e-5 && (c.y - z).abs() < 1e-5, "motion {id:#x} frame {t}: {c} vs ({x}, {z})");
+        }
     }
 }
