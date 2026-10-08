@@ -40,7 +40,7 @@ last run is lock-step with PINE's 8-bit write.
 
 With player 2 human, about one point in ten has player 1 taking draw 0 instead of draw 1. Every one of those points
 still ends with the generator's index at 4. Player 2 was only poked human mid-match, and a real setup puts the pad-1
-human on player 0, so this order shift is left as P3d2a.
+human on player 0, so this order shift is not a real setup and is not ported (humans and computer players are chosen at the match start).
 
 ## Port
 

@@ -119,8 +119,8 @@ fn list(line: &str, key: &str) -> Vec<u32> {
 /// (`context/fixtures/p3d2_formation_h{-1,0}.jsonl`: four bots, player 0 human; research/p3d2_formation.py; skipped
 /// when missing): every player's +0x13f4 is `Team::pick` from the point's four placement draws in player order,
 /// players 2 and 3 their partner's. A pick that didn't run (0x77) and each run's first line (its +0x13f4 not yet
-/// marked: slot 5's first point can keep the state's placement) are left out. With player 2 human (h2) about one
-/// point in ten takes the draws in another order (PLAN P3d2a).
+/// marked: slot 5's first point can keep the state's placement) are left out. With player 2 poked human mid-match
+/// (h2) about one point in ten takes the draws in another order: not a real setup, left out.
 #[test]
 fn formation_pick_matches_the_game() {
     use hst_sim::rng::Mt;
