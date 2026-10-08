@@ -20,6 +20,7 @@ mod hud_gamma;
 mod noise;
 mod play;
 mod sandbox;
+mod shade;
 mod shadow;
 mod textures;
 mod weather;
@@ -112,6 +113,7 @@ fn main() {
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);
     if play {
         app.add_plugins(play::plugin);
@@ -189,10 +191,17 @@ fn load(
         // the game's season is 1 in singles (hole archive SSN1/HOL01.XB, which differs by the net), 0 in doubles
         let season = args.singles as usize;
         let mut sky_colour = std::collections::HashMap::new();
+        let (mut hole_box, mut model_tris) = (std::collections::HashMap::new(), std::collections::HashMap::new());
         for name in ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
             for_models(&data, |n| n.contains("_sky"), |stem, model, mats| {
                 sky_colour.insert(stem, sky_top(&model, &mats));
+            });
+            // the sun-shade map: the hole model's box frames it, the casters' triangles shade it
+            for_models(&data, |n| !skip(n), |stem, model, _| {
+                hole_box.insert(stem.clone(), shade::packet_box(&model));
+                let tris: Vec<[[f32; 3]; 3]> = model.materials.iter().flatten().flat_map(|pk| pk.triangles.iter().map(|t| t.map(|i| pk.vertices[i as usize].pos))).collect();
+                model_tris.insert(stem, tris);
             });
             for (stem, parts, anim) in gs_models_anim(&data, |n| !skip(n), &mut images) {
                 let tags: Vec<_> = parts.iter().flat_map(|(_, g, t)| std::iter::repeat_n(*t, g.len())).collect();
@@ -253,12 +262,17 @@ fn load(
         // the hole's ground model is the one shadow receiver
         // the game loads every in-season sky but draws only the first; its colour also clears the screen
         let mut sky = None;
+        let (mut shade_frame, mut shade_tris) = (None, Vec::new());
         for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg")).filter(this_hole).filter(|e| layout::in_season(&e.stem, season)) {
             if e.stem.contains("_sky") {
                 if sky.is_some() {
                     continue;
                 }
                 sky = sky_colour.get(&e.stem).copied();
+            }
+            // the sun-shade map frames the hole model (court 7 has none)
+            if let Some(&(lo, hi)) = hole_box.get(&e.stem).filter(|_| e.dir == "hole" && n != 7) {
+                shade_frame = Some((hst_sim::shade::Frame::new(lo, hi, 1.0, [0.0; 3]), e.stem.clone()));
             }
             if let Some(parts) = library.get(&e.stem) {
                 let id = spawn(&mut commands, parts, Transform::default());
@@ -291,10 +305,15 @@ fn load(
             let Some(parts) = library.get(&e.stem) else { continue };
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
             let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
+            let tris = model_tris.get(&e.stem);
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
+                shade_tris.extend(tris.into_iter().flatten().map(|tri| tri.map(|v| t.transform_point(Vec3::from(v)).to_array())));
             }
+        }
+        if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
+            commands.insert_resource(shade::build(frame, sun.dir, shade_tris, model_tris.remove(&hole).unwrap_or_default()));
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {

@@ -1,8 +1,8 @@
 //! The match's weather on court (`hst_sim::weather`): which game of the schedule is on, and what its weather
 //! does to the fog, light, clear colour, ground shadow and background models. Clouds read it in `main::clouds`.
 //! The wind's speed also sways the costumes (`noise`).
-//! Characters' light scale: the game reads it from the court's sun-shade map in clear and cloudy weather and sets
-//! 1.0 in rain, as here. ponytail: no shade map yet (P17l), so 1.0 in every weather.
+//! The ball's and NPCs' light scale: read from the court's sun-shade map in clear and cloudy weather, 1.0 in rain
+//! (`shade`).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, Ordering};

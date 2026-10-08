@@ -60,6 +60,8 @@ pub struct Packet {
     pub morphs: Vec<Vec<(usize, [f32; 3])>>,
     /// The node owning the packet's batch (batch header +0x2a): a `.NOI` deformer moves its node's packets.
     pub group: i16,
+    /// Bounding box min, max (packet header +0, +0x10).
+    pub bounds: [[f32; 3]; 2],
     /// Per position entry, its share of the noise deformer (the VIF unpack after the bounding boxes, when packet
     /// header +0x56 is set); empty when the packet has none.
     pub noise: Vec<f32>,
@@ -317,6 +319,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 pk.morphs = morphs;
                 pk.group = i16::from_le_bytes([bh[0x2a], bh[0x2b]]);
                 pk.noise = noise;
+                pk.bounds = [0, 0x10].map(|o| std::array::from_fn(|k| f32_at(ph, o + 4 * k)));
                 packets.push(pk);
             }
         }

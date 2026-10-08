@@ -11,8 +11,8 @@ fn daz(x: f32) -> f32 {
     if x.is_subnormal() { 0.0f32.copysign(x) } else { x }
 }
 
-/// Round an exact (or exactly representable) f64 toward zero to f32.
-fn chop(x: f64) -> f32 {
+/// Round an f64 toward zero to f32 (also how the game's soft-float double → float conversion rounds).
+pub fn chop(x: f64) -> f32 {
     let r = x as f32;
     let r = if (r as f64).abs() > x.abs() { f32::from_bits(r.to_bits() - 1) } else { r };
     daz(r)
