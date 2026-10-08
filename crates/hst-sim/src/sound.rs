@@ -477,8 +477,8 @@ pub fn favoured(human: &[bool]) -> [bool; 2] {
 /// 5) at a random pitch, and the applause or groan (programs 0 and 1 from three stands), perhaps followed by a
 /// shout (5 or 6 from a random stand). `roll` is the game's random number generator.
 /// ponytail: the match-start cheer, the match-end ceremony (programs 3/4 then 7/8), the shout when a player runs
-/// near the stands on courts 1, 4 and 6 (program 9) and the gallery's silence in the rain are left out; a shout's
-/// end is not waited on.
+/// near the stands on courts 1, 4 and 6 (program 9) are left out; a shout's end is not waited on. The manager that
+/// skips `step` while paused or raining is `play::npcs`.
 #[derive(Clone, Debug)]
 pub struct Gallery {
     cheering: bool,
@@ -515,6 +515,11 @@ impl Gallery {
             self.event = Some(e);
             self.start = self.wait + if e == 1 { 0x3c } else { 0x1e };
         }
+    }
+
+    /// A tick the manager does not run (paused, or raining): its pending reaction is dropped.
+    pub fn idle(&mut self) {
+        self.event = None;
     }
 
     /// The next serve: the gallery falls quiet until the next point.
