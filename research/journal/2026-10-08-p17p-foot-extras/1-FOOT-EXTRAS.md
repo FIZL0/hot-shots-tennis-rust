@@ -21,7 +21,7 @@ Per-character flags at char table +0x10c (56 bytes): motion 47 for chars 0, 1, 4
 
 ## Type 1 "dive ring"
 
-On the manager's hit event with branch 3 (dive), if the court is dusty or wet, 10 puffs go in a ring around the player. dir is the level unit vector player to Bip01Head (negated in rain; y stays +0, w becomes -0). Size and speed come from the shared match MT19937 (uniform = lo + (hi-lo)*2^-32*u); velocity steps by 36 degrees. In all 8 recorded dive frames (foot_s05x/w/d) the rings' 20 draws are the frame's only shared draws, straight from the previous frame's state (P17p3): the run object takes the players' hit events the same frame, so in the app foot_fx ticks after `simulate`/`character::tick` and draws from `Game::rng.shared`; the test asserts it.
+On the manager's hit event with branch 3 (dive), if the court is dusty or wet, 10 puffs go in a ring around the player. dir is the level unit vector player to Bip01Head (negated in rain; y stays +0, w becomes -0). Size and speed come from the sound manager's MT19937 (*(0x43b1d0)+0x740; P17p called it the shared one, P3e2 corrected it) (uniform = lo + (hi-lo)*2^-32*u); velocity steps by 36 degrees. In all 8 recorded dive frames (foot_s05x/w/d) the rings' 20 draws are the frame's only sound-generator draws, straight from the previous frame's state (P17p3): the run object takes the players' hit events the same frame, so in the app foot_fx ticks after `simulate`/`character::tick` and draws from `Game::rng.sound`; the test asserts it.
 
 ## Dash streak
 

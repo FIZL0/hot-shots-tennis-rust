@@ -152,8 +152,8 @@ pub struct Feet {
 
 impl Feet {
     /// One frame on `court`: steps (when `stepping`), then every puff and footprint ages. `dusty` and `wet` pick the
-    /// puff (dust, spray, none) and footprint looks; `wind` is the weather's wind vector; `rand` the game's shared
-    /// generator (`weather::Mt`), drawn twice per dive-ring puff.
+    /// puff (dust, spray, none) and footprint looks; `wind` is the weather's wind vector; `rand` the sound manager's
+    /// generator, drawn twice per dive-ring puff.
     #[allow(clippy::too_many_arguments)]
     pub fn tick(&mut self, t: &Foot, court: usize, dusty: bool, wet: bool, wind: V4, runners: &[Runner], stepping: bool, rand: &mut impl FnMut() -> u32) {
         use ps2::{add, div, madd, mul, sub};

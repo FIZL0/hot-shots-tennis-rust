@@ -2,9 +2,9 @@
 //!
 //! The match keeps four generators: the shared one (the match object's: weather schedule, placement, mis-hits, wild
 //! aims, shouts, voice banks, effects), the AI's (seeded 1 when the game starts, reseeded from a shared draw as each
-//! AI object is made), the court's (spectators, gallery, emitters) and the sound manager's (hit keys, ball bounces).
-//! A new point reseeds the shared and the court generator from `rand()` (in that order); change ends reseeds the sound
-//! manager's.
+//! AI object is made), the court's (spectators, gallery, emitters) and the sound manager's (hit keys, ball bounces,
+//! stroke bits, hit-spark rolls, dive rings). A new point reseeds the shared and the court generator from `rand()` (in
+//! that order); the match start, a change of ends and a new point after a point's end then reseed the sound manager's.
 
 use crate::ps2;
 
@@ -106,7 +106,8 @@ impl Rngs {
         self.court = Mt::new(self.rand.next());
     }
 
-    /// Change ends (and the match start): the sound manager's generator takes a fresh `rand()` seed.
+    /// The sound manager's reseed (the match start, change ends, and after `new_point` when a point has just ended):
+    /// its generator takes a fresh `rand()` seed.
     pub fn change_ends(&mut self) {
         self.sound = Mt::new(self.rand.next());
     }
