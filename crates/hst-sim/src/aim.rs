@@ -182,7 +182,7 @@ impl AiParams {
         v.map(|c| ps2::mul(ps2::mul(c, -side), len))
     }
 
-    /// The aim at a return of serve (`kind` ≠ 2; a volleyed return takes the volley's choice).
+    /// The singles NET rally routine's aim (its shots and dives; once taken for the aim at a return of serve).
     pub fn receive_aim(&self, l: &Look, roll: &mut impl FnMut() -> u32) -> Aim {
         if l.kind == 2 {
             return self.volley_aim(l, roll);

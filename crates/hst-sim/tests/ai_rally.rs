@@ -86,8 +86,15 @@ fn shift(o: usize, singles: bool) -> usize {
     if singles && (0x234..0x260).contains(&o) { o - 0x10 } else { o }
 }
 
+/// The walk back (wait, going, there) and the net pick (left, rate, net): 0x260.. and 0x26c.. in doubles,
+/// 0x250.. and 0x258.. in singles.
+fn back_mind(singles: bool) -> (usize, usize) {
+    if singles { (0x250, 0x258) } else { (0x260, 0x26c) }
+}
+
 fn rally(e: &[u8], singles: bool) -> Rally {
     let at = |o| shift(o, singles);
+    let (bk, md) = back_mind(singles);
     let a = &e[A..A + 0x280];
     Rally {
         level: a[0x10],
@@ -130,17 +137,20 @@ fn rally(e: &[u8], singles: bool) -> Rally {
         tick: i32_at(a, 0xd8),
         voice: a[0xdc] != 0,
         lean: i32_at(a, 0xe0),
-        back: Return { wait: i32_at(a, 0x260), going: a[0x264] != 0, there: a[0x265] != 0 },
+        back: Return { wait: i32_at(a, bk), going: a[bk + 4] != 0, there: a[bk + 5] != 0 },
         lane: a[0x266],
         front: a[0x267] != 0,
         forward: a[0x268] != 0,
-        mind: Mind { net_left: i32_at(a, 0x26c), net_rate: i32_at(a, 0x270), net: a[0x274] != 0, ..Mind::default() },
+        mind: Mind { net_left: i32_at(a, md), net_rate: i32_at(a, md + 4), net: a[md + 8] != 0, ..Mind::default() },
         defer: a[0x275] != 0,
         stash: quad(e, 0x730),
         reach: f32_at(a, 0x14),
         dash: a[0x256] != 0 && singles,
         last: quad(a, 0x130),
         return_level: a[0x5e],
+        short: a[0x257] != 0 && singles,
+        high_level: a[0x5f],
+        opp_kind: i32_at(a, 0x124),
     }
 }
 
@@ -154,6 +164,7 @@ fn flag(a: &mut [u8], o: usize, v: bool) {
 /// The AI's bytes with the port's fields written over the entry's.
 fn bytes(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
     let at = |o| shift(o, singles);
+    let (bk, md) = back_mind(singles);
     let mut a = e[A..A + 0x280].to_vec();
     let mut w = |o: usize, v: u32| a[o..o + 4].copy_from_slice(&v.to_le_bytes());
     w(0x3c, r.len as u32);
@@ -172,8 +183,8 @@ fn bytes(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
     }
     w(0xd0, r.next as u32);
     w(0xd8, r.tick as u32);
-    w(0x260, r.back.wait as u32);
-    w(0x26c, r.mind.net_left as u32);
+    w(bk, r.back.wait as u32);
+    w(md, r.mind.net_left as u32);
     a[0x56] = r.state;
     flag(&mut a, 0x98, r.fresh);
     a[0x9a] = r.kind;
@@ -187,15 +198,17 @@ fn bytes(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
     flag(&mut a, 0xd5, r.middle);
     flag(&mut a, 0xd6, r.ours);
     flag(&mut a, 0xdc, r.voice);
-    flag(&mut a, 0x264, r.back.going);
-    flag(&mut a, 0x265, r.back.there);
-    a[0x266] = r.lane;
-    flag(&mut a, 0x267, r.front);
-    flag(&mut a, 0x268, r.forward);
-    flag(&mut a, 0x274, r.mind.net);
-    flag(&mut a, 0x275, r.defer);
+    flag(&mut a, bk + 4, r.back.going);
+    flag(&mut a, bk + 5, r.back.there);
+    flag(&mut a, md + 8, r.mind.net);
     if singles {
         flag(&mut a, 0x256, r.dash);
+        flag(&mut a, 0x257, r.short);
+    } else {
+        a[0x266] = r.lane;
+        flag(&mut a, 0x267, r.front);
+        flag(&mut a, 0x268, r.forward);
+        flag(&mut a, 0x275, r.defer);
     }
     a
 }
@@ -242,6 +255,7 @@ fn body(e: &[u8]) -> Body {
         reach: ReachStats {
             base: f32_at(e, 0x304),
             reach: f32_at(e, 0x308),
+            under_min: f32_at(e, 0x30c),
             stroke_height: f32_at(e, 0x310),
             volley_height: f32_at(e, 0x314),
             smash: [f32_at(e, 0x318), f32_at(e, 0x31c), f32_at(e, 0x320)],
@@ -252,7 +266,8 @@ fn body(e: &[u8]) -> Body {
         opp: [quad(e, 0x500), quad(e, 0x510)],
         mate_voice: e[0x725],
         mark: e[0x4d6],
-        target_x: f32_at(e, 0x4f0),
+        target: quad(e, 0x4f0),
+        opp_lefty: e[0x521] != 0,
     }
 }
 
@@ -307,7 +322,7 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         // the dispatcher: receive in state 2, NET/BASE by style in state 3
         let want = match e[A + 0x54] {
             2 => 1,
-            3 => match (Mind { net: e[A + 0x274] != 0, ..Mind::default() }).play(row.style) {
+            3 => match (Mind { net: e[A + back_mind(singles).1 + 8] != 0, ..Mind::default() }).play(row.style) {
                 Play::Net => 2,
                 Play::Base => 3,
             },
@@ -339,7 +354,11 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         let ret = if tag == 1 {
             r.receive(row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll)
         } else {
-            r.rally(tag == 2, row, &mut b, &mut w, &mut c, &mut seen, &mut out, &mut roll);
+            if singles {
+                r.singles_rally(tag == 2, row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll);
+            } else {
+                r.rally(tag == 2, row, &mut b, &mut w, &mut c, &mut seen, &mut out, &mut roll);
+            }
             false
         };
         drop(roll);
@@ -427,5 +446,13 @@ fn singles_receive_matches_the_game() {
     for name in ["ai_rally_singles.bin", "ai_rally_singles_long.bin"] {
         let Some(n) = replay(name, 1) else { return eprintln!("fixture or disc missing, skipped") };
         eprintln!("{name}: calls, per substate {n:?}");
+    }
+}
+
+#[test]
+fn singles_net_and_base_match_the_game() {
+    for (tag, what) in [(2, "NET"), (3, "BASE")] {
+        let Some(n) = replay("ai_rally_singles_net.bin", tag) else { return eprintln!("fixture or disc missing, skipped") };
+        eprintln!("{what}: calls, per substate {n:?}");
     }
 }

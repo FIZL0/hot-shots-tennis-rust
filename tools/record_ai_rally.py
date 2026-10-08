@@ -36,7 +36,8 @@ ARGS = ["a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3"]
 REC, CACHE, MAXPATH = 0x780, 0x424e90, 180
 HOOKS = {1: 0x3cf7b0, 2: 0x3d02c0, 3: 0x3d1320}
 # HST_SINGLES=1 (P11l): the singles routines (receive 0x3c9a40, NET 0x3ca4e0, BASE 0x3cb130). The opponent
-# (*(ai+0xd4)) +0x3d70 goes to 0x500, the player's +0x3e90 (0x10) to 0x4f0; no partner (0x510..0x530, 0x720 zero).
+# (*(ai+0xd4)) +0x3d70 goes to 0x500, the player's +0x3e90 (0x10) to 0x4f0, the opponent's hand byte
+# (*(*(*(opp+0x54)))+0x135, the aim choosers') at 0x521; no partner (0x510, 0x530, 0x720 zero).
 SINGLES = os.environ.get("HST_SINGLES") == "1"
 if SINGLES: HOOKS = {1: 0x3c9a40, 2: 0x3ca4e0, 3: 0x3cb130}
 # (at, source: list of (base, offsets to load through), first offset, bytes)
@@ -53,7 +54,8 @@ REGIONS = ([(0x40, ("abs", 0x423040), 0, 0x30), (0x80, ("ai",), 0, 0x280), (0x30
               (0x720, ("ai", 0xec), 0x3fa0, 0x10), (0x730, ("sp",), -0x20, 0x10)])
 if SINGLES:
     REGIONS = [r for r in REGIONS if not (r[1][0] == "ai" and r[1][1:2] and r[1][1] in (0xe4, 0xe8, 0xec))] + [
-        (0x4f0, ("ai", 4), 0x3e90, 0x10), (0x500, ("ai", 0xd4), 0x3d70, 0x10)]
+        (0x4f0, ("ai", 4), 0x3e90, 0x10), (0x500, ("ai", 0xd4), 0x3d70, 0x10),
+        (0x520, ("ai", 0xd4, 0x54, 0, 0), 0x134, 0x10)]
 
 
 def i(op, rs, rt, imm): return op << 26 | R[rs] << 21 | R[rt] << 16 | imm & 0xffff
