@@ -6,14 +6,15 @@
 //!   of 0x500 bits (game z), 0x380 rows (game x), least significant bit first ([`Frame`], [`rasterize`]).
 //! - Each frame the ball's and the NPCs' light scale is the bilinear blend of the four map pixels around their
 //!   (x, z), 0 where shade and 1 where not ([`lookup`]); 1.0 off the map, on court 7 and in rain. The ball's is at
-//!   least its height above the ground, so 1.0 from a unit up ([`ball`]); the players are never shaded. The scale multiplies the model's
-//!   directional light colour (VU1), not the ambient.
+//!   least its height above the ground, so 1.0 from a unit up ([`ball`]); off the court the height comes from a
+//!   ray cast down at the court model ([`ball_height`]). The players are never shaded. The scale multiplies the
+//!   model's directional light colour (VU1), not the ambient.
 //!
 //! ponytail: [`rasterize`] casts the casters' exact silhouettes (no texture alpha, no shadow-texture resolution or
 //! filtering, binary instead of the red > 0x6f threshold); the game draws its shadow textures onto the hole's
 //! ground through the GS and reads the frame back (P17r).
 
-use crate::ps2;
+use crate::{mesh, ps2};
 
 /// Bits per map row (game z) and rows (game x).
 pub const COLS: usize = 0x500;
@@ -89,6 +90,23 @@ pub fn ball(map: &[u8], f: &Frame, x: f32, z: f32, height: f32) -> f32 {
     let h = if height < f32::from_bits(1) { f32::from_bits(1) } else { height };
     let s = lookup(map, f, x, z);
     if h <= s { s } else { h }
+}
+
+/// The ball's height above the ground for [`ball`], from its game position (y down). On the court (|x| ≤ 10.685,
+/// |z| ≤ 19.885) the ground is y 0; off it the game casts a ray 200 units straight down against the court model
+/// (`court`), and `None` when it misses (the ball keeps its last light scale).
+pub fn ball_height(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Option<f32> {
+    let [x, y, z, _] = pos;
+    let ground = if x.abs() <= 10.685 && z.abs() <= 19.885 {
+        0.0
+    } else {
+        let mut hit = mesh::Hit::NONE;
+        if !court.ray(models, &mut hit, pos, [x, ps2::add(y, 200.0), z, pos[3]]) {
+            return None;
+        }
+        hit.centre[1]
+    };
+    Some(-ps2::sub(y, ground))
 }
 
 /// Fill every pixel centre inside triangle `t` (map space (column, row), with a value per corner) over a

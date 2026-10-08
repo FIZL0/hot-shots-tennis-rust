@@ -313,7 +313,7 @@ fn load(
             }
         }
         if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
-            commands.insert_resource(shade::build(frame, sun.dir, shade_tris, model_tris.remove(&hole).unwrap_or_default()));
+            commands.insert_resource(shade::build(frame, sun.dir, shade_tris, model_tris.remove(&hole).unwrap_or_default(), hst_sim::court::world(&mut iso, n)));
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {
