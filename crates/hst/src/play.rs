@@ -108,6 +108,8 @@ struct Player {
     serve_anim: Option<f32>,
     kind: i32,
     aim: Vec2,
+    /// The d-pad's held directions with `aim` (`SlotPad::dpad`).
+    dpad: u16,
     /// A shot press still looking for its contact (frames it stays live).
     pending: Option<u32>,
     /// The auto-approach's run direction (game x, z) while `pending` counts down to its one search.
@@ -409,7 +411,11 @@ struct ServeSwing {
 /// One controller slot's state, gathered every display frame and consumed by the 60 Hz simulation.
 #[derive(Clone, Copy, Default)]
 struct SlotPad {
+    /// The left stick alone (after the pad driver, `pad_stick`).
     stick: Vec2,
+    /// D-pad (and direction keys) held, as the pad's bits (`loco::pad_dir`: 0x10 up, 0x20 right, 0x40 down,
+    /// 0x80 left): the original runs and aims by them only while the stick sits in its dead square.
+    dpad: u16,
     /// Latched shot press (kind), so a press between fixed steps is never lost.
     shot: Option<i32>,
     serve: bool,
@@ -1427,11 +1433,11 @@ fn read_input(
 ) {
     use controls::Action as A;
     let mut now = [SlotPad::default(); 2];
-    let dirs = [(A::Up, Vec2::Y), (A::Down, -Vec2::Y), (A::Left, -Vec2::X), (A::Right, Vec2::X)];
+    let dirs = [(A::Up, 0x10), (A::Down, 0x40), (A::Left, 0x80), (A::Right, 0x20)];
     let shots = [(A::Normal, 0), (A::Cut, 1), (A::Lob, 3)];
     for (a, d) in dirs {
         if bind.key_pressed(&keys, a) {
-            now[0].stick += d;
+            now[0].dpad |= d;
         }
     }
     now[0].shot = shots
@@ -1459,7 +1465,7 @@ fn read_input(
         s.stick += pad_stick(g.left_stick());
         for (a, d) in dirs {
             if bind.pad_pressed(g, a) {
-                s.stick += d;
+                s.dpad |= d;
             }
         }
         s.shot = s.shot.or(shots
@@ -1473,7 +1479,8 @@ fn read_input(
     }
     pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
-        slot.stick = n.stick.clamp_length_max(1.0);
+        slot.stick = n.stick;
+        slot.dpad = n.dpad;
         if n.shot.is_some() {
             slot.shot = n.shot;
         }
@@ -1672,7 +1679,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         } else {
             // walk the baseline: a human by the pad's run direction (its dead square, camera flip), a bot by its stick
             let walk = if g.humans.get(i) == Some(&true) {
-                pad_run(g, g.players[i].aim)
+                pad_run(g, g.players[i].aim, g.players[i].dpad)
             } else {
                 stick
             };
@@ -1902,10 +1909,10 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
 }
 
 /// The run direction the original gives a human's stick (`hst_sim::player::pad_dir`): the stick as pad bytes, its
-/// dead square, rescale and ×1.2 clip, on world axes, turned by π when the camera looks from the +z side.
-/// ponytail: the app's stick already merges d-pad and keys into one vector, so the d-pad's own (faster diagonal)
-/// path isn't taken; world axes also under the free camera
-fn pad_run(g: &Game, stick: Vec2) -> Vec2 {
+/// dead square, rescale and ×1.2 clip, or the d-pad bits (`dpad`, full length on diagonals) while the stick is
+/// dead, on world axes, turned by π when the camera looks from the +z side. ponytail: world axes also under the
+/// free camera
+fn pad_run(g: &Game, stick: Vec2, dpad: u16) -> Vec2 {
     // 0x00 full left/up, 0x80 centre, 0xff full right/down
     let byte =
         |v: f32| (128.0 + v.clamp(-1.0, 1.0) * if v < 0.0 { 128.0 } else { 127.0 }).round() as u8;
@@ -1914,7 +1921,7 @@ fn pad_run(g: &Game, stick: Vec2) -> Vec2 {
     } else {
         3
     };
-    let [x, z] = loco::pad_dir(0, byte(stick.x), byte(-stick.y), phase);
+    let [x, z] = loco::pad_dir(dpad, byte(stick.x), byte(-stick.y), phase);
     if g.cam.view.eye[2] >= 0.0 {
         Vec2::new(-x, -z)
     } else {
@@ -2545,15 +2552,17 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
 
 fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: bool) {
     g.players[i].aim = pad.stick;
+    g.players[i].dpad = pad.dpad;
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         let press = shot.or(serve_press.then_some(0));
         // the serve aims with the run direction, as the original (its dead square, ×1.2 clip, camera flip)
-        let stick = pad_run(g, pad.stick);
+        let stick = pad_run(g, pad.stick, pad.dpad);
         serve_turn(g, i, stick, press);
         return;
     }
-    follow_through(&mut g.players[i], shot.is_some() || pad.stick != Vec2::ZERO);
-    whiff_frame(g, i, pad.stick != Vec2::ZERO);
+    let moved = pad.stick != Vec2::ZERO || pad.dpad != 0;
+    follow_through(&mut g.players[i], shot.is_some() || moved);
+    whiff_frame(g, i, moved);
     if let Some(kind) = shot {
         press(g, i, kind);
     }
@@ -2561,11 +2570,11 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     // player (or sets its motion) through the swing
     let p = &g.players[i];
     if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
-        let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick));
+        let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick, pad.dpad));
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot: the run direction, as the original
-    let aim = pad_run(g, pad.stick);
+    let aim = pad_run(g, pad.stick, pad.dpad);
     advance_stroke(g, i, move |_| aim);
 }
 

@@ -371,3 +371,33 @@ fn rally_aims_pulled_inside_like_the_game() {
         assert_eq!((n, moved), (want_n, want_moved), "{fx}");
     }
 }
+
+/// P5: the game's own swings off P1's recorded pad (`research/p5_input_rec.py`, slot 4: ✕ held for seconds, two and
+/// three buttons on one frame, double taps, d-pad diagonals). Every swing the game starts (the stroke countdown
+/// +0x3ec4 leaving −1) comes on a frame `press_kind` reads a press, with its shot code (+0x3ee4: 1 ✕, 2 ○, 4 △);
+/// a button held on gives none.
+#[test]
+fn presses_start_swings_like_the_game() {
+    use hst_sim::replay::frames_live;
+    use hst_sim::shot::press_kind;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let Ok(rec) = std::fs::read(format!("{dir}/p5_presses_s04.bin")) else {
+        return eprintln!("p5_presses_s04.bin absent, skipped");
+    };
+    let frames = frames_live(&rec);
+    let word = |k: usize, off: usize| frames[k].player_f32(0, off).to_bits() as i32;
+    let (mut swings, mut held) = (0, 0);
+    for k in 1..frames.len() {
+        let (before, now) = (frames[k - 1].pad(0).buttons, frames[k].pad(0).buttons);
+        let press = press_kind(before, now);
+        if word(k - 1, 0x3ec4) == -1 && word(k, 0x3ec4) != -1 {
+            let code = press.map(|k| [1, 2, 0, 4][k as usize]);
+            assert_eq!(code, Some(word(k, 0x3ee4)), "frame {k}: pad {before:04x} -> {now:04x}");
+            swings += 1;
+        } else if press.is_none() && now & 0x7000 != 0 {
+            held += 1;
+        }
+    }
+    eprintln!("{swings} swings, {held} held frames without one");
+    assert!(swings >= 10 && held > 100);
+}

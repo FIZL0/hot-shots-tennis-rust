@@ -308,6 +308,8 @@ fn human_pad_replay() {
         if row.split(|&b| b == b',').nth(6).unwrap().trim_ascii() == [0x89, 0x45] { 1.0 } else { -1.0 } // 右
     };
     let mut runs = vec![("p7_carol_s04.bin".to_string(), 6, rows(&pel), 1.0), ("p7_kaito_s04.bin".into(), 3, rows(&pel), 1.0)];
+    // P5's press recording: d-pad diagonals held (full length, the d-pad path of `pad_dir`)
+    runs.push(("p5_presses_s04.bin".into(), 6, rows(&pel), 1.0));
     for ch in 0..14 {
         if let Ok(pel) = std::fs::read(format!("{dir}/p7b_c{ch:02}_pelvis.bin")) {
             runs.push((format!("p7b_c{ch:02}.bin"), ch, rows(&pel), -hand(ch)));

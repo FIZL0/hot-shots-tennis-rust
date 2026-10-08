@@ -205,7 +205,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P2a** Sweet spots by timing (user 2026-10-07): P2's aim recorder forces sweet hits (and the opponents' slices) by memory writes because its swings locked at arbitrary timing; find out why (stray buffered presses, or an auto-swing in the original) and make the recordings plain play → `tools/record_aim.py` · `play.rs` find_contact · `plan/P2a.md` | t: aim.rs | j: 2026-10-07-p2-aim
 - [x] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs, timing.rs | j: 2026-10-07-p3-timing-grades — DONE: per-character grades/bias, timing error, scatter, table mode/variants (up1/dw1/dw2/dw3, lob POW), late lift wired into strike (`play/timing.rs`); 211 recorded launches, grades/error/target exact, scattered velocity ~1e-4 off; mis-hits, reactions and slices left
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
-- [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
+- [x] **P5** Shot selection by input → `play.rs` read_input/press/human · `shot.rs` press_kind | t: shot_tables.rs, player.rs | j: 2026-10-08-p5-shot-input — DONE: edge-only ✕>○>△, no hold/charge; d-pad reaches pad_dir (full-length diagonals); 0x408e60 list and blend were P3
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
 - [x] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
