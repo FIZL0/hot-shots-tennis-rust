@@ -1,6 +1,6 @@
-//! The doubles AI's dispatcher (`hst_sim::rally`): a computer player in a doubles point runs the ported receive
-//! while it receives and the NET or BASE rally routine (by its style, an ALL-style player by its net pick) while it
-//! rallies, in place of the stand-in intercept. The routines think y-up; the app is y-down.
+//! The AI's dispatcher (`hst_sim::rally`): a computer player runs the ported receive while it receives and the NET
+//! or BASE rally routine (by its style, an ALL-style player by its net pick) while it rallies, in place of the
+//! stand-in intercept; doubles and singles have their own routines. The routines think y-up; the app is y-down.
 
 use super::*;
 use hst_sim::ai::{Guess, Phase as Ai, Play};
@@ -32,8 +32,7 @@ fn up(v: V3) -> [f32; 4] {
     [v[0], -v[1], v[2], 0.0]
 }
 
-/// One frame of doubles computer player `i` in the receive or rally: false (nothing done) outside them, in singles
-/// and between ends.
+/// One frame of computer player `i` in the receive or rally: false (nothing done) outside them and between ends.
 pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let phase = match g.phase {
         Phase::Serve => 2,
@@ -41,7 +40,8 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         Phase::Post => 4,
         Phase::ChangeEnds(_) => return false,
     };
-    if g.players.len() != 4 || !matches!(mind.phase, Ai::Receive | Ai::Rally) {
+    let singles = g.players.len() == 2;
+    if !matches!(g.players.len(), 2 | 4) || !matches!(mind.phase, Ai::Receive | Ai::Rally) {
         return false;
     }
     let d = &mut g.doubles_ai;
@@ -57,9 +57,10 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     }
     let p = g.players[i];
     let busy = p.contact.is_some() || p.pending.is_some() || p.swing.is_some() || p.whiff.is_some() || p.dive.is_some();
-    let mate = i ^ 2;
-    let human_mate = g.humans.get(mate) == Some(&true);
-    let opp = [(i & 1) ^ 1, ((i & 1) ^ 1) + 2];
+    // singles: no partner (its own spot), one opponent
+    let mate = if singles { i } else { i ^ 2 };
+    let human_mate = !singles && g.humans.get(mate) == Some(&true);
+    let opp = if singles { [i ^ 1; 2] } else { [(i & 1) ^ 1, ((i & 1) ^ 1) + 2] };
     let r = &g.reaches[i];
     let mut b = Body {
         pos: up(p.pos),
@@ -97,8 +98,8 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         opp: opp.map(|j| up(g.players[j].pos)),
         mate_voice: 0,
         mark: 0,
-        target: [0.0; 4],
-        opp_lefty: false,
+        target: if singles { landing(g) } else { [0.0; 4] },
+        opp_lefty: g.players[opp[0]].hand < 0.0,
     };
     let mut w = World {
         frame: g.doubles_ai.frame,
@@ -134,8 +135,13 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let row = p.ai;
     let me = &mut g.doubles_ai.me[i];
     let x = &mut me.rally;
-    (x.level, x.mate, x.first, x.window, x.singles) = (3, human_mate as i32, 2, PATH_MAX as i32, false);
-    (x.rate, x.radius) = (row.doubles_center_rate, row.doubles_center_radius);
+    (x.level, x.mate, x.first, x.window, x.singles) = (3, human_mate as i32, 2, PATH_MAX as i32, singles);
+    (x.rate, x.radius) = if singles {
+        (row.singles_center_rate, row.singles_center_radius)
+    } else {
+        (row.doubles_center_rate, row.doubles_center_radius)
+    };
+    x.high_level = p.ai_picks.high_level;
     x.lean = hst_sim::position::Team::lean(b.formation, !human_mate, row.style, g.players[mate].ai.style);
     let t = p.ai_timing;
     x.leads = [t.stroke, t.volley, t.smash];
@@ -153,6 +159,15 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             Some((Guess::Other, at)) => (2, at),
             None => (0, x.from),
         };
+        // the singles hit message on an opponent's shot: its kind and spot (ponytail: the hitter's position for the
+        // shot's own spot, P11l6), and the dash after a dive
+        if singles && g.last_hitter >= 0 && g.last_hitter as usize & 1 != i & 1 {
+            if let Some(seen) = p.ai_seen[0] {
+                x.opp_kind = seen.kind;
+                x.last = b.opp[0];
+                x.heard_hit(seen.kind, row.style, &b);
+            }
+        }
     }
     let rng = &mut g.rng;
     let mut roll = || {
@@ -164,7 +179,8 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let kept = x.mind;
     match mind.phase {
         Ai::Receive if entered || (new_shot && x.state != 3) => x.enter_receive(&mut roll),
-        Ai::Rally if entered || (new_shot && g.shots > 1 && x.sub != 3) => {
+        // singles re-enters on the new path, not on the hit
+        Ai::Rally if entered || (new_shot && (singles || g.shots > 1) && x.sub != 3) => {
             x.enter_rally(&b, &mut w, &mut roll);
             x.mind = kept;
         }
@@ -180,7 +196,11 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         received = x.receive(&row, &mut b, &w, c, seen, &mut out, &mut roll);
     } else {
         let net = x.mind.play(row.style) == Play::Net;
-        x.rally(net, &row, &mut b, &mut w, c, seen, &mut out, &mut roll);
+        if singles {
+            x.singles_rally(net, &row, &mut b, &w, c, seen, &mut out, &mut roll);
+        } else {
+            x.rally(net, &row, &mut b, &mut w, c, seen, &mut out, &mut roll);
+        }
     }
     let (net, net_rate, net_left, aim) = (x.mind.net, x.mind.net_rate, x.mind.net_left, x.stick);
     (me.lost, me.lost_log) = (b.lost, b.lost_log);
@@ -202,4 +222,19 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     }
     advance_stroke(g, i, |g| ai_contact_stick(g, i));
     true
+}
+
+/// The ball's next landing on the app's flight (y-up), for the singles routines' shot target (the player's +0x3e90).
+// ponytail: where its shot lands, not the target it aimed at (scatter and timing errors included); P11l6
+fn landing(g: &Game) -> [f32; 4] {
+    let mut f = g.flight;
+    f.net = false;
+    let n = f.contacts;
+    for _ in 0..PATH_MAX {
+        if f.contacts != n {
+            break;
+        }
+        f.step(&g.shot, &COURTS[g.court]);
+    }
+    up(f.ball.pos)
 }

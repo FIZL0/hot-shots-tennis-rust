@@ -1052,7 +1052,21 @@ impl Rally {
 
     /// The dispatcher's entry to the rally state (and the strike/hit messages while it rallies): substate 0.
     pub fn enter_rally(&mut self, b: &Body, w: &mut World, roll: &mut impl FnMut() -> u32) {
-        self.set_sub(b, w, 0, false, roll);
+        if self.singles {
+            self.singles_set_sub(0, roll);
+        } else {
+            self.set_sub(b, w, 0, false, roll);
+        }
+    }
+
+    /// The singles hit message on an opponent's shot of kind `kind` (3 a dive): a NET or ALL style (`style` 1 or 3)
+    /// not yet dashing dashes to the middle of the net.
+    pub fn heard_hit(&mut self, kind: i32, style: u8, b: &Body) {
+        if kind == 3 && !self.dash && (style == 1 || style == 3) {
+            self.dash = true;
+            self.stand[0] = 0.0;
+            self.stand[2] = mul(-self.reach, b.side);
+        }
     }
 
     fn set_sub(&mut self, b: &Body, w: &mut World, s: u8, keep: bool, roll: &mut impl FnMut() -> u32) {
