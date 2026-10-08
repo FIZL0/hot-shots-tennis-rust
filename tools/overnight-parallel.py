@@ -173,6 +173,8 @@ belong). Then tools/check.sh; fix what the merge broke, never the task's own wor
 3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, leave the branch and say why.
 4. Append one line to context/notes/master.md: <ID>: merged / conflicts fixed (what) / left (why), the task's state \
 (ticked, part, blocked) and anything the human must do.
+5. Commit every change you made in main, so `git status` shows only the user's popped-back edits (context/ is \
+gitignored, so master.md stays uncommitted).
 Never push, never touch the worktrees, never do task work yourself. When the runner says `RUN DONE`, finish \
 master.md with a short summary for the human at the top."""
 
