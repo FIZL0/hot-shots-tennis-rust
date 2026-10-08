@@ -94,12 +94,14 @@ pub struct Motion {
     /// frame 0 over the frozen outgoing pose; else the outgoing pose over the new one).
     pub fade: Fade,
     pub mix: Option<(f32, bool)>,
+    /// Bumped by every [`Motion::set`], a restart of the same motion included (the costume deformers restart).
+    pub sets: u32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
         let clock = Clock::start(1.0, true, None);
-        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, fade: Fade::default(), mix: None }
+        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, fade: Fade::default(), mix: None, sets: 0 }
     }
 }
 
@@ -119,7 +121,7 @@ impl Motion {
         let mut fade = self.fade;
         fade.start(frames, id as i32, hold.is_some(), self.id as i32, true, &self.clock);
         let face_clock = Clock::start(speed, looping, None);
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, fade, mix: None };
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, fade, mix: None, sets: self.sets.wrapping_add(1) };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
