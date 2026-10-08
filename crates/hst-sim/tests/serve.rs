@@ -301,11 +301,10 @@ fn anim_s05_held_ball() {
 }
 
 
-/// Every serve's launch against the game's (velocity within 2e-5 as for smashes, the launch's trig not being
-/// the game's own; flight frames and spin exact): the server's own trajectory table (the `dw1` variant
-/// for a weak toss), looked up from the contact less the scatter toward the aim, and the spin of the
-/// character's shot record (the variant's for a weak toss). Slice serves (kind 1) bend by a wind not ported
-/// yet (P6) and are skipped.
+/// Every serve's launch against the game's, bit for bit (velocity, spin frame, wind, flight frames and spin): the
+/// server's own trajectory table (the `dw1` variant for a weak toss), looked up from the contact less the
+/// scatter toward the aim, and the spin and side angle of the character's shot record (the variant's for a weak
+/// toss); a slice serve (kind 1) leaves off the target line and its wind brings it back.
 #[test]
 fn serves_launch_like_the_game() {
     use hst_sim::params::{ShotParams, record_of, spin};
@@ -323,10 +322,10 @@ fn serves_launch_like_the_game() {
     };
     let launched = |x: &[u8]| x[0x58] == 0 && i(x, 0xac) == 0 && f(x, 0x130).abs() + f(x, 0x138).abs() > 0.05;
     for (name, data, ram) in matches() {
-        let (mut checked, mut lefty) = ([0; 3], 0);
+        let (mut checked, mut lefty, mut slices) = ([0; 3], 0, 0);
         for w in frames_live(&data).windows(2) {
             let b = w[1].live_ball();
-            if !launched(b) || launched(w[0].live_ball()) || i(b, 0x5c) == 1 {
+            if !launched(b) || launched(w[0].live_ball()) {
                 continue;
             }
             let kind = i(b, 0x5c);
@@ -336,18 +335,22 @@ fn serves_launch_like_the_game() {
             let hit = v3(b, 0x70);
             let aim = serve::inside(w[1].player_pos(p)[0], hit, [0x3e90, 0x3e94, 0x3e98].map(|o| w[1].player_f32(p, o)));
             let scatter = [f(b, 0x80) - aim[0], 0.0, f(b, 0x88) - aim[2]];
-            let (vel, frames) = serve::launch(&table(c, kind, weak), kind == 3, Params::default().radius, hit, aim, scatter);
-            let want = v3(b, 0x130);
-            let at = format!("{name} vsync {} player {p} (character {c}, hand {}) kind {kind}", w[1].vsync(), hand(&ram, p));
-            assert!((0..3).all(|j| (vel[j] - want[j]).abs() < 2e-5), "{at}: {vel:?} vs {want:?}");
-            assert_eq!(frames + 1, i(b, 0x260), "{at}");
             let rec = if weak { params.variant(0, kind as usize, record_of(c), -0.5) } else { params.record(0, kind as usize, record_of(c)).try_into().unwrap() };
-            assert_eq!(spin(&rec).to_bits(), f(b, 0x1a4).to_bits(), "{at}: spin");
+            let turn = (spin(&rec), hst_sim::ps2::mul(rec[10], 0.017453292), hand(&ram, p) < 0.0);
+            let l = serve::launch(&table(c, kind, weak), kind == 3, Params::default().radius, hit, aim, scatter, turn);
+            let at = format!("{name} vsync {} player {p} (character {c}, hand {}) kind {kind}", w[1].vsync(), hand(&ram, p));
+            assert_eq!(l.vel, v3(b, 0x130), "{at}: velocity");
+            assert_eq!(l.frame, std::array::from_fn(|r| std::array::from_fn(|k| f(b, 0x160 + 16 * r + 4 * k))), "{at}: frame");
+            assert_eq!(l.wind, std::array::from_fn(|k| f(b, 0x240 + 4 * k)), "{at}: wind");
+            assert_eq!(l.frames, i(b, 0x260), "{at}");
+            assert_eq!(l.spin.to_bits(), f(b, 0x1a4).to_bits(), "{at}: spin");
             checked[if weak { 1 } else if kind == 3 { 2 } else { 0 }] += 1;
+            slices += (kind == 1) as i32;
             lefty += (hand(&ram, p) < 0.0) as i32;
         }
-        eprintln!("{name}: strong/weak/underhand serves {checked:?}, {lefty} left-handed");
-        // 1p3goodcpus has no weak toss; its slice (kind 1) is skipped
+        eprintln!("{name}: strong/weak/underhand serves {checked:?}, {lefty} left-handed, {slices} slices");
+        assert!(slices >= 1, "{name}: no slice serve");
+        // 1p3goodcpus has no weak toss
         let (want, l) = if name == "match_s05.bin" { ([1, 1, 1], 0) } else { ([3, 0, 1], 4) };
         assert!((0..3).all(|k| checked[k] >= want[k]) && lefty >= l, "{name}: {checked:?}, {lefty} left-handed");
     }

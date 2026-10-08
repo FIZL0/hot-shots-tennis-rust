@@ -7,6 +7,8 @@
 
 use crate::ball::V3;
 use crate::libm::cosf;
+use crate::world::{self, M4};
+use crate::{ps2, vu0};
 
 const N: usize = 16;
 const ANGLE_UNIT: f32 = 0.0007669904; // π / 4096
@@ -26,16 +28,16 @@ impl Table {
     fn cell(&self, i: usize) -> (f32, f32, i32) {
         let w = self.0[i.min(self.0.len() - 1)];
         let sext = |v: u32| ((v << 20) as i32 >> 20) as f32;
-        (sext(w & 0xfff) * ANGLE_UNIT, sext((w >> 12) & 0xfff) * SPEED_UNIT, (w >> 24) as i32)
+        (ps2::mul(sext(w & 0xfff), ANGLE_UNIT), ps2::mul(sext((w >> 12) & 0xfff), SPEED_UNIT), (w >> 24) as i32)
     }
 }
 
 /// Where a coordinate falls on a 16-point axis: cell index and fraction, with the game's edge rule.
 fn axis(num: f32, den: f32) -> (usize, f32) {
-    let u = if den == 0.0 { if num > 0.0 { 1.0 } else { 0.0 } } else { (num / den).clamp(0.0, 1.0) };
-    let s = (N - 1) as f32 * u;
+    let u = if den == 0.0 { if num > 0.0 { 1.0 } else { 0.0 } } else { ps2::div(num, den).clamp(0.0, 1.0) };
+    let s = ps2::mul((N - 1) as f32, u);
     let i = s as usize;
-    (i, if i == N - 1 { 1.0 } else { s - i as f32 })
+    (i, if i == N - 1 { 1.0 } else { ps2::sub(s, i as f32) })
 }
 
 const RADIUS: f32 = 0.064;
@@ -43,8 +45,9 @@ const RADIUS: f32 = 0.064;
 /// The low end of the height axis for strokes and volleys: from 0.2 m below the ground at the baseline up to the
 /// ground at the net, but never above the ball's radius below it.
 fn low_bound(hit_z: f32) -> f32 {
-    let u = ((11.385 - (hit_z.abs() - 0.5)) / 11.385).clamp(0.0, 1.0);
-    (u * (0.0 - -0.2) + -0.2 + 0.0).min(-RADIUS)
+    use crate::ps2::{div, lerp, sub};
+    let u = div(sub(11.385, sub(hit_z.abs(), 0.5)), 11.385).clamp(0.0, 1.0);
+    lerp(-0.2, 0.0, u).min(-RADIUS)
 }
 
 /// Axis bounds for a stroke kind (class 1).
@@ -70,7 +73,7 @@ impl Bounds {
             near: -0.5,
             far: -18.17,
             low: low_bound(hit_z),
-            high: ((-1.1638 + 0.0) - 1.3 * 1.3) - 0.5,
+            high: ps2::sub(ps2::msub(ps2::add(-1.1638, 0.0), 1.3, 1.3), 0.5),
             short: if kind == 2 { 6.4 } else { 3.0 },
             long: 16.17,
         }
@@ -81,7 +84,7 @@ impl Bounds {
     pub fn volley(kind: i32, hit_z: f32) -> Self {
         Self {
             low: if kind == 1 { -RADIUS } else { low_bound(hit_z) },
-            high: -1.6 * 1.3 - 0.5,
+            high: ps2::sub(ps2::mul(-1.6, 1.3), 0.5),
             ..Self::stroke(kind, hit_z)
         }
     }
@@ -115,15 +118,16 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
         hit = [-hit[0], hit[1], -hit[2]];
         tgt = [-tgt[0], tgt[1], -tgt[2]];
     }
-    tgt[2] += TARGET_PULL;
-    let dz = tgt[2] - hit[2];
-    let dist = (dz * dz + (tgt[0] - hit[0]) * (tgt[0] - hit[0]) + 0.0).sqrt();
-    let past_net = (dist * tgt[2]) / dz;
-    let (ix, fx) = axis(-(-(dist - past_net) - b.near), -(b.far - b.near));
-    let (iy, fy) = axis(-(hit[1] - b.low), -(b.high - b.low));
-    let (iz, fz) = axis(past_net - b.short, b.long - b.short);
+    use crate::ps2::{add, div, madd, mul, sqrt, sub};
+    tgt[2] = add(tgt[2], TARGET_PULL);
+    let (dx, dz) = (sub(tgt[0], hit[0]), sub(tgt[2], hit[2]));
+    let dist = sqrt(madd(madd(add(0.0, 0.0), dx, dx), dz, dz));
+    let past_net = div(mul(dist, tgt[2]), dz);
+    let (ix, fx) = axis(-sub(-sub(dist, past_net), b.near), -sub(b.far, b.near));
+    let (iy, fy) = axis(-sub(hit[1], b.low), -sub(b.high, b.low));
+    let (iz, fz) = axis(sub(past_net, b.short), sub(b.long, b.short));
     let at = |x: usize, y: usize, z: usize| t.cell(x + N * y + N * N * z);
-    let lerp = |a: f32, b: f32, u: f32| u * (b - a) + a + 0.0;
+    let lerp = |a: f32, b: f32, u: f32| ps2::lerp(a, b, u);
     let plane = |z: usize, k: fn((f32, f32, i32)) -> f32| {
         let a = lerp(k(at(ix, iy, z)), k(at(ix + 1, iy, z)), fx);
         let b = lerp(k(at(ix, iy + 1, z)), k(at(ix + 1, iy + 1, z)), fx);
@@ -137,7 +141,7 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
     let frames_plane = |z: usize| {
         let row = |y: usize| lerp(at(ix, y, z).2 as f32, at(ix + 1, y, z).2 as f32, fx) as i32 & 0xff;
         let (a, b) = (row(iy), row(iy + 1));
-        (fy * (b - a) as f32 + a as f32 + 0.0) as i32
+        madd(add(0.0, a as f32), fy, (b - a) as f32) as i32
     };
     let (f0, f1) = (frames_plane(iz), frames_plane(iz + 1));
     let (elevation, mut speed) = (tri(|c| c.0), tri(|c| c.1));
@@ -146,7 +150,7 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
     // the more the closer to the net, the higher the hit and the further the elevation sits above the lowest
     // corner (full past 7°, easing off again toward 1.05 rad). As the game, only the far target plane's corners
     // count.
-    let (to_net, height) = ((dist - past_net).abs(), hit[1].abs());
+    let (to_net, height) = (sub(dist, past_net).abs(), hit[1].abs());
     if (0.5..=6.0).contains(&to_net) && (0.0..=1.3).contains(&height) {
         let least = |k: fn((f32, f32, i32)) -> f32| {
             [at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1)]
@@ -155,24 +159,100 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
                 .fold(f32::MAX, f32::min)
         };
         let (lowest, slowest) = (least(|c| c.0), least(|c| c.1));
-        let near = cosf((1.0 - (1.0 - ((to_net - 0.5) / (6.0 - 0.5)).clamp(0.0, 1.0))) * 1.5707964);
-        let high = cosf((1.0 - (height / 1.3).clamp(0.0, 1.0)) * 1.5707964);
-        let rise = elevation - lowest;
-        let w = if rise >= 0.0 { (rise / (7.0 * 0.017453292)).min(1.0) } else { 0.0 };
+        let near = cosf(mul(sub(1.0, sub(1.0, div(sub(to_net, 0.5), sub(6.0, 0.5)).clamp(0.0, 1.0))), 1.5707964));
+        let high = cosf(mul(sub(1.0, div(sub(height, 0.0), sub(1.3, 0.0)).clamp(0.0, 1.0)), 1.5707964));
+        let rise = sub(elevation, lowest);
+        let w = if rise >= 0.0 { div(rise, mul(7.0, 0.017453292)).min(1.0) } else { 0.0 };
         if w != 0.0 {
-            let k = w * (1.0 - (rise.abs() / 1.05).min(1.0));
-            speed = k * high * near * (slowest - speed) + speed + 0.0;
+            let k = mul(w, sub(1.0, div(rise.abs(), 1.05).min(1.0)));
+            speed = madd(add(0.0, speed), mul(mul(k, high), near), sub(slowest, speed));
         }
     }
     Lookup { elevation, speed, frames: (fz * (f1 - f0) as f32 + f0 as f32 + 0.0) as i32 }
 }
 
-/// Launch velocity: head for the target horizontally, pitched up by `elevation`, at `speed` per frame.
+/// The launch frame: row 2 heads for the target horizontally, row 1 is up, row 0 = up × row 2, the whole frame
+/// then pitched by `elevation` about row 0. The game builds it as here (FPU horizontal unit vector, VU0
+/// normalize/cross, rotation about X), so the ball's spin frame is the game's bit for bit.
+pub fn launch_frame(hit: V3, target: V3, elevation: f32) -> M4 {
+    use crate::ps2::{div, madd, mul, sqrt, sub};
+    let (dx, dz) = (sub(target[0], hit[0]), sub(target[2], hit[2]));
+    let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
+    let up = vu0::normalize([0.0, 1.0, 0.0, 0.0]);
+    let side = vu0::normalize(vu0::cross(up, [mul(dx, inv), 0.0, mul(dz, inv), 0.0]));
+    let ahead = vu0::normalize(vu0::cross(side, up));
+    let frame = [side, up, ahead, [0.0, 0.0, 0.0, 1.0]];
+    world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(elevation)), &frame)
+}
+
+/// Launch velocity: along the launch frame's row 2 at `speed` per frame.
 pub fn launch(hit: V3, target: V3, elevation: f32, speed: f32) -> V3 {
-    let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
-    let inv = 1.0 / (dx * dx + dz * dz).sqrt();
-    let (s, c) = elevation.sin_cos();
-    [dx * inv * c * speed, -s * speed, dz * inv * c * speed]
+    let ahead = launch_frame(hit, target, elevation)[2];
+    std::array::from_fn(|k| crate::ps2::mul(ahead[k], speed))
+}
+
+/// A launch with its side angle (record field 10, nonzero only on slice serves) and the frames it flies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Launch {
+    pub vel: V3,
+    /// The ball's spin frame.
+    pub frame: M4,
+    /// Per-frame pull that bends the flight onto the target (w included).
+    pub wind: [f32; 4],
+    /// Spin, made positive when the side angle turned it.
+    pub spin: f32,
+    pub frames: i32,
+}
+
+/// The launch of `launch_frame` with the record's `spin` and `side` angle (radians), the table's flight
+/// `frames`, and the shot's `bend` (0 until the special shots, P6). A lefty hitter's side-angled shot spins the
+/// other way. With a side angle the velocity heads off the target line by the spin (as a yaw) and the wind
+/// brings the ball back onto the target over the flight; the spin frame is turned a quarter about Z and by the
+/// side angle about Y, toward the spin's sign. Off a serve (`class` 0) clear of the 2.0575 m line the flight
+/// gets one frame less or more, by which side of that line the ball crosses to.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_turned(class: u8, hit: [f32; 4], target: [f32; 4], elevation: f32, speed: f32, spin: f32, side: f32, bend: f32, lefty: bool, frames: i32) -> Launch {
+    use crate::ps2::{add, div, mul, sub};
+    let frame = launch_frame([hit[0], hit[1], hit[2]], [target[0], target[1], target[2]], elevation);
+    let mut spin = if side != 0.0 && lefty { mul(spin, -1.0) } else { spin };
+    let mut n = frames + 1;
+    if side != 0.0 || bend != 0.0 {
+        let mut step = 0;
+        if class == 0 {
+            let toward = if target[2] < 0.0 { -1.0 } else { 1.0 };
+            if sub(target[0].abs(), 2.0575).abs() > 1.0 {
+                let past = mul(target[0], toward);
+                step = if mul(hit[0], toward) > 0.0 { if past < -2.0575 { 1 } else { -1 } } else if past < 2.0575 { 1 } else { -1 };
+                if spin < 0.0 || bend < 0.0 {
+                    step = -step;
+                }
+            }
+        }
+        n += step;
+    }
+    let ahead = frame[2];
+    if side == 0.0 {
+        let vel = std::array::from_fn(|k| mul(ahead[k], speed));
+        return Launch { vel, frame, wind: [0.0; 4], spin, frames: n };
+    }
+    // ponytail: the yaw is never past ±π (a record's spin is a few tens of degrees), so the game's wrap is left out
+    let d = [sub(target[0], hit[0]), sub(target[1], hit[1]), sub(target[2], hit[2]), 1.0];
+    let turned = world::mat_mul(&[frame[0], frame[1], frame[2], d], &world::rot_y(spin));
+    let inv = div(1.0, n as f32);
+    let back = |k: usize| mul(sub(target[k], add(turned[3][k], hit[k])), inv);
+    let wind = [back(0), back(1), back(2), mul(sub(target[3], 1.0), inv)];
+    let vel = std::array::from_fn(|k| mul(turned[2][k], speed));
+    let (quarter, side) = if spin >= 0.0 { (world::HALF_PI, side) } else { spin = -spin; (-world::HALF_PI, -side) };
+    let frame = world::mat_mul(&world::mat_mul(&world::IDENTITY, &rot_z(quarter)), &frame);
+    let frame = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_y(side)), &frame);
+    Launch { vel, frame, wind, spin, frames: n }
+}
+
+/// Rotation about Z (rows (c, s, 0), (−s, c, 0), (0, 0, 1)), built like `world::rot_x`.
+fn rot_z(t: f32) -> M4 {
+    let (s, c) = world::sincos(t);
+    let z = 0.0;
+    [[vu0::add(z, c), vu0::add(z, s), z, z], [vu0::sub(z, s), vu0::add(z, c), z, z], [z, z, vu0::add(z, 1.0), z], [z, z, z, vu0::add(z, 1.0)]]
 }
 
 /// The shot buttons give three kinds: ✕ topspin (0), ○ slice (1), △ lob (3). Flat (2) and drop (4) have no

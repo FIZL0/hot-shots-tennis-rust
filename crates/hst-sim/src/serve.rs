@@ -288,12 +288,15 @@ pub fn scatter(d: &ServeData, toss: Toss, miss: Miss, error: i32, hit: [f32; 3],
     [v[0], v[1], v[2]]
 }
 
-/// A serve's launch velocity and flight frames, as the original: the trajectory table is looked up as if
-/// from the contact point less the scatter toward the aim, and the ball flies to aim + scatter.
-pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3]) -> ([f32; 3], i32) {
+/// A serve's launch, as the original: the trajectory table is looked up as if from the contact point less the
+/// scatter toward the aim, and the ball flies to aim + scatter. `turn` is the shot record's spin and side angle
+/// (radians; only slice serves have a side angle) and whether the server is left-handed (see
+/// `shot::launch_turned`).
+pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool)) -> shot::Launch {
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [hit[0] - scatter[0], hit[1], hit[2] - scatter[2]], aim);
-    let target = [crate::ps2::add(aim[0], scatter[0]), aim[1], crate::ps2::add(aim[2], scatter[2])];
-    (shot::launch(hit, target, l.elevation, l.speed), l.frames)
+    let target = [crate::ps2::add(aim[0], scatter[0]), aim[1], crate::ps2::add(aim[2], scatter[2]), 1.0];
+    let (spin, side, lefty) = turn;
+    shot::launch_turned(0, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, 0.0, lefty, l.frames)
 }
 
 /// The balloon over a hitter's head.
