@@ -55,6 +55,10 @@ pub enum Test {
     Lt70,
     /// Nothing passes: every pixel writes colour only.
     Never,
+    /// A ≥ 0x80, colour and Z (the effect textures' TEST: GEQUAL 0x80, FB_ONLY on fail).
+    Ge80,
+    /// A < 0x80, colour only (its other half).
+    Lt80,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -222,7 +226,7 @@ impl Material for GsMaterial {
         // blended draws and those that write no Z (e.g. the unblended `line@add` court lines) go after the opaque
         // ones, back to front, as the PS2 draws them after the ground they lie on; specialize sets the real blend.
         // Alpha-tested ones are Mask so the shadow pass runs the test too.
-        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Never) {
+        if self.key.blend.is_some() || matches!(self.key.test, Test::Lt70 | Test::Lt80 | Test::Never) {
             AlphaMode::Blend
         } else if self.key.test == Test::Always {
             AlphaMode::Opaque
@@ -247,7 +251,7 @@ impl Material for GsMaterial {
         let shadow = key.mesh_key.contains(bevy::pbr::MeshPipelineKey::DEPTH_PREPASS);
         descriptor.primitive.cull_mode = (k.cull && !shadow).then_some(bevy::render::render_resource::Face::Back);
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
-            ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt70 | Test::Never));
+            ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt70 | Test::Lt80 | Test::Never));
         }
         // the shadow pass has no fragment stage for draws that cannot discard
         let Some(fragment) = descriptor.fragment.as_mut() else { return Ok(()) };
@@ -262,12 +266,14 @@ impl Material for GsMaterial {
             Test::Ge40 => defs.push("GS_GE40".into()),
             Test::Ge70 => defs.push("GS_GE70".into()),
             Test::Lt70 => defs.push("GS_LT70".into()),
+            Test::Ge80 => defs.push("GS_GE80".into()),
+            Test::Lt80 => defs.push("GS_LT80".into()),
             Test::Always | Test::Never => {}
         }
         if k.fog {
             defs.push("GS_FOG".into());
         }
-        if matches!(k.test, Test::Lt70 | Test::Never) {
+        if matches!(k.test, Test::Lt70 | Test::Lt80 | Test::Never) {
             defs.push("GS_NO_Z".into());
         }
         let keep_alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add };
