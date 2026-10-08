@@ -326,3 +326,114 @@ fn ai_draws_like_the_game() {
         assert!(g == ai_at(point + 1), "vsync {point}: the AI generator after the new point");
     }
 }
+
+/// The shared generator over all of `rng_s05`, against what the same run's `context/fixtures/match_s05.bin` shows
+/// happening (a frame's draws show in the next sample). Every frame's draws are replayed from the recipes the app
+/// uses, and the generator must land on the recorded one:
+/// - a new point: the reseed (`Rngs::new_point`), then one placement draw per player
+/// - the serve toss (the server's serve flag +0x3ec0 set): the ball's two launch uniforms
+/// - a stroke (the live ball's uniforms change; the hitter is the rally's last hitter):
+///   - the mis-hit roll (`swing::mis_hit`) and a framed hit's lob (`swing::wild_aim`)
+///   - the fresh draw
+///   - the shout's chances and key (`sound::stroke_shout`, `Voice::shout`)
+///   - the two uniforms, which must be the ball's
+/// - a dive's start (branch 3): its shout key
+/// - the doubles team reactions (`motion::team_reaction`), which must pick the recorded motions
+/// - the reaction voice of a player in the post-point camera's close view (its voice key +0x3d38 set): one key draw,
+///   taken from the recording, as the app leaves it out with that view
+#[test]
+fn shared_draws_like_the_game() {
+    use hst_sim::replay::{Frame, frames_live};
+    use hst_sim::{motion, sound, swing};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(d), Ok(m)) = (std::fs::read(format!("{root}/context/p3b/rng_s05.bin")), std::fs::read(format!("{root}/context/fixtures/match_s05.bin"))) else {
+        return eprintln!("rng_s05.bin or match_s05.bin missing, skipped");
+    };
+    let size = 4 + 8 + 4 * 0x9d0;
+    let rng: Vec<(u32, Rand, Mt)> = d
+        .chunks_exact(size)
+        .map(|s| (u32::from_le_bytes(s[..4].try_into().unwrap()), Rand(u64::from_le_bytes(s[4..12].try_into().unwrap())), Mt::from_ram(&s[12..])))
+        .collect();
+    let frames = frames_live(&m);
+    let at = |v: u32| frames.iter().copied().find(|f| f.vsync() == v).unwrap();
+    let pi = |f: Frame, p: usize, o: usize| f.player_f32(p, o).to_bits() as i32;
+    let pb = |f: Frame, p: usize, o: usize| f.player_f32(p, o & !3).to_bits().to_le_bytes()[o & 3];
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let chars: Vec<i32> = (0..4).map(|p| at(rng[0].0).global(0x422fa8 + 4 * p)).collect();
+    let mut voices = [sound::Voice::default(); 4];
+    let mut g = rng[0].2.clone();
+    // reseeds, placements, tosses, strokes, dives, team reactions, reaction voices
+    let mut tally = [0usize; 7];
+    for w in rng.windows(2) {
+        let ((v, rand, before), (_, _, after)) = (&w[0], &w[1]);
+        let (a, b) = (at(*v), at(v + 1));
+        let start = g.clone();
+        let mut n = 0;
+        let mut draw = || {
+            n += 1;
+            g.next()
+        };
+        if reach(before, after, 4000).is_none() {
+            let mut r = Rngs::new(*rand, before.clone());
+            r.new_point();
+            g = r.shared;
+            tally[0] += 1;
+            for _ in 0..4 {
+                g.next();
+            }
+            tally[1] += 1;
+            assert!(g == *after, "vsync {v}: the new point's reseed and placements");
+            continue;
+        }
+        let (ba, bb) = (a.live_ball(), b.live_ball());
+        if u(bb, 0x258) != u(ba, 0x258) {
+            if pb(b, 0, 0x3ec0) != 0 && (0..4).any(|p| pb(a, p, 0x3ec0) == 0 && pb(b, p, 0x3ec0) != 0) {
+                tally[2] += 1;
+            } else {
+                let p = b.rally(hst_sim::replay::RALLY_ADDR + 8) as usize;
+                let (branch, grade, kind) = (pb(b, p, 0x3ec1), pb(b, p, 0x3ee8), u(bb, 0x5c) as i32);
+                let (_, awkward) = swing::launch_motion(branch, pi(b, p, 0x3df0));
+                let mis = swing::mis_hit(grade, branch, kind, pi(b, p, 0x3df4) < 10, awkward, b.player_f32(p, 0x3f44), &mut draw);
+                if mis.wild {
+                    swing::wild_aim(true, 1.0, &mut draw);
+                }
+                draw();
+                let hit = sound::Hit { branch, grade, offset: pi(b, p, 0x3fa0), kind, strong_toss: pi(b, p, 0x3ea0) == 1, framed: mis.wild, dull: mis.dull, ..Default::default() };
+                if let Some(program) = sound::stroke_shout(&hit, chars[p], 4, || (draw() >> 16 & 0x7fff) % 100) {
+                    voices[p].shout(p, program, 4, draw() >> 16 & 0x7fff);
+                }
+                tally[3] += 1;
+            }
+            let uniform = |r: u32| hst_sim::ps2::mul(hst_sim::ps2::utof(r), 2.328_306_4e-10).to_bits();
+            let (u0, u1) = (draw(), draw());
+            assert_eq!((uniform(u0), uniform(u1)), (u(bb, 0x258), u(bb, 0x25c)), "vsync {v}: the launch's uniforms");
+        }
+        for p in 0..4 {
+            if pb(b, p, 0x3ec1) == 3 && pb(a, p, 0x3ec1) != 3 {
+                voices[p].shout(p, sound::DIVE_SHOUT, 4, draw() >> 16 & 0x7fff);
+                tally[4] += 1;
+            }
+        }
+        if (0..4).any(|p| pi(a, p, 0x3db0) == 0 && pi(b, p, 0x3db0) != 0) {
+            let mut taken = Vec::new();
+            for p in 0..4 {
+                let want = pi(b, p, 0x3db0);
+                let base = if want >= 0x30 { 0x2c } else { want };
+                let id = motion::team_reaction(base, chars[p], &taken, |m| (draw() >> 16 & 0x7fff) % m);
+                assert_eq!(id, want, "vsync {v}: player {p}'s team reaction");
+                if id >= 0x30 {
+                    taken.push(id - 0x30);
+                }
+            }
+            tally[5] += 1;
+        }
+        // the post-point close-view test isn't ported (its own PLAN task): the key's draw is taken as recorded
+        for _ in (0..4).filter(|&p| pi(a, p, 0x3d38) == -1 && pi(b, p, 0x3d38) != -1) {
+            draw();
+            tally[6] += 1;
+        }
+        assert!(g == *after, "vsync {v}: the shared generator after {n} draws, {:?} short", reach(&g, after, 400).map(|k| k as i32).or(reach(after, &start, 400).map(|k| -(k as i32))));
+    }
+    eprintln!("{} frames: {tally:?} (reseeds, placements, tosses, strokes, dives, team reactions, reaction voices)", rng.len());
+    assert_eq!(tally, [2, 2, 2, 13, 1, 1, 1]);
+}

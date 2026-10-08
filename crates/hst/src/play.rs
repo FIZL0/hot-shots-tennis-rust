@@ -1324,6 +1324,7 @@ fn setup(
     // the match starts (the sound manager's reseed), then its first point
     reseed_sound(&mut game);
     game.rng.new_point();
+    placement_draws(&mut game);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(
@@ -1850,6 +1851,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             g.path_base = 0;
             g.prev_ball = hand;
             g.serving.tossed = true;
+            toss_draws(g);
         }
         g.players[i].serve_anim = Some(0.35 * (s.t as f32 / serve::TOSS_RELEASE as f32).min(1.0));
         return;
@@ -1910,7 +1912,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         } else {
             g.serving.bot_aim
         };
-        let coins = [(); 3].map(|_| g.rng.shared.bit());
+        let coins = || g.rng.shared.bit();
         let d = &g.serve_data[i];
         let (target, miss) = serve::target(
             d,
@@ -1985,6 +1987,20 @@ fn pad_stick(v: Vec2) -> Vec2 {
 /// Whether player `i`'s serve aim comes from a stick (humans) rather than the stand-in AI's pick.
 fn pads_aim(g: &Game, i: usize) -> bool {
     g.serving.bot_due.is_none() || i != g.score.server as usize
+}
+
+/// The toss's ball launch draws the ball's two shared uniforms, as every launch does (kept on the ball; nothing
+/// ported reads them).
+fn toss_draws(g: &mut Game) {
+    (g.rng.shared.next(), g.rng.shared.next());
+}
+
+/// A new point's placement message: one shared draw per player, right after the reseed.
+// ponytail: the doubles formation the draw picks from (staggered when `% 100 < 20`) is left out (PLAN P3d2)
+fn placement_draws(g: &mut Game) {
+    for _ in 0..g.players.len() {
+        g.rng.shared.next();
+    }
 }
 
 /// The ball is held: still, and placed on the server's motion each tick (`held_ball`).
@@ -3691,6 +3707,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
     g.rng.new_point();
+    placement_draws(g);
     // a point's end leaves for the next point (or match): the sound manager reseeds as on a change of ends
     if fresh {
         reseed_sound(g);

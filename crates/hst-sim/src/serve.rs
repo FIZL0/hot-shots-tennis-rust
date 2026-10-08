@@ -194,8 +194,9 @@ pub fn ai_pick(window: [f32; 3], quick: bool, path: impl IntoIterator<Item = (f3
 /// the character's serve angle from where the server stands). A mistimed weak or underhand toss (offset beyond
 /// ±1) shrinks the area; a mistimed strong toss (timing grade 3 or 4) throws the aim deep (late) or short (early)
 /// and sideways, which is where faults come from. `side` 0 deuce / 1 ad, `stick` on the court (x, z).
-/// Returns the aim and the swing's error off it (see `scatter`). `rand` are the game's coin flips in draw order:
-/// the aim's centred nudge (5 or 10, its sign), then the strong toss's sideways error when the stick is centred.
+/// Returns the aim and the swing's error off it (see `scatter`). `rand` flips the shared generator's coins, drawn
+/// only where the game draws them: the aim's centred nudge (5 or 10, then its sign) when aimed within 1 m of the
+/// centre with the stick level, then the mistimed strong toss's sideways error when the stick is centred.
 #[allow(clippy::too_many_arguments)]
 pub fn target(
     d: &ServeData,
@@ -207,7 +208,7 @@ pub fn target(
     side: i32,
     doubles: bool,
     stick: [f32; 2],
-    rand: [bool; 3],
+    mut rand: impl FnMut() -> bool,
 ) -> ([f32; 3], Miss) {
     use crate::ps2::{add, div, mul, madd, sqrt, sub};
     let strong = toss == Toss::Strong;
@@ -220,7 +221,12 @@ pub fn target(
     let s = shot::AimStats { con: [0, 0, d.max_angle as i32], ..Default::default() };
     let t = shot::aim_from(&h, &s, stick, doubles, false, None, base, width, half);
     // aimed close to the centre line with the stick level: a random nudge sideways
-    let nudge = if t[0].abs() <= 1.0 && stick[0] == 0.0 { (if rand[1] { 1 } else { -1 }) * if rand[0] { 5 } else { 10 } } else { 0 };
+    let nudge = if t[0].abs() <= 1.0 && stick[0] == 0.0 {
+        let size = if rand() { 5 } else { 10 };
+        if rand() { size } else { -size }
+    } else {
+        0
+    };
     let mut miss = Miss { side: 0.0, depth: 0.0, nudge };
     if strong && (grade == 3 || grade == 4) {
         let sign = if offset < 1 { -1 } else { 1 };
@@ -232,7 +238,7 @@ pub fn target(
             miss.side = along(0.0, stick[0]);
             miss.depth = along(miss.depth, stick[1]);
         } else {
-            miss.side = madd(add(0.0, 0.0), 0.01, ((if rand[2] { -1 } else { 1 }) * d.miss[2]) as f32);
+            miss.side = madd(add(0.0, 0.0), 0.01, ((if rand() { -1 } else { 1 }) * d.miss[2]) as f32);
         }
         miss.side = mul(miss.side, 0.6666667);
         miss.depth = mul(miss.depth, 0.6666667);
@@ -418,20 +424,20 @@ mod tests {
         let d = data();
         let server = [3.0, 0.0, -12.25];
         // centred: the deuce box's centre; full tilt reaches its corner exactly
-        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], [false; 3]), ([-2.0575, 0.0, 4.7], Miss::default()));
-        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], [false; 3]);
+        assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], || false), ([-2.0575, 0.0, 4.7], Miss::default()));
+        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], || false);
         assert!((corner[0] + 4.115).abs() < 1e-3 && (corner[2] - 6.4).abs() < 1e-3, "{corner:?}");
         // the same aim with a late strong toss lands past the service line (fault)
         let hit = [3.0, -2.5, -12.0];
-        let (aim, m) = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        let (aim, m) = target(&d, Toss::Strong, 5, 4, server, 1.0, 0, false, [0.0, 1.0], || false);
         let e = scatter(&d, Toss::Strong, m, depth_error(&d, Toss::Strong, 13, 4, 2.5), hit, aim);
         assert!(aim[2] + e[2] > 6.4, "{aim:?} {e:?}");
         // an early one falls short, the short error tripled
-        let (aim, m) = target(&d, Toss::Strong, -5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        let (aim, m) = target(&d, Toss::Strong, -5, 4, server, 1.0, 0, false, [0.0, 1.0], || false);
         let e = scatter(&d, Toss::Strong, m, depth_error(&d, Toss::Strong, 3, 4, 2.5), hit, aim);
         assert!(e[2] < -1.4, "{aim:?} {e:?}");
         // a mistimed weak toss stays inside
-        let (weak, m) = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], [false; 3]);
+        let (weak, m) = target(&d, Toss::Weak, 5, 4, server, 1.0, 0, false, [0.0, 1.0], || false);
         assert!(weak[2] <= 6.4 && m == Miss::default(), "{weak:?}");
     }
 
