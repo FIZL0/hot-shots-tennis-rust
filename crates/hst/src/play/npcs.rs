@@ -9,6 +9,9 @@
 //! The points are seen from the game's state: a decided point is the umpire turning (`point_over` sets her
 //! motion only then), a new point the next serve after it. The walkers react and the gallery picks who cheers
 //! ([`npc::cheerers`]) on the tick after the point, one tick after the original.
+//!
+//! The walkers stand at their home facing the court centre (each serve placement turns them there) and turn to the
+//! middle of the winners' half when they react ([`npc::walker_facing`]).
 
 use std::sync::Arc;
 
@@ -28,7 +31,8 @@ pub fn plugin(app: &mut App) {
 #[derive(Resource)]
 struct Npcs {
     umpire: Option<(Entity, Anim)>,
-    walkers: Vec<(Entity, npc::Walker)>,
+    /// Each walker with where it stands (its home; it turns there, `npc::walker_facing`).
+    walkers: Vec<(Entity, npc::Walker, [f32; 4])>,
     triggers: Vec<(Entity, npc::Trigger, exe::TriggerRow)>,
     /// The gallery's tick counter (restarts at a new point).
     tick: i32,
@@ -102,7 +106,9 @@ fn setup(
                 let lens = std::array::from_fn(|a| data.motions.get(&a).map_or(0.0, |c| c.length));
                 let slot = npcs.walkers.len() as u32;
                 let w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens };
-                npcs.walkers.push((place(&data, &c.world, c.scale), w));
+                // the serve placement before the first point turns it to the court centre
+                let world = npc::walker_facing(c.world[3], 0.0);
+                npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
             }
             npc::Kind::Trigger(t) => {
                 let Some((model, base, clips)) = game.trigger_model(t) else { continue };
@@ -122,6 +128,14 @@ fn setup(
     commands.insert_resource(npcs);
 }
 
+/// Turn walker `e` at `home` toward (0, 0, `z`), keeping its scale.
+fn face(turn: &mut Query<&mut Transform, With<character::Rig>>, e: Entity, home: [f32; 4], z: f32) {
+    if let Ok(mut t) = turn.get_mut(e) {
+        let scale = t.scale;
+        *t = Transform::from_matrix(Mat4::from_cols_array_2d(&npc::walker_facing(home, z))).with_scale(scale);
+    }
+}
+
 /// Show clip `id` at `frame` (the tick's sampled time; `character::tick` already moved the last one to `prev`).
 fn show(m: &mut Motion, id: usize, frame: f32, looping: bool) {
     if m.id != id {
@@ -131,12 +145,19 @@ fn show(m: &mut Motion, id: usize, frame: f32, looping: bool) {
     m.clock.sampled = frame;
 }
 
-fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&character::Rig, &mut Motion)>) {
+fn step(
+    mut g: ResMut<Game>,
+    npcs: Option<ResMut<Npcs>>,
+    mut q: Query<(&character::Rig, &mut Motion)>,
+    mut turn: Query<&mut Transform, With<character::Rig>>,
+) {
     let Some(mut npcs) = npcs else { return };
     let npcs = &mut *npcs;
     let at = |p: [f32; 3]| [p[0], p[1], p[2], 1.0];
     npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
+    // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
+    let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
     let rng = &mut g.rng;
     let mut roll = || {
         rand(rng);
@@ -144,7 +165,10 @@ fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&characte
     };
     // a decided point: the walkers react, some cheering
     let cheer = if motion != 0 && npcs.motion == 0 {
-        npcs.walkers.iter_mut().for_each(|(_, w)| w.react());
+        for (e, w, home) in &mut npcs.walkers {
+            w.react();
+            face(&mut turn, *e, *home, side);
+        }
         npcs.decided = true;
         npc::cheerers(npcs.walkers.len(), &mut roll)
     } else {
@@ -154,7 +178,9 @@ fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&characte
     if npcs.decided && serve {
         npcs.decided = false;
         npcs.tick = 0;
-        for (_, w) in &mut npcs.walkers {
+        for (e, w, home) in &mut npcs.walkers {
+            // the serve placement turns them back to the court centre
+            face(&mut turn, *e, *home, 0.0);
             // the match's first point (no stagger) comes before any decided one
             w.new_point(players >= 3);
         }
@@ -180,7 +206,7 @@ fn step(mut g: ResMut<Game>, npcs: Option<ResMut<Npcs>>, mut q: Query<(&characte
         }
     }
     npcs.motion = motion;
-    for (k, (e, w)) in npcs.walkers.iter_mut().enumerate() {
+    for (k, (e, w, _)) in npcs.walkers.iter_mut().enumerate() {
         w.step(players, cheer[k], npcs.tick, &mut roll);
         if let Ok((_, mut m)) = q.get_mut(*e) {
             show(&mut m, w.anim as usize, w.frame, matches!(w.anim, 3 | 5));

@@ -74,7 +74,7 @@ fn creatures_match_ram_on_four_courts() {
             let vt = r.u(a);
             if vt == WALKER || vt == TRIGGER {
                 let rec = (r.u(a + 0x54) - recs) / 0x90;
-                objs.insert(rec as usize, (vt == WALKER, r.u(a + 0x50) as u8, r.bits(a + 0x70, 16)));
+                objs.insert(rec as usize, (vt == WALKER, r.u(a + 0x50) as u8, r.bits(a + 0x70, 16), r.bits(a + 0x120, 16)));
             }
         }
         let made = npc::spawn(&entries, &plants, &game.npc_roster(court), &game.walkers(court), players);
@@ -90,7 +90,12 @@ fn creatures_match_ram_on_four_courts() {
         assert_eq!(ours, theirs, "court {court}: figures (record → walker?, type)");
         let mut still = 0;
         for m in &made {
-            let Some((walker, _, mtx)) = objs.get(&m.record) else { continue };
+            let Some((walker, _, mtx, drawn)) = objs.get(&m.record) else { continue };
+            if *walker {
+                // drawn turned to the court centre (the serve placement before every state)
+                let centre: Vec<u32> = npc::walker_facing(m.world[3], 0.0).iter().flatten().map(|x| x.to_bits()).collect();
+                assert_eq!(*drawn, centre, "court {court} record {}: walker facing", m.record);
+            }
             let want: Vec<u32> = m.world.iter().flatten().map(|x| x.to_bits()).collect();
             if *walker && mtx[12..15] != want[12..15] {
                 continue; // walked off
@@ -224,6 +229,63 @@ fn walkers_animate_like_the_game() {
             }
         }
         eprintln!("court {court}: {ticks} walker ticks, {draws} with random draws, {reactions} reactions");
+        courts.push(court);
+    }
+    assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}
+
+/// Walking spectators' facing against the same recordings: every sample, every walker's drawn matrix (+0x120) is
+/// [`npc::walker_facing`] from its home (+0x70 row 3): toward the court centre, or, from the tick it reacts to a
+/// point (mode 0 → 2), toward the middle of the winners' half (the winning team's first player's z, as the walker
+/// copied it the tick before). Any other turn is back to the centre (a serve placement).
+#[test]
+fn walkers_face_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut courts = Vec::new();
+    for slot in [5, 7, 10, 3] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/npc_s{slot:02}.bin")) else {
+            eprintln!("npc_s{slot:02}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+        let n = u(&d, 0) as usize;
+        let (g, mgr2) = (4, 4 + 0x180 + 0x9d0 + 0x280);
+        let wo = |k: usize| mgr2 + 0x20 + 8 + k * 0x380;
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(wo(n)).collect();
+        let court = u(samples[0], g + 0x10);
+        let drawn = |s: &[u8], k: usize| -> Vec<u32> { (0..16).map(|i| u(s, wo(k) + 0x120 + 4 * i)).collect() };
+        let bits = |m: [[f32; 4]; 4]| -> Vec<u32> { m.iter().flatten().map(|x| x.to_bits()).collect() };
+        let (mut turns, mut reactions, mut blank) = (0, 0, 0);
+        // the last sample with a matrix, per walker (a reset zeroes the object before it writes it again)
+        let mut last: Vec<Option<usize>> = vec![None; n];
+        for i in 0..samples.len() {
+            let b = samples[i];
+            for k in 0..n {
+                let home = std::array::from_fn(|c| f(b, wo(k) + 0xa0 + 4 * c));
+                let centre = bits(npc::walker_facing(home, 0.0));
+                let have = drawn(b, k);
+                if have.iter().all(|&x| x == 0) {
+                    blank += 1;
+                    continue;
+                }
+                let Some(a) = last[k].replace(i).map(|j| samples[j]) else {
+                    assert!([6.4, -6.4, 0.0].iter().any(|&z| bits(npc::walker_facing(home, z)) == have), "court {court}: walker {k} first facing");
+                    continue;
+                };
+                if u(a, wo(k) + 0x210) == 0 && u(b, wo(k) + 0x210) == 2 {
+                    let team = u(b, g + 0x128) as usize;
+                    let z = if 0.0 <= f(a, wo(k) + 0x220 + 0x10 * team + 8) { 6.4 } else { -6.4 };
+                    assert_eq!(have, bits(npc::walker_facing(home, z)), "court {court} vsync {} walker {k}: reaction", u(b, 0));
+                    reactions += 1;
+                } else if have != drawn(a, k) {
+                    assert_eq!(have, centre, "court {court} vsync {} walker {k}: turn", u(b, 0));
+                    turns += 1;
+                }
+            }
+        }
+        eprintln!("court {court}: {} samples, {reactions} reaction turns, {turns} turns back to the centre, {blank} blank", samples.len());
+        assert!(blank * 100 < samples.len() * n, "court {court}: {blank} blank matrices");
         courts.push(court);
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
