@@ -365,6 +365,8 @@ struct Game {
     errors: u32,
     gallery_game: bool,
     cheers: Vec<(sound::Play, i32)>,
+    /// The decided point's reaction, for the gallery to take before the walkers step.
+    applause: Option<sound::Reaction>,
     /// The court's ambient sound emitters.
     emitters: Vec<npc::Emitter>,
     /// Which players are on a controller (the gallery favours their side).
@@ -1203,6 +1205,7 @@ fn setup(
         errors: 0,
         gallery_game: false,
         cheers: Vec::new(),
+        applause: None,
         emitters: Vec::new(),
         humans: Vec::new(),
         jingle: None,
@@ -3414,29 +3417,7 @@ fn simulate(mut g: ResMut<Game>) {
     // ponytail: she steps first, so this tick's phase messages reach her a tick later than in the original
     let playing = g2.umpire_voice != 0;
     g2.umpire.step(playing, g2.flight.ball.pos);
-    let rng = &mut g2.rng.court;
-    let cheers = g2.gallery.step(
-        g2.stage,
-        g2.players.len() as u32,
-        g2.gallery_game,
-        &mut || rng.next(),
-    );
-    g2.cheers.extend(cheers);
-    for e in &mut g2.emitters {
-        if e.step(&mut || rng.next()) {
-            debug!("emitter type {} sound {}", e.ty, e.row.sound);
-            g2.sounds.push((
-                sound::Play {
-                    slot: 0,
-                    program: 7,
-                    key: e.row.sound as u8,
-                    volume: 0x40,
-                    speed: 1.0,
-                },
-                e.pos,
-            ));
-        }
-    }
+    // the gallery and the emitters step after the walkers, in `npcs::step` (the game's order)
     let players: Vec<V3> = g2.players.iter().map(|p| p.pos).collect();
     g2.cam.step(&Scene {
         players: &players,
@@ -3579,8 +3560,8 @@ fn simulate(mut g: ResMut<Game>) {
         g.smashed && g.last_hitter & 1 == team as i32
     };
     if let Some(r) = sound::reaction(verdict.call, g.gallery_game, applause, &mut g.errors) {
-        let rng = &mut g.rng.court;
-        g.gallery.point(r, &mut || rng.next());
+        // taken in `npcs::step`, after the cheerers are picked
+        g.applause = Some(r);
     }
     let who = format!("team {}", team + 1);
     g.message = match event {
