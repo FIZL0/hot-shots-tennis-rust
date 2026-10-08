@@ -1,8 +1,11 @@
 //! The doubles AI's rally routines: the receive (waiting for a ball coming its way, running to the contact spot,
 //! timing the swing), with the path copy, the landing and bounce picks, the dive check, the smash search, the
-//! ready check and the stroke-frame pickers it calls.
+//! ready check and the stroke-frame pickers it calls; and the NET and BASE rally routines (waiting in the formation
+//! between shots, the shot records the partners leave each other, the volley search).
 
 use crate::ai::{AiParams, PathBall, Runner, Searcher};
+use crate::aim::Pair;
+use crate::position::{Cue, Formation, Return, Team};
 use crate::player::{self, ReachStats, Stats};
 use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
 
@@ -49,6 +52,36 @@ pub struct World {
     pub floor: i32,
     /// The predicted path (its live window) the AI copies from.
     pub path: Vec<Ball>,
+    /// The players' shot records (by slot), the path object's mode byte and its line gap.
+    pub records: [Shot; 4],
+    pub path_mode: u8,
+    pub path_gap: f32,
+}
+
+/// A player's shot record: the frame it was written, the frames to its contact (relative to `stamp`; −2 none,
+/// −3 hitting), the contact kind, where the player stood and where it runs to.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Shot {
+    pub stamp: i32,
+    pub n: i32,
+    pub kind: i32,
+    pub pos: [f32; 4],
+    pub vec: [f32; 4],
+}
+
+impl World {
+    /// The record of `slot`, its frames made absolute.
+    fn shot(&self, slot: i32) -> Shot {
+        let mut s = self.records[slot as usize];
+        if s.n >= 0 {
+            s.n += s.stamp;
+        }
+        s
+    }
+
+    fn put(&mut self, slot: i32, n: i32, kind: i32, pos: [f32; 4], vec: [f32; 4]) {
+        self.records[slot as usize] = Shot { stamp: self.frame, n, kind, pos, vec };
+    }
 }
 
 /// The AI's player as the rally routines read it.
@@ -84,6 +117,11 @@ pub struct Body {
     pub reach: ReachStats,
     /// TParam's hand (see `Searcher::strong`).
     pub strong: u8,
+    /// The partner's and the opponents' positions; the partner's voice state; the hit mark.
+    pub mate: [f32; 4],
+    pub opp: [[f32; 4]; 2],
+    pub mate_voice: u8,
+    pub mark: u8,
 }
 
 /// The doubles AI's rally state.
@@ -122,6 +160,35 @@ pub struct Rally {
     pub push: bool,
     /// The spot the guess walk started from (x, z).
     pub from: [f32; 2],
+    /// NET/BASE: the substate, the volley level pick, the centre rate and radius.
+    pub sub: u8,
+    pub volley_level: u8,
+    pub rate: i32,
+    pub radius: f32,
+    /// Chase the bounce while nothing's found; held back (a line call coming); the formation spot (x, z of 4).
+    pub chase: bool,
+    pub held: bool,
+    pub spot: [f32; 4],
+    /// The path entry the next search starts from (−1 the window's start).
+    pub next: i32,
+    /// Following the partner's shot; holding the middle; its team hit (with the frames since).
+    pub follow: bool,
+    pub middle: bool,
+    pub ours: bool,
+    pub tick: i32,
+    pub voice: bool,
+    pub lean: i32,
+    pub back: Return,
+    pub lane: u8,
+    pub front: bool,
+    pub forward: bool,
+    /// Giving way to the partner: the rounds before the roll is retaken, the rate, the roll, the flag.
+    pub rounds: i32,
+    pub defer_rate: i32,
+    pub defer_roll: bool,
+    pub defer: bool,
+    /// The caller's stack quad the bounce picks start from (the game leaves it uninitialised).
+    pub stash: [f32; 4],
 }
 
 /// What a call leaves for the player: the run target or stick, and the button.
@@ -389,14 +456,14 @@ impl Rally {
     }
 
     /// The smash search: the ball nearest the ideal smash height, falling, in the smash window and in time.
-    fn smash_search(&self, b: &Body, w: &World, c: &PathCopy, min: i32) -> Option<([f32; 4], [f32; 4], i32, i32)> {
+    fn smash_search(&self, b: &Body, w: &World, c: &PathCopy, from: i32, min: i32) -> Option<([f32; 4], [f32; 4], i32, i32)> {
         let r = &b.reach;
         let [high, ideal, low] = r.smash;
         let runner = self.runner(b, w);
         let off_x = |x| sub(x, div(mul(b.hand, mul(b.smash_off[0], b.side)), 2.0));
         let off_z = |z| sub(z, div(mul(b.smash_off[1], b.side), 2.0));
         let mut best: Option<(usize, f32, i32)> = None;
-        for at in self.first.max(0) as usize..self.len.max(0) as usize {
+        for at in (if from < 0 { self.first } else { from }).max(0) as usize..self.len.max(0) as usize {
             let e = c.balls[at];
             if e.bounces >= 2 {
                 break;
@@ -715,7 +782,7 @@ impl Rally {
                     }
                 }
                 if !found {
-                    if let Some((stand, ball, frames, index)) = self.smash_search(b, w, c, 1) {
+                    if let Some((stand, ball, frames, index)) = self.smash_search(b, w, c, -1, 1) {
                         (self.stand, self.ball, self.frames, self.index, self.kind) = (stand, ball, frames, index, 3);
                         found = true;
                     }
@@ -813,5 +880,482 @@ impl Rally {
             }
         }
         done
+    }
+}
+
+/// What a search found: stand, ball, run frames, index (from `first`).
+type Found = ([f32; 4], [f32; 4], i32, i32);
+
+impl Rally {
+    fn our_hit(b: &Body, w: &World) -> bool {
+        w.hitter >= 0 && (w.hitter & 1) == (b.team & 1)
+    }
+
+    /// The formation re-pick; a new spot restarts the walk back.
+    fn repick(&mut self, b: &Body, w: &World, cue: Cue, roll: &mut impl FnMut() -> u32) {
+        let mut f = Formation { lane: self.lane, front: self.front, spot: [self.spot[0], self.spot[2]] };
+        let t = Team { side: b.side, formation: b.formation, lean: self.lean };
+        let moved = f.repick(&t, cue, [b.pos[0], b.pos[2]], w.ball[2], Self::our_hit(b, w));
+        (self.lane, self.front, self.spot[0], self.spot[2]) = (f.lane, f.front, f.spot[0], f.spot[1]);
+        if !matches!(cue, Cue::Middle) {
+            self.forward = match b.formation {
+                0 => self.front,
+                f => f == 1,
+            };
+        }
+        if moved {
+            self.back = Return::new(self.rate, roll);
+        }
+    }
+
+    /// Stand at its depth on the half the ball isn't in.
+    fn hold_spot(&mut self, b: &Body, w: &World) {
+        self.spot = b.pos;
+        self.spot[0] = mul(f32::from_bits(0xc02f_851f), sign(w.ball[0]) as f32);
+    }
+
+    /// The walk back to the spot: true when it walks this frame (`out` then heads there).
+    fn walk_back(&mut self, b: &Body, w: &World, out: &mut Out, roll: &mut impl FnMut() -> u32) {
+        if self.back.step(self.rate, self.radius, [self.spot[0], self.spot[2]], [b.pos[0], b.pos[2]], roll) {
+            out.stick = self.spot;
+            b.walk(w, &mut out.stick, false);
+        }
+    }
+
+    fn set_sub(&mut self, b: &Body, w: &mut World, s: u8, keep: bool, roll: &mut impl FnMut() -> u32) {
+        self.sub = s;
+        match s {
+            0 => {
+                if !keep {
+                    (self.fresh, self.next, self.chase) = (true, -1, true);
+                    (self.middle, self.follow, self.ours) = (false, false, false);
+                    self.back = Return::new(self.rate, roll);
+                }
+                w.put(b.team, -2, 0, b.pos, [0.0; 4]);
+                if self.rounds <= 0 {
+                    self.defer_roll = chance(roll, self.defer_rate);
+                    self.rounds = draw(roll, 3) as i32 + 2;
+                }
+                self.defer = false;
+            }
+            1 => w.put(b.team, self.index, self.kind as i32, b.pos, self.stand),
+            2 => {
+                self.lead = match self.kind {
+                    4 => 0,
+                    3 => self.leads[2],
+                    2 => self.leads[1],
+                    0 | 1 => self.leads[0],
+                    _ => self.lead,
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The partner's voice line on giving way (one roll, a second when it speaks).
+    fn call(&mut self, b: &Body, roll: &mut impl FnMut() -> u32) {
+        if self.voice && b.mate_voice < 2 && chance(roll, 25) {
+            roll(); // ponytail: picks the voice line; the sound isn't played (P11n)
+        }
+        self.voice = false;
+    }
+
+    /// Leave the ball to the partner: its own and the partner's shot records compared.
+    fn give_way(&mut self, b: &Body, mine: &Shot, theirs: &Shot) -> bool {
+        if self.defer {
+            return false;
+        }
+        let (t, m) = (theirs.n, mine.n);
+        let run = |s: &Shot| {
+            let (dz, dx) = (sub(s.vec[2], s.pos[2]), sub(s.vec[0], s.pos[0]));
+            sqrt(madd(mul(dz, dz), dx, dx))
+        };
+        let yes = t >= 0 && {
+            let (f4, f3) = (run(mine), run(theirs));
+            if self.mate > 0 {
+                if f4 < 2.5 && add(1.0, abs(b.pos[2])) < abs(b.mate[2]) {
+                    false
+                } else if f3 < 2.0 {
+                    true
+                } else if f4 < 2.5 {
+                    false
+                } else if t.wrapping_sub(m).wrapping_abs() < 30 {
+                    add(f3, 1.0) < f4
+                } else {
+                    t < m
+                }
+            } else if t < m && f3 < f4 {
+                true
+            } else if m < t && f4 < f3 {
+                false
+            } else if f3 < 2.5 || f4 < 2.5 {
+                f3 < f4
+            } else {
+                t < m
+            }
+        };
+        if !yes && self.mate > 0 && (t == -2 || t >= 0) {
+            self.defer = true;
+        }
+        yes
+    }
+
+    /// The entry after the last one with `k` bounces, when the path ends past `k` and `t` (as it comes in) lies on the
+    /// other half.
+    fn after(&self, b: &Body, c: &PathCopy, k: i32, t: &mut [f32; 4]) -> bool {
+        let len = self.len as usize;
+        if self.len < 2 || c.balls[len - 1].bounces <= k {
+            return false;
+        }
+        let Some(a) = (0..len - 1).rev().find(|&a| c.balls[a].bounces == k) else { return false };
+        let v = sign(b.side) != sign(t[2]);
+        if v {
+            *t = c.balls[a + 1].pos;
+        }
+        v
+    }
+
+    /// The partner stands nearer `t` than it does.
+    fn mate_nearer(b: &Body, t: &[f32; 4]) -> bool {
+        let d = |p: &[f32; 4]| {
+            let (dz, dx) = (sub(t[2], p[2]), sub(t[0], p[0]));
+            madd(mul(dz, dz), dx, dx)
+        };
+        d(&b.mate) < d(&b.pos)
+    }
+
+    /// Its team plays forward and the ball is on the other half, or nearer the net than it on this one.
+    fn forward_ball(&self, b: &Body, w: &World) -> bool {
+        let (oz, bz) = (b.pos[2], w.ball[2]);
+        self.forward && (sign(oz) != sign(bz) || abs(bz) <= abs(oz))
+    }
+
+    /// The volley search: before the bounce, on the other half past 1.5, under 1.3 volley heights and in reach of
+    /// the base height, nearest the volley height, in time; stops at the first found unless `all`.
+    fn volley_search(&self, b: &Body, w: &World, c: &PathCopy, from: i32, all: bool, body: bool) -> Option<Found> {
+        let r = &b.reach;
+        let vh = r.volley_height;
+        let top = mul(f32::from_bits(0x3fa6_6666), vh);
+        let r2 = mul(r.reach, r.reach);
+        let runner = self.runner(b, w);
+        let (mx, mz) = (b.pos[0], b.pos[2]);
+        let mut best: Option<(i32, f32, i32, [f32; 4])> = None;
+        let mut at = if from < 0 { self.first } else { from };
+        while at < self.len {
+            let e = c.balls[at as usize];
+            if e.bounces > 0 {
+                break;
+            }
+            let p = e.pos;
+            if sign(b.side) != sign(p[2]) && !(abs(p[2]) < 1.5) {
+                'c: {
+                    if !(0.0 <= p[1] && p[1] <= top) {
+                        break 'c;
+                    }
+                    let dy = sub(p[1], r.base);
+                    let f = msub(add(0.0, r2), dy, dy);
+                    if f < 0.0 {
+                        break 'c;
+                    }
+                    let half = if body { 0.0 } else { sqrt(f) };
+                    let (l, rr) = (sub(p[0], half), add(p[0], half));
+                    let dz = sub(p[2], mz);
+                    let (dl, dr) = (sub(l, mx), sub(rr, mx));
+                    let mut s = p;
+                    s[0] = if madd(mul(dz, dz), dl, dl) <= madd(mul(dz, dz), dr, dr) { l } else { rr };
+                    let score = abs(sub(p[1], vh));
+                    s[2] = sub(p[2], div(mul(b.depth, b.side), 2.0));
+                    let frames = runner.frames_to([s[0], s[2]]);
+                    if at - self.first < frames {
+                        break 'c;
+                    }
+                    if best.is_none_or(|(_, bs, _, _)| !(bs <= score)) {
+                        best = Some((at, score, frames, s));
+                    }
+                }
+                if !all && best.is_some() {
+                    break;
+                }
+            }
+            at += 1;
+        }
+        let (at, _, frames, stand) = best?;
+        Some((stand, c.balls[at as usize].pos, frames, at - self.first))
+    }
+
+    fn pair_aim(&mut self, row: &AiParams, b: &Body, roll: &mut impl FnMut() -> u32) {
+        let xz = |p: [f32; 4]| [p[0], p[2]];
+        let a = row.pair_aim(
+            &Pair {
+                me: xz(b.pos),
+                mate: xz(b.mate),
+                opp: [xz(b.opp[0]), xz(b.opp[1])],
+                side: b.side,
+                singles: self.singles,
+                kind: self.kind,
+                volley_level: self.volley_level,
+                level: self.level,
+                formation: b.formation,
+                smash_third: self.mate != 0,
+            },
+            roll,
+        );
+        (self.stick, self.plan) = (a.stick, a.plan);
+    }
+
+    /// The searches in the NET (`net`) or BASE order: the contact kind found.
+    #[allow(clippy::too_many_arguments)]
+    fn search(&mut self, net: bool, row: &AiParams, b: &Body, w: &World, c: &PathCopy, seen: &mut [bool], roll: &mut impl FnMut() -> u32) -> Option<u8> {
+        let take = |me: &mut Rally, (stand, ball, frames, index): Found| {
+            (me.stand, me.ball, me.frames, me.index) = (stand, ball, frames, index);
+        };
+        if let Some(f) = self.smash_search(b, w, c, self.next, 0) {
+            take(self, f);
+            return Some(3);
+        }
+        let near = self.forward_ball(b, w) || (self.mate > 0 && abs(b.pos[2]) < abs(b.mate[2]));
+        if net || near {
+            if let Some(f) = self.volley_search(b, w, c, self.next, !net, self.body) {
+                take(self, f);
+                return Some(2);
+            }
+        }
+        let path = self.path(c);
+        let s = Searcher {
+            row,
+            reach: &b.reach,
+            strong: b.strong,
+            singles: self.singles,
+            beside_human: self.mate > 0,
+            runner: self.runner(b, w),
+            depth: b.depth,
+            path: &path,
+            first: self.first.max(0) as usize,
+            end: self.len.max(0) as usize,
+        };
+        let hit = |me: &mut Rally, ct: crate::ai::Contact| {
+            let e = c.balls[ct.at].pos;
+            me.stand = [ct.stand[0], e[1], ct.stand[1], e[3]];
+            (me.ball, me.frames, me.index) = (e, ct.frames, ct.at as i32 - me.first);
+        };
+        let tiers = if self.low { 3 } else { 0 }..4;
+        if near {
+            let from = (self.next >= 0).then_some(self.next as usize);
+            for tier in tiers {
+                if let Some(ct) = s.tier_search(from, tier, 0, !net, self.body, self.low, seen, roll) {
+                    hit(self, ct);
+                    return Some(0);
+                }
+            }
+        } else if self.fresh && !self.landing_short(c) {
+            self.fresh = false;
+            if !net {
+                if let Some(ct) = s.reach_search(None, 1, true, self.body, roll) {
+                    hit(self, ct);
+                    return Some(1);
+                }
+            }
+            for min in [1, 0] {
+                for tier in tiers.clone() {
+                    if let Some(ct) = s.tier_search(None, tier, min, true, self.body, self.low, seen, roll) {
+                        hit(self, ct);
+                        return Some(0);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// One frame of the doubles NET (`net`) or BASE rally routine. `out` is the run target or stick (as the caller
+    /// passed it), the button set when it presses.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rally(
+        &mut self,
+        net: bool,
+        row: &AiParams,
+        b: &mut Body,
+        w: &mut World,
+        c: &mut PathCopy,
+        seen: &mut [bool],
+        out: &mut Out,
+        roll: &mut impl FnMut() -> u32,
+    ) {
+        self.frames -= 1;
+        self.index -= 1;
+        self.swing -= 1;
+        let (frame, phase) = (w.frame, w.phase);
+        let (slot, mate) = (b.team, b.team ^ 2);
+        let mut s = self.sub;
+        if s == 0 {
+            if self.hold || (phase == 4 && w.shots == 1) || w.shots < 2 || self.held {
+                return;
+            }
+            if self.wait > 0 {
+                self.wait -= 1;
+                return;
+            }
+            if !self.ours && Self::our_hit(b, w) {
+                (self.ours, self.tick) = (true, 0);
+            }
+            if self.ours {
+                self.tick += 1;
+                if self.tick >= 30 {
+                    self.tick = 0;
+                    let at = [b.mate[0], b.mate[2]];
+                    self.repick(b, w, if w.hitter == slot { Cue::Me(at) } else { Cue::Other(at) }, roll);
+                }
+                self.walk_back(b, w, out, roll);
+                return;
+            }
+            if !self.follow {
+                let p = w.shot(mate);
+                if p.n >= 0 && (!self.fresh || (self.front && sign(b.pos[2]) == sign(w.ball[2]))) {
+                    self.repick(b, w, Cue::Other([p.vec[0], p.vec[2]]), roll);
+                    self.follow = true;
+                }
+            }
+            if self.follow {
+                let p = w.shot(mate);
+                let (pz, bz, oz) = (b.mate[2], w.ball[2], b.pos[2]);
+                let same = sign(pz) == sign(bz);
+                let check = p.n < 0
+                    || p.n < frame
+                    || (p.n < frame + 8 && same && !(abs(bz) <= abs(pz)))
+                    || (!(abs(bz) <= add(2.0, abs(pz))) && same);
+                if check {
+                    let near = || {
+                        let (dz, dx) = (sub(oz, bz), sub(b.pos[0], w.ball[0]));
+                        sqrt(madd(mul(dz, dz), dx, dx)) <= 3.0
+                    };
+                    if !self.middle && (sign(oz) != sign(bz) || abs(bz) <= abs(oz) || near()) {
+                        (self.follow, self.fresh) = (false, true);
+                    } else {
+                        self.hold_spot(b, w);
+                    }
+                }
+            }
+            if self.follow {
+                let p = w.shot(mate);
+                if p.n >= 0 {
+                    self.repick(b, w, Cue::Other([p.vec[0], p.vec[2]]), roll);
+                }
+                self.walk_back(b, w, out, roll);
+                return;
+            }
+            let n = self.copy_path(b, w, c, seen, true);
+            if n <= 0 {
+                return;
+            }
+            if let Some(kind) = self.search(net, row, b, w, c, seen, roll) {
+                self.kind = kind;
+                self.set_sub(b, w, 1, false, roll);
+                s = 1;
+            } else {
+                let mut t = self.stash;
+                let mut go = |me: &mut Rally, t: [f32; 4]| {
+                    out.stick = t;
+                    if b.walk(w, &mut out.stick, false) {
+                        me.chase = false;
+                    }
+                };
+                if self.landing_short(c) {
+                    if self.landing(b, w, c, f32::from_bits(0x3e99_999a), &mut t)
+                        || self.after_bounce(b, c, &mut t)
+                        || self.entry(c, 11).map(|e| t = e).is_some()
+                        || self.last(b, c, &mut t)
+                    {
+                        let chase = self.chase;
+                        go(self, t);
+                        self.chase = chase;
+                    }
+                } else {
+                    if self.after(b, c, 1, &mut t) {
+                        let p = w.shot(mate);
+                        if p.n >= 0 {
+                            self.repick(b, w, Cue::Other([p.vec[0], p.vec[2]]), roll);
+                            self.follow = true;
+                            self.call(b, roll);
+                            self.stash = t;
+                            return;
+                        }
+                        if self.mate == 0 && Self::mate_nearer(b, &t) {
+                            self.after(b, c, 0, &mut t);
+                            if self.mate == 0 && Self::mate_nearer(b, &t) {
+                                self.repick(b, w, Cue::Middle, roll);
+                                (self.follow, self.middle) = (true, true);
+                                self.stash = t;
+                                return;
+                            }
+                        }
+                    }
+                    if self.dive && phase != 4 && !self.no_dive(b, c) {
+                        self.kind = 4;
+                        self.pair_aim(row, b, roll);
+                        out.button = Some(button(self.plan));
+                        self.set_sub(b, w, 3, false, roll);
+                    } else if self.chase
+                        && (self.after_bounce(b, c, &mut t)
+                            || self.entry(c, 11).map(|e| t = e).is_some()
+                            || self.last(b, c, &mut t))
+                    {
+                        go(self, t);
+                    }
+                }
+                self.stash = t;
+                self.next = n - 1;
+            }
+        }
+        if s == 1 {
+            let (mine, theirs) = (w.shot(slot), w.shot(mate));
+            if self.give_way(b, &mine, &theirs) {
+                self.repick(b, w, Cue::Other([theirs.vec[0], theirs.vec[2]]), roll);
+                self.follow = true;
+                self.call(b, roll);
+                self.set_sub(b, w, 0, true, roll);
+                return;
+            }
+            let go = if self.frames == 1 { self.ready(b, w) == 2 } else { self.frames < 1 };
+            if !go {
+                out.stick = self.stand;
+                b.walk(w, &mut out.stick, true);
+                return;
+            }
+            self.copy_path(b, w, c, seen, true);
+            self.swing = self.swing_frame(b, c).unwrap_or(8);
+            self.set_sub(b, w, 2, false, roll);
+            s = 2;
+        }
+        if s == 2 {
+            let mine = w.shot(slot);
+            if mine.n >= 0 && mine.n < frame {
+                w.put(slot, -2, 0, b.pos, [0.0; 4]);
+            }
+            if self.swing + self.lead < 9 {
+                if w.path_mode == 2 && !(w.path_gap < row.line_margin) {
+                    self.held = true;
+                    self.set_sub(b, w, 0, false, roll);
+                } else {
+                    self.pair_aim(row, b, roll);
+                    out.button = Some(button(self.plan));
+                    self.set_sub(b, w, 3, false, roll);
+                }
+            }
+            return;
+        }
+        if s == 3 {
+            if b.swing == 1 {
+                out.stick = self.stick;
+            }
+            if b.mark != 0 {
+                w.put(slot, -3, 0, b.pos, [0.0; 4]);
+            }
+            if b.stroke == 0 {
+                self.set_sub(b, w, 0, false, roll);
+            }
+            if b.swing < 0 && w.hitter >= 0 && (w.hitter & 1) != (b.team & 1) && self.wait > 0 {
+                self.wait -= 1;
+            }
+        }
     }
 }

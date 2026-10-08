@@ -96,3 +96,10 @@ See 12-P11K1-RECEIVE-FINAL.md. Done: `hst_sim::rally` (`Rally::receive` with the
 check, smash search, ready check, stroke-frame pickers and return aim). Test `receive_matches_the_game` /
 `receive_matches_the_game_long` (`crates/hst-sim/tests/ai_rally.rs`, fixtures `ai_rally_s05*.bin` from
 `tools/record_ai_rally.py`, two with slowed players). Unreached branches: P11k4. Not wired into `play.rs` yet: P11k3.
+
+## P11k2 (doubles NET/BASE)
+
+See 13-P11K2-NETBASE-FINAL.md. Done: `Rally::rally(net, …)` with the shot records (`World::shot`/`put`), formation
+repicks, give way, the volley search and the not-found tail. Test `net_and_base_match_the_game` (fixture
+`ai_net_s05.bin`). Recorder fix: the gm-relative regions (ball, hits, gravity, path object) were read from the wrong
+pointer in every earlier fixture; the receive was re-checked on `ai_rally_s05_fix.bin`. Unreached branches: P11k5.
