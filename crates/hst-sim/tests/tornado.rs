@@ -74,3 +74,59 @@ fn tornado_s05() {
     eprintln!("{} frames, {starts} starts, {on} frames on", frames.len());
     assert!(starts > 5 && on > 300);
 }
+
+/// Forced constant ×4 slow motion (`context/fixtures/tornado_slowmo.bin`, `research/p17q_slowmo_rec.py 5`): every
+/// in-between frame's drawn scale, UV time, alpha, on flag and matrix match the game bit for bit.
+#[test]
+fn tornado_slowmo() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(data) = std::fs::read(format!("{root}/context/fixtures/tornado_slowmo.bin")) else {
+        return eprintln!("tornado_slowmo.bin absent, skipped");
+    };
+    // per frame: vsync 4, slow-motion block 0x30, tornado 0x190, its model +0x120 (8), its UV animation 0x30, ball
+    const SLOW: usize = 4;
+    const T: usize = SLOW + 0x30;
+    const MODEL: usize = T + 0x190;
+    const ANIM: usize = MODEL + 8;
+    const B: usize = ANIM + 0x30;
+    let fade = i(&data, 0);
+    let frames: Vec<&[u8]> = data[4..].chunks_exact(B + 0x290).collect();
+    let state = |fr: &[u8]| {
+        let t = &fr[T..];
+        Tornado {
+            on: t[0x62] != 0,
+            t: f(t, 0xb8),
+            end: f(t, 0xc8),
+            speed: f(t, 0xc0),
+            fade: i(t, 0xb0),
+            alpha: f(t, 0xbc),
+            m: std::array::from_fn(|r| v4(t, 0x70 + 16 * r)),
+        }
+    };
+    let mut checked = 0;
+    for w in frames.windows(2) {
+        let (prev, fr) = (w[0], w[1]);
+        let frac = f(fr, SLOW + 4);
+        if fr[SLOW] == 0 || frac == 1.0 || prev[T + 0x62] == 0 {
+            continue;
+        }
+        let mut tor = state(prev);
+        let uv = [f(&fr[T..], 0x180), f(&fr[T..], 0x17c)];
+        let (scale, time) = tor.between(i(&fr[B..], 0x224), v4(&fr[B..], 0xe0), v4(&fr[B..], 0x140), frac, uv, fade, 0);
+        // the UV animation's setter wraps a looping time into its length
+        let (len, mut time) = (f(&fr[ANIM..], 0x14), time);
+        if fr[ANIM + 0x28] != 0 && len != 0.0 {
+            while len <= time {
+                time = hst_sim::ps2::sub(time, len);
+            }
+        }
+        let want = state(fr);
+        assert_eq!(scale.to_bits(), f(fr, MODEL).to_bits(), "scale, vsync {}", i(fr, 0));
+        assert_eq!(time.to_bits(), f(fr, ANIM + 0x20).to_bits(), "uv, vsync {}", i(fr, 0));
+        assert_eq!(key(&tor), key(&want), "vsync {}", i(fr, 0));
+        assert_eq!(tor.alpha.to_bits(), want.alpha.to_bits(), "alpha, vsync {}", i(fr, 0));
+        checked += 1;
+    }
+    eprintln!("{checked} in-between frames");
+    assert!(checked > 60);
+}

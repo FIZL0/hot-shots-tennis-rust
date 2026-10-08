@@ -25,6 +25,10 @@ struct Wind {
     /// Per material its MTL colour.
     colours: Vec<[f32; 4]>,
     view: Shown,
+    /// A swing locked onto the ball since the last hit (the game's per-player search records, not a dive's or a miss's).
+    latched: bool,
+    /// Last frame's locked swings: per player, then the serve's.
+    locked: Vec<bool>,
 }
 
 fn setup(
@@ -48,26 +52,44 @@ fn setup(
     let mtl = mtl::parse(&get("mtl").expect("tornado mtl"), get("mti").as_deref()).expect("tornado mtl");
     let uva = mor::parse(&get("uva").expect("tornado uva"), 4).expect("tornado uva");
     let (_, view) = model(&arc, s, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("tornado model");
+    // the GS adds the stored (gamma-encoded) texel values: raw texels, as gs.rs's (sRGB-decoded, the aura's grey
+    // texture added a fraction of its glow)
+    // ponytail: added in linear light (the scene target is sRGB), not on gamma values as the GS; B31
+    for h in &view.materials {
+        if let Some(mut img) = materials.get(h).and_then(|m| m.base_color_texture.clone()).and_then(|t| images.get_mut(&t)) {
+            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+        }
+    }
     commands.insert_resource(Wind {
         tornado: Tornado::default(),
         fade,
         uv: CourtAnim::new(&mdl, Some(&uva), None, &mtl.materials),
         colours: mtl.materials.iter().map(|m| m.color).collect(),
         view,
+        latched: false,
+        locked: Vec::new(),
     });
 }
 
-/// One game frame: a shot leaving the racket starts it (before `start_effects` takes the hit), then it rides the ball.
-// ponytail: starts on the frame the shot leaves; the game latches the hit and starts it once it flags the ball away
-// (4 frames later on a serve)
+/// One game frame: a swing locking onto the ball latches it, and the shot leaving the racket then starts it (the
+/// game's ball-away flag is the contact frame; before `start_effects` takes the hit), then it rides the ball. A dive
+/// or a missed swing posts no record, so a dive's return starts none unless an earlier lock is still latched.
+// ponytail: the latch clears once the point is over; the game clears it at its point reset, no contact comes between
 fn tick(fx: Option<ResMut<Wind>>, g: Res<Game>) {
     let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
     let b = &g.flight.ball;
     let v4 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];
-    if g.hit_effect.is_some() {
+    let locked: Vec<bool> = g.players.iter().map(|p| p.contact.is_some()).chain([g.serving.swing.is_some()]).collect();
+    fx.latched |= locked.iter().zip(fx.locked.iter().chain(std::iter::repeat(&false))).any(|(&now, &was)| now && !was);
+    fx.locked = locked;
+    if !matches!(g.phase, super::Phase::Serve | super::Phase::Rally) {
+        fx.latched = false;
+    }
+    if g.hit_effect.is_some() && std::mem::take(&mut fx.latched) {
         fx.tornado.start(v4(b.vel, 0.0), fx.fade);
         fx.uv.restart(fx.tornado.uv_speed());
+        debug!("tornado {} at speed {}", if fx.tornado.on { "on" } else { "too slow" }, fx.tornado.speed);
     }
     fx.tornado.tick(g.flight.bounces, v4(b.pos, 1.0), v4(b.vel, 0.0), fx.fade);
     if fx.tornado.on {

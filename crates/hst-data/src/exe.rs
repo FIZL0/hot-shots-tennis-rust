@@ -140,6 +140,11 @@ impl<'a> Game<'a> {
         i32::from_le_bytes(self.at(0x41_6650, 4).try_into().unwrap())
     }
 
+    /// The lowest alpha (0..128) the tornado's slow-motion in-between frames draw at.
+    pub fn tornado_floor(&self) -> i32 {
+        i32::from_le_bytes(self.at(0x41_6658, 4).try_into().unwrap())
+    }
+
     /// How far inside the court lines shots are pulled: per shot class (serve, stroke, volley, smash) and kind
     /// (0..4) the margins (across, along) for a shot mode ≥ 0 then < 0; and per character (0..13) the widest
     /// sideline margin a short angled topspin stroke can get.
