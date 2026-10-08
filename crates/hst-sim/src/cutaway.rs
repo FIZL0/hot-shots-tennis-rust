@@ -206,7 +206,7 @@ fn rot_x(t: f32) -> M4 {
     let (s, c) = t.sin_cos();
     [[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, -s, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
-const IDENTITY: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+pub const IDENTITY: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 /// A point in the camera's frame (x right, y down, z forward).
 fn local(cam: &M4, p: [f32; 3]) -> [f32; 3] {
@@ -448,23 +448,25 @@ impl Shot {
 
 /// What the post-point shot pick looks at.
 pub struct PickInput {
-    /// 0 a point, 1 a game-ending point, 2 the shown player plays a doubles team reaction.
-    pub list: usize,
+    /// The shown player plays a doubles team reaction.
+    pub team: bool,
+    /// The point ends a game or a set.
+    pub game_end: bool,
     /// The shown player's team lost the point.
     pub lost: bool,
-    /// The shown player's head (lowered 0.2 m) is below 0.8 m (crouched).
+    /// The shown player's head (frame 61) is below 0.8 m (crouched).
     pub low: bool,
-    /// Set-point flag of the match (gm+0x358) is clear.
-    pub no_set_point: bool,
+    /// Replays shown so far in the match (none until replays are ported).
+    pub replays: i32,
     pub character: i32,
 }
 
-/// Which post-point shot comes next: the point's list cycled by its own counter, skipping shots that don't fit
-/// (the down-the-line shots when the shown player lost, the high shots when crouched, the long shots on a
-/// game-ending point without a set point, the close-ups some characters lack), swapping the winner's shot for the
-/// loser's on a game-ending point.
+/// Which post-point shot comes next: the point's list (a point, a game-ending point, a team reaction) cycled by
+/// its own counter, skipping shots that don't fit (the down-the-line shots when the shown player lost, the high
+/// shots when crouched, the long shots on a game-ending point before any replay, the close-up some characters
+/// lack), swapping the winner's shot for the loser's on a game-ending point.
 pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u8 {
-    let list = i.list;
+    let list = if i.team { 2 } else { i.game_end as usize };
     let l = &lists[list];
     let len = l.len();
     let next = |c: &mut [usize; 3]| {
@@ -473,7 +475,7 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
         n
     };
     let mut n = next(counters);
-    if list != 2 && i.lost {
+    if !i.team && i.lost {
         while n == 0x62 || n == 0x63 {
             n = next(counters);
         }
@@ -483,7 +485,7 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
             n = next(counters);
         }
     }
-    if list == 1 && i.no_set_point {
+    if i.game_end && i.replays == 0 {
         while matches!(n, 0x63 | 0x66 | 0x67 | 0x68) {
             n = next(counters);
         }
@@ -493,11 +495,78 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
             n = next(counters);
         }
     }
-    if list == 1 && i.lost {
+    if i.game_end && i.lost {
         if (matches!(i.character, 0 | 4 | 10) && n == 0x61) || (i.character == 6 && (0x61..0x64).contains(&n)) {
             n = 0x65;
             counters[list] += 1;
         }
     }
     n
+}
+
+/// The reference frames the post-point shots look at, set when the cut-away starts.
+#[derive(Clone, Copy, Debug)]
+pub struct Frames {
+    /// The court corner view (frame 6).
+    pub corner: M4,
+    /// The shown player and the other one: [`subject_frames`].
+    pub shown: [[M4; 4]; 2],
+    /// The shown player's live head (frame 35): [`head_frame`].
+    pub head: M4,
+}
+
+impl Frames {
+    /// Frame `i` of the game's table; the ones no post-point shot uses are the court centre.
+    pub fn get(&self, i: u8) -> M4 {
+        match i {
+            6 => self.corner,
+            29 | 30 | 45 | 46 | 61 | 62 | 77 | 78 => self.shown[(i as usize - 29) % 2][(i as usize - 29) / 16],
+            35 => self.head,
+            _ => IDENTITY,
+        }
+    }
+}
+
+/// On the court corner nearest `spot` (the shown player's ground spot) yet more than 5 m from it, looking at the
+/// court centre.
+pub fn corner_frame(spot: [f32; 4]) -> M4 {
+    let mut best = (99.0, [0.0, 0.0]);
+    for c in [[-5.485, -11.885], [5.485, -11.885], [-5.485, 11.885], [5.485, 11.885]] {
+        let d = ((c[0] - spot[0]) * (c[0] - spot[0]) + (c[1] - spot[2]) * (c[1] - spot[2])).sqrt();
+        if d < best.0 && 5.0 < d {
+            best = (d, c);
+        }
+    }
+    let [x, z] = best.1;
+    let up = [0.0, 1.0, 0.0, 0.0];
+    let f = normalize([-x, 0.0, -z, 0.0]);
+    let r = normalize(cross(up, f));
+    [r, up, normalize(cross(r, up)), [x, 0.0, z, 1.0]]
+}
+
+/// A shown player's frames as their reaction will leave them, from the head and Spine2 bone matrices posed at
+/// that time: upright, facing the way the face looks (from the chest to the head instead when the face looks
+/// back against the chest or the head lies tilted over), at [the ground under the head, 0.4 m above the head,
+/// 0.2 m above it, the chest] (frames 29, 45, 61, 77; +1 for the other player).
+pub fn subject_frames(head: &M4, spine: &M4) -> [M4; 4] {
+    let up = [0.0, 1.0, 0.0, 0.0];
+    let (h, s) = (head[3], spine[3]);
+    let mut z = [-head[2][0], -head[2][1], -head[2][2], -head[2][3]];
+    if z[0] * -spine[2][0] + z[2] * -spine[2][2] < 0.0 || head[0][1].abs() < 0.4 {
+        z = normalize([h[0] - s[0], 0.0, h[2] - s[2], 0.0]);
+    }
+    let x = normalize(cross(up, z));
+    let z = normalize(cross(x, up));
+    let p = [h[0], h[1] - 0.2, h[2], h[3]];
+    let at = |pos| [x, up, z, pos];
+    [at([p[0], 0.0, p[2], p[3]]), at([p[0], p[1] - 0.2, p[2], p[3]]), at(p), at(s)]
+}
+
+/// The live head frame: the head bone turned to the face's axes (`left`: a left-hander's model is mirrored),
+/// 0.2 m above the head along it and 0.2 m higher still.
+pub fn head_frame(head: &M4, left: bool) -> M4 {
+    let s = if left { -1.0 } else { 1.0 };
+    let r = |i: usize, k: f32| [head[i][0] * k, head[i][1] * k, head[i][2] * k, head[i][3] * k];
+    let p: [f32; 4] = std::array::from_fn(|i| head[3][i] - 0.2 * head[0][i] - if i == 1 { 0.2 } else { 0.0 });
+    [r(1, s), r(0, 1.0), r(2, -1.0), p]
 }

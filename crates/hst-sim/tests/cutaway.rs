@@ -107,3 +107,78 @@ fn debug_frame() {
     eprintln!("basis ours {:?}\n      game {:?}", sh.basis(&table), mat(s, CAM + 0x2f50));
     for i in [0x1d, 0x1e, 0x2e, 0x3e] { eprintln!("frame {i:#x} {:?}", table(i)[3]); }
 }
+
+/// The director against `cutaway2_s05.bin` (`record_cutaway.py --players`: the same samples plus the point's
+/// globals, the pick counters and each player's head/Spine2 bones, predicted head, matrix, reaction, motion):
+/// every cut-away's shot pick and orbit side, the shown players' frames from their bones posed where the reaction
+/// leaves them (the motion runs 117 frames into the cut-away, then holds), the corner view and the live head frame.
+#[test]
+fn director_s05() {
+    use hst_sim::cutaway::{self, PickInput};
+    const X: usize = SAMPLE;
+    const PL: usize = X + 0xd8;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Ok(mut iso)) = (std::fs::read(format!("{dir}/cutaway2_s05.bin")), Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"))) else {
+        return eprintln!("cutaway2_s05.bin or ISO absent, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let lists = Game::new(&cnf, &bin).unwrap().cutaway_lists();
+    let i32_ = |s: &[u8], o: usize| i32::from_le_bytes(s[o..o + 4].try_into().unwrap());
+    let samples: Vec<&[u8]> = data.chunks_exact(PL + 4 * 0x170).collect();
+    let mut runs = vec![0];
+    for k in 1..samples.len() {
+        if i32_(samples[k], 0) != i32_(samples[k - 1], 0) + 1 || samples[k][CAM + 0x114] != samples[k - 1][CAM + 0x114] {
+            runs.push(k);
+        }
+    }
+    runs.push(samples.len());
+    let near = |a: &M4, b: &M4, what: &str| {
+        let e = (0..16).map(|i| (a[i / 4][i % 4] - b[i / 4][i % 4]).abs()).fold(0.0, f32::max);
+        assert!(e < 1e-4, "{what}: {a:?} vs {b:?}");
+    };
+    let (mut counters, mut mirror, mut posed) = ([0; 3], true, 0);
+    for (j, w) in runs.windows(2).enumerate() {
+        let (s, last) = (samples[w[0]], samples[w[1] - 1]);
+        let pl = |i: usize| PL + 0x170 * i;
+        let (shown, other) = (i32_(s, TAB + 0x1800 + 0x1a0) as usize, i32_(s, TAB + 0x1800 + 0x1a4) as usize);
+        let lost = shown as i32 & 1 != i32_(s, X + 0x68) & 1;
+        let number = cutaway::pick(&lists, &mut counters, &PickInput {
+            team: i32_(s, pl(shown) + 0x110) >= 0x30,
+            game_end: i32_(s, X + 0x78) > 0,
+            lost,
+            low: mat(s, TAB + 61 * 0x40)[3][1] > -0.8,
+            replays: i32_(s, X + 0x98 + 0x18),
+            character: i32_(s, pl(shown) + 0x124),
+        });
+        assert_eq!(number, s[CAM + 0x114], "cut-away {j} shot");
+        assert_eq!(counters.map(|c| c as i32), std::array::from_fn(|i| i32_(s, X + 0x80 + 8 * i)), "cut-away {j} counters");
+        mirror = !mirror;
+        if !matches!(number, 0x0c | 0x0d | 0x11) {
+            assert_eq!(s[CAM + 0x50] == 0xff, mirror, "cut-away {j} side");
+        }
+        let spot = mat(s, TAB + 19 * 0x40)[3];
+        near(&cutaway::corner_frame(spot), &mat(s, TAB + 6 * 0x40), "corner");
+        // the shown pair's frames, once the reaction has reached the predicted pose (the head at +0x17e0)
+        let held = [shown, other].iter().all(|&i| (0..3).all(|c| (f(last, pl(i) + 0x30 + 4 * c) - f(s, pl(i) + 0x80 + 4 * c)).abs() < 1e-5));
+        if held {
+            for (k, &i) in [shown, other].iter().enumerate() {
+                let fr = cutaway::subject_frames(&mat(last, pl(i)), &mat(last, pl(i) + 0x40));
+                for (n, e) in [29, 45, 61, 77].into_iter().enumerate() {
+                    near(&fr[n], &mat(s, TAB + (e + k) * 0x40), &format!("cut-away {j} frame {}", e + k));
+                }
+            }
+            posed += 1;
+        }
+        // the live head frame
+        for &t in &samples[w[0]..w[1]] {
+            let a = i32_(t, TAB + 0x1800 + 0x198) as usize;
+            let left = cutaway::head_frame(&mat(t, pl(a)), true);
+            let right = cutaway::head_frame(&mat(t, pl(a)), false);
+            let want = mat(t, TAB + 35 * 0x40);
+            let e = |m: &M4| (0..16).map(|i| (m[i / 4][i % 4] - want[i / 4][i % 4]).abs()).fold(0.0, f32::max);
+            assert!(e(&left).min(e(&right)) < 1e-4, "cut-away {j} head frame");
+        }
+    }
+    eprintln!("{} cut-aways, {posed} with the pose held", runs.len() - 1);
+    assert!(runs.len() > 10 && posed > 8);
+}
