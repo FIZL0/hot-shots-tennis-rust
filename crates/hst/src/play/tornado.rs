@@ -52,14 +52,8 @@ fn setup(
     let mtl = mtl::parse(&get("mtl").expect("tornado mtl"), get("mti").as_deref()).expect("tornado mtl");
     let uva = mor::parse(&get("uva").expect("tornado uva"), 4).expect("tornado uva");
     let (_, view) = model(&arc, s, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("tornado model");
-    // the GS adds the stored (gamma-encoded) texel values: raw texels, as gs.rs's (sRGB-decoded, the aura's grey
-    // texture added a fraction of its glow)
-    // ponytail: added in linear light (the scene target is sRGB), not on gamma values as the GS; B31
-    for h in &view.materials {
-        if let Some(mut img) = materials.get(h).and_then(|m| m.base_color_texture.clone()).and_then(|t| images.get_mut(&t)) {
-            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
-        }
-    }
+    // sRGB-decoded texels: the scene's PBR output re-encodes them, so the add is on the stored values as the GS's
+    // (hud_gamma.rs)
     commands.insert_resource(Wind {
         tornado: Tornado::default(),
         fade,
