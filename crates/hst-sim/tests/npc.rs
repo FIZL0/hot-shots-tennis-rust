@@ -479,8 +479,9 @@ fn trigger_engine_matches_the_game() {
 /// still creature next to a player or the ball; not in git, skipped when absent): courts 1 (types 0, 1), 2 (5) and
 /// 11 (48), any of 7, 8, 9 too. Every tick of every creature of those types from the recorded state before, with that
 /// tick's players' and ball's positions and the type flags, must give the game's state after bit for bit, startled
-/// latch and 48's scrub too, and a startle must set its type's flag. Skipped: message ticks, a poke's tick (moved
-/// while standing), a new leg (the path manager is not ported) and a flag the game cleared on its own.
+/// latch and 48's scrub too, a startle must set its type's flag and a one-shot path's end clear it (steering rows
+/// too). Skipped: message ticks, a poke's tick (moved while standing) and a new leg (the path manager is not
+/// ported); a stalled recording's catch-up of up to three ticks is stepped as such.
 #[test]
 fn startled_creatures_match_the_game() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -529,9 +530,7 @@ fn startled_creatures_match_the_game() {
                 if poked {
                     before.world[3] = after.world[3];
                 }
-                // ponytail: a startled steering creature's walk (row `steer`) is not ported: those ticks are skipped
-                let steering = row.steer != 0.0 && before.moving;
-                if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || steering || before.target != after.target {
+                if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || before.target != after.target {
                     continue;
                 }
                 let mut rng = Mt::of(&a[mt..]);
@@ -539,14 +538,14 @@ fn startled_creatures_match_the_game() {
                 while rng != end && out.len() < 2000 {
                     out.push(rng.next());
                 }
-                let found = [1, 0, 2].into_iter().find_map(|steps| {
+                let found = [1, 0, 2, 3].into_iter().find_map(|steps| {
                     (0..=out.len()).find_map(|j| {
                         let (mut t, mut it, mut seen) = (before.clone(), out[j..].iter(), near(b));
                         seen.flags = near(a).flags;
                         for _ in 0..steps {
                             t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0));
                         }
-                        let want = npc::Trigger { struck: t.struck, path: t.path.clone(), ..after.clone() };
+                        let want = npc::Trigger { struck: t.struck, path: t.path.clone(), anchor: t.anchor, ..after.clone() };
                         (t == want).then_some((t, seen))
                     })
                 });
@@ -558,6 +557,9 @@ fn startled_creatures_match_the_game() {
                 };
                 if seen.flags[ty as usize] && !near(a).flags[ty as usize] {
                     assert!(near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag not set", u(b, 0));
+                }
+                if !seen.flags[ty as usize] && near(a).flags[ty as usize] {
+                    assert!(!near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag not cleared", u(b, 0));
                 }
                 startles += (t.startled && !before.startled) as usize;
                 turns += (t.scrub.0 != before.scrub.0) as usize;
@@ -608,6 +610,8 @@ fn trigger_at(s: &[u8], o: usize, row: &hst_data::exe::TriggerRow, anchor: [f32;
         to: v(s, 0x170),
         snap: h(s, 0x180),
         orient: s[o + 0x182] != 0,
+        pitch: f(s, 0x184),
+        yaw: f(s, 0x188),
         clockwise: s[o + 0x194] != 0,
         angle: f(s, 0x198),
         radius: f(s, 0x19c),
