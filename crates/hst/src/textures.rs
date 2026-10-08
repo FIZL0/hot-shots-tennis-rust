@@ -1,4 +1,4 @@
-//! Replaced textures: `mods/textures/` over the PCSX2 pack (`mods/texture-replacements/`) over the disc, both beside the ISO.
+//! Replaced textures from `mods/texture-replacements/` beside the ISO: key-named files over a PCSX2 pack's, over the disc.
 //! Mod files are re-read when they change while running.
 
 use bevy::prelude::*;
@@ -27,7 +27,7 @@ pub fn init(iso: &str) {
         .unwrap_or(Path::new("."));
     let o = Overrides::scan(root);
     eprintln!(
-        "textures: {} in the PCSX2 pack, {} in mods/textures",
+        "textures: {} PCSX2-named, {} key-named in mods/texture-replacements",
         o.pack.len(),
         o.mods.len()
     );

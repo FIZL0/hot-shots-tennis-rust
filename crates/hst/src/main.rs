@@ -8,9 +8,9 @@
 //! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs); a BGM archive
 //! (`--sound SND/BGM/BGMM_05.XB data/sound/BGM/Menu/bgmm_05.hd`) plays its music. `--music` turns on the court's
 //! BGM in a `--play` match (off by default).
-//! Textures come from `mods/textures/` over a PCSX2 pack in `mods/texture-replacements/` over the disc (beside the
+//! Textures come from `mods/texture-replacements/` (key-named files over a PCSX2 pack's) over the disc (beside the
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
-//! upscale into `mods/textures/`.
+//! upscale into `mods/texture-replacements/`.
 
 mod audio;
 mod character;
@@ -102,7 +102,7 @@ fn main() {
                 let mut iso_ = Iso::open(&iso).expect("open iso");
                 let o = hst_data::texhash::Overrides::scan(std::path::Path::new(&iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()));
                 let n = o.dump(&mut iso_);
-                return println!("wrote {n} disc textures to {} (upscale them into mods/textures)", o.root.join("mods/textures-src").display());
+                return println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
             }
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),

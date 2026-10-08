@@ -322,8 +322,9 @@ pub fn disc_textures(iso: &mut crate::iso::Iso, mut f: impl FnMut(DiscTexture)) 
     }
 }
 
-/// User textures that replace disc ones: `mods/textures/**/<path>-<key>.png` (straight alpha, found by
-/// [`GsTex::key`]) over PCSX2's `mods/texture-replacements/<name>.png` (PS2 alpha, 0x80 opaque), both beside the ISO.
+/// User textures that replace disc ones, all in `mods/texture-replacements/` beside the ISO: `**/<path>-<key>.png`
+/// (straight alpha, found by [`GsTex::key`], e.g. upscaled `--dump-textures` output) over a PCSX2 pack's
+/// hash-named `<name>.png` at its top level (PS2 alpha, 0x80 opaque).
 #[derive(Default)]
 pub struct Overrides {
     pub root: PathBuf,
@@ -374,7 +375,7 @@ impl Overrides {
             }
         }
         let mut out = HashMap::new();
-        walk(&root.join("mods/textures"), &mut out);
+        walk(&root.join("mods/texture-replacements"), &mut out);
         out
     }
 
@@ -400,7 +401,7 @@ impl Overrides {
     }
 
     /// Write every disc texture as it is on the disc (native size, straight 0..255 alpha) to
-    /// `mods/textures-src/<path>-<key>.png`: the input for upscaling, whose output goes in `mods/textures/` under
+    /// `mods/textures-src/<path>-<key>.png`: the input for upscaling, whose output goes in `mods/texture-replacements/` under
     /// the same names. Not the pack's PNGs, so every file is the same kind of input.
     pub fn dump(&self, iso: &mut crate::iso::Iso) -> usize {
         let mut n = 0;
@@ -476,7 +477,7 @@ mod tests {
     #[test]
     fn mods_then_pack() {
         let root = std::env::temp_dir().join(format!("hst-texhash-{}", std::process::id()));
-        std::fs::create_dir_all(root.join("mods/textures/A")).unwrap();
+        std::fs::create_dir_all(root.join("mods/texture-replacements/A")).unwrap();
         std::fs::create_dir_all(root.join("mods/texture-replacements")).unwrap();
         write_png(&root.join("mods/texture-replacements/abc-1.png"), 1, 1, &[1, 2, 3, 0x40]).unwrap();
         let o = Overrides::scan(&root);
@@ -484,7 +485,7 @@ mod tests {
         // pack: PS2 alpha expanded
         assert_eq!(o.load("k1", &names), Some((1, 1, vec![1, 2, 3, 127])));
         write_png(
-            &root.join("mods/textures/A/x.0-k1.png"),
+            &root.join("mods/texture-replacements/A/x.0-k1.png"),
             1,
             1,
             &[9, 9, 9, 200],
