@@ -1394,6 +1394,7 @@ fn setup(
     };
     let ball = part("ball1.mdl", BallView(false));
     part("ballshadow.mdl", BallView(true));
+    commands.entity(ball).insert(crate::shade::Ball);
     let ink = materials.add(StandardMaterial {
         base_color: Color::BLACK,
         unlit: true,

@@ -39,3 +39,4 @@ pub mod weather;
 pub mod noise;
 pub mod foot;
 pub mod tornado;
+pub mod shade;
