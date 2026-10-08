@@ -36,9 +36,9 @@ pub struct Shade {
 #[derive(Component)]
 pub struct Ball;
 
-/// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half) last applied.
+/// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half, mirrored) last applied.
 #[derive(Component)]
-struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool)>);
+struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool)>);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, (own_materials.after(crate::noise::attach), light.after(crate::weather::apply)).chain());
@@ -89,7 +89,7 @@ fn own_materials(
                     commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
                     continue;
                 }
-                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), ChildOf(up.parent())));
+                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), ChildOf(up.parent()), bevy::camera::visibility::NoFrustumCulling));
                 if let Some(s) = skin {
                     c.insert(s.clone());
                 }
@@ -128,7 +128,10 @@ fn light(
             }
             _ => 1.0,
         };
-        let key = (s, w, player && p.z < 0.0);
+        // a left-hander is drawn mirrored (x scale −1): its one-sided parts keep the faces towards the camera, as
+        // the game's (Will's eyes are one-sided)
+        let mirror = t.affine().matrix3.determinant() < 0.0;
+        let key = (s, w, player && p.z < 0.0, mirror);
         if lit.1 == Some(key) {
             continue;
         }
@@ -147,6 +150,7 @@ fn light(
         }
         for h in &lit.0 {
             let Some(mut m) = materials.get_mut(h) else { continue };
+            m.key.mirror = mirror;
             (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (dir, (colour.truncate() * s).extend(1.0), ambient);
             (m.uniform.light2_dir, m.uniform.light2_color, m.uniform.glare) = (dir2, second, !rain as u8 as f32);
             if let Some((_, Some((mut main, _, _, fog)))) = court {
