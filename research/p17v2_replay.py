@@ -41,6 +41,9 @@ def addr8(x, y, bp, bw):  # byte address
     return bp * 256 + page * 8192 + BT8[(y >> 4) & 3][(x >> 4) & 7] * 256 + CT8[y & 15][x & 15]
 
 
+LANES = 4  # PCSX2 SW lanes per scanline step
+
+
 def texel_round(st, q):
     """PCSX2 GSState's texel coordinate rounding (STQ, all Z of the draw equal): S or T loses its low 9 mantissa bits,
     more by the exponent it is below Q's."""
@@ -226,21 +229,22 @@ class Gs:
 
     @staticmethod
     def lanes(t0, d, left, right):
-        """PCSX2 SW's fst texture coordinate over a span (AVX2: 8 lanes from the aligned 8 at or before left)."""
-        skip = left & 7
-        nv = (right - left + skip + 7) // 8
-        off = (np.arange(8) - skip).astype(F)
-        k = np.repeat(np.arange(nv), 8)
-        u = int(trunc(t0)) + np.tile(trunc(F(d) * off), nv) + k * int(trunc(F(d) * F(8)))
+        """PCSX2 SW's fst texture coordinate over a span (4 lanes from the aligned 4 at or before left: copy 5 runs
+        the 128-bit JIT, steps of trunc(d·4))."""
+        skip = left % LANES
+        nv = (right - left + skip + LANES - 1) // LANES
+        off = (np.arange(LANES) - skip).astype(F)
+        k = np.repeat(np.arange(nv), LANES)
+        u = int(trunc(t0)) + np.tile(trunc(F(d) * off), nv) + k * int(trunc(F(d) * F(LANES)))
         return u[skip:skip + right - left]
 
     @staticmethod
     def colour(c0, d, left, right):
         """PCSX2 SW's Gouraud channel (8.7) over a span: truncated at its start, 16-bit lane steps, ≥ 0 per step."""
-        skip = left & 7
-        nv = (right - left + skip + 7) // 8
-        off = trunc(F(d) * (np.arange(8) - skip).astype(F)) & 0xffff
-        step = int(trunc(F(d) * F(8))) & 0xffff
+        skip = left % LANES
+        nv = (right - left + skip + LANES - 1) // LANES
+        off = trunc(F(d) * (np.arange(LANES) - skip).astype(F)) & 0xffff
+        step = int(trunc(F(d) * F(LANES))) & 0xffff
         c, out = (int(trunc(c0)) + off) & 0xffff, []
         for k in range(nv):
             if k:
