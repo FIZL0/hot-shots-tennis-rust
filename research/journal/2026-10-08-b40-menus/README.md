@@ -31,6 +31,7 @@ the original's for comparison `context/b40/00_charsel.png`, `05_setup.png`, `2x_
   overlay's draw code (B40e).
 - No animation: the original's slides, the hand's swing (a plain sine here), the select's flame (P3f1a), the
   ticker scrolling of long descriptions (shrunk to fit here), the menu BGM (B40e).
+  Ticker and BGM since done: `2-B40E-BGM-TICKER.md`; the rest B40e1–B40e5.
 - The back sound is SYS_SE00 key 1 by assumption (move 0 and confirm 2 checked by ear only).
 - Costume 9's portrait sheet (`CS2_Shots_Cos_a/b`) is assumed; costumes 1–8 use `CS2_Shots_<char>`.
 - Main menu, Settings and Controls screens are remaster-only (styled on the original's option screens); their

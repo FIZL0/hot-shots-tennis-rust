@@ -148,6 +148,8 @@ struct Press {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
+    /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
+    /// switch, measured per screen).
     Main,
     Settings,
     Controls,
@@ -695,6 +697,9 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
 struct Draw<'a> {
     out: Vec<Quad>,
     text: &'a Text,
+    /// Frames (60 Hz) since the description bar's text changed, and that text.
+    tick: u32,
+    said: String,
 }
 
 const WHITE: [f32; 3] = [128.0; 3];
@@ -757,9 +762,18 @@ impl Draw<'_> {
     /// The description bar along the bottom.
     fn info(&mut self, s: &str) {
         self.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 404.0, 640.0, 32.0], [0.0; 3], 90.0);
-        // ponytail: the original scrolls long lines as a ticker; this shrinks them to fit
-        let size = (620.0 * 20.0 / self.width(s, 20.0).max(1.0)).min(20.0);
-        self.text(s, 10.0, 410.0 + (20.0 - size) / 2.0, size, WHITE);
+        self.said = s.into();
+        // the original's monospace 11 px pitch; ponytail: its bar font isn't found yet, `word.tm2` squeezed into the cells
+        let mut x = ticker_x(self.tick, s.chars().count());
+        for c in s.chars() {
+            if let Some(&(u, v, w)) = self.text.glyphs.get(&c) {
+                let gw = (w * 18.0 / 32.0).min(10.0);
+                if (-11.0..640.0).contains(&x) {
+                    self.q(Tex::Font, [u, v, w, 32.0], [x + (11.0 - gw) / 2.0, 411.0, gw, 18.0], WHITE, 128.0);
+                }
+            }
+            x += 11.0;
+        }
     }
 }
 
@@ -772,8 +786,32 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
     }
 }
 
-fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> Vec<Quad> {
-    let mut d = Draw { out: Vec::new(), text };
+/// The description bar's first glyph x `f` frames after its text (`n` glyphs) changed, as the MENU overlay moves it:
+/// in from the right edge at 32 px a frame to x 16, held, then (if it runs off the right) left 2 px a frame, back in
+/// at the right edge once its last glyph is past x -8.
+fn ticker_x(f: u32, n: usize) -> f32 {
+    const IN: u32 = 20; // (656 - 16) / 32
+    const HOLD: u32 = 160; // the frame before the scroll starts, from the change
+    if f < IN {
+        return 656.0 - 32.0 * f as f32;
+    }
+    let last = 11 * n.saturating_sub(1) as i32;
+    // ponytail: which lengths scroll is a guess (37 glyphs held, 81 scrolled); B40e3 measures it
+    if f <= HOLD || 16 + last + 11 <= 624 {
+        return 16.0;
+    }
+    let k = (f - HOLD) as i32;
+    // first run from x 16, then whole runs from x 656, each ending when the last glyph is left of x -8
+    let first = (24 + last) / 2 + 1;
+    if k < first {
+        return (16 - 2 * k) as f32;
+    }
+    let run = (664 + last) / 2 + 1;
+    (656 - 2 * ((k - first) % run)) as f32
+}
+
+fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, tick: u32) -> (Vec<Quad>, String) {
+    let mut d = Draw { out: Vec::new(), text, tick, said: String::new() };
     match m.screen {
         Screen::Main | Screen::Playing => {
             d.frame(0, 5);
@@ -843,7 +881,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         Screen::Chars => chars(&mut d, m, text),
         Screen::Confirm => confirm(&mut d, m, text, hand_x),
     }
-    d.out
+    (d.out, d.said)
 }
 
 fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
@@ -1119,6 +1157,7 @@ fn draw(
     gamepads: Query<(Entity, &Gamepad)>,
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
+    mut ticker: Local<(String, f32)>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let Some(art) = art else { return };
@@ -1126,7 +1165,13 @@ fn draw(
     pads.sort();
     // the hand swings out and back (the pause menu's `Hand` is the original's; here a plain sine)
     let hand_x = -8.0 + 8.0 * (time.elapsed_secs() * 5.5).cos();
-    let quads = layout(&menu, &art.2, &bind, &pads, hand_x);
+    // the description ticker counts the original's 60 Hz frames from its text's change
+    ticker.1 += time.delta_secs() * 60.0;
+    let (mut quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x, ticker.1 as u32);
+    if said != ticker.0 {
+        *ticker = (said, 0.0);
+        quads = layout(&menu, &art.2, &bind, &pads, hand_x, 0).0;
+    }
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
@@ -1155,14 +1200,70 @@ fn draw(
     }
 }
 
+/// The menu's BGM tracks, `bgmm_04`..`bgmm_06`.
+#[derive(Resource)]
+struct MenuBgm(Vec<Option<(Arc<SoundBank>, Vec<u8>)>>);
+
+impl Screen {
+    /// Which of `MenuBgm`'s tracks plays on this screen.
+    fn bgm(self) -> Option<usize> {
+        match self {
+            Screen::Main | Screen::Settings | Screen::Controls => Some(0),
+            Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
+            Screen::Confirm => Some(2),
+            Screen::Playing => None,
+        }
+    }
+}
+
+fn load_bgm(mut commands: Commands, args: Res<Args>) {
+    let Ok(mut iso) = Iso::open(&args.iso) else { return };
+    let tracks = (4..=6).map(|n| SoundBank::music(&mut iso, "Menu", &format!("bgmm_{n:02}")).map(|(b, m)| (Arc::new(b), m))).collect();
+    commands.insert_resource(MenuBgm(tracks));
+}
+
+/// The overlay switches track only when the screen's track changes: the new one from its start at volume 55, no fade.
+fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>, mut on: Local<Option<usize>>) {
+    let (Some(tracks), Some(sound)) = (tracks, sound) else { return };
+    let want = menu.screen.bgm();
+    if want == *on {
+        return;
+    }
+    *on = want;
+    match want.and_then(|t| tracks.0[t].as_ref()) {
+        Some((bank, mid)) => sound.music(bank, mid, 55),
+        // the match is its own process with its own music
+        None => sound.music_volume(0),
+    }
+}
+
 pub fn plugin(app: &mut App) {
-    app.add_plugins((controls::plugin, super::widescreen::plugin)).add_systems(Startup, setup).add_systems(Update, (step, draw).chain());
+    app.add_plugins((controls::plugin, super::widescreen::plugin))
+        .add_systems(Startup, (setup, load_bgm))
+        .add_systems(Update, ((step, draw).chain(), bgm));
     previews::plugin(app);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ticker_as_measured() {
+        // Options' sound line (81 glyphs) on the original, frame by frame from its change
+        let x = |f| ticker_x(f, 81);
+        assert_eq!([x(0), x(1), x(19), x(20), x(160), x(161)], [656.0, 624.0, 48.0, 16.0, 16.0, 14.0]);
+        // last shown at -888 (last glyph at -8), then back in at 656; 773 frames a run after that
+        assert_eq!([x(160 + 452), x(160 + 453), x(160 + 453 + 772), x(160 + 453 + 773)], [-888.0, 656.0, -888.0, 656.0]);
+        // music's line (37 glyphs) fits and holds
+        assert_eq!(ticker_x(1000, 37), 16.0);
+    }
+
+    #[test]
+    fn bgm_per_screen() {
+        let t = [Screen::Main, Screen::Settings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
+        assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
+    }
 
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
         let mut p = Press::default();

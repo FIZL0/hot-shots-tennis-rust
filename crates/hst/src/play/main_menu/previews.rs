@@ -118,7 +118,7 @@ fn sync(
         cache.insert(key, loaded);
     }
     let Some(art) = art else { return };
-    let quads = if menu.screen == Screen::Chars { layout(&menu, &art.2, &bind, &[], 0.0) } else { Vec::new() };
+    let quads = if menu.screen == Screen::Chars { layout(&menu, &art.2, &bind, &[], 0.0, 0).0 } else { Vec::new() };
     let mut root = None;
     for (Slot(i), parent, mut z) in &mut slots {
         root = Some(parent.parent());
