@@ -320,8 +320,24 @@ pub struct Motions {
     pub stance_ball: Option<Path>,
 }
 
-/// Character `n`'s motions (`PCANI/PCnnANI.XB`) and the shared team reactions (`PCDATA/PCCG0.XB`), bound to
-/// `skeleton`; `target` binds a `.MOR` track name to a morph target.
+/// The menu's inspect pose (`MENU/PC/PCnn.XB` `pcNN_pose.ANI`/`.MOR`), keyed past the game's motion numbers.
+pub const POSE: usize = 0x40;
+
+/// The characters whose inspect pose shows its end rather than frame 0.
+const POSE_AT_END: [bool; 16] = [true, true, false, true, false, true, false, true, false, false, true, true, false, true, false, false];
+
+/// The pose frame character `n`'s inspect screen holds (its motion never advances there): the clip's whole length −
+/// 1 for the characters that show the end (Ashley a fixed 69), else 0.
+pub fn pose_frame(n: usize, length: f32) -> f32 {
+    match POSE_AT_END.get(n) {
+        Some(true) if n == 0 => 69.0,
+        Some(true) => (length as i32 - 1) as f32,
+        _ => 0.0,
+    }
+}
+
+/// Character `n`'s motions (`PCANI/PCnnANI.XB`), the shared team reactions (`PCDATA/PCCG0.XB`) and its inspect
+/// pose ([`POSE`]), bound to `skeleton`; `target` binds a `.MOR` track name to a morph target.
 pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>) -> Result<Motions, String> {
     // motions by the game's numbers
     let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
@@ -373,6 +389,19 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
             let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
             let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
             paths.extend(Path::new(&a).map(|p| (0x30 + k, p)));
+        }
+    }
+    // the menu's inspect pose (hierarchical: the scene's own nodes bind to nothing and drop out)
+    if let Ok(d) = iso.read(&format!("MENU/PC/PC{n:02}.XB")) {
+        let marc = Archive::parse(&d).map_err(|e| e.0)?;
+        let file = |ext: &str| marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("pc{n:02}_pose.{ext}"))).and_then(|e| marc.read(e).ok());
+        if let Some(a) = file("ani").and_then(|d| ani::parse(&d).ok()) {
+            motions.insert(POSE, Clip::new(skeleton, &a));
+        }
+        if let Some(t) = file("mor").and_then(|d| mor::parse(&d, 1).ok()) {
+            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
+            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
+            faces.insert(POSE, Face { tracks, length });
         }
     }
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
@@ -641,4 +670,32 @@ fn spawn_viewer(
     info!("character {n}: {} joints, {} parts, motions {:?}", data.joints.len(), data.parts.len(), { let mut k: Vec<_> = data.motions.keys().collect(); k.sort(); k });
     let c = spawn(&mut commands, &data, root);
     commands.entity(c).insert(Motion { id: motion, ..default() });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// Every character's inspect pose binds to its skeleton, and the held frames are the ones the game's inspect
+    /// screen held (read live in its motion player for characters 0..7, 12 and 13).
+    #[test]
+    fn inspect_poses_bind_and_hold_the_games_frames() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let mut held = Vec::new();
+        for n in 0..14 {
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).unwrap();
+            let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
+            let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+            let m = disc_motions(&mut iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name)).unwrap();
+            let pose = &m.motions[&POSE];
+            assert!(pose.tracks.len() > 40, "character {n}: {} pose tracks", pose.tracks.len());
+            assert!(m.faces.get(&POSE).is_some_and(|f| !f.tracks.is_empty()), "character {n}: no pose face");
+            held.push(pose_frame(n, pose.length));
+        }
+        assert_eq!(held[..8], [69.0, 61.0, 0.0, 62.0, 0.0, 66.0, 0.0, 57.0]);
+        assert_eq!((held[12], held[13]), (0.0, 64.0));
+    }
 }

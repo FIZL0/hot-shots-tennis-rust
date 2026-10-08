@@ -8,6 +8,8 @@
 //! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs); a BGM archive
 //! (`--sound SND/BGM/BGMM_05.XB data/sound/BGM/Menu/bgmm_05.hd`) plays its music. `--music` turns on the court's
 //! BGM in a `--play` match (off by default).
+//! `--inspect all|N[:C],…|MODDIR,…` shows characters (costume C) and mods posed as the original's inspect screen, side
+//! by side (default: the disc roster; see inspect.rs).
 //! Textures come from `mods/texture-replacements/` (key-named files over a PCSX2 pack's) over the disc (beside the
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
 //! upscale into `mods/texture-replacements/`.
@@ -19,6 +21,7 @@ mod effects;
 mod gs;
 mod mods;
 mod hud_gamma;
+mod inspect;
 mod noise;
 mod play;
 mod sandbox;
@@ -81,6 +84,7 @@ fn main() {
     let mut sound = None;
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
+    let mut roster = None;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -94,6 +98,18 @@ fn main() {
             "--character" => viewer_char = a.next().and_then(|r| r.parse().ok()),
             "--mod" => (viewer_mod, viewer_char) = (a.next(), viewer_char.or(Some(0))),
             "--motion" => viewer_motion = a.next().and_then(|r| r.parse().ok()).unwrap_or(0),
+            "--inspect" => {
+                let list = a.next().filter(|l| l != "all").unwrap_or_else(|| (0..14).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+                let (mut disc, mut mods) = (Vec::new(), Vec::new());
+                for e in list.split(',') {
+                    let (n, c) = e.split_once(':').unwrap_or((e, "0"));
+                    match (n.parse(), c.parse()) {
+                        (Ok(n), Ok(c)) => disc.push((n, c)),
+                        _ => mods.push(e.to_string()),
+                    }
+                }
+                roster = Some(inspect::Roster(disc, mods));
+            }
             "--vsync" => vsync = true,
             "--music" => music = true,
             "--sound" => {
@@ -121,6 +137,8 @@ fn main() {
     app.add_plugins(noise::plugin);
     if play {
         app.add_plugins(play::plugin);
+    } else if let Some(r) = roster {
+        app.add_plugins(inspect::viewer).insert_resource(r);
     } else if viewer_char.is_some() {
         app.add_plugins(character::viewer).insert_resource(character::ViewerMod(viewer_mod));
     } else if ball {
