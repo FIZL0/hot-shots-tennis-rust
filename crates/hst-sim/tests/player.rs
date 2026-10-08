@@ -517,6 +517,9 @@ fn reach_stats_from_tparam() {
             let i = |o: usize| i32::from_le_bytes(rec[o - 0x12d8..o - 0x12d4].try_into().unwrap());
             let fl = |o: usize| f(rec, o - 0x12d8).to_bits();
             assert_eq!([s.body_adj, s.vbody_adj, s.rising_adj, s.smash_low_pow, s.stroke_high_pow], [0x1310, 0x1314, 0x1318, 0x13a0, 0x13a4].map(i), "character {n}");
+            let ints = [s.power.as_slice(), &s.after, &s.before, &s.stroke_miss, &s.volley_miss, &[s.body_down, s.back_down, s.volley_down], &s.low_power].concat();
+            let offs = [0x12e4, 0x12e8, 0x12ec, 0x12f0, 0x12f4, 0x131c, 0x1320, 0x1324, 0x1328, 0x132c, 0x1330, 0x1364, 0x1368, 0x136c, 0x1370, 0x138c, 0x1390, 0x1394, 0x1398, 0x139c];
+            assert_eq!(ints, offs.map(i), "character {n}");
             let mine = [
                 [s.serve_scatter, s.base, s.reach, s.under_min, s.stroke_height, s.volley_height].as_slice(),
                 &s.smash, &s.serve, &s.under_serve, &[s.dive_start, s.dive_limit, s.collision],

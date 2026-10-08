@@ -336,3 +336,198 @@ pub fn approach_dir(path: &[PathPoint], pos: [f32; 3]) -> [f32; 2] {
     }
     dir
 }
+
+/// A character's rally timing tables, as the original builds them at setup: per frame from the swing press the
+/// grade (8 the sweet frame, grade 1; `after` frames of grades 2, 3, 4 behind it and `before` frames ahead of
+/// it; the first two frames never hit) and the bias the frame throws the shot off by (tenths of a metre: grade 3
+/// one per frame, grade 4 two per frame on top of the grade-3 run; negative before the sweet frame). Both run to
+/// the first frame past the sweet one that has no grade.
+pub fn timing(after: [i32; 3], before: [i32; 3]) -> (Vec<u8>, Vec<i32>) {
+    // ponytail: the game's index cap (60) is never reached by the disc's counts
+    let (mut grades, mut bias) = ([0u8; 60], [0i32; 60]);
+    grades[8] = 1;
+    for (sign, counts) in [(1i32, after), (-1, before)] {
+        let mut k = 8i32;
+        for (g, n) in (2u8..).zip(counts) {
+            for i in 0..n {
+                k += sign;
+                if k < 0 {
+                    continue;
+                }
+                grades[k as usize] = g;
+                bias[k as usize] = sign * match g {
+                    3 => i + 1,
+                    4 => counts[1] + (i + 1) * 2,
+                    _ => 0,
+                };
+            }
+        }
+    }
+    let len = (8..60).find(|&k| grades[k] == 0).unwrap_or(60);
+    grades[0] = 0;
+    grades[1] = 0;
+    (grades[..len].to_vec(), bias[..len].to_vec())
+}
+
+/// A rally swing's timing error as the original sets it up at the lock (tenths of a metre): `side` and `depth`
+/// off the aim, and `mode` the pressure toward the weaker (down) trajectory tables. Ground strokes (branch 1),
+/// volleys (2) and dives (3); `bias` is the timing table's for the contact frame and `offset` frames from the
+/// sweet one, `height` the contact height. `right` is the ball on the right of the body (the path's side bit 0),
+/// `forehand` on the hitter's forehand side, `body` a body-shot swing; a dive's error follows its direction
+/// `dive` (x, z) against the player's end sign `end`.
+#[allow(clippy::too_many_arguments)]
+pub fn timing_error(
+    s: &crate::player::ReachStats,
+    branch: u8,
+    lob: bool,
+    bias: i32,
+    offset: i32,
+    height: f32,
+    right: bool,
+    forehand: bool,
+    body: bool,
+    dive: [f32; 2],
+    end: f32,
+) -> TimingError {
+    let mut e = TimingError::default();
+    if branch == 3 {
+        let ahead = add(mul(end, dive[1]), 0.0);
+        if ahead >= 0.70710677 {
+            e.depth = bias.abs();
+        } else if ahead <= -0.70710677 {
+            e.depth = -bias.abs();
+        } else if sub(add(mul(end, dive[0]), 0.0), 0.0) > 0.0 {
+            e.side = bias.abs();
+        } else {
+            e.side = -bias.abs();
+        }
+    } else {
+        e.side = if right { -bias } else { bias };
+    }
+    let (ideal, scale, [from, step]) = match branch {
+        1 => (s.stroke_height, 1.0, s.stroke_miss),
+        _ => (s.volley_height, 0.5, s.volley_miss),
+    };
+    let off = sub(height, ideal);
+    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
+    let steps = match cm - from {
+        n if n < 0 => 0,
+        n if n < step => n / 10,
+        n => step / 10 + (n - step) / 10 * 2,
+    };
+    e.depth += mul(steps as f32, scale) as i32 * if off > 0.0 { 1 } else { -1 };
+    let mut down = match branch {
+        1 if !forehand => s.back_down,
+        3 => 10,
+        _ => 0,
+    };
+    if branch == 2 && offset.abs() > 1 {
+        down += s.volley_down;
+    }
+    if body {
+        down += s.body_down;
+    }
+    // the lob button keeps its tables
+    e.mode = if lob { 0 } else { -down };
+    e
+}
+
+/// See `timing_error`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimingError {
+    pub side: i32,
+    pub depth: i32,
+    pub mode: i32,
+}
+
+/// What a rally shot's timing error does at the launch, as the original: (side, depth) scatter in metres before
+/// the 1.5 scale, and the mode blend. A clean grade (1, 2) drops the error but keeps the aim's random `nudge`;
+/// each part is held to ±1 m (depth to [−1, 0] when `short_only`, the aim's flag), the blend is scaled by how
+/// much the character's power stat leaves for its low-power (or, for a raising ground stroke, high-power) stat
+/// to move it. A ground stroke's short error counts double unless it is kind 4.
+pub fn timing_launch(s: &crate::player::ReachStats, branch: u8, kind: i32, grade: u8, e: TimingError, nudge: i32, short_only: bool) -> (f32, f32, f32) {
+    let clean = grade == 1 || grade == 2;
+    let side = ((if clean { 0 } else { e.side }) + nudge).clamp(-10, 10);
+    let depth = if clean { 0 } else { e.depth }.clamp(-10, if short_only { 0 } else { 10 });
+    let mode = e.mode.clamp(-10, 10);
+    let (sx, mut sz, mut blend) = (div(div(side as f32, 10.0), 2.0), div(depth as f32, 10.0), div(mode as f32, 10.0));
+    let (base, mut add_) = match branch {
+        1 => (s.power[1], s.low_power[0]),
+        2 => (s.power[2], s.low_power[1]),
+        _ => (s.power[2], s.low_power[0]),
+    };
+    if blend >= 0.0 {
+        if branch == 1 {
+            add_ = s.stroke_high_pow;
+        }
+        let top = (base + add_).min(16);
+        blend = if base < 16 { mul(blend, div((top - base) as f32, (16 - base) as f32)) } else { 0.0 };
+    } else {
+        let low = (base - add_).max(0);
+        blend = if base < 1 { 0.0 } else { mul(blend, div((base - low) as f32, base as f32)) };
+    }
+    if branch == 1 && kind != 4 && sz < 0.0 {
+        sz = mul(sz, 2.0);
+    }
+    (sx, sz, blend)
+}
+
+/// The high-ball ground stroke's (class-2 launch) blend: how much the volley power leaves the high-power stat.
+pub fn high_blend(s: &crate::player::ReachStats) -> f32 {
+    let (base, top) = (s.power[2], (s.power[2] + s.stroke_high_pow).min(16));
+    if base < 16 { div((top - base) as f32, (16 - base) as f32) } else { 0.0 }
+}
+
+/// The trajectory table mode a launch blend picks, as the original: for a shot class 2 launch (volleys, dives
+/// and the high-ball ground stroke) up (1) above 0.1, else down 1..3 by the character's thresholds (`lowest`,
+/// character 9 its own three steps); for class 1 down 1 below −0.4 (character 4 never, character 9 down 2 below
+/// −0.7), and a grade-4 non-lob always at least down 1.
+pub fn table_mode(class: u8, character: usize, grade: u8, kind: i32, blend: f32, lowest: &[f32; 14]) -> i32 {
+    match class {
+        2 if blend > 0.1 => 1,
+        2 if character == 9 => [(-0.9, -3), (-0.7, -2), (-0.4, -1)].iter().find(|t| blend < t.0).map_or(0, |t| t.1),
+        2 if blend < lowest[character] => -2,
+        2 => -((blend < -0.3) as i32),
+        1 => {
+            let m = match character {
+                4 => 0,
+                9 => -2 * (blend < -0.7) as i32,
+                _ => -((blend < -0.4) as i32),
+            };
+            if grade == 4 && kind != 3 && m == 0 { -1 } else { m }
+        }
+        _ => 0,
+    }
+}
+
+/// The trajectory table and shot-record variant a mode selects: up1, dw1, dw2, dw3 for modes 1, −1, −2, −3 (the
+/// variant list's use flags 0..3), base otherwise.
+pub fn mode_variant(mode: i32) -> Option<usize> {
+    match mode {
+        1 => Some(0),
+        -1 => Some(1),
+        -2 => Some(2),
+        -3 => Some(3),
+        _ => None,
+    }
+}
+
+/// A lob's table variant, as the original: on a clean grade (1, 2) the character's Lob POW against its Lob2 POW
+/// (each held to 0..16) picks up1 when lower, the variant list's flag 1 when higher, base when equal. Only a
+/// character with that variant listed has the table.
+// ponytail: the original's practice-mode exception (solo with player 1 hitting) is left out.
+pub fn lob_variant(s: &crate::player::ReachStats, grade: u8) -> Option<usize> {
+    let [a, b] = [s.power[3], s.power[4]].map(|p| p.clamp(0, 16));
+    match grade {
+        1 | 2 if a < b => Some(0),
+        1 | 2 if a > b => Some(1),
+        _ => None,
+    }
+}
+
+/// What a grade-4 (SLOW) flat or topspin ground stroke does to its table elevation when it isn't a mis-hit, as
+/// the original: 0.95 of it.
+// ponytail: the low-contact mis-hits (random elevation scale or a wild shot from the game's RNG) are not ported.
+pub fn late_lift(grade: u8, branch: u8, kind: i32) -> f32 {
+    if grade == 4 && branch == 1 && (kind == 0 || kind == 2) { 0.95 } else { 1.0 }
+}

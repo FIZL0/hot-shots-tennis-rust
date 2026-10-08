@@ -269,13 +269,20 @@ pub fn dw1(d: &ServeData) -> bool {
 /// `error` of `depth_error` (a strong toss's short error × `short_miss`), × 1.5, sideways and along the line
 /// from the contact `hit` to the `aim`.
 pub fn scatter(d: &ServeData, toss: Toss, miss: Miss, error: i32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
-    use crate::ps2::{add, div, madd, mul, sqrt, sub};
-    use crate::vu0::{cross, normalize, transform};
+    use crate::ps2::{add, div, mul};
     let side = add(div(div(miss.nudge.clamp(-10, 10) as f32, 10.0), 2.0), miss.side);
     let mut depth = add(div(error as f32, 10.0), miss.depth);
     if toss == Toss::Strong && depth < 0.0 {
         depth = mul(depth, d.short_miss);
     }
+    scatter_along(side, depth, hit, aim)
+}
+
+/// `side` and `depth` (m) × 1.5 across and along the line from `hit` to `aim`, as the original's launch sets
+/// out every timing scatter.
+pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
+    use crate::ps2::{div, madd, mul, sqrt, sub};
+    use crate::vu0::{cross, normalize, transform};
     if side == 0.0 && depth == 0.0 {
         return [0.0; 3];
     }

@@ -61,6 +61,20 @@ pub struct ReachStats {
     pub dive_limit: f32,
     /// Sideways body-collision size (the second half of the collision cell).
     pub collision: f32,
+    /// Serv, Strk, Voley, Lob and Lob2 POW.
+    pub power: [i32; 5],
+    /// Frames of each timing grade 2, 3, 4 after the sweet frame (the "rabbit" cell) and before it ("turtle").
+    pub after: [i32; 3],
+    pub before: [i32; 3],
+    /// Contact height error (cm) a ground stroke and a volley shrug off, and past which it counts double.
+    pub stroke_miss: [i32; 2],
+    pub volley_miss: [i32; 2],
+    /// Shot-mode pressure of a body shot, a backhand ground stroke and a mistimed volley (Body/Back/V DWN).
+    pub body_down: i32,
+    pub back_down: i32,
+    pub volley_down: i32,
+    /// LOW POW, V LOW POW.
+    pub low_power: [i32; 2],
 }
 
 impl ReachStats {
@@ -91,6 +105,15 @@ impl ReachStats {
             smash: three(63),
             serve: three(64),
             under_serve: three(65),
+            power: [11, 12, 13, 14, 15].map(|k| int(t[k])),
+            after: [0, 1, 2].map(|i| int(part(27, i))),
+            before: [0, 1, 2].map(|i| int(part(28, i))),
+            stroke_miss: [int(t[33]), int(t[34])],
+            volley_miss: [int(t[36]), int(t[37])],
+            body_down: int(t[44]),
+            back_down: int(t[45]),
+            volley_down: int(t[47]),
+            low_power: [int(t[49]), int(t[50])],
         }
     }
 }
