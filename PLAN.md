@@ -21,6 +21,9 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
 - **Same input, same result**: P0's replay harness (`hst_sim::replay`) is the acceptance test for gameplay.
 - **Handedness**: read it from character data (Carol, Will lefty); mirror forehand/backhand, reach, swing/serve,
   toss hand, racket.
+- **All UI at any aspect ratio** (user 2026-10-08): every HUD element, pop-up, menu, result/loading screen and
+  new screen must lay out for any aspect ratio and resolution, pinned/scaled like B17's panels
+  (`play/widescreen.rs`), never locked to 4:3 or one resolution. Any UI task isn't done until it is.
 - **Look at the original too**: `tools/screenshot.sh` (PCSX2) vs `--shot out.png` at the same moment for anything
   visual; screenshots go in `context/`, not the journal.
 - Findings → `research/journal/<date>-<slug>/`. When a task lands: tick it, add to `plan/REFERENCE.md` *Done* /
@@ -68,6 +71,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **B42** Court intros at match start (user 2026-10-08): when a match starts, play the original's court intro as it does (camera flyover/shots, court and player introductions, banners/text, music and sounds, timing, skip button) for every court and mode; record it from the original per court and match → `play.rs` setup/camera · `hst-sim/src/camera.rs` · `hst-sim/src/flow.rs`
 - [ ] **B43** Loading screen with hints (user 2026-10-08): show the original's loading screen with its hint/tip text (art, layout, font, which hint is picked and how) while the match loads; don't match the original's load time, show it only until the port's load is ready → `main.rs` load · `play/menu.rs` INPANE assets
 - [ ] **B44** Pin the MPH and finish banners to the screen sides (user 2026-10-08): (a) pin the serve speed (MPH) readout to its side of the screen like B17's score and player panels, at any aspect/resolution; (b) check where the smash ace, counter and other finish banners draw against the original and pin them to the sides the same way if they are off → `play/popups.rs` · `play/widescreen.rs` · `play/panel.rs`
+- [ ] **B55** Pause menu widescreen/dynamic (user 2026-10-08): lay out P19a's pause menu for any aspect/resolution like B17's team and score panels (pinned/scaled, not a stretched or centred 4:3 box); see *All UI at any aspect ratio* above → `play/menu.rs` · `play/widescreen.rs` · `play/panel.rs`
 - [ ] **B45** AI levels wrong during the score pop-up (bug, (user 2026-10-08); after B35): the CPU levels shown during the score pop-up are still wrong. Match the level shown there to the original → `play/popups.rs` · `play/panel.rs`
 - [ ] **B46** Carol's walk after a point still wrong (bug, (user 2026-10-08); B3 follow-up): her post-point walk movement still doesn't match the original. Compare against a recording and match → `play.rs` next_point · `hst-sim/src/position.rs`
 - [ ] **B47** NPCs sometimes clap with no sound (bug, (user 2026-10-08)): spectators play the clap animation but the clap sound is sometimes missing. Find when the original plays it and match → `play/npcs.rs` · `hst-sim/src/npc.rs` · `play/audio`
