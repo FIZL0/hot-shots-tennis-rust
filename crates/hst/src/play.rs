@@ -41,6 +41,7 @@ use crate::character::{self, CharacterData, Motion};
 use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 
+mod cutaway;
 mod markers;
 mod menu;
 mod panel;
@@ -443,6 +444,7 @@ struct BalloonView(usize, Handle<StandardMaterial>);
 struct BalloonArt([Handle<Image>; 4]);
 
 pub fn plugin(app: &mut App) {
+    app.add_plugins(cutaway::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(menu::plugin);
     app.add_plugins(panel::plugin);
