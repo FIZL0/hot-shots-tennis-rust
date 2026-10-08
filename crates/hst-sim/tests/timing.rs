@@ -1,7 +1,7 @@
 //! Timing grades against the live-ball recordings: every player's grade and bias tables from its character's
 //! TParam counts, and every recorded stroke and volley (scattered or not) through the timing error at the lock,
 //! its launch scaling, the table mode it picks and the scatter, to the launch velocity, flight frames and stored
-//! target bit for bit.
+//! target (grades, bias, error and target exact; a scattered launch's velocity within 5e-4, ~5% within 2e-3).
 
 use hst_sim::player::ReachStats;
 use hst_sim::replay::{Frame, frames_live};

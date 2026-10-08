@@ -100,6 +100,7 @@ impl Bounds {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Lookup {
     pub elevation: f32,
     pub speed: f32,

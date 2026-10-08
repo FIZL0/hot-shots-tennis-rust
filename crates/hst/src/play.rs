@@ -46,6 +46,7 @@ mod menu;
 mod panel;
 mod popups;
 mod surprise;
+mod timing;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -247,6 +248,10 @@ struct Game {
     rally_tables: Vec<[Vec<Table>; 2]>,
     /// Per player: the character's stroke and volley shot records (classes 1, 2) by kind, for their spins.
     rally_records: Vec<[[[f32; 13]; 5]; 2]>,
+    /// Per player: its character's timing data (see `timing`).
+    timing: Vec<timing::Timing>,
+    /// The timing error of the stroke or volley being struck, set at its contact.
+    timing_error: Option<swing::TimingError>,
     /// Per player: the serve (see `serve_data`).
     serve_data: Vec<ServeData>,
     /// The serve in progress (server's toss and swing).
@@ -563,6 +568,7 @@ mod every_character_tables {
             character_tables(&mut iso, c, "B", "smsh", "", 2);
             serve_tables(&mut iso, &params, c);
             rally_tables(&mut iso, c);
+            timing::load(&mut iso, &params, c);
         }
     }
 }
@@ -571,6 +577,14 @@ mod every_character_tables {
 /// (`params::rally_spin`). ponytail: the up1/dw1/dw2 variant records go with the table mode choice (P3).
 fn rally_spin(g: &mut Game, who: usize, class: u8, kind: i32, at: V3, target: V3) -> f32 {
     let record = &g.rally_records[who][class as usize - 1][kind as usize];
+    let (spin, first, rest) = params::rally_spin(record, class as usize, kind as usize, at, target);
+    g.shot.first_bounce_spin = first;
+    g.shot.first_bounce_restitution = rest;
+    spin
+}
+
+/// `rally_spin` from a variant shot record (the timing's table mode).
+fn record_spin(g: &mut Game, record: &[f32], class: u8, kind: i32, at: V3, target: V3) -> f32 {
     let (spin, first, rest) = params::rally_spin(record, class as usize, kind as usize, at, target);
     g.shot.first_bounce_spin = first;
     g.shot.first_bounce_restitution = rest;
@@ -849,6 +863,7 @@ fn character_reach(base: &Reach, iso: &mut Iso, n: usize, hand: f32) -> Reach {
         smash_top: s.smash[0],
         smash_bottom: s.smash[2],
         hand,
+        grades: swing::timing(s.after, s.before).0,
         ..base.clone()
     }
 }
@@ -988,6 +1003,8 @@ fn setup(
         smash_tables: Vec::new(),
         rally_tables: Vec::new(),
         rally_records: Vec::new(),
+        timing: Vec::new(),
+        timing_error: None,
         serve_data: Vec::new(),
         serving: Serving::default(),
         reach,
@@ -1108,6 +1125,7 @@ fn setup(
         game.serve_tables
             .push(serve_tables(&mut iso, &shot_params, c));
         game.rally_tables.push(rally_tables(&mut iso, c));
+        game.timing.push(timing::load(&mut iso, &shot_params, c));
         game.rally_records.push(std::array::from_fn(|v| {
             std::array::from_fn(|k| shot_params.record(v + 1, k, params::record_of(c)).try_into().unwrap())
         }));
@@ -1464,6 +1482,10 @@ fn strike(
         let doubles = g.rules.players > 2;
         g.margins.inside(class, kind, false, doubles, g.chars[src] as usize, false, at, target)
     };
+    let timed = g.timing_error.take().filter(|_| class == 1 || class == 2).map(|e| {
+        timing::launch(g, who, src, class, kind, (branch, grade), e, power_gap.is_some(), at, target)
+    });
+    let target = timed.as_ref().map_or(target, |t| t.target);
     let (vel, frames) = if class == 0 {
         let (table, _) = &g.serve_tables[who][weak][kind as usize];
         serve::launch(
@@ -1482,6 +1504,8 @@ fn strike(
                 at,
                 target,
             )
+        } else if let Some(t) = &timed {
+            t.lookup
         } else {
             rally_lookup(g, src, class, kind, at, target)
         };
@@ -1540,7 +1564,10 @@ fn strike(
     let spin = match class {
         0 => g.serve_tables[who][weak][kind as usize].1,
         3 => 5f32.to_radians(),
-        _ => rally_spin(g, src, class, kind, at, target),
+        _ => match timed.as_ref().and_then(|t| t.record) {
+            Some(r) => record_spin(g, &r, class, kind, at, target),
+            None => rally_spin(g, src, class, kind, at, target),
+        },
     };
     g.flight = Flight::new(Ball { pos: at, vel, spin }, rows4(frame), rows4(frame));
     ai_heard_hit(g, who, branch, vel);
@@ -1897,12 +1924,12 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
         return None;
     }
     let p = &g.players[i];
-    let path = predicted_path(g, g.reach.grades.len());
+    let path = predicted_path(g, g.reaches[i].grades.len());
     let s = swing::search(&g.reaches[i], &path, p.pos, p.end, p.kind)?;
     Some(Contact {
         frames: s.frame as u32,
         swing: s,
-        grade: g.reach.grades[s.frame],
+        grade: g.reaches[i].grades[s.frame],
         offset: s.frame as i32 - SWEET_FRAME,
     })
 }
@@ -2200,6 +2227,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             } else {
                 (if branch == 2 { 2 } else { 1 }, kind)
             };
+            g.timing_error = (branch < 3).then(|| timing::error(g, i, &c, branch, g.players[i].kind == 3));
             strike(
                 g,
                 i,

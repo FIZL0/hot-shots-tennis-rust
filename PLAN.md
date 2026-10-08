@@ -190,7 +190,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 - [ ] **P1** Shot parameters in play → `play.rs` strike/tables · `hst-sim/src/params.rs` `shot.rs` | t: shot_tables.rs, hst/tests/shot_params.rs | j: 2026-10-05-ball-physics/5-SHOT-PARAMS-READY.md
 - [ ] **P2** Aim exactly (user 2026-10-07: a sweet-spot shot can't quite reach the exact corner as in the original; singles and doubles aim differently, their court lines differ) → `play.rs` aim_target/screen · `shot.rs`
-- [ ] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs
+- [x] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs, timing.rs | j: 2026-10-07-p3-timing-grades — DONE: per-character grades/bias, timing error, scatter, table mode/variants (up1/dw1/dw2/dw3, lob POW), late lift wired into strike (`play/timing.rs`); 211 recorded launches, grades/error/target exact, scattered velocity ~1e-4 off; mis-hits, reactions and slices left
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [ ] **P5** Shot selection by input → `play.rs` read_input/press/human
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs
