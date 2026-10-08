@@ -27,8 +27,9 @@ slot, want, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 p = Pine()
 p.load_state(slot)
 # the load lands late: a patch written before it is overwritten by the state's own RAM. Slot 5 loads at vsync
-# ~7527 and its point starts at 7565: wait for the loaded vsync, then a few frames
-while not 7500 <= p.read32(VSYNC) < 7550: time.sleep(0.01)
+# ~7527 and its point starts at 7565: wait for the loaded vsync, then a few frames (HST_V0: another state's vsync)
+V0 = int(os.environ.get("HST_V0", 7500))
+while not V0 <= p.read32(VSYNC) < V0 + 50: time.sleep(0.01)
 v0 = p.read32(VSYNC)
 while p.read32(VSYNC) - v0 < 4: time.sleep(0.01)
 gm0 = p.read32(GM_PTR)

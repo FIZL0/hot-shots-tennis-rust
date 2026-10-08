@@ -361,6 +361,8 @@ struct Game {
     chars: Vec<i32>,
     /// Each player's last shouts.
     voices: Vec<sound::Voice>,
+    /// No serve struck yet this match: the singles server's voice on the coming new point.
+    first_serve: bool,
     data: Vec<std::sync::Arc<CharacterData>>,
     /// The team that won the last point.
     post_winner: i32,
@@ -1213,6 +1215,7 @@ fn setup(
         chars: vec![0; rules.players as usize],
         body_hit: None,
         voices: vec![default(); rules.players as usize],
+        first_serve: true,
         data: Vec::new(),
         post_winner: 0,
         umpire,
@@ -1301,6 +1304,8 @@ fn setup(
         if cpu(i) || n == 4 && cpu(i ^ 2) {
             game.rng.new_ai();
         }
+        // the player object places itself
+        game.rng.shared.next();
         game.serve_data.push(serve_data(&mut iso, &data));
         serve_character(&mut iso, c, game.aim_stats[i], game.serve_data.last_mut().unwrap());
         game.data.push(data.clone());
@@ -1329,10 +1334,15 @@ fn setup(
             .flatten()
             .map(|(b, mid)| (std::sync::Arc::new(b), mid)),
     });
+    // the hit-spark table and the gallery bank (slot 6), drawn before the sound manager is made
+    // ponytail: one match per run, so all four banks are unused; the game keeps them used across matches
+    let pick = game.rng.setup_gallery(&mut [false; 4]);
+    let gallery = crate::audio::gallery_bank(&mut iso, game.stage as usize, pick);
+    commands.insert_resource(crate::audio::GalleryBank(gallery.map(std::sync::Arc::new)));
     // the match starts (the sound manager's reseed), then its first point
     reseed_sound(&mut game);
     game.rng.new_point();
-    placement_draws(&mut game);
+    placement_draws(&mut game, false);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(
@@ -2005,11 +2015,21 @@ fn toss_draws(g: &mut Game) {
 }
 
 /// A new point's placement message: one shared draw per player, right after the reseed.
+/// In singles the server then voices program 6 (keys 0..1, memory slot 2) on the match's first serve, and after a
+/// change of ends (`ends`) half the time.
 // ponytail: the doubles formation the draw picks from (staggered when `% 100 < 20`) is left out (PLAN P3d2)
-fn placement_draws(g: &mut Game) {
-    for _ in 0..g.players.len() {
+fn placement_draws(g: &mut Game, ends: bool) {
+    for i in 0..g.players.len() {
         g.rng.shared.next();
+        if g.players.len() == 2
+            && i as i32 == g.score.server
+            && (g.first_serve || ends && g.rng.shared.r15() % 100 < 50)
+            && let Some(play) = g.voices[i].react(i, (6, 0, 1, Some(2)), || g.rng.shared.r15())
+        {
+            g.whooshes.push((0, i, play));
+        }
     }
+    g.first_serve = false;
 }
 
 /// The ball is held: still, and placed on the server's motion each tick (`held_ball`).
@@ -3532,6 +3552,7 @@ fn simulate(mut g: ResMut<Game>) {
                     g.umpire.match_over();
                     match_stats::match_over(g);
                     g.score = Score::new();
+                    g.first_serve = true;
                     g.players.iter_mut().for_each(|p| p.stance = 3.0);
                     return next_point(g, true);
                 }
@@ -3716,7 +3737,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
     g.rng.new_point();
-    placement_draws(g);
+    placement_draws(g, !fresh);
     // a point's end leaves for the next point (or match): the sound manager reseeds as on a change of ends
     if fresh {
         reseed_sound(g);
