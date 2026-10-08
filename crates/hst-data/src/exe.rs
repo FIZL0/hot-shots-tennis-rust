@@ -106,6 +106,35 @@ impl<'a> Game<'a> {
         self.at(0x41_5000, 13 * 0x90).chunks_exact(0x90).map(|r| BounceLook { dust: rgb(r, 0), mark: rgb(r, 0x60), puffs: r[0x80] != 0 }).collect()
     }
 
+    /// The running players' footstep effects: per character (0..13) the step rule, the dry and wet puff rows,
+    /// the puffs' speed decay and wind share, and per court (13) its footprints.
+    pub fn foot(&self) -> Foot {
+        let i = |a: u32| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
+        let row = |a: u32| FootPuff {
+            fade_in: i(a),
+            fade_out: i(a + 4),
+            alpha: i(a + 0xc),
+            size: self.f32(a + 0x14),
+            grow: self.f32(a + 0x18),
+            speed: self.f32(a + 0x1c),
+            rise: self.f32(a + 0x20),
+        };
+        let steps = (0..14u32)
+            .map(|c| {
+                let t = 0x41_1620 + c * 0x144;
+                FootStep { cooldown: i(0x41_1520 + c * 0xc), lift: self.f32(0x41_1524 + c * 0xc), runs: self.at(t, 56).iter().map(|&b| b != 0).collect(), scale: self.f32s(t + 0x38, 53) }
+            })
+            .collect();
+        let rgb = |r: &[u8], o: usize| std::array::from_fn(|k| f32::from_le_bytes(r[o + 4 * k..o + 4 * k + 4].try_into().unwrap()));
+        let n = |r: &[u8], o: usize| i32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let courts = self
+            .at(0x41_5000, 13 * 0x90)
+            .chunks_exact(0x90)
+            .map(|r| FootCourt { dusty: r[0x80] != 0, prints: r[0x83] != 0, print_rgb: [rgb(r, 0x40), rgb(r, 0x50)], print_alpha: [n(r, 0x70), n(r, 0x74)], print_life: [n(r, 0x78), n(r, 0x7c)] })
+            .collect();
+        Foot { steps, puffs: [row(0x41_14a0), row(0x41_14d8)], decay: self.f32(0x41_13d8), wind: self.f32(0x41_13e0), courts }
+    }
+
     /// How far inside the court lines shots are pulled: per shot class (serve, stroke, volley, smash) and kind
     /// (0..4) the margins (across, along) for a shot mode ≥ 0 then < 0; and per character (0..13) the widest
     /// sideline margin a short angled topspin stroke can get.
@@ -493,6 +522,52 @@ pub struct BounceLook {
     pub dust: [f32; 3],
     pub mark: [f32; 3],
     pub puffs: bool,
+}
+
+/// See [`Game::foot`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Foot {
+    pub steps: Vec<FootStep>,
+    /// Puff rows: dusty court, wet court.
+    pub puffs: [FootPuff; 2],
+    /// Per-frame factor on a puff's speed.
+    pub decay: f32,
+    /// Share of the wind a puff drifts with per frame.
+    pub wind: f32,
+    pub courts: Vec<FootCourt>,
+}
+
+/// A character's footstep rule: a foot lifted above 0.08 m lands at `lift`; then it can't step again for `cooldown`
+/// frames. Per motion whether it steps at all and its puff scale.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FootStep {
+    pub cooldown: i32,
+    pub lift: f32,
+    pub runs: Vec<bool>,
+    pub scale: Vec<f32>,
+}
+
+/// A footstep puff's look: frames to fade in and out, peak alpha, start size, growth over its life, drift speed,
+/// rise per frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FootPuff {
+    pub fade_in: i32,
+    pub fade_out: i32,
+    pub alpha: i32,
+    pub size: f32,
+    pub grow: f32,
+    pub speed: f32,
+    pub rise: f32,
+}
+
+/// A court's footstep look: dust puffs rise, footprints stay; footprint colour, alpha and life (frames) dry, wet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FootCourt {
+    pub dusty: bool,
+    pub prints: bool,
+    pub print_rgb: [[f32; 3]; 2],
+    pub print_alpha: [i32; 2],
+    pub print_life: [i32; 2],
 }
 
 /// Number of scripted camera shots.
