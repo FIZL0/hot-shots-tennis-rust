@@ -57,3 +57,9 @@ See 5-P11C-REACTION-FINAL.md. Done: `AiParams::reaction`, test `reactions_match_
 
 See 6-P11E4-RUNROUND-FINAL.md. Done: `AiParams::run_round` / `run_round_width` / `stand_side`, test
 `stand_sides_match_the_game` (fixture `ai_side_s05.bin` from `tools/record_ai_side.py`); `play.rs` `ai_stand_x`.
+
+## P11f (target choice)
+
+See 7-P11F-TARGET-FINAL.md. Done: `hst_sim::aim` (doubles `pair_aim`/`aim_at`, singles `rally_aim`/`receive_aim`,
+`lets_go`), tests `aims_match_the_game` (fixture `ai_aim_s05.bin`) and `singles_aims_match_the_game`
+(`ai_aim_singles.bin`, from `tools/record_ai_aim.py ... singles`); `play.rs` `ai_aim` / `ai_lets_go`.

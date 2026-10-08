@@ -213,8 +213,13 @@ const DASH_X: f32 = 2.743333;
 /// +x side seen from that end, 0 the other) and depth band (0 nearest the net, 2 deepest) past 1.5 from the net.
 /// `blur`: the game's look at where the opponent stands, which rolls between bands near their edges.
 pub fn zone(p: [f32; 2], blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
+    zone_in(p, SINGLES, blur)
+}
+
+/// [`zone`] on a court of half width `w` (the AI's: 4.115 singles, 5.485 doubles).
+pub fn zone_in(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
     let (x, d) = (p[0].abs(), ps2::sub(p[1].abs(), 1.5));
-    let third = ps2::div(SINGLES, 3.0);
+    let third = ps2::div(w, 3.0);
     let wide = if across(p) > 0.0 { 2 } else { 0 };
     let Some(roll) = blur else {
         let lane = if x <= third { 1 } else { wide };
@@ -223,7 +228,7 @@ pub fn zone(p: [f32; 2], blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
     };
     // the MT word as a fraction of 2³²
     let mut roll = || ps2::mul(2.3283064e-10, ps2::utof(roll()));
-    let q = ps2::div(ps2::div(ps2::mul(SINGLES, 2.0), 3.0), 4.0);
+    let q = ps2::div(ps2::div(ps2::mul(w, 2.0), 3.0), 4.0);
     let inner = ps2::sub(third, q);
     let lane = if x <= inner {
         1

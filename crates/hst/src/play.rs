@@ -2790,7 +2790,7 @@ fn bot(g: &mut Game, i: usize) {
             }
             // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
             let t = g.players[i].ai_timing;
-            if find_contact(g, i).is_some_and(|c| {
+            if !ai_lets_go(g, i) && find_contact(g, i).is_some_and(|c| {
                 let err = match c.swing.branch {
                     swing::Branch::Ground => t.stroke,
                     swing::Branch::Volley => t.volley,
@@ -2806,9 +2806,7 @@ fn bot(g: &mut Game, i: usize) {
             g.players[i].bot_due = None;
         }
     }
-    advance_stroke(g, i, |g| {
-        Vec2::new(rand(&mut g.rng) * 1.8 - 0.9, rand(&mut g.rng) * 1.6 - 0.8)
-    });
+    advance_stroke(g, i, |g| ai_aim(g, i));
 }
 
 /// The x a computer player runs to for ball `b`: the side of it the AI's contact search keeps (`hst_sim::ai::stand_side`,
@@ -2992,6 +2990,63 @@ fn bot_serve(g: &mut Game, i: usize) {
         None
     };
     serve_turn(g, i, stick, press);
+}
+
+/// A computer player's aim at its contact (`hst_sim::aim`): the doubles chooser from the four players' spots, the
+/// singles rally chooser from its own and its opponent's, as the stick a human would hold (world x, z).
+/// ponytail: the volley and high-ball level picks are P11g's draws (0 here), the exhibition level is always 3 (P11a),
+/// the mark is the opponent's spot, the reach heights are the contact's own (never low), the singles return of serve
+/// and the short-ball flag aren't kept; the kind-1 contact (its own search) isn't told apart from a ground stroke.
+fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
+    use hst_sim::aim::{Look, Pair};
+    let p = g.players[i];
+    let at = |j: usize| [g.players[j].pos[0], g.players[j].pos[2]];
+    let kind = match (p.dive.is_some(), p.contact.map(|c| c.swing.branch)) {
+        (true, _) => 4,
+        (_, Some(swing::Branch::Volley)) => 2,
+        (_, Some(swing::Branch::Smash)) => 3,
+        _ => 0,
+    };
+    let rng = &mut g.rng;
+    let stick = if g.players.len() == 4 {
+        let human_mate = g.humans.get(i ^ 2) == Some(&true);
+        let l = Pair {
+            me: at(i),
+            mate: at(i ^ 2),
+            opp: [at(i ^ 1), at(i ^ 3)],
+            side: p.end,
+            singles: false,
+            kind,
+            volley_level: 0,
+            level: 3,
+            formation: if human_mate { p.ai.formation } else { 0 },
+            smash_third: false,
+        };
+        p.ai.pair_aim(&l, &mut ai_roll(rng)).stick
+    } else {
+        let o = at(i ^ 1);
+        let l = Look { me: at(i), opp: o, side: p.end, singles: true, kind, mark: o, level: 3, ..Default::default() };
+        p.ai.rally_aim(&l, &mut false, &mut ai_roll(rng)).stick
+    };
+    Vec2::new(stick[0], stick[2])
+}
+
+/// Whether a computer player leaves the ball: its predicted first bounce lands out by at least the row's line
+/// margin (`AiParams::lets_go`; a ball that has bounced is played).
+/// ponytail: the original also stops its run there; this one only holds the press.
+fn ai_lets_go(g: &Game, i: usize) -> bool {
+    let mut f = g.flight;
+    if f.bounces > 0 {
+        return false;
+    }
+    for _ in 0..240 {
+        f.step(&g.shot, &COURTS[g.court]);
+        if f.bounces > 0 {
+            let at = [f.ball.pos[0], f.ball.pos[2]];
+            return g.players[i].ai.lets_go(at, g.shots <= 1, g.players.len() == 2);
+        }
+    }
+    false
 }
 
 /// The AI's draws on the game's generator stand-in.
