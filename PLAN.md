@@ -180,6 +180,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **B61** Singles: bottom side missing red and shadow (bug, user 2026-10-08): in singles the near (bottom) side of the court shows no red and no shadow, where the far side does (user's words; find what "red" is: court marking/zone, player marker, HUD). Compare `--singles --shot` vs `tools/screenshot.sh` in a singles match and match the original → `play.rs` · `shadow.rs` · `gs.rs`
 - [ ] **B62** Music on when it shouldn't be (bug, user 2026-10-08): matches started from the main menu play music. Likely cause: `main_menu.rs` `Settings::default()` is all on, so `music` defaults on and passes `--music`; check what the user expects (default off? or the setting is ignored) and the original's music behaviour → `play/main_menu.rs` Settings
 - [ ] **B63** Main menu starts the match in the same process (user 2026-10-08): the menu spawns a new `hst` process per match (`main_menu.rs` `Command::new(current_exe)`); start the match in the running app instead (same window, no relaunch) and come back to the menu after it → `play/main_menu.rs` · `main.rs` · `play.rs`
+- [ ] **B64** Court select and umpire select like the original (user 2026-10-08): B40's court and umpire selects must look and behave like the original's screens, including their 3D models with their animations (the court preview models, the umpires posed and animated as in the original's umpire select), camera, light, layout, cursor, sounds and transitions; find each screen's objects, motions and timing in PCSX2 and the menu overlay (MENU.BIN) and port them (with B40b4's umpire previews and B40e's menus 1:1) → `play/main_menu.rs` · `inspect.rs` · `character.rs` load_npc | j: 2026-10-08-b40-menus
+- [ ] **B65** Frame limit and vsync settings (user 2026-10-08): B40's settings get a frame-limit choice (a few options, e.g. 30 / 60 / 120 / 144 / uncapped) and a separate vsync on/off, replacing the single `uncapped_fps` switch; saved in `settings.txt` and passed to the match (new `--fps N` flag; the simulation stays a fixed 60 Hz tick) → `play/main_menu.rs` Settings · `main.rs` present mode / frame limiter
 - [ ] **B15** CPUs sometimes don't hit the ball (bug, user 2026-10-07): AI players just miss/let balls go that they should play. Reproduce (all-CPU `HST_AUTOPLAY`, log misses), compare with the original's AI decision (reach, run target, swing trigger) and match the CPU logic exactly → `hst-sim/src/ai.rs` · `play.rs` ai
 
 ### Match basics
@@ -406,6 +408,10 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P0b4d** Instant replay and between-points skipping, just like the original (in P0b4; user 2026-10-08, low priority: which points replay, the replay itself, and what a button press skips between points (replay, cut-away, walk-back) and when it may; B22: a set-ending point replays even with bots, before the cut-away; replay count feeds `cutaway::roles`/`pick`) → `flow.rs` · `play.rs` next_point | t: score.rs | j: 2026-10-06-p0b-rules
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.
+
+### Polish (at the end, user 2026-10-08)
+
+- [ ] **Z1** Performance pass, no lost functionality (user 2026-10-08): time every load and frame across the whole game (startup, menus, select previews, match load, court/weather/NPC setup, texture replacements, first draws/shader pipelines, results) and remove every stutter: move loads off the main thread or prefetch (as the select previews do, `previews.rs` worker + `character::Staged`), cache repeated work, pre-warm pipelines; no feature, look or bit-exact behaviour may change (check.sh and the replay tests still pass). Known: the first preview spawn in the select takes a ~67 ms frame (render target/pipeline creation) → whole game
 
 ## Code map
 
