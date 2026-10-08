@@ -86,8 +86,11 @@ pub(crate) fn apply(
             m.uniform.fog = if look.skies.contains(&id) { sky } else if look.bg.contains(&id) { bg } else { main };
             m.uniform.fog_color = colour;
         }
-        if let Some(((colour, ambient), sun)) = light {
+        if let Some(((colour, ambient, second), sun)) = light {
             (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (sun.light.extend(0.0), colour, ambient);
+            (m.uniform.light2_dir, m.uniform.light2_color) = (-sun.light.extend(0.0), second);
+            // the sky's light block has no glare; none in rain
+            m.uniform.glare = (w < 2 && !look.skies.contains(&id)) as u8 as f32;
         }
         if look.holes.contains(&id) {
             m.uniform.shadow = darken;

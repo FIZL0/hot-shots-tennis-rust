@@ -3,8 +3,9 @@
 //! cloudy weather (1.0 in rain and on court 7) and darkens it. Off the court the ball's height is a ray cast down at
 //! the court's collision model; a miss keeps its last scale. The players are never shaded.
 //!
-//! The ball and characters are drawn VU1-lit ([`GsMaterial`]): ambient + the light scale × the directional light,
-//! the match's model light (`gs::model_light`; the players' own, `gs::player_light`), the sun's direction.
+//! The ball and characters are drawn VU1-lit ([`GsMaterial`]): ambient + the light scale × the directional light
+//! (the sun's direction) + a second light (opposite the sun; the players': along the court towards their end), from
+//! the match's model light (`gs::model_light`; the players' own, `gs::player_light`, with their own fog near F).
 //!
 //! `HST_SHADE_DUMP=<file>` writes the built map (the game's bit layout) for comparing with a capture.
 
@@ -35,9 +36,9 @@ pub struct Shade {
 #[derive(Component)]
 pub struct Ball;
 
-/// A rig's or the ball's own GS draws, and the (light scale, weather) last applied.
+/// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half) last applied.
 #[derive(Component)]
-struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>)>);
+struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool)>);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, (own_materials.after(crate::noise::attach), light.after(crate::weather::apply)).chain());
@@ -127,23 +128,32 @@ fn light(
             }
             _ => 1.0,
         };
-        if lit.1 == Some((s, w)) {
+        let key = (s, w, player && p.z < 0.0);
+        if lit.1 == Some(key) {
             continue;
         }
-        lit.1 = Some((s, w));
+        lit.1 = Some(key);
         let court = look.as_deref().zip(w).map(|(look, w)| {
             let l = look.looks.get(w as usize).map_or(hst_sim::weather::Look::CLEAR, |r| hst_sim::weather::look(w, *r));
             let light = if player { gs::player_light(&look.envir, look.season, &l, look.players) } else { gs::model_light(&look.envir, look.season, &l) };
             (light, gs::court_fog(&look.envir, look.season, &l))
         });
         let (mut dir, mut colour, mut ambient) = gs::DEFAULT_LIGHT;
-        if let (Some((Some((c, a)), _)), Some(sun)) = (court, sun.as_deref()) {
+        let (mut dir2, mut second) = (Vec4::ZERO, Vec4::ZERO);
+        if let (Some((Some((c, a, t)), _)), Some(sun)) = (court, sun.as_deref()) {
             (dir, colour, ambient) = (sun.light.extend(0.0), c, a);
+            // the players' second light runs along the court towards their end (Bevy z is −game z)
+            (dir2, second) = (if player { gs::player_light2(-p.z) } else { -dir }, t);
         }
         for h in &lit.0 {
             let Some(mut m) = materials.get_mut(h) else { continue };
             (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (dir, (colour.truncate() * s).extend(1.0), ambient);
-            if let Some((_, Some((main, _, _, fog)))) = court {
+            (m.uniform.light2_dir, m.uniform.light2_color, m.uniform.glare) = (dir2, second, !rain as u8 as f32);
+            if let Some((_, Some((mut main, _, _, fog)))) = court {
+                // the players' fog is the court's with their own near F (`exe::Game::player_light`[3])
+                if player {
+                    main.x = look.as_deref().unwrap().players[3];
+                }
                 (m.uniform.fog, m.uniform.fog_color) = (main, fog);
             }
         }

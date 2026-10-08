@@ -15,6 +15,9 @@ struct Gs {
     light_dir: vec4<f32>,
     light_color: vec4<f32>,
     ambient: vec4<f32>,
+    light2_dir: vec4<f32>,
+    light2_color: vec4<f32>,
+    glare: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -42,8 +45,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #else
     var f = gs.color;
 #endif
-    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient + the light's colour × its
-    // diffuse term, and a specular term on the half vector between the light and the camera's forward axis,
+    // VU1 lighting, in game space (y down; GameSpace turns it 180° about X): ambient + each light's colour × its
+    // diffuse term (the first dimmed with the ambient when the camera looks near it, `glare`), and a specular term on the half vector between the light and the camera's forward axis,
     // Schlick's t/(k − (k − 1)t) for t^k. Meshes without normals (the weather's particles) go unlit.
     var spec = 0.0;
 #ifdef VERTEX_NORMALS
@@ -53,7 +56,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let forward = -view_bindings::view.world_from_view[2].xyz * flip;
     let h = max(-dot(n, normalize(gs.light_dir.xyz + forward)), 0.0);
     spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
-    f = vec4(f.rgb * (gs.ambient.rgb + gs.light_color.rgb * diffuse), f.a);
+    let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
+    let diffuse2 = max(-dot(n, gs.light2_dir.xyz), 0.0);
+    f = vec4(f.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), f.a);
 #endif
     var rgb = min(f.rgb, vec3(255.0 / 128.0));
     var a = min(f.a, 255.0 / 128.0);

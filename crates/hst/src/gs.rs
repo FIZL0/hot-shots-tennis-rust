@@ -15,7 +15,7 @@
 //!   model's material header (mdl.rs). Q = 1/w (VU1), so a pixel's level is ⌊log2(view depth m) + K + ½⌋ clamped
 //!   to 0..MXL.
 //! - Colour = texture × vertex colour × material colour × light in 8-bit PS2 units (0x80 = 1.0), clamped, in gamma
-//!   space. VU1 lights each vertex with one fixed directional light and an ambient (gs.wgsl); its specular term,
+//!   space. VU1 lights each vertex with two directional lights and an ambient (gs.wgsl); its specular term,
 //!   scaled by header +0x14, goes out as the vertex alpha, which HIGHLIGHT2 adds to the colour (untextured: added to
 //!   the colour directly). The specular exponent is max(1, 128·(header +0x10)^1.65).
 //!
@@ -97,6 +97,12 @@ pub struct GsUniform {
     pub light_dir: Vec4,
     pub light_color: Vec4,
     pub ambient: Vec4,
+    /// VU1's second light (the "third" factor): its direction and colour; no specular.
+    pub light2_dir: Vec4,
+    pub light2_color: Vec4,
+    /// 1: the light and ambient dim when the camera looks within ~37° of the light (the light block's glare flag, off in
+    /// rain): x = (−forward·light_dir − 0.8)/0.2 > 0 takes ambient ×(1 − x/2) and light ×(1 − 0.6x).
+    pub glare: f32,
 }
 
 /// The light VU1 has outside a match camera (direction, colour, ambient): white, from (1, 2, 1)/√6.
@@ -104,32 +110,39 @@ pub const DEFAULT_LIGHT: (Vec4, Vec4, Vec4) =
     (Vec4::new(0.408248, 0.816497, 0.408248, 0.0), Vec4::new(0.49, 0.49, 0.49, 1.0), Vec4::new(0.5, 0.5, 0.5, 1.0));
 
 /// A court's light for season `season` from its `envir_cNN.dat` (the light row `court_clear` reads) in weather `w`:
-/// (colour, ambient) = the row's RGB × +0x10 (× the weather's scale) and × +0xc; rain greys the RGB to its mean.
-/// The direction is the sun's (`shadow::Sun::light`).
-/// ponytail: the game dims both (×(1 − x/2), ×(1 − 0.6x)) when the camera looks within ~37° of the sun; a match
-/// camera never does.
-pub fn court_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)> {
+/// (colour, ambient, second) = the row's RGB × +0x10 (× the weather's scale), × +0xc and × +0x14; rain greys the RGB
+/// to its mean. The direction is the sun's (`shadow::Sun::light`), the second light's the opposite.
+pub fn court_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4, Vec4)> {
     let (rgb, ambient, intensity) = light_row(envir, season, w)?;
-    Some(((rgb * intensity).extend(1.0), (rgb * ambient).extend(1.0)))
+    let row = light_rgb(envir, season, w)?.1;
+    let third = f32::from_le_bytes(envir.get(row + 0x14..row + 0x18)?.try_into().ok()?);
+    Some(((rgb * intensity).extend(1.0), (rgb * ambient).extend(1.0), (rgb * third).extend(1.0)))
 }
 
 /// The light VU1 has for the match's characters and ball (the game copies the court's light for them with factors of
-/// their own): (colour, ambient) = the light row's RGB × +0x1c and × +0x18, each the court's +0x10 / +0xc where 0,
-/// and not × the weather's scale. A model's light scale (`shade`) multiplies the colour.
-/// ponytail: the row's third light (+0x20 / +0x14, the opposite direction) is left out, as for the court; 0 on court 10
-pub fn model_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4)> {
+/// their own): (colour, ambient, second) = the light row's RGB × +0x1c, × +0x18 and × +0x20, each the court's +0x10 /
+/// +0xc / +0x14 where 0, and not × the weather's scale. A model's light scale (`shade`) multiplies the colour. The
+/// second light is the court's, opposite the sun.
+pub fn model_light(envir: &[u8], season: usize, w: &Look) -> Option<(Vec4, Vec4, Vec4)> {
     let (rgb, row) = light_rgb(envir, season, w)?;
     let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
     let or = |a: f32, b: f32| if a != 0.0 { a } else { b };
-    Some(((rgb * or(f(row + 0x1c)?, f(row + 0x10)?)).extend(1.0), (rgb * or(f(row + 0x18)?, f(row + 0xc)?)).extend(1.0)))
+    let k = |own: usize, court: usize| Some((rgb * or(f(row + own)?, f(row + court)?)).extend(1.0));
+    Some((k(0x1c, 0x10)?, k(0x18, 0xc)?, k(0x20, 0x14)?))
 }
 
 /// The light VU1 has for the match's players: (colour, ambient) = the light row's RGB × the court's own player factors
-/// (`exe::Game::player_light`: [ambient, light, ..]), not the row's model factors and not × the weather's scale.
-/// ponytail: the third light (its factor × RGB, from the player's court end) is left out, as for the court; 0 on court 10
-pub fn player_light(envir: &[u8], season: usize, w: &Look, factors: [f32; 4]) -> Option<(Vec4, Vec4)> {
+/// (`exe::Game::player_light`: [ambient, light, second, fog near F]), not the row's model factors and not × the
+/// weather's scale: (colour, ambient, second). The second light shines along the court towards the player's end:
+/// direction (0, 0, z) with z the sign of the player's game z (`player_light2`).
+pub fn player_light(envir: &[u8], season: usize, w: &Look, factors: [f32; 4]) -> Option<(Vec4, Vec4, Vec4)> {
     let (rgb, _) = light_rgb(envir, season, w)?;
-    Some(((rgb * factors[1]).extend(1.0), (rgb * factors[0]).extend(1.0)))
+    Some(((rgb * factors[1]).extend(1.0), (rgb * factors[0]).extend(1.0), (rgb * factors[2]).extend(1.0)))
+}
+
+/// The players' second light direction for a player at game z `z`: the game's (0, 0, −end), end +1 on the −z half.
+pub fn player_light2(z: f32) -> Vec4 {
+    Vec4::new(0.0, 0.0, if z < 0.0 { -1.0 } else { 1.0 }, 0.0)
 }
 
 /// The light row's RGB, ambient and intensity in weather `w`.
@@ -227,7 +240,7 @@ impl GsMaterial {
             }
         };
         let f = |o: usize| f32::from_le_bytes(m.header[o..o + 4].try_into().unwrap());
-        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: DEFAULT_LIGHT.0, light_color: DEFAULT_LIGHT.1, ambient: DEFAULT_LIGHT.2 };
+        let uniform = GsUniform { color: Vec4::from(m.color), shininess: (128.0 * f(0x10).powf(1.65)).max(1.0), highlight: f(0x14), shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: DEFAULT_LIGHT.0, light_color: DEFAULT_LIGHT.1, ambient: DEFAULT_LIGHT.2, light2_dir: Vec4::ZERO, light2_color: Vec4::ZERO, glare: 0.0 };
         tests
             .into_iter()
             .map(|test| GsMaterial {
@@ -389,7 +402,7 @@ mod tests {
         assert_eq!(court_clear(&envir, 0, sky, &Look::CLEAR), Some([0x11, 0x28, 0x67]));
         // PINE, weather 3: the light greys to 0.847059 and its intensity drops to 0x3ee8f5c0
         let rain = hst_sim::weather::look(3, [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
-        let (colour, _) = court_light(&envir, 0, &rain).unwrap();
+        let (colour, _, _) = court_light(&envir, 0, &rain).unwrap();
         // (within an ulp: the test's 0.7 and 0.65 literals may not be the files' exact bits)
         assert!(colour.x.to_bits().abs_diff((f32::from_bits(0x3f58_d8d8) * f32::from_bits(0x3ee8_f5c0)).to_bits()) <= 1);
         // sky fog F 0: the clear colour is the fog colour, white × 0.65
@@ -409,17 +422,38 @@ mod tests {
             envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
         }
         let near = |a: Vec4, b: [f32; 3]| (a.truncate() - Vec3::from(b)).abs().max_element() < 1e-5;
-        let (colour, ambient) = model_light(&envir, 0, &Look::CLEAR).unwrap();
+        let (colour, ambient, _) = model_light(&envir, 0, &Look::CLEAR).unwrap();
         assert!(near(colour, [0.5349, 0.52031, 0.52031]) && near(ambient, [0.59529, 0.57906, 0.57906]), "{colour} {ambient}");
         // 0 falls back to the court's factors
         envir[0xe8..0xf0].fill(0);
-        let (colour, ambient) = model_light(&envir, 0, &Look::CLEAR).unwrap();
+        let (colour, ambient, _) = model_light(&envir, 0, &Look::CLEAR).unwrap();
         assert!(near(colour, [0.60392, 0.58745, 0.58745]) && near(ambient, [0.63843, 0.62102, 0.62102]), "{colour} {ambient}");
         // the players: court 10's own factors (0.7, 0.7); slot 5's GS dump draws them with ambient = light =
         // (0.60392, 0.58745), unlit (77, 75, 75) and at most (154, 150, 150) for vertex colour 0x80
-        let (colour, ambient) = player_light(&envir, 0, &Look::CLEAR, [0.7, 0.7, 0.0, 245.0]).unwrap();
+        let (colour, ambient, _) = player_light(&envir, 0, &Look::CLEAR, [0.7, 0.7, 0.0, 245.0]).unwrap();
         assert!(near(colour, [0.60392, 0.58745, 0.58745]) && near(ambient, [0.60392, 0.58745, 0.58745]), "{colour} {ambient}");
         assert_eq!((ambient * 128.0).truncate().as_uvec3().to_array(), [77, 75, 75]);
         assert_eq!(((ambient + colour) * 128.0).truncate().as_uvec3().to_array(), [154, 150, 150]);
+    }
+
+    #[test]
+    fn second_light() {
+        // court 4 season 0 (slot 4 RAM): RGB 1, court factors (ambient 0.7, light 0.5, second 0.02), the models' (0.8,
+        // 1.0, 0.08), the players' table (0.75, 0.35, 0.1, 255); a player at end +1 (the −z half) has its second
+        // light along (0, 0, −1), and its single-bone vertices in slot 4's GS dump match with it (119/121, 58 without)
+        let mut envir = vec![0; 0x550];
+        envir[0x10] = 18;
+        for (o, v) in [(0xd0, 1.0f32), (0xd4, 1.0), (0xd8, 1.0), (0xdc, 0.7), (0xe0, 0.5), (0xe4, 0.02), (0xe8, 0.8), (0xec, 1.0), (0xf0, 0.08)] {
+            envir[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let (c, a, t) = court_light(&envir, 0, &Look::CLEAR).unwrap();
+        assert_eq!((c.x, a.x, t.x), (0.5, 0.7, 0.02));
+        let (c, a, t) = model_light(&envir, 0, &Look::CLEAR).unwrap();
+        assert_eq!((c.x, a.x, t.x), (1.0, 0.8, 0.08));
+        envir[0xf0..0xf4].fill(0);
+        assert_eq!(model_light(&envir, 0, &Look::CLEAR).unwrap().2.x, 0.02);
+        let (c, a, t) = player_light(&envir, 0, &Look::CLEAR, [0.75, 0.35, 0.1, 255.0]).unwrap();
+        assert_eq!((c.x, a.x, t.x), (0.35, 0.75, 0.1));
+        assert_eq!((player_light2(-3.0).z, player_light2(10.0).z), (-1.0, 1.0));
     }
 }
