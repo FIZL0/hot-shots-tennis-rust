@@ -55,6 +55,9 @@ pub struct CharacterData {
     pub skeleton: Skeleton,
     /// The costume's noise deformers (`.NOI`), if it sways.
     pub noise: Option<Arc<crate::noise::Costume>>,
+    /// Each part's material as the GS draws it (one, or two for TEST mode 20..29), VU1-lit: `shade` swaps them in,
+    /// per rig.
+    pub gs: HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
 }
 
 /// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
@@ -181,6 +184,27 @@ fn materials_of(mats: &mtl::Mtl, images: &mut Assets<Image>, materials: &mut Ass
         .collect()
 }
 
+/// The GS draws of `mats` for `model`'s batches (by its first packet's PRIM; raw texels), by the material's handle.
+fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial>], images: &mut Assets<Image>) -> HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>> {
+    let tex: Vec<Handle<Image>> = mats
+        .textures
+        .iter()
+        .map(|t| {
+            let mut img = texture_image(t);
+            img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
+            crate::textures::add_mtl(images, img, t)
+        })
+        .collect();
+    let mut out = HashMap::new();
+    for (mi, (m, h)) in mats.materials.iter().zip(handles).enumerate() {
+        let prim = model.materials.get(mi).and_then(|p| p.first()).map_or(0x10, |p| p.prim);
+        let mut draws = crate::gs::GsMaterial::for_batch(m, prim, m.texture.map(|t| tex[t].clone()));
+        draws.iter_mut().for_each(|g| g.uniform.lod_k = model.lod_k.get(mi).copied().unwrap_or(0.0));
+        out.insert(h.id(), draws);
+    }
+    out
+}
+
 /// A skinned model's parts, one mesh per material (joints = the model's nodes), with its morph targets; `true`
 /// where a part carries them.
 pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut Assets<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
@@ -259,6 +283,7 @@ pub fn load_disc(
     let model = mdl::parse(&find(&format!("{body}.mdl")).ok_or("no body model")?).map_err(|e| e.0)?;
     let mats = mtl::parse(&find(&format!("{body}.mtl")).ok_or("no body MTL")?, find(&format!("{body}.mti")).as_deref()).map_err(|e| e.0)?;
     let handles = materials_of(&mats, images, materials);
+    let mut gs = gs_of(&model, &mats, &handles, images);
 
     let joints: Vec<Joint> = (0..model.node_count)
         .map(|i| Joint {
@@ -280,6 +305,7 @@ pub fn load_disc(
         let rmodel = mdl::parse(&rm).map_err(|e| e.0)?;
         let rmats = mtl::parse(&rt, find(&format!("{rk}.mti")).as_deref()).map_err(|e| e.0)?;
         let rh = materials_of(&rmats, images, materials);
+        gs.extend(gs_of(&rmodel, &rmats, &rh, images));
         // the gut (TEST mode 25 in an ABE batch): A ≥ 0x70 writes colour and Z, the rest colour only, both blended
         // (Cs − Cd)·As + Cd; its texels are 0 or 0x80, so the holes between the strings show what is behind
         // ponytail: drawn without Z for the A ≥ 0x70 half too; nothing in the racket sits behind the strings but the frame
@@ -373,7 +399,7 @@ pub fn load_disc(
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(&skeleton, &c, n as i32)));
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs })
 }
 
 /// Build a background figure (umpire, spectator, creature) from a court archive: the model `{stem}.MDL` with its
@@ -395,6 +421,7 @@ pub fn load_npc(
     let model = mdl::parse(&find(&format!("{stem}.mdl"))?).ok()?;
     let mats = mtl::parse(&find(&format!("{stem}.mtl"))?, find(&format!("{stem}.mti")).as_deref()).ok()?;
     let handles = materials_of(&mats, images, materials);
+    let gs = gs_of(&model, &mats, &handles, images);
     // their texture alpha is coverage: TEST mode 10..19 keeps A ≥ 0x40, 20..29 blends (the ground shadow quad)
     // ponytail: mode 20..29's A ≥ 0x70 half writes Z on the PS2; drawn blended without it
     for (m, h) in mats.materials.iter().zip(&handles) {
@@ -432,6 +459,7 @@ pub fn load_npc(
         stance_ball: None,
         skeleton,
         noise: None,
+        gs,
     })
 }
 

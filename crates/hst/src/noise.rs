@@ -94,7 +94,7 @@ pub fn plugin(app: &mut App) {
 }
 
 /// A new rig with a costume deformer swaps its swaying parts for copies of its own.
-fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Children), Added<Rig>>, mut parts: Query<&mut Mesh3d>, mut meshes: ResMut<Assets<Mesh>>) {
+pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Children), Added<Rig>>, mut parts: Query<&mut Mesh3d>, mut meshes: ResMut<Assets<Mesh>>) {
     for (root, rig, children) in &rigs {
         let Some(c) = &rig.data.noise else { continue };
         let mut own = Vec::new();
