@@ -83,6 +83,7 @@ python3 research/mkirx_elf.py context/iso/MODULES2/SG2IOPM1.IRX context/elf/sg2i
 | `context/fixtures/ball_path_s08.csv` | `research/tools/fixture_ball_path.py` on a RAM image |
 | `context/fixtures/shot_params_ram.bin` | the shot parameter table from a save state's RAM |
 | `context/fixtures/spu_s03.csv`, `spu_s04.csv`, `spu_s05.csv` | `research/tools/fixture_spu.py <slot N .p2s> …` (sound banks, key-ons, pitch registers, SPU2 voice decoder/envelope state and the driver's voice volume inputs of slots 3/4/5) |
+| `context/fixtures/ai_serve_singles.bin`, `ai_serve_s05.bin` | `tools/record_ai_serve.py <slot> 7000 …` (slot 8 = `bots_singles.p2m2`'s save state; slot 5) |
 | `context/recordings/*.p2m2` | PCSX2 input recordings (Tools → Input Recording) |
 
 Each test names the recording it needs in its header comment and skips itself when that recording is missing.

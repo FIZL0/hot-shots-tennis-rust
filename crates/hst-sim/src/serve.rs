@@ -163,17 +163,24 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
 /// within the window while the ball falls, or while it still rises for a quick serve (never on an underhand toss);
 /// earliest on ties, no timing table. The AI presses once the frames to it, plus its serve error, are few enough.
 pub fn ai_search(d: &ServeData, toss: Toss, quick: bool, path: &[PathPoint]) -> Option<usize> {
-    let [top, ideal, low] = d.window(toss);
     let quick = quick && toss != Toss::Under;
+    // heights are −y; ponytail: the vertical speed is the next frame's rise (the path carries no velocity)
+    let path = path.windows(2).map(|w| (-w[0].pos[1], crate::ps2::sub(w[0].pos[1], w[1].pos[1]), w[0].bounces));
+    ai_pick(d.window(toss), quick, path)
+}
+
+/// The original's serve contact pick over the predicted path, as (height, vertical speed, bounces) per frame, up
+/// positive: the frame nearest the window's ideal height (`[top, ideal, low]`) inside it, rising (quick serve,
+/// speed ≥ 0) or falling (≤ 0), the first on a tie; nothing from the first bounce on.
+pub fn ai_pick(window: [f32; 3], quick: bool, path: impl IntoIterator<Item = (f32, f32, i32)>) -> Option<usize> {
+    let [top, ideal, low] = window;
     let mut best: Option<(usize, f32)> = None;
-    for (k, w) in path.windows(2).enumerate() {
-        if w[0].bounces > 0 {
+    for (k, (h, vy, bounces)) in path.into_iter().enumerate() {
+        if bounces > 0 {
             break;
         }
-        // heights are −y; the next frame's says which way the ball is going
-        let (h, rising) = (-w[0].pos[1], w[1].pos[1] <= w[0].pos[1]);
-        if rising == quick && low <= h && h <= top {
-            let off = (h - ideal).abs();
+        if (if quick { vy >= 0.0 } else { vy <= 0.0 }) && low <= h && h <= top {
+            let off = crate::ps2::sub(h, ideal).abs();
             if best.is_none_or(|(_, b)| off < b) {
                 best = Some((k, off));
             }

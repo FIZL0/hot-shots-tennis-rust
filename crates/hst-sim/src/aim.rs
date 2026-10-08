@@ -842,20 +842,58 @@ impl AiParams {
     /// a near-middle lane and level 2 any lane and depth; other swings aim at the side away from the hand (`lefty`)
     /// at level 1, any depth at level 2. A non-wide middle-depth aim never points back (z toward `side`).
     pub fn serve_aim(&self, level: u8, swing: u8, ad: bool, lefty: bool, side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
+        let (zone, wide, _) = self.serve_zone(level, swing, ad, lefty, roll);
+        self.serve_stick(zone, wide, side, roll)
+    }
+
+    /// The singles serve's stick (`serve_aim`'s zones) and the net dash it may set off: at level 2 a serve down
+    /// the lane on the receiver's forehand side of the T (a wide ✕ from the deuce court's left lane or the ad
+    /// court's right, another swing from the deuce court's right lane or the ad's left) sends a NET player (ALL: 80 %)
+    /// in toward the net at `reach` depth, x 0..1.37 m (✕) or 1.37..2.74 m (else) to the serve's side; then any
+    /// singles serve dashes `net_dash_rate` % of the time. Returns the stick, whether it dashes and the drawn
+    /// dash spot (None: the plain net spot).
+    #[allow(clippy::too_many_arguments)]
+    pub fn serve_aim_singles(
+        &self,
+        level: u8,
+        swing: u8,
+        ad: bool,
+        lefty: bool,
+        side: f32,
+        reach: f32,
+        roll: &mut impl FnMut() -> u32,
+    ) -> ([f32; 4], bool, Option<[f32; 2]>) {
+        let (zone, wide, follow) = self.serve_zone(level, swing, ad, lefty, roll);
+        let mut spot = None;
+        if follow && (self.style == 1 || self.style == 3 && chance(roll, 80)) {
+            let x = ps2::madd(if swing == 3 { 0.0 } else { 1.3716666 }, 1.3716666, ps2::mul(2.3283064e-10, ps2::utof(roll())));
+            spot = Some([ps2::mul(ps2::mul(x, if ad { 1.0 } else { -1.0 }), side), ps2::mul(-reach, side)]);
+        }
+        let dash = chance(roll, self.net_dash_rate) || spot.is_some();
+        (self.serve_stick(zone, wide, side, roll), dash, spot)
+    }
+
+    /// The serve's zone, whether it is the wide one, and whether a singles net player follows it in.
+    fn serve_zone(&self, level: u8, swing: u8, ad: bool, lefty: bool, roll: &mut impl FnMut() -> u32) -> ((u8, u8), bool, bool) {
         let away = if lefty { 0 } else { 2 };
-        let draw = |roll: &mut dyn FnMut() -> u32| (roll() >> 16 & 0x7fff) as u8;
-        let (zone, wide) = match (level, swing == 3) {
+        let draw = |roll: &mut dyn FnMut() -> u32| roll() >> 16 & 0x7fff;
+        let ((x, z), wide) = match (level, swing == 3) {
             (0, _) => ((1, 1), false),
             (1, true) if chance(roll, self.serve_kind[0]) => ((if ad { 2 } else { 0 }, 2), true),
             (1, true) => ((if ad { (!chance(roll, 50)) as u8 } else { 2 - chance(roll, 50) as u8 }, 1), false),
             (1, false) => ((away, 1), false),
-            (_, true) if chance(roll, self.serve_kind[0]) => ((draw(roll) % 3, 2), true),
+            (_, true) if chance(roll, self.serve_kind[0]) => (((draw(roll) % 3) as u8, 2), true),
             (_, true) => {
-                let x = draw(roll) % 3;
-                ((x, draw(roll) & 1), false)
+                let x = (draw(roll) % 3) as u8;
+                ((x, (draw(roll) & 1) as u8), false)
             }
-            _ => ((away, draw(roll) % 3), false),
+            _ => ((away, (draw(roll) % 3) as u8), false),
         };
+        let follow = level >= 2 && (wide && x == if ad { 2 } else { 0 } || swing != 3 && x == if ad { 0 } else { 2 });
+        ((x, z), wide, follow)
+    }
+
+    fn serve_stick(&self, zone: (u8, u8), wide: bool, side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let mut s = self.aim(zone, side, roll);
         if !wide && zone.1 == 1 && ps2::mul(s[2], side) > 0.0 {
             s[2] = 0.0;

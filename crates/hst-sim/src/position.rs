@@ -289,7 +289,7 @@ impl Single {
         [0.0, ps2::mul(c.side, -d)]
     }
 
-    /// Go in to the net (a smash seen, a net-dash roll on the serve): to the middle at the reach depth.
+    /// Go in to the net (a smash seen): to the middle at the reach depth.
     pub fn go_in(&mut self, c: &Court) {
         self.dash.get_or_insert(self.net_spot(c, false));
     }
