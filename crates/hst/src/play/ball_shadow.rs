@@ -71,6 +71,8 @@ fn fade(
             let Ok(h) = parts.get(c) else { continue };
             if let Some(mut m) = materials.get_mut(&h.0) {
                 m.uniform.color.w *= alpha;
+                // TFX as `GsMaterial::for_batch` picks it: HIGHLIGHT2 only at colour alpha 0x80
+                m.key.modulate |= (m.uniform.color.w * 128.0) as i32 != 0x80;
                 commands.entity(c).insert(Faded);
             }
         }
