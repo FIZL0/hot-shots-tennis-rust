@@ -4,7 +4,7 @@
 //! must: at a new point the shared generator takes the frame's first output and the court's the second
 //! (`Rngs::new_point`), and the sound manager's (`Rngs::change_ends`) the next (8656's sample is torn between them:
 //! `sound_draws_like_the_game` has the order).
-use hst_sim::rng::{Mt, Rand, Rngs};
+use hst_sim::rng::{MenuFlame, Mt, Rand, Rngs};
 
 /// Draws from `a` that land on `b`, if any within `max`.
 fn reach(a: &Mt, b: &Mt, max: usize) -> Option<usize> {
@@ -703,4 +703,51 @@ fn setup_rand_like_the_game() {
         assert_eq!(low(&g.rand), point, "rand() at the first point");
     }
     assert_eq!(d.len(), 24);
+}
+
+/// The menus' flame against research/p3f_menu_log.py's logs (`context/p3f/menu_c{1,2}.bin`, the same picks at different
+/// timing): every `rand()` call before the match seed is the flame's. From its setup, each port frame must end where a
+/// game frame does, and the last on the seed. A game frame ends where its calls' particle pointer (s0, rising
+/// through the 24) falls back; frames straddle vsyncs, so the vsync can't split them.
+#[test]
+fn menu_flame_draws_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    for name in ["menu_c1", "menu_c2"] {
+        let Ok(d) = std::fs::read(format!("{root}/context/p3f/{name}.bin")) else {
+            return eprintln!("{name}.bin missing, skipped");
+        };
+        // records: vsync, caller, s0, gm+0x54, rand()'s low word before the call, match frame
+        let rec: Vec<[u32; 6]> =
+            d.chunks_exact(24).map(|c| std::array::from_fn(|k| u32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap()))).collect();
+        let seed = rec.iter().position(|x| x[1] == 0x322f1c).expect("the match seed");
+        let low = |r: &Rand| r.0 as u32;
+        let mut r = Rand::default();
+        (0..1 << 20).find(|_| low(&r) == rec[0][4] || { r.next(); false }).expect("the flame's state from boot");
+        let mut flame = MenuFlame::new(&mut r);
+        let first = (0..seed).find(|&k| rec[k][4] == low(&r)).expect("the setup's draws");
+        // the frame loop's calls (the spawn's own, made from a helper, carry other s0s)
+        let mut ends = vec![];
+        let mut prev = 0;
+        for k in first..seed {
+            if (0x37ba20..0x37c2ac).contains(&rec[k][1]) {
+                if rec[k][2] < prev {
+                    ends.push(k);
+                }
+                prev = rec[k][2];
+            }
+        }
+        ends.push(seed);
+        let (mut at, mut frames) = (first, 0);
+        for &end in &ends {
+            while at < end {
+                flame.frame(&mut r);
+                frames += 1;
+                let next = (at..=end).find(|&k| rec[k][4] == low(&r));
+                at = next.unwrap_or_else(|| panic!("{name}: frame {frames} overshoots the game's (vsync {})", rec[at][0]));
+            }
+            assert_eq!(at, end, "{name}: frame {frames}");
+        }
+        assert!(frames >= ends.len());
+        eprintln!("{name}: {seed} calls in {frames} frames");
+    }
 }

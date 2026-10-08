@@ -157,6 +157,77 @@ impl Rngs {
     }
 }
 
+/// The character select's flame (24 particles of `menu/2d/f_s.tm2`, made at P1's pick), as far as its `rand()`
+/// calls go: it draws on every frame it's up, so the calls before the match seed follow how long the select is shown.
+/// A particle lives 18 + `% 24` frames at an integer heading in degrees (0 = right, 270 = up) that steers toward
+/// 270, by a random step in 226..315.
+// ponytail: only what the draws read (alive, life, heading); its motion, spin and alpha wait for a select (P3f1a)
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuFlame {
+    alive: [bool; 24],
+    life: [u32; 24],
+    heading: [i32; 24],
+}
+
+impl MenuFlame {
+    /// The screen's setup: each particle starts alive when `% 3 != 0`, else when a second draw's `& 7 == 0`.
+    pub fn new(r: &mut Rand) -> MenuFlame {
+        let mut f = MenuFlame { alive: [false; 24], life: [0; 24], heading: [0; 24] };
+        for i in 0..24 {
+            if Self::draw(r) % 3 != 0 || Self::draw(r) & 7 == 0 {
+                f.spawn(r, i);
+            }
+        }
+        f
+    }
+
+    fn draw(r: &mut Rand) -> i32 {
+        (r.next() >> 8) as i32
+    }
+
+    /// A heading (`% 360`), a life and a spin (`% 7 − 3`, not kept).
+    fn spawn(&mut self, r: &mut Rand, i: usize) {
+        self.alive[i] = true;
+        self.heading[i] = Self::draw(r) % 360;
+        self.life[i] = 18 + (Self::draw(r) % 24) as u32;
+        Self::draw(r);
+    }
+
+    /// One frame: with fewer than 13 particles out a dead one respawns when `& 7 == 0`; with 13 or more, when
+    /// `% 3 != 0` or else a second draw's `& 7 == 0`. Each live one (a new one too) then loses a frame of life and,
+    /// still alive, steers.
+    pub fn frame(&mut self, r: &mut Rand) {
+        let dead = self.alive.iter().filter(|&&a| !a).count();
+        for i in 0..24 {
+            if !self.alive[i] && ((dead >= 13 && Self::draw(r) % 3 != 0) || Self::draw(r) & 7 == 0) {
+                self.spawn(r, i);
+            }
+            if !self.alive[i] {
+                continue;
+            }
+            self.life[i] -= 1;
+            if self.life[i] == 0 {
+                self.alive[i] = false;
+                continue;
+            }
+            let a = self.heading[i];
+            // a random step: a sixth of the way to 270 (truncated), scaled by 100..299 %, at least 1
+            let jitter = |r: &mut Rand, sixth: i32| (sixth * (Self::draw(r) % 200 + 100) / 100).max(1);
+            self.heading[i] += match a {
+                0..=90 => -((a + 90) >> 2),
+                91..=180 => (270 - a) >> 2,
+                181..=225 => (270 - a) / 6,
+                226..=269 => jitter(r, (270 - a) / 6),
+                270 => if Self::draw(r) & 1 == 0 { -1 } else { 1 },
+                271..=315 => -jitter(r, (a - 270) / 6),
+                316..=359 => -((a - 270) / 6),
+                _ => 0,
+            };
+            self.heading[i] = self.heading[i].rem_euclid(360);
+        }
+    }
+}
+
 /// Player `i`'s voice bank (b or a) from its draw `drawn` (`r15 % 100 >= 70`, always made) and the banks `banks` of
 /// the players before it, `chars` every player's character: two of one character take different banks (the second
 /// the other of the first's); three: the first two keep their draws, the third takes the other of its partner's
