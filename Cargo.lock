@@ -2941,8 +2941,10 @@ name = "hst"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "gltf",
  "hst-data",
  "hst-sim",
+ "serde_json",
 ]
 
 [[package]]

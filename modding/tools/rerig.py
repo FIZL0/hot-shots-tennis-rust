@@ -355,7 +355,7 @@ def rerig(src_path, out_path, donor=None, motions=None):
         if fn is not None:
             arr = fn(arr)
         c = comp or (glb.FLOAT if a.get("normalized") else a["componentType"])
-        return out.accessor(arr, c, a["type"], minmax=a["type"] == "VEC3" and fn is not None)
+        return out.accessor(arr, c, a["type"], minmax=a["type"] == "VEC3")
 
     def lin(Kx):
         A = (G @ Kx)[:3, :3]

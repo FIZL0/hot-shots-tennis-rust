@@ -111,6 +111,11 @@ Get a Grip's labelled cues map almost 1:1: smash→0, swing→1, receive→3, po
   `Voley POW`, `Top SPIN`, `Strk CON`, `SPE`, `STA`, `Agili`, reach `リーチ(cm)`, heights). Other games' stats are
   mapped once per game (PLAN M8).
 - `hand`: `right`/`left` (the game mirrors left-handers, like Carol and Will).
+- `face`: `morph` (§4a channels), `texture` (§4b, needs `face.json`) or `none` (no face animation).
+- The HST loader (`crates/hst/src/mods.rs`) rejects a mod with `<path>: <reason>` when the manifest is off
+  (`standard` ≠ 1, a missing costume, `donor`/`base`/`ai_row` outside 0–13, `hand` not right/left, an `override`
+  key that is no TParam column) or a costume fails §7's FAIL checks; WARN checks are logged. Buffers and images
+  must be embedded in the `.glb`; it skips glTF accessor validation (older rerig output lacks POSITION min/max).
 
 ## 7. Conformance
 
