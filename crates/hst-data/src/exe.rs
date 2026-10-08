@@ -368,6 +368,13 @@ impl<'a> Game<'a> {
         self.f32s(0x41_3270, 93 * 4).chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
     }
 
+    /// The cheer marks' sprites by kind (0 the walkers', 1 court 5's): scale, the near and far size factors (of the
+    /// view's half height at the mark), how far above the mark it hangs, and the on-screen size of a metre it hides at.
+    pub fn cheer_sprites(&self) -> [[f32; 5]; 2] {
+        let v = self.f32s(0x41_31e0, 10);
+        std::array::from_fn(|k| std::array::from_fn(|i| v[5 * k + i]))
+    }
+
     pub fn ball_routes(&self) -> [[[f32; 4]; 2]; 3] {
         let v = self.f32s(0x41_cc70, 24);
         std::array::from_fn(|r| std::array::from_fn(|p| std::array::from_fn(|c| v[8 * r + 4 * p + c])))
