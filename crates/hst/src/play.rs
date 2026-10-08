@@ -44,6 +44,7 @@ use crate::{Args, GameSpace, Orbit};
 mod bodyhit;
 mod controls;
 mod cutaway;
+mod doubles_ai;
 mod markers;
 mod match_stats;
 mod menu;
@@ -362,6 +363,8 @@ struct Game {
     smash_heights: Vec<[f32; 2]>,
     /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
     reaches: Vec<Reach>,
+    /// The doubles AI's rally state (`doubles_ai`).
+    doubles_ai: doubles_ai::Shared,
     marks: Marks,
     /// The finish and Set / Match Point banners (`popups`).
     finish: popups::Finish,
@@ -1194,6 +1197,7 @@ fn setup(
         hit_effect: None,
         smash_heights: Vec::new(),
         reaches: Vec::new(),
+        doubles_ai: default(),
         marks: Marks::default(),
         finish: default(),
     };
@@ -2818,6 +2822,9 @@ fn bot(g: &mut Game, i: usize) {
     let mind = ai_update(g, i);
     if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
+    }
+    if doubles_ai::step(g, i, &mind) {
+        return;
     }
     // ponytail: the stand-in AI always wants to move on, so it breaks off at the recovery
     follow_through(&mut g.players[i], true);

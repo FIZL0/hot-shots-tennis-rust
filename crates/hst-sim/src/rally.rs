@@ -921,6 +921,16 @@ impl Rally {
         }
     }
 
+    /// The dispatcher's entry to the receive state (and the strike/new-path messages while it receives).
+    pub fn enter_receive(&mut self, roll: &mut impl FnMut() -> u32) {
+        self.set_state(0, roll);
+    }
+
+    /// The dispatcher's entry to the rally state (and the strike/hit messages while it rallies): substate 0.
+    pub fn enter_rally(&mut self, b: &Body, w: &mut World, roll: &mut impl FnMut() -> u32) {
+        self.set_sub(b, w, 0, false, roll);
+    }
+
     fn set_sub(&mut self, b: &Body, w: &mut World, s: u8, keep: bool, roll: &mut impl FnMut() -> u32) {
         self.sub = s;
         match s {

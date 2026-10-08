@@ -103,3 +103,8 @@ See 13-P11K2-NETBASE-FINAL.md. Done: `Rally::rally(net, …)` with the shot reco
 repicks, give way, the volley search and the not-found tail. Test `net_and_base_match_the_game` (fixture
 `ai_net_s05.bin`). Recorder fix: the gm-relative regions (ball, hits, gravity, path object) were read from the wrong
 pointer in every earlier fixture; the receive was re-checked on `ai_rally_s05_fix.bin`. Unreached branches: P11k5.
+
+## P11k3 (doubles dispatcher + wiring)
+
+See 14-P11K3-DISPATCH-FINAL.md. Done: the dispatcher's state choice checked on every recorded call (ai_rally.rs). The
+receive and NET/BASE now drive doubles bots in the app (`play/doubles_ai.rs`, one hook in `bot`). Wiring gaps: P11k6.
