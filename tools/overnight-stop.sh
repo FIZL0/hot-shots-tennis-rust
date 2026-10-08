@@ -2,7 +2,10 @@
 # Stop/StopFailure hook for tools/overnight.sh: once Claude has been idle for HST_IDLE seconds (no background
 # tasks, no new user/tool-result entries in the transcript — i.e. you didn't type anything), end the session so the loop starts the next run.
 in=$(cat)
-[ "$(jq '.background_tasks // [] | length' <<<"$in")" = 0 ] || exit 0
+# background tasks normally end and wake the session (a new transcript entry); one that never ends (a Monitor
+# waiting on output that won't come) would hold it forever, so with any running wait HST_IDLE_BG instead
+idle=${HST_IDLE:-90}
+[ "$(jq '.background_tasks // [] | length' <<<"$in")" = 0 ] || idle=${HST_IDLE_BG:-1800}
 t=$(jq -r .transcript_path <<<"$in")
 n() { grep -c '"type":"user"' "$t"; }  # ponytail: transcript size isn't stable after Stop, this count is
 s=$(n)
@@ -17,4 +20,4 @@ waiting() {
         (.type != "assistant" or (.message.content | tostring | test("\"tool_use\"") | not))
         and (.type != "user" or (.message.content | tostring | test("usage limit has reset") | not))))' "$t" >/dev/null
 }
-(sleep "${HST_IDLE:-90}"; [ "$(n)" = "$s" ] && ! waiting && kill "$p") >/dev/null 2>&1 &
+(sleep "$idle"; [ "$(n)" = "$s" ] && ! waiting && kill "$p") >/dev/null 2>&1 &
