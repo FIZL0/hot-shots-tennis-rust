@@ -45,6 +45,7 @@ mod bodyhit;
 mod controls;
 mod cutaway;
 mod markers;
+mod match_stats;
 mod menu;
 mod panel;
 mod popups;
@@ -285,6 +286,8 @@ struct Game {
     shots: i32,
     /// The last shot was on the sweet spot (not a dive, |offset| < 2): its record's flag the next aim reads.
     last_sweet: bool,
+    /// The match statistics (`match_stats`).
+    match_stats: hst_sim::stats::Stats,
     /// Per player: the character's aim values (see `aim_stats`).
     aim_stats: Vec<hst_sim::shot::AimStats>,
     /// Line tolerance from the game program.
@@ -473,6 +476,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(controls::plugin);
     app.add_plugins(cutaway::plugin);
     app.add_plugins(markers::plugin);
+    app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
@@ -1081,6 +1085,7 @@ fn setup(
         rally: Rally::default(),
         shots: 0,
         last_sweet: false,
+        match_stats: hst_sim::stats::Stats::new(),
         aim_stats: Vec::new(),
         line_margin,
         margins,
@@ -1600,6 +1605,7 @@ fn strike(
     }
     g.smashed = branch == 4 && g.rules.players > 1;
     g.last_sweet = branch != 3 && offset.abs() < 2;
+    match_stats::hit(g, who, branch, grade, offset);
     g.whistle = if kind == 3 {
         (true, g.whistle.1 + 1)
     } else {
@@ -3226,6 +3232,7 @@ fn simulate(mut g: ResMut<Game>) {
                     // ponytail: the match-over phase isn't played: she announces it as the next match starts
                     g.umpire.call_match();
                     g.umpire.match_over();
+                    match_stats::match_over(g);
                     g.score = Score::new();
                     g.players.iter_mut().for_each(|p| p.stance = 3.0);
                     return next_point(g, true);
@@ -3272,6 +3279,7 @@ fn simulate(mut g: ResMut<Game>) {
         return;
     }
     let verdict = g.rally.judge(g.body_hit);
+    match_stats::point(g, verdict.call, verdict.winner);
     g.finish.point_over(&g.rally, verdict.call, g.players.len() > 2);
     let why = CALLS[verdict.call as usize];
     let Some(team) = verdict.winner else {
@@ -3290,6 +3298,7 @@ fn simulate(mut g: ResMut<Game>) {
     g.post_winner = team as i32;
     let before = g.score.clone();
     let event = g.score.point(&g.rules, team as usize);
+    match_stats::scored(g, &before, event, team as usize);
     g.umpire
         .point_over(event, team as i32, g.score.swapped, verdict.call as u8);
     g.score.note_tiebreak_start();
