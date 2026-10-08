@@ -344,6 +344,10 @@ struct Game {
     smashed: bool,
     /// The flight whistle (`sound::FLIGHT`) is on, and how many have started (a new one restarts it).
     whistle: (bool, u32),
+    /// What the flight sound plays (whistle or rush), set at each hit that starts one.
+    flight_sound: Option<sound::Flight>,
+    /// The last hit was a special serve (the AI's reaction adds its special-serve frames).
+    special_serve: bool,
     /// The original's match camera, stepped with the simulation.
     cam: Camera,
     /// Its view one tick earlier (drawing blends the two); `cam_cut` makes the next step start from the new view.
@@ -1199,6 +1203,8 @@ fn setup(
         bounces: default(),
         smashed: false,
         whistle: (false, 0),
+        flight_sound: None,
+        special_serve: false,
         cam: Camera::new(),
         prev_view: Camera::new().view,
         cam_cut: false,
@@ -1734,7 +1740,8 @@ fn strike(
     g.smashed = branch == 4 && g.rules.players > 1;
     g.last_sweet = branch != 3 && offset.abs() < 2;
     match_stats::hit(g, who, branch, grade, offset);
-    g.whistle = if kind == 3 {
+    flight_sound(g, who, &hit, class, vel);
+    g.whistle = if g.flight_sound.is_some() {
         (true, g.whistle.1 + 1)
     } else {
         (false, g.whistle.1)
@@ -2836,14 +2843,14 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
 
 /// A computer player's reaction and guess (ヤマ張り) after an opponent's hit, drawn after its timing errors and
 /// shot-choice draws: it stands for the reaction frames (a guess runs for its move frames instead).
-/// ponytail: the app has no special serves yet, so the special-serve part never comes in.
 fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
+    let special_serve = g.special_serve;
     let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
     let rng = &mut g.rng.ai;
     let mut roll = || rng.next();
     let p = &mut g.players[i];
     let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
-    p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, false, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
+    p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, special_serve, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
     let guess = p.ai.guess(&p.ai_timing, kind == 0, !beside_human, &mut roll);
     p.ai_guess = guess.map(|q| (q, [p.pos[0], p.pos[2]]));
     if guess.is_some() {
@@ -4017,6 +4024,15 @@ impl Bgm {
     }
 }
 
+/// The flight sound hit `h` starts (`sound::Flight::start`), and whether it was a special serve for the AI: a strong
+/// toss hit within a frame of the sweet one with a topspin by characters 11/12 or a slice by 10 (the bending ones).
+fn flight_sound(g: &mut Game, who: usize, h: &sound::Hit, class: u8, vel: V3) {
+    let special = hst_sim::shot::special(class, h.kind, h.strong_toss, h.grade, h.offset);
+    let c = g.chars[who];
+    g.flight_sound = sound::Flight::start(h, c, special, sound::kmh(vel));
+    g.special_serve = class == 0 && h.strong_toss && h.offset.abs() < 2 && matches!((h.kind, c), (0, 11 | 12) | (1, 10));
+}
+
 /// Plays the sounds due on the court's bank.
 /// The flight whistle follows the ball: started at the hit, re-placed and re-pitched each tick, stopped at the bounce.
 fn play_sounds(
@@ -4070,24 +4086,22 @@ fn play_sounds(
         sound.stop(whistle.1);
         whistle.1 = 0;
     }
-    if g.whistle.0 && whistle.1 == 0 && whistle.0 != g.whistle.1 {
-        whistle.1 = sound.play_at(
-            &bank,
-            sound::Play {
-                speed: sound::flight_speed(ball[1], 0.0, 10.0),
-                ..sound::FLIGHT
-            },
-            ball,
-        );
-    } else if whistle.1 != 0 {
-        sound.update(
-            whistle.1,
-            sound::Play {
-                speed: sound::flight_speed(ball[1], 0.3, 10.0),
-                ..sound::FLIGHT
-            },
-            ball,
-        );
+    if let (true, 0, true, Some(f)) = (g.whistle.0, whistle.1, whistle.0 != g.whistle.1, g.flight_sound) {
+        whistle.1 = sound.play_at(&bank, f.play(ball[1]), ball);
+    } else if let (true, Some(f)) = (whistle.1 != 0, &mut g.flight_sound) {
+        let (angle, dist) = sound::place(ball);
+        let volume = sound::falloff(f.play(ball[1]).volume, dist);
+        match f.frame(ball[1], sound::kmh(g.flight.ball.vel), volume) {
+            (p, None) => sound.update(whistle.1, p, ball),
+            (_, Some(0)) => {
+                sound.stop(whistle.1);
+                (whistle.1, g.whistle.0) = (0, false);
+            }
+            (p, Some(q)) => {
+                sound.update(whistle.1, p, ball);
+                sound.turn(whistle.1, q, angle);
+            }
+        }
     }
     whistle.0 = g.whistle.1;
     // her voice (slot 5, non-positional): a new word stops the last

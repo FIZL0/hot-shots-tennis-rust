@@ -387,9 +387,87 @@ pub fn kmh(vel: [f32; 3]) -> f32 {
 
 /// The whistle of a lob or a framed mis-hit, on the court bank (slot 0) program 5 key 2 at the ball: from the hit
 /// until the ball's first bounce or the next hit, re-placed at the ball every frame.
-/// ponytail: two characters' own key (5) and range (low 0.3, top 8) at the start, the training mode's whistle (its
-/// own volume table) and the fast-serve/smash rush (mode 2, ≥140 km/h) are left out.
+/// `Flight::start` picks it (or the rush) and the special lobs' key and range.
+/// ponytail: the training mode's whistle (its own volume table) is left out.
 pub const FLIGHT: Play = play(0, 5, 2, 0x80);
+
+/// The sound a hit sends with the ball, on the court bank program 5, until its first bounce or the next hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Flight {
+    /// `FLIGHT`'s whistle with key `key`; its start speed is `flight_speed(height, low, top)`.
+    Whistle { key: u8, low: f32, top: f32 },
+    /// The rush of a fast serve or smash (and Lola's special slice serve): `play` re-placed every frame; once the
+    /// ball's speed falls to `threshold` km/h it fades out over four frames (`Flight::frame`).
+    Rush { play: Play, threshold: f32, count: i32 },
+}
+
+impl Flight {
+    /// What hit `h` by `character` starts: the whistle for a lob or a framed mis-hit; the rush for a serve (topspin
+    /// or flat) or smash at ≥140 km/h (`kmh` × 0.9, the ball's speed after the hit), or character 10's special slice
+    /// serve. A special lob of characters 5 and 13 whistles on key 5, and of 5, 6, 9 and 13 starts from 0.3 with
+    /// the top at 8 m.
+    /// ponytail: the instant replay's restarts (the app has none, P0b4d) are left out.
+    pub fn start(h: &Hit, character: i32, special: bool, kmh: f32) -> Option<Flight> {
+        let v = mul(kmh, 0.9);
+        let serve = h.hits == 1;
+        let kind = if h.branch == 4 { 5 } else { h.kind };
+        if h.framed && kind != 3 {
+            return Some(Flight::Whistle { key: 2, low: 0.0, top: 10.0 });
+        }
+        let rush = match kind {
+            0 | 2 => serve && v >= 140.0,
+            1 => character == 10 && special && serve,
+            3 => {
+                let s = special.then_some(character);
+                return Some(Flight::Whistle {
+                    key: if matches!(s, Some(5 | 13)) { 5 } else { 2 },
+                    low: if matches!(s, Some(5 | 6 | 9 | 13)) { 0.3 } else { 0.0 },
+                    top: if matches!(s, Some(5 | 6 | 9 | 13)) { 8.0 } else { 10.0 },
+                });
+            }
+            4 => false,
+            _ => v >= 140.0,
+        };
+        if !rush {
+            return None;
+        }
+        let lola = character == 10 && special;
+        let bands: [i32; 6] = if lola { [0x80; 6] } else if h.branch == 4 { [0x46, 0x50, 0x5a, 100, 0x6e, 0x80] } else { [0x55, 0x5a, 100, 0x6e, 0x73, 0x80] };
+        let band = [149.0, 159.0, 169.0, 179.0, 199.0].iter().take_while(|&&t| v > t).count();
+        Some(Flight::Rush {
+            play: Play { speed: if lola { 1.5 } else { 1.0 }, ..play(0, 5, if lola { 0 } else { 6 }, bands[band]) },
+            threshold: if lola || h.branch == 4 { 50.0 } else { 100.0 },
+            count: 0,
+        })
+    }
+
+    /// The play at the start (ball height `height`).
+    pub fn play(&self, height: f32) -> Play {
+        match *self {
+            Flight::Whistle { key, low, top } => Play { key, speed: flight_speed(height, low, top), ..FLIGHT },
+            Flight::Rush { play, .. } => play,
+        }
+    }
+
+    /// A later frame at ball height `height` and speed `kmh`, with `placed` the volume after falloff the re-placing
+    /// gave: the play to re-place it with, and for a fading rush `Some(volume)` to set instead (`Some(0)`: stop).
+    pub fn frame(&mut self, height: f32, kmh: f32, placed: i32) -> (Play, Option<i32>) {
+        match self {
+            Flight::Whistle { key, .. } => (Play { key: *key, speed: flight_speed(height, 0.3, 10.0), ..FLIGHT }, None),
+            Flight::Rush { play, threshold, count } => {
+                if *count == 0 && kmh <= *threshold {
+                    *count = 1;
+                }
+                if *count == 0 {
+                    return (*play, None);
+                }
+                *count += 1;
+                let q = placed / *count;
+                (*play, Some(if q < 1 || *count >= 5 { 0 } else { q }))
+            }
+        }
+    }
+}
 
 /// The whistle's play speed at ball height `height` (|y|): `low` below 1 m, rising linearly by (2 − low) over `top`
 /// metres, 2 from `top` up. The start uses low 0 and top 10, every later frame low 0.3 and top 10.
