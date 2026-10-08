@@ -109,3 +109,37 @@ fn court10_map_near_game() {
     // ponytail: fitted screen (`shade::build`); bit for bit P17v
     assert!(iou >= 0.975, "IoU {iou}");
 }
+
+/// The shade receiver vertices bit for bit against the game's (`context/p17v/rcv.txt`: every receiver triangle
+/// vertex of the hole drawn in `context/p17v/cap0.pkl` with the camera, model and caster light matrices from game
+/// RAM; slot 5, court 10). Skips when absent.
+#[test]
+fn receiver_vertices_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(txt) = std::fs::read_to_string(format!("{root}/context/p17v/rcv.txt")) else {
+        eprintln!("recording missing, skipped");
+        return;
+    };
+    let hex = |s: &str| u32::from_str_radix(s, 16).unwrap();
+    let mat = |w: &[&str]| -> [[f32; 4]; 4] { std::array::from_fn(|i| std::array::from_fn(|j| f32::from_bits(hex(w[i * 4 + j])))) };
+    let (mut vp, mut item, mut tex, mut n, mut bad) = ([[0.0; 4]; 4], [[0.0; 4]; 4], Vec::new(), 0, Vec::new());
+    for line in txt.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w[0] {
+            "VP" => vp = mat(&w[1..]),
+            "ITEM" => item = mat(&w[1..]),
+            "L" => tex.push(shade::tex_matrix(&mat(&w[2..]))),
+            c => {
+                let p = [1, 2, 3].map(|k| f32::from_bits(hex(w[k])));
+                let got = shade::receiver_vertex(&item, &vp, &tex[c.parse::<usize>().unwrap()], p);
+                let want = ([hex(w[4]) as u16, hex(w[5]) as u16], [6, 7, 8].map(|k| f32::from_bits(hex(w[k]))));
+                n += 1;
+                if got != want {
+                    bad.push(format!("{line}: port {got:?}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} of {n} differ:\n{}", bad.len(), bad[..bad.len().min(20)].join("\n"));
+    assert!(n > 1700);
+}
