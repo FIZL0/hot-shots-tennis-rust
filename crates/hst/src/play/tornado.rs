@@ -17,7 +17,7 @@ use crate::Args;
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.before(super::start_effects).after(super::simulate))
-        .add_systems(Update, (own_materials, draw).chain());
+        .add_systems(Update, (own_materials, draw).chain().after(crate::weather::apply));
 }
 
 #[derive(Resource)]
@@ -142,5 +142,7 @@ fn draw(fx: Option<Res<Wind>>, mut q: Query<(&mut Transform, &mut Visibility)>, 
         let [r, g, b, a] = fx.colours[k];
         m.uniform.color = Vec4::new(r, g, b, a * t.opacity());
         m.uniform.uv_offset = Vec2::from(fx.uv.uv_offset(k, 0));
+        // a weather change relights every GS draw with the court's model light; the effect keeps the default one
+        (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = crate::gs::DEFAULT_LIGHT;
     }
 }
