@@ -48,8 +48,11 @@ pub struct CharacterData {
     pub arm: Option<Arc<ArmTable>>,
     /// Face morph targets of the skinned parts (`MorphWeights` on the rig root, one weight per target).
     pub morph_targets: usize,
-    /// Faces by motion number (`.MOR`, `hst_sim::face`).
+    /// Faces by motion number (`.MOR` and `.UVA`, `hst_sim::face`).
     pub faces: HashMap<usize, Face>,
+    /// Per part (as `parts`): the nodes its packets' palettes hold (a `.UVA` track binds by node) and whether its
+    /// texture coordinates are stored swapped (`mdl::Packet::uv_swap`).
+    pub part_nodes: Vec<(Vec<usize>, bool)>,
     /// The ball's track through the serve stance (0x20; `*_serve_ad00_ball`).
     pub stance_ball: Option<Path>,
     /// The model's skeleton in the game's terms (bone-attached points such as the held serve ball).
@@ -116,10 +119,34 @@ pub fn texture_faces(
     }
 }
 
-/// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length.
+/// A motion's face: per bound track its morph target, ticks and weights, and the face clock's length; its `.UVA`
+/// (texture offsets): per track the skeleton node it binds, ticks and (x, y) values, and the UV clock's length (the
+/// last key over every track of the file, bound or not).
+#[derive(Default)]
 pub struct Face {
     pub tracks: Vec<(usize, Vec<i32>, Vec<[f32; 4]>)>,
     pub length: f32,
+    pub uv: Vec<(usize, Vec<i32>, Vec<[f32; 4]>)>,
+    pub uv_length: f32,
+}
+
+/// A motion's face from its `.MOR` and `.UVA` files (`None` without either): MOR tracks bind by `target`, UVA
+/// tracks to the skeleton node of their name (the game's node binding; unmatched tracks never play).
+fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &impl Fn(&str) -> Option<usize>) -> Option<Face> {
+    let (mor, uva) = (m.and_then(|d| mor::parse(&d, 1).ok()), u.and_then(|d| mor::parse(&d, 4).ok()));
+    if mor.is_none() && uva.is_none() {
+        return None;
+    }
+    let mut f = Face::default();
+    if let Some(t) = mor {
+        f.tracks = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
+        f.length = hst_sim::face::length(f.tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
+    }
+    if let Some(t) = uva {
+        f.uv_length = hst_sim::face::length(t.tracks.iter().map(|t| &t.ticks[..]), t.ticks_per_frame);
+        f.uv = t.tracks.into_iter().filter_map(|tr| Some((skeleton.names.iter().position(|n| *n == tr.name)?, tr.ticks, tr.values))).collect();
+    }
+    Some(f)
 }
 
 impl CharacterData {
@@ -353,6 +380,17 @@ pub fn load_disc(
         .collect();
 
     let parts = skinned_parts(&model, &handles, meshes);
+    let part_nodes = parts
+        .iter()
+        .map(|(_, h, _)| {
+            let packets = handles.iter().position(|x| x == h).and_then(|m| model.materials.get(m)).map_or(&[][..], |p| &p[..]);
+            let mut nodes: Vec<usize> = packets.iter().flat_map(|p| p.palette.iter().copied()).collect();
+            nodes.sort();
+            nodes.dedup();
+            // ponytail: one swap flag per part (every bound disc part is one material, unswapped); per packet if a model mixes them
+            (nodes, packets.first().is_some_and(|p| p.uv_swap))
+        })
+        .collect();
     let noise = find(&format!("{body}.noi")).and_then(|d| crate::noise::costume(&model, &d, &parts, meshes));
     let targets = model.morph_names.len();
 
@@ -362,7 +400,7 @@ pub fn load_disc(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, stance_ball, skeleton, noise, gs, texture_face: None })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None })
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
@@ -406,11 +444,8 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
     let mut stance_ball = None;
     for id in 0..ani::MOTIONS.len() {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
-        if let Some(t) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.mor"))).and_then(|e| mor::parse(&aarc.read(e).ok()?, 1).ok()) {
-            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
-            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
-            faces.insert(id, Face { tracks, length });
-        }
+        let file = |ext: &str| aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.{ext}"))).and_then(|e| aarc.read(e).ok());
+        faces.extend(face(file("mor"), file("uva"), skeleton, &target).map(|f| (id, f)));
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
         let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
         if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
@@ -454,11 +489,7 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
         if let Some(a) = file("ani").and_then(|d| ani::parse(&d).ok()) {
             motions.insert(POSE, Clip::new(skeleton, &a));
         }
-        if let Some(t) = file("mor").and_then(|d| mor::parse(&d, 1).ok()) {
-            let tracks: Vec<_> = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
-            let length = hst_sim::face::length(tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
-            faces.insert(POSE, Face { tracks, length });
-        }
+        faces.extend(face(file("mor"), file("uva"), skeleton, &target).map(|f| (POSE, f)));
     }
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(skeleton, &c, n as i32)));
@@ -576,6 +607,7 @@ pub fn load_npc(
         arm: None,
         morph_targets: model.morph_names.len(),
         faces: HashMap::new(),
+        part_nodes: Vec::new(),
         stance_ball: None,
         skeleton,
         noise: None,
@@ -749,7 +781,7 @@ mod tests {
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    /// Every character's inspect pose binds to its skeleton, and the held frames are the ones the game's inspect
+    /// Every character's inspect pose (and its eyes' `.UVA`) binds to its skeleton, and the held frames are the ones the game's inspect
     /// screen held (read live in its motion player for characters 0..7, 12 and 13).
     #[test]
     fn inspect_poses_bind_and_hold_the_games_frames() {
@@ -765,6 +797,16 @@ mod tests {
             let pose = &m.motions[&POSE];
             assert!(pose.tracks.len() > 40, "character {n}: {} pose tracks", pose.tracks.len());
             assert!(m.faces.get(&POSE).is_some_and(|f| !f.tracks.is_empty()), "character {n}: no pose face");
+            let f = &m.faces[&POSE];
+            // the eyes' .UVA binds to a skeleton node for every character with one but 7 (its track names no node)
+            assert_eq!(f.uv.is_empty(), n == 7 || n == 13, "character {n}: {} uv tracks", f.uv.len());
+            if n == 0 {
+                // the held offset, as the game's draw packet for Ashley's eyes carried it on the Items screen
+                let (_, ticks, values) = &f.uv[0];
+                let t = hst_sim::pose::wrap(pose_frame(n, pose.length), f.uv_length, true);
+                let v = hst_sim::face::sample(ticks, values, hst_sim::ps2::mul(t, 80.0), &mut 0, true);
+                assert_eq!([v[0].to_bits(), v[1].to_bits()], [0xbca3_d70a, 0x3ca3_d70a]);
+            }
             held.push(pose_frame(n, pose.length));
         }
         assert_eq!(held[..8], [69.0, 61.0, 0.0, 62.0, 0.0, 66.0, 0.0, 57.0]);

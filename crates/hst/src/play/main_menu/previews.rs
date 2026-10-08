@@ -130,7 +130,7 @@ fn buttons(
     pads: Query<&Gamepad>,
     mut cams: Query<(&mut Preview, &Card)>,
     data: Query<&character::Rig>,
-    mut rigs: Query<(&mut Motion, &mut Transform)>,
+    mut rigs: Query<(&mut Motion, &mut Transform, &mut inspect::UvClock)>,
 ) {
     if menu.screen != Screen::Chars {
         return;
@@ -152,7 +152,7 @@ fn buttons(
         };
         let Ok(rig) = data.get(p.rig) else { continue };
         let d = rig.data.clone();
-        inspect::apply(&mut p, act, &mut rigs, |id| d.motions.get(&id).map_or(0.0, |c| c.length));
+        inspect::apply(&mut p, act, &mut rigs, &d);
     }
 }
 

@@ -152,7 +152,7 @@ fn main() {
         textures::init(&iso);
     }
     // nothing asked for: the main menu, which starts matches as child processes with the flags above
-    let menu = archives.is_empty() && stage.is_none() && !play && !ball && viewer_char.is_none() && sound.is_none();
+    let menu = archives.is_empty() && stage.is_none() && !play && !ball && viewer_char.is_none() && sound.is_none() && roster.is_none();
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
