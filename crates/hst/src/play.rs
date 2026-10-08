@@ -145,6 +145,9 @@ struct Player {
     bot_left: i32,
     /// This player's AIParam.csv row when the computer plays it (`hst_sim::ai`).
     ai: hst_sim::ai::AiParams,
+    /// Its doubles formation (`hst_sim::position::Team::pick`, 0 staggered, 1 attacking, 2 defensive): picked at
+    /// the match's first point, kept for the match.
+    formation: u8,
     /// The AI's memory of the opponents' last two shots and last two serves' velocities, whether its team has hit
     /// since the match began (its stroke error is halved until then), and the timing errors it drew last.
     ai_seen: [Option<hst_sim::ai::Seen>; 2],
@@ -1326,7 +1329,9 @@ fn setup(
     // the match starts (the sound manager's reseed), then its first point
     reseed_sound(&mut game);
     game.rng.new_point();
-    placement_draws(&mut game);
+    game.humans = (0..n).map(|k| pads.slot_of(k, n).is_some()).collect();
+    let draws = placement_draws(&mut game);
+    doubles_ai::formations(&mut game, &draws);
     commands.insert_resource(game);
     commands.insert_resource(VoiceBanks(voices));
     let impacts = effects::load(
@@ -1468,7 +1473,7 @@ fn reset_positions(g: &mut Game) {
             &g.score,
             g.rally.faults,
             stance,
-            0,
+            g.players[i].formation,
             g.score.swapped,
         );
         let end = at.facing;
@@ -1477,6 +1482,7 @@ fn reset_positions(g: &mut Game) {
         // the AI keeps its row and whether its team has hit yet across points
         let ai = (g.players[i].ai, g.players[i].ai_hit);
         let mind = g.players[i].ai_mind;
+        let formation = g.players[i].formation;
         g.players[i] = Player {
             pos: at.pos,
             prev: at.pos,
@@ -1492,6 +1498,7 @@ fn reset_positions(g: &mut Game) {
         };
         (g.players[i].ai, g.players[i].ai_hit) = ai;
         g.players[i].ai_mind = mind;
+        g.players[i].formation = formation;
     }
     // with more than one human the camera keeps its end through changes of ends; only solo games turn it
     if g.humans.iter().filter(|&&h| h).count() <= 1 {
@@ -1998,11 +2005,10 @@ fn toss_draws(g: &mut Game) {
 }
 
 /// A new point's placement message: one shared draw per player, right after the reseed.
-// ponytail: the doubles formation the draw picks from (staggered when `% 100 < 20`) is left out (PLAN P3d2)
-fn placement_draws(g: &mut Game) {
-    for _ in 0..g.players.len() {
-        g.rng.shared.next();
-    }
+/// The players take it in order (the match sends it to them as they were made); the first point's picks the
+/// formations from it (`doubles_ai::formations`).
+fn placement_draws(g: &mut Game) -> Vec<u32> {
+    (0..g.players.len()).map(|_| g.rng.shared.next()).collect()
 }
 
 /// The ball is held: still, and placed on the server's motion each tick (`held_ball`).
@@ -3101,11 +3107,12 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
     let human_mate = g.humans.get(mate) == Some(&true);
     let (p, m) = (g.players[i], g.players[mate]);
     // beside a human the row's formation and doubles centre numbers, beside a bot staggered and the singles ones
-    let (formation, rate, radius) = if human_mate {
-        (p.ai.formation, p.ai.doubles_center_rate, p.ai.doubles_center_radius)
+    let (rate, radius) = if human_mate {
+        (p.ai.doubles_center_rate, p.ai.doubles_center_radius)
     } else {
-        (0, p.ai.singles_center_rate, p.ai.singles_center_radius)
+        (p.ai.singles_center_rate, p.ai.singles_center_radius)
     };
+    let formation = p.formation;
     let t = Team { side: p.end, formation, lean: Team::lean(formation, !human_mate, p.ai.style, m.ai.style) };
     let at = |q: &Player| [q.pos[0], q.pos[2]];
     let rng = &mut g.rng.ai;
@@ -3273,7 +3280,7 @@ fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
             kind,
             volley_level: p.ai_picks.volley_level,
             level: 3,
-            formation: if human_mate { p.ai.formation } else { 0 },
+            formation: p.formation,
             smash_third: false,
         };
         p.ai.pair_aim(&l, &mut ai_roll(rng))

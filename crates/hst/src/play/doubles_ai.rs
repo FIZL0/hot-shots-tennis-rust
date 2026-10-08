@@ -82,7 +82,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         depth: r.ahead,
         smash_off: [-0.067, r.smash_ahead],
         control: 0x21,
-        formation: if human_mate { p.ai.formation } else { 0 },
+        formation: p.formation,
         swing: p.contact.map_or(-1, |c| c.frames as i32),
         stroke: busy as u8,
         lost: g.doubles_ai.me[i].lost,
@@ -263,4 +263,31 @@ fn landing(g: &Game) -> [f32; 4] {
         f.step(&g.shot, &COURTS[g.court]);
     }
     up(f.ball.pos)
+}
+
+/// The match's first point: each doubles player's formation from its placement draw (`Team::pick`; players 2 and 3
+/// take their partner's), and everyone placed again for the serve with it (the set-up placed them before the rows
+/// were loaded).
+pub(super) fn formations(g: &mut Game, draws: &[u32]) {
+    use hst_sim::position::Team;
+    if g.players.len() != 4 {
+        return;
+    }
+    let human = |g: &Game, k: usize| g.humans.get(k) == Some(&true);
+    for i in 0..4 {
+        let m = i ^ 2;
+        g.players[i].formation = if i < 2 {
+            let rows = (g.players[i].ai.formation, g.players[m].ai.formation);
+            // the menus' setup words have no third byte (slots 3 and 5 read 0)
+            Team::pick((human(g, i), human(g, m)), rows, 0, draws[i])
+        } else {
+            g.players[m].formation
+        };
+    }
+    for i in 0..4 {
+        let p = &g.players[i];
+        let at = serve_placement(i as i32, &g.score, g.rally.faults, p.stance, p.formation, g.score.swapped);
+        let p = &mut g.players[i];
+        (p.pos, p.prev, p.home, p.body.pos) = (at.pos, at.pos, at.pos, at.pos);
+    }
 }
