@@ -2794,7 +2794,8 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
         if g.humans.get(i) == Some(&true) {
             continue;
         }
-        ai_heard_shot(g, i, i & 1 == who & 1);
+        let again = doubles_ai::heard_hit(g, i);
+        ai_heard_shot(g, i, i & 1 == who & 1, again);
         let p = &mut g.players[i];
         let shots = if i & 1 != who & 1 {
             let last = hst_sim::ai::Seen { kind, vel };
@@ -2910,7 +2911,13 @@ fn bot(g: &mut Game, i: usize) {
     if let Some(c) = &g.players[i].contact {
         g.players[i].ai_branch = Some(c.swing.branch);
     }
+    let was = g.players[i].ai_mind.map(|m| m.phase);
     let mind = ai_update(g, i);
+    // the new-point message's tick runs nothing else, nor does the serve state's entry (the serve routine first
+    // runs the tick after)
+    if mind.phase == hst_sim::ai::Phase::Start || mind.phase == hst_sim::ai::Phase::Serve && was == Some(hst_sim::ai::Phase::Start) {
+        return;
+    }
     if mind.phase == hst_sim::ai::Phase::Serve {
         return bot_serve(g, i);
     }
@@ -3173,16 +3180,13 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
 /// ponytail: the original aims the frame before the contact; the server stands still, so this aims at the press.
 fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
-        ai_draw(g, i, None);
         let (end, ad, doubles) = (g.players[i].end, g.score.side == 1, g.players.len() == 4);
         let mut roll = ai_roll(&mut g.rng);
-        let mut m = g.players[i].ai_mind.unwrap_or_default();
-        m.count(&mut roll);
         let level0 = g.players[i].ai_picks.serve_level == 0;
         let spot = hst_sim::ai::serve_spot(level0, doubles, end, ad, &mut roll);
         let wait = hst_sim::ai::serve_wait(&mut roll);
         drop(roll);
-        (g.players[i].ai_mind, g.players[i].ai_serve) = (Some(m), (spot, wait));
+        g.players[i].ai_serve = (spot, wait);
         g.players[i].ai_serve_swing = None;
         g.serving.bot_due = Some((SWEET_FRAME - g.players[i].ai_timing.serve).max(0) as usize);
     }
@@ -3392,11 +3396,18 @@ fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
         g.players[i].ai_heard = 1;
         ai_draw(g, i, None);
         m.count(&mut ai_roll(&mut g.rng));
+        // the new-point message: every AI resets and draws in this tick, its state's entry comes the next
+        g.players[i].ai_mind = Some(m);
+        return m;
     }
     let p = g.players[i];
     let done = match m.phase {
         Ai::Start => {
-            m.start(g.score.server == i as i32, g.score.receiver == i as i32);
+            // the serve state's entry draws the timing errors and the count again
+            if m.start(g.score.server == i as i32, g.score.receiver == i as i32) == Ai::Serve {
+                ai_draw(g, i, None);
+                m.count(&mut ai_roll(&mut g.rng));
+            }
             false
         }
         Ai::Serve => g.phase != Phase::Serve,
@@ -3419,11 +3430,11 @@ fn ai_update(g: &mut Game, i: usize) -> hst_sim::ai::Mind {
     m
 }
 
-/// The AI hears a shot: while it rallies it looks again at its net pick (a new ball path), and it counts its own
-/// team's hits toward the next one.
-fn ai_heard_shot(g: &mut Game, i: usize, own: bool) {
+/// The AI hears a shot: re-entering the rally (`again`, `doubles_ai::heard_hit`) it looks again at its net pick (a
+/// new ball path), and it counts its own team's hits toward the next one.
+fn ai_heard_shot(g: &mut Game, i: usize, own: bool, again: bool) {
     let Some(mut m) = g.players[i].ai_mind else { return };
-    if m.phase == hst_sim::ai::Phase::Rally {
+    if again {
         m.rally(&mut ai_roll(&mut g.rng));
     }
     if own {
