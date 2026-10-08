@@ -543,6 +543,16 @@ pub struct PickInput {
     pub character: i32,
 }
 
+/// Who the cut-away shows and who is the other subject, from the roles `[a, b]` (a = the last hitter, b = the one
+/// before; the server and receiver until the return): `a`, unless it isn't on the last hitter's (`last`, −1 for
+/// none) team; on a point that ends a game whichever of the two is on the winning team (`winner`, team = index & 1).
+/// ponytail: the original also swaps them on every third instant replay (unless the other one's character has
+/// some flag); replays aren't ported (P0b4d), so the count is always 0 here
+pub fn roles([a, b]: [usize; 2], last: i32, game_end: bool, winner: i32) -> [usize; 2] {
+    let swap = if game_end { a as i32 & 1 != (winner != 0) as i32 } else { last >= 0 && a as i32 & 1 != last & 1 };
+    if swap { [b, a] } else { [a, b] }
+}
+
 /// Which post-point shot comes next: the point's list (a point, a game-ending point, a team reaction) cycled by
 /// its own counter, skipping shots that don't fit (the down-the-line shots when the shown player lost, the high
 /// shots when crouched, the long shots on a game-ending point before any replay, the close-up some characters
