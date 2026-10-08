@@ -334,6 +334,11 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         };
         assert_eq!(u32_at(e, 0), want, "{name}: dispatch");
         let mut r = rally(e, singles);
+        if name == "ai_human_vpad_b.bin" && tag == 2 && (9760..=9764).contains(&u32_at(e, 8)) {
+            // recorded before the recorder took the stand scratch last in its entry stub: a vsync during the stub
+            // zeroed it after it was taken (as on m3c v6843 / m3d v7900, P11k8), so the game read 0 here
+            r.stash = [0.0; 4];
+        }
         let state = if tag == 1 { r.state } else { r.sub };
         if let Some(s) = states.get_mut(state as usize) {
             *s += 1;
@@ -469,9 +474,6 @@ fn human_record_matches_the_game() {
     // P11k7: ai_human_vpad.bin is slot 3 with P1 driven by the pad (`context/p11k7/drive.sh 3 1800`; _b slot 4, 3000; _c the timed pad script `context/p11k7/run.sh 1800 out context/p11k7/c_pad.txt`)
     for name in ["ai_human_1p.bin", "ai_human_1p_b.bin", "ai_human_1p_c.bin", "ai_human_vpad.bin", "ai_human_vpad_b.bin", "ai_human_vpad_c.bin"] {
         for (tag, what) in [(4, "human"), (1, "receive"), (2, "NET"), (3, "BASE")] {
-            if name == "ai_human_vpad_b.bin" && tag == 2 {
-                continue; // its NET differs on 5 calls (v9760-9764, state 0, kind 2): P11k8
-            }
             let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
             eprintln!("{name} {what}: calls, per substate {n:?}");
         }

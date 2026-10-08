@@ -238,6 +238,48 @@ fn shadow_textures_match_the_game() {
     assert_eq!(n, 16);
 }
 
+/// The receiver pass bit for bit with the reds the game read back: `context/p17v/rcv_pass.txt`
+/// (`research/p17v3_fixture.py`: the receiver draws and shadow textures of `context/p17v/cap0.gs`, the reds of
+/// `cap0.red`; slot 5, court 10, the 4 tiles the dump holds). Skips when absent.
+#[test]
+fn receiver_tiles_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(txt) = std::fs::read_to_string(format!("{root}/context/p17v/rcv_pass.txt")) else {
+        eprintln!("rcv_pass.txt missing, skipped");
+        return;
+    };
+    let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let mut texs = Vec::new();
+    let mut draws: Vec<(usize, Vec<[shade::ReceiverVertex; 3]>)> = Vec::new();
+    let (mut tile, mut n, mut bad) = (String::new(), 0, Vec::new());
+    for line in txt.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w[0] {
+            "X" => texs.push(shade::PassTexture { alpha: hex(w[2]), log2: [7, 7], wrap: [shade::Wrap::Clamp(0, 127); 2] }),
+            "T" => (tile, draws) = (line.to_string(), Vec::new()),
+            "D" => draws.push((w[1].parse().unwrap(), Vec::new())),
+            "V" => {
+                let t = std::array::from_fn(|k| {
+                    let f = &w[1 + 5 * k..];
+                    let bits = |s: &str| f32::from_bits(u32::from_str_radix(s, 16).unwrap());
+                    shade::ReceiverVertex { xy: [f[0].parse().unwrap(), f[1].parse().unwrap()], stq: [bits(f[2]), bits(f[3]), bits(f[4])] }
+                });
+                draws.last_mut().unwrap().1.push(t);
+            }
+            _ => {
+                let d: Vec<shade::ReceiverDraw> = draws.iter().map(|(i, t)| shade::ReceiverDraw { tex: &texs[*i], tris: t.clone() }).collect();
+                let diff = shade::receiver_tile(&d).iter().zip(hex(w[1])).filter(|(a, b)| **a != *b).count();
+                if diff > 0 {
+                    bad.push(format!("{tile}: {diff} reds differ"));
+                }
+                n += 1;
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    assert_eq!(n, 4);
+}
+
 /// The ball model's draw scale and its outline billboard against the game, frame by frame:
 /// `context/fixtures/b36b_ball.bin` (slot 5, court 10, 900 frames from the serve set-up into the rally; made by
 /// `research/b36b_ball_rec.py`). Skips when the recording is absent.

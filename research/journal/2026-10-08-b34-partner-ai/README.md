@@ -137,3 +137,11 @@ Not reached:
 ### Pitfall
 
 - A long `tools/vpad.py send < script` holds the pad server, so the recorder's Guide pause times out. Send one line at a time with the sleeps in bash (no `bc` on this box).
+
+## P11k8: the NET gap was the recorder
+
+See 1-P11K8-STACK-SCRATCH-FINAL.md.
+- No port change. The 5 calls are the no-find tail's 0x362090 ("the entry after the last 1-bounce entry"), which reads the NET routine's uninitialised stand scratch (sp−0x20 of the caller).
+- The recorder took that scratch early in its entry stub and then copied up to 180 path entries. A vsync interrupt during the copy writes below sp, so the routine read something else; twice it read 0 (m3c v6843, m3d v7900).
+- With t = 0, after() is false and the replay is bit-exact. With the recorded t, the port followed the partner's record (n ≥ 0).
+- The recorder now takes the scratch as the stub's last step. The test sets the 5 calls of ai_human_vpad_b.bin to 0 and drops the skip.
