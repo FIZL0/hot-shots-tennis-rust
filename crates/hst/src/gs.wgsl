@@ -90,6 +90,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_LT70
     if a8 >= 112.0 { discard; }
 #endif
+#ifdef GS_GE80
+    if a8 < 128.0 { discard; }
+#endif
+#ifdef GS_LT80
+    if a8 >= 128.0 { discard; }
+#endif
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
 #ifdef GS_FOG
     // VU1: F from the view depth (clip w), at most F near, then at least F far (VU1's MINI, MAX); both go towards 255 as the eye rises past 30 m

@@ -234,7 +234,7 @@ struct Particles {
     ground: Vec2,
     winds: Vec<Wind>,
     serving: bool,
-    views: Vec<(Handle<Mesh>, Entity)>,
+    views: Vec<Handle<Mesh>>,
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh>>, mut standard: ResMut<Assets<StandardMaterial>>, mut materials: ResMut<Assets<GsMaterial>>, mut images: ResMut<Assets<Image>>) {
@@ -250,13 +250,16 @@ fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh
                 img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::nearest() });
             }
         }
-        // ponytail: blended without a Z write (`Test::Never`), as they were as standard materials (P17n)
+        // the effect textures' GS state (read from the game's texture objects): ALPHA (Cs − Cd)·As + Cd, TEST
+        // A ≥ 0x80 writes colour and Z, the rest colour only (Z GEQUAL), so each set is drawn twice, one per half
         let uniform = GsUniform { color: Vec4::ONE, shininess: 1.0, highlight: 0.0, shadow: 0.0, uv_offset: Vec2::ZERO, fog: NO_FOG, fog_color: Vec4::ONE, lod_k: 0.0, light_dir: Vec4::ZERO, light_color: Vec4::ZERO, ambient: Vec4::ONE };
-        let key = GsKey { textured: true, modulate: true, test: Test::Never, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false };
-        let m = materials.add(GsMaterial { uniform, texture, key });
         let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-        let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling, bevy::light::NotShadowCaster)).id();
-        views.push((mesh, e));
+        for test in [Test::Ge80, Test::Lt80] {
+            let key = GsKey { textured: true, modulate: true, test, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false };
+            let m = materials.add(GsMaterial { uniform, texture: texture.clone(), key });
+            commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling, bevy::light::NotShadowCaster));
+        }
+        views.push(mesh);
     }
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
     let winds = COURT_LEAVES.get(court as usize).copied().unwrap_or_default().iter().map(|&(kind, strength)| Wind { kind, strength, speed: -1, ..default() }).collect();
@@ -456,7 +459,7 @@ fn draw(fx: Option<Res<Particles>>, w: Option<Res<Weather>>, cam: Query<&Transfo
             sets[2 + wind.kind].push([c - r0 - r1, c + r0 - r1, c - r0 + r1, c + r0 + r1], [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], l.alpha / 128.0);
         }
     }
-    for ((mesh, _), q) in fx.views.iter().zip(sets) {
+    for (mesh, q) in fx.views.iter().zip(sets) {
         if let Some(mut m) = meshes.get_mut(mesh) {
             fill(&mut m, q.pos, q.uv, q.colour, q.index);
         }
