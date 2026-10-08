@@ -241,8 +241,8 @@ fn load(
             let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
             // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
             // directly (slot 5's was 0x28c7c4a1)
-            // the menus' `rand()` calls before the match: their count follows how long each screen is up (a draw per
-            // frame of some screens), so a clock-picked count stands in for them
+            // the menus' `rand()` calls before the match are the character select's flame (`rng::MenuFlame`), drawing
+            // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
             let mut r = hst_sim::weather::Rand::default();
             let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
                 let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
