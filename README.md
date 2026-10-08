@@ -55,6 +55,30 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 | Camera (original / free) | C | Select |
 | Turn free camera | Arrow keys | Right stick |
 
+## Texture replacements
+
+Upscaled or edited textures are read at runtime from two folders beside the ISO. Neither is part of the repository.
+Each texture is taken from the first place that has it:
+
+1. **`mods/textures/`**: your own edits, in readable folders. `hst <iso> --dump-textures` writes every disc
+   texture there, using the PCSX2 pack's PNG where it has one. Edit a PNG in place, at any size and with alpha,
+   and keep the part of its name after the last `-`: that is the key it replaces. Changed files reload while the
+   game runs.
+2. **`replacements/`**: a PCSX2 texture pack, the hash-named PNGs PCSX2 dumps or loads (copy the pack's PNGs here,
+   flat, no subfolders). The port computes PCSX2's hash for each disc texture, so a pack made for the original
+   game works as is.
+3. The disc.
+
+```
+Hot Shots Tennis (USA).iso
+replacements/100df1904009e520-b504ef1b611f72ee-00001e13.png ...
+mods/textures/...
+```
+
+The startup log line `textures: N in the PCSX2 pack, M in mods/textures` shows what was found. Bundling upscaled
+textures of our own into the remaster is planned (`PLAN.md` M5). Like everything else from the disc, they would be
+made on your machine, not shipped.
+
 ## Development
 
 - `crates/hst-data`: readers for the disc and its formats (ISO, XB archives, TIM2 textures, models, motions,
