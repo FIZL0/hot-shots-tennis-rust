@@ -52,3 +52,8 @@ See 4-P11B-MIND-FINAL.md. Done: `hst_sim::ai::Mind` and the serve spot/wait, tes
 
 See 5-P11C-REACTION-FINAL.md. Done: `AiParams::reaction`, test `reactions_match_the_game` (fixture `ai_pos_s05.bin`);
 `play.rs` `ai_draw_guess` / `ai_guessing` / `bot` hold the bot for it. The shot record's kind is the branch (3 dive, 4 smash).
+
+## P11e4 (strong-side run-round)
+
+See 6-P11E4-RUNROUND-FINAL.md. Done: `AiParams::run_round` / `run_round_width` / `stand_side`, test
+`stand_sides_match_the_game` (fixture `ai_side_s05.bin` from `tools/record_ai_side.py`); `play.rs` `ai_stand_x`.

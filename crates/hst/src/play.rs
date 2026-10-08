@@ -136,6 +136,8 @@ struct Player {
     /// The AI's guess at the serve and where it stood when it drew it (`hst_sim::ai::Guess`), and the frames it
     /// holds before reading the ball: the guess's move frames, or the stuck frames after a wrong guess.
     ai_guess: Option<(hst_sim::ai::Guess, [f32; 2])>,
+    /// The side of the ball the AI stands on for the shot it is after (the shot count, true: ball x − reach·side).
+    ai_side: Option<(i32, bool)>,
     ai_hold: i32,
     /// A singles bot's centre spot, net dash and walk back (`hst_sim::position::Single`), placed afresh every point,
     /// and the branch of the swing it last had on (its after-hit reads it).
@@ -2646,10 +2648,11 @@ fn bot(g: &mut Game, i: usize) {
         } else {
             None
         };
+        let stand = mine.map(|(b, _)| ai_stand_x(g, i, b));
         let p = g.players[i];
         let goal = mine.map_or(wait.unwrap_or(p.home), |(b, _)| {
             [
-                b[0] - 1.1 * (b[0] - p.pos[0]).signum(),
+                stand.unwrap_or(b[0]),
                 0.0,
                 b[2] - p.end * g.reach.ahead,
             ]
@@ -2693,6 +2696,34 @@ fn bot(g: &mut Game, i: usize) {
     advance_stroke(g, i, |g| {
         Vec2::new(rand(&mut g.rng) * 1.8 - 0.9, rand(&mut g.rng) * 1.6 - 0.8)
     });
+}
+
+/// The x a computer player runs to for ball `b`: the side of it the AI's contact search keeps (`hst_sim::ai::stand_side`,
+/// the run-round roll drawn on the first search for this shot), a reach away from the ball.
+/// ponytail: the stand-in `intercept` finds one contact point, so both sides share it (and their depth: 0 here);
+/// the original searches each side's best point of the path, and draws the roll on every search until one is found.
+fn ai_stand_x(g: &mut Game, i: usize, b: V3) -> f32 {
+    let (p, reach) = (g.players[i], g.reaches[i].reach);
+    let minus = match p.ai_side {
+        Some((shot, minus)) if shot == g.shots => minus,
+        _ => {
+            let beside_human = g.players.len() == 4 && g.humans.get(i ^ 2) == Some(&true);
+            let rng = &mut g.rng;
+            let run = p.ai.run_round(beside_human, &mut || {
+                rand(rng);
+                *rng
+            });
+            let width = run.then(|| p.ai.run_round_width(g.players.len() == 2));
+            // the strong side is TParam's hand (the game's +0x12dc ignores the select-screen hand toggle)
+            let strong = if g.reaches[i].hand >= 0.0 { 1 } else { 2 };
+            let spot = Some((1, [b[0], b[2]]));
+            let at = [p.pos[0], p.pos[2]];
+            let minus = hst_sim::ai::stand_side(spot, spot, at, reach, p.end, 0.0, strong, width) == Some(true);
+            g.players[i].ai_side = Some((g.shots, minus));
+            minus
+        }
+    };
+    if minus { b[0] - reach * p.end } else { b[0] + reach * p.end }
 }
 
 /// A doubles bot's goal while the ball isn't its own (`hst_sim::position`): its formation spot, walked to once

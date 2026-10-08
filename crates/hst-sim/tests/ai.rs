@@ -450,3 +450,49 @@ fn reactions_match_the_game() {
     eprintln!("{checked} reactions checked, by shot kind {kinds:?}, {near} near the net");
     assert!(checked >= 50 && kinds[4] > 0 && near > 0, "{checked} reactions, kinds {kinds:?}, {near} near the net");
 }
+
+/// Every time a slot-5 bot's contact search finds the ball on both sides of it
+/// (`context/fixtures/ai_side_s05.bin`, tools/record_ai_side.py: the game's decision hooked), the side the port keeps
+/// must be the game's: the nearer stand spot, or the strong side when the run-round roll passed and it is inside the
+/// court's half width plus the row's extend (which must also be the game's width).
+#[test]
+fn stand_sides_match_the_game() {
+    use hst_sim::ai::stand_side;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Some((_, csv)), Ok(d)) = (load(), std::fs::read(format!("{root}/context/fixtures/ai_side_s05.bin"))) else {
+        return eprintln!("disc or ai_side_s05.bin missing, skipped");
+    };
+    let table = AiParams::table(&csv);
+    let recs: Vec<&[u8]> = d.chunks_exact(0x50).collect();
+    let int = |b: &[u8], o: usize| word(b, o) as i32;
+    let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
+    let (mut checked, mut ran, mut kept_nearer_on_roll) = (0, 0, 0);
+    for w in recs.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if word(a, 0) >> 16 != 1 {
+            continue;
+        }
+        assert_eq!((word(b, 0), word(b, 8)), (word(a, 0) + 0x10000, word(a, 8)), "unpaired decision at vsync {}", word(a, 4));
+        let row = &table[(word(a, 68) - TABLE) / RECORD];
+        let width = f(a, 24);
+        assert_eq!(row.run_round_width(false).to_bits(), width.to_bits(), "vsync {}: width", word(a, 4));
+        let roll = word(a, 40) != 0;
+        let spot = |i: usize, o: usize| Some((int(a, i), [f(a, o), f(a, o + 4)]));
+        let side = |w: Option<f32>| {
+            stand_side(spot(12, 48), spot(16, 56), [f(a, 32), f(a, 36)], f(a, 20), f(a, 28), f(a, 64), word(a, 44) as u8, w)
+        };
+        let got = side(roll.then_some(width));
+        let want = Some(int(b, 12) >= 1);
+        assert_eq!(got, want, "vsync {} AI {:#x}: {:?}", word(a, 4), word(a, 8), &a[..0x50]);
+        checked += 1;
+        if roll {
+            if side(None) != got {
+                ran += 1;
+            } else {
+                kept_nearer_on_roll += 1;
+            }
+        }
+    }
+    eprintln!("{checked} sides checked, {ran} ran round, {kept_nearer_on_roll} rolls kept the nearer side");
+    assert!(checked >= 30 && ran > 0, "{checked} sides, {ran} run-rounds");
+}

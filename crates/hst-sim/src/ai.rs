@@ -497,6 +497,64 @@ impl Guess {
     }
 }
 
+/// A side of the ball the AI's contact search can stand on: the path entry it found (its index, counted from the
+/// path's start) and the ball's x and z there.
+pub type Spot = (i32, [f32; 2]);
+
+impl AiParams {
+    /// The contact search's run-round roll, drawn on every search (whether it finds the ball or not): a
+    /// `strong_side_rate` % chance, void for a doubles AI beside a human partner.
+    pub fn run_round(&self, beside_human: bool, roll: &mut impl FnMut() -> u32) -> bool {
+        chance(roll, self.strong_side_rate) && !beside_human
+    }
+
+    /// How far out the AI runs round: the court's half width (singles or doubles) plus the row's extend.
+    pub fn run_round_width(&self, singles: bool) -> f32 {
+        ps2::add(if singles { 4.115 } else { 5.485 }, self.strong_side_extend)
+    }
+}
+
+/// Where the AI stands when its contact search found the ball on both sides of it: `minus` (standing at ball x −
+/// reach·side, the forehand of a right-hander) or `plus` (ball x + reach·side). It keeps the stand spot nearer to
+/// `from` (its position, x and z), unless the farther one is its `strong` side (1 minus, 2 plus: TParam's hand,
+/// right 1) and the run-round roll passed (`width`: Some(`run_round_width`)) and that spot's |x| is inside the
+/// width. Each spot stands `depth` (player stat) · side / 2 short of the ball. Some(true) for minus, Some(false) for
+/// plus, None when neither was found. As the game, a side found at the path's first entry (index 0) isn't weighed.
+/// ponytail: only minus at index 0 found makes the game read the entry before the path; this keeps minus then.
+pub fn stand_side(
+    minus: Option<Spot>,
+    plus: Option<Spot>,
+    from: [f32; 2],
+    reach: f32,
+    side: f32,
+    depth: f32,
+    strong: u8,
+    width: Option<f32>,
+) -> Option<bool> {
+    let (m, p) = match (minus, plus) {
+        (None, None) => return None,
+        (Some(m), Some(p)) if m.0 > 0 && p.0 > 0 => (m.1, p.1),
+        (Some(m), p) => return Some(m.0 >= 1 || p.is_none()),
+        (None, Some(_)) => return Some(false),
+    };
+    let off = ps2::mul(reach, side);
+    let x = [ps2::sub(m[0], off), ps2::add(p[0], off)];
+    let back = ps2::div(ps2::mul(depth, side), 2.0);
+    let dist = |x: f32, z: f32| {
+        let (dx, dz) = (ps2::sub(x, from[0]), ps2::sub(ps2::sub(z, back), from[1]));
+        ps2::madd(ps2::mul(dz, dz), dx, dx)
+    };
+    let nearer_minus = dist(x[0], m[1]) <= dist(x[1], p[1]);
+    let strong_minus = match strong {
+        1 => true,
+        2 => false,
+        _ => return Some(nearer_minus),
+    };
+    let run = strong_minus != nearer_minus
+        && width.is_some_and(|w| x[if strong_minus { 0 } else { 1 }].abs() < w);
+    Some(if run { strong_minus } else { nearer_minus })
+}
+
 /// The bounds an ALL-style AI's net rate is kept in after each point (the same for both AI classes).
 pub const NET_RATE: (i32, i32) = (15, 85);
 
