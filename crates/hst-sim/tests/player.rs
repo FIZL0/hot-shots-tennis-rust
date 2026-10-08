@@ -636,6 +636,8 @@ fn bot_frames(d: &[u8]) -> Vec<BotFrame> {
 fn p7f_bot_stick() {
     use hst_sim::player::{bot_stick, stick_dir};
     use hst_sim::ps2::{div, madd, mul, sqrt};
+    // slot 5's line-up (characters 0, 2, 1, 5; TParam SPE/Agili/STA and costs)
+    const STATS: [(i32, i32, i32, [i32; 3]); 4] = [(10, 40, 40, [8, 4, 7]), (11, 40, 40, [8, 4, 7]), (9, 40, 40, [6, 3, 7]), (12, 10, 40, [8, 6, 6])];
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/p7f_s05.bin")) else {
         return eprintln!("p7f_s05.bin absent, skipped");
