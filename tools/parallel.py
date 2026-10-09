@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/parallel.sh [N] [p|d]      # e.g. 5 p; progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 90% weekly usage; progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -26,6 +26,9 @@ the master's instructions, so the session lives on across runs without its conte
 it outlives a done or stopped run, and the next run adopts it. Restarting the runner adopts the master and the sessions still running in panes s1..sN instead of resetting them. A run that only
 hit the usage limit is discarded and its slot sleeps until the reset; one that hit it partway waits in its pane (the stop
 hook spares it) and Claude Code continues it at the reset.
+
+Weekly cap: no new task starts once the account's 7-day usage is at WEEKLY_MAX % (read from the same endpoint as /usage,
+no tokens spent); running ones finish and the run ends. `f` ignores the cap.
 """
 import glob, json, os, re, select, shlex, subprocess as sp, sys, threading, time, uuid
 from datetime import datetime, timedelta
@@ -35,8 +38,11 @@ WT = ROOT + '-slots'
 _args = sys.argv[1:]
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
 MODE = next((a for a in _args if a in ('p', 'd')), 'd')
-if any(a not in ('p', 'd') and not a.isdigit() for a in _args) or SLOTS < 1:
-    raise SystemExit('usage: tools/parallel.sh [N] [p|d]   (N sessions, p = priority order, d = different files)')
+FORCE = 'f' in _args
+if any(a not in ('p', 'd', 'f') and not a.isdigit() for a in _args) or SLOTS < 1:
+    raise SystemExit('usage: tools/parallel.sh [N] [p|d] [f]   (N sessions, p = priority order, d = different files, '
+                     'f = ignore the 90% weekly usage cap)')
+WEEKLY_MAX = 90  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 WATCH = 600  # seconds between match-over checks of a slot's game while a capture drives it
@@ -57,6 +63,30 @@ code) so the merges stay clean. Close it with `tools/pcsx2-hst.sh stop` \
 `tools/ctx.py tick {id}` and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
 is not stuck: commit what's solid but don't mark it `[~]` or stop PCSX2 — the session waits for the reset and continues \
 the task."""
+
+
+_weekly = [-1e9, None]  # checked at, last value
+
+
+def weekly():
+    """7-day usage % from the endpoint /usage reads (OAuth token of the local login; costs no tokens), checked at most
+    every 5 min; None if it can't be read (expired token: any claude run refreshes it)."""
+    if time.time() - _weekly[0] >= 300:
+        import urllib.request
+        try:
+            tok = json.load(open(os.path.expanduser('~/.claude/.credentials.json')))['claudeAiOauth']['accessToken']
+            req = urllib.request.Request('https://api.anthropic.com/api/oauth/usage',
+                                         headers={'Authorization': f'Bearer {tok}', 'anthropic-beta': 'oauth-2025-04-20'})
+            _weekly[1] = json.load(urllib.request.urlopen(req, timeout=10))['seven_day']['utilization']
+        except Exception as e:  # ponytail: unreadable = no cap; the per-session limit handling still applies
+            log(f'weekly usage unreadable ({e}); not capping')
+            _weekly[1] = None
+        _weekly[0] = time.time()
+    return _weekly[1]
+
+
+def capped():
+    return not FORCE and (w := weekly()) is not None and w >= WEEKLY_MAX
 
 
 def git(*a, cwd=ROOT):
@@ -325,7 +355,8 @@ def main():
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
     watched = {}  # slot -> time of its last match-over check
     stopping = False  # `s` typed: start nothing new
-    log(f'parallel run, {SLOTS} slots, mode {MODE}')
+    log(f'parallel run, {SLOTS} slots, mode {MODE}, weekly usage {weekly()}%' + (' (cap ignored: f)' if FORCE else f' (cap {WEEKLY_MAX}%)'))
+    cap_logged = False
     master()
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
@@ -348,8 +379,13 @@ def main():
                     log(f'{task[0]}: reported to the master')
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
             if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
+                if capped():
+                    if not cap_logged:
+                        log(f'weekly usage {weekly()}% >= {WEEKLY_MAX}%: starting nothing new (restart with f to go on)')
+                        cap_logged = True
+                    continue
                 procs[n], running[n] = start(n, task), task
-        if not done and not procs and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
+        if not done and not procs and (stopping or capped() or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
             done = True
             report('RUN DONE')
             log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
