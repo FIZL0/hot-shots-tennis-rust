@@ -1431,7 +1431,9 @@ fn setup_speed(mut commands: Commands, args: Res<Args>, mut images: ResMut<Asset
         .expect("inpane_speed00 in INPANE");
     commands.insert_resource(SpeedArt(panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))));
     commands.init_resource::<Speed>();
-    commands.spawn((super::widescreen::screen_43(), GlobalZIndex(1))).with_children(|p| {
+    // a full-window root: the readout is pinned to its side of the window (`widescreen::pin`)
+    let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    commands.spawn((full, GlobalZIndex(1))).with_children(|p| {
         for i in 0..4 {
             p.spawn((SpeedSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
@@ -1451,9 +1453,15 @@ fn tick_speed(g: Res<Game>, speed: Option<ResMut<Speed>>) {
     }
 }
 
-fn draw_speed(speed: Option<Res<Speed>>, art: Option<Res<SpeedArt>>, mut q: Query<(&SpeedSlot, &mut ImageNode, &mut Node, &mut Visibility)>) {
+fn draw_speed(
+    speed: Option<Res<Speed>>,
+    art: Option<Res<SpeedArt>>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut q: Query<(&SpeedSlot, &mut ImageNode, &mut Node, &mut Visibility)>,
+) {
     let (Some(speed), Some(art)) = (speed, art) else { return };
     let quads = speed.quads();
+    let share = super::widescreen::window_share(&window);
     for (SpeedSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&([u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i).filter(|q| q.2 > 0) else {
             *vis = Visibility::Hidden;
@@ -1462,9 +1470,11 @@ fn draw_speed(speed: Option<Res<Speed>>, art: Option<Res<SpeedArt>>, mut q: Quer
         img.image = art.0.clone();
         img.rect = Some(Rect::new(u, v, u + w, v + h));
         img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
-        node.left = Val::Percent(x / 6.4);
+        // every quad of a readout is on its side of the centre, so they all pin to the same edge
+        let (left, width) = super::widescreen::pin(x, dw, share);
+        node.left = Val::Percent(left);
         node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(dw / 6.4);
+        node.width = Val::Percent(width);
         node.height = Val::Percent(dh / 4.48);
         *vis = Visibility::Inherited;
     }
@@ -1473,6 +1483,25 @@ fn draw_speed(speed: Option<Res<Speed>>, art: Option<Res<SpeedArt>>, mut q: Quer
 #[cfg(test)]
 mod speed_tests {
     use super::*;
+
+    /// 16:9: the readout keeps its 4:3 distance from its own window edge (16 px left, 8 px right: "mph" ends at
+    /// 632), every quad on the same edge.
+    #[test]
+    fn pinned_to_its_side() {
+        for right in [false, true] {
+            let mut s = Speed::default();
+            s.start(300.0, right);
+            s.show.as_mut().unwrap().4 = 128;
+            let rects: Vec<_> = s.quads().iter().map(|q| super::super::widescreen::pin(q.1[0], q.1[2], 0.75)).collect();
+            let (lo, hi) = rects.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &(l, w)| (lo.min(l), hi.max(l + w)));
+            let edge = if right { 8.0 } else { 16.0 } / 6.4 * 0.75;
+            if right {
+                assert!((100.0 - hi - edge).abs() < 1e-4, "{rects:?}");
+            } else {
+                assert!((lo - edge).abs() < 1e-4, "{rects:?}");
+            }
+        }
+    }
 
     #[test]
     fn readout() {
