@@ -139,8 +139,8 @@ pub fn look(weather: u8, row: [f32; 6]) -> Look {
 pub fn shadow(s: u32, weather: u8) -> u32 {
     match weather {
         1 => (s as f32 * 0.75) as u32,
-        2 => (s as f32 * 0.75) as u32,
-        3 => (s as f32 * 0.75) as u32,
+        2 => (s as f32 * 0.5) as u32,
+        3 => (s as f32 * 0.25) as u32,
         _ => s,
     }
 }
@@ -196,7 +196,7 @@ mod tests {
         assert!(l.grey && l.scale == 0.65);
         let l = look(0, [-1.0, -1.0, -1.0, -1.0, -1.0, 1.0]);
         assert_eq!((l.sky, l.far, l.z, l.grey), (None, None, [None, None], false));
-        assert_eq!((shadow(76, 1), shadow(76, 2), shadow(76, 3), shadow(76, 4)), (57, 57, 57, 76));
+        assert_eq!((shadow(76, 1), shadow(76, 2), shadow(76, 3), shadow(76, 4)), (57, 38, 19, 76));
     }
 
     #[test]
