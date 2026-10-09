@@ -136,15 +136,22 @@ Get a Grip's labelled cues map almost 1:1: smash→0, swing→1, receive→3, po
   Pick by body type and play style (`research/characters.md`).
 - `params`: `TParam.csv` row: `base` donor row, `override` by column header (e.g. `Serv POW`, `Strk POW`,
   `Voley POW`, `Top SPIN`, `Strk CON`, `SPE`, `STA`, `Agili`, reach `リーチ(cm)`, heights). Other games' stats are
-  mapped once per game (PLAN M8).
+  mapped once per game (PLAN M8), **by rank**: a character's position among its own game's cast on the source stat
+  picks the value at the same position in HST's 14 rows of the mapped column, so values stay inside HST's balance
+  (integer columns stay integers; `a/b/c` cells are whole HST cells); columns with no source stay the base row's.
+  Keep the body-bound columns (contact/smash/serve heights, リーチ基点, collision) at the donor's, since its motions
+  are played. Get a Grip's table: HST-MODS `notes/getagrip.md` (*Stats → HST TParam*); タイプ (オール/ベース/ネット/ビッグ) sets the
+  select's play-style label.
+- `ai_row`: the AIParam.csv row (and second-toss pick) the computer plays this character with; may differ from
+  `donor` (e.g. the HST character of the same タイプ while the body donor is the nearest height).
 - `hand`: `right`/`left` (the game mirrors left-handers, like Carol and Will).
 - `face`: `morph` (§4a channels), `texture` (§4b, needs `face.json`) or `none` (no face animation).
 - The HST loader (`crates/hst/src/mods.rs`) rejects a mod with `<path>: <reason>` when the manifest is off
   (`standard` ≠ 1, a missing costume, `donor`/`base`/`ai_row` outside 0–13, `hand` not right/left, an `override`
   key that is no TParam column) or a costume fails §7's FAIL checks; WARN checks are logged. Buffers and images
   must be embedded in the `.glb`; it skips glTF accessor validation (older rerig output lacks POSITION min/max).
-- Optional, informational: `donor_why`, `size_why` (how the height and head were set), `racket_why`. A loader
-  ignores unknown keys.
+- Optional, informational: `donor_why`, `size_why` (how the height and head were set), `racket_why`, `source_stats` (the source game's raw stats),
+  `params_why` (per overridden column: source stat, value, rank → HST value), `ai_row_why`. A loader ignores unknown keys.
 
 ## 7. Conformance
 

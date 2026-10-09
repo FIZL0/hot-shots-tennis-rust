@@ -112,4 +112,35 @@ mod tests {
         }
         assert!(best >= 3 && mod_hit, "longest rally {best} shots, mod returned a ball: {mod_hit}");
     }
+
+    /// A packaged Get a Grip mod (`mods/hst-mods`, the mods repo's `out/mods`) in a match: the stats the game reads
+    /// are its `params.override` cells (Get a Grip's stats ranked onto TParam), its AI row is `ai_row`.
+    #[test]
+    fn get_a_grip_stats_reach_the_match() {
+        const GAG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/getagrip_pc00_emi");
+        if !Path::new(ISO).is_file() || !Path::new(GAG).is_dir() {
+            return eprintln!("no ISO or mods/hst-mods/getagrip_pc00_emi, skipped");
+        }
+        let m = mods::read(Path::new(GAG)).unwrap();
+        let o = |k: &str| m.overrides.iter().find(|(c, _)| c == k).unwrap_or_else(|| panic!("no {k} override")).1.parse::<i32>().unwrap();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![1, m.donor], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(MatchMod(vec![None, Some(m.clone())]));
+        app.init_resource::<super::super::Pads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, super::super::setup);
+        app.update();
+        let mut iso = Iso::open(ISO).unwrap();
+        let g = app.world().resource::<super::super::Game>();
+        let p = &g.players[1];
+        eprintln!("{}: speed {} agility {} stamina {}, power {:?}, aim {:?}, reach {}", m.id, p.stats.speed, p.stats.agility, p.stats.stamina, g.finish.power[1], g.aim_stats[1].con, g.reaches[1].reach);
+        assert_eq!((p.stats.speed, p.stats.agility, p.stats.stamina), (o("SPE") as f32 / 10.0, o("Agili"), o("STA")));
+        assert_eq!(g.finish.power[1], [o("Strk POW"), o("Voley POW")]);
+        assert_eq!(g.aim_stats[1].con, [o("Strk CON"), o("Voley CON"), o("Serv CON")]);
+        assert_eq!(g.reaches[1].reach, hst_sim::ps2::add(hst_sim::ps2::div(o("リーチ(cm)") as f32, 100.0), hst_sim::ps2::div(30.0, 100.0)));
+        assert_eq!(p.ai, super::super::ai_params(&mut iso, m.ai_row, 0, false));
+        assert_ne!(m.ai_row, m.donor, "Emi's AI row should follow her play style, not her body donor");
+    }
 }
