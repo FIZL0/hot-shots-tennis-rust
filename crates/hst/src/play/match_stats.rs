@@ -534,7 +534,7 @@ fn step(
         // ponytail: the fixed clock runs on but never reaches a step, as the pause menu
         fixed.set_timestep(Duration::from_secs(1 << 20));
     }
-    let any = |b: GamepadButton| gamepads.iter().any(|p| p.just_pressed(b));
+    let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|p| p.just_pressed(b));
     let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South);
     let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || any(GamepadButton::DPadRight);
     let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) || any(GamepadButton::DPadLeft);

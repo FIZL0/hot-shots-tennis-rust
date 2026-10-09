@@ -1643,10 +1643,9 @@ fn read_input(
     let mut turn = bind.key_pressed(&keys, A::TurnRight) as i32 as f32
         - bind.key_pressed(&keys, A::TurnLeft) as i32 as f32;
     // controllers keep their slot while connected (`controls::PadSlots`); new ones fill the first free slot
-    // ponytail: Steam Input's virtual pads (Valve, 0x28de) mirror real ones; skip them so slot 2 is the second real pad
     let mut list: Vec<_> = gamepads
         .iter()
-        .filter(|(_, g)| g.vendor_id() != Some(0x28de))
+        .filter(|(_, g)| controls::readable(g))
         .map(|(e, _)| e)
         .collect();
     list.sort();

@@ -260,7 +260,7 @@ fn act(
     mut rigs: Query<(&mut Motion, &mut Transform, &mut UvClock)>,
     data: Query<&character::Rig>,
 ) {
-    let pressed = |b: GamepadButton, k: KeyCode| keys.just_pressed(k) || pads.iter().any(|p| p.just_pressed(b));
+    let pressed = |b: GamepadButton, k: KeyCode| keys.just_pressed(k) || pads.iter().filter(|g| crate::play::controls::readable(g)).any(|p| p.just_pressed(b));
     let act = if pressed(GamepadButton::RightTrigger2, KeyCode::Digit1) {
         Act::Win
     } else if pressed(GamepadButton::LeftTrigger2, KeyCode::Digit2) {

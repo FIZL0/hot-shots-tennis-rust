@@ -1,4 +1,4 @@
-//! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png]`
+//! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png] [--fullscreen]`
 //! Loads every model in the given disc archives and shows them with an orbit camera
 //! (drag: orbit, wheel: zoom). `--shot` saves one frame (after `--shot-at` seconds) and exits, for unattended checks;
 //! `--radius r` orbits the origin at distance r instead of framing everything (skyboxes are huge).
@@ -140,6 +140,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 roster = Some(inspect::Roster(disc, mods));
             }
             "--vsync" => vsync = true,
+            "--fullscreen" => {} // read in `main`
             "--music" => music = true,
             "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
@@ -182,7 +183,10 @@ fn main() {
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     // a `--shot` window has its own title so the desktop can keep test windows out of the way (tools/shot.sh)
     let title = if args.shot.is_some() { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, ..default() }), ..default() }));
+    // Steam's Big Picture (`SteamGamepadUI`) and the Steam Deck (`SteamDeck`) start games full screen
+    let full = std::env::args().any(|a| a == "--fullscreen") || ["SteamGamepadUI", "SteamDeck"].iter().any(|v| std::env::var(v).is_ok_and(|v| v == "1"));
+    let mode = if full && args.shot.is_none() { bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current) } else { default() };
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);

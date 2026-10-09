@@ -379,13 +379,13 @@ fn step(
     mut exit: MessageWriter<AppExit>,
     mut auto: Local<bool>,
 ) {
-    let any = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
+    let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(b));
     let start = keys.just_pressed(KeyCode::Escape) || any(GamepadButton::Start);
     let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South);
     // the stick as the original's menus read it: its byte's held direction (|48| of 127, past the driver's deadzone)
     let stick = |g: &Gamepad| -hst_sim::player::pad_held(super::stick_byte(-g.left_stick().y)) as f32 + g.dpad().y;
-    let up = keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) || gamepads.iter().any(|g| stick(g) > 0.5);
-    let down = keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) || gamepads.iter().any(|g| stick(g) < -0.5);
+    let up = keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) || gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| stick(g) > 0.5);
+    let down = keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) || gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| stick(g) < -0.5);
     let play = |key: usize| {
         if let (Some(s), Some(Art(_, Some(b)))) = (&sound, art.as_deref()) {
             s.play_centre(b, sound::Play { slot: 9, program: 0, key: key as u8, volume: 0x80, speed: 1.0 });

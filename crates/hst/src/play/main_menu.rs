@@ -1243,7 +1243,7 @@ fn step(
             s.play_centre(b, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
         }
     };
-    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| g.vendor_id() != Some(0x28de)).map(|(e, _)| e).collect();
+    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
     pads.sort();
     // the controls screen waiting for a key or button
     if let Some(i) = menu.rebinding {
@@ -1253,7 +1253,7 @@ fn step(
             return;
         }
         let key = keys.get_just_pressed().find(|k| Bindings::bindable_key(**k)).copied();
-        let button = gamepads.iter().flat_map(|(_, g)| g.get_just_pressed().copied().collect::<Vec<_>>()).find(|b| Bindings::bindable_pad(*b));
+        let button = gamepads.iter().filter(|(_, g)| controls::readable(g)).flat_map(|(_, g)| g.get_just_pressed().copied().collect::<Vec<_>>()).find(|b| Bindings::bindable_pad(*b));
         if key.is_some() || button.is_some() {
             if let Some(k) = key {
                 bind.rebind_key(i, k);
@@ -1346,7 +1346,7 @@ fn draw(
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let Some(art) = art else { return };
-    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| g.vendor_id() != Some(0x28de)).map(|(e, _)| e).collect();
+    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
     pads.sort();
     // the hand swings out and back (the pause menu's `Hand` is the original's; here a plain sine)
     let hand_x = -8.0 + 8.0 * (time.elapsed_secs() * 5.5).cos();
