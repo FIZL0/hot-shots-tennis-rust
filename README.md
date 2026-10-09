@@ -64,8 +64,11 @@ On a Wayland desktop, set the shortcut's launch options to run it under X11 (Xwa
 Environment variables go before `%command%`, the game's own arguments (the ISO, if the launcher doesn't find it) after:
 
 ```
-WAYLAND_DISPLAY= %command% "/path/to/Hot Shots Tennis (USA).iso"
+GDK_SCALE=1 WAYLAND_DISPLAY= %command% "/path/to/Hot Shots Tennis (USA).iso"
 ```
+
+`GDK_SCALE=1` matters on HiDPI setups that export `GDK_SCALE=2` (Omarchy/Hyprland does): Steam hands it to the game,
+and the overlay then draws into the top-left quarter of the window and ignores clicks.
 
 ## Texture replacements
 
