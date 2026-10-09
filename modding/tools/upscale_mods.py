@@ -6,7 +6,7 @@
 For each `mod.json` under MODS_DIR (default `mods/`), every image embedded in its costume `.glb`s and
 `racket.glb` without a `textures/upscaled/<glb stem>/<name>.png` yet is upscaled with the chain (its folders and
 model filled in here, run headless with `chainner run`) and written there. The game draws those when the
-"upscaled textures" setting is on. Already-upscaled images are skipped unless their source changed
+"upscaled textures" setting is on. Mods with `"upscale": false` in mod.json are skipped. Already-upscaled images are skipped unless their source changed
 (`textures/upscaled/sources.json`); delete a PNG to redo it. Rerun after adding or rebuilding mods.
 
 Slow (~2.5 s an image whatever its size)? chaiNNer 0.25.1 starts each node's work from a worker thread without
@@ -44,7 +44,10 @@ def todo(roots):
         for mj in sorted(glob.glob(f'{root}/**/mod.json', recursive=True)):
             d = Path(mj).parent
             done = sources(d)
-            glbs = [d / c for c in json.loads(Path(mj).read_text()).get('costumes', [])] + [d / 'racket.glb']
+            m = json.loads(Path(mj).read_text())
+            if m.get('upscale', True) is False:
+                continue
+            glbs = [d / c for c in m.get('costumes', [])] + [d / 'racket.glb']
             for g in filter(Path.is_file, glbs):
                 for name, png in glb_images(g):
                     out = d / 'textures/upscaled' / g.stem / name

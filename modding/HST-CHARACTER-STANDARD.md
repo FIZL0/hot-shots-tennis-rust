@@ -20,7 +20,7 @@ mods/<id>/
                            optional: one folder per .glb (costume or racket.glb), one PNG per embedded image,
                            named by the glTF image's `name` (else `image<index>`); drawn instead when the
                            "upscaled textures" setting is on, any size; missing files fall back to the embedded
-                           one. `upscale_mods.py` makes them (with `sources.json`, the hashes it skips by)
+                           one. `upscale_mods.py` makes them (with `sources.json`, the hashes it skips by; not for `"upscale": false`, §6)
   motions.glb              optional: the mod's own motions, drawn in place of the donor's (§6 `motions`)
   voice/<program>_<key>.wav  §5
   face.json                only for texture faces (§4b)
@@ -149,6 +149,8 @@ Get a Grip's labelled cues map almost 1:1: smash→0, swing→1, receive→3, po
 - `ai_row`: the AIParam.csv row (and second-toss pick) the computer plays this character with; may differ from
   `donor` (e.g. the HST character of the same タイプ while the body donor is the nearest height).
 - `hand`: `right`/`left` (the game mirrors left-handers, like Carol and Will).
+- `upscale` (optional, default `true`): `false` for mods whose textures are already high-res (e.g. Hot Shots
+  Golf Fore! players): `upscale_mods.py` skips the mod (the game still draws any `textures/upscaled/` it has).
 - `motions` (optional): a `.glb` in the folder whose animations replace the donor's clips **on screen only**.
   Each animation is named by the motion without `_pc%02d` (`re_gu`, `re_di`, `re_gu_set`, `re_di_set`, `mo_ad00`,
   `sh_f_t`, … as `hst_data::ani::MOTIONS`, one the donor has) and keys the costume's joints by name with their
