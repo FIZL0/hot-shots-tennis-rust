@@ -60,10 +60,11 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 Add the launcher as a non-Steam game. Under Big Picture and on the Steam Deck it starts full screen (`--fullscreen`
 elsewhere), Steam Input layouts apply, and every menu works from a controller.
 
-On a Wayland desktop, set the shortcut's launch options to run it under X11 (Xwayland), which the Steam overlay needs:
+On a Wayland desktop, set the shortcut's launch options to run it under X11 (Xwayland), which the Steam overlay needs.
+Environment variables go before `%command%`, the game's own arguments (the ISO, if the launcher doesn't find it) after:
 
 ```
-WAYLAND_DISPLAY= %command%
+WAYLAND_DISPLAY= %command% "/path/to/Hot Shots Tennis (USA).iso"
 ```
 
 ## Texture replacements
