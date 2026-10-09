@@ -57,9 +57,8 @@ removed): `Bip01` (root) › `Bip01Pelvis` › `Bip01Spine` › `Spine1` › `Sp
   then one factor per source game (≤ 1) so its tallest is 0.95 m; relative heights stay the source's. Chibi
   sources also shrink each head about `Bip01Neck` by its own factor: half way from 1 to the factor that would bring
   that character's head ratio ((top of head mesh − neck) / `Bip01` height, smallest over its costumes so a hat
-  doesn't count) to HST's standard-body median (0.538), never above 1; the full match looked small-headed. A
-  character the user judged right unshrunk keeps 1 (`HEAD_KEEP`; Get a Grip's Helghast). Get a Grip's factors run
-  0.72–0.80, in `out/rerig/getagrip/sizing.json` and each mod's `size_why`. The donor is then the nearest
+  doesn't count) to HST's standard-body median (0.538), never above 1; the full match looked small-headed. Get a
+  Grip's factors run 0.72–0.80, in `out/rerig/getagrip/sizing.json` and each mod's `size_why`. The donor is then the nearest
   `Bip01` height among HST's same-sex standard bodies.
 - **Extra joints are allowed** (hair, skirts, earrings, accessories) anywhere below the core. HST motions don't
   drive them; they follow their parent, plus the sway of §3a.
