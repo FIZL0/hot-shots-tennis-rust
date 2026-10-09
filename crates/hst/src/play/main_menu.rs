@@ -15,7 +15,7 @@
 //! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
-//! second page of the select, switched for everyone by Tab / Select: a list of names, 2 columns of [`LIST_ROWS`] a
+//! second page of the select, switched for everyone by Tab / □: a list of names, 2 columns of [`LIST_ROWS`] a
 //! page (↑↓ one, ←→ a column). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
 //! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
 //! (`--slot-mod N DIR`, `--chars` the donor), and a costume readied on is closed to the others as on the disc.
@@ -153,7 +153,7 @@ struct Press {
     /// L1 / R1: the costume.
     prev: bool,
     next: bool,
-    /// Select / Tab: the disc or custom page.
+    /// □ / Tab: the disc or custom page.
     page: bool,
 }
 
@@ -1041,7 +1041,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
         }
         if !m.mods.is_empty() {
-            d.centred(&format!("Tab / Select: {} custom characters", m.mods.len()), 320.0, 159.0, 12.0, WHITE);
+            d.centred(&format!("Tab / Square: {} custom characters", m.mods.len()), 320.0, 159.0, 12.0, WHITE);
         }
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
@@ -1106,9 +1106,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         Who::Mod(i) => {
             let md = &m.mods[i];
             let s = if md.costumes.len() == 1 { "" } else { "s" };
-            d.info(&format!("{}: custom character, {} costume{s}. Tab / Select: the disc characters.", md.name, md.costumes.len()));
+            d.info(&format!("{}: custom character, {} costume{s}. Tab / Square: the disc characters.", md.name, md.costumes.len()));
         }
-        Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Select: custom characters)", text.msg(308 + c))),
+        Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Square: custom characters)", text.msg(308 + c))),
         Who::Disc(c) => d.info(text.msg(308 + c)),
     }
 }
@@ -1278,7 +1278,7 @@ fn step(
                 k.card = g.just_pressed(GamepadButton::North);
                 k.prev = g.just_pressed(GamepadButton::LeftTrigger);
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
-                k.page = g.just_pressed(GamepadButton::Select);
+                k.page = g.just_pressed(GamepadButton::West);
             }
         }
         let mut dirs = [false; 4];

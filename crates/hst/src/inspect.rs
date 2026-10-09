@@ -51,7 +51,6 @@ fn loss_yaw(n: usize) -> f32 {
 }
 
 pub fn plugin(app: &mut App) {
-    bevy::asset::embedded_asset!(app, "inspect.wgsl");
     // a mode's plugins build without the render app (`mode.rs`): there the app added these first
     if !app.world().contains_resource::<Assets<PreviewMaterial>>() {
         render(app);
@@ -61,6 +60,7 @@ pub fn plugin(app: &mut App) {
 
 /// The previews' Bevy plugins, which set up the render app too.
 pub fn render(app: &mut App) {
+    bevy::asset::embedded_asset!(app, "inspect.wgsl");
     app.add_plugins((HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), UiMaterialPlugin::<PreviewMaterial>::default()));
 }
 
