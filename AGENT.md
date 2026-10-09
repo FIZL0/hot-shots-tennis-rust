@@ -22,8 +22,8 @@ dumps, save states, recordings) and lists the tool pitfalls.
 
 ## Plan
 `PLAN.md` holds the rules and a code map; the ordered open tasks are in `plan/TODO.md` (each line names the files to
-open), finished ones in `plan/DONE.md`. "continue" means: `tools/ctx.py next`, read only `tools/ctx.py <ID>`, its
-listed files and journal, port + verify, `tools/ctx.py tick <ID>` (moves it to DONE.md), commit. Don't grep the repo for where things live — the code map says. Background (game
+open), finished ones in `plan/DONE.md`. "continue" means: `tools/ctx.py next`, read `tools/ctx.py brief <ID>` (line, plan file,
+journal, files), port + verify, `tools/done.sh <ID> "<msg>"` (tests, tick into DONE.md, commit). Don't grep the repo for where things live — the code map says. Background (game
 control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md, else
 its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any markdown) · `tick <ID>` · `block <ID> <why>`.
 
@@ -33,9 +33,8 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
   blocks reading the 16 MB dumps whole.
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
-- Hand anything mechanical to the `chore` subagent instead of doing it yourself: journal write-ups from your notes,
-  ticking/blocking tasks (`tools/ctx.py tick`/`block`), checking a capture, the final test run + commit. Keep porting, the test loop,
-  decompile reading and gameplay decisions.
+- Wrap-up is one call, no subagent: `tools/done.sh <ID> "<msg>"` (tests, tick, commit) or `… --blocked "<why>"`.
+  The `chore` subagent is only for bigger mechanical jobs (checking a capture, reformatting).
 
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`; remaster `--shot`s in a fixed-size floating window: `tools/shot.sh`) and

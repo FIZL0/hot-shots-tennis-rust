@@ -7,9 +7,9 @@ other sessions change them.
 
 ## Continue
 
-"continue" = take the first open task (`tools/ctx.py next`), read `tools/ctx.py <ID>` + its journal, carry it out
-completely, then hand the wrap-up to the `chore` subagent (`tools/ctx.py tick <ID>`, write the journal
-entry from your notes, run `tools/check.sh`, commit with the message you give it), stop and report. One task per
+"continue" = take the first open task (`tools/ctx.py next`), read `tools/ctx.py brief <ID>` (its line, plan file,
+journal and files in one go; the runners paste it into your prompt already), carry it out completely, write the journal
+entry, then `tools/done.sh <ID> "<commit message>"` (tests → tick → commit in one call), stop and report. One task per
 iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `plan/<ID>.md` files + lines in `plan/TODO.md`) first.
 
 - **Match the original exactly** — no approximations or placeholders. Find it in the decompile (`context/decomp/`,
@@ -34,7 +34,9 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
 ## When blocked
 
 Stalled (tool hangs, PCSX2 won't cooperate, same fix fails twice, ~20 min on one obstacle, needs the human):
-have `chore` commit what's solid (stash experiments), write details in the journal and `tools/ctx.py block <ID> <why + what unblocks>`, move to the next `- [ ]` — preferably another section. Never end a
+stash experiments, write details in the journal and `tools/done.sh <ID> "<msg>" --blocked "<why + what unblocks>"`.
+PCSX2 runs unattended (`tools/pcsx2-hst.sh`, `tools/screenshot.sh`, PINE): "couldn't capture / not launched" is not a
+blocker, launch it; move to the next `- [ ]` — preferably another section. Never end a
 run while `- [ ]` lines remain; at the end list blockers. Human-only items go under **Needs the human**, never into
 code as guesses. Don't touch PCSX2 while `pgrep -f record_p2m2` runs.
 

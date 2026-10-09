@@ -45,7 +45,6 @@ if any(a not in ('p', 'd', 'f') and not a.isdigit() for a in _args) or SLOTS < 1
 WEEKLY_MAX = 90  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
-WATCH = 600  # seconds between match-over checks of a slot's game while a capture drives it
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
@@ -60,7 +59,8 @@ input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Ot
 time: keep your play.rs changes local (add functions, systems or new modules; don't move, rename or reformat existing \
 code) so the merges stay clean. Close it with `tools/pcsx2-hst.sh stop` \
 (never pkill pcsx2-qt: the other agents' copies are running too). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, \
-`tools/ctx.py tick {id}` and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
+`tools/done.sh {id} "<msg>"`; if stuck, `tools/done.sh {id} "<msg>" --blocked "<why>"` per AGENT.md 'If you get stuck', \
+and stop. A usage limit \
 is not stuck: commit what's solid but don't mark it `[~]` or stop PCSX2 — the session waits for the reset and continues \
 the task."""
 
@@ -192,7 +192,10 @@ def start(n, task):
     out.write(f'\n=== {datetime.now().isoformat(timespec="seconds")} {tid} session {sid}\n')
     out.close()
     stop = [{'hooks': [{'type': 'command', 'command': os.path.join(ROOT, 'tools/agent-stop.sh')}]}]
-    cmd = shlex.join(['claude', PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60), '--session-id', sid, '--permission-mode', 'bypassPermissions',
+    brief = sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'brief', tid], cwd=d, capture_output=True, text=True).stdout
+    prompt = PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60) + f' Its brief (tools/ctx.py brief {tid}) follows, so ' \
+             f"don't gather it again.\n\n{brief}"
+    cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
     p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}'])
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
@@ -220,6 +223,53 @@ Never touch the worktrees, never do task work yourself. When the runner says `RU
 master.md with a short summary for the human at the top."""
 
 
+MERGE = threading.Lock()  # one merge into main at a time
+SUSPECT = re.compile(r'BLOCKED:.*(pcsx2|capture|unattended|screenshot|not launched|recording)', re.I)
+
+
+def merge(tid):
+    """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
+    Returns None when done, else why it was left for the master (main is then as it was)."""
+    with MERGE:
+        if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+            return 'main has uncommitted changes'
+        pre = git('rev-parse', 'HEAD').stdout.strip()
+        if git('merge', '--no-edit', f'task/{tid}').returncode:
+            files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+            git('merge', '--abort')
+            return f'conflicts in {", ".join(files)}'
+        sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
+        if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+            git('commit', '-qam', f'{tid}: archive ticked tasks into plan/DONE.md')
+        chk = sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
+        if chk.returncode:
+            git('reset', '-q', '--keep', pre)
+            return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
+        git('branch', '-d', f'task/{tid}')
+        pushed = git('push', '-q', 'origin', 'main').returncode == 0
+        added = git('diff', pre, 'HEAD', '--', 'plan/TODO.md').stdout
+        line = next((l for l in open(os.path.join(ROOT, 'plan/TODO.md')) if f'**{tid}**' in l), '')
+        state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
+        sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l)]
+        note = f'{tid}: merged by the runner, {state}' + ('' if pushed else ', push failed') + \
+               (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
+        open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
+        log(note)
+        return None
+
+
+def finish(tid, n, sid, commits):
+    """After a slot's session: merge its branch here; only what this can't merge goes to the master (a model)."""
+    if not commits:
+        git('branch', '-D', f'task/{tid}')
+        open(os.path.join(NOTES, 'master.md'), 'a').write(f'{tid}: no commits\n')
+        return log(f'{tid}: no commits')
+    if why := merge(tid):
+        report(f'REPORT {tid} slot {n}: session {sid} ended; {len(commits)} commits: {" / ".join(commits)[:600]}. '
+               f'The runner could not merge it: {why}')
+        log(f'{tid}: left for the master ({why})')
+
+
 def master():
     """The master's tmux pane; started once, adopted by a restarted runner."""
     if 'master' not in panes():
@@ -245,6 +295,7 @@ def flush():
     """Once the master is idle: /clear it, then type its instructions and the next queued line."""
     if not (q := queued()):
         return
+    master()
     m = panes().get('master', ['master'])[0]  # master gone: send-keys fails quietly, as it always did
     screen = sp.run(['tmux', 'capture-pane', '-p', '-t', m], capture_output=True, text=True).stdout
     if re.search(r'…\s\(\d|esc to interrupt', screen):
@@ -315,35 +366,6 @@ def limit_only(n, sid, since):
     return max(at, now)
 
 
-def watch(n):
-    """While slot n's game is being driven (its PCSX2 lock is held): F8-screenshot it and ask Haiku whether the match
-    is over (slot 5's bot match ends, and captures ran on past it unnoticed); if so, tell the agent in its pane."""
-    lock = os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), f'hst-pcsx2{n}.lock')
-    if sp.run(['flock', '-n', lock, 'true']).returncode == 0:
-        return  # nobody is driving it
-    png = os.path.join(WT, 'pcsx2', f'watch_s{n}.png')  # outside the repo, so `claude -p` loads none of its hooks
-    if sp.run([os.path.join(ROOT, 'tools/screenshot.sh'), png], env={**os.environ, 'HST_PCSX2': str(n)},
-              capture_output=True).returncode:
-        return  # paused or down
-    # ponytail: a Haiku look per check (~cents); a RAM flag over PINE once someone finds the match-over state
-    ask = (f'Read {os.path.basename(png)}. Is this Hot Shots Tennis\'s match-over screen ("Game, Set, Match!" banner, '
-           '"Continue" prompt, or the stats/results screen after it) rather than gameplay or a menu? Answer only yes or no.')
-    try:
-        a = sp.run(['claude', '-p', ask, '--model', 'haiku', '--allowedTools', 'Read'], cwd=os.path.dirname(png),
-                   stdin=sp.DEVNULL, capture_output=True, text=True, timeout=180).stdout
-    except sp.TimeoutExpired:
-        return
-    if not a.strip().lower().startswith('yes'):
-        return
-    log(f'slot {n}: match over while its game is being driven; told the agent')
-    pane_id = panes().get(f's{n}', [None])[0]
-    if pane_id:
-        msg = (f'From the runner: your PCSX2 (copy {n}) is on the match-over screen ("Game, Set, Match!"; screenshot '
-               f'{png}) while something drives it. Anything a capture recorded after the match ended is not gameplay: '
-               'stop or cut it, and re-record from a save state if you need more.')
-        enter(pane_id, msg)
-
-
 def main():
     if not os.environ.get('TMUX'):
         raise SystemExit('run me inside tmux: tmux new -s hst tools/parallel.sh [N] [p|d]')
@@ -353,11 +375,12 @@ def main():
         raise SystemExit(f'another runner is going (pid {", ".join(others)}); wait for it to end')
     os.makedirs(NOTES, exist_ok=True)
     running, procs, tried, free_at, done = {}, {}, set(), {n: datetime.min for n in range(1, SLOTS + 1)}, False
-    watched = {}  # slot -> time of its last match-over check
     stopping = False  # `s` typed: start nothing new
     log(f'parallel run, {SLOTS} slots, mode {MODE}, weekly usage {weekly()}%' + (' (cap ignored: f)' if FORCE else f' (cap {WEEKLY_MAX}%)'))
     cap_logged = False
-    master()
+    merging = []  # threads merging finished branches into main
+    if queued():
+        master()  # reports a previous run left; otherwise the master starts only when a merge needs it
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
     while True:
@@ -373,10 +396,11 @@ def main():
                     log(f'slot {n}: {task[0]} only hit the limit; transcript discarded, slot sleeps until {reset:%H:%M}')
                 else:
                     tried.add(task[0])  # one attempt per night: ticked, blocked or failed, a human looks next
-                    git('checkout', '-q', '--detach', cwd=slot(n))  # frees task/<ID> for the master to delete
+                    git('checkout', '-q', '--detach', cwd=slot(n))  # frees task/<ID> for the merge to delete
                     commits = git('log', '--format=%s', f'main..task/{task[0]}').stdout.splitlines()
-                    report(f'REPORT {task[0]} slot {n}: session {sid} ended; {len(commits)} commits: {" / ".join(commits)[:600]}')
-                    log(f'{task[0]}: reported to the master')
+                    t = threading.Thread(target=finish, args=(task[0], n, sid, commits))
+                    t.start()
+                    merging.append(t)
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
             if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 if capped():
@@ -387,14 +411,12 @@ def main():
                 procs[n], running[n] = start(n, task), task
         if not done and not procs and (stopping or capped() or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
             done = True
-            report('RUN DONE')
+            if 'master' in panes() or queued():
+                report('RUN DONE')
             log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
-        for n in procs:
-            if time.time() - watched.setdefault(n, time.time()) >= WATCH:
-                watched[n] = time.time()
-                threading.Thread(target=watch, args=(n,), daemon=True).start()
+        merging = [t for t in merging if t.is_alive()]
         flush()
-        if done and not queued():
+        if done and not queued() and not merging:
             return  # the master stays up for the next run
         line = sys.stdin.readline() if select.select([sys.stdin], [], [], 10)[0] else None
         if line == '':

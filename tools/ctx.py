@@ -9,8 +9,10 @@
     tools/ctx.py tick <ID>       mark done: [x] here and in plan/<ID>.md, move the line to plan/DONE.md
     tools/ctx.py block <ID> WHY  mark [~] with "BLOCKED: WHY" appended
     tools/ctx.py archive         move every [x] line left in TODO.md to DONE.md (after merges, hand edits)
+    tools/ctx.py brief <ID>      everything a task starts from: its line, plan/<ID>.md, its journal (newest file in
+                                 full), where its files are and their last commits; the runners paste it in the prompt
 """
-import os, re, sys, time
+import os, re, subprocess, sys, time
 
 TTL = 5.0  # seconds a parsed file is trusted before its mtime is checked again
 _cache = {}  # path -> (checked_at, mtime, lines)
@@ -148,6 +150,53 @@ def block(todo, tid, why):
     _write(todo, ls)
 
 
+JOURNAL_MAX = 12000  # chars of the newest journal file put in a brief; the rest is a Read away
+
+
+def brief(root, tid):
+    """The task's starting context in one go, so a session doesn't spend its first turns gathering it."""
+    plan_dir = os.path.join(root, 'plan')
+    paths = [os.path.join(plan_dir, 'TODO.md'), os.path.join(plan_dir, 'DONE.md')]
+    line = next((o for p in paths if (o := section(p, tid))), [])
+    if not line:
+        raise SystemExit(f'ctx: no task {tid!r}')
+    text = '\n'.join(line)
+    out = [f'## Task {tid} (plan/TODO.md)', *line]
+    own = os.path.join(plan_dir, f'{tid}.md')
+    if os.path.exists(own):
+        out += ['', f'## plan/{tid}.md', *lines(own)]
+        text += '\n'.join(lines(own))
+    jdir = os.path.join(root, 'research/journal')
+    named = re.findall(r'\bj: ([\w.-]+)', text)
+    own_j = [d for d in sorted(os.listdir(jdir)) if re.search(rf'-{re.escape(tid.lower())}(-|$)', d.lower())]
+    for j in dict.fromkeys(named + own_j):
+        d = os.path.join(root, 'research/journal', j)
+        if not os.path.isdir(d):
+            continue
+        files = sorted(f for f in os.listdir(d) if f.endswith('.md'))
+        out += ['', f'## Journal research/journal/{j}/: {" · ".join(files)}']
+        if files:
+            body = open(os.path.join(d, files[-1]), encoding='utf-8').read()
+            cut = len(body) > JOURNAL_MAX
+            out += [f'### {files[-1]}' + (f' (first {JOURNAL_MAX} chars)' if cut else ''), body[:JOURNAL_MAX].rstrip()]
+    names = list(dict.fromkeys(re.findall(r'[\w-]+\.(?:rs|py|sh|md|toml)\b', text.split('| t:')[0])))
+    tracked = subprocess.run(['git', 'ls-files'], cwd=root, capture_output=True, text=True).stdout.split()
+    where = [(n, [t for t in tracked if t.endswith('/' + n) or t == n]) for n in names]
+    where = [(n, ts) for n, ts in where if ts and n != f'{tid}.md']
+    if where:
+        out += ['', '## Files on the line, and their last commits']
+        for n, ts in where:
+            if len(ts) > 1:
+                out.append(f'- `{n}`: one of ' + ' · '.join(f'`{t}`' for t in ts))
+                continue
+            for t in ts:
+                log = subprocess.run(['git', 'log', '-3', '--format=%h %ad %s', '--date=short', '--', t], cwd=root,
+                                     capture_output=True, text=True).stdout.strip().splitlines()
+                n_lines = sum(1 for _ in open(os.path.join(root, t), encoding='utf-8', errors='replace'))
+                out += [f'- `{t}` ({n_lines} lines)', *[f'  - {l[:120]}' for l in log]]
+    return out
+
+
 if __name__ == '__main__':
     args = sys.argv[1:]
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
@@ -159,6 +208,8 @@ if __name__ == '__main__':
     if args[:1] == ['block'] and len(args) > 2:
         block(todo, args[1], ' '.join(args[2:]))
         sys.exit(print(f'blocked {args[1]}'))
+    if args[:1] == ['brief'] and len(args) == 2:
+        sys.exit(print('\n'.join(brief(root, args[1]))))
     if args == ['archive']:
         sys.exit(print(f'archived {archive(todo, done)}'))
     paths = [todo, os.path.join(root, 'PLAN.md'), done]

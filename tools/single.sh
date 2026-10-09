@@ -24,8 +24,8 @@ starts copy 6, pine.py and tools/vpad.py talk to it; its save states are a copy,
 anything that drives the game in several steps as one command under \`tools/pcsx2.sh <cmd>\`; each is cut off after \
 $((HST_PCSX2_MAX_HOLD / 60)) min, so keep runs short (record less, split it). Save slot 5 is the only bot-only game; 3 and \
 4 have P1 human and sit waiting for input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Close \
-it with \`tools/pcsx2-hst.sh stop\` (never pkill pcsx2-qt). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, `tools/ctx.py tick <ID>` and commit; if stuck, \
-mark it \`[~]\` per AGENT.md 'If you get stuck', commit, and stop. A usage limit is not stuck: commit what's solid but \
+it with \`tools/pcsx2-hst.sh stop\` (never pkill pcsx2-qt). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, \`tools/done.sh <ID> \"<msg>\"\`; if stuck, \
+\`tools/done.sh <ID> \"<msg>\" --blocked \"<why>\"\` per AGENT.md 'If you get stuck', and stop. A usage limit is not stuck: commit what's solid but \
 don't mark it \`[~]\` or stop PCSX2 — the session waits for the reset and continues the task."
 log=context/notes/overnight.log
 mkdir -p "$(dirname "$log")"
@@ -36,7 +36,10 @@ while grep -q '^- \[ \]' plan/TODO.md; do
   run=$((run + 1))
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' plan/TODO.md | cut -c1-100)" | tee -a "$log"
   id=$(uuidgen)
-  claude "$prompt" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
+  tid=$(grep -m1 -oP '^- \[ \] \*\*\K[^*\s]+' plan/TODO.md)
+  claude "$prompt Your task is $tid; its brief (tools/ctx.py brief $tid) follows, so don't gather it again.
+
+$(tools/ctx.py brief "$tid")" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
     --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it
