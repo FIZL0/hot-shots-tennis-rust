@@ -262,6 +262,14 @@ impl Sound {
         m.music = Some(Music { bank: bank.clone(), seq, channels: [[0, 100, 0x40, 127]; 16], volume, id });
     }
 
+    /// Stops the BGM: its sequence and its sounding notes.
+    pub fn stop_music(&self) {
+        let mut m = self.0.lock().unwrap();
+        if let Some(old) = m.music.take() {
+            m.voices.retain(|v| !(old.id..old.id + 16).contains(&v.2));
+        }
+    }
+
     /// The BGM's sequence volume, its sounding notes included.
     pub fn music_volume(&self, volume: u32) {
         let mut m = self.0.lock().unwrap();

@@ -3,6 +3,8 @@
 //! crate's resources it added go. The window, the pads, the audio device, the GPU and loaded textures stay up. A mode
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
+//! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
+//! time paused, until the next mode's render pipelines are built; the BGM stops with the old mode.
 
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::message::Messages;
@@ -12,6 +14,8 @@ use bevy::input::gamepad::Gamepad;
 use bevy::prelude::*;
 use bevy::window::{Monitor, PrimaryWindow};
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Build = Box<dyn FnOnce(&mut App) + Send + Sync>;
 
@@ -51,9 +55,32 @@ struct Base {
     clear: ClearColor,
 }
 
+/// The loading screen: `up` frames shown before the switch, then `after` frames since it, `idle` of them in a row
+/// with no pipeline compiling.
+#[derive(Component, Default)]
+struct Loading {
+    up: u32,
+    built: bool,
+    after: u32,
+    idle: u32,
+}
+
+/// Render pipelines still compiling (the render world's count, a frame or two behind).
+#[derive(Resource, Clone, Default)]
+struct Compiling(Arc<AtomicUsize>);
+
 pub fn plugin(app: &mut App) {
+    let compiling = Compiling::default();
+    if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        r.insert_resource(compiling.clone()).add_systems(
+            bevy::render::Render,
+            (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| c.0.store(cache.waiting_pipelines().count(), Ordering::Relaxed))
+                .in_set(bevy::render::RenderSystems::Cleanup),
+        );
+    }
     app.init_resource::<Next>()
-        .add_systems(First, (switch, |w: &mut World| run(w, First)).chain())
+        .insert_resource(compiling)
+        .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
         .add_systems(FixedPreUpdate, |w: &mut World| run(w, FixedPreUpdate))
         .add_systems(FixedUpdate, |w: &mut World| run(w, FixedUpdate))
@@ -75,7 +102,23 @@ fn run(world: &mut World, label: impl ScheduleLabel + Clone) {
 }
 
 fn switch(world: &mut World) {
-    let Some(next) = world.resource_mut::<Next>().0.take() else { return };
+    if world.resource::<Next>().0.is_none() {
+        return;
+    }
+    // the loading screen goes up and is presented (pipelined rendering: frames later) before the build blocks
+    let mut q = world.query::<&mut Loading>();
+    match q.iter_mut(world).next() {
+        None => {
+            show_loading(world);
+            return;
+        }
+        Some(mut l) if l.up < 3 => {
+            l.up += 1;
+            return;
+        }
+        Some(mut l) => *l = Loading { up: l.up, built: true, ..default() },
+    }
+    let next = world.resource_mut::<Next>().0.take().expect("checked");
     if !world.contains_resource::<Base>() {
         let entities = world.iter_entities().map(|e| e.id()).collect();
         let resources = world.iter_resources().map(|(i, _)| i.id()).collect();
@@ -102,14 +145,45 @@ fn switch(world: &mut World) {
     world.insert_resource(Running { s, back: next.back });
 }
 
+fn show_loading(world: &mut World) {
+    if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
+        t.pause();
+    }
+    let node = Node { width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() };
+    world.spawn((Loading::default(), node, BackgroundColor(Color::BLACK), GlobalZIndex(i32::MAX))).with_children(|p| {
+        p.spawn((Text::new("Loading..."), TextFont { font_size: bevy::text::FontSize::Vh(5.0), ..default() }, TextColor(Color::WHITE)));
+    });
+}
+
+/// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling
+/// (10 s at most), and starts game time again.
+fn loaded(world: &mut World) {
+    let compiling = world.get_resource::<Compiling>().map_or(0, |c| c.0.load(Ordering::Relaxed));
+    let mut q = world.query::<(Entity, &mut Loading)>();
+    let Some((e, mut l)) = q.iter_mut(world).next().filter(|(_, l)| l.built) else { return };
+    l.after += 1;
+    l.idle = if compiling == 0 { l.idle + 1 } else { 0 };
+    if (l.after < 5 || l.idle < 3) && l.after < 600 {
+        return;
+    }
+    info!("loading screen down after {} frames", l.after);
+    world.entity_mut(e).despawn();
+    if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
+        t.unpause();
+    }
+}
+
 /// Drop the running mode: its entities (except windows, monitors and pads) and the resources of this crate it added.
 fn teardown(world: &mut World) {
     world.remove_resource::<Running>();
+    if let Some(s) = world.get_resource::<crate::audio::Sound>() {
+        s.stop_music();
+    }
     let base = world.remove_resource::<Base>().expect("base");
     let doomed: Vec<Entity> = world
         .iter_entities()
         .filter(|e| !base.entities.contains(&e.id()) && e.get::<ChildOf>().is_none_or(|p| base.entities.contains(&p.parent())))
-        .filter(|e| !(e.contains::<IsResource>() || e.contains::<Window>() || e.contains::<Monitor>() || e.contains::<Gamepad>() || e.contains::<Observer>()))
+        .filter(|e| !(e.contains::<Loading>() || e.contains::<IsResource>() || e.contains::<Window>() || e.contains::<Monitor>() || e.contains::<Gamepad>() || e.contains::<Observer>()))
         .map(|e| e.id())
         .collect();
     for e in doomed {
@@ -164,6 +238,13 @@ mod tests {
         })
     }
 
+    /// Frames until the switch (the loading screen's, if it isn't up yet), the switch's included.
+    fn loading(app: &mut App) {
+        while app.world().resource::<Next>().0.is_some() {
+            app.update();
+        }
+    }
+
     /// Menu → match → (the match's quit) → menu: each start builds fresh (`Local`s, resources, Startup), the old
     /// mode's entities go, the base's stay, and only a mode without a way back quits.
     #[test]
@@ -172,20 +253,25 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::window::WindowPlugin { primary_window: Some(Window::default()), exit_condition: bevy::window::ExitCondition::DontExit, ..default() }, plugin));
         let kept = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<Next>().0 = Some(mode(1));
-        app.update();
+        loading(&mut app);
         app.update();
         assert_eq!(app.world().resource::<Count>().0, 102);
         app.world_mut().resource_mut::<Next>().0 = Some(mode(2).back(mode(1)));
-        app.update();
+        loading(&mut app);
         assert_eq!(app.world().resource::<Count>().0, 201, "fresh resource and Local");
         assert_eq!(app.world_mut().query::<&Thing>().iter(app.world()).count(), 1, "the menu's Thing went");
         app.update();
         app.update();
         assert!(app.should_exit().is_none(), "the match's quit goes back");
-        app.update();
+        loading(&mut app);
         assert_eq!(app.world().resource::<Count>().0, 101, "back in a fresh menu");
         assert_eq!(app.world_mut().query::<&Thing>().iter(app.world()).count(), 1);
         assert!(app.world().get_entity(kept).is_ok());
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(app.world_mut().query::<&Loading>().iter(app.world()).count(), 0, "the loading screen went");
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         assert!(app.world_mut().query::<&Window>().iter(app.world()).next().is_some());
         app.world_mut().write_message(AppExit::Success);
         app.update();

@@ -1040,6 +1040,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
             d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
         }
+        if !m.mods.is_empty() {
+            d.centred(&format!("Tab / Select: {} custom characters", m.mods.len()), 320.0, 159.0, 12.0, WHITE);
+        }
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
     for p in 0..n {
