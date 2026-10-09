@@ -17,3 +17,4 @@ research/journal/**/*
 !research/journal/**/*.md
 /controls.txt
 /dist
+tools/upscale_mods.sh
