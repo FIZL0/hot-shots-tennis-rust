@@ -173,6 +173,11 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
 }
 
 fn main() {
+    // Steam's overlay only draws over X11 windows on a Linux desktop (gamescope, the Deck's session, is X11 already):
+    // started by Steam, use Xwayland. Before any thread exists, so changing the environment is sound.
+    if std::env::var_os("SteamGameId").is_some() && std::env::var_os("DISPLAY").is_some() {
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    }
     let Cli { args, vsync, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(std::env::args().skip(1));
     if upscale {
         textures::init(&args.iso);

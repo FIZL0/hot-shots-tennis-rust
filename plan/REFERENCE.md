@@ -53,10 +53,10 @@ J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net a
 C/Select camera (original/free) · arrows/right stick turn the free camera.
 Rebind any of these in `controls.txt` beside the ISO (written with the defaults on first run). Controllers can be
 plugged and unplugged mid-match: each keeps its slot, a new one takes the first free slot. **Steam / Big Picture**: add the
-`hst` binary as a non-Steam game with launch options `"/path/to/Hot Shots Tennis (USA).iso" %command%`-style args
-(the ISO as first argument); Big Picture and the Deck start it full screen (`--fullscreen` anywhere else), and under
+installer's launcher as a non-Steam game; Big Picture and the Deck start it full screen (`--fullscreen` anywhere else), and under
 Steam Input only Steam's virtual pad is read (the physical pads Steam lists in `SDL_GAMECONTROLLER_IGNORE_DEVICES` are
-skipped), so Steam's per-game layouts apply; the whole menu flow, including Quit, works from the pad. Wide windows show more court at the sides (the game's vertical view kept); the HUD stays on a centred 4:3 screen.
+skipped), so Steam's per-game layouts apply; the whole menu flow, including Quit, works from the pad. Started by Steam the
+window is an X11 (Xwayland) one so the Steam overlay draws over it (Shift+Tab / the Steam button). Wide windows show more court at the sides (the game's vertical view kept); the HUD stays on a centred 4:3 screen.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface. Drawing runs uncapped (the simulation stays a fixed 60 Hz tick, visuals blend the last two ticks); `--vsync` caps it to the display.
 `--mod DIR [--mod-slot N]` puts a standard character mod (`modding/`) in player N (default the first), costume by `--outfits`.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
