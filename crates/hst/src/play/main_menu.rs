@@ -12,7 +12,7 @@
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / Select: a list of names, 2 columns of [`LIST_ROWS`] a
@@ -787,7 +787,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" => Screen::Chars,
+        "chars" | "mods" => Screen::Chars,
         "confirm" => Screen::Confirm,
         _ => Screen::Main,
     };
@@ -797,6 +797,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
         menu.players[0].cursor = 6;
+        menu.custom = screen == "mods" && !menu.mods.is_empty();
+        menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
     }
     commands.insert_resource(menu);
     commands.spawn((super::widescreen::screen_43(), GlobalZIndex(10))).with_children(|p| {

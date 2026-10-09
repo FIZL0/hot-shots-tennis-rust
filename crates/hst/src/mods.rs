@@ -121,9 +121,13 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
 
 /// Every mod under `root` (the select's custom roster, sorted by folder); a broken one is left out with its
 /// `<path>: <reason>` logged.
-/// Folders without a `mod.json` (`texture-replacements`, `textures-src`) aren't mods and are skipped quietly.
+/// A folder without a `mod.json` is searched one level down (a pack, e.g. `mods/hst-mods` → the mods repo's `out/mods`);
+/// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly.
 pub fn list(root: &Path) -> Vec<Mod> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|d| d.join("mod.json").is_file()).collect();
+    let sub = |d: &Path| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).collect::<Vec<_>>();
+    // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods)
+    let mut dirs: Vec<PathBuf> =
+        sub(root).into_iter().flat_map(|d| if d.join("mod.json").is_file() { vec![d] } else { sub(&d) }).filter(|d| d.join("mod.json").is_file()).collect();
     dirs.sort();
     dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }
