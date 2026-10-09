@@ -180,7 +180,9 @@ fn main() {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: "Hot Shots Tennis".into(), present_mode, ..default() }), ..default() }));
+    // a `--shot` window has its own title so the desktop can keep test windows out of the way (tools/shot.sh)
+    let title = if args.shot.is_some() { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(noise::plugin);

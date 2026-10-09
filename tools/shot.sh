@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/shot.sh OUT.png [hst args…] — `hst <iso> … --shot OUT.png` in a floating 1280×720 window (2048×1152 PNG at
 # the desktop's scale) on workspace 1, unfocused and lowered under the user's window, so every shot has the
-# same size whatever else is tiled. The window is titled "Hot Shots Tennis" (like PCSX2's game window): the user's
+# same size whatever else is tiled. The window is titled "Hot Shots Tennis (shot)" (any `--shot` run): the user's
 # ~/.config/hypr/hyprland.lua sends that title and class pcsx2-qt to workspace 1, unfocused, under every other window.
 # HST_ISO overrides the ISO (a symlink in a folder without mods/texture-replacements shows the disc textures: the
 # symlink is kept, not resolved); HST_BIN the binary.

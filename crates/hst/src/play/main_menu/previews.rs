@@ -6,7 +6,8 @@
 //! The cards stack by quad order: every slot's `ZIndex` is its index in the layout, the preview's its `Tex::Preview`'s.
 //! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms), every
 //! character's first costume as soon as the menu opens and the hovered one's next and previous costumes on hover, so
-//! moving the cursor never waits on the disc; a card shows its model once it has loaded. A custom character (a mod)
+//! moving the cursor never waits on the disc; a card shows its model once it has loaded. The worker takes the newest
+//! ask first, so a fresh hover jumps the startup warm-up. A custom character (a mod)
 //! loads on hover only, its hovered and neighbouring costumes.
 //!
 //! `HST_SELECT=c,c,c,c` (with `HST_MENU=chars`) seats all four players on the keyboard hovering those characters (`mN`:
@@ -74,7 +75,17 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
     let path = args.iso.clone();
     std::thread::spawn(move || {
         let Ok(mut iso) = Iso::open(&path) else { return };
-        for ((who, costume), md) in asks {
+        // newest ask first: the card just hovered loads before the startup warm-up and older hovers
+        let mut queue = Vec::new();
+        loop {
+            queue.extend(asks.try_iter());
+            if queue.is_empty() {
+                match asks.recv() {
+                    Ok(a) => queue.push(a),
+                    Err(_) => return,
+                }
+            }
+            let ((who, costume), md) = queue.pop().unwrap();
             let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
             let r = match (who, md) {
                 (Who::Mod(_), Some(md)) => crate::mods::load(&mut iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
@@ -145,7 +156,8 @@ fn sync(
         };
         if let Some((w, costume)) = key {
             let n = menu.costumes(w);
-            for k in [costume, (costume + 1) % n, (costume + n - 1) % n] {
+            // the hovered costume last: the loader takes the newest first
+            for k in [(costume + n - 1) % n, (costume + 1) % n, costume] {
                 loader.want((w, k), modded(w));
             }
         }
