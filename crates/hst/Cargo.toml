@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 hst-data = { path = "../hst-data" }
 hst-sim = { path = "../hst-sim" }
-bevy = "0.19.1"
+# `debug`: type names, which `mode.rs` tells its resources by
+bevy = { version = "0.19.1", features = ["debug"] }
 gltf = { version = "1.4", default-features = false, features = ["extras", "names", "utils"] }
 serde_json = "1"

@@ -52,7 +52,16 @@ fn loss_yaw(n: usize) -> f32 {
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "inspect.wgsl");
-    app.add_plugins((HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), UiMaterialPlugin::<PreviewMaterial>::default())).add_systems(FixedUpdate, tick_uv).add_systems(Update, (place, centre.after(character::animate), uv_offsets));
+    // a mode's plugins build without the render app (`mode.rs`): there the app added these first
+    if !app.world().contains_resource::<Assets<PreviewMaterial>>() {
+        render(app);
+    }
+    app.add_systems(FixedUpdate, tick_uv).add_systems(Update, (place, centre.after(character::animate), uv_offsets));
+}
+
+/// The previews' Bevy plugins, which set up the render app too.
+pub fn render(app: &mut App) {
+    app.add_plugins((HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), UiMaterialPlugin::<PreviewMaterial>::default()));
 }
 
 /// A preview drawn into an image ([`spawn_into`]) on a UI node: the image holds the GS's encoded values (as the scene

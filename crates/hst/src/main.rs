@@ -22,6 +22,7 @@ mod gs;
 mod mods;
 mod hud_gamma;
 mod inspect;
+mod mode;
 mod noise;
 mod play;
 mod sandbox;
@@ -39,7 +40,7 @@ use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Args {
     pub iso: String,
     archives: Vec<String>,
@@ -80,8 +81,17 @@ pub struct Orbit {
     pub pitch: f32,
 }
 
-fn main() {
-    let mut a = std::env::args().skip(1);
+/// The command line: the app's `Args` and the flags that only pick how it starts.
+struct Cli {
+    args: Args,
+    vsync: bool,
+    upscale: bool,
+    viewer_mod: Option<String>,
+    mod_slot: usize,
+    roster: Option<inspect::Roster>,
+}
+
+fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let iso = a.next().expect("usage: hst <iso> <archive.XB>... [--shot out.png]");
     let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles, mut chars) = (Vec::new(), None, None, false, 0, None, false, false, Vec::new());
     let (mut viewer_char, mut viewer_motion) = (None, 0);
@@ -141,18 +151,25 @@ fn main() {
                 let mut iso_ = Iso::open(&iso).expect("open iso");
                 let o = hst_data::texhash::Overrides::scan(std::path::Path::new(&iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()));
                 let n = o.dump(&mut iso_);
-                return println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
+                println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
+                std::process::exit(0);
             }
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
     }
+    let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
+    Cli { args, vsync, upscale, viewer_mod, mod_slot, roster }
+}
+
+fn main() {
+    let Cli { args, vsync, upscale, viewer_mod, mod_slot, roster } = parse(std::env::args().skip(1));
     if upscale {
-        textures::init(&iso);
+        textures::init(&args.iso);
     }
-    // nothing asked for: the main menu, which starts matches as child processes with the flags above
-    let menu = archives.is_empty() && stage.is_none() && !play && !ball && viewer_char.is_none() && sound.is_none() && roster.is_none();
+    // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
+    let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     let mut app = App::new();
     let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { present_mode, ..default() }), ..default() }));
@@ -161,26 +178,55 @@ fn main() {
     app.add_plugins(noise::plugin);
     app.add_systems(Update, character::texture_faces.after(character::animate));
     if menu {
-        app.add_plugins(play::main_menu::plugin);
-    } else if play {
-        app.add_plugins(play::plugin);
-        // `--play --mod DIR [--mod-slot N]`: the mod plays player N (default 1st), its costume by `--outfits`
-        if let Some(dir) = &viewer_mod {
-            let m = mods::read(dir.as_ref()).unwrap_or_else(|e| panic!("{e}"));
-            app.insert_resource(mods::MatchMod { slot: mod_slot, m });
-        }
+        app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(mode::Mode::new(menu_mode))));
+    } else if args.play {
+        add_match(&mut app, viewer_mod, mod_slot);
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);
-    } else if viewer_char.is_some() {
+    } else if args.viewer.is_some() {
         app.add_plugins(character::viewer).insert_resource(character::ViewerMod(viewer_mod));
-    } else if ball {
+    } else if args.ball {
         app.add_plugins(sandbox::plugin);
     }
-    app.insert_resource(Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads })
-        .insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35)))
-        .add_systems(Startup, load)
-        .add_systems(Update, (orbit, auto_shot, clouds))
-        .run();
+    if !menu {
+        app.add_systems(Startup, load);
+    }
+    app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds)).run();
+}
+
+/// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]`: the mod plays player N (default 1st), its costume by
+/// `--outfits`.
+fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize) {
+    app.add_plugins(play::plugin);
+    if let Some(dir) = &viewer_mod {
+        let m = mods::read(dir.as_ref()).unwrap_or_else(|e| panic!("{e}"));
+        app.insert_resource(mods::MatchMod { slot: mod_slot, m });
+    }
+}
+
+/// The main menu as a mode (`mode.rs`).
+pub fn menu_mode(app: &mut App) {
+    app.add_systems(Startup, load).add_plugins(play::main_menu::plugin);
+}
+
+/// The menu's match in this app: `flags` read as on the command line (the settings' `--4x3`, `--vsync`,
+/// `--no-upscale` take effect here); its quit comes back to `back`.
+pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
+    play::main_menu::WIDE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Cli { mut args, vsync, upscale, viewer_mod, mod_slot, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    textures::set(iso, upscale);
+    mode::Mode::new(move |app| {
+        let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
+        for mut w in app.world_mut().query::<&mut Window>().iter_mut(app.world_mut()) {
+            w.present_mode = present_mode;
+        }
+        // the app's own `--shot` goes on through the match
+        let old = app.world().resource::<Args>();
+        (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
+        app.insert_resource(args).add_systems(Startup, load);
+        add_match(app, viewer_mod, mod_slot);
+    })
+    .back(back)
 }
 
 /// Court `n`'s entry list and hole-01 placement records.

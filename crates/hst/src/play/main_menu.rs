@@ -19,7 +19,6 @@ use bevy::window::PrimaryWindow;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::sound;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::controls::{self, Action, Bindings, Seat};
 use super::panel;
@@ -174,7 +173,7 @@ impl Player {
     }
 }
 
-#[derive(Resource, Debug)]
+#[derive(Resource, Clone, Debug)]
 struct Menu {
     screen: Screen,
     sel: usize,
@@ -610,7 +609,7 @@ fn styles(csv: &[u8]) -> [usize; 14] {
     out
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
+fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let mut archives = std::collections::HashMap::new();
     let mut read = |iso: &mut Iso, xb: &str, name: &str| -> Vec<u8> {
@@ -666,7 +665,8 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style: styles(&csv) }));
 
-    let mut menu = Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| Settings::default(), |t| Settings::parse(&t)), ..default() };
+    let fresh = kept.is_none();
+    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| Settings::default(), |t| Settings::parse(&t)), ..default() });
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
         "settings" => Screen::Settings,
@@ -677,7 +677,9 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         "confirm" => Screen::Confirm,
         _ => Screen::Main,
     };
-    if menu.screen != Screen::Main {
+    if !fresh {
+        (menu.screen, menu.sel) = (Screen::Main, 0);
+    } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
         menu.players[0].cursor = 6;
@@ -974,9 +976,9 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
 
 // ---------------------------------------------------------------- systems
 
-/// A running match: set when its process ends.
+/// The menu as a match left it (picks, seats, settings), back on its main screen.
 #[derive(Resource)]
-struct Child(Arc<AtomicBool>);
+struct Kept(Menu);
 
 #[allow(clippy::too_many_arguments)]
 fn step(
@@ -989,8 +991,6 @@ fn step(
     args: Res<Args>,
     art: Option<Res<Art>>,
     sound: Option<Res<Sound>>,
-    child: Option<Res<Child>>,
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -999,17 +999,6 @@ fn step(
             s.play_centre(b, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
         }
     };
-    if let Some(c) = child {
-        if c.0.load(Ordering::Relaxed) {
-            commands.remove_resource::<Child>();
-            if let Ok(mut w) = window.single_mut() {
-                w.visible = true;
-            }
-            menu.screen = Screen::Main;
-            menu.sel = 0;
-        }
-        return;
-    }
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| g.vendor_id() != Some(0x28de)).map(|(e, _)| e).collect();
     pads.sort();
     // the controls screen waiting for a key or button
@@ -1086,25 +1075,13 @@ fn step(
                 Effect::Launch => {
                     let a = menu.args(&pads);
                     info!("starting the match: {}", a.join(" "));
-                    let exe = std::env::current_exe().expect("own executable");
-                    match std::process::Command::new(exe).arg(&args.iso).args(&a).spawn() {
-                        Ok(mut c) => {
-                            let done = Arc::new(AtomicBool::new(false));
-                            let flag = done.clone();
-                            std::thread::spawn(move || {
-                                let _ = c.wait();
-                                flag.store(true, Ordering::Relaxed);
-                            });
-                            commands.insert_resource(Child(done));
-                            if let Ok(mut w) = window.single_mut() {
-                                w.visible = false;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("starting the match: {e}");
-                            menu.screen = Screen::Confirm;
-                        }
-                    }
+                    // the match in this app; its quit comes back to this menu as it is now
+                    let (base, kept) = (args.clone(), menu.clone());
+                    let back = crate::mode::Mode::new(move |app| {
+                        app.insert_resource(base).insert_resource(Kept(kept));
+                        crate::menu_mode(app);
+                    });
+                    commands.insert_resource(crate::mode::Next(Some(crate::match_mode(&args.iso, &a, back))));
                 }
             }
         }

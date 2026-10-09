@@ -39,6 +39,15 @@ pub fn init(iso: &str) {
     });
 }
 
+/// Replacements on or off (the menu's "upscaled textures" setting, per match); on keeps what an earlier `init` read.
+pub fn set(iso: &str, on: bool) {
+    if !on {
+        *STATE.lock().unwrap() = None;
+    } else if STATE.lock().unwrap().is_none() {
+        init(iso);
+    }
+}
+
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, reload)
         .add_systems(PostUpdate, ui_rects);
