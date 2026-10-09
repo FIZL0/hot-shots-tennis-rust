@@ -16,3 +16,4 @@ research/journal/**/*
 !research/journal/**/
 !research/journal/**/*.md
 /controls.txt
+/dist
