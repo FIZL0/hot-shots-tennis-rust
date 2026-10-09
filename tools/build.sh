@@ -6,29 +6,32 @@
 # Windows is cross-compiled with MinGW. One-time setup (Arch):
 #   sudo pacman -S rustup mingw-w64-gcc     # rustup replaces the `rust` package
 #   rustup default stable && rustup target add x86_64-pc-windows-gnu
-# Linux links against glibc 2.31 with cargo-zigbuild so it runs on SteamOS / Steam Deck (SteamOS 3.5 ships 2.37,
-# 3.7 2.41; 2.31 is Valve's Steam Runtime "sniper", so it also runs inside it). One-time setup:
-#   cargo install --locked cargo-zigbuild && pip install --user ziglang   # or: sudo pacman -S zig
+# Linux is built inside Valve's Steam Runtime "sniper" SDK container (glibc 2.31, Debian 11), so it runs on every
+# SteamOS 3.x / Steam Deck (3.5 ships glibc 2.37, 3.7 2.41) and inside the Steam Runtime. One-time setup:
+#   sudo pacman -S docker && sudo systemctl enable --now docker && sudo usermod -aG docker $USER   # then log in again
+# The container's Rust toolchain and cargo cache live in ~/.cache/hst-steamrt; its build in target/steamrt.
 set -e
 cd "$(dirname "$0")/.."
 what=${1:-linux}
 
-glibc=2.31
+sdk=registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
 
 linux() {
-    if ! command -v cargo-zigbuild >/dev/null; then
-        echo "linux build needs (once): cargo install --locked cargo-zigbuild && pip install --user ziglang" >&2
+    if ! docker info >/dev/null 2>&1; then
+        echo "linux build needs docker (once): sudo pacman -S docker; sudo systemctl enable --now docker; sudo usermod -aG docker \$USER; log in again" >&2
         exit 1
     fi
-    # allow-shlib-undefined: the dev machine's libasound/libudev reference its newer glibc; the player's own copies
-    # are loaded at run time, so only the binary's own symbol versions matter (checked below)
-    RUSTFLAGS="-C link-arg=-Wl,--allow-shlib-undefined" \
-        cargo zigbuild --release -p hst --target x86_64-unknown-linux-gnu.$glibc
+    mkdir -p ~/.cache/hst-steamrt
+    docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -v ~/.cache/hst-steamrt:/cache -w /src \
+        -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
+        $sdk sh -ec '
+            [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
+            /cache/cargo/bin/cargo build --release -p hst'
     mkdir -p dist/linux
-    strip -o dist/linux/hst target/x86_64-unknown-linux-gnu/release/hst
-    local need
+    strip -o dist/linux/hst target/steamrt/release/hst
+    local need glibc=2.31
     need=$(objdump -T dist/linux/hst | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-    echo "dist/linux/hst needs $need (target GLIBC_$glibc)"
+    echo "dist/linux/hst needs $need (sniper has GLIBC_$glibc)"
     if [ "$(printf '%s\n' "${need#GLIBC_}" $glibc | sort -V | tail -1)" != $glibc ]; then
         echo "dist/linux/hst needs $need, newer than GLIBC_$glibc: won't start on SteamOS" >&2
         exit 1

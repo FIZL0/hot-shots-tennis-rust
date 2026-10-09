@@ -19,3 +19,11 @@ Docker isn't usable without root here, so tested with the locally installed Stea
 - glibc 2.31 itself: the sniper platform's own `ld-linux-x86-64.so.2` + libc 2.31 (staged under their sonames),
   `LD_BIND_NOW=1`: the new binary resolves every symbol and boots into Bevy; the old dist binary won't load.
 Not tested on real Deck hardware (none here); the binary needs nothing above 2.30 and SteamOS 3.5+ ships ≥ 2.37.
+
+## Follow-up: build in the sniper SDK container
+Docker set up (user in group `docker`). `tools/build.sh linux` now builds inside
+`registry.gitlab.steamos.cloud/steamrt/sniper/sdk` (glibc 2.31, native gcc/ld against sniper's own libs, so no
+`--allow-shlib-undefined`); rustup stable is installed into `~/.cache/hst-steamrt`, build dir `target/steamrt`.
+zigbuild dropped. Result needs GLIBC_2.30; same two checks pass (match in `SteamLinuxRuntime_sniper/run`,
+`context/b82_sniper2.png`; eager load under sniper's glibc 2.31). Gotcha: `rustup update` as a uid with no passwd
+entry fails (`getpwuid_r`) and killed the `sh -e` step; it isn't needed.
