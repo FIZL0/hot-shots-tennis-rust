@@ -192,9 +192,10 @@ fn sync(
             && let Ok((mut node, mut z)) = nodes.get_mut(s.node)
         {
             let [x, y, w, h] = q.dst;
-            node.left = Val::Percent(x / 6.4);
+            let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), q.anchor);
+            node.left = Val::Percent(left);
             node.top = Val::Percent(y / 4.48);
-            node.width = Val::Percent(w / 6.4);
+            node.width = Val::Percent(width);
             node.height = Val::Percent(h / 4.48);
             z.0 = i as i32;
         }

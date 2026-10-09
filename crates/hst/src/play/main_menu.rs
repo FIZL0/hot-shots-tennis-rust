@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use super::controls::{self, Action, Bindings, Seat};
 use super::panel;
+use super::widescreen::Anchor;
 use crate::Args;
 use crate::audio::{Sound, SoundBank};
 
@@ -644,6 +645,8 @@ struct Quad {
     alpha: f32,
     /// Tiled across `dst` at the screen's scale.
     tile: bool,
+    /// Where it goes on a wide window.
+    anchor: Anchor,
 }
 
 /// The disc's text and tables the screens show.
@@ -801,7 +804,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
     }
     commands.insert_resource(menu);
-    commands.spawn((super::widescreen::screen_43(), GlobalZIndex(10))).with_children(|p| {
+    let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    commands.spawn((full, GlobalZIndex(10))).with_children(|p| {
         for i in 0..POOL {
             p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
@@ -816,6 +820,8 @@ struct Draw<'a> {
     /// Frames (60 Hz) since the description bar's text changed, and that text.
     tick: u32,
     said: String,
+    /// Where `q` puts its quads on a wide window.
+    anchor: Anchor,
 }
 
 const WHITE: [f32; 3] = [128.0; 3];
@@ -823,14 +829,16 @@ const DIMMED: [f32; 3] = [80.0; 3];
 
 impl Draw<'_> {
     fn q(&mut self, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: f32) {
-        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false });
+        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor });
     }
 
     /// The screen's wall (tiled) and title bar.
     fn frame(&mut self, title: usize, wall: usize) {
-        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true });
+        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span });
+        self.anchor = Anchor::Span;
         self.q(Tex::Sheet(title), [0.0, 0.0, 512.0, 64.0], [0.0, 0.0, 512.0, 64.0], WHITE, 128.0);
         self.q(Tex::Sheet(title), [480.0, 0.0, 32.0, 64.0], [512.0, 0.0, 128.0, 64.0], WHITE, 128.0);
+        self.anchor = Anchor::Centre;
     }
 
     fn width(&self, s: &str, size: f32) -> f32 {
@@ -883,7 +891,10 @@ impl Draw<'_> {
 
     /// The description bar along the bottom.
     fn info(&mut self, s: &str) {
+        self.anchor = Anchor::Span;
         self.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 404.0, 640.0, 32.0], [0.0; 3], 90.0);
+        // ponytail: the ticker's text stays on the 4:3 screen (it enters at x 656 and clips at 0..640 there)
+        self.anchor = Anchor::Centre;
         self.said = s.into();
         // the boot program's text printer: `ascii.bmp` cell char - 0x1f (21 a row, 12×23), 11×22 texels drawn
         // 11×22 at an 11 px pitch, from y 408; a glyph is skipped once it is off either edge
@@ -940,7 +951,7 @@ fn bar_font(bmp: &[u8]) -> Image {
 }
 
 fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, tick: u32) -> (Vec<Quad>, String) {
-    let mut d = Draw { out: Vec::new(), text, tick, said: String::new() };
+    let mut d = Draw { out: Vec::new(), text, tick, said: String::new(), anchor: Anchor::Centre };
     match m.screen {
         Screen::Main | Screen::Playing => {
             d.frame(0, 5);
@@ -1052,6 +1063,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         let [u, v] = CARDS[p];
         let human = m.seats[p].is_some();
         let picking = picking(p);
+        d.anchor = Anchor::Sides;
         let modded = match m.who(p) {
             Who::Mod(i) => Some(i),
             Who::Disc(_) => None,
@@ -1089,9 +1101,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 d.q(CS0, [2.0, 232.0, 110.0, 24.0], [x + 17.0, y + 96.0, 110.0, 24.0], WHITE, 128.0);
             }
             if !pl.ready && !pl.modded {
+                d.anchor = Anchor::Centre;
                 let [fx, fy] = [GRID[pl.cursor].1, GRID[pl.cursor].2];
                 d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
                 d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
+                d.anchor = Anchor::Sides;
             }
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
             d.text(&format!("{}", pl.costume + 1), x + 6.0, y + 26.0, 18.0, WHITE);
@@ -1101,6 +1115,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         if !human {
             d.text("COM", x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
         }
+        d.anchor = Anchor::Centre;
     }
     match m.who(lead) {
         Who::Mod(i) => {
@@ -1160,10 +1175,12 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     }
     d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [288.0, 110.0, 64.0, 48.0], WHITE, 128.0);
     // the umpire's face at the top right
+    d.anchor = Anchor::Sides;
     d.q(CONFIRM, [10.0 + 88.0 * m.umpire as f32, 394.0, 76.0, 60.0], [540.0, 2.0, 76.0, 60.0], WHITE, 128.0);
     let umpire = text.msg(669 + 2 * m.umpire as usize).to_string();
     let w = d.width(&umpire, 22.0);
     d.text(&umpire, 532.0 - w, 20.0, 22.0, WHITE);
+    d.anchor = Anchor::Centre;
     // court name
     let court = format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court));
     d.text(&court, 30.0, 258.0, 24.0, [128.0, 110.0, 40.0]);
@@ -1341,6 +1358,7 @@ fn draw(
         quads = layout(&menu, &art.2, &bind, &pads, hand_x, 0).0;
     }
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
+    let share = super::widescreen::window_share(&window);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
@@ -1361,9 +1379,10 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        node.left = Val::Percent(x / 6.4);
+        let (left, width) = super::widescreen::place(x, w, share, quad.anchor);
+        node.left = Val::Percent(left);
         node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(w / 6.4);
+        node.width = Val::Percent(width);
         node.height = Val::Percent(h / 4.48);
         *vis = Visibility::Inherited;
     }

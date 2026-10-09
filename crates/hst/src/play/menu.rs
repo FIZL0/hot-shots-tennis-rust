@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::panel::{self, Colours};
+use super::widescreen::Anchor;
 use super::{Game, Pads};
 use crate::Args;
 use crate::audio::{Sound, SoundBank};
@@ -348,7 +349,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     commands.insert_resource(Art(art, bank));
     commands
         .spawn((
-            super::widescreen::screen_43(),
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             GlobalZIndex(10),
             Root,
         ))
@@ -434,6 +435,7 @@ fn draw(
     art: Option<Res<Art>>,
     panel_art: Option<Res<panel::Art>>,
     colours: Option<Res<Colours>>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
     mut others: Query<(Entity, &mut Visibility), Hud>,
     mut hidden: Local<Vec<(Entity, Visibility)>>,
@@ -477,6 +479,7 @@ fn draw(
     } else {
         Vec::new()
     };
+    let share = super::widescreen::window_share(&window);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             *vis = Visibility::Hidden;
@@ -492,9 +495,12 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        node.left = Val::Percent(x / 6.4);
+        // widescreen: the dimmer and the top bar span the window, "Paused" and the rules keep to its left
+        let anchor = if [DIM, BAR, TEXT].contains(&quad.tex) { Anchor::Span } else { Anchor::Centre };
+        let (left, width) = super::widescreen::place(x, w, share, anchor);
+        node.left = Val::Percent(left);
         node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(w / 6.4);
+        node.width = Val::Percent(width);
         node.height = Val::Percent(h / 4.48);
         *vis = Visibility::Inherited;
     }
