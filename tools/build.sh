@@ -6,15 +6,33 @@
 # Windows is cross-compiled with MinGW. One-time setup (Arch):
 #   sudo pacman -S rustup mingw-w64-gcc     # rustup replaces the `rust` package
 #   rustup default stable && rustup target add x86_64-pc-windows-gnu
+# Linux links against glibc 2.31 with cargo-zigbuild so it runs on SteamOS / Steam Deck (SteamOS 3.5 ships 2.37,
+# 3.7 2.41; 2.31 is Valve's Steam Runtime "sniper", so it also runs inside it). One-time setup:
+#   cargo install --locked cargo-zigbuild && pip install --user ziglang   # or: sudo pacman -S zig
 set -e
 cd "$(dirname "$0")/.."
 what=${1:-linux}
 
+glibc=2.31
+
 linux() {
-    cargo build --release -p hst
+    if ! command -v cargo-zigbuild >/dev/null; then
+        echo "linux build needs (once): cargo install --locked cargo-zigbuild && pip install --user ziglang" >&2
+        exit 1
+    fi
+    # allow-shlib-undefined: the dev machine's libasound/libudev reference its newer glibc; the player's own copies
+    # are loaded at run time, so only the binary's own symbol versions matter (checked below)
+    RUSTFLAGS="-C link-arg=-Wl,--allow-shlib-undefined" \
+        cargo zigbuild --release -p hst --target x86_64-unknown-linux-gnu.$glibc
     mkdir -p dist/linux
-    strip -o dist/linux/hst target/release/hst
-    echo "dist/linux/hst"
+    strip -o dist/linux/hst target/x86_64-unknown-linux-gnu/release/hst
+    local need
+    need=$(objdump -T dist/linux/hst | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+    echo "dist/linux/hst needs $need (target GLIBC_$glibc)"
+    if [ "$(printf '%s\n' "${need#GLIBC_}" $glibc | sort -V | tail -1)" != $glibc ]; then
+        echo "dist/linux/hst needs $need, newer than GLIBC_$glibc: won't start on SteamOS" >&2
+        exit 1
+    fi
 }
 
 windows() {
