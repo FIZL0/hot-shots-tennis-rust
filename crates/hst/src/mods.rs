@@ -12,7 +12,8 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use hst_data::{iso::Iso, mtl, xb::Archive};
-use hst_sim::pose::Skeleton;
+use hst_sim::pose::{Clip, Skeleton};
+use hst_sim::ps2;
 
 use crate::character::{self, CharacterData, Joint, Motions, Store};
 
@@ -42,6 +43,8 @@ pub struct Mod {
     pub no_face: bool,
     /// The voice folder, relative to `dir`.
     pub voice: String,
+    /// The mod's own motions `.glb` (§6 `motions`), relative to `dir`: drawn in place of the donor's, same timing.
+    pub motions: Option<String>,
 }
 
 /// The mods playing in a match, by match slot (`--slot-mod N DIR` from the character select, or `--mod DIR
@@ -103,7 +106,13 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         Some("texture") => return Err(err("`face` \"texture\" needs a face.json".into())),
         _ => return Err(err("`face` must be \"morph\", \"texture\" or \"none\"".into())),
     };
+    let motions = match &j["motions"] {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(f) if dir.join(f).is_file() => Some(f.clone()),
+        v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
+    };
     Ok(Mod {
+        motions,
         dir: dir.to_path_buf(),
         id: text("id")?,
         name: text("name")?,
@@ -616,9 +625,72 @@ pub fn load(
 
     // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
+    let visual = match &m.motions {
+        Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions)?,
+        None => HashMap::new(),
+    };
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     let noise = (!swaying.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes: Vec::new(), stance_ball, skeleton, noise, gs, texture_face })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes: Vec::new(), stance_ball, skeleton, noise, gs, texture_face, visual })
+}
+
+/// A mod's own motions (§6 `motions`): each animation, named by its motion (`re_gu`, `sh_f_t`: the disc name
+/// without `_pc%02d`), keys the skeleton's joints by name with their local rotation and translation in game space.
+/// Its keys are spread linearly over the donor clip's frames, so it draws in the donor's time (`drawn`); gameplay
+/// keeps reading the donor's clip.
+fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -> Result<HashMap<usize, Clip>, String> {
+    use hst_data::ani::{Anim, MOTIONS, Track};
+    use gltf::animation::util::ReadOutputs;
+    let (doc, blob) = open(path)?;
+    let ctx = |e: String| format!("{}: {e}", path.display());
+    let mut out = HashMap::new();
+    for a in doc.animations() {
+        let name = a.name().unwrap_or("");
+        let id = MOTIONS.iter().position(|m| m.replace("_pc%02d", "") == name).ok_or_else(|| ctx(format!("animation `{name}` is not a motion name")))?;
+        let d = donor.get(&id).ok_or_else(|| ctx(format!("`{name}`: the donor has no clip {id:#x} to time it by")))?;
+        let end = ps2::mul(d.length, d.ticks_per_frame).round();
+        let mut keys: Vec<(&gltf::animation::Channel, Vec<f32>)> = Vec::new();
+        let channels: Vec<_> = a.channels().collect();
+        for c in &channels {
+            keys.push((c, c.reader(|_| Some(&blob[..])).read_inputs().ok_or_else(|| ctx(format!("`{name}`: a channel has no times")))?.collect()));
+        }
+        let span = keys.iter().flat_map(|k| k.1.iter().copied()).fold(0.0f32, f32::max);
+        let mut tracks: Vec<Track> = Vec::new();
+        for (c, times) in keys {
+            let joint = c.target().node().name().unwrap_or("").replace(' ', "");
+            if !skeleton.names.contains(&joint) {
+                return Err(ctx(format!("`{name}` keys `{joint}`, not a skeleton joint")));
+            }
+            let tick = |t: f32| if span > 0.0 { (t / span * end).round() as i32 } else { 0 };
+            let values: Vec<[f32; 4]> = match c.reader(|_| Some(&blob[..])).read_outputs() {
+                // a rotation key is the conjugate of the local rotation (`ani`)
+                Some(ReadOutputs::Rotations(r)) => r.into_f32().map(|[x, y, z, w]| [-x, -y, -z, w]).collect(),
+                Some(ReadOutputs::Translations(t)) => t.map(|[x, y, z]| [x, y, z, 1.0]).collect(),
+                _ => continue,
+            };
+            let mut list: Vec<(i32, [f32; 4])> = Vec::new();
+            for (t, v) in times.iter().zip(values) {
+                match list.last_mut() {
+                    Some(l) if l.0 == tick(*t) => l.1 = v,
+                    _ => list.push((tick(*t), v)),
+                }
+            }
+            let k = tracks.iter().position(|t| t.name == joint).unwrap_or_else(|| {
+                tracks.push(Track { name: joint.clone(), length: 0.0, rotation: vec![], position: vec![], parent: None });
+                tracks.len() - 1
+            });
+            match c.target().property() {
+                gltf::animation::Property::Rotation => tracks[k].rotation = list,
+                _ => tracks[k].position = list,
+            }
+        }
+        let clip = Clip::new(skeleton, &Anim { ticks_per_frame: d.ticks_per_frame as i32, tracks });
+        if clip.length != d.length {
+            return Err(ctx(format!("`{name}` spans {} frames, the donor's {}", clip.length, d.length)));
+        }
+        out.insert(id, clip);
+    }
+    Ok(out)
 }
 
 /// A mesh's `extras.noise` deformers (period, rate, amplitudes), as a `.NOI` gives them.
@@ -779,6 +851,48 @@ mod tests {
             }
         }
         assert!(shown > 0, "the donor's faces never show an expression");
+    }
+
+    /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's, on the donor's clip
+    /// lengths, while everything gameplay reads (the donor's clips) is what it is without them.
+    #[test]
+    fn own_motions_are_visual_only() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/getagrip_pc00_emi");
+        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/getagrip_pc00_emi, skipped") };
+        assert_eq!(m.motions.as_deref(), Some("motions.glb"));
+        let mut s = Stores(default(), default(), default(), default());
+        let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let plain = load(&mut iso, &Mod { motions: None, ..m.clone() }, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        assert!(plain.visual.is_empty());
+        let mut ids: Vec<usize> = c.visual.keys().copied().collect();
+        ids.sort();
+        assert_eq!(ids, [0x2c, 0x2d, 0x2e, 0x2f]);
+        for (id, clip) in &c.motions {
+            let p = &plain.motions[id];
+            assert_eq!(clip.length, p.length);
+            for k in 0..4 {
+                let t = p.length * k as f32 / 4.0;
+                assert!(clip.locals(&c.skeleton, t) == p.locals(&plain.skeleton, t), "gameplay clip {id:#x} changed");
+            }
+        }
+        assert_eq!((c.pelvis.clone(), c.paths.len()), (plain.pelvis.clone(), plain.paths.len()));
+        for id in ids {
+            let (v, d) = (&c.visual[&id], &c.motions[&id]);
+            assert_eq!(v.length, d.length);
+            assert!(std::ptr::eq(c.drawn(id).unwrap(), v));
+            let at = |clip: &Clip, t: f32| -> Vec<Vec3> {
+                model(&c.skeleton, &clip.locals(&c.skeleton, t)).iter().map(|m| Vec3::new(m[3][0], m[3][1], m[3][2])).collect()
+            };
+            let mut moved = 0.0f32;
+            for k in 0..=8 {
+                let t = v.length * k as f32 / 8.0;
+                let (a, b) = (at(v, t), at(d, t));
+                assert!(a.iter().all(|p| p.is_finite() && p.length() < 2.5), "{id:#x} at {t}: {a:?}");
+                moved = moved.max(a.iter().zip(&b).map(|(a, b)| (*a - *b).length()).fold(0.0, f32::max));
+            }
+            assert!(moved > 0.1, "{id:#x} draws like the donor's");
+        }
     }
 
     /// A packaged rerig.py mod (Fore!'s Phoebe on donor 6) plays the forehand and run without breaking up.

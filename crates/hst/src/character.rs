@@ -118,6 +118,9 @@ pub struct CharacterData {
     pub gs: HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
     /// A mod's texture face (standard §4b), if it swaps whole-face textures instead of morphing.
     pub texture_face: Option<TextureFace>,
+    /// A mod's own clips (standard §6 `motions`), by motion number, drawn in place of `motions`' but never read by
+    /// gameplay: each is retimed onto the donor clip's length, so timing, events and the sim stay the donor's.
+    pub visual: HashMap<usize, Clip>,
 }
 
 /// A texture face (standard §4b): the face materials show the strongest channel's whole-face texture above 0.5,
@@ -206,6 +209,11 @@ fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &im
 impl CharacterData {
     pub fn joint(&self, name: &str) -> Option<usize> {
         self.joints.iter().position(|j| j.name == name)
+    }
+
+    /// The clip drawn for motion `id`: the mod's own if it has one, else the gameplay clip.
+    pub fn drawn(&self, id: usize) -> Option<&Clip> {
+        self.visual.get(&id).or_else(|| self.motions.get(&id))
     }
 }
 
@@ -454,7 +462,7 @@ pub fn load_disc(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
@@ -667,6 +675,7 @@ pub fn load_npc(
         noise: None,
         gs,
         texture_face: None,
+        visual: HashMap::new(),
     })
 }
 
@@ -704,7 +713,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
 /// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
 pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights)>, mut joints: Query<&mut Transform>) {
     for (rig, motion, mut weights) in &mut rigs {
-        let fading = rig.data.motions.get(&(motion.fade.id as usize)).filter(|_| motion.fade.clip);
+        let fading = rig.data.drawn(motion.fade.id as usize).filter(|_| motion.fade.clip);
         // the face: each bound track's weight at the face clock's last sampled time (unbound targets 0)
         // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
         let w = weights.weights_mut();
@@ -715,7 +724,7 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
                 w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
             }
         }
-        let Some(new) = rig.data.motions.get(&motion.id) else { continue };
+        let Some(new) = rig.data.drawn(motion.id) else { continue };
         // between the last two ticks' sampled times (across a loop's wrap)
         let (a, b) = (motion.prev, motion.clock.sampled);
         let b = if b < a && motion.clock.looping { b + new.length } else { b };

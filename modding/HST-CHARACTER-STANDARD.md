@@ -18,6 +18,7 @@ mods/<id>/
                            source game's racket, keeping its grip on the hand)
   textures/upscaled/       optional: same file names as the PNGs embedded in the .glb, used when the
                            global "upscaled textures" switch is on (B40); missing files fall back to native
+  motions.glb              optional: the mod's own motions, drawn in place of the donor's (§6 `motions`)
   voice/<program>_<key>.wav  §5
   face.json                only for texture faces (§4b)
 ```
@@ -145,13 +146,23 @@ Get a Grip's labelled cues map almost 1:1: smash→0, swing→1, receive→3, po
 - `ai_row`: the AIParam.csv row (and second-toss pick) the computer plays this character with; may differ from
   `donor` (e.g. the HST character of the same タイプ while the body donor is the nearest height).
 - `hand`: `right`/`left` (the game mirrors left-handers, like Carol and Will).
+- `motions` (optional): a `.glb` in the folder whose animations replace the donor's clips **on screen only**.
+  Each animation is named by the motion without `_pc%02d` (`re_gu`, `re_di`, `re_gu_set`, `re_di_set`, `mo_ad00`,
+  `sh_f_t`, … as `hst_data::ani::MOTIONS`, one the donor has) and keys the costume's joints by name with their
+  local rotation and translation, in the costume's own terms (the costume's node tree, no meshes needed). HST
+  spreads its keys linearly over the donor clip's length, so time it to that length; gameplay (clip lengths, the
+  arm table, serve toss, body hits, root paths, cut-away cameras) keeps reading the donor's clip, and a match
+  plays out exactly as without it. Unkeyed joints hold their rest; the left-hand mirror applies as to the donor's.
+  HST-MODS `tools/rerig/motions.py` retargets a source game's motions (per-joint world rotation change from the shared bind pose; root
+  from the pelvis, scaled by hip height; intro then loop played at 60 Hz to fill the donor's frames).
 - `face`: `morph` (§4a channels), `texture` (§4b, needs `face.json`) or `none` (no face animation).
 - The HST loader (`crates/hst/src/mods.rs`) rejects a mod with `<path>: <reason>` when the manifest is off
   (`standard` ≠ 1, a missing costume, `donor`/`base`/`ai_row` outside 0–13, `hand` not right/left, an `override`
-  key that is no TParam column) or a costume fails §7's FAIL checks; WARN checks are logged. Buffers and images
+  key that is no TParam column, a `motions` file that is missing, names no motion the donor has, keys a
+  non-joint or does not span the donor's frames) or a costume fails §7's FAIL checks; WARN checks are logged. Buffers and images
   must be embedded in the `.glb`; it skips glTF accessor validation (older rerig output lacks POSITION min/max).
 - Optional, informational: `donor_why`, `size_why` (how the height and head were set), `racket_why`, `source_stats` (the source game's raw stats),
-  `params_why` (per overridden column: source stat, value, rank → HST value), `ai_row_why`. A loader ignores unknown keys.
+  `params_why` (per overridden column: source stat, value, rank → HST value), `ai_row_why`, `motions_why`. A loader ignores unknown keys.
 
 ## 7. Conformance
 

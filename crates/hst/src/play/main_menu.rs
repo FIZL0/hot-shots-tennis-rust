@@ -1578,6 +1578,7 @@ mod tests {
             texture_face: false,
             no_face: false,
             voice: "voice/".into(),
+            motions: None,
         };
         let ok = press(|p| &mut p.ok);
         let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };
