@@ -21,11 +21,11 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
 dumps, save states, recordings) and lists the tool pitfalls.
 
 ## Plan
-`PLAN.md` is the index: rules, the ordered task list (each line names the files to open) and a code map. "continue"
-means: take the first `- [ ]` line there, read only `plan/<ID>.md`, its listed files and journal, port + verify,
-tick it in PLAN.md, commit. Don't grep the repo for where things live — the code map says. Background (game
-control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md) ·
-`"when blocked"` (a section) · `-f FILE <name>` (any markdown).
+`PLAN.md` holds the rules and a code map; the ordered open tasks are in `plan/TODO.md` (each line names the files to
+open), finished ones in `plan/DONE.md`. "continue" means: `tools/ctx.py next`, read only `tools/ctx.py <ID>`, its
+listed files and journal, port + verify, `tools/ctx.py tick <ID>` (moves it to DONE.md), commit. Don't grep the repo for where things live — the code map says. Background (game
+control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md, else
+its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any markdown) · `tick <ID>` · `block <ID> <why>`.
 
 ## Cheap context
 - Decompile: `research/fn.sh <addr>` (one function), `research/xref.py <addr>` (callers/callees),
@@ -34,7 +34,7 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
 - Hand anything mechanical to the `chore` subagent instead of doing it yourself: journal write-ups from your notes,
-  ticking/blocking lines in PLAN.md, checking a capture, the final test run + commit. Keep porting, the test loop,
+  ticking/blocking tasks (`tools/ctx.py tick`/`block`), checking a capture, the final test run + commit. Keep porting, the test loop,
   decompile reading and gameplay decisions.
 
 ## Controlling the game
@@ -48,5 +48,5 @@ close yours: `tools/pcsx2.sh tools/pcsx2-hst.sh stop` (waits for anything mid-us
 ## If you get stuck, move on
 Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something
 needs the human, or ~20 minutes go by without progress: write what happened and what you tried in the prompt's
-journal, mark it `- [~] … BLOCKED: <one-line reason>` in PLAN.md, commit what's solid, and start the next open
+journal, `tools/ctx.py block <ID> <one-line reason>`, commit what's solid, and start the next open
 prompt. Don't touch PCSX2 while a capture (`pgrep -f record_p2m2`) is running.

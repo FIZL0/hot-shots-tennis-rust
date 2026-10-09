@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Read one part of PLAN.md (or another markdown file) by name instead of the whole file.
+"""Read one part of the plan by name instead of whole files, and tick/block tasks.
 
-    tools/ctx.py                 index: every heading and prompt id, one line each
-    tools/ctx.py next            the first open prompt, with its sub-items
-    tools/ctx.py <ID>            a task's full text, plan/<ID>.md (N1e, F0)
-    tools/ctx.py <name>          a heading's section (case-insensitive substring) or an index line by id
+    tools/ctx.py                 index of plan/TODO.md: every heading and task id, one line each
+    tools/ctx.py next            the first open task, with its sub-items
+    tools/ctx.py <ID>            a task's full text: plan/<ID>.md, else its line in TODO.md or DONE.md
+    tools/ctx.py <name>          a heading's section (case-insensitive substring) in TODO.md, PLAN.md or DONE.md
     tools/ctx.py -f FILE <name>  same, on another markdown file
+    tools/ctx.py tick <ID>       mark done: [x] here and in plan/<ID>.md, move the line to plan/DONE.md
+    tools/ctx.py block <ID> WHY  mark [~] with "BLOCKED: WHY" appended
+    tools/ctx.py archive         move every [x] line left in TODO.md to DONE.md (after merges, hand edits)
 """
 import os, re, sys, time
 
@@ -75,16 +78,99 @@ def section(path, name):
     return []
 
 
+def _write(path, ls):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(ls).rstrip('\n') + '\n')
+    os.replace(tmp, path)
+    _cache.pop(path, None)
+
+
+def _find(ls, tid):
+    for i, line in enumerate(ls):
+        m = ITEM.match(line)
+        if m and not m.group(1) and m.group(3).rstrip('.') == tid:
+            return i
+    raise SystemExit(f'ctx: no task {tid!r}')
+
+
+def _mark(ls, i, box):
+    ls[i] = re.sub(r'^- \[.\]', f'- [{box}]', ls[i])
+
+
+def archive(todo, done):
+    """Move every top-level [x] task (with its sub-lines) from todo into done, under the same ### heading."""
+    ls, dl, sec, moved = list(lines(todo)), list(lines(done)), '', 0
+    i = 0
+    while i < len(ls):
+        if _level(ls[i]):
+            sec = ls[i]
+        m = ITEM.match(ls[i])
+        if not (m and not m.group(1) and m.group(2) == 'x'):
+            i += 1
+            continue
+        block = _item_block(ls, i)
+        del ls[i:i + len(block)]
+        if i < len(ls) and not ls[i].strip() and i and not ls[i - 1].strip():
+            del ls[i]  # don't leave a double blank line
+        h = sec or '### (no section)'
+        if h not in dl:
+            dl += ['', h, '']
+        j = dl.index(h) + 1
+        while j < len(dl) and not _level(dl[j]):
+            j += 1
+        while dl[j - 1].strip() == '':
+            j -= 1
+        dl[j:j] = block
+        moved += 1
+    if moved:
+        _write(done, dl)
+        _write(todo, ls)
+    return moved
+
+
+def tick(todo, done, tid, plan_dir=None):
+    ls = list(lines(todo))
+    _mark(ls, _find(ls, tid), 'x')
+    _write(todo, ls)
+    own = plan_dir and os.path.join(plan_dir, f'{tid}.md')
+    if own and os.path.exists(own):
+        _write(own, [re.sub(rf'^(\s*)- \[[ ~]\] \*\*{re.escape(tid)}\b', rf'\1- [x] **{tid}', l) for l in lines(own)])
+    return archive(todo, done)
+
+
+def block(todo, tid, why):
+    ls = list(lines(todo))
+    i = _find(ls, tid)
+    _mark(ls, i, '~')
+    end = i + len(_item_block(ls, i)) - 1
+    ls[end] += f' BLOCKED: {why}'
+    _write(todo, ls)
+
+
 if __name__ == '__main__':
     args = sys.argv[1:]
-    path = os.path.join(os.path.dirname(__file__), '..', 'PLAN.md')
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    plan_dir = os.path.join(root, 'plan')
+    todo, done = os.path.join(plan_dir, 'TODO.md'), os.path.join(plan_dir, 'DONE.md')
+    if args[:1] == ['tick'] and len(args) == 2:
+        tick(todo, done, args[1], plan_dir)
+        sys.exit(print(f'ticked {args[1]}, moved to plan/DONE.md'))
+    if args[:1] == ['block'] and len(args) > 2:
+        block(todo, args[1], ' '.join(args[2:]))
+        sys.exit(print(f'blocked {args[1]}'))
+    if args == ['archive']:
+        sys.exit(print(f'archived {archive(todo, done)}'))
+    paths = [todo, os.path.join(root, 'PLAN.md'), done]
     if args[:1] == ['-f']:
-        path, args = args[1], args[2:]
-    task = os.path.join(os.path.dirname(__file__), '..', 'plan', f'{args[0]}.md') if args else ''
-    if path.endswith('PLAN.md') and os.path.exists(task):
+        paths, args = [args[1]], args[2:]
+    task = os.path.join(plan_dir, f'{args[0]}.md') if args else ''
+    if len(paths) > 1 and os.path.exists(task):
         out = lines(task)
+    elif not args:
+        out = index(paths[0])
     else:
-        out = section(path, args[0]) if args else index(path)
+        out = next((o for p in paths if (o := section(p, args[0]))), [])
     if not out:
         sys.exit(f'ctx: no section or prompt named {args[0]!r}; run tools/ctx.py for the index')
     print('\n'.join(out))

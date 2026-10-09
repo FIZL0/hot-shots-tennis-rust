@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
-sessions going, each on its own PLAN.md task in its own git worktree, and merges each finished branch into main.
+sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
     tmux new -s hst tools/parallel.sh [N] [p|d]      # e.g. 5 p; progress: context/notes/overnight.log, slot logs beside it
 
@@ -10,7 +10,7 @@ runner's session (the master has its own window): watch or type to any of them. 
 join/break/swap them freely. Like single.sh, tools/agent-stop.sh ends a session after HST_IDLE (90) idle seconds; typing
 into a finished session cancels that, so /exit it yourself or the runner never merges it.
 
-Picking: open `- [ ] **ID**` lines under ## Tasks, in order, skipping split parents, `(after X)` while X is open,
+Picking: open `- [ ] **ID**` lines in plan/TODO.md, in order, skipping split parents, `(after X)` while X is open,
 Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Mode p (priority):
 each free slot takes the next such task, exactly in order, files may overlap. Mode d (different): two running tasks
 never share a file named on their lines, except SHARED (play.rs: nearly every task names it); the first open "Next"
@@ -53,8 +53,8 @@ runs short (record less, split it). Save slot 5 is the only bot-only game; 3 and
 input unless you drive it with tools/vpad.py in the same tools/pcsx2.sh call. Other agents edit play.rs at the same \
 time: keep your play.rs changes local (add functions, systems or new modules; don't move, rename or reformat existing \
 code) so the merges stay clean. Close it with `tools/pcsx2-hst.sh stop` \
-(never pkill pcsx2-qt: the other agents' copies are running too). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, tick \
-{id} in PLAN.md and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
+(never pkill pcsx2-qt: the other agents' copies are running too). In the task's journal entry, list under 'Not verified / not 1:1' everything you couldn't verify against the original or couldn't match exactly, each with the reason (or 'none'). When done, \
+`tools/ctx.py tick {id}` and commit; if stuck, mark it `[~]` per AGENT.md 'If you get stuck', commit, and stop. A usage limit \
 is not stuck: commit what's solid but don't mark it `[~]` or stop PCSX2 — the session waits for the reset and continues \
 the task."""
 
@@ -70,16 +70,14 @@ def log(msg):
 
 
 def tasks():
-    """Open tasks in PLAN.md order: (id, section, files)."""
-    lines = git('show', 'main:PLAN.md').stdout.splitlines()
+    """Open tasks in plan/TODO.md order: (id, section, files)."""
+    lines = git('show', 'main:plan/TODO.md').stdout.splitlines()
     open_ids = {m.group(1) for l in lines if (m := TASK.match(l))}
-    out, section, inside = [], '', False
+    out, section = [], ''
     for l in lines:
-        if l.startswith('## '):
-            inside = l.startswith('## Tasks')
-        elif l.startswith('### '):
+        if l.startswith('### '):
             section = l[4:]
-        elif inside and (m := TASK.match(l)) and not section.startswith('Stretch') and 'split into' not in l:
+        elif (m := TASK.match(l)) and not section.startswith('Stretch') and 'split into' not in l:
             if any(o != m.group(1) and o.startswith(m.group(1)) and o[len(m.group(1))].isdigit() != m.group(1)[-1].isdigit()
                    for o in open_ids):
                 continue  # a parent: its open subtasks run instead
@@ -172,14 +170,15 @@ def start(n, task):
 
 
 MASTER = """You are the master of a parallel unattended run (tools/parallel.sh): nobody will answer \
-questions. Up to {slots} agents work on PLAN.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
+questions. Up to {slots} agents work on plan/TODO.md tasks in worktrees ../<repo>-slots/sN, each on branch task/<ID>. The \
 runner clears your context and sends you these instructions with one message at a time: `REPORT <ID> slot <n>: \
 <session, its commits>` as each one ends. Earlier reports' outcomes are at the end of context/notes/master.md. Handle the \
 report in this main checkout:
-1. If main has uncommitted changes that aren't yours (the user edits PLAN.md), `git stash` them and pop them back after.
+1. If main has uncommitted changes that aren't yours (the user edits PLAN.md or plan/TODO.md), `git stash` them and pop them back after.
 2. `git merge --no-edit task/<ID>` (no commits on it: just note that). Resolve every conflict keeping both sides' \
-intent (read both sides' commits and journal; tasks run in parallel, so PLAN.md ticks and new struct fields from both \
-belong). Then tools/check.sh; fix what the merge broke, never the task's own work; commit.
+intent (read both sides' commits and journal; tasks run in parallel, so plan/TODO.md + DONE.md moves and new struct fields from both \
+belong; a branch that still ticks/blocks in PLAN.md's old task list: redo that as `tools/ctx.py tick|block <ID>`). \
+Then `tools/ctx.py archive` (moves any [x] the merge brought into plan/TODO.md to plan/DONE.md), tools/check.sh; fix what the merge broke, never the task's own work; commit.
 3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, leave the branch and say why.
 4. Append one line to context/notes/master.md: <ID>: merged / conflicts fixed (what) / left (why), the task's state \
 (ticked, part, blocked) and anything the human must do.
