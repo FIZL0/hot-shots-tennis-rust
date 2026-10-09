@@ -3,5 +3,5 @@
 #   N  sessions at once (default 3)
 #   p  priority: tasks exactly in plan/TODO.md order, the next open one to each free slot, files may overlap
 #   d  different (default): the first open "Next" task leads, the others pick later tasks that touch different files
-#   f  force: keep starting tasks past 90% weekly usage (WEEKLY_MAX in parallel.py)
+#   f  force: keep starting tasks past 94% weekly usage (WEEKLY_MAX in parallel.py)
 exec "$(dirname "$(realpath "$0")")/parallel.py" "$@"

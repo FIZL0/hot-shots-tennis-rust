@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 90% weekly usage; progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 94% weekly usage; progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -41,8 +41,8 @@ MODE = next((a for a in _args if a in ('p', 'd')), 'd')
 FORCE = 'f' in _args
 if any(a not in ('p', 'd', 'f') and not a.isdigit() for a in _args) or SLOTS < 1:
     raise SystemExit('usage: tools/parallel.sh [N] [p|d] [f]   (N sessions, p = priority order, d = different files, '
-                     'f = ignore the 90% weekly usage cap)')
-WEEKLY_MAX = 90  # % of the 7-day limit; at or past it no new task starts (unless f)
+                     'f = ignore the 94% weekly usage cap)')
+WEEKLY_MAX = 94  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
