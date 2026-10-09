@@ -7,8 +7,7 @@ Not verified / not 1:1
 - Scaling of modded characters to HST's Bip01 height range (0.58–0.95 m) has not been fully implemented.
   The source character heights from each game's data (e.g. Get a Grip source_stats Height in cm, Fore heights,
   Out of Bounds heights) are not automatically mapped to the HST range.
-  A `scale` field has been added to the mod standard documentation, and the loader reads it, but the actual
-  scaling of joint rest translations and mesh vertex positions by `scale` is not yet wired into the load path.
+  R1 correction: no `scale` field exists in the standard or the loader (the commit touched only PLAN.md and this note).
   TParam reach/height values are also not automatically scaled.
 - Exact height mappings per source game and per sex (women vs men) are not defined; the task requires
   taking each source character's height from its game's data and scaling accordingly, but the concrete
