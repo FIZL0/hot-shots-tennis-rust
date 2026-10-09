@@ -1433,7 +1433,11 @@
     "joy_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 155,
+   "model_type": 0,
+   "head_ratio": 0.5401
   },
   {
    "index": 1,
@@ -1450,7 +1454,11 @@
     "joy_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 165,
+   "model_type": 0,
+   "head_ratio": 0.5128
   },
   {
    "index": 2,
@@ -1469,7 +1477,11 @@
     "smile_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 160,
+   "model_type": 0,
+   "head_ratio": 0.5347
   },
   {
    "index": 3,
@@ -1488,7 +1500,11 @@
     "niya_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 180,
+   "model_type": 3,
+   "head_ratio": 0.5204
   },
   {
    "index": 4,
@@ -1507,7 +1523,11 @@
     "smile_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 160,
+   "model_type": 0,
+   "head_ratio": 0.5533
   },
   {
    "index": 5,
@@ -1526,7 +1546,11 @@
     "sorrow_mouth",
     "tukare_eye",
     "tukare_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 130,
+   "model_type": 1,
+   "head_ratio": 0.9963
   },
   {
    "index": 6,
@@ -1545,7 +1569,11 @@
     "sorrow_eye",
     "sorrow_mouth",
     "wink_eye"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 150,
+   "model_type": 0,
+   "head_ratio": 0.768
   },
   {
    "index": 7,
@@ -1561,7 +1589,11 @@
     "joy_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 185,
+   "model_type": 2,
+   "head_ratio": 0.5462
   },
   {
    "index": 8,
@@ -1580,7 +1612,11 @@
     "sorrow_eye",
     "sorrow_mouth",
     "wink_eye"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 165,
+   "model_type": 0,
+   "head_ratio": 0.5901
   },
   {
    "index": 9,
@@ -1600,7 +1636,11 @@
     "sorrow_eye",
     "sorrow_eye2",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 170,
+   "model_type": 0,
+   "head_ratio": 0.5122
   },
   {
    "index": 10,
@@ -1620,7 +1660,11 @@
     "sorrow_eye",
     "sorrow_mouth",
     "wink_eye"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 170,
+   "model_type": 4,
+   "head_ratio": 0.4533
   },
   {
    "index": 11,
@@ -1637,7 +1681,11 @@
     "joy_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 180,
+   "model_type": 5,
+   "head_ratio": 0.5362
   },
   {
    "index": 12,
@@ -1657,7 +1705,11 @@
     "sorrow_eye",
     "sorrow_mouth",
     "wink_eye"
-   ]
+   ],
+   "sex": "f",
+   "height_cm": 165,
+   "model_type": 0,
+   "head_ratio": 0.5504
   },
   {
    "index": 13,
@@ -1673,7 +1725,11 @@
     "joy_mouth",
     "sorrow_eye",
     "sorrow_mouth"
-   ]
+   ],
+   "sex": "m",
+   "height_cm": 160,
+   "model_type": 6,
+   "head_ratio": 0.7425
   }
  ]
 }

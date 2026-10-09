@@ -12,6 +12,10 @@ mods/<id>/
   mod.json                 manifest (§6)
   model/<costume>.glb      one per costume, §2–§4 (c00 required)
   racket.glb               optional rigid racket in Racket-joint space (else the donor's)
+                           (metres; vertices baked in that space: the loader reads POSITION/NORMAL/UV/
+                           COLOR as stored and ignores node transforms. HST's rackets are 0.944 m butt to
+                           tip along +Y, strings facing ±Z, grip 0–0.32 m; `racket.py` makes one from a
+                           source game's racket, keeping its grip on the hand)
   textures/upscaled/       optional: same file names as the PNGs embedded in the .glb, used when the
                            global "upscaled textures" switch is on (B40); missing files fall back to native
   voice/<program>_<key>.wav  §5
@@ -47,6 +51,16 @@ removed): `Bip01` (root) › `Bip01Pelvis` › `Bip01Spine` › `Spine1` › `Sp
 - **Proportions are free.** The game scales motion positions to the model: `Bip01` by its rest height |y|,
   others by rest bone length, `Bip01Pelvis` not at all. HST's own range: `Bip01` height 0.58–0.95 m (see
   `characters` in the JSON). Keep `TParam` reach values (§6) consistent with the arm length.
+- **Size to HST's cast** (`HST-MODS tools/rerig/sizing.py`, applied at packaging by re-rigging, so no mod.json field):
+  `Bip01` height = HST's metres per cm for the character's sex (median `bip01_height / height_cm` over HST's
+  standard bodies, `model_type` 0/4/5 in the JSON: women 0.005184, men 0.005322) × the source's own height in cm,
+  then one factor per source game (≤ 1) so its tallest is 0.95 m; relative heights stay the source's. Chibi
+  sources also shrink each head about `Bip01Neck` by its own factor: half way from 1 to the factor that would bring
+  that character's head ratio ((top of head mesh − neck) / `Bip01` height, smallest over its costumes so a hat
+  doesn't count) to HST's standard-body median (0.538), never above 1; the full match looked small-headed. A
+  character the user judged right unshrunk keeps 1 (`HEAD_KEEP`; Get a Grip's Helghast). Get a Grip's factors run
+  0.72–0.80, in `out/rerig/getagrip/sizing.json` and each mod's `size_why`. The donor is then the nearest
+  `Bip01` height among HST's same-sex standard bodies.
 - **Extra joints are allowed** (hair, skirts, earrings, accessories) anywhere below the core. HST motions don't
   drive them; they follow their parent, plus the sway of §3a.
 
@@ -130,6 +144,8 @@ Get a Grip's labelled cues map almost 1:1: smash→0, swing→1, receive→3, po
   (`standard` ≠ 1, a missing costume, `donor`/`base`/`ai_row` outside 0–13, `hand` not right/left, an `override`
   key that is no TParam column) or a costume fails §7's FAIL checks; WARN checks are logged. Buffers and images
   must be embedded in the `.glb`; it skips glTF accessor validation (older rerig output lacks POSITION min/max).
+- Optional, informational: `donor_why`, `size_why` (how the height and head were set), `racket_why`. A loader
+  ignores unknown keys.
 
 ## 7. Conformance
 
