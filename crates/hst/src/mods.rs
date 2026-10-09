@@ -838,7 +838,12 @@ mod tests {
     fn lists_the_custom_roster() {
         let Ok(root) = std::env::var("HST_MODS") else { return eprintln!("no HST_MODS, skipped") };
         let all = list(Path::new(&root));
-        let n = std::fs::read_dir(&root).unwrap().flatten().filter(|e| e.path().join("mod.json").is_file()).count();
+        let n = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .map(|d| if d.join("mod.json").is_file() { 1 } else { std::fs::read_dir(&d).into_iter().flatten().flatten().filter(|e| e.path().join("mod.json").is_file()).count() })
+            .sum::<usize>();
         assert_eq!(all.len(), n);
         for game in ["fore_", "getagrip_", "opentee_", "oob_"] {
             assert!(all.iter().any(|m| m.id.starts_with(game)), "no {game} mod");
@@ -847,6 +852,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("broken")).unwrap();
         std::fs::write(dir.join("broken/mod.json"), "{}").unwrap();
         assert!(list(&dir).is_empty());
+        // a pack folder (no mod.json) is searched one level down
+        let one = all.iter().find(|m| m.id.starts_with("fore_")).unwrap();
+        std::fs::create_dir_all(dir.join("pack")).unwrap();
+        std::os::unix::fs::symlink(&one.dir, dir.join("pack/m")).unwrap();
+        assert_eq!(list(&dir).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [one.id.as_str()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
