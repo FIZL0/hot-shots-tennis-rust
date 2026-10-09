@@ -1,0 +1,11 @@
+[package]
+name = "hst-oracle"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Test-only: runs the original's own functions (loaded from the user's disc at test time) so ports can be
+# compared against them bit for bit without PCSX2. Nothing ships with it.
+[dependencies]
+hst-data = { path = "../hst-data" }
+hst-sim = { path = "../hst-sim" }

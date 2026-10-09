@@ -2966,6 +2966,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hst-oracle"
+version = "0.1.0"
+dependencies = [
+ "hst-data",
+ "hst-sim",
+]
+
+[[package]]
 name = "hst-sim"
 version = "0.1.0"
 dependencies = [

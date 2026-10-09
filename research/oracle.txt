@@ -1,0 +1,4 @@
+# Function addresses for crates/hst-oracle tests: name hexaddr (boot program or GAME overlay, US 1.00).
+atan2f 111b60
+atanf 115970
+powf 1121f0
