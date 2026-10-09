@@ -18,6 +18,7 @@ mod audio;
 mod character;
 mod court_anim;
 mod effects;
+mod graphics;
 mod gs;
 mod mods;
 mod hud_gamma;
@@ -84,7 +85,7 @@ pub struct Orbit {
 /// The command line: the app's `Args` and the flags that only pick how it starts.
 struct Cli {
     args: Args,
-    vsync: bool,
+    gfx: graphics::Graphics,
     upscale: bool,
     viewer_mod: Option<String>,
     mod_slot: usize,
@@ -97,7 +98,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let (mut archives, mut shot, mut radius, mut ball, mut court, mut stage, mut play, mut singles, mut chars) = (Vec::new(), None, None, false, 0, None, false, false, Vec::new());
     let (mut viewer_char, mut viewer_motion) = (None, 0);
     // drawing runs uncapped by default; the simulation stays a fixed 60 Hz tick either way
-    let mut vsync = false;
+    let mut gfx = graphics::Graphics::default();
     let mut music = false;
     let mut shot_at = 0.5;
     let mut sound = None;
@@ -139,7 +140,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 }
                 roster = Some(inspect::Roster(disc, mods));
             }
-            "--vsync" => vsync = true,
+            "--vsync" => gfx.vsync = true,
+            "--fps" | "--scale" | "--shadows" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--fullscreen" => {} // read in `main`
             "--music" => music = true,
             "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
@@ -169,18 +171,18 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
         }
     }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, vsync, upscale, viewer_mod, mod_slot, slot_mods, roster }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster }
 }
 
 fn main() {
-    let Cli { args, vsync, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(std::env::args().skip(1));
+    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(std::env::args().skip(1));
     if upscale {
         textures::init(&args.iso);
     }
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     let mut app = App::new();
-    let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
+    let present_mode = gfx.present_mode();
     // a `--shot` window has its own title so the desktop can keep test windows out of the way (tools/shot.sh)
     let title = if args.shot.is_some() { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
     // Steam's Big Picture (`SteamGamepadUI`) and the Steam Deck (`SteamDeck`) start games full screen
@@ -189,8 +191,12 @@ fn main() {
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, ..default() }), ..default() }));
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
+    app.add_plugins(graphics::plugin).insert_resource(gfx);
     app.add_plugins(noise::plugin);
     app.add_systems(Update, character::texture_faces.after(character::animate));
+    if std::env::var_os("HST_FPS").is_some() {
+        app.add_systems(Last, log_fps);
+    }
     if menu {
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(mode::Mode::new(menu_mode))));
     } else if args.play {
@@ -227,17 +233,14 @@ pub fn menu_mode(app: &mut App) {
     app.add_systems(Startup, load).add_plugins(play::main_menu::plugin);
 }
 
-/// The menu's match in this app: `flags` read as on the command line (the settings' `--4x3`, `--vsync`,
-/// `--no-upscale` take effect here); its quit comes back to `back`.
+/// The menu's match in this app: `flags` read as on the command line (the settings' `--4x3`, `--no-upscale` and
+/// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     play::main_menu::WIDE.store(true, std::sync::atomic::Ordering::Relaxed);
-    let Cli { mut args, vsync, upscale, viewer_mod, mod_slot, slot_mods, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     mode::Mode::new(move |app| {
-        let present_mode = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
-        for mut w in app.world_mut().query::<&mut Window>().iter_mut(app.world_mut()) {
-            w.present_mode = present_mode;
-        }
+        app.insert_resource(gfx);
         // the app's own `--shot` goes on through the match
         let old = app.world().resource::<Args>();
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
@@ -828,6 +831,16 @@ fn clouds(
                 m.uniform.color = (base.truncate() * tint).extend(base.w * fade);
             }
         }
+    }
+}
+
+/// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr (for profiling, P23).
+fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32)>) {
+    let dt = time.delta_secs();
+    *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt));
+    if acc.1 >= 5.0 {
+        eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
+        *acc = default();
     }
 }
 

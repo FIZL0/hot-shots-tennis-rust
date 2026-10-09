@@ -3,6 +3,7 @@
 
 @group(1) @binding(0) var scene: texture_2d<f32>;
 @group(1) @binding(1) var hud: texture_2d<f32>;
+@group(1) @binding(2) var scene_sampler: sampler;
 
 fn enc(c: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3(0.0031308));
@@ -15,7 +16,8 @@ fn dec(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let p = vec2<i32>(in.position.xy);
-    let b = textureLoad(scene, p, 0).rgb;
+    // the scene is drawn at the render scale setting: filtered up to the window (at 100 % this hits texel centres)
+    let b = textureSampleLevel(scene, scene_sampler, in.position.xy / vec2<f32>(textureDimensions(hud)), 0.0).rgb;
     let h = textureLoad(hud, p, 0);
     let c = select(vec3(0.0), h.rgb / h.a, h.a > 0.0);
     return vec4(dec(enc(c) * h.a + b * (1.0 - h.a)), 1.0);

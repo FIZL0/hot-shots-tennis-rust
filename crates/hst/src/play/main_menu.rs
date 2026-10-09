@@ -5,14 +5,15 @@
 //!
 //! Art and text come from the disc: walls, titles and labels from `MENU/MENUxx.XB0`, the font from `word.tm2`, the
 //! descriptions and names from `message0.dat`, the grades from the MENU overlay (`exe::Menu`), the play style from
-//! TParam.csv. Settings (each enhancement on or off) live in `settings.txt` beside the disc image.
+//! TParam.csv. Settings (each enhancement on or off, and the graphics settings, `graphics.rs`) live in `settings.txt`
+//! beside the disc image.
 //!
 //! Who plays: the device that chose Local is player 1; in the assignment the other pads and the keyboard join with ✕
 //! (the first free seat, ←/→ to change seat, ○ to leave), up to four humans, any device on any seat; the rest are the
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, controls, mode, assign, chars, mods = the custom page, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: a list of names, 2 columns of [`LIST_ROWS`] a
@@ -30,6 +31,7 @@ use super::controls::{self, Action, Bindings, Seat};
 use super::panel;
 use super::widescreen::Anchor;
 use crate::Args;
+use crate::graphics::Graphics;
 use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
@@ -89,16 +91,26 @@ const FONT: [&str; 15] = [
 
 // ---------------------------------------------------------------- settings
 
-/// The enhancements, each on or off (all on by default), saved in `settings.txt`.
+/// The enhancements, each on or off (all on by default), and the graphics settings, saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 4]);
-const SETTING_NAMES: [&str; 4] = ["widescreen", "uncapped_fps", "upscaled_textures", "music"];
-const SETTING_LABELS: [&str; 4] = ["Widescreen", "Uncapped Frame Rate", "Upscaled Textures", "Music"];
+pub struct Settings([bool; 3], Graphics);
+const SETTING_NAMES: [&str; 3] = ["widescreen", "upscaled_textures", "music"];
+const SETTING_LABELS: [&str; 3] = ["Widescreen", "Upscaled Textures", "Music"];
+/// The Settings screen's rows after the switches.
+const GRAPHICS_ROW: usize = SETTING_NAMES.len();
+const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
+const GRAPHICS_LABELS: [&str; 5] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync"];
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings([true; 4])
+        Settings([true; 3], Graphics::default())
     }
+}
+
+/// The next (`d` = 1) or previous (−1) of `list` after `cur` (the first if `cur` isn't in it).
+fn cycle<T: PartialEq + Copy>(list: &[T], cur: T, d: isize) -> T {
+    let i = list.iter().position(|x| *x == cur).map_or(0, |i| (i as isize + d).rem_euclid(list.len() as isize) as usize);
+    list[i]
 }
 
 impl Settings {
@@ -107,13 +119,49 @@ impl Settings {
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
             if let Some(i) = SETTING_NAMES.iter().position(|n| *n == k.trim()) {
                 s.0[i] = v.trim() != "off";
+            } else if k.trim() == "uncapped_fps" {
+                // before the graphics settings: off waited for the display
+                s.1.vsync = v.trim() == "off";
+            } else {
+                s.1.set(k, v);
             }
         }
         s
     }
 
     fn text(&self) -> String {
-        SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect()
+        let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
+        on + &self.1.text()
+    }
+
+    /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
+    fn graphics_step(&mut self, row: usize, d: isize) {
+        use crate::graphics::{FPS, SCALES, SHADOWS};
+        let g = &mut self.1;
+        match row {
+            0 => {
+                let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
+                let n = cycle(&names, g.preset(), d);
+                *g = Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1;
+            }
+            1 => g.scale = cycle(&SCALES, g.scale, d),
+            2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
+            3 => g.fps = cycle(&FPS, g.fps, d),
+            _ => g.vsync = !g.vsync,
+        }
+    }
+
+    /// The value shown beside graphics row `row`.
+    fn graphics_value(&self, row: usize) -> String {
+        let g = &self.1;
+        match row {
+            0 => g.preset().into(),
+            1 => format!("{} %", g.scale),
+            2 => ["Off", "Low", "High"][g.shadows as usize].into(),
+            3 if g.fps == 0 => "Uncapped".into(),
+            3 => format!("{} fps", g.fps),
+            _ => if g.vsync { "On" } else { "Off" }.into(),
+        }
     }
 
     fn path(iso: &str) -> std::path::PathBuf {
@@ -122,12 +170,9 @@ impl Settings {
 
     /// The match's flags for these settings.
     fn flags(&self) -> Vec<String> {
-        let [wide, uncapped, upscale, music] = self.0;
-        [(!wide, "--4x3"), (!uncapped, "--vsync"), (!upscale, "--no-upscale"), (music, "--music")]
-            .into_iter()
-            .filter(|(on, _)| *on)
-            .map(|(_, f)| f.to_string())
-            .collect()
+        let [wide, upscale, music] = self.0;
+        let on = [(!wide, "--4x3"), (!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
+        on.chain(self.1.flags()).collect()
     }
 }
 
@@ -164,6 +209,7 @@ enum Screen {
     /// switch, measured per screen).
     Main,
     Settings,
+    Graphics,
     Controls,
     Mode,
     Assign,
@@ -327,16 +373,30 @@ impl Menu {
                 }
             }
             Screen::Settings => {
-                rows(SETTING_NAMES.len() + 2, &mut self.sel, &mut out);
+                rows(CONTROLS_ROW + 2, &mut self.sel, &mut out);
                 let s = self.sel;
                 if s < SETTING_NAMES.len() && (k.ok || k.left || k.right) {
                     self.settings.0[s] = !self.settings.0[s];
                     out.extend([Sound(0), SaveSettings]);
-                } else if k.ok && s == SETTING_NAMES.len() {
+                } else if k.ok && s == GRAPHICS_ROW {
+                    self.go(Screen::Graphics, &mut out);
+                } else if k.ok && s == CONTROLS_ROW {
                     self.go(Screen::Controls, &mut out);
-                } else if (k.ok && s > SETTING_NAMES.len()) || k.back {
+                } else if (k.ok && s > CONTROLS_ROW) || k.back {
                     self.sel = 2;
                     self.screen = Screen::Main;
+                    out.push(Sound(1));
+                }
+            }
+            Screen::Graphics => {
+                rows(GRAPHICS_LABELS.len() + 1, &mut self.sel, &mut out);
+                let s = self.sel;
+                if s < GRAPHICS_LABELS.len() && (k.ok || k.left || k.right) {
+                    self.settings.graphics_step(s, if k.left { -1 } else { 1 });
+                    out.extend([Sound(0), SaveSettings]);
+                } else if k.ok || k.back {
+                    self.sel = GRAPHICS_ROW;
+                    self.screen = Screen::Settings;
                     out.push(Sound(1));
                 }
             }
@@ -350,7 +410,7 @@ impl Menu {
                     self.rebinding = Some(self.sel);
                     out.push(Sound(2));
                 } else if (k.ok && self.sel == n) || k.back {
-                    self.sel = SETTING_NAMES.len();
+                    self.sel = CONTROLS_ROW;
                     self.screen = Screen::Settings;
                     out.push(Sound(1));
                 }
@@ -783,10 +843,14 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, mods: mod_text }));
 
     let fresh = kept.is_none();
-    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| Settings::default(), |t| Settings::parse(&t)), mods, ..default() });
+    // first run (no settings.txt) on a Steam Deck: its graphics preset
+    let first = || Settings([true; 3], if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
+    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| first(), |t| Settings::parse(&t)), mods, ..default() });
+    commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
         "settings" => Screen::Settings,
+        "graphics" => Screen::Graphics,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
@@ -968,7 +1032,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, 
         Screen::Settings => {
             d.frame(1, 6);
             let mut labels: Vec<String> = SETTING_LABELS.iter().map(|s| s.to_string()).collect();
-            labels.extend(["Controls".into(), "Back".into()]);
+            labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
             d.rows(&labels, m.sel, 120.0, 90.0, 300.0, hand_x);
             for (i, on) in m.settings.0.iter().enumerate() {
                 let src = if *on { [429.0, 5.0, 39.0, 23.0] } else { [423.0, 37.0, 51.0, 23.0] };
@@ -976,11 +1040,28 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, 
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
-                1 => "Draw as fast as the PC allows; off waits for the display (the game itself always runs at 60 Hz).".into(),
-                2 => "Use the upscaled textures in mods/texture-replacements.".into(),
-                3 => "Play each court's music in matches.".into(),
+                1 => "Use the upscaled textures in mods/texture-replacements.".into(),
+                2 => "Play each court's music in matches.".into(),
+                3 => "Resolution, shadows, frame limit and vsync.".into(),
                 4 => "Change the keys and buttons (controls.txt).".into(),
                 _ => text.msg(190).to_string(),
+            });
+        }
+        Screen::Graphics => {
+            d.frame(1, 6);
+            let mut labels: Vec<String> = GRAPHICS_LABELS.iter().map(|s| s.to_string()).collect();
+            labels.push("Back".into());
+            d.rows(&labels, m.sel, 120.0, 80.0, 300.0, hand_x);
+            for i in 0..GRAPHICS_LABELS.len() {
+                d.text(&m.settings.graphics_value(i), 440.0, 80.0 + 44.0 * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
+            }
+            d.info(match m.sel {
+                0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
+                1 => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
+                2 => "Off, or the shadow map's detail (Low: smaller and fewer cascades).",
+                3 => "The most frames drawn a second (the game itself always runs at 60 Hz).",
+                4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
+                _ => "Back to the settings.",
             });
         }
         Screen::Controls => {
@@ -1237,6 +1318,7 @@ fn step(
     sound: Option<Res<Sound>>,
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
+    mut gfx: ResMut<Graphics>,
 ) {
     let play = |key: u8| {
         if let (Some(s), Some(Art(_, Some(b), _))) = (&sound, art.as_deref()) {
@@ -1310,6 +1392,8 @@ fn step(
             match e {
                 Effect::Sound(s) => play(s),
                 Effect::SaveSettings => {
+                    // applied live: the menu draws with them too
+                    gfx.set_if_neq(menu.settings.1);
                     let path = Settings::path(&args.iso);
                     if let Err(e) = std::fs::write(&path, menu.settings.text()) {
                         warn!("{}: {e}", path.display());
@@ -1396,7 +1480,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Settings | Screen::Controls => Some(0),
+            Screen::Main | Screen::Settings | Screen::Graphics | Screen::Controls => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Playing => None,
@@ -1463,11 +1547,21 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, true, false]);
+        let s = Settings([true, true, false], Graphics::LOW);
         assert_eq!(Settings::parse(&s.text()), s);
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false]));
-        assert_eq!(s.flags(), ["--vsync"]);
-        assert_eq!(Settings([false, true, false, true]).flags(), ["--4x3", "--no-upscale", "--music"]);
+        let d = Graphics::default();
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false], d));
+        assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
+        assert_eq!(s.flags()[..1], ["--fps"]);
+        assert_eq!(Settings([false, false, true], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
+        // the preset row steps through the presets; changing any other row makes it Custom
+        let mut s = Settings::default();
+        s.graphics_step(0, 1);
+        assert_eq!(s.1, Graphics::STEAM_DECK);
+        s.graphics_step(0, -1);
+        assert_eq!(s.1, d);
+        s.graphics_step(1, -1);
+        assert_eq!((s.1.scale, s.graphics_value(0).as_str()), (85, "Custom"));
     }
 
     #[test]

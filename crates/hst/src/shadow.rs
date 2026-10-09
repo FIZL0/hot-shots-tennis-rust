@@ -14,7 +14,7 @@
 //!
 //! ponytail: time of day 0 and hour 1; add them with the match settings that pick them (P17e).
 
-use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 
@@ -105,13 +105,13 @@ fn casters(mut commands: Commands, new: Query<Entity, Added<Mesh3d>>, parents: Q
 }
 
 /// Point the match's shadow light along the court's sun.
-fn aim(mut commands: Commands, sun: Option<Res<Sun>>, mut lights: Query<(Entity, &mut Transform), Added<DirectionalLight>>) {
+/// (Its cascades follow the shadow quality setting, `graphics::lights`.)
+fn aim(sun: Option<Res<Sun>>, mut lights: Query<&mut Transform, Added<DirectionalLight>>) {
     let Some(sun) = sun else { return };
-    for (e, mut t) in &mut lights {
+    for mut t in &mut lights {
         // game (x, y, z) is Bevy (x, −y, −z)
         let d = Vec3::new(sun.dir.x, -sun.dir.y, -sun.dir.z);
         *t = Transform::default().looking_to(d, Vec3::Y);
-        commands.entity(e).insert(CascadeShadowConfigBuilder { first_cascade_far_bound: 30.0, maximum_distance: 120.0, ..default() }.build());
     }
 }
 

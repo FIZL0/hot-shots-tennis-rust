@@ -38,6 +38,7 @@ struct Targets {
 #[derive(AsBindGroup, Asset, TypePath, Clone)]
 struct Composite {
     #[texture(0)]
+    #[sampler(2)]
     scene: Handle<Image>,
     #[texture(1)]
     hud: Handle<Image>,
@@ -76,7 +77,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
 
 /// A 3D camera drawing into the scene image.
 #[derive(Component)]
-struct Scene;
+pub struct Scene;
 
 /// Every 3D camera drawing to the window draws into the scene image instead, HDR so nothing re-encodes its values.
 fn retarget(mut commands: Commands, t: Res<Targets>, mut q: Query<(Entity, &mut RenderTarget), Added<Camera3d>>) {
@@ -116,9 +117,11 @@ fn encode_pbr_output(mut events: MessageReader<AssetEvent<Shader>>, mut shaders:
     }
 }
 
-/// Both images at the window's physical size and scale factor, as the window target was.
+/// Both images at the window's physical size and scale factor, as the window target was; the scene's times the
+/// render scale setting (the composite upscales it).
 fn follow_window(
     t: Res<Targets>,
+    g: Res<crate::graphics::Graphics>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<Composite>>,
@@ -126,9 +129,9 @@ fn follow_window(
     mut stale: Local<u8>,
 ) {
     let Ok(w) = window.single() else { return };
-    let size = Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 };
-    let scale = w.scale_factor();
-    for h in [&t.scene, &t.hud] {
+    let k = g.scale as f32 / 100.0;
+    let at = |k: f32| Extent3d { width: ((w.physical_width() as f32 * k) as u32).max(1), height: ((w.physical_height() as f32 * k) as u32).max(1), depth_or_array_layers: 1 };
+    for (h, size) in [(&t.scene, at(k)), (&t.hud, at(1.0))] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
             *stale = 2;
@@ -141,8 +144,14 @@ fn follow_window(
         materials.get_mut(&t.composite).map(|m| m.into_inner());
     }
     for mut target in &mut targets {
+        let Some(scale) = (match &*target {
+            RenderTarget::Image(i) if i.handle == t.scene => Some(w.scale_factor() * k),
+            RenderTarget::Image(i) if i.handle == t.hud => Some(w.scale_factor()),
+            _ => None,
+        }) else {
+            continue;
+        };
         if let RenderTarget::Image(i) = &*target
-            && (i.handle == t.scene || i.handle == t.hud)
             && i.scale_factor != scale
         {
             let handle = i.handle.clone();
