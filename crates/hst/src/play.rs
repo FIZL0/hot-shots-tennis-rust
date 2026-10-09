@@ -1400,6 +1400,8 @@ fn setup(
     let pick = game.rng.setup_gallery(&mut gallery_used);
     let gallery = crate::audio::gallery_bank(&mut iso, game.stage as usize, pick);
     commands.insert_resource(crate::audio::GalleryBank(gallery.map(std::sync::Arc::new)));
+    // the match's court's effects (the app's start loaded the menu's court 0, which has none)
+    commands.insert_resource(crate::audio::court_bank(&mut iso, stage));
     // the match starts (the sound manager's reseed), then its first point
     reseed_sound(&mut game);
     // the intro's lens flare ticks

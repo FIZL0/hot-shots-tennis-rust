@@ -410,9 +410,13 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     }
     // the court's sound effects (bank slot 0); court 0 has no bank of its own
     let n = args.stage.map_or(args.court, |s| s as usize);
-    let court = SoundBank::load(&mut iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd"));
-    commands.insert_resource(CourtBank(court.map(Arc::new)));
+    commands.insert_resource(court_bank(&mut iso, n));
     commands.insert_resource(sound);
+}
+
+/// Court `n`'s sound effects (bank slot 0); court 0 has none.
+pub fn court_bank(iso: &mut Iso, n: usize) -> CourtBank {
+    CourtBank(SoundBank::load(iso, &format!("SND/COURT/C_SND{n:02}A.XB0"), &format!("data/sound/SE/court/co_se{n:02}.hd")).map(Arc::new))
 }
 
 /// Court `n`'s gallery bank (slot 6) for the setup's pick 0..3 (`Rngs::setup_gallery`): archive A (`galsg`) below
