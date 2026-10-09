@@ -32,6 +32,11 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
   `research/xref.py <addr> --similar` (look-alike functions; `ported` ones have Rust to copy the shape of). A hook
   blocks reading the 16 MB dumps whole.
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
+- Function oracle (`crates/hst-oracle`): for a pure function of its arguments and RAM (math, AI decisions, table
+  lookups) check the port with `Ee::game()`/`Ee::from_ram(dump)` + `call(addr(name), ints, floats, budget)` over
+  ≥10k generated inputs instead of recording it (names → addresses in `research/oracle.txt`; examples in its
+  `tests/`). An unknown op panics with its address: add it to the interpreter. Timing, frame flow, VU0 and
+  rendering still need PCSX2 recordings.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
 - Wrap-up is one call, no subagent: `tools/done.sh <ID> "<msg>"` (tests, tick, commit) or `… --blocked "<why>"`.
   The `chore` subagent is only for bigger mechanical jobs (checking a capture, reformatting).

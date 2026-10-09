@@ -2,3 +2,5 @@
 atan2f 111b60
 atanf 115970
 powf 1121f0
+# AI run estimate (a0 player, a1 spot x,y,z): hst_sim::ai::Runner::frames_to
+ai_run_frames 35bc50
