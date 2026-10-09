@@ -48,7 +48,8 @@ Task: Replace B40's guesses with original game values from MENU.BIN draw code/ta
 ### 8. Sets choices 1/3/5 → sets-to-win
 - **Status**: VERIFIED
 - **Mapping**: (n + 1) / 2 → 1, 2, 3 for sets 1, 3, 5
-- **Source**: Standard tennis, game data at 0x423048
+- **Source** (R1 recheck): the menu keeps sets-to-win in 0x423048 and draws the sets count as `win * 2 - 1`
+  (MENU overlay, the confirm screen's draw; decomp `DAT_00423048 * 2 + -1`), so win = (n + 1) / 2 for 1/3/5.
 
 ### 9. Pad numbering across processes
 - **Status**: NOT VERIFIED
