@@ -291,8 +291,9 @@ fn step(
         for (e, w, home) in &mut npcs.walkers {
             // the serve placement turns them back to the court centre
             face(&mut turn, *e, *home, 0.0);
-            // the match's first point (no stagger) comes before any decided one
-            w.new_point(players >= 3);
+            // a new point after a decided one resets the walker (counter 0 with any player count): the cheer loop
+            // only ends when the idle loops restart
+            w.new_point(true);
         }
         for (_, t, row) in &mut npcs.triggers {
             t.reset_near(row, &mut npcs.near, &mut roll);

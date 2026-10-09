@@ -147,8 +147,8 @@ impl Walker {
         self.mode = 1;
     }
 
-    /// A new point: stop reacting; with `stagger` (a doubles point after the first) restart the idle loops one walker
-    /// per tick.
+    /// A new point: stop reacting; with `stagger` (any point after a decided one, or the match's first with more
+    /// than one player) restart the idle loops one walker per tick.
     pub fn new_point(&mut self, stagger: bool) {
         self.mode = 0;
         if stagger {
