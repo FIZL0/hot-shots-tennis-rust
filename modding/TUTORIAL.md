@@ -65,8 +65,9 @@ Known failure signs and fixes:
 
 Make `mods/<id>/` as in the standard: costumes from step 1, `mod.json` (pick `donor` by body type and play
 style, `research/characters.md`; map stats into `params.override`), voices renamed to `<program>_<key>.wav`
-(table in §5). Upscaled textures: run `tools/chainner/upscale.chn` on the PNGs and put them in
-`textures/upscaled/`.
+(table in §5). Upscaled textures, for every mod at once:
+`python3 modding/tools/upscale_mods.py MODEL.pth [mods/]` (headless chaiNNer, `tools/chainner/upscale.chn`, skips
+what's already upscaled; rerun after adding or rebuilding mods).
 
 ## 5. Report
 

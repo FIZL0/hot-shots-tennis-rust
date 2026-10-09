@@ -48,6 +48,11 @@ pub fn set(iso: &str, on: bool) {
     }
 }
 
+/// Whether the "upscaled textures" setting is on (mods read their `textures/upscaled/` then).
+pub fn on() -> bool {
+    STATE.lock().unwrap().is_some()
+}
+
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, reload)
         .add_systems(PostUpdate, ui_rects);

@@ -16,8 +16,11 @@ mods/<id>/
                            COLOR as stored and ignores node transforms. HST's rackets are 0.944 m butt to
                            tip along +Y, strings facing ±Z, grip 0–0.32 m; `racket.py` makes one from a
                            source game's racket, keeping its grip on the hand)
-  textures/upscaled/       optional: same file names as the PNGs embedded in the .glb, used when the
-                           global "upscaled textures" switch is on (B40); missing files fall back to native
+  textures/upscaled/<glb stem>/<image>.png
+                           optional: one folder per .glb (costume or racket.glb), one PNG per embedded image,
+                           named by the glTF image's `name` (else `image<index>`); drawn instead when the
+                           "upscaled textures" setting is on, any size; missing files fall back to the embedded
+                           one. `upscale_mods.py` makes them (with `sources.json`, the hashes it skips by)
   motions.glb              optional: the mod's own motions, drawn in place of the donor's (§6 `motions`)
   voice/<program>_<key>.wav  §5
   face.json                only for texture faces (§4b)

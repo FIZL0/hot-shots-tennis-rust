@@ -332,11 +332,23 @@ fn target_names(mesh: &gltf::Mesh) -> Vec<String> {
     extras.and_then(|e| e["targetNames"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())).unwrap_or_default()
 }
 
-/// The `.glb`'s materials as a disc MTL would give them: an unlit `StandardMaterial` and its GS draws.
+/// The upscaled-image file name of a `.glb` image: its name, else `image<index>` (same as `upscale_mods.py`).
+fn image_file(im: &gltf::Image) -> String {
+    format!("{}.png", im.name().map_or_else(|| format!("image{}", im.index()), str::to_string))
+}
+
+/// `textures/upscaled/<glb stem>/` of a mod's `.glb`, when the "upscaled textures" setting is on.
+fn upscaled_dir(m: &Mod, glb: &Path) -> Option<PathBuf> {
+    crate::textures::on().then(|| m.dir.join("textures/upscaled").join(glb.file_stem().unwrap_or_default()))
+}
+
+/// The `.glb`'s materials as a disc MTL would give them: an unlit `StandardMaterial` and its GS draws. Images
+/// with a PNG of the same name in `upscaled` are drawn from that instead.
 #[allow(clippy::type_complexity)]
 fn materials_of(
     doc: &gltf::Document,
     blob: &[u8],
+    upscaled: Option<&Path>,
     images: &mut impl Store<Image>,
     materials: &mut impl Store<StandardMaterial>,
     gs: &mut HashMap<AssetId<StandardMaterial>, Vec<crate::gs::GsMaterial>>,
@@ -346,7 +358,12 @@ fn materials_of(
     for im in doc.images() {
         let gltf::image::Source::View { view, mime_type } = im.source() else { return Err("images must be embedded".into()) };
         let bytes = blob.get(view.offset()..view.offset() + view.length()).ok_or("image outside the buffer")?;
-        let img = Image::from_buffer(bytes, ImageType::MimeType(mime_type), CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
+        let up = upscaled.and_then(|d| std::fs::read(d.join(image_file(&im))).ok());
+        let (bytes, ty) = match &up {
+            Some(b) => (&b[..], ImageType::Extension("png")),
+            None => (bytes, ImageType::MimeType(mime_type)),
+        };
+        let img = Image::from_buffer(bytes, ty, CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
         let mut raw = img.clone();
         raw.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
         tex.push((images.add(img), images.add(raw)));
@@ -529,7 +546,7 @@ pub fn load(
     };
 
     let mut gs = HashMap::new();
-    let handles = materials_of(&doc, &blob, images, materials, &mut gs).map_err(ctx)?;
+    let handles = materials_of(&doc, &blob, upscaled_dir(m, &file).as_deref(), images, materials, &mut gs).map_err(ctx)?;
     // the skinned parts, one per primitive, every morphed one carrying all the model's targets
     let mut names: Vec<String> = Vec::new();
     for mesh in doc.meshes() {
@@ -601,7 +618,7 @@ pub fn load(
     let racket = match m.dir.join("racket.glb") {
         f if f.is_file() => {
             let (rdoc, rblob) = open(&f)?;
-            let rh = materials_of(&rdoc, &rblob, images, materials, &mut gs)?;
+            let rh = materials_of(&rdoc, &rblob, upscaled_dir(m, &f).as_deref(), images, materials, &mut gs)?;
             let mut out = Vec::new();
             for mesh in rdoc.meshes() {
                 for p in mesh.primitives() {

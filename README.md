@@ -100,6 +100,11 @@ set, so after opening it in chaiNNer:
 - Set *Load Model* to your own upscaling model. The chain was made for 4xHDcube4 (a paid model, not included),
   but any 4× ESRGAN-style model works.
 
+**Character mods** keep their textures inside their `.glb` files. `python3 modding/tools/upscale_mods.py MODEL.pth`
+upscales every mod under `mods/` at once with the same chain, run headless (no GUI, no paths to set), into each
+mod's `textures/upscaled/`; the "upscaled textures" setting then draws them. It skips textures already done, so
+rerun it after adding or rebuilding mods.
+
 The startup log line `textures: N PCSX2-named, M key-named in mods/texture-replacements` shows what was found. Bundling upscaled
 textures of our own into the remaster is planned (`PLAN.md` M5). Like everything else from the disc, they would be
 made on your machine, not shipped.
