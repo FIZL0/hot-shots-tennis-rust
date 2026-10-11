@@ -211,7 +211,8 @@ fn main() {
     if !menu {
         app.add_systems(Startup, load);
     }
-    app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds)).run();
+    app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds))
+        .add_systems(PostUpdate, (fixed_eye, backdrops).chain().before(bevy::transform::TransformSystems::Propagate)).run();
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
@@ -398,11 +399,13 @@ fn load(
         };
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // the court load shifts the hole model's vertex colours in HSL by the court's and the hole's envir
-        let hole_hsl = envir.as_deref().zip(iso.read(&format!("{dir}/GRD01.XB")).ok().and_then(|d| {
+        let hole_envir = iso.read(&format!("{dir}/GRD01.XB")).ok().and_then(|d| {
             let arc = Archive::parse(&d).ok()?;
             arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("envir_c{n:02}_h01.dat")))?).ok()
-        })).and_then(|(c, h)| gs::hole_hsl(c, &h));
-        // ground, skies and clouds stand at the origin; props are placed from the plant records
+        });
+        let hole_hsl = envir.as_deref().zip(hole_envir.as_deref()).and_then(|(c, h)| gs::hole_hsl(c, h));
+        // the ground stands at the origin, sky/clo/acc/bg follow the camera (`backdrops`); props are placed from the
+        // plant records
         // the entry list names every hole variant; this layout is hole 01
         let this_hole = |e: &&layout::Entry| e.dir != "hole" || e.stem.contains("_h01");
         // the hole's ground model is the one shadow receiver
@@ -425,6 +428,10 @@ fn load(
                     shift_colours(parts, &mut meshes, hsl);
                 }
                 let id = spawn(&mut commands, parts, Transform::default());
+                if let Some(i) = (e.dir == "bg").then(|| ["_sky", "_clo", "_acc", "_bg"].iter().position(|k| e.stem.contains(k))).flatten() {
+                    let (yaw, lift) = gs::backdrop(envir.as_deref().unwrap_or_default(), hole_envir.as_deref(), i);
+                    commands.entity(id).insert(Backdrop { yaw, lift });
+                }
                 let set = if e.dir == "hole" { &mut look.holes } else if e.stem.contains("_sky") { &mut look.skies } else { &mut look.bg };
                 set.extend(parts.iter().map(|(_, m)| m.id()));
                 if e.stem.contains("_acc") {
@@ -831,6 +838,39 @@ fn clouds(
                 m.uniform.color = (base.truncate() * tint).extend(base.w * fade);
             }
         }
+    }
+}
+
+/// A sky, `_clo`, `_acc` or `_bg` model: the court draw stands it at the camera's eye + (0, lift, 0), turned by yaw
+/// about game y (`gs::backdrop`; slot 5's RAM has these matrices).
+#[derive(Component)]
+struct Backdrop {
+    yaw: f32,
+    lift: f32,
+}
+
+/// Runs after every Update camera move, so the backdrop never lags the camera by a frame.
+fn backdrops(camera: Query<&Transform, (With<Orbit>, Without<Backdrop>)>, mut models: Query<(&Backdrop, &mut Transform)>) {
+    let Ok(camera) = camera.single() else { return };
+    // game space is Bevy's turned a half-turn about X
+    let eye = camera.translation * Vec3::new(1.0, -1.0, -1.0);
+    for (b, mut t) in &mut models {
+        *t = Transform::from_translation(eye + Vec3::Y * b.lift).with_rotation(Quat::from_rotation_y(b.yaw));
+    }
+}
+
+/// `HST_EYE=ex,ey,ez,fx,fy,fz,dx,dy,dz,t`: hold the camera at a view read from the original's RAM (game space: eye,
+/// forward, down rows, t = tan of the horizontal half field of view), shown like the match camera (`play` keeps
+/// 4:3's height), for `--shot` checks against `tools/screenshot.sh` from the same camera.
+fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, window: Query<&Window>) {
+    let Some(v) = std::env::var("HST_EYE").ok().map(|e| e.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 10) else { return };
+    let Ok((mut t, mut proj)) = camera.single_mut() else { return };
+    // game space → Bevy: (x, -y, -z)
+    let b = |i: usize| Vec3::new(v[i], -v[i + 1], -v[i + 2]);
+    *t = Transform::from_translation(b(0)).looking_to(b(3), -b(6));
+    let aspect = window.single().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    if let Projection::Perspective(p) = &mut *proj {
+        p.fov = 2.0 * (v[9] * 0.75f32.max(1.0 / aspect)).atan();
     }
 }
 

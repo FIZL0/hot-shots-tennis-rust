@@ -185,6 +185,24 @@ pub fn hole_hsl(envir: &[u8], hole: &[u8]) -> Option<[i32; 3]> {
     (hsl != [0; 3]).then_some(hsl)
 }
 
+/// Where the court draw stands backdrop model `i` (0 sky, 1 `_clo`, 2 `_acc`, 3 `_bg`) each frame: at the camera's
+/// eye + (0, lift, 0) game y, turned about game y by yaw. Yaw = `envir_cNN.dat` +0x450 + 4i − the hole's
+/// `envir_cNN_h01.dat` +0x58 (degrees) × 0.017453292, wrapped to ±π; lift = the hole file's +0x10 + 4i. The load
+/// copies season 0's rows over the other seasons', so every season uses these. With no hole file the lift is 370 and
+/// the hole's turn 0. Returns (yaw, lift).
+pub fn backdrop(envir: &[u8], hole: Option<&[u8]>, i: usize) -> (f32, f32) {
+    use hst_sim::ps2::{add, mul, sub};
+    let f = |d: &[u8], o: usize| d.get(o..o + 4).map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
+    let (turn, lift) = hole.map_or((0.0, 370.0), |h| (f(h, 0x58), f(h, 0x10 + 4 * i)));
+    let mut yaw = sub(add(f(envir, 0x450 + 4 * i), 0.0), mul(turn, 0.017453292));
+    if yaw > std::f32::consts::PI {
+        yaw = sub(yaw, 6.2831855);
+    } else if yaw < -std::f32::consts::PI {
+        yaw = add(yaw, 6.2831855);
+    }
+    (yaw, lift)
+}
+
 /// A vertex colour shifted by `hsl` ([`hole_hsl`]) as the game does it: to HSL from byte/255, hue + hue/360 (wrapped),
 /// saturation and lightness + /100 (clamped to 0..1), back to RGB, each channel ×255 truncated.
 pub fn hsl_shift(c: [u8; 3], [hue, sat, light]: [i32; 3]) -> [u8; 3] {
@@ -422,6 +440,24 @@ impl Material for GsMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Synthetic envir rows; the formula was checked against slot 5's RAM (court 10: the sky matrix at eye + 194,
+    /// the bg's turned by envir +0x45c = 0.0874 with the hole's 0.0001°).
+    #[test]
+    fn backdrop_yaw_lift() {
+        let mut envir = vec![0u8; 0x550];
+        let mut hole = vec![0u8; 0xd0];
+        envir[0x45c..0x460].copy_from_slice(&0.5f32.to_le_bytes());
+        envir[0x450..0x454].copy_from_slice(&3.0f32.to_le_bytes());
+        hole[0x58..0x5c].copy_from_slice(&(-90.0f32).to_le_bytes());
+        hole[0x1c..0x20].copy_from_slice(&476.0f32.to_le_bytes());
+        let (yaw, lift) = backdrop(&envir, Some(&hole), 3);
+        assert_eq!(lift, 476.0);
+        assert!((yaw - (0.5 + std::f32::consts::FRAC_PI_2)).abs() < 1e-6);
+        // 3 + π/2 wraps below π
+        assert!((backdrop(&envir, Some(&hole), 0).0 - (3.0 + std::f32::consts::FRAC_PI_2 - std::f32::consts::TAU)).abs() < 1e-5);
+        assert_eq!(backdrop(&envir, None, 2), (0.0, 370.0));
+    }
 
     #[test]
     fn hole_hsl_shift() {

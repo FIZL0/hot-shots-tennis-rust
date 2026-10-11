@@ -114,6 +114,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Shot buttons (P5a): ✕ topspin, ○ slice, △ lob only; the stick at contact turns topspin flat (within 60° of forward) and slice into a drop shot (within 45° of back; not on serves; smashes unchanged) — 42/42 recorded human aims in round1.bin.
 - P14c2: ambient sound emitters (`npc::Emitter`: countdown, re-arm, pan bit, type-36 sweep) bit-exact on courts 10, 1, 2, 4; wired into play's court sounds.
 
+- B74 court backdrops: sky/clo/acc/bg follow the camera eye + envir lift, rotated by the envir yaw − hole yaw (row 0); matches RAM on courts 1, 2, 4, 10 and a court-10 screenshot overlay (`HST_EYE` fixed-view shots).
 ## Known gaps / caveats
 
 - Table lookups at an axis maximum read one cell past the table in the original; we clamp (never seen in captures).
