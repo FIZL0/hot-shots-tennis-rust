@@ -1,4 +1,7 @@
 widescreen = on
-uncapped_fps = on
 upscaled_textures = on
 music = off
+frame_limit = uncapped
+vsync = off
+render_scale = 100
+shadows = high
