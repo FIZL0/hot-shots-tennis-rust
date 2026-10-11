@@ -154,6 +154,11 @@ pub fn player_light2(z: f32) -> Vec4 {
     Vec4::new(0.0, 0.0, if z < 0.0 { -1.0 } else { 1.0 }, 0.0)
 }
 
+/// The court light's intensity in weather `w` (the row's +0x10 × the weather's scale).
+pub fn court_intensity(envir: &[u8], season: usize, w: &Look) -> Option<f32> {
+    Some(light_row(envir, season, w)?.2)
+}
+
 /// The light row's RGB, ambient and intensity in weather `w`.
 fn light_row(envir: &[u8], season: usize, w: &Look) -> Option<(Vec3, f32, f32)> {
     let f = |o: usize| Some(f32::from_le_bytes(envir.get(o..o + 4)?.try_into().ok()?));
