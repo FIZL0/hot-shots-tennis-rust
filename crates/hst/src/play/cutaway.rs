@@ -22,6 +22,8 @@ struct Director {
     /// The last hitter and the one before (the server and receiver before any hit).
     roles: [usize; 2],
     shot: Option<(Shot, Frames, usize)>,
+    /// The serve's first tick has shown the shot.
+    held: bool,
 }
 
 pub fn plugin(app: &mut App) {
@@ -40,6 +42,7 @@ fn setup(mut commands: Commands, args: Res<Args>) {
         mirror: true,
         roles: [0, 1],
         shot: None,
+        held: false,
     });
 }
 
@@ -84,7 +87,15 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
         if g.phase == Phase::Serve && g.last_hitter < 0 {
             d.roles = [g.score.server as usize, g.score.receiver as usize];
         }
-        d.shot = None;
+        // the game's camera takes the switch back a tick late: the serve's first tick still shows the shot
+        if g.phase == Phase::Serve && !d.held && d.shot.as_ref().is_some_and(|s| s.0.fov != 0.0) {
+            d.held = true;
+            return show(&mut g, &mut d, &q);
+        }
+        if d.shot.take().is_some() {
+            g.prev_view = g.cam.view; // a cut doesn't blend
+        }
+        d.held = false;
         return;
     };
     let d = &mut *d;
@@ -121,7 +132,14 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
         d.mirror = !d.mirror;
         info!("cut-away shot {n:#x} on player {shown} (other {other}), mirror {}", d.mirror);
         d.shot = Some((Shot::new(&d.shots, n, d.mirror), frames, shown));
+        // picked the tick the reactions start, as the game; its camera switches to it (and steps it) the next
+        return;
     }
+    show(&mut g, d, &q);
+}
+
+/// Steps the shot and shows it.
+fn show(g: &mut Game, d: &mut Director, q: &Query<(&Figure, &Motion)>) {
     let (shot, frames, shown) = d.shot.as_mut().expect("started");
     // the shown player's live head
     if let Some((_, m)) = q.iter().find(|(f, _)| f.0 == *shown) {
