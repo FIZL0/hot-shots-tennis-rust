@@ -125,6 +125,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
   aimed live-ball recordings (post hits, cord dribble-overs in rallies and serve lets, cord/net stops) bit-exact.
 - Shot buttons (P5a): ✕ topspin, ○ slice, △ lob only; the stick at contact turns topspin flat (within 60° of forward) and slice into a drop shot (within 45° of back; not on serves; smashes unchanged) — 42/42 recorded human aims in round1.bin.
 - P14c2: ambient sound emitters (`npc::Emitter`: countdown, re-arm, pan bit, type-36 sweep) bit-exact on courts 10, 1, 2, 4; wired into play's court sounds.
+- P14d: court 5's stand crowds (roster 61..66, `npc::Crowd`: atlas column, cheer level ping-pong, stand up/seat per match phase) bit-exact against a court 5 recording; drawn as the `wim-0N` billboards with their UV atlas frame.
 - B74 court backdrops: sky/clo/acc/bg follow the camera eye + envir lift, rotated by the envir yaw − hole yaw (row 0); matches RAM on courts 1, 2, 4, 10 and a court-10 screenshot overlay (`HST_EYE` fixed-view shots).
 - B80 court model draw: MODULATE materials blend (ABE), `@add` drops fog, the hole model drawn faded (MODULATE, A ≥ 0x80 test, vertex alpha) and first in material order, MODULATE alpha on GS integers; load rules match RAM on all 11 courts (8,821 batches), grass vs screenshots on courts 3 and 9.
 

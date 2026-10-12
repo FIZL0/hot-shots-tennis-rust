@@ -340,6 +340,63 @@ pub fn court5_again(call: u8, game: bool, shots: i32, hitter_won: bool) -> bool 
     call == 0 && (game || (1..=2).contains(&shots) && hitter_won)
 }
 
+/// One of court 5's own creatures (roster kinds 61..66, `creatureMdl/wim-0N` with `creatureAni/wim-0N.UVA`): a
+/// figure whose texture is a 4×4 atlas picked by its UV-animation frame. Its column (`base`) is drawn once when
+/// made; its row is the cheer level (0 seated, 1..3 standing up), which ping-pongs between 1 and 3 every other tick
+/// while it cheers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Crowd {
+    pub base: i32,
+    pub on: bool,
+    pub tick: i32,
+    /// The UV-animation frame shown (set on the model at the start of the next tick).
+    pub frame: i32,
+    pub level: i32,
+    pub up: bool,
+}
+
+impl Crowd {
+    /// Made at the match's start: one draw of the shared generator for its atlas column.
+    pub fn new(roll: &mut impl FnMut() -> u32) -> Crowd {
+        let base = (roll() >> 16 & 3) as i32;
+        Crowd { base, frame: base, ..Crowd::default() }
+    }
+
+    /// Seated again: at the serve set-up and as a point's end is left.
+    pub fn reset(&mut self) {
+        *self = Crowd { base: self.base, frame: self.base, ..Crowd::default() };
+    }
+
+    /// Stands up: at the start of a match of more than one player, at its end, and at [`crowd_cheers_point`].
+    /// One draw for the starting level; the tick count and direction carry on.
+    pub fn cheer(&mut self, roll: &mut impl FnMut() -> u32) {
+        self.on = true;
+        self.level = (roll() >> 16 & 0x7fff) as i32 % 3 + 1;
+    }
+
+    pub fn step(&mut self) {
+        if !self.on {
+            return;
+        }
+        if self.tick % 2 == 0 {
+            match (self.up, self.level) {
+                (false, l) if l < 2 => self.up = true,
+                (false, _) => self.level -= 1,
+                (true, l) if l < 3 => self.level += 1,
+                (true, _) => self.up = false,
+            }
+            self.frame = self.base + self.level * 4;
+        }
+        self.tick += 1;
+    }
+}
+
+/// Court 5's creatures cheer a point's end unless an instant replay was picked for it, and then only for a game,
+/// set or match won (`event`) or a call other than a fault, let or net (`call` 1..4, 6).
+pub fn crowd_cheers_point(replay: bool, event: bool, call: u8) -> bool {
+    !replay && (event || !matches!(call, 1..=4 | 6))
+}
+
 /// Trigger creature types that just play their sound now and then (`exe::Game::emitter` gives the sound and gap).
 pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36, 41, 42, 45, 46, 50, 51];
 /// The emitter type whose sound sweeps across the stereo field after it starts.

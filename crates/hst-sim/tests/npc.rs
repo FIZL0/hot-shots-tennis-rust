@@ -1011,3 +1011,85 @@ fn serve_setup_keeps_and_restores_like_the_game() {
     assert_eq!(arrivals.iter().map(|a| a.0).collect::<Vec<_>>(), [false, true, false]);
     assert_eq!(restored, 2, "the poked creatures' done not put back at the replay");
 }
+
+/// Court 5's own creatures against `context/p14d/run1/c5.bin` (research/p14d_record.py: a doubles match on court 5
+/// from the intro; not in git, skipped when absent). Every tick of all six, from the recorded state of the tick
+/// before, must reproduce the game's tick count, cheering flag, UV frame, level and direction: seated again at the
+/// serve set-up and when a point's end is left, standing up at a point's end when [`npc::crowd_cheers_point`] says
+/// so, each level one draw of the shared generator in creature order.
+#[test]
+fn court5_crowd_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(d) = std::fs::read(format!("{root}/context/p14d/run1/c5.bin")) else {
+        eprintln!("c5.bin missing, skipped");
+        return;
+    };
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let n = u(&d, 0) as usize;
+    let (mt, cr) = (0x34, 0x34 + 0x9d0);
+    let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(cr + 0xc0 * n).collect();
+    let state = |s: &[u8], k: usize| {
+        let o = cr + 0xc0 * k;
+        npc::Crowd {
+            base: u(s, o + 0x58) as i32,
+            on: s[o + 0xa8] != 0,
+            tick: u(s, o + 0xa4) as i32,
+            frame: u(s, o + 0xac) as i32,
+            level: u(s, o + 0xb0) as i32,
+            up: s[o + 0xb4] != 0,
+        }
+    };
+    let (mut ticks, mut cheers, mut resets, mut stalls) = (0, 0, 0, 0);
+    for i in 1..samples.len() {
+        let (a, b) = (samples[i - 1], samples[i]);
+        if u(b, 0) != u(a, 0) + 1 {
+            continue; // a frame missed between them
+        }
+        let (pa, pb) = (a[9], b[9]);
+        let reset = pa != pb && (pb == 2 || pa == 4);
+        let cheer = pa != pb && pb == 4 && npc::crowd_cheers_point(b[0x1a] != 0, u(b, 0x24) != 0, b[0x32]);
+        let mut rng = Mt::of(&a[mt..]);
+        let end = Mt::of(&b[mt..]);
+        let mut out = Vec::new();
+        while rng != end && out.len() < 2000 {
+            out.push(rng.next());
+        }
+        // a long frame: the game ticks twice between two vsyncs
+        let run = |j: usize, steps: usize| {
+            let mut it = out[j..].iter().copied();
+            let mut roll = || it.next().unwrap_or(0);
+            (0..n)
+                .map(|k| {
+                    let mut c = state(a, k);
+                    // the phase's message reaches them before their tick
+                    if reset {
+                        c.reset();
+                    }
+                    if cheer {
+                        c.cheer(&mut roll);
+                    }
+                    (0..steps).for_each(|_| c.step());
+                    c
+                })
+                .collect::<Vec<_>>()
+        };
+        let want: Vec<_> = (0..n).map(|k| state(b, k)).collect();
+        if !reset && !cheer && (0..n).all(|k| state(a, k) == want[k]) {
+            stalls += want.iter().any(|c| c.on) as usize; // the objects weren't ticked this frame (the intro's loading, a long frame)
+            continue;
+        }
+        let starts = if cheer { 0..out.len().saturating_sub(n - 1) } else { 0..1 };
+        assert!(
+            starts.clone().any(|j| (1..=2).any(|t| run(j, t) == want)),
+            "vsync {} phase {pa}->{pb}:\n from {:?}\n got {:?}\n want {want:?}",
+            u(b, 0),
+            (0..n).map(|k| state(a, k)).collect::<Vec<_>>(),
+            run(0, 1)
+        );
+        ticks += n;
+        cheers += cheer as usize;
+        resets += reset as usize;
+    }
+    eprintln!("court 5: {ticks} creature ticks, {cheers} cheers, {resets} resets, {stalls} cheering frames not ticked");
+    assert!(cheers >= 5 && resets >= 5 && stalls < samples.len() / 10);
+}
