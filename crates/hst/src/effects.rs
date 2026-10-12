@@ -502,7 +502,7 @@ pub fn load_bounce(
 
 impl BallBounce {
     /// One game frame of the ball (`bounces` so far, the last landing `at` on `court` ground moving at `vel`);
-    /// `smash` a smash landing at 85 km/h or more; `fading` the marks age (a point is on).
+    /// `smash` a smash landing at 85 km/h or more; `fading` the marks age (`play::marks_age`).
     // ponytail: every contact's surface is the flat court (normal up); the stage mesh's own normal would tilt the ring
     pub fn frame(&mut self, bounces: i32, at: [f32; 3], vel: [f32; 3], court: bool, smash: bool, fading: bool, transforms: &mut Query<&mut Transform>) {
         if bounces == 0 {

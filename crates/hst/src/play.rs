@@ -4032,16 +4032,27 @@ fn start_effects(
     );
     let f = &g.flight;
     let smash = g.smashed && sound::kmh(f.ball.vel) >= 85.0;
-    // ponytail: marks age while a point is on (the game's own on/off messages are not traced)
     bounce.frame(
         f.bounces,
         f.landing.0,
         f.ball.vel,
         f.landing.1.court,
         smash,
-        !dead,
+        marks_age(&g),
         &mut transforms,
     );
+}
+
+/// Whether the ball marks age this tick: from the serve's swing (the play phase's enter) until the players react
+/// to the point (message 0x19); after a fault, until the next serve's set-up. Nothing else clears them: a mark goes
+/// when its 1800 ticks run out or a 21st pushes it off.
+fn marks_age(g: &Game) -> bool {
+    match g.phase {
+        Phase::Serve => g.serving.swing.is_some(),
+        Phase::Rally => true,
+        Phase::Post => g.post.as_ref().is_some_and(|p| !p.reacted),
+        Phase::ChangeEnds(_) => false,
+    }
 }
 
 /// Which of the game's motions each player plays (by its motion number): the serve's stance, baseline walk,
