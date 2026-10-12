@@ -1014,6 +1014,10 @@ pub(super) struct Finish {
     /// Set (false) or Match (true) Point on show: stage and ticks; and whether the last new point wasn't one.
     point: Option<(bool, u8, i32)>,
     armed: bool,
+    /// The branches of the last shot and the one before (5 none yet this point), the scoreboard's +0x1a0/+0x1a1.
+    branches: [u8; 2],
+    /// The last serve was off a strong toss.
+    pub strong: bool,
 }
 
 /// A character's stroke and volley power from its TParam.csv row (the parser skips the empty Special POW cell).
@@ -1030,6 +1034,7 @@ impl Finish {
     /// line on a ball at 0.6 or more, which the game plays as a volley and never as a counter.
     pub fn strike(&mut self, who: usize, branch: u8, kind: i32, offset: i32, players: usize, inside_high: bool) -> Option<i32> {
         let (prev, prev_branch, prev_kind) = std::mem::replace(&mut self.prev, (who, branch, kind));
+        self.branches = [branch, self.branches[0]];
         let flat_or_top = |k: i32| k == 0 || k == 2;
         let col = match branch {
             1 if players >= 2 && !inside_high => Some(0),
@@ -1072,12 +1077,33 @@ impl Finish {
         self.banner = Some((kind, on_line, 1, 5));
     }
 
+    /// The gallery on a plain point (no line call) short of a game: `Some(shout)` applauds it, the shout following
+    /// the applause or not; `None` just cheers. Applauded: an ace off a strong toss, a return or smash winner (as the
+    /// banners: `hitter_won`, no net cord), a dive (shout when on the line or answering a smash, and no body hit), a
+    /// ground stroke or volley on the line (with the shout). On the line: `on_the_line`, never after a body hit on
+    /// the first court contact. Call after `point_over`.
+    // ponytail: the scoreboard's "called branch" (rally block +0x14) that moves the ace/return kinds one shot on is
+    // not ported (as the banners)
+    pub fn applause(&self, rally: &Rally, hitter_won: bool, body_hit: bool, contacts: i32, doubles: bool) -> Option<bool> {
+        let line = (!body_hit || contacts > 1) && on_the_line(self.mark, rally.shots < 2, doubles);
+        match finish_kind(rally.shots, rally.call, self.last).filter(|_| hitter_won) {
+            Some(0) if self.strong => Some(line),
+            Some(1 | 2) => Some(line),
+            _ => match self.branches {
+                [3, before] => Some((line || before == 4) && !body_hit),
+                [1 | 2, _] if line => Some(true),
+                _ => None,
+            },
+        }
+    }
+
     /// A new point is set up: marks record afresh; a set or match point for either team after a point that wasn't
     /// one starts its banner.
     // ponytail: the jingle (slot 9) isn't loaded
     pub fn new_point(&mut self, score: &Score, rules: &Rules) {
         self.mark = [[0.0; 2]; 2];
         self.marking = true;
+        self.branches = [5; 2];
         match (0..2).find_map(|t| set_point(score, rules, t)) {
             None | Some(0) => self.armed = true,
             Some(r) => {
@@ -1299,6 +1325,40 @@ mod banner_tests {
         assert_eq!(finish_kind(5, Call::NetIn, (4, false)), None);
         assert_eq!(finish_kind(4, Call::In, (2, true)), Some(3));
         assert_eq!(finish_kind(4, Call::In, (1, false)), None);
+    }
+
+    /// B47: which plain points the gallery applauds (the walkers clap at every one), and when a shout follows.
+    #[test]
+    fn applause() {
+        let rally = |shots| Rally { call: Call::In, shots, ..default() };
+        // a rally of `shots`, the last branches, the toss, the bounce mark on the line or well inside
+        let f = |branches: [u8; 2], strong: bool, line: bool| {
+            let mark = if line { [[4.1, 0.0], [4.2, 1.0]] } else { [[2.0, 2.0], [2.5, 3.0]] };
+            let last = (branches[0], false);
+            Finish { branches, strong, mark, last, ..default() }
+        };
+        let a = |f: &Finish, shots, won, body| f.applause(&rally(shots), won, body, 1, false);
+        // an ace off a strong toss; not off a weak one, nor when the server's team lost it
+        assert_eq!(a(&f([0, 5], true, false), 1, true, false), Some(false));
+        assert_eq!(a(&f([0, 5], true, true), 1, true, false), Some(true));
+        assert_eq!(a(&f([0, 5], false, true), 1, true, false), None);
+        assert_eq!(a(&f([0, 5], true, false), 1, false, false), None);
+        // return and smash winners
+        assert_eq!(a(&f([1, 0], false, false), 2, true, false), Some(false));
+        assert_eq!(a(&f([4, 1], false, true), 6, true, false), Some(true));
+        // a dive: always, the shout on the line or after a smash, never after a body hit
+        assert_eq!(a(&f([3, 1], false, false), 5, true, false), Some(false));
+        assert_eq!(a(&f([3, 4], false, false), 5, true, false), Some(true));
+        assert_eq!(a(&f([3, 1], false, true), 5, false, false), Some(true));
+        assert_eq!(a(&f([3, 1], false, true), 5, true, true), Some(false));
+        // a ground stroke or volley: only on the line (never after a body hit on the first contact)
+        assert_eq!(a(&f([1, 2], false, false), 5, true, false), None);
+        assert_eq!(a(&f([2, 1], false, true), 5, true, false), Some(true));
+        assert_eq!(a(&f([2, 1], false, true), 5, true, true), None);
+        assert_eq!(f([2, 1], false, true).applause(&rally(5), true, true, 2, false), Some(true));
+        // a counter is no named point of the gallery's: a ground counter inside the lines just cheers
+        let counter = Finish { last: (1, true), ..f([1, 2], false, false) };
+        assert_eq!(a(&counter, 5, true, false), None);
     }
 
     #[test]

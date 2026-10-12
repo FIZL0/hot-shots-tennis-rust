@@ -739,7 +739,7 @@ fn gallery_matches_the_game() {
         if points(k) != points(k - 1) {
             // the last hitter's branch (4 smash)
             let branch = s[k].hit[0x20 + 8 * (u(s[k].rally, 8) as usize & 3) + 5];
-            gallery.point(sound::reaction(0, false, branch == 4, &mut errors).unwrap(), &mut roll);
+            gallery.point(sound::reaction(0, false, (branch == 4).then_some(false), &mut errors).unwrap(), &mut roll);
         }
         for (p, angle) in gallery.step(10, 4, false, &mut roll) {
             want.push((k + 1, p.program, p.key, angle, p.volume));
