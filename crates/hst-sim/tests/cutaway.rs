@@ -138,7 +138,7 @@ fn director_s05() {
         let pl = |i: usize| PL + 0x170 * i;
         // who: from the roles (last hitter, the one before), the last hitter, game end and the point's winner
         let ab = [i32_(s, TAB + 0x1800 + 0x198) as usize, i32_(s, TAB + 0x1800 + 0x19c) as usize];
-        let [shown, other] = cutaway::roles(ab, i32_(s, X + 0x18), i32_(s, X + 0x78) > 0, i32_(s, X + 0x68));
+        let [shown, other] = cutaway::roles(ab, i32_(s, X + 0x18), i32_(s, X + 0x78) > 0, i32_(s, X + 0x68), i32_(s, X + 0x98 + 0x18), |_| false);
         assert_eq!([shown, other], [0x1a0, 0x1a4].map(|o| i32_(s, TAB + 0x1800 + o) as usize), "cut-away {j} roles");
         let lost = shown as i32 & 1 != i32_(s, X + 0x68) & 1;
         let number = cutaway::pick(&lists, &mut counters, &PickInput {

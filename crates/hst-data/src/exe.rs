@@ -231,6 +231,26 @@ impl<'a> Game<'a> {
         [self.at(0x3f_cce0, 6).to_vec(), self.at(0x3f_cce8, 4).to_vec(), self.at(0x3f_ccf0, 7).to_vec()]
     }
 
+    /// The instant replay's camera shots: see [`ReplayCameras`].
+    pub fn replay_cameras(&self) -> ReplayCameras {
+        let pair = |a: u32| -> [u8; 2] { self.at(a, 2).try_into().unwrap() };
+        let three = |a: u32| -> [u8; 3] { self.at(a, 3).try_into().unwrap() };
+        let short = |a: u32| i16::from_le_bytes(self.at(a, 2).try_into().unwrap());
+        ReplayCameras {
+            by_type: [
+                self.at(0x3f_cc98, 7).to_vec(),
+                self.at(0x3f_cca0, 9).to_vec(),
+                self.at(0x3f_ccb0, 6).to_vec(),
+                self.at(0x3f_ccb8, 5).to_vec(),
+                self.at(0x3f_ccc0, 2).to_vec(),
+            ],
+            tracking: std::array::from_fn(|k| pair(0x3f_ccc8 + 2 * k as u32)),
+            end: [three(0x3f_cc80), three(0x3f_cc88)],
+            serve: three(0x3f_ccd8),
+            windows: std::array::from_fn(|k| (short(0x3f_ca6c + 0x38 * k as u32), short(0x3f_ca6e + 0x38 * k as u32))),
+        }
+    }
+
     /// The umpire's word countdowns in ticks (after this long her next word plays even if the last still
     /// sounds): score words (program 0, 14 keys) and announcements (program 2, 5 keys), for the game's language
     /// setting `language`, umpire `umpire` (0..5) and her voice set `set` (0..2).
@@ -707,6 +727,22 @@ pub struct FootCourt {
 
 /// Number of scripted camera shots.
 pub const CAMERA_SHOTS: usize = 108;
+
+/// The instant replay's camera shot lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplayCameras {
+    /// A recorded shot's camera by its shot type: 0 (the serve), 1–2 (strokes; any other type shares this list
+    /// under its own counter), 3, 5, 6 (a dive).
+    pub by_type: [Vec<u8>; 5],
+    /// The tracking camera between shots, a pair per replay (0 = none).
+    pub tracking: [[u8; 2]; 5],
+    /// The closing shot: after a close-up of the hitter, else.
+    pub end: [[u8; 3]; 2],
+    /// A fast-forwarded replay's first shot.
+    pub serve: [u8; 3],
+    /// Per recorder kind: ticks from the shot to its camera's pick, and to the end of its window.
+    pub windows: [(i16, i16); 9],
+}
 
 /// One scripted camera shot.
 #[derive(Clone, Debug, PartialEq)]

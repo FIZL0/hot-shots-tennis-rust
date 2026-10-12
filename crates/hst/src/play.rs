@@ -60,6 +60,7 @@ mod npcs;
 mod panel;
 mod popups;
 mod reaction_voices;
+mod replay_camera;
 mod surprise;
 mod snapshot;
 mod tick_input;

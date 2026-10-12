@@ -8,3 +8,4 @@ fast-forward/slow-mo schedule, its own cameras and the pad handling between poin
 P0b4d1 wired the decision into the app (`play/instant_replay.rs`), see `2-WIRED-FINAL.md`.
 P0b4d2 runs the replay (snapshot at each serve set-up, restore + logged pads), see `3-RUN-FINAL.md`.
 P0b4d5 adds the between-points buttons, the rally cancel and the replay starting at the board's pause end, see `4-BUTTONS-FINAL.md`.
+P0b4d4 gives the replay its own cameras (`play/replay_camera.rs`, `cutaway::ReplayPicks`), see `4-CAMERAS-FINAL.md`.

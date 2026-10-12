@@ -26,9 +26,16 @@ pub(super) struct Director {
     held: bool,
 }
 
+#[cfg(test)]
+impl Director {
+    pub(super) fn showing(&self) -> bool {
+        self.shot.is_some()
+    }
+}
+
 pub fn plugin(app: &mut App) {
     app.add_systems(Startup, setup)
-        .add_systems(FixedUpdate, step.after(super::simulate).before(super::start_effects));
+        .add_systems(FixedUpdate, (step, super::replay_camera::step).chain().after(super::simulate).before(super::start_effects));
 }
 
 fn setup(mut commands: Commands, args: Res<Args>) {
@@ -44,11 +51,12 @@ fn setup(mut commands: Commands, args: Res<Args>) {
         shot: None,
         held: false,
     });
+    commands.insert_resource(super::replay_camera::ReplayCamera::new(game.camera_shots(), game.replay_cameras()));
 }
 
 /// Bone `name`'s world matrix with the player's motion `id` at time `t` (clamped to its length), the player
 /// standing at `pos`.
-fn bone(p: &Player, data: &CharacterData, id: usize, t: f32, pos: [f32; 4], name: &str) -> Option<M4> {
+pub(super) fn bone(p: &Player, data: &CharacterData, id: usize, t: f32, pos: [f32; 4], name: &str) -> Option<M4> {
     let sk = &data.skeleton;
     let c = data.motions.get(&id)?;
     let n = sk.names.iter().position(|s| s == name)?;
@@ -79,6 +87,11 @@ fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M
 }
 
 fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion)>) {
+    // a replay runs on its own cameras (`replay_camera`); after the match-ending one its closing shot holds
+    if g.instant.replaying {
+        d.shot = None;
+        return;
+    }
     if g.last_hitter >= 0 && g.last_hitter as usize != d.roles[0] {
         d.roles = [g.last_hitter as usize, d.roles[0]];
     }
@@ -102,7 +115,7 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
     if d.shot.is_none() {
         let game_end = matches!(event, Event::Game | Event::Set);
         let winner = |i: usize| i as i32 & 1 == g.post_winner & 1;
-        let [shown, other] = cutaway::roles(d.roles, g.last_hitter, game_end, g.post_winner);
+        let [shown, other] = cutaway::roles(d.roles, g.last_hitter, game_end, g.post_winner, g.instant.replays, |i| g.players[i].dive.is_some());
         // ponytail: 117 frames in, as every rally point recorded; the game adds 93 or 99 instead of 97 to its 20 under
         // two flags not traced yet
         let t = if game_end { 378.0 } else { 117.0 };
