@@ -390,7 +390,7 @@ fn load(
             // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
             let mut r = hst_sim::weather::Rand::default();
             let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
-                let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
+                let skip = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
                 (0..skip).for_each(|_| _ = r.next());
                 r.next()
             });

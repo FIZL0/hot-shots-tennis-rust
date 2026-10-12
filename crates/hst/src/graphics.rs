@@ -118,7 +118,8 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
 /// The frame limit: sleep away what's left of the frame's time.
 // ponytail: thread::sleep overshoots by the OS timer's slack (≈0.1 ms on Linux); spin the last bit if that shows
 fn limit(g: Res<Graphics>, mut next: Local<Option<Instant>>) {
-    if g.fps == 0 {
+    // the browser paces frames itself (and can't sleep)
+    if g.fps == 0 || cfg!(target_arch = "wasm32") {
         *next = None;
         return;
     }

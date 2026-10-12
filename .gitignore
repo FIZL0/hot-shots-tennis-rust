@@ -20,3 +20,4 @@ research/journal/**/*
 tools/upscale_mods.sh
 /cache
 target-wasm/
+/web/pkg
