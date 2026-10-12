@@ -783,6 +783,37 @@ fn intro_ticks_like_the_game() {
     assert_eq!(d.len(), 20 * 16);
 }
 
+/// The intro's length from its source (the court's camera file and the "Start the match!" banner's animation) against
+/// every length recorded in the game: research/p3f2_intro_log.py (P3f2: courts 1–11 but 3 in doubles and 10 in
+/// singles) and research/p3f6_intro_watch.py (P3f6: court 3 in doubles, court 10 in singles, and courts 2, 5, 6, 7,
+/// 11 in doubles again; the frame the intro phase ends, + 1).
+#[test]
+fn intro_ticks_from_the_disc() {
+    let Ok(mut iso) = hst_data::iso::Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"))
+    else {
+        return eprintln!("ISO absent, skipped");
+    };
+    // (court, singles, doubles)
+    let recorded = [
+        (1, 364, 364),
+        (2, 394, 394),
+        (3, 394, 394),
+        (4, 394, 394),
+        (5, 446, 446),
+        (6, 394, 394),
+        (7, 394, 394),
+        (8, 394, 394),
+        (9, 394, 394),
+        (10, 394, 394),
+        (11, 354, 354),
+    ];
+    for (court, singles, doubles) in recorded {
+        let ticks = Rngs::intro_ticks_on_disc(&mut iso, court).unwrap();
+        assert_eq!((ticks, ticks), (singles, doubles), "court {court}");
+        assert_eq!(Rngs::intro_ticks(court), ticks, "court {court}");
+    }
+}
+
 /// Clouds remade at a weather change, against `context/p3f3/run2.bin` (research/p3f3_cloud_log.py: slot 5's
 /// schedule rewritten to rain 3, rain 5, 1, then 0, a point each) and its `.clouds` (the court's cloud list right after
 /// each change). From each new point's shared reseed (the state found from `rng_s05.bin`'s first sample by its

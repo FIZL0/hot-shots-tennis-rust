@@ -1434,7 +1434,8 @@ fn setup(
     reseed_sound(&mut game);
     // the intro's lens flare ticks
     if weather.is_some_and(|w| w.today().weather < 2) {
-        (0..Rngs::intro_ticks(game.stage as u32)).for_each(|_| game.rng.flare_tick());
+        let ticks = Rngs::intro_ticks_on_disc(&mut iso, game.stage as u32).expect("court intro files on disc");
+        (0..ticks).for_each(|_| game.rng.flare_tick());
     }
     game.rng.new_point();
     game.humans = (0..n).map(|k| pads.slot_of(k, n).is_some()).collect();

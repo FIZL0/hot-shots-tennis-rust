@@ -7,6 +7,7 @@
 //! that order); the match start, a change of ends and a new point after a point's end then reseed the sound manager's.
 
 use crate::ps2;
+use hst_data::{ani::{self, Anim}, iso::Iso, xb::Archive};
 
 /// The C library's `rand()`: a 64-bit LCG whose state is 1 at boot (the game never reseeds it); each call returns
 /// bits 32..62 of the stepped state.
@@ -163,9 +164,36 @@ impl Rngs {
         (self.rand.next(), draws)
     }
 
-    /// The match intro's game ticks on court `stage` (before the first point, each a lens flare tick in clear or
-    /// cloudy weather). Recorded per court, the same in singles and doubles (research/p3f2_intro_log.py).
-    // ponytail: recorded lengths; court 3 is recorded in singles only and court 10 in doubles only
+    /// The match intro's game ticks (before the first point, each a lens flare tick in clear or cloudy weather). The
+    /// intro phase ends once the court's camera flyover (`camera`: `cam_cNN_00.dat`, 40-byte records whose first
+    /// field is the move's frames) has run and then the "Start the match!" banner's animation (`banner`) has played
+    /// out: the flyover takes its records' frames (a record of 0 frames after the first cuts to a new segment, 2
+    /// frames), the banner its last key's frame, and the two hand-offs a tick each. Its timer (3 ticks) and the
+    /// streamed sound are done long before. Same in singles and doubles.
+    pub fn intro_ticks_of(camera: &[u8], banner: &Anim) -> usize {
+        let flyover: usize = camera
+            .chunks_exact(40)
+            .take(20)
+            .enumerate()
+            .map(|(i, r)| (i16::from_le_bytes([r[0], r[1]]).max(0) as usize).max(2 * (i > 0) as usize))
+            .sum();
+        flyover + (banner.end_tick() / banner.ticks_per_frame) as usize + 2
+    }
+
+    /// `intro_ticks_of` for court `stage` from the disc (`COURT/NN/CMN.XB` and INPANE's `i_gamestart_00.ANI`).
+    pub fn intro_ticks_on_disc(iso: &mut Iso, stage: u32) -> Option<usize> {
+        let read = |iso: &mut Iso, xb: &str, name: &str| {
+            let d = iso.read(xb).ok()?;
+            let arc = Archive::parse(&d).ok()?;
+            arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(name))?).ok()
+        };
+        let camera = read(iso, &format!("COURT/{stage:02}/CMN.XB"), &format!("cam_c{stage:02}_00.dat"))?;
+        let banner = read(iso, "AZUMA/INPANE/INPANE.XB0", "i_gamestart_00.ani")?;
+        Some(Self::intro_ticks_of(&camera, &ani::parse(&banner).ok()?))
+    }
+
+    /// `intro_ticks_on_disc` for the retail disc's court `stage` (1–11), for callers without the disc at hand.
+    // ponytail: the retail courts' lengths, checked against the disc by tests/rng.rs intro_ticks_from_the_disc
     pub fn intro_ticks(stage: u32) -> usize {
         match stage {
             1 => 364,
