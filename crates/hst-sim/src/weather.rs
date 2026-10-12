@@ -151,9 +151,16 @@ pub fn rain(weather: u8) -> bool {
 }
 
 /// The sky clouds' layout in this weather, in cloud units (×40 when drawn): (radius, lowest y, highest y, count
-/// or `None` for the court's own count). Heavy rain packs 200 low clouds.
-pub fn cloud_layout(weather: u8) -> (f32, f32, f32, Option<usize>) {
-    if weather == 3 || weather == 5 { (50.0, -2.0, -5.0, Some(200)) } else { (50.0, -5.0, -10.0, None) }
+/// or `None` for the court's own count). Heavy rain packs `rain` (`exe::Game::rain_clouds`: 200 low clouds).
+pub fn cloud_layout(weather: u8, rain: (usize, [f32; 3])) -> (f32, f32, f32, Option<usize>) {
+    let (n, [r, y0, y1]) = rain;
+    if weather == 3 || weather == 5 { (r, y0, y1, Some(n)) } else { (50.0, -5.0, -10.0, None) }
+}
+
+/// A new point's weather change from `old` to `new` remakes the clouds (singles and doubles alike), unless both
+/// are heavy rain.
+pub fn clouds_remade(old: u8, new: u8) -> bool {
+    old != new && !(matches!(old, 3 | 5) && matches!(new, 3 | 5))
 }
 
 /// The clouds' colour scale.

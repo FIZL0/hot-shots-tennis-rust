@@ -102,8 +102,21 @@ impl Rngs {
     /// A new point: the shared generator, then the court's, take fresh `rand()` seeds.
     // ponytail: a replay keeps the point's saved seed; no replays here
     pub fn new_point(&mut self) {
+        self.new_point_clouds(0);
+    }
+
+    /// A new point whose weather change remakes `clouds` clouds (`weather::clouds_remade`): their draws come between
+    /// the shared and the court generator's seeds. Returns them (`clouds::spawn`).
+    pub fn new_point_clouds(&mut self, clouds: usize) -> Vec<u32> {
         self.shared = Mt::new(self.rand.next());
+        let draws = self.clouds(clouds);
         self.court = Mt::new(self.rand.next());
+        draws
+    }
+
+    /// `n` clouds are made: 5 `rand()` draws each (`clouds::spawn`).
+    pub fn clouds(&mut self, n: usize) -> Vec<u32> {
+        (0..5 * n).map(|_| self.rand.next()).collect()
     }
 
     /// The sound manager's reseed (the match start, change ends, and after `new_point` when a point has just ended):
@@ -114,18 +127,16 @@ impl Rngs {
 
     /// The match setup's `rand()` calls after the seed, up to the sound manager's second reseed (which
     /// `change_ends` makes): the sun's lens flare is made (24 rays × a brightness and an angle jitter), the sound
-    /// manager's first reseed, the court's `clouds` clouds are placed (5 each: a heading, x, height, z and a model;
-    /// made in doubles too, where they neither move nor draw), and the effects seed is drawn. Returns the effects
-    /// seed (the effects' LCG restarts from it at every new point).
-    pub fn setup_rand(&mut self, clouds: usize) -> u32 {
+    /// manager's first reseed, `clouds` clouds are placed (`clouds`; the court's count for the first game's weather in
+    /// singles, none in doubles), and the effects seed is drawn. Returns the effects seed (the effects' LCG restarts
+    /// from it at every new point) and the clouds' draws.
+    pub fn setup_rand(&mut self, clouds: usize) -> (u32, Vec<u32>) {
         for _ in 0..48 {
             self.rand.next();
         }
         self.change_ends();
-        for _ in 0..5 * clouds {
-            self.rand.next();
-        }
-        self.rand.next()
+        let draws = self.clouds(clouds);
+        (self.rand.next(), draws)
     }
 
     /// The match intro's game ticks on court `stage` (before the first point, each a lens flare tick in clear or
