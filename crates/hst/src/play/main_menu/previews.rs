@@ -726,10 +726,11 @@ struct Voices {
 }
 
 /// The voice a press on a card plays as its motion starts (B86a), as the original's Data → Items → Characters screen,
-/// whose inspect the cards copy: R2 / L2 key 1 / 0 of program 0 of the character's `itgNN_n` bank (bank slot 0x16;
-/// `_c` from costume 5 on, the Costumes tab), △ the "Voice Sample", key = character of `mvc_it0` (slot 0x13;
-/// `mvc_it1`, slot 0x14, from costume 5 on). A mod: R2 / L2 its own `voice/` program 9 / 10 key 0 (the match's voices
-/// for the same motions, 0x2e / 0x2f), else its donor's costume-0 ones; △ its donor's sample only if it ships no voice.
+/// whose inspect the cards copy: R2 / L2 key 0 / 1 (the happy / upset take; pad bits 0x200 / 0x100) of program 0 of
+/// the character's `itgNN_n` bank (bank slot 0x16; `_c` from costume 5 on, the Costumes tab), △ the "Voice Sample",
+/// key = character of `mvc_it0` (slot 0x13; `mvc_it1`, slot 0x14, from costume 5 on). A mod: R2 / L2 its own `voice/` program 9 / 10 key 0 (the match's voices
+/// for the same motions, 0x2e / 0x2f), nothing for a take it lacks (B105: another person's voice would stand in); a mod
+/// with no voice at all: its donor's costume-0 R2 / L2 and sample.
 fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<String, Option<Arc<SoundBank>>>, iso: &Path) -> Option<(Arc<SoundBank>, sound::Play)> {
     let (c, costume) = match who {
         Who::Disc(c) => (c, costume),
@@ -739,9 +740,7 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
             if let Some(own) = own {
                 // ponytail: no mod take stands in for the sample (the standard has none); a mod with voices gives none
                 let program: u8 = match act { Act::Win => 9, Act::Loss => 10, Act::Pose => return None };
-                if own.wav.contains_key(&(program as usize)) {
-                    return Some((own, sound::Play { slot: 0x16, program, key: 0, volume: 0x80, speed: 1.0 }));
-                }
+                return own.wav.contains_key(&(program as usize)).then(|| (own, sound::Play { slot: 0x16, program, key: 0, volume: 0x80, speed: 1.0 }));
             }
             (m.donor, 0)
         }
@@ -750,7 +749,7 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
     let (xb, hd, play) = match act {
         Act::Win | Act::Loss => {
             let v = if alt { 'c' } else { 'n' };
-            (format!("SND/VOICE/MENU/ITG{c:02}_{}.XB0", v.to_ascii_uppercase()), format!("data/sound/VOICE/MENU/itg{c:02}_{v}.hd"), sound::Play { slot: 0x16, program: 0, key: (act == Act::Win) as u8, volume: 0x80, speed: 1.0 })
+            (format!("SND/VOICE/MENU/ITG{c:02}_{}.XB0", v.to_ascii_uppercase()), format!("data/sound/VOICE/MENU/itg{c:02}_{v}.hd"), sound::Play { slot: 0x16, program: 0, key: (act == Act::Loss) as u8, volume: 0x80, speed: 1.0 })
         }
         Act::Pose => {
             let n = alt as u8;
@@ -883,7 +882,7 @@ mod tests {
         let sound = Sound::test(&mut disc);
         let dir = std::env::temp_dir().join(format!("hst-b86a-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("voice")).unwrap();
-        // a 0.1 s silent PCM16 mono wav as the mod's R2 voice (program 9); no L2 take, so L2 falls back to the donor
+        // a 0.1 s silent PCM16 mono wav as the mod's R2 voice (program 9); no L2 take, so L2 plays nothing
         let mut wav = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x22\x56\0\0\x44\xac\0\0\x02\0\x10\0data".to_vec();
         wav.extend((4410u32 * 2).to_le_bytes());
         wav.extend(vec![0u8; 4410 * 2]);
@@ -901,18 +900,20 @@ mod tests {
             (Arc::as_ptr(&bank), play.slot, play.program, play.key)
         };
         let (win, s, p, k) = go(Act::Win, Who::Disc(2), 0);
-        assert_eq!((s, p, k), (0x16, 0, 1));
-        assert_eq!(go(Act::Loss, Who::Disc(2), 0), (win, 0x16, 0, 0));
+        // B105: R2 the happy take (key 0), L2 the upset one (key 1), as the original's 0x200 / 0x100 handlers
+        assert_eq!((s, p, k), (0x16, 0, 0));
+        assert_eq!(go(Act::Loss, Who::Disc(2), 0), (win, 0x16, 0, 1));
         assert_ne!(go(Act::Win, Who::Disc(2), 5).0, win, "costume 5 on: the _c bank");
         let tail = |(_, s, p, k)| (s, p, k);
         assert_eq!(tail(go(Act::Pose, Who::Disc(2), 0)), (0x13, 0, 2));
         assert_eq!(go(Act::Pose, Who::Disc(2), 7).1, 0x14);
-        // the mod: its own R2 take; L2 the donor's costume-0 bank; △ none (it has a voice); no voice → all the donor's
+        // the mod: its own R2 take; L2 and △ none (it has a voice, not the donor's); no voice → all the donor's
         assert_eq!(tail(go(Act::Win, Who::Mod(0), 7)), (0x16, 9, 0));
         let donor = go(Act::Win, Who::Disc(3), 0).0;
-        assert_eq!(go(Act::Loss, Who::Mod(0), 7), (donor, 0x16, 0, 0));
+        assert!(voice(Act::Loss, Who::Mod(0), 7, &mods, &mut HashMap::new(), iso).is_none());
         assert!(voice(Act::Pose, Who::Mod(0), 0, &mods, &mut HashMap::new(), iso).is_none());
-        assert_eq!(go(Act::Win, Who::Mod(1), 7), (donor, 0x16, 0, 1));
+        assert_eq!(go(Act::Win, Who::Mod(1), 7), (donor, 0x16, 0, 0));
+        assert_eq!(go(Act::Loss, Who::Mod(1), 7), (donor, 0x16, 0, 1));
         assert_eq!(tail(go(Act::Pose, Who::Mod(1), 7)), (0x13, 0, 3));
         std::fs::remove_dir_all(&dir).unwrap();
     }
