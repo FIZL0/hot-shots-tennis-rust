@@ -534,6 +534,9 @@ fn load(
             let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let e = spawn(&mut commands, parts, t);
+            if play::net_hide::picked(p.category, p.pos) {
+                commands.entity(e).insert(play::net_hide::HideNearCamera);
+            }
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
                 if let Some(sun) = &sun {

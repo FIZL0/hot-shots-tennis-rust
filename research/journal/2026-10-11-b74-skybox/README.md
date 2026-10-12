@@ -35,3 +35,8 @@ matrix rotY(yaw) and translation **main view eye + (0, lift, 0)**. They follow t
 - Courts 3, 5–9, 11 checked only by code path (no RAM dump of them); `_acc` (courts 3, 9) never seen in RAM.
 - Season row = 0 from the decompile and the RAM copy; no non-zero-season singles state checked.
 - clo/acc weather draw gates only as already ported.
+
+## B74d — the net in a close cut-away (3-B74D-FINAL.md)
+The original hides the net (it isn't clipped). It runs a camera test on the plant at the court centre: the eye within 7 m of
+the court's long axis, within 2 m of the net plane in a cut-away (0.8 m otherwise), and the net top above the lower view.
+Ported as `play/net_hide.rs` and checked per frame against the game's flag (slot 5, 28,001 frames).
