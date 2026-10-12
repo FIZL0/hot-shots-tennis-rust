@@ -18,7 +18,7 @@ use crate::Args;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, tick.after(crate::character::tick))
+        .add_systems(FixedUpdate, tick.after(super::bodyhit::pose))
         .add_systems(Update, (draw.after(super::camera), draw_dash, draw_bits.after(super::camera)));
 }
 
@@ -80,7 +80,7 @@ fn setup(
 /// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
 /// step the sim. The run object updates after the players (it takes their hit events the same frame), so the dive
 /// rings draw from the sound manager's generator after the frame's strokes.
-fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, q: Query<(&Figure, &Motion)>) {
+fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, q: Query<(&Figure, &Motion)>) {
     let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
     // the game clears the run object as a point is set up
@@ -103,9 +103,9 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
             let pd = p.dive.as_ref();
             let (dive, lunge, dive_over) = fx.dives.get_mut(i).map_or((false, 0.0, false), |w| w.see(pd.map(|d| (d.slide, d.cut()))));
             let sk = &data.skeleton;
-            let locals = super::bodyhit::posed(data, m)?;
+            let locals = posed.locals(i)?;
             let pm = super::player_matrix(p);
-            let joint = |n: &str| sk.names.iter().position(|b| b == n).map(|k| hst_sim::pose::node_world(sk, &locals, k, &pm));
+            let joint = |n: &str| sk.names.iter().position(|b| b == n).map(|k| hst_sim::pose::node_world(sk, locals, k, &pm));
             Some((
                 i,
                 Runner {
@@ -121,8 +121,6 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
                     dive,
                     lunge,
                     dive_over,
-                    // ponytail: where the motion set off, taken as a step back along the dive (the player hasn't moved yet)
-                    anchor: pd.map_or([0.0; 4], |d| [pm[3][0] - d.dir[0], pm[3][1], pm[3][2] - d.dir[1], pm[3][3]]),
                     ..Runner::default()
                 },
             ))
@@ -173,12 +171,12 @@ fn sub(g: &Game, i: usize, reacted: bool) -> i32 {
 }
 
 /// Puffs face the camera, pulled back half a metre along the game view's forward row (its camera → world row 2),
-/// `size` either side and twice that tall; footprints lie on the court.
-fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
-    let (Some(fx), Ok(cam)) = (fx, cam.single()) else { return };
-    let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
-    let (right, up) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y));
+/// `size` either side along row 0 and twice that up along row 1 of the basis the run object's draw builds facing
+/// back along the camera's look (`impact_matrix(-look)`, level right); footprints lie on the court.
+fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, mut meshes: ResMut<Assets<Mesh>>) {
+    let Some(fx) = fx else { return };
     let [ax, ay, az] = g.cam.view.rot[2];
+    let basis = hst_sim::effect::impact_matrix([-ax, -ay, -az, -0.0], [0.0; 3]);
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
     let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 4])>| {
         let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
@@ -197,12 +195,17 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, cam: Query<&Transform, With<crate
         .puffs
         .iter()
         .map(|p| {
-            use hst_sim::ps2::{add, madd};
+            use hst_sim::ps2::{add, madd, mul, sub};
             // pos + 0 − row 2 × 0.5 (the halving is exact, so one madd rounds as the game's mul and sub)
             let pull = |a: f32, r: f32| madd(add(a, 0.0), r, -0.5);
-            let foot = Vec3::new(pull(p.pos[0], ax), pull(p.pos[1], ay), pull(p.pos[2], az));
-            let (w, h) = (right * p.size, up * 2.0 * p.size);
-            ([foot - w + h, foot + w + h, foot - w, foot + w], [r, g, b, p.alpha / 128.0])
+            let foot = [pull(p.pos[0], ax), pull(p.pos[1], ay), pull(p.pos[2], az)];
+            let corner = |side: f32, top: bool| {
+                Vec3::from_array(std::array::from_fn(|k| {
+                    let at = add(foot[k], side * mul(basis[0][k], p.size));
+                    if top { sub(at, mul(mul(basis[1][k], p.size), 2.0)) } else { at }
+                }))
+            };
+            ([corner(-1.0, true), corner(1.0, true), corner(-1.0, false), corner(1.0, false)], [r, g, b, p.alpha / 128.0])
         })
         .collect();
     let (shown, empty) = if fx.wet { (&fx.wet_puffs, &fx.dry_puffs) } else { (&fx.dry_puffs, &fx.wet_puffs) };

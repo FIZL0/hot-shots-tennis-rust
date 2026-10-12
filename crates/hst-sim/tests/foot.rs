@@ -339,7 +339,8 @@ fn foot_extras_s05() {
 
 // `foot_s05g.bin` / `foot_s05c.bin` (`FOOT_DEBRIS=grass|dirt FOOT_FROM=11450 record_foot.py 5 120 … extras`): an
 // instant replay forced on every point (the third has a dive), the dirt one with the court made clay. Each frame as
-// `foot_s05x`, then the debris slots 0x2d00, the C `rand()` state 8 and per player the motion's start matrix 0x40.
+// `foot_s05x`, then the debris slots 0x2d00, the C `rand()` state 8 and per player the motion object's +0x84 matrix 0x40
+// (the `Bip01Head` node).
 const DB: usize = EX + 4 * EXSZ;
 const ANCHOR: usize = DB + 0x2d00 + 8;
 
@@ -417,10 +418,13 @@ fn foot_debris_s05() {
                         dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
                         lunge: f(x, 0),
                         dive_over: x[0x10 + 9] != 0,
-                        anchor: v4(fr, ANCHOR + 0x40 * p + 0x30),
                     }
                 })
                 .collect();
+            // the spawn's "motion object +0x84" matrix is the head node the rings read
+            for (p, r) in runners.iter().enumerate() {
+                assert_eq!(bits(&v4(fr, ANCHOR + 0x40 * p + 0x30)), bits(&r.head), "{name} frame {k}: player {p}'s +0x84 matrix isn't the head");
+            }
             let wkey = debris_key(&want, &want);
             let diving = runners.iter().any(|r| r.dive);
             // other `rand()` callers draw first in the frame: a blade group's 60 draws end at the recorded state
@@ -495,4 +499,19 @@ fn dive_inputs_s05() {
         }
     }
     eprintln!("{dives} dives");
+}
+
+/// The puff quad's basis: the run object's draw faces the camera's look vector, which every save state holds equal
+/// to row 2 (forward) of the camera's view matrix, the row the app builds the basis from.
+#[test]
+fn puff_look_is_view_forward() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/ram/");
+    let mut n = 0;
+    for s in ["s03", "s04", "s05", "s08", "s09", "npc_c01"] {
+        let Ok(ram) = std::fs::read(format!("{root}{s}.bin")) else { continue };
+        let w = |a: usize| u32::from_le_bytes(ram[a..a + 4].try_into().unwrap());
+        assert_eq!([0, 4, 8, 12].map(|o| w(0x1e7d30 + o)), [0, 4, 8].map(|o| w(0x1e7f30 + 0x20 + o)).into_iter().chain([0]).collect::<Vec<_>>()[..], "{s}");
+        n += 1;
+    }
+    eprintln!("{n} save states");
 }

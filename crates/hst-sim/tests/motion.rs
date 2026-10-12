@@ -673,6 +673,84 @@ fn fade_mix_ram() {
     assert!(players >= 3);
 }
 
+/// The motion player's node state across a frame (`pose::Nodes`), from the save states: starting from each player's
+/// nodes as caught (rows, sampled rotation +0xe0, position +0xf0), sampling the bound clip at its sampled time and,
+/// mid-fade, mixing the outgoing clip over it gives back every node's rows and held values bit for bit: the mix
+/// writes only rows (position w 1) and mixes from the held values, which only sampling changes.
+#[test]
+fn nodes_ram() {
+    use hst_data::iso::Iso;
+    use hst_sim::pose::{Clip, Nodes};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let Ok(mut iso) = Iso::open(format!("{root}Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let (mut players, mut fading, mut nodes_n) = (0, 0, 0);
+    for s in ["s03", "s04", "s05", "s08", "s09"] {
+        let Ok(ram) = std::fs::read(format!("{root}context/ram/{s}.bin")) else { return eprintln!("{s}.bin absent, skipped") };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let fr = |a: usize| f32::from_bits(u(a) as u32);
+        let gm = u(0x422f80);
+        for p in 0..4 {
+            let an = u(u(gm + 0xa8 + 4 * p) + 0x54);
+            let (id, clip, old, oclip, count) = (u(an + 0x20), u(an + 0x24), u(an + 0x44), u(an + 0x48), u(an + 0x60) as i32);
+            if clip == 0 || ram[(an + 0x6c) & 0x1ff_ffff] != 0 {
+                continue;
+            }
+            let (a, sk) = ram_clip(&mut iso, &ram, an, clip, id);
+            let new = Clip::new(&sk, &a);
+            let base = u(u(u(u(an)) + 0xc) + 0x64);
+            // the game's node of each of our skeleton's nodes a clip tracks (its node list isn't the model's)
+            let mut ram_node = vec![None; sk.rest.len()];
+            let mut bind = |c: usize, ours: &Clip| {
+                for (k, t) in ours.tracks.iter().enumerate() {
+                    ram_node[t.node] = Some(base + ((u(u(c + 0x1c) + 2 * (k & !1)) >> (16 * (k & 1))) as u16 as usize) * 0x120);
+                }
+            };
+            bind(clip, &new);
+            let other = (oclip != 0).then(|| {
+                let (a, sk) = ram_clip(&mut iso, &ram, an, oclip, old);
+                Clip::new(&sk, &a)
+            });
+            if let Some(o) = &other {
+                bind(oclip, o);
+            }
+            let n = sk.rest.len();
+            let rows = |k: usize| -> [[f32; 4]; 4] { ram_node[k].map_or(sk.rest[k], |a| std::array::from_fn(|r| std::array::from_fn(|c| fr(a + 0x80 + 16 * r + 4 * c)))) };
+            let q = |k: usize| ram_node[k].map_or([0.0; 4], |a| [0, 4, 8, 12].map(|o| fr(a + 0xe0 + o)));
+            let x = |k: usize| ram_node[k].map_or([0.0; 3], |a| [0, 4, 8].map(|o| fr(a + 0xf0 + o)));
+            let mut nodes = Nodes::from_parts((0..n).map(rows).collect(), (0..n).map(q).collect(), (0..n).map(x).collect());
+            let bits = |m: &[[f32; 4]; 4]| m.map(|r| r.map(f32::to_bits));
+            // what a clip's sampling or mix wrote into a node's rows, as it copies them into the clip's cache
+            let cached = |c: usize, ours: &Clip, nodes: &Nodes, upto: usize, least: usize, ctx: &str| {
+                for (k, t) in ours.tracks.iter().enumerate().take(upto) {
+                    let (rot, pos) = ours.keys(k);
+                    let cache = u(c + 0x18) + 0x40 * k;
+                    let want: [[u32; 4]; 4] = std::array::from_fn(|r| std::array::from_fn(|j| u(cache + 16 * r + 4 * j) as u32));
+                    let got = bits(&nodes.local[t.node]);
+                    let rows = if rot >= least { 0 } else { 3 }..if pos >= least { 4 } else { 3 };
+                    assert_eq!(got[rows.clone()], want[rows], "{ctx} track {k} {} cache", sk.names[t.node]);
+                }
+            };
+            let ctx = format!("{s} p{p} motion {id:#x} (old {old:#x})");
+            nodes.sample(&new, fr(an + 0x38));
+            cached(clip, &new, &nodes, usize::MAX, 2, &ctx);
+            if let Some(o) = &other {
+                let w = hst_sim::ps2::div((count + 1) as f32, u(an + 0x5c) as f32);
+                nodes.mix(o, fr(an + 0x4c), w, 23);
+                cached(oclip, o, &nodes, 23, 1, &ctx);
+                fading += 1;
+            }
+            let n = (0..n).filter(|&k| ram_node[k].is_some()).inspect(|&k| {
+                let (hq, hx) = nodes.held(k);
+                assert_eq!((hq.map(f32::to_bits), hx.map(f32::to_bits)), (q(k).map(f32::to_bits), x(k).map(f32::to_bits)), "{ctx} node {k} {} held", sk.names[k]);
+            }).count();
+            players += 1;
+            nodes_n += n;
+        }
+    }
+    eprintln!("{players} players ({fading} mid-fade), {nodes_n} nodes bit-exact");
+    assert!(fading >= 3);
+}
+
 /// Every stroke's hand-off in the slot-5 match (`context/fixtures/anim_s05.bin`; player +0x3f00 frames since contact,
 /// +0x3e50 recovery, +0x3ec1 branch, +0x3ee4 shot code): played out the frame after the motion's sampled time
 /// reached its length, broken off into standing or running no earlier than `follow_over` allows with input, and the

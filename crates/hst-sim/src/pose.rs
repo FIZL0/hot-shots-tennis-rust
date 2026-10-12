@@ -265,6 +265,11 @@ impl Clip {
         (rot, pos)
     }
 
+    /// Track `k`'s rotation and position key counts.
+    pub fn keys(&self, k: usize) -> (usize, usize) {
+        (self.tracks[k].rot.tick.len(), self.tracks[k].pos.tick.len())
+    }
+
     /// Every node's local matrix at `t` frames (rest where no track keys it).
     pub fn locals(&self, sk: &Skeleton, t: f32) -> Vec<M4> {
         let mut local = sk.rest.clone();
@@ -282,6 +287,94 @@ impl Clip {
             }
         }
         local
+    }
+}
+
+/// A skeleton's nodes as the motion player keeps them from frame to frame: each node's local rows, and the
+/// rotation and position a clip last sampled into it. A crossfade mixes from the sampled values and writes only
+/// the rows, so a node the playing clip doesn't key mixes from whatever clip last keyed it.
+#[derive(Clone)]
+pub struct Nodes {
+    pub local: Vec<M4>,
+    q: Vec<[f32; 4]>,
+    p: Vec<[f32; 3]>,
+}
+
+impl Nodes {
+    // ponytail: before any clip has sampled a node it holds its rest pose (the player's creation isn't ported)
+    pub fn new(sk: &Skeleton) -> Nodes {
+        Nodes { local: sk.rest.clone(), q: sk.rest.iter().map(crate::quat::from_matrix).collect(), p: sk.rest.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect() }
+    }
+
+    /// Nodes as caught in a save state: local rows, sampled rotations and positions.
+    pub fn from_parts(local: Vec<M4>, q: Vec<[f32; 4]>, p: Vec<[f32; 3]>) -> Nodes {
+        Nodes { local, q, p }
+    }
+
+    /// Node `n`'s sampled rotation and position (what a crossfade mixes from).
+    pub fn held(&self, n: usize) -> ([f32; 4], [f32; 3]) {
+        (self.q[n], self.p[n])
+    }
+
+    /// Binding `clip`: every node's rows back to rest, single-key lists set once, unkeyed lists of its tracks held
+    /// at rest (the sampled values of nodes it doesn't track stay as they were).
+    pub fn bind(&mut self, sk: &Skeleton, clip: &Clip) {
+        self.local.clone_from(&sk.rest);
+        for k in 0..clip.tracks.len() {
+            let (tr, n) = (&clip.tracks[k], clip.tracks[k].node);
+            let (rot, pos) = clip.sample(k, 0.0);
+            match (tr.rot.tick.len(), rot) {
+                (1, Some(q)) => self.rotate(n, q),
+                (0, _) => self.q[n] = crate::quat::from_matrix(&sk.rest[n]),
+                _ => {}
+            }
+            match (tr.pos.tick.len(), pos) {
+                (1, Some(p)) => self.place(n, p, tr.pos.hermite(0.0)[3]),
+                (0, _) => self.p[n] = [sk.rest[n][3][0], sk.rest[n][3][1], sk.rest[n][3][2]],
+                _ => {}
+            }
+        }
+    }
+
+    /// One frame of `clip` at `t`: lists of two or more keys resampled into the rows and the held values.
+    pub fn sample(&mut self, clip: &Clip, t: f32) {
+        for k in 0..clip.tracks.len() {
+            let (tr, n) = (&clip.tracks[k], clip.tracks[k].node);
+            let (rot, pos) = clip.sample(k, t);
+            if let (true, Some(q)) = (tr.rot.tick.len() > 1, rot) {
+                self.rotate(n, q);
+            }
+            if let (true, Some(p)) = (tr.pos.tick.len() > 1, pos) {
+                self.place(n, p, tr.pos.hermite(ps2::mul(t, clip.ticks_per_frame))[3]);
+            }
+        }
+    }
+
+    /// A crossfade's mix of `clip` at `t` over the first `count` tracks: each keyed list from the node's held value
+    /// toward the clip's by `w`, into the rows only (position w 1).
+    pub fn mix(&mut self, clip: &Clip, t: f32, w: f32, count: usize) {
+        for k in 0..clip.tracks.len().min(count) {
+            let n = clip.tracks[k].node;
+            let (rot, pos) = clip.sample(k, t);
+            let (q, p) = crate::motion::mix((self.q[n], self.p[n]), (rot.unwrap_or(self.q[n]), pos.unwrap_or(self.p[n])), w);
+            if rot.is_some() {
+                self.local[n][..3].copy_from_slice(&q_matrix(q)[..3]);
+            }
+            if pos.is_some() {
+                self.local[n][3] = [p[0], p[1], p[2], 1.0];
+            }
+        }
+    }
+
+    fn rotate(&mut self, n: usize, q: [f32; 4]) {
+        self.local[n][..3].copy_from_slice(&q_matrix(q)[..3]);
+        self.q[n] = q;
+    }
+
+    fn place(&mut self, n: usize, [x, y, z]: [f32; 3], w: f32) {
+        // w is the interpolated key w (unscaled), not always exactly 1
+        self.local[n][3] = [x, y, z, w];
+        self.p[n] = [x, y, z];
     }
 }
 
