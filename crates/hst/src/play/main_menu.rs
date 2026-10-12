@@ -891,7 +891,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
-        "lobby" => Screen::Lobby,
+        "lobby" | "lobby-ask" => Screen::Lobby,
         _ => Screen::Main,
     };
     if !fresh {
@@ -1796,6 +1796,7 @@ mod tests {
             no_face: false,
             voice: "voice/".into(),
             motions: None,
+            skeleton: None,
         };
         let ok = press(|p| &mut p.ok);
         let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };

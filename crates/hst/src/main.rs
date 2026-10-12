@@ -26,6 +26,7 @@ mod graphics;
 mod handshake;
 mod gs;
 mod mods;
+mod mods_online;
 mod net;
 mod hud_gamma;
 mod inspect;

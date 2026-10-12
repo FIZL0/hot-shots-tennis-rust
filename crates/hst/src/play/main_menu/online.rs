@@ -6,7 +6,11 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
+use crate::mods_online::{self as mo, Ask, Wire};
 use crate::net::{Cmd, Event, Listing, Net, Online, Pick, Relay, Room, Seat};
 
 /// What Online does once this machine's players are picked.
@@ -30,6 +34,12 @@ pub struct View {
     pub room: Option<Room>,
     pub list: Vec<Listing>,
     pub started: bool,
+    /// Mods in the lobby (M2i), by their looks (pack hash): where this machine has them (`None`: a stand-in plays
+    /// it), the ones asked for and not here yet, the one the prompt asks about, the line-up last reported settled.
+    pub looks: HashMap<u64, Option<PathBuf>>,
+    pub wanted: HashSet<u64>,
+    pub ask: Option<u64>,
+    pub ready: Option<u32>,
 }
 
 /// What an Online press asks of the app.
@@ -43,9 +53,14 @@ pub enum Fx {
     SaveCfg,
     /// Read `online.txt` (opening the Online screen).
     Load,
+    /// Remember the answer to "get a remote mod's looks?".
+    Ask(Ask),
 }
 
 const ROWS: [&str; 6] = ["Host", "Find", "Quickplay", "Join by Code", "Relay", "Back"];
+/// The prompt for a mod this machine doesn't have: fetch its looks or not, and whether to ask again.
+const ASK_ROWS: [(&str, bool, Ask); 4] =
+    [("Download, always", true, Ask::Always), ("Download this one", true, Ask::Each), ("Stand-in this time", false, Ask::Each), ("Never download", false, Ask::Never)];
 
 impl Menu {
     pub(super) fn online(&self) -> bool {
@@ -59,7 +74,18 @@ impl Menu {
 
     /// This machine's players' picks, in seat order.
     fn picks(&self) -> Vec<Pick> {
-        (0..self.players()).filter(|&p| self.seats[p].is_some()).map(|p| Pick { char: self.players[p].char(), costume: self.players[p].costume }).collect()
+        let pick = |p: usize| {
+            let costume = self.players[p].costume;
+            match self.who(p) {
+                // a mod: its donor, and its gameplay data for every peer
+                super::Who::Mod(i) => {
+                    let m = &self.mods[i];
+                    Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new) }
+                }
+                super::Who::Disc(c) => Pick::disc(c, costume),
+            }
+        };
+        (0..self.players()).filter(|&p| self.seats[p].is_some()).map(pick).collect()
     }
 
     /// The lobby this machine would host: its players in the first seats, the rest open.
@@ -78,6 +104,8 @@ impl Menu {
         self.net.status.clear();
         self.net.room = None;
         self.net.started = false;
+        (self.net.ask, self.net.ready) = (None, None);
+        self.net.wanted.clear();
         match go {
             Go::Host => self.go(Screen::Confirm, out),
             Go::Find => {
@@ -144,6 +172,20 @@ impl Menu {
                     self.back_to_online(out);
                 }
             }
+            Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
+                rows(ASK_ROWS.len(), &mut self.sel, out);
+                if k.ok {
+                    let (_, fetch, remember) = ASK_ROWS[self.sel];
+                    self.net.ask = None;
+                    if fetch {
+                        self.net.wanted.insert(h);
+                        out.push(Effect::Online(Fx::Net(Cmd::Want(h))));
+                    } else {
+                        self.net.looks.insert(h, None);
+                    }
+                    out.extend([Sound(2), Effect::Online(Fx::Ask(remember))]);
+                }
+            }
             Screen::Lobby => {
                 if k.ok && !self.net.code.is_empty() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
@@ -199,8 +241,47 @@ impl Menu {
                 v.started = true;
                 v.status = "Everyone's in.".into();
             }
-            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) => {}
+            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) => {}
         }
+    }
+
+    /// The lobby's mods, each to its looks: found here, fetched or a stand-in by the remembered answer, else asked
+    /// (one at a time); once every one is settled, tell the host (the match waits for everyone).
+    fn settle(&mut self, iso: &str, net: &Net) {
+        let Some(room) = self.net.room.clone().filter(|_| !self.net.started) else { return };
+        let cache = mo::cache(iso);
+        for (_, w) in room.mods() {
+            let h = w.looks;
+            if self.net.looks.contains_key(&h) || self.net.wanted.contains(&h) || self.net.ask == Some(h) {
+                continue;
+            }
+            if let Some(d) = mo::find(w, &self.mods, &cache) {
+                self.net.looks.insert(h, Some(d));
+                continue;
+            }
+            match Ask::load(&cache) {
+                Some(Ask::Always) => {
+                    self.net.wanted.insert(h);
+                    net.send(Cmd::Want(h));
+                }
+                Some(Ask::Never) => drop(self.net.looks.insert(h, None)),
+                _ if self.net.ask.is_none() => (self.net.ask, self.sel) = (Some(h), 0),
+                _ => {}
+            }
+        }
+        if self.net.ready != Some(room.ver) && room.mods().all(|(_, w)| self.net.looks.contains_key(&w.looks)) {
+            self.net.ready = Some(room.ver);
+            net.send(Cmd::Ready(room.ver));
+        }
+    }
+
+    /// A mod's looks arrived: checked and kept, or refused (a stand-in plays it).
+    fn got_pack(&mut self, iso: &str, h: u64, pack: &[u8]) {
+        if !self.net.wanted.remove(&h) {
+            return;
+        }
+        let dir = mo::unpack(pack, h, &mo::cache(iso)).map(|m| m.dir).map_err(|e| self.net.status = format!("A mod's files were refused, a stand-in plays it: {e}")).ok();
+        self.net.looks.insert(h, dir);
     }
 }
 
@@ -265,6 +346,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     d.text(&format!("{}P", i + 1), 56.0, y + 8.0, 20.0, WHITE);
                     match s {
                         // the name from the select's name sheet, and whose machine (the host, or the peer's ID)
+                        Some(s) if let Some(w) = &s.pick.r#mod => {
+                            d.text(&w.name, 100.0, y + 8.0, 20.0, WHITE);
+                            let whose = if s.peer == "host" { "host".to_string() } else { s.peer.chars().take(6).collect() };
+                            d.text(&whose, 240.0, y + 8.0, 18.0, WHITE);
+                        }
                         Some(s) => {
                             d.q(super::NAMES, [23.0, 24.0 * s.pick.char as f32, 105.0, 24.0], [100.0, y + 4.0, 105.0, 24.0], WHITE, 128.0);
                             let whose = if s.peer == "host" { "host".to_string() } else { s.peer.chars().take(6).collect() };
@@ -273,6 +359,14 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         None => d.text("open", 100.0, y + 8.0, 20.0, WHITE),
                     }
                 }
+            }
+            if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
+                // a mod this machine doesn't have: its looks, or its donor recoloured
+                d.text(&format!("{} is a mod you don't have.", w.name), 380.0, 120.0, 18.0, WHITE);
+                let labels: Vec<String> = ASK_ROWS.iter().map(|r| r.0.to_string()).collect();
+                d.rows(&labels, m.sel, 400.0, 156.0, 220.0, hand_x);
+                d.info("Get its looks, or play it as its donor in odd colours.");
+                return;
             }
             if !m.net.code.is_empty() {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
@@ -323,7 +417,13 @@ pub(super) fn poll(
             if let Event::Start(r, me) = &e {
                 launch(&menu, r.clone(), me.clone(), &gamepads, &args, &mut commands);
             }
+            if let Event::Pack(h, b) = &e {
+                menu.got_pack(&args.iso, *h, b);
+            }
             menu.heard(e);
+        }
+        if menu.screen == Screen::Lobby {
+            menu.settle(&args.iso, &net);
         }
     }
     let code = &menu.net.code;
@@ -337,9 +437,15 @@ pub(super) fn poll(
 
 /// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the QR).
 pub(super) fn sample(m: &mut Menu) {
-    let pick = |char| Pick { char, costume: 0 };
+    let pick = |char| Pick::disc(char, 0);
     let seats = vec![Some(Seat { peer: "host".into(), pick: pick(6) }), Some(Seat { peer: "k51qzi5uqu5d".into(), pick: pick(1) }), None, None];
     m.net.room = Some(Room { name: "Player".into(), doubles: true, court: 0, sets: 1, games: 4, umpire: 4, seats, ..Default::default() });
+    if std::env::var("HST_MENU").as_deref() == Ok("lobby-ask") {
+        // 2P brought a mod this machine doesn't have: the prompt
+        let w = Wire { id: "x".into(), name: "Emi".into(), donor: 1, hand: 1.0, base: 1, overrides: vec![], ai_row: 1, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
+        m.net.room.as_mut().unwrap().seats[1].as_mut().unwrap().pick.r#mod = Some(Box::new(w));
+        m.net.ask = Some(7);
+    }
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
     m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
 }
@@ -356,6 +462,14 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         })
         .collect();
     let flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    // the mods by match slot (as `netplay::flags` orders the seats): the wire's gameplay, the looks this machine has
+    let order: &[usize] = if room.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
+    let mut mm = crate::mods::MatchMod::default();
+    for (k, &s) in order.iter().enumerate() {
+        if let Some(w) = room.seats.get(s).and_then(|x| x.as_ref()?.pick.r#mod.as_deref()) {
+            mm.set(k, mo::for_match(w, menu.net.looks.get(&w.looks).cloned().flatten().as_deref()));
+        }
+    }
     info!("starting the online match: {}", flags.join(" "));
     let base = args.clone();
     commands.queue(move |w: &mut World| {
@@ -365,7 +479,11 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
             crate::menu_mode(app);
         });
         let iso = w.resource::<crate::Args>().iso.clone();
-        w.insert_resource(crate::mode::Next(Some(crate::play::netplay::mode(&iso, &flags, back, net, room, me))));
+        let mode = crate::play::netplay::mode(&iso, &flags, back, net, room, me);
+        let mode = if mm.0.is_empty() { mode } else { mode.and(move |app| {
+            app.insert_resource(mm);
+        }) };
+        w.insert_resource(crate::mode::Next(Some(mode)));
     });
 }
 
@@ -403,6 +521,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::Load => {
             menu.net.cfg.get_or_insert_with(|| Online::load(iso));
         }
+        Fx::Ask(a) => a.save(&mo::cache(iso)),
         Fx::SaveCfg => {
             if let Some(cfg) = &menu.net.cfg {
                 let path = Online::path(iso);

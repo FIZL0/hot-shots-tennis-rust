@@ -853,7 +853,7 @@ mod tests {
         std::fs::write(dir.join("voice/9_0.wav"), &wav).unwrap();
         let m = |voice: &str| Mod {
             dir: dir.clone(), id: "t".into(), name: "t".into(), costumes: vec![], donor: 3, hand: 1.0, base: 3,
-            overrides: vec![], ai_row: 3, texture_face: false, no_face: false, voice: voice.into(), motions: None,
+            overrides: vec![], ai_row: 3, texture_face: false, no_face: false, voice: voice.into(), motions: None, skeleton: None,
         };
         let mods = [m("voice/"), m("none/")];
         let mut banks = HashMap::new();
