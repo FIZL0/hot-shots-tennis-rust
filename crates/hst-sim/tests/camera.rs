@@ -55,3 +55,19 @@ fn match_s05_camera() {
     eprintln!("{n} frames, worst {worst}");
     assert!(worst < 0.01, "worst error {worst}");
 }
+
+/// B49: the change-ends move starts on the view it was given, ends on the match camera's, and swings round
+/// the court at the views' distance (it doesn't slide through the court).
+#[test]
+fn change_ends_swing() {
+    use hst_sim::camera::{SWING, base, base_turned, swing, swing_weight};
+    let (a, b, pivot) = (base(), base_turned(), [0.0; 3]);
+    let close = |x: &View, y: &View| (0..3).all(|j| (x.eye[j] - y.eye[j]).abs() < 1e-3 && (x.rot[2][j] - y.rot[2][j]).abs() < 1e-4);
+    assert!(close(&swing(&a, &b, 0.0, pivot), &a) && close(&swing(&a, &b, 1.0, pivot), &b));
+    // halfway it looks across the court from beside it, as far out as it started
+    let flat = |v: &View| v.eye[0].hypot(v.eye[2]);
+    let mid = swing(&a, &b, 0.5, pivot);
+    assert!((flat(&mid) - flat(&a)).abs() < 1e-2 && mid.eye[2].abs() < 1e-2, "{mid:?}");
+    assert!(swing_weight(SWING - 1) < 1e-3 && swing_weight(0) == 1.0);
+    assert!((1..SWING).all(|k| swing_weight(k - 1) >= swing_weight(k)));
+}

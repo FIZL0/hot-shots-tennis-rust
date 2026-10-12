@@ -236,6 +236,41 @@ fn ease(from: View, to: View, t: f32) -> View {
     View { rot: [r, d, f], eye: mix(from.eye, to.eye), fov: from.fov + (to.fov - from.fov) * t }
 }
 
+/// Ticks of the change-ends phase's camera move (the phase is as long).
+pub const SWING: u32 = 80;
+
+/// The change-ends move's progress with `left` of its [`SWING`] ticks still to go (counted down before use,
+/// so the first tick has 79 left): t = 1 − left/80 eased as t^(2·(1−t)²), slow out, fast through the middle.
+pub fn swing_weight(left: u32) -> f32 {
+    let t = 1.0 - left as f32 / SWING as f32;
+    musl::powf(musl::powf(t, musl::powf(1.0 - t, 2.0)), 2.0)
+}
+
+/// The change-ends move: the view the phase started from swung toward this tick's `to` by `w`, both taken
+/// apart as an orbit about `pivot` (heading and pitch of the look, the eye's angles from the pivot in the
+/// look's own heading, its distance, the field of view) and the parts blended linearly, so a swap of ends
+/// swings round the court rather than sliding through it.
+pub fn swing(from: &View, to: &View, w: f32, pivot: V3) -> View {
+    let parts = |v: &View| {
+        let f = v.rot[2];
+        let h = musl::atan2f(f[0], f[2]);
+        let (s, c) = musl::sincosf(-h);
+        let o = sub(v.eye, pivot);
+        let o = [c * o[0] + s * o[2], o[1], -s * o[0] + c * o[2]];
+        let d = dot(o, o).sqrt();
+        [h, musl::asinf(f[1]), musl::atan2f(o[0], o[2]), musl::asinf(o[1] / d), d, v.fov]
+    };
+    let (a, b) = (parts(from), parts(to));
+    let [h, p, ye, pe, d, fov]: [f32; 6] = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * w);
+    let dir = |yaw: f32, pitch: f32| {
+        let ((sy, cy), (sp, cp)) = (musl::sincosf(yaw), musl::sincosf(pitch));
+        [cp * sy, sp, cp * cy]
+    };
+    let f = dir(h, p);
+    let r = norm(cross([0.0, 1.0, 0.0], f));
+    View { rot: [r, cross(f, r), f], eye: add(pivot, scale(dir(h + ye, pe), d)), fov }
+}
+
 fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
