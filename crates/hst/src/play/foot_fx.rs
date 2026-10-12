@@ -131,8 +131,7 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;
     let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));
-    // ponytail: no instant replay yet (P0b4d), so dives throw no debris
-    fx.feet.replay = false;
+    fx.feet.replay = g.instant.replaying;
     let mt = &mut g.rng.sound;
     fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true, &mut || mt.next());
     // the streak plays from each dive's start while it shows

@@ -5,7 +5,7 @@
 //! then on. At the next serve set-up with a replay pending it puts that state back and plays the logged pads again:
 //! the point, its post-point phase and the serve set-up replay as they went, the scoreboard awards the point onto the
 //! score as it was before it (so it isn't scored twice) and every generator draws what it drew, so the match goes on
-//! exactly as without the replay, only later. Its pacing (P0b4d3) and cameras (P0b4d4) come later.
+//! exactly as without the replay, only later. Its pacing is `replay_pace`, its cameras `replay_camera`.
 //!
 //! When it starts (the match handler's skip/button check, after each tick): the decision's own replay as the
 //! scoreboard's pause runs out (the post-point waits there for it); □ during the post-point asks for one of the last
@@ -288,14 +288,14 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
 /// A bot-only singles match through the app, headless: the original replays a bot match's point only when it wins
 /// the match (and the recorder holds its shots). Needs the ISO at the repository root (skipped without).
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::*;
     use super::{Decision, Recorder};
     use crate::{Args, GameSpace};
 
-    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+    pub(in crate::play) const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    fn app(human: bool) -> App {
+    pub(in crate::play) fn app(human: bool) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();

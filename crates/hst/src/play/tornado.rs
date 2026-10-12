@@ -127,12 +127,19 @@ fn own_materials(mut commands: Commands, fx: Option<Res<Wind>>, children: Query<
     }
 }
 
-fn draw(fx: Option<Res<Wind>>, mut q: Query<(&mut Transform, &mut Visibility)>, mut materials: ResMut<Assets<GsMaterial>>) {
+fn draw(fx: Option<Res<Wind>>, g: Res<Game>, virt: Res<Time<Virtual>>, fixed: Res<Time<Fixed>>, mut q: Query<(&mut Transform, &mut Visibility)>, mut materials: ResMut<Assets<GsMaterial>>) {
     let Some(fx) = fx else { return };
-    let t = &fx.tornado;
+    let (mut tween, mut scale) = (fx.tornado, fx.tornado.t);
+    // an instant replay's slow-motion frame between two ticks (`replay_pace`): the game's in-between draw
+    if virt.relative_speed() < 1.0 {
+        let (b, v4) = (&g.flight.ball, |v: [f32; 3], w: f32| [v[0], v[1], v[2], w]);
+        // ponytail: the UV scroll holds at the tick's (no time before/after kept); the scale, aim and fade move on
+        scale = tween.between(g.flight.bounces, v4(b.pos, 1.0), v4(b.vel, 0.0), fixed.overstep_fraction(), [0.0; 2], fx.fade, 0).0;
+    }
+    let t = &tween;
     if let Ok((mut tr, mut v)) = q.get_mut(fx.view.root) {
         *v = if t.on { Visibility::Visible } else { Visibility::Hidden };
-        *tr = Transform::from_matrix(Mat4::from_cols_array_2d(&t.m)).with_scale(Vec3::splat(t.t));
+        *tr = Transform::from_matrix(Mat4::from_cols_array_2d(&t.m)).with_scale(Vec3::splat(scale));
     }
     if !t.on {
         return;
