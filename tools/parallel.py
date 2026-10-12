@@ -273,6 +273,8 @@ SUSPECT = re.compile(r'BLOCKED:.*(pcsx2|capture|unattended|screenshot|not launch
 def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
+    while queued():  # ponytail: the master's reports go first (back-to-back runner merges starved it); stalls if it never takes them
+        time.sleep(10)
     with MERGE:
         while master_busy():  # the master is merging in main: queue behind it
             time.sleep(10)
@@ -380,9 +382,18 @@ def queued():
 
 def flush():
     """Once the master is idle: /clear it, then type its instructions and the next queued line."""
-    if not (q := queued()) or master_busy() or MERGE.locked():
+    if not (q := queued()):
+        return
+    master()  # (re)open it at once, even while a merge holds main
+    if master_busy() or not MERGE.acquire(blocking=False):
         return  # one merge into main at a time: the master's report, or the runner's own merge
-    master()
+    try:
+        hand(q)
+    finally:
+        MERGE.release()
+
+
+def hand(q):
     m = panes().get('master', ['master'])[0]  # master gone: send-keys fails quietly, as it always did
     if not master_idle():
         return
