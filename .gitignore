@@ -20,3 +20,5 @@ research/journal/**/*
 tools/upscale_mods.sh
 /cache
 research/tools/wasmtime-*/
+/target-wasm/
+/web/pkg/

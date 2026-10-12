@@ -208,6 +208,9 @@ fn main() {
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, log_fps);
     }
+    if std::env::var_os("HST_KEYS").is_some() {
+        app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
+    }
     if menu {
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(mode::Mode::new(menu_mode))));
     } else if args.play {
@@ -916,6 +919,39 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32)>) {
         eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
         *acc = default();
     }
+}
+
+/// `HST_KEYS="2:Enter 9:Escape 10:ArrowDown 11:Enter 15:shot=a.png"`: at each real-time second a key is pressed for one
+/// frame (Enter, Escape, Arrow*) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
+fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>) {
+    let script = std::env::var("HST_KEYS").unwrap_or_default();
+    let steps: Vec<_> = script.split_whitespace().filter_map(|s| s.split_once(':')).collect();
+    for k in [KeyCode::Enter, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight] {
+        if keys.pressed(k) && !keys.just_pressed(k) {
+            keys.release(k);
+        }
+    }
+    let Some(&(at, what)) = steps.get(*done) else { return };
+    if time.elapsed_secs() < at.parse::<f32>().unwrap_or(f32::MAX) {
+        return;
+    }
+    *done += 1;
+    info!("HST_KEYS: {what}");
+    let key = match what {
+        "Enter" => KeyCode::Enter,
+        "Escape" => KeyCode::Escape,
+        "ArrowUp" => KeyCode::ArrowUp,
+        "ArrowDown" => KeyCode::ArrowDown,
+        "ArrowLeft" => KeyCode::ArrowLeft,
+        "ArrowRight" => KeyCode::ArrowRight,
+        _ => {
+            if let Some(path) = what.strip_prefix("shot=") {
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.to_string()));
+            }
+            return;
+        }
+    };
+    keys.press(key);
 }
 
 fn auto_shot(mut commands: Commands, args: Res<Args>, time: Res<Time>, mut taken: Local<bool>, mut exit: MessageWriter<AppExit>) {
