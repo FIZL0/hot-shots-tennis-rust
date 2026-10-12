@@ -129,7 +129,7 @@ pub(super) fn quads(plan: &Plan, doubles: bool) -> Vec<Quad> {
     let mut out = vec![q(Tex::Gameset, [0, plan.row as i32 * 80, 256, 80], [192, 360, 256, 80], WHITE)];
     if doubles {
         let tint = if plan.shown == 0 { [127.0, 77.0, 77.0] } else { [67.0, 101.0, 127.0] };
-        for (v, rgb) in [(96, tint), (64, WHITE)] {
+        for (v, rgb) in [(96, WHITE), (64, tint)] {
             out.push(q(Tex::Team, [0, v, 16, 32], [240, 320, 16, 32], rgb));
             out.push(q(Tex::Team, [16, v, 16, 32], [256, 320, 128, 32], rgb));
             out.push(q(Tex::Team, [32, v, 16, 32], [384, 320, 16, 32], rgb));
@@ -153,8 +153,8 @@ const BOX: Vec3 = Vec3::new(1.7, 1.7, 1.5);
 const AHEAD: f32 = 2.4;
 const FALL: f32 = 0.015;
 const SWAY: f32 = 0.02;
-const FLAKES: usize = 200;
-const FLAKE: f32 = 0.04;
+const FLAKES: usize = 400;
+const FLAKE: f32 = 0.025;
 
 #[derive(Resource)]
 pub(super) struct Ceremony {
@@ -294,6 +294,7 @@ pub(super) fn begin(
         }
         cer.confetti = Some(root);
     }
+    info!("winners' ceremony");
     commands.insert_resource(cer);
 }
 
@@ -481,7 +482,7 @@ mod tests {
         let p = plan(&[false; 4], &[0; 4], 1, false, 70.0);
         let q = quads(&p, true);
         assert_eq!((q[0].src, q[0].dst), ([0.0, 160.0, 256.0, 80.0], [192.0, 360.0, 256.0, 80.0]));
-        assert_eq!((q[1].rgb, q[7].src), ([67.0, 101.0, 127.0], [0.0, 32.0, 96.0, 32.0]));
+        assert_eq!((q[4].rgb, q[7].src), ([67.0, 101.0, 127.0], [0.0, 32.0, 96.0, 32.0]));
         assert_eq!(quads(&p, false).len(), 1);
     }
 

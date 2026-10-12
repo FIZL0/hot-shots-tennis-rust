@@ -537,13 +537,14 @@ fn step(
         let winner = (g.score.games[1] > g.score.games[0]) as i32;
         g.post_winner = winner;
         match_over(g);
+        // the ceremony begins next frame
+        return;
     }
     if g.match_stats.result.is_none() {
         return;
     }
     if let Some(c) = cer.as_mut().filter(|c| c.running()) {
         if c.t == 0 {
-            info!("winners' ceremony");
             if let Some(b) = banner.as_mut() {
                 b.0.start();
             }
@@ -617,6 +618,10 @@ fn step(
         input = 0;
         if let Some(b) = banner.as_mut() {
             b.0.tick();
+        }
+        // the figures and the confetti go on behind the page
+        if let Some(c) = cer.as_mut() {
+            ceremony::tick(c, g.players.len() as u32, g.stage, sound.as_deref(), gallery.as_deref().and_then(|b| b.0.as_ref()));
         }
     }
 }
