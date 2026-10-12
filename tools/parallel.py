@@ -155,6 +155,8 @@ def family(tid):
 def pick(running, tried):
     busy, seen = list(running.values()), set()
     for tid, section, files in tasks():
+        if all(tid != b[0] for b in busy) and git('rev-list', '-1', f'main..task/{tid}').stdout.strip():
+            continue  # finished, its branch waits for a merge: starting it again would reset that branch to main
         if any(family(tid) == family(b[0]) for b in busy):
             continue
         if MODE == 'p':
