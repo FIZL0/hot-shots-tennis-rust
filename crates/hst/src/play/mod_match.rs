@@ -1,7 +1,7 @@
 //! A standard mod (`crate::mods`) in a match slot: the donor's motions, trajectory tables, shot records, serve
 //! and timing tables (the setup loads them by the donor's number), with the mod's own TParam.csv row (stats, aim,
 //! reach and heights, smash window, power, timing stats, collision size), `ai_row` for the computer's
-//! AIParam.csv row and second-toss pick, `hand`, and its voice bank (the donor's when it ships no wavs).
+//! AIParam.csv row and second-toss pick, `hand`, and its voice bank (the donor's for every program it ships no wav for).
 
 use std::sync::Arc;
 
@@ -53,7 +53,11 @@ pub(super) fn apply(g: &mut Game, i: usize, iso: &mut Iso, m: &Mod, outfit: usiz
     g.smash_heights[i] = [smash[0] / 100.0, smash[1] / 100.0];
     g.reaches[i] = super::reach_of(&g.reach, &row, m.hand);
     g.timing[i].restat(&row);
-    if let Some(bank) = mods::voice(m) {
+    if let Some(mut bank) = mods::voice(m) {
+        // programs the mod has no wav for play the donor's disc takes (standard §5)
+        if let Some(donor) = &voices[i] {
+            (bank.hd, bank.bd) = (donor.hd.clone(), donor.bd.clone());
+        }
         voices[i] = Some(Arc::new(bank));
     }
 }
@@ -63,7 +67,7 @@ pub(super) fn apply(g: &mut Game, i: usize, iso: &mut Iso, m: &Mod, outfit: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Args, GameSpace, character};
+    use crate::{Args, GameSpace};
     use std::path::Path;
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
@@ -74,20 +78,9 @@ mod tests {
         if !Path::new(ISO).is_file() || !Path::new(MOD).is_dir() {
             return eprintln!("no ISO or context/mods/test_pc00, skipped");
         }
-        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
-        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
         let m = mods::read(Path::new(MOD)).unwrap();
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
-        app.insert_resource(MatchMod(vec![None, Some(m.clone())]));
-        app.init_resource::<super::super::Pads>().init_resource::<super::super::tick_input::TickPads>();
-        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-        app.add_systems(Startup, super::super::setup);
+        let mut app = bot_match(&m, 1);
         use super::super::*;
-        app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
-        app.update();
         let mut iso = Iso::open(ISO).unwrap();
         let row = mods::tparam(&mut iso, &m).unwrap();
         {
@@ -98,7 +91,29 @@ mod tests {
             assert_ne!(g.reaches[1].reach, character_reach(&g.reach, &mut iso, 0, -1.0).reach, "the override didn't reach the contact search");
             assert_eq!(g.data[1].joints.len(), mods::load(&mut iso, &m, 0, &mut Assets::<Mesh>::default(), &mut Assets::<StandardMaterial>::default(), &mut Assets::<Image>::default(), &mut Assets::<SkinnedMeshInverseBindposes>::default()).unwrap().joints.len());
         }
-        // a rally: three shots or more in one point, the mod striking one of them
+        rally(&mut app, &m);
+    }
+
+    /// A bot singles match, Carol against mod `m` (set up as disc character `char`), after its first update.
+    fn bot_match(m: &Mod, char: usize) -> App {
+        use super::super::*;
+        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
+        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, char], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(MatchMod(vec![None, Some(m.clone())]));
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, setup);
+        app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        app
+    }
+
+    /// Plays until a rally of three shots or more in one point with the mod (player 1) striking one of them.
+    fn rally(app: &mut App, m: &Mod) {
         let (mut best, mut mod_hit) = (0, false);
         for frame in 0..60 * 120 {
             app.world_mut().run_schedule(FixedUpdate);
@@ -106,11 +121,32 @@ mod tests {
             best = best.max(g.shots);
             mod_hit |= g.last_hitter == 1 && g.shots >= 2;
             if best >= 3 && mod_hit {
-                eprintln!("frame {frame}: a {best}-shot rally, the mod hit");
-                break;
+                eprintln!("{}: frame {frame}, a {best}-shot rally, the mod hit", m.id);
+                return;
             }
         }
-        assert!(best >= 3 && mod_hit, "longest rally {best} shots, mod returned a ball: {mod_hit}");
+        panic!("{}: longest rally {best} shots, mod returned a ball: {mod_hit}", m.id);
+    }
+
+    /// M1g: the five chair umpires, packaged by the mods repo (`tools/rerig/hst_umpires.py` -> `mods/hst-mods`), are
+    /// in the custom roster (`mods::list` of `mods/`, readable TParam row, as the select builds it), load as a model
+    /// and each plays a rally (skipped without the ISO or the umpire mods).
+    #[test]
+    fn umpires_are_on_the_roster_and_play_a_rally() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods"));
+        let ump: Vec<Mod> = mods::list(root).into_iter().filter(|m| m.id.starts_with("hst_umpire_")).collect();
+        if !Path::new(ISO).is_file() || ump.is_empty() {
+            return eprintln!("no ISO or umpire mods under mods/, skipped");
+        }
+        let ids: Vec<&str> = ump.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_03_robottennis", "hst_umpire_04_anna"]);
+        let mut iso = Iso::open(ISO).unwrap();
+        for m in &ump {
+            mods::tparam(&mut iso, m).unwrap_or_else(|e| panic!("{}: no TParam row, left off the select: {e}", m.id));
+            let data = mods::load(&mut iso, m, 0, &mut Assets::<Mesh>::default(), &mut Assets::<StandardMaterial>::default(), &mut Assets::<Image>::default(), &mut Assets::<SkinnedMeshInverseBindposes>::default());
+            assert!(data.is_ok_and(|d| !d.joints.is_empty()), "{}: model doesn't load", m.id);
+            rally(&mut bot_match(m, m.donor), m);
+        }
     }
 
     /// A packaged Get a Grip mod (`mods/hst-mods`, the mods repo's `out/mods`) in a match: the stats the game reads

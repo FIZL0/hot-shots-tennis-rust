@@ -229,10 +229,10 @@ impl Sound {
     /// and the play and channel pans (`pan[0..2]`); the tone and velocity parts come from the sequence.
     /// Returns the play's id for `update` and `stop` (0 if the bank has no such sequence).
     pub fn play(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32) -> u64 {
-        if !bank.wav.is_empty() {
-            // a mod's take: a voice keyed on at once with the disc voices' tone at velocity 127, at the wav's rate
-            // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)
-            let Some((w, rate)) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) else { return 0 };
+        // a mod's take: a voice keyed on at once with the disc voices' tone at velocity 127, at the wav's rate; a
+        // program the mod ships no wav for falls to `hd` (the donor's disc bank, `mod_match::apply`), or silence
+        // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)
+        if let Some((w, rate)) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) {
             let mut m = self.0.lock().unwrap();
             m.ids += 1;
             let id = m.ids;
@@ -567,7 +567,7 @@ mod tests {
     }
 
     /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono), play at the sequence's full
-    /// level and end; a key past the takes wraps round them.
+    /// level and end; a key past the takes wraps round them; a program without wavs is silent, or the donor's.
     #[test]
     fn plays_mod_wavs() {
         let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
@@ -600,6 +600,10 @@ mod tests {
         let peak = out.iter().fold(0f32, |a, x| a.max(x.abs()));
         eprintln!("wav peak {peak}, {frames} frames");
         assert!(frames == 6 && peak > 0.1 && peak < 1.0);
+        // with the donor's disc bank beside the wavs (`mod_match::apply`), a program the mod lacks plays the disc's
+        let disc = voice_bank(&mut iso, 0, 2, 1, false).unwrap();
+        let both = Arc::new(SoundBank { hd: disc.hd, bd: disc.bd, wav: bank.wav.clone() });
+        assert_ne!(sound.play(&both, 2, 0, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000), 0);
     }
 
     /// Each of character 0's disc voice takes that keys on at once at full velocity and tone volume, written out as
