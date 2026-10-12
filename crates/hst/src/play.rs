@@ -4154,7 +4154,7 @@ impl Bgm {
     fn step(&mut self, g: &mut Game, sound: &Sound, music: &MusicBanks, played: &mut heard::Played, tick: u32) {
         if !self.started {
             self.started = true;
-            if let Some((bank, mid)) = &music.bgm {
+            if let Some((bank, mid)) = music.bgm.as_ref().filter(|(b, _)| !sound.music_of(b)) {
                 sound.music(bank, mid, Self::FULL as u32);
             }
         }

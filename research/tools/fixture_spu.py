@@ -43,7 +43,7 @@ while (i := ee.find(b'SShd', i + 1)) >= 0:
 head, = struct.unpack_from('<i', ee, HEAD)
 cur, last = {}, {}
 ring = [struct.unpack_from('<4I', ee, RING + 16 * (n % 1024)) for n in range(head - 1023, head)]
-upload = max(i for i, c in enumerate(ring) if c[0] == 19)
+upload = max((i for i, c in enumerate(ring) if c[0] == 19), default=0)
 for i, (c, v, w8, wc) in enumerate(ring):
     if i < upload and c != 4: continue
     if c == 2: cur[v] = [w8 & 0xffff, wc & 0xffff]
