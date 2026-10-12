@@ -353,7 +353,7 @@ fn load(
         // the game's season is 1 in singles (hole archive SSN1/HOL01.XB, which differs by the net), 0 in doubles
         let season = args.singles as usize;
         let mut sky_colour = std::collections::HashMap::new();
-        let (mut hole_box, mut model_tris) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (mut hole_box, mut raw_models) = (std::collections::HashMap::new(), std::collections::HashMap::new());
         let mut model_shapes = std::collections::HashMap::new();
         for name in ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }] {
             let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
@@ -364,8 +364,7 @@ fn load(
             for_models(&data, |n| !skip(n), |stem, model, mats| {
                 hole_box.insert(stem.clone(), shade::packet_box(&model));
                 model_shapes.insert(stem.clone(), hst_sim::shade::Shape::new(&model, &mats));
-                let tris: Vec<[[f32; 3]; 3]> = model.materials.iter().flatten().flat_map(|pk| pk.triangles.iter().map(|t| t.map(|i| pk.vertices[i as usize].pos))).collect();
-                model_tris.insert(stem, tris);
+                raw_models.insert(stem, (model, mats));
             });
             for (stem, parts, anim) in gs_models_anim(&data, |n| !skip(n), &mut images) {
                 let tags: Vec<_> = parts.iter().flat_map(|(_, g, t)| std::iter::repeat_n(*t, g.len())).collect();
@@ -501,8 +500,9 @@ fn load(
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
-                let axes = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| (t.rotation * a * t.scale).to_array());
-                shade_casters.push(hst_sim::shade::Caster { axes, pos: p.pos, tris: shape.tris, cut: shape.cut });
+                if let Some(sun) = &sun {
+                    shade_casters.push(hst_sim::shade::Caster::new(&shape, p, &sun.axes));
+                }
             }
             // ponytail: the net's shadow is too thin for the sun's shadow map, so its triangles are flattened along
             // the sun onto the ground (game y 0) and drawn black at the shadow's strength through the texture's
@@ -530,8 +530,10 @@ fn load(
         if envir.is_some() {
             commands.insert_resource(look);
         }
-        if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
-            commands.insert_resource(shade::build(frame, sun.dir, &shade_casters, &model_tris.remove(&hole).unwrap_or_default(), hst_sim::court::world(&mut iso, n)));
+        if let (Some((frame, hole)), Some(_)) = (shade_frame, sun) {
+            if let Some((model, mats)) = raw_models.get(&hole) {
+                commands.insert_resource(shade::build(frame, &shade_casters, model, mats, hst_sim::court::world(&mut iso, n)));
+            }
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {
