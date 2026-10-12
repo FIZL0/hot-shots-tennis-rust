@@ -553,7 +553,7 @@ mod tests {
                     let w = apps[i].world_mut();
                     if gate(w) {
                         if i == 1 && bad == Some(w.resource::<Netplay>().lock.tick) {
-                            w.resource_mut::<tick_input::Replay>().0.back_mut().unwrap()[2].buttons ^= 0x8000;
+                            w.resource_mut::<tick_input::Replay>().0.back_mut().unwrap()[2].buttons ^= !0;
                         }
                         w.run_schedule(FixedUpdate);
                     }

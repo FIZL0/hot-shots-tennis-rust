@@ -306,6 +306,26 @@ impl Sound {
         self.play(bank, p.program as usize, p.key as usize, level, 0x1000)
     }
 
+    /// How many 60 Hz frames `play_centre(bank, p)` sounds for: rendered alone on a silent copy of the mixer, so
+    /// the match can time the umpire's voice by ticks, the same on every machine (the live mixer runs on the audio
+    /// device's clock). ponytail: capped at 30 s; a looping sequence would never end
+    pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
+        let solo = {
+            let m = self.0.lock().unwrap();
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
+        };
+        let solo = Self(Arc::new(Mutex::new(solo)));
+        let id = solo.play_centre(bank, p);
+        let mut out = Vec::new();
+        let mut n = 0;
+        while id != 0 && solo.playing(id) && n < 30 * 60 {
+            out.clear();
+            solo.0.lock().unwrap().render(&mut out);
+            n += 1;
+        }
+        n
+    }
+
     /// A mixer on `iso`'s banks with no output, for tests.
     #[cfg(test)]
     pub fn test(iso: &mut Iso) -> Self {

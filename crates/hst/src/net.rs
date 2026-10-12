@@ -757,11 +757,22 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
         return false;
     }
     let link = Link::new(tx);
+    // its own task: `recv` isn't cancel-safe, so it can't sit in the `select!` (a command mid-read lost bytes)
+    let (got, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let m = recv(&mut rx).await;
+            let end = m.is_err();
+            if got.send(m).is_err() || end {
+                return;
+            }
+        }
+    });
     let mut seated = false;
     let mut playing = false;
     loop {
         tokio::select! {
-            m = recv(&mut rx) => match m {
+            m = inbox.recv() => match m.unwrap_or_else(|| Err("closed".into())) {
                 Ok(Msg::Room(r)) => {
                     seated = true;
                     cx.say(Event::Room(r));

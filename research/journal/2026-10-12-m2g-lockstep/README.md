@@ -29,10 +29,12 @@
 
 ## Verified
 
-- `doubles_match_at_100ms_stays_in_sync`: two headless match apps (the snapshot harness, doubles: 1P+2P on the host,
-  3P+4P on the guest). Every message is held 6 ticks (100 ms) each way, the delay comes from `delay_for`, and every
-  seat presses random buttons. The match is played to its result, every hash agrees, and both pad logs are the same.
-- `a_desync_stops_both_and_saves`: one tick's pads flipped on one side → both stop at tick 120's hash and both save.
+- `full_doubles_match_at_100ms_stays_in_sync` (`--ignored`, ~20 min unoptimised): two headless match apps (the
+  snapshot harness, doubles: 1P+2P on the host, 3P+4P on the guest). Every message is held 6 ticks (100 ms) each way,
+  the delay comes from `delay_for`, and every seat presses random buttons. The match is played to its result, every
+  hash agrees, and both pad logs are the same. `doubles_at_100ms_stays_in_sync` (in `tools/check.sh`) runs its first
+  3600 ticks.
+- `a_desync_stops_both_and_saves`: tick 119's pads flipped on one side → both stop at tick 120's hash and both save.
 - `lockstep_over_a_slow_link`, `hashes_compare_whichever_comes_first`, `pads_wire_round_trip`,
   `flags_put_each_seat_in_match_order`.
 
@@ -40,10 +42,23 @@
 
 - The original has no online play: nothing here is checked against the game. It's an addition, and with no `Netplay`
   resource the gate is absent, so offline matches run as before.
-- Two separate processes over a real network with the 100 ms lag were (see below).
 - The delay is fixed at the start (one measurement). A link that gets slower mid-match stalls instead of adjusting.
 - Star topology: guests' pads reach each other through the host (a guest↔guest hop is two links' lag).
 - No bot takeover option (the task says "unless asked"; nobody asked).
 - Local pads are sampled at the 60 Hz tick as `tick_input::local` does, so a press made between two network-stalled
   ticks is kept (latched) but its timing is the tick it's sent on.
 - The acceptance match's players press random buttons (`HST_NET_MASH`), not real play.
+
+## Two real processes (`hst net host doubles 2 --games 1 --relay off --play …` + `hst net join <code> 2 …`)
+
+Both with `HST_NET_LAG=100` (100 ms each way) and `HST_NET_MASH` (random pads on their two seats), on one machine
+over iroh with the relay off. Logs and any `desync-*.json` in `context/m2g/runN/`.
+
+- Run 1 desynced at tick 3060, run 3 at tick 210: same pads on both, the state diff (`HST_DESYNC` replay + the saved
+  `state` text) first differed in `PostPoint … CallShow { frames: 38 }` vs 37. The post-point timeline waits for the
+  umpire's voice to end (`voice_idle`), and that was read from the live mixer (`Sound::playing`), which runs on the
+  audio device's clock: each machine heard the word end on a different tick. Fix: `Sound::centre_frames` renders the
+  word alone on a silent copy of the mixer and `play_sounds` counts it down per tick, so the voice's end is a tick
+  count, the same everywhere (offline too; same length as before, now not jittered by the audio thread).
+- Run 2: the guest saw "The host left." mid-match: `recv` (two `read_exact`s) sat in a `tokio::select!` and isn't
+  cancel-safe, so a ping/send wake-up cut a message in half. The guest now reads in its own task into a channel.
