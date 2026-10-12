@@ -63,13 +63,22 @@ pub(super) struct Plan {
     pub voice_now: bool,
 }
 
-/// The ceremony for `humans` (players on a controller), `chars`, the `winner` side, the ends `swapped` and the
-/// winner's rating (stats row 8).
-pub(super) fn plan(humans: &[bool], chars: &[i32], winner: usize, swapped: bool, rating: f32) -> Plan {
+/// Which players are real on this machine: offline every human (`humans`, players on a controller); online
+/// (`mine` = this machine's seats 1P..4P) only this machine's own, so a peer's side counts as the bots' would.
+pub(super) fn local(humans: &[bool], mine: Option<&[usize]>) -> Vec<bool> {
     let n = humans.len();
+    let seat = |i: usize| if n == 4 { [0, 2, 1, 3][i] } else { i };
+    (0..n).map(|i| mine.map_or(humans[i], |m| m.contains(&seat(i)))).collect()
+}
+
+/// The ceremony for `local` (players real on this machine, [`local`]), `chars`, the `winner` side, the ends
+/// `swapped` and the winner's rating (stats row 8). The shown side is the local one if exactly one side has local
+/// players (win or lose, as the original's human side against the COM), else the winners.
+pub(super) fn plan(local: &[bool], chars: &[i32], winner: usize, swapped: bool, rating: f32) -> Plan {
+    let n = local.len();
     let doubles = n > 2;
     let mut human = [false; 2];
-    for (i, &h) in humans.iter().enumerate() {
+    for (i, &h) in local.iter().enumerate() {
         human[i & 1] |= h;
     }
     let one = human[0] != human[1];
@@ -222,6 +231,7 @@ pub(super) fn begin(
     mut dissolve: ResMut<super::dissolve::Dissolve>,
     art: Option<Res<super::Art>>,
     camera: Query<Entity, With<crate::Orbit>>,
+    net: Option<Res<super::super::netplay::Netplay>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -237,7 +247,8 @@ pub(super) fn begin(
     let n = g.players.len();
     let humans: Vec<bool> = (0..n).map(|i| g.humans.get(i).copied().unwrap_or(false)).collect();
     let winner = table.winner.min(1);
-    let plan = plan(&humans, &g.chars, winner, swapped, table.rows[winner][8]);
+    let local = local(&humans, net.as_ref().map(|np| &np.lock.mine[..]));
+    let plan = plan(&local, &g.chars, winner, swapped, table.rows[winner][8]);
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let cam_name = ["win_99", "lost_99", "hand_99"][plan.clip];
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT on disc");
@@ -485,6 +496,41 @@ mod tests {
         // ends swapped, the human won: the win clip from the near end of team 1
         let p = plan(&[false, true], &[0, 0], 1, true, 85.0);
         assert_eq!((p.shown, p.clip, p.turned, p.row, p.offset[2]), (1, 0, false, 0, -6.4));
+    }
+
+    /// The shown side, clip and banner row for every line-up (B106): `local` from humans and this machine's seats.
+    #[test]
+    fn shown_side() {
+        // (shown, lost, clip, row) at rating 70 (rows 2/3)
+        let see = |l: Vec<bool>, winner| {
+            let p = plan(&l, &vec![0; l.len()], winner, false, 70.0);
+            (p.shown, p.lost, p.clip, p.row)
+        };
+        let off = |h: &[bool]| local(h, None);
+        // vs CPU, singles: the human's side, won or lost
+        assert_eq!(see(off(&[true, false]), 0), (0, false, 0, 2));
+        assert_eq!(see(off(&[true, false]), 1), (0, true, 1, 3));
+        // vs CPU, doubles with a COM partner or two humans on one team
+        assert_eq!(see(off(&[true, false, false, false]), 1), (0, true, 1, 3));
+        assert_eq!(see(off(&[false, true, false, true]), 1), (1, false, 2, 2));
+        // 2 and 4 local players on both sides: the winners
+        assert_eq!(see(off(&[true, true]), 1), (1, false, 0, 2));
+        assert_eq!(see(off(&[true; 4]), 0), (0, false, 2, 2));
+        assert_eq!(see(off(&[true, true, false, false]), 1), (1, false, 2, 2));
+        // online 1v1, team 0 wins: 1P's machine its victory, 2P's its defeat
+        let h = [true, true];
+        assert_eq!(see(local(&h, Some(&[0])), 0), (0, false, 0, 2));
+        assert_eq!(see(local(&h, Some(&[1])), 0), (1, true, 1, 3));
+        // online 2+2, team 1 wins: seats 1P/2P (players 0/2, team 0) on one machine see their defeat, 3P/4P
+        // (players 1/3, team 1) on the other their victory
+        let h = [true; 4];
+        assert_eq!(local(&h, Some(&[0, 1])), [true, false, true, false]);
+        assert_eq!(see(local(&h, Some(&[0, 1])), 1), (0, true, 1, 3));
+        assert_eq!(see(local(&h, Some(&[2, 3])), 1), (1, false, 2, 2));
+        // a machine with local players on both teams: the winners
+        assert_eq!(see(local(&h, Some(&[0, 2])), 1), (1, false, 2, 2));
+        // online with a bot in an empty seat: only this machine's seat counts
+        assert_eq!(see(local(&[true, false], Some(&[0])), 1), (0, true, 1, 3));
     }
 
     #[test]
