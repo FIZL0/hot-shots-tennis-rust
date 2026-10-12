@@ -118,6 +118,8 @@ fn modules(w: &World) -> Vec<Box<dyn Fn(&mut World) + Send + Sync>> {
     keep::<crate::effects::BallFlight>(w, &mut out);
     keep::<crate::effects::BallBounce>(w, &mut out);
     keep::<crate::effects::LandingMarks>(w, &mut out);
+    // the sounds' tick number and timers (what was played stays: `heard`)
+    keep::<super::heard::Heard>(w, &mut out);
     out
 }
 
@@ -171,7 +173,7 @@ mod tests {
         app.init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         // the modules keeping their own tick state; only the setup and fixed schedules run (no window, no sound)
-        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin));
+        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
         app.add_systems(PostStartup, setup);
         app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
         app.finish();
@@ -219,5 +221,47 @@ mod tests {
         restore(app.world_mut(), &s);
         let b = run(&mut app, &[[tick_input::IDLE; 4]; 300]);
         assert_ne!(a, b, "the hash didn't see the input");
+    }
+
+    /// M2d: a rollback re-running the last 8 ticks every tick starts exactly the sounds a straight run starts, tick
+    /// for tick, and ends in the same state.
+    #[test]
+    fn rerun_ticks_play_nothing_twice() {
+        let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
+            return eprintln!("no ISO or round1.bin, skipped");
+        };
+        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(900).map(|f| [f.pad(0), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]).collect();
+        let sounding = || {
+            let mut app = app();
+            let mut iso = hst_data::iso::Iso::open(ISO).unwrap();
+            let sound = crate::audio::Sound::test(&mut iso);
+            // the test's court 0 has no sounds: court 1's
+            app.insert_resource(crate::audio::court_bank(&mut iso, 1));
+            app.insert_resource(crate::audio::GalleryBank(crate::audio::gallery_bank(&mut iso, 1, 0).map(std::sync::Arc::new)));
+            app.insert_resource(sound.clone());
+            app.add_systems(FixedUpdate, play_sounds.after(held_ball));
+            (app, sound)
+        };
+        let (mut a, sa) = sounding();
+        let (mut b, sb) = sounding();
+        let mut want = Vec::new();
+        for p in &pads {
+            run(&mut a, &[*p]);
+            want.push(sa.plays());
+        }
+        // into the point, then every tick: back to 8 ticks ago and those 8 again
+        run(&mut b, &pads[..300]);
+        let mut snaps = std::collections::VecDeque::new();
+        for t in 300..pads.len() {
+            snaps.push_back(save(b.world_mut()));
+            run(&mut b, &pads[t..=t]);
+            if snaps.len() == 8 {
+                restore(b.world_mut(), &snaps.pop_front().unwrap());
+                run(&mut b, &pads[t - 7..=t]);
+            }
+            assert_eq!(sb.plays(), want[t], "tick {t}: sounds started {} times, a straight run {}", sb.plays(), want[t]);
+        }
+        assert!(want[pads.len() - 1] - want[299] > 15, "too few sounds to tell");
+        assert_eq!(state_hash(a.world_mut()), state_hash(b.world_mut()), "the re-runs ended somewhere else");
     }
 }

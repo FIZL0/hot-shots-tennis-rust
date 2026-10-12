@@ -66,10 +66,9 @@ pub(super) struct Npcs {
     /// The match was decided: whether the favoured team won, until the next serve.
     over: Option<bool>,
     /// The decided point ended a game or set (its new point's resets follow the game's end message); the
-    /// scoreboard's pause was over last tick; court 2's flyover sound playing.
+    /// scoreboard's pause was over last tick.
     game_end: bool,
     reacted: bool,
-    flyover: Option<u64>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -115,7 +114,7 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false, flyover: None };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -226,6 +225,7 @@ fn step(
     children: Query<&Children>,
     audio: Option<Res<crate::audio::Sound>>,
     bank: Option<Res<crate::audio::CourtBank>>,
+    (ticks, mut once): (Res<super::heard::Heard>, ResMut<super::heard::Played>),
 ) {
     let Some(mut npcs) = npcs else {
         // no court figures: the gallery and the emitters still step
@@ -470,21 +470,26 @@ fn step(
     }
     let (Some(audio), Some(Some(bank))) = (audio, bank.map(|b| b.0.clone())) else { return };
     let play = |key: i32, volume: i32| sound::Play { slot: 0, program: 7, key: key as u8, volume, speed: 1.0 };
+    // each once however often its tick runs (`heard`)
     for (s, ty, at) in heard {
+        if !once.first(ticks.tick, ("creature", s, ty, at)) {
+            continue;
+        }
         let t = npcs.triggers.iter().find(|(_, t, _)| t.ty == ty).map(|(_, t, _)| t);
         match (ty, t) {
             // 19's sweep: from its bearing at its volume
             (19, Some(t)) => _ = audio.play_toward(&bank, play(s, t.volume), t.bearing),
-            (6, Some(t)) => npcs.flyover = Some(audio.play_at(&bank, play(s, t.volume), at)),
+            (6, Some(t)) => once.flyover = Some(audio.play_at(&bank, play(s, t.volume), at)),
             _ => _ = audio.play_at(&bank, play(s, 0x80), at),
         }
     }
-    // the flyover's sound follows it, fading with |z|; its reset stops it
-    match (npcs.flyover, flyover) {
+    // the flyover's sound follows it, fading with |z|; its reset stops it (as of the last tick heard)
+    match (once.flyover, flyover) {
+        _ if !once.fresh => {}
         (Some(id), Some((true, volume, at))) => audio.update(id, play(30, volume), at),
         (Some(id), _) => {
             audio.stop(id);
-            npcs.flyover = None;
+            once.flyover = None;
         }
         _ => {}
     }
