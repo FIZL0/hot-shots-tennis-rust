@@ -114,8 +114,8 @@ recorders lose frames: B24 journal.
 - **One PINE connection at a time.** A second client while a recorder is polling hangs both. To read static
   values during a capture, read them from the save state (`7z e -so <p2s> eeMemory.bin`) instead.
 - **Don't touch PCSX2 during a capture** (`pgrep -f record_p2m2`).
-- **`pkill -f <pattern>` kills your own shell** when the pattern is in its command line. Use
-  `pgrep -x pcsx2-qt` and kill by PID; close PCSX2 itself with `tools/pcsx2-hst.sh stop` (only your instance).
+- **`pkill -f <pattern>` used to kill your own shell** (the pattern is in its command line). The guard hook now runs
+  bare `pgrep`/`pkill` as `tools/pgrep`/`tools/pkill`, which skip the caller; still close PCSX2 with `tools/pcsx2-hst.sh stop`.
 - **Never press Select on the virtual pad.** PCSX2's hotkeys are Select + shoulder combinations.
 - **`tools/vpad.py` timing is wall-clock.** For frame-exact input, use PCSX2 input recordings (`.p2m2`).
 - **Gamepads with a read-only device node** (udev rules that block rumble writes) work in the remaster through the
