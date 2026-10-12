@@ -570,8 +570,9 @@ const CROWD: i32 = 0x4c;
 const SHOUT: i32 = 0x66;
 
 /// How the gallery takes a decided point: `cheer` (the rolling cheer, at once without an `event`, else once the
-/// event's shout has had its time), `event` (0 applause, 1 groan) and `chain` (a shout follows: 5 after the
-/// applause, 6 after the groan).
+/// event's shout has had its time), `event` (0 applause, 1 groan; at the match's end 3 the shown side won, 4 it
+/// lost) and `chain` (a shout follows: 5 after the applause, 6 after the groan; after the match-end 3 two cheers
+/// (program 7 keys 0, 1), after 4 a sigh (program 8)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reaction {
     pub cheer: bool,
@@ -622,7 +623,8 @@ pub fn favoured(human: &[bool]) -> [bool; 2] {
 /// The gallery (slot 6): after a point the cheer, program 10 at the next stand every 12–40 ticks (21–70 on court
 /// 5) at a random pitch, and the applause or groan (programs 0 and 1 from three stands), perhaps followed by a
 /// shout (5 or 6 from a random stand). `roll` is the game's random number generator.
-/// ponytail: the match-start cheer, the match-end ceremony (programs 3/4 then 7/8), the shout when a player runs
+/// At the match's end (`event` 3/4) the ovation or groan (program 3 or 4 from three stands) and its follow-ups.
+/// ponytail: the match-start cheer, the shout when a player runs
 /// near the stands on courts 1, 4 and 6 (program 9) are left out; a shout's end is not waited on. The manager that
 /// skips `step` while paused or raining is `play::npcs`.
 #[derive(Clone, Debug)]
@@ -725,11 +727,29 @@ impl Gallery {
                 let key = turn(e as usize, if e == 5 { 3 } else { 2 });
                 out.push((play(GALLERY, e, key, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
             }
+            // the game picks 3 when the shown side is the winner, else 4: the ceremony's event says the same
+            3 | 4 => out.extend([0, 3, 6].map(|s| (play(GALLERY, e, 0, CROWD), STANDS[s]))),
+            7..=9 => {
+                let program = if e == 9 { 8 } else { 7 };
+                out.push((play(GALLERY, program, (e == 8) as u8, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
+            }
             _ => {}
         }
-        if self.chain && e < 2 {
-            self.event = Some(e + 5);
-            self.wait = if game { 0xa0 } else { 0x3c };
+        let next = match e {
+            0 | 1 => Some(e + 5),
+            3 => Some(7),
+            4 => Some(9),
+            7 => Some(8),
+            _ => None,
+        };
+        if let Some(n) = next.filter(|_| self.chain) {
+            self.event = Some(n);
+            self.wait = match n {
+                9 => 0x78,
+                7 | 8 => 0x3c,
+                _ if game => 0xa0,
+                _ => 0x3c,
+            };
         } else {
             self.event = None;
         }

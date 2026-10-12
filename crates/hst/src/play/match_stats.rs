@@ -15,9 +15,11 @@
 //! ends it once the stats page has been seen.
 //!
 //! The match pauses on it; Continue starts the next match. `HST_STATS=<seconds>` ends the match (as it stands) after
-//! that long, for `--shot`; `HST_STATS_PAGE=1` opens it on the stats page.
-//! ponytail: the original's first state (the winners' ceremony with "NARROW WIN" etc. and the confetti) isn't
-//! ported (P26c): the result page opens straight away, the banner's animation run on by that state's length.
+//! that long, for `--shot`; `HST_STATS_PAGE=1` opens it on the stats page (skipping the ceremony).
+//!
+//! Before it, the original's first state: the winners' ceremony ([`ceremony`]), the banner already up.
+
+mod ceremony;
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -32,8 +34,11 @@ use super::{Game, Pads, Phase};
 use crate::Args;
 
 /// From `AZUMA/PRIZE/OTHER.XB0`, then `AZUMA/INPANE/INPANE.XB0`.
-const TEXTURES: [&str; 3] = ["/result_status00.tm2", "/result_status01.tm2", "/keyassign_inpane.tm2"];
-const INPANE: [&str; 2] = ["/i_pause_result_15.tm2", "/2d/info.tm2"];
+const TEXTURES: [&str; 5] =
+    ["/result_status00.tm2", "/result_status01.tm2", "/keyassign_inpane.tm2", "/result_gameset05.tm2", "/eff/confetti.tm2"];
+const INPANE: [&str; 3] = ["/i_pause_result_15.tm2", "/2d/info.tm2", "/inpane_team.tm2"];
+/// The confetti piece's index in [`Art`].
+const CONFETTI: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tex {
@@ -50,6 +55,9 @@ enum Tex {
     /// The result board's (popups) sheets.
     Board(u8),
     Slot,
+    /// The ceremony's "NARROW WIN" etc. rows and the team name plate.
+    Gameset,
+    Team,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,6 +98,7 @@ pub(super) fn match_over(g: &mut Game) {
     let table = g.match_stats.finish(g.post_winner.clamp(0, 1) as usize);
     g.match_stats = hst_sim::stats::Stats::new();
     g.match_stats.result = Some(table);
+    *ceremony::ENDING.lock().unwrap() = Some((g.score.swapped, g.rng.sound.clone()));
 }
 
 /// What the stats screen shows.
@@ -362,11 +371,9 @@ const POOL: usize = 400;
 /// The "Game, Set, Match!" model.
 #[derive(Resource)]
 struct Banner(hst_sim::effect::Effect, crate::effects::Shown);
-/// Its scale, the screen point it stands on (page 0 at x 0), and the ticks the ceremony before the result page
-/// runs it on (seen in a recording).
+/// Its scale and the screen point it stands on (page 0 at x 0).
 const BANNER_SCALE: f32 = 1.7;
 const BANNER_AT: [f32; 2] = [321.0, 53.0];
-const CEREMONY: usize = 202;
 
 #[derive(Resource, Default)]
 struct Screen {
@@ -430,7 +437,10 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Serving>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(super::simulate))
-        .add_systems(Update, (step, draw, draw_banner).chain());
+        .add_systems(Update, (ceremony::begin, step, draw, draw_banner).chain())
+        .add_systems(Update, ceremony::pose.after(crate::character::animate))
+        .add_systems(PostUpdate, ceremony::hide.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
+        .add_systems(PostUpdate, ceremony::show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -513,7 +523,11 @@ fn step(
     mut banner: Option<ResMut<Banner>>,
     sounds: Option<Res<Art>>,
     sound: Option<Res<crate::audio::Sound>>,
+    gallery: Option<Res<crate::audio::GalleryBank>>,
+    mut cer: Option<ResMut<ceremony::Ceremony>>,
+    mut commands: Commands,
     mut auto: Local<bool>,
+    mut stick: Local<f32>,
 ) {
     if !*auto
         && std::env::var("HST_STATS").ok().and_then(|s| s.parse::<f32>().ok()).is_some_and(|t| time.elapsed_secs() >= t)
@@ -527,22 +541,44 @@ fn step(
     if g.match_stats.result.is_none() {
         return;
     }
+    if let Some(c) = cer.as_mut().filter(|c| c.running()) {
+        if c.t == 0 {
+            info!("winners' ceremony");
+            if let Some(b) = banner.as_mut() {
+                b.0.start();
+            }
+            fixed.set_timestep(Duration::from_secs(1 << 20));
+        }
+        screen.acc += time.delta_secs() * 60.0;
+        let bank = gallery.as_deref().and_then(|b| b.0.as_ref());
+        while screen.acc >= 1.0 && c.running() {
+            screen.acc -= 1.0;
+            ceremony::tick(c, g.players.len() as u32, g.stage, sound.as_deref(), bank);
+            if let Some(b) = banner.as_mut() {
+                b.0.tick();
+            }
+        }
+        if c.running() {
+            return;
+        }
+    }
     if !screen.open {
         info!("result screen opens");
         *screen = Screen::opened(std::env::var("HST_STATS_PAGE").map_or(0, |p| (p == "1") as usize));
-        if let Some(b) = banner.as_mut() {
+        if let Some(b) = banner.as_mut().filter(|_| cer.is_none()) {
             b.0.start();
-            for _ in 0..CEREMONY {
-                b.0.tick();
-            }
         }
         // ponytail: the fixed clock runs on but never reaches a step, as the pause menu
         fixed.set_timestep(Duration::from_secs(1 << 20));
     }
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|p| p.just_pressed(b));
     let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South);
-    let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || any(GamepadButton::DPadRight);
-    let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) || any(GamepadButton::DPadLeft);
+    // the left stick as a d-pad: a push past half way
+    let x = gamepads.iter().filter(|g| super::controls::readable(g)).filter_map(|p| p.get(GamepadAxis::LeftStickX)).find(|x| x.abs() >= 0.5).unwrap_or(0.0);
+    let pushed = |s: f32| x * s >= 0.5 && *stick * s < 0.5;
+    let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || any(GamepadButton::DPadRight) || pushed(1.0);
+    let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) || any(GamepadButton::DPadLeft) || pushed(-1.0);
+    *stick = x;
     let play = |key: u8| {
         if let (Some(s), Some(b)) = (&sound, sounds.as_deref().and_then(|a| a.1.as_ref())) {
             s.play_centre(b, hst_sim::sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
@@ -552,7 +588,6 @@ fn step(
         s.shot = None;
         s.serve = false;
     }
-    // ponytail: the left stick's directions aren't read
     let mut input = match () {
         _ if confirm && screen.timer >= 120 => 3,
         _ if right => 1,
@@ -565,6 +600,7 @@ fn step(
             play(2);
             g.match_stats.result = None;
             screen.open = false;
+            ceremony::end(&mut commands, cer.as_deref());
             fixed.set_timestep_hz(60.0);
             let over = fixed.overstep();
             fixed.discard_overstep(over);
@@ -608,6 +644,7 @@ fn draw(
     g: Res<Game>,
     pads: Res<Pads>,
     screen: Res<Screen>,
+    cer: Option<Res<ceremony::Ceremony>>,
     art: Option<Res<Art>>,
     panel_art: Option<Res<panel::Art>>,
     board_art: Option<Res<popups::Art>>,
@@ -649,6 +686,8 @@ fn draw(
             quads.append(&mut page);
         }
         quads.extend(bar(screen.page, screen.timer, screen.blink));
+    } else if let Some(c) = cer.filter(|c| c.running()) {
+        quads = ceremony::quads(&c.plan, n > 2);
     }
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
@@ -659,8 +698,10 @@ fn draw(
             Tex::Frame => art.0[0].clone(),
             Tex::Text => art.0[1].clone(),
             Tex::Keys => art.0[2].clone(),
-            Tex::Back => art.0[3].clone(),
-            Tex::Info => art.0[4].clone(),
+            Tex::Gameset => art.0[3].clone(),
+            Tex::Back => art.0[5].clone(),
+            Tex::Info => art.0[6].clone(),
+            Tex::Team => art.0[7].clone(),
             Tex::Face(p) => panel_art.0[panel::FACES + p].clone(),
             Tex::Rank => panel_art.0[6].clone(),
             Tex::Slot => panel_art.0[1].clone(),
@@ -684,6 +725,7 @@ fn draw(
 fn draw_banner(
     g: Res<Game>,
     screen: Res<Screen>,
+    cer: Option<Res<ceremony::Ceremony>>,
     banner: Option<Res<Banner>>,
     mut q: Query<(&mut Visibility, &mut bevy::mesh::morph::MorphWeights)>,
     mut joints: Query<&mut Transform>,
@@ -691,7 +733,8 @@ fn draw_banner(
 ) {
     let Some(banner) = banner else { return };
     let (effect, shown) = (&banner.0, &banner.1);
-    let x = screen.page_x(0).filter(|_| screen.open && g.match_stats.result.is_some());
+    let during = cer.is_some_and(|c| c.running()) && g.match_stats.result.is_some();
+    let x = if during { Some(0) } else { screen.page_x(0).filter(|_| screen.open && g.match_stats.result.is_some()) };
     let Some(x) = x else {
         if let Ok((mut v, _)) = q.get_mut(shown.root) {
             *v = Visibility::Hidden;

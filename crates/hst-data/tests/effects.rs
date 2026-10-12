@@ -63,3 +63,17 @@ fn court10_wind_and_clouds() {
     assert_eq!(hst_data::layout::cloud_count(&envir, &hole, 0), Some(9));
     assert_eq!(hst_data::layout::cloud_count(&envir, &hole, 1), Some(11));
 }
+
+/// The ceremony's camera clips parse to the end: track `Camera01`, 229/240/319 frames, the FOV in radians.
+#[test]
+fn ceremony_cameras() {
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+    let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").unwrap();
+    let arc = Archive::parse(&data).unwrap();
+    for (name, frames) in [("win_99", 229), ("lost_99", 240), ("hand_99", 319)] {
+        let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(&format!("prize/CAM/{name}.CAM"))).unwrap();
+        let (cam, fov) = ani::parse_cam(&arc.read(e).unwrap()).unwrap();
+        assert_eq!((cam.tracks[0].name.as_str(), cam.end_tick().max(fov.end_tick()) / cam.ticks_per_frame), ("Camera01", frames), "{name}");
+        assert!(fov.tracks[0].position.iter().all(|k| (0.3..1.4).contains(&k.1[0])), "{name}");
+    }
+}

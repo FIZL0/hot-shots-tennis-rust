@@ -3776,6 +3776,8 @@ fn simulate(mut g: ResMut<Game>) {
                 .iter()
                 .enumerate()
                 .any(|(i, &h)| h && i & 1 == team as usize)
+                // the side the ceremony shows won: a bot-only match too (P26c)
+                || !g.humans.iter().enumerate().any(|(i, &h)| h && i & 1 != team as usize)
             {
                 3
             } else {
