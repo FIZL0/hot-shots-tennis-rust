@@ -108,6 +108,11 @@ impl PostPoint {
         matches!(self.board, Board::Pause(_))
     }
 
+    /// The scoreboard's pause ends with the next tick (its stage-0 end: the instant replay starts here).
+    pub fn pausing_out(&self) -> bool {
+        matches!(self.board, Board::Pause(n) if n + 1 > self.pause)
+    }
+
     /// The score show has started (a game or set: the umpire announces it then, `Umpire::announce`).
     pub fn showing(&self) -> bool {
         matches!(self.board, Board::Show(_) | Board::Done)
