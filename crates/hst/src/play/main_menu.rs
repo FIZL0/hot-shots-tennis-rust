@@ -101,7 +101,7 @@ const SETTING_LABELS: [&str; 3] = ["Widescreen", "Upscaled Textures", "Music"];
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
-const GRAPHICS_LABELS: [&str; 6] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode"];
+const GRAPHICS_LABELS: [&str; 7] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing"];
 
 /// Widescreen and upscaled textures on, music off (user 2026-10-12).
 const SETTING_DEFAULTS: [bool; 3] = [true, true, false];
@@ -141,7 +141,7 @@ impl Settings {
 
     /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
     fn graphics_step(&mut self, row: usize, d: isize) {
-        use crate::graphics::{FPS, SCALES, SHADOWS};
+        use crate::graphics::{FPS, MSAA, SCALES, SHADOWS};
         let g = &mut self.1;
         match row {
             0 => {
@@ -153,7 +153,8 @@ impl Settings {
             2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
             3 => g.fps = cycle(&FPS, g.fps, d),
             4 => g.vsync = !g.vsync,
-            _ => g.original = !g.original,
+            5 => g.original = !g.original,
+            _ => g.msaa = cycle(&MSAA, g.msaa, d),
         }
     }
 
@@ -167,7 +168,8 @@ impl Settings {
             3 if g.fps == 0 => "Uncapped".into(),
             3 => format!("{} fps", g.fps),
             4 => if g.vsync { "On" } else { "Off" }.into(),
-            _ => if g.original { "On" } else { "Off" }.into(),
+            5 => if g.original { "On" } else { "Off" }.into(),
+            _ => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
         }
     }
 
@@ -1038,13 +1040,19 @@ impl Draw<'_> {
 
     /// A column of rows, the chosen one bright with the hand beside it.
     fn rows(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32) {
+        self.rows_at(labels, sel, x, y, w, hand_x, 44.0);
+    }
+
+    /// `rows` `pitch` px apart.
+    #[allow(clippy::too_many_arguments)]
+    fn rows_at(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32, pitch: f32) {
         for (i, l) in labels.iter().enumerate() {
-            let yy = y + 44.0 * i as f32;
+            let yy = y + pitch * i as f32;
             let on = i == sel;
             self.pill(x, yy, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
             self.centred(l, x + w / 2.0, yy + 7.0, 24.0, if on { WHITE } else { [100.0; 3] });
         }
-        self.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + 44.0 * sel as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
+        self.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + pitch * sel as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
     }
 
     /// The description bar along the bottom.
@@ -1161,9 +1169,10 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.frame(1, 6);
             let mut labels: Vec<String> = GRAPHICS_LABELS.iter().map(|s| s.to_string()).collect();
             labels.push("Back".into());
-            d.rows(&labels, m.sel, 120.0, 80.0, 300.0, hand_x);
+            // eight rows: closer than the other screens' to clear the description bar (y 404)
+            d.rows_at(&labels, m.sel, 120.0, 66.0, 300.0, hand_x, 42.0);
             for i in 0..GRAPHICS_LABELS.len() {
-                d.text(&m.settings.graphics_value(i), 440.0, 80.0 + 44.0 * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
+                d.text(&m.settings.graphics_value(i), 440.0, 66.0 + 42.0 * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
             }
             d.info(match m.sel {
                 0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
@@ -1172,6 +1181,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 3 => "The most frames drawn a second (the game itself always runs at 60 Hz).",
                 4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
                 5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
+                6 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
                 _ => "Back to the settings.",
             });
         }

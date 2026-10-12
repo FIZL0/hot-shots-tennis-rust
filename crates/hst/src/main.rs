@@ -162,7 +162,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             }
             "--vsync" => gfx.vsync = true,
             "--original" => gfx.original = true,
-            "--fps" | "--scale" | "--shadows" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--fullscreen" => {} // read in `main`
             "--music" => music = true,
             "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
