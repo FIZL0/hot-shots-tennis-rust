@@ -205,42 +205,56 @@ fn boot_file(iso: &mut Iso) -> Option<String> {
     Some(name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_', "_"))
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static WORK: std::cell::RefCell<Option<Box<dyn FnMut() -> bool>>> = const { std::cell::RefCell::new(None) };
+}
+
 fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh>>, materials: Res<Assets<StandardMaterial>>, images: Res<Assets<Image>>, binds: Res<Assets<SkinnedMeshInverseBindposes>>) {
     let (ask, asks) = std::sync::mpsc::channel::<(Key, Option<Mod>)>();
     let (send, done) = std::sync::mpsc::channel();
     let providers = (meshes.get_handle_provider(), materials.get_handle_provider(), images.get_handle_provider(), binds.get_handle_provider());
     let path = args.iso.clone();
-    std::thread::spawn(move || {
-        let Ok(mut iso) = Iso::open(&path) else { return };
-        // newest ask first: the card just hovered loads before older hovers; a backlog past a few is stale
-        let mut queue = Vec::new();
-        loop {
-            queue.extend(asks.try_iter());
-            if queue.is_empty() {
-                match asks.recv() {
-                    Ok(a) => queue.push(a),
-                    Err(_) => return,
-                }
+    // newest ask first: the card just hovered loads before older hovers; a backlog past a few is stale
+    let mut queue = Vec::new();
+    // one load; false once the menu is gone. `block`: wait for an ask (the worker thread), else return when there's none
+    let mut work = move |iso: &mut Iso, block: bool| -> bool {
+        queue.extend(asks.try_iter());
+        if queue.is_empty() {
+            if !block {
+                return true;
             }
-            let stale = queue.len().saturating_sub(8);
-            for (key, _) in queue.drain(..stale) {
-                if send.send((key, Err(String::new()))).is_err() {
-                    return;
-                }
-            }
-            let ((who, costume), md) = queue.pop().unwrap();
-            let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
-            let r = match (who, md) {
-                (Who::Mod(_), Some(md)) => crate::mods::load(&mut iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
-                (Who::Disc(c), _) => character::load_disc(&mut iso, c, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, inspect::disc_hand(&mut iso, c))),
-                (Who::Mod(_), None) => Err("no mod".into()),
-            };
-            let r = r.map(|(d, hand)| (d, hand, m, t, i, b)).map_err(|e| if e.is_empty() { "failed".into() } else { e });
-            if send.send(((who, costume), r)).is_err() {
-                return;
+            match asks.recv() {
+                Ok(a) => queue.push(a),
+                Err(_) => return false,
             }
         }
+        let stale = queue.len().saturating_sub(8);
+        for (key, _) in queue.drain(..stale) {
+            if send.send((key, Err(String::new()))).is_err() {
+                return false;
+            }
+        }
+        let ((who, costume), md) = queue.pop().unwrap();
+        let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
+        let r = match (who, md) {
+            (Who::Mod(_), Some(md)) => crate::mods::load(iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
+            (Who::Disc(c), _) => character::load_disc(iso, c, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, inspect::disc_hand(iso, c))),
+            (Who::Mod(_), None) => Err("no mod".into()),
+        };
+        let r = r.map(|(d, hand)| (d, hand, m, t, i, b)).map_err(|e| if e.is_empty() { "failed".into() } else { e });
+        send.send(((who, costume), r)).is_ok()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        let Ok(mut iso) = Iso::open(&path) else { return };
+        while work(&mut iso, true) {}
     });
+    // no threads in the browser: `receive` runs a load a frame
+    #[cfg(target_arch = "wasm32")]
+    if let Ok(mut iso) = Iso::open(&path) {
+        WORK.with(|w| *w.borrow_mut() = Some(Box::new(move || work(&mut iso, false))));
+    }
     let mut iso = Iso::open(&args.iso).ok();
     let boot = iso.as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
     let root = super::Settings::path(&args.iso).with_file_name("cache").join("previews");
@@ -272,6 +286,8 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
 fn receive(mut loader: ResMut<Loader>, mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, ResMut<Assets<Image>>, ResMut<Assets<SkinnedMeshInverseBindposes>>)) {
     let (meshes, materials, images, binds) = &mut assets;
     let loader = &mut *loader;
+    #[cfg(target_arch = "wasm32")]
+    WORK.with(|w| w.borrow_mut().as_mut().map(|f| f()));
     for (key, r) in loader.done.get_mut().unwrap().try_iter() {
         let loaded = match r {
             Ok((d, hand, m, t, i, b)) => {
@@ -497,7 +513,9 @@ fn bake(
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
 ) {
-    if menu.screen != Screen::Chars && baker.job.is_none() {
+    // ponytail: no PNG cache in the browser (no files): its cards always draw the live model; an OPFS cache if
+    // scrolling there hitches
+    if cfg!(target_arch = "wasm32") || menu.screen != Screen::Chars && baker.job.is_none() {
         return;
     }
     // a hovered card without a PNG jumps the queue

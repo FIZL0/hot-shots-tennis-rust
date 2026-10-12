@@ -51,10 +51,14 @@ file dialog on first start) copies the 171 MB the remaster reads into `~/.local/
 (`%APPDATA%\hst` on Windows); after that `hst [flags]` runs from the pack (settings.txt, controls.txt, mods/ beside it)
 and the ISO can go. `hst <iso> …` still runs straight from an ISO.
 
-In the browser (M13a): `tools/web.sh` builds `web/pkg`; serve `web/` on localhost or https (`python3 -m http.server -d
-web 8765`). The first visit asks for the ISO and imports the pack into the browser's storage (OPFS); later visits run
-from it. Flags go in the URL (`?play&singles&stage=1` = `--play --singles --stage 1`); `?forget` drops the pack. Only
-`?play` works yet (the menus spawn threads, M3).
+In the browser (M13a, M3): `tools/web.sh` builds `web/pkg` (WebGL2) and `web/pkg-webgpu` (the page takes WebGPU when
+the browser has an adapter; `?webgl2` forces WebGL2); serve `web/` on localhost or https (`python3 -m http.server -d
+web 8765`; GitHub Pages: `.github/workflows/pages.yml`). The first visit asks for the ISO and imports the pack into the
+browser's storage (OPFS); later visits run from it, menus and all. Flags go in the URL (`?play&singles&stage=1` =
+`--play --singles --stage 1`); `?forget` drops the pack. Sound starts on the first click/key. Online: relay only (no
+DHT/mDNS), host or join by code (`?code=<code>` or Ctrl+V on the page, then Join by Code); plays with desktop peers.
+Headless check: `tools/web_check.mjs` (`WEB_INPUT` key/click script, `PROFILE`, `CHROME_FLAGS="--enable-features=Vulkan
+--use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device).
 
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected, players 3 and 4 (the other team) = controllers 3 and 4 when connected; the other slots are CPU. `--pads a,b,c,d` seats
