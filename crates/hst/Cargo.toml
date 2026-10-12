@@ -22,10 +22,11 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "UrlSearchParams", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# netplay transport and lobbies (`net.rs`): iroh QUIC, addresses and lobby list on the mainline DHT, tickets for codes/QR
+# netplay transport and lobbies (`net.rs`): iroh QUIC, addresses and lobby list on the mainline DHT and LAN mDNS, tickets for codes/QR
 iroh = "1.3"
 iroh-mainline-address-lookup = "0.6"
 n0-mainline = "0.7"
 iroh-tickets = "1"
+iroh-mdns-address-lookup = "0.6"
 n0-future = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

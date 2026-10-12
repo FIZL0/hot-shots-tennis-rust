@@ -8,8 +8,12 @@
 //!   time) as a BEP 44 mutable item under the well-known [`BOARD`] key, salted with that number and signed again
 //!   with its own endpoint key. Find = `get_peers(TOPIC)`, then each lobby number's listing; listings older than
 //!   [`STALE`] are dropped. Republished every [`REPUBLISH`] and on change (the Halo CE port's 30 s / 90 s).
+//! - **LAN** (M2j): every endpoint also advertises itself by mDNS (service [`MDNS`]), so bare IDs resolve on a shared
+//!   network with no internet (a router, or one phone's hotspot with no mobile data); a host puts its listing in the
+//!   mDNS record's user data too, and Find lists those first, before the DHT has answered (or with no internet at all).
 //! - **Relay** for when hole punching fails: n0's public relays, your own `iroh-relay`, or none (LAN only).
-//! - **Code / QR**: the host's [`EndpointTicket`] (ID + relay + direct addresses), needs no discovery at all.
+//! - **Code / QR**: the host's [`EndpointTicket`] (ID + relay + direct addresses, its LAN ones included), needs no
+//!   discovery at all.
 //!
 //! The lobby protocol (ALPN [`ALPN`]): the joiner opens a stream and sends [`Msg::Hello`] (build, its 1–3 local
 //! players' picks); the host answers [`Msg::Room`] (seated) or [`Msg::Refused`], sends `Room` again on every
@@ -33,6 +37,10 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, S
 #[cfg(not(target_arch = "wasm32"))]
 use iroh_mainline_address_lookup::DhtAddressLookup;
 #[cfg(not(target_arch = "wasm32"))]
+use iroh::endpoint_info::UserData;
+#[cfg(not(target_arch = "wasm32"))]
+use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
+#[cfg(not(target_arch = "wasm32"))]
 use iroh_tickets::endpoint::EndpointTicket;
 #[cfg(not(target_arch = "wasm32"))]
 use n0_future::StreamExt;
@@ -48,6 +56,12 @@ const TOPIC: &[u8; 20] = b"hst-remaster-lobby/1";
 /// The listings' shared BEP 44 key (its secret is public on purpose: anyone may list; the endpoint signature inside
 /// says who wrote a listing).
 const BOARD: &[u8; 32] = b"hot-shots-tennis-remaster-lobby1";
+/// The mDNS service name (`<id>._hst._udp.local`), so only our endpoints answer.
+const MDNS: &str = "hst";
+/// The LAN listing's prefix in the mDNS user data.
+const LAN_TAG: &str = "hst1";
+/// How long Find listens on the LAN before it shows what it has (mDNS answers come within a second or two).
+const LAN_WAIT: Duration = Duration::from_secs(3);
 const REPUBLISH: Duration = Duration::from_secs(30);
 const STALE: u64 = 90;
 /// The build peers must share (M2e will add the disc pack, rules and mods).
@@ -249,6 +263,20 @@ fn unseal(n: u16, value: &[u8]) -> Option<Listing> {
     Some(l)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// A listing as mDNS user data (≤ 245 bytes: the ID is the record's own, the time the finder's clock).
+fn lan_data(l: &Listing) -> Option<UserData> {
+    let json = serde_json::to_string(&Listing { id: String::new(), time: 0, ..l.clone() }).ok()?;
+    format!("{LAN_TAG}{json}").parse().ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The listing in endpoint `id`'s mDNS user data, if it's hosting.
+fn lan_listing(id: EndpointId, data: Option<&UserData>) -> Option<Listing> {
+    let l: Listing = serde_json::from_str(data?.as_ref().strip_prefix(LAN_TAG)?).ok()?;
+    Some(Listing { id: id.to_string(), time: now(), ..l })
+}
+
 // ---------------------------------------------------------------- wire
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -408,7 +436,40 @@ impl Net {
 struct Ctx {
     ep: Endpoint,
     dht: Dht,
+    /// The lobbies heard on the LAN, kept current by mDNS.
+    lan: Lan,
     ev: mpsc::Sender<Event>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type Lan = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<EndpointId, Listing>>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Keep `lan` to the hosts mDNS hears now (a host's record updates when its seats change; gone when it stops).
+fn watch_lan(mdns: MdnsAddressLookup) -> Lan {
+    let lan = Lan::default();
+    let l = lan.clone();
+    tokio::spawn(async move {
+        let mut events = mdns.subscribe().await;
+        while let Some(e) = events.next().await {
+            let mut l = l.lock().unwrap();
+            match e {
+                DiscoveryEvent::Discovered { endpoint_info: i, .. } => match lan_listing(i.endpoint_id, i.data.user_data()) {
+                    Some(listing) => l.insert(i.endpoint_id, listing),
+                    None => l.remove(&i.endpoint_id),
+                },
+                DiscoveryEvent::Expired { endpoint_id } => l.remove(&endpoint_id),
+                _ => None,
+            };
+        }
+    });
+    lan
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The open lobbies on the LAN.
+fn lan_list(lan: &Lan) -> Vec<Listing> {
+    lan.lock().unwrap().values().filter(|l| l.open() > 0).cloned().collect()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -419,7 +480,7 @@ impl Ctx {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn endpoint(relay: &Relay) -> Result<Endpoint, String> {
+pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), String> {
     let mode = match relay {
         Relay::N0 => RelayMode::Default,
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
@@ -433,17 +494,20 @@ pub async fn endpoint(relay: &Relay) -> Result<Endpoint, String> {
         b = b.clear_ip_transports();
     }
     let ep = b.bind().await.map_err(|e| e.to_string())?;
+    // LAN: bare IDs resolve by mDNS and hosts' listings ride on it (no internet needed)
+    let mdns = MdnsAddressLookup::builder().service_name(MDNS).build(ep.id()).map_err(|e| format!("mDNS: {e}"))?;
+    ep.address_lookup().map_err(|e| e.to_string())?.add(mdns.clone());
     if *relay != Relay::Off {
         // a home relay before the ticket, so the code works from anywhere (bounded: a dead relay still leaves LAN)
         let _ = tokio::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
-    Ok(ep)
+    Ok((ep, mdns))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sender<Event>) {
     let _ = ev.send(Event::Status("Connecting...".into()));
-    let ep = match endpoint(&cfg.relay).await {
+    let (ep, mdns) = match endpoint(&cfg.relay).await {
         Ok(ep) => ep,
         Err(e) => {
             let _ = ev.send(Event::Failed(e));
@@ -458,21 +522,25 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             return;
         }
     };
-    let cx = Ctx { ep, dht, ev };
+    let cx = Ctx { ep, dht, lan: watch_lan(mdns), ev };
     cx.say(Event::Status("Online.".into()));
     while let Some(c) = cmds.recv().await {
         match c {
             Cmd::Host(room) => host(&cx, room, &mut cmds).await,
             Cmd::Find => {
                 cx.say(Event::Status("Looking for lobbies...".into()));
-                let list = find(&cx.dht).await;
+                // the LAN's first (all there is with no internet), then the DHT's added
+                tokio::time::sleep(LAN_WAIT).await;
+                cx.say(Event::Found(lan_list(&cx.lan)));
+                let list = find_all(&cx).await;
                 cx.say(Event::Found(list));
             }
             Cmd::Quick(room) => {
                 cx.say(Event::Status("Looking for a lobby...".into()));
                 let mine: Vec<Pick> = room.seats.iter().flatten().map(|s| s.pick).collect();
                 let mut joined = false;
-                for l in quick_pick(&find(&cx.dht).await, room.doubles, mine.len()) {
+                tokio::time::sleep(LAN_WAIT).await;
+                for l in quick_pick(&find_all(&cx).await, room.doubles, mine.len()) {
                     if join(&cx, &l.id, mine.clone(), &mut cmds).await {
                         joined = true;
                         break;
@@ -489,6 +557,15 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
         }
     }
     cx.ep.close().await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The open lobbies on the LAN and the DHT (the LAN's copy of one listed on both).
+async fn find_all(cx: &Ctx) -> Vec<Listing> {
+    let mut list = lan_list(&cx.lan);
+    let dht = find(&cx.dht).await;
+    list.extend(dht.into_iter().filter(|l| !cx.lan.lock().unwrap().keys().any(|id| id.to_string() == l.id)));
+    list
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -564,7 +641,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             dirty = false;
             // listing in the background: a slow DHT put never holds up a join
             let l = room.clone();
-            let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), ev: cx.ev.clone() };
+            cx.ep.set_user_data_for_address_lookup(lan_data(&Listing::of(cx.ep.id(), &l)));
+            let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone() };
             tokio::spawn(async move { announce(&cx2, n, &l).await });
         }
         if let Some((waiting, until)) = &starting
@@ -577,6 +655,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             broadcast(&joined, &Msg::Start(room.clone()));
             cx.say(Event::Status(format!("Round trip {} ms, input delay {} ticks.", worst.as_millis(), room.delay)));
             cx.say(Event::Start(room.clone(), "host".into()));
+            cx.ep.set_user_data_for_address_lookup(None);
             return relay(cx, joined, guests, cmds).await;
         }
         tokio::select! {
@@ -648,6 +727,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 for (_, _, conn) in &joined {
                     conn.close(0u32.into(), b"host left");
                 }
+                cx.ep.set_user_data_for_address_lookup(None);
                 // an empty listing ages out in STALE; a full one isn't shown
                 return;
             },
@@ -849,13 +929,19 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
             return None;
         }
     };
-    let find = matches!(cmd, Cmd::Find);
+    // Find answers twice: the LAN's list, then with the DHT's
+    let mut finds = if matches!(cmd, Cmd::Find) { 2 } else { 0 };
     net.send(cmd);
     loop {
         for e in net.poll() {
             println!("{e:?}");
             match e {
-                Event::Found(_) if find => return None,
+                Event::Found(_) if finds > 0 => {
+                    finds -= 1;
+                    if finds == 0 {
+                        return None;
+                    }
+                }
                 Event::Start(r, me) if play => return Some((net, r, me)),
                 Event::Start(..) | Event::Failed(_) => return None,
                 _ => {}
@@ -952,13 +1038,70 @@ mod tests {
             let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
             let (a, b) = (dht(&net.bootstrap), dht(&net.bootstrap));
             let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
-            let cx = Ctx { ep, dht: a, ev: mpsc::channel().0 };
+            let cx = Ctx { ep, dht: a, lan: Lan::default(), ev: mpsc::channel().0 };
             let mut r = room(true);
             r.take("host", &[Pick { char: 0, costume: 0 }]);
             announce(&cx, 4242, &r).await;
             let list = find(&b).await;
             assert_eq!(list.len(), 1);
             assert_eq!((list[0].id.clone(), list[0].taken, list[0].seats), (cx.ep.id().to_string(), 1, 4));
+        });
+    }
+
+    #[test]
+    fn lan_listing_fits_mdns() {
+        let mut r = room(true);
+        // the longest name: 24 four-byte characters
+        r.name = "🎾".repeat(24);
+        r.take("host", &[Pick { char: 0, costume: 0 }]);
+        let id = SecretKey::generate().public();
+        let data = lan_data(&Listing::of(id, &r)).expect("fits in 245 bytes");
+        let l = lan_listing(id, Some(&data)).unwrap();
+        assert_eq!((l.id, l.name, l.taken, l.seats), (id.to_string(), r.name, 1, 4));
+        assert_eq!(lan_listing(id, Some(&"other app".parse().unwrap())), None);
+    }
+
+    /// LAN play with relays off and no DHT: a host's lobby heard by mDNS, then joined by bare ID (mDNS lookup) and
+    /// by its code (whose direct addresses need no lookup at all).
+    #[test]
+    fn lan_lobby_by_mdns() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (host, _hm) = endpoint(&Relay::Off).await.unwrap();
+            let (guest, gm) = endpoint(&Relay::Off).await.unwrap();
+            let lan = watch_lan(gm);
+            let mut r = room(false);
+            r.take("host", &[Pick { char: 0, costume: 0 }]);
+            host.set_user_data_for_address_lookup(lan_data(&Listing::of(host.id(), &r)));
+            let t = tokio::time::Instant::now();
+            while lan_list(&lan).is_empty() && t.elapsed() < Duration::from_secs(15) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let list = lan_list(&lan);
+            assert_eq!(list.len(), 1, "no LAN listing in 15 s (is multicast blocked?)");
+            assert_eq!((list[0].id.clone(), list[0].open()), (host.id().to_string(), 1));
+            let accept = tokio::spawn({
+                let host = host.clone();
+                async move {
+                    for _ in 0..2 {
+                        let c = host.accept().await.unwrap().await.unwrap();
+                        tokio::spawn(async move { c.closed().await });
+                    }
+                }
+            });
+            // by ID: the address from mDNS
+            let c = guest.connect(list[0].id.parse::<EndpointId>().unwrap(), ALPN).await.unwrap();
+            c.close(0u32.into(), b"");
+            // by code: the ticket carries the LAN addresses
+            let ticket = EndpointTicket::new(host.addr());
+            assert!(host.addr().ip_addrs().next().is_some(), "no direct address in the code");
+            // (an endpoint with no address lookup at all)
+            let fresh = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
+            let c = fresh.connect(EndpointAddr::from(ticket), ALPN).await.unwrap();
+            c.close(0u32.into(), b"");
+            accept.await.unwrap();
+            // stopped hosting: off the list once its record updates
+            host.set_user_data_for_address_lookup(None);
         });
     }
 }

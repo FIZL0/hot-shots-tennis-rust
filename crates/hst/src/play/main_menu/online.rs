@@ -221,8 +221,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.rows(&labels, m.sel, 170.0, 84.0, 300.0, hand_x);
             let info = match m.sel {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
-                0 => "Open a lobby for players over the internet; the match starts when every seat is taken.".into(),
-                1 => "List the open lobbies (from the BitTorrent DHT, no server of ours).".into(),
+                0 => "Open a lobby for players over the internet or on this network; the match starts when every seat is taken.".into(),
+                1 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
                 2 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
                 3 => "Copy a host's code, then choose this to join their lobby.".into(),
                 4 => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
