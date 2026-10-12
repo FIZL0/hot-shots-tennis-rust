@@ -171,3 +171,20 @@ const update = () => {
   requestAnimationFrame(update);
 };
 update();
+
+// iOS Safari / Android Chrome edge swipes go back a page (and leave the game) despite `overscroll-behavior: none`:
+// swallow touches that start at the left/right edge (pointer events, so the touch stick, still fire), and keep a
+// spare history entry that a back gesture getting through only pops. Not on the ISO import page.
+const inGame = () => !document.getElementById('disc')?.offsetParent;
+addEventListener('touchstart', e => {
+  const x = e.touches[0]?.clientX;
+  if (inGame() && (x < 20 || x > innerWidth - 20)) e.preventDefault();
+}, { passive: false, capture: true });
+const guard = () => inGame() && history.pushState({ hst: 1 }, '', location.href);
+// pushed on a tap: Chrome skips entries a page added before any user activation
+addEventListener('pointerdown', function once() {
+  if (!inGame()) return;
+  removeEventListener('pointerdown', once, true);
+  guard();
+  addEventListener('popstate', guard);
+}, true);
