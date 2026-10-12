@@ -41,6 +41,8 @@ pub enum Fx {
     Paste,
     Copy,
     SaveCfg,
+    /// Read `online.txt` (opening the Online screen).
+    Load,
 }
 
 const ROWS: [&str; 6] = ["Host", "Find", "Quickplay", "Join by Code", "Relay", "Back"];
@@ -268,7 +270,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             if !m.net.code.is_empty() {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
                 d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [400.0, 120.0, 200.0, 200.0], WHITE, 128.0);
-                d.centred("Code: X / Enter copies", 500.0, 326.0, 18.0, WHITE);
+                d.centred("Scan it, or OK copies the code", 500.0, 326.0, 18.0, WHITE);
             }
             let info = if m.net.status.is_empty() { "Waiting for players...".to_string() } else { m.net.status.clone() };
             d.info(&info);
@@ -279,7 +281,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 
 /// The lobby code's QR, drawn as `Tex::Qr`.
 #[derive(Resource)]
-pub struct QrImage(pub Handle<Image>);
+pub struct QrImage(pub Handle<Image>, String);
 
 /// `code` as a QR: black modules on white, 4 modules of quiet zone, one texel a module (drawn with nearest
 /// sampling would be sharper; the menu's linear filter blurs edges a little at small sizes).
@@ -299,17 +301,29 @@ fn qr(code: &str) -> Option<Image> {
     Some(img)
 }
 
-/// The network's events into the menu, and the QR when a code arrives.
-pub(super) fn poll(net: Option<Res<Net>>, mut menu: ResMut<Menu>, mut images: ResMut<Assets<Image>>, mut commands: Commands) {
-    let Some(net) = net else { return };
-    for e in net.poll() {
-        if let Event::Code(c) = &e
-            && let Some(img) = qr(c)
-        {
-            commands.insert_resource(QrImage(images.add(img)));
+/// The network's events into the menu, and the QR of the menu's code whenever the code changes.
+pub(super) fn poll(net: Option<Res<Net>>, mut menu: ResMut<Menu>, mut images: ResMut<Assets<Image>>, made: Option<Res<QrImage>>, mut commands: Commands) {
+    if let Some(net) = net {
+        for e in net.poll() {
+            menu.heard(e);
         }
-        menu.heard(e);
     }
+    let code = &menu.net.code;
+    if !code.is_empty()
+        && made.is_none_or(|m| m.1 != *code)
+        && let Some(img) = qr(code)
+    {
+        commands.insert_resource(QrImage(images.add(img), code.clone()));
+    }
+}
+
+/// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the QR).
+pub(super) fn sample(m: &mut Menu) {
+    let pick = |char| Pick { char, costume: 0 };
+    let seats = vec![Some(Seat { peer: "host".into(), pick: pick(6) }), Some(Seat { peer: "k51qzi5uqu5d".into(), pick: pick(1) }), None, None];
+    m.net.room = Some(Room { name: "Player".into(), doubles: true, court: 0, sets: 1, games: 4, umpire: 4, seats });
+    m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
+    m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
 }
 
 /// An Online effect (from `Menu::step`).
@@ -334,6 +348,9 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::Copy => {
             let ok = clipboard.set_text(menu.net.code.clone()).is_ok();
             menu.net.status = if ok { "Code copied: send it to the other players (they paste it in Join by Code).".into() } else { format!("Code: {}", menu.net.code) };
+        }
+        Fx::Load => {
+            menu.net.cfg.get_or_insert_with(|| Online::load(iso));
         }
         Fx::SaveCfg => {
             if let Some(cfg) = &menu.net.cfg {

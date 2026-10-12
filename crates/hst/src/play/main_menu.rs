@@ -377,6 +377,7 @@ impl Menu {
                         1 => {
                             self.seats = [Some(dev), None, None, None];
                             self.net.status.clear();
+                            out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
                         }
                         2 => self.go(Screen::Settings, &mut out),
@@ -891,6 +892,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.custom = screen == "mods" && !menu.mods.is_empty();
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
+        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
+            online::sample(&mut menu);
+        }
     }
     commands.insert_resource(menu);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
@@ -1504,11 +1508,20 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        let (left, width) = super::widescreen::place(x, w, share, quad.anchor);
+        let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
+        let (mut top, mut height) = (y / 4.48, h / 4.48);
+        if quad.tex == Tex::Qr
+            && let Ok(win) = window.single()
+        {
+            // a QR stays square (scannable) at any aspect: the largest square in its rect, centred
+            let side = (width * win.width()).min(height * win.height());
+            (left, top) = (left + (width - side / win.width()) / 2.0, top + (height - side / win.height()) / 2.0);
+            (width, height) = (side / win.width(), side / win.height());
+        }
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(h / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }
