@@ -4180,6 +4180,9 @@ impl Bgm {
                         speed: 1.0,
                     },
                 );
+                if key >= 3 {
+                    match_stats::END_JINGLE.store(self.jingle, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             // ponytail: the match-end jingles (3, 4) leave the BGM as it is, as the game's match end does
             if key < 3 {

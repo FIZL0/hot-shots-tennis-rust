@@ -20,6 +20,7 @@
 //! Before it, the original's first state: the winners' ceremony ([`ceremony`]), the banner already up.
 
 mod ceremony;
+pub(super) use ceremony::END_JINGLE;
 mod dissolve;
 
 use bevy::prelude::*;
@@ -525,7 +526,7 @@ fn step(
     mut banner: Option<ResMut<Banner>>,
     sounds: Option<Res<Art>>,
     sound: Option<Res<crate::audio::Sound>>,
-    gallery: Option<Res<crate::audio::GalleryBank>>,
+    (gallery, music): (Option<Res<crate::audio::GalleryBank>>, Option<Res<crate::audio::MusicBanks>>),
     mut cer: Option<ResMut<ceremony::Ceremony>>,
     mut dissolve: ResMut<dissolve::Dissolve>,
     mut commands: Commands,
@@ -616,7 +617,7 @@ fn step(
             play(2);
             g.match_stats.result = None;
             screen.open = false;
-            ceremony::end(&mut commands, cer.as_deref());
+            ceremony::end(&mut commands, cer.as_deref(), sound.as_deref(), music.as_deref());
             fixed.set_timestep_hz(60.0);
             let over = fixed.overstep();
             fixed.discard_overstep(over);
