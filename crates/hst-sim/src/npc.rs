@@ -500,6 +500,16 @@ pub struct Trigger {
     /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others (it scales the
     /// model's sub-meshes when drawn).
     pub weight: f32,
+    /// Type 2: where the point's first bounce landed, if in the court with no body hit.
+    pub landing: Option<[f32; 4]>,
+    /// Types 19 and 33: a sound armed (at a game's end) for the next reset; type 40: it cheers for `team`.
+    pub armed: bool,
+    pub team: i32,
+    /// Type 19's sweep loudness (as `angle` its bearing in degrees); the last sound's volume (0–128) and bearing
+    /// (type 6's flyover updates its volume each tick).
+    pub vol: f32,
+    pub volume: i32,
+    pub bearing: i32,
 }
 
 /// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
@@ -515,11 +525,30 @@ pub struct Near {
     pub deciding: bool,
     /// The gallery's manager paused (set by type 44's reset).
     pub paused: bool,
+    /// The point just decided: a game or set won short of the match's end, a point the game names (an ace, a
+    /// return, smash or passing winner), its call (0 plain), the winning team and the shots played.
+    pub game: bool,
+    pub named: bool,
+    pub call: u8,
+    pub winner: i32,
+    pub shots: i32,
+    /// The teams with a human player.
+    pub humans: [bool; 2],
+    /// The ball's bounces so far, the first one's spot and whether it was in the court with no body hit.
+    pub bounces: i32,
+    pub landing: [f32; 4],
+    pub in_court: bool,
+    /// The camera's eye.
+    pub eye: [f32; 4],
 }
 
 impl Default for Near {
     fn default() -> Near {
-        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false, paused: false }
+        Near {
+            pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false, paused: false, game: false,
+            named: false, call: 0, winner: 0, shots: 0, humans: [false; 2], bounces: 0, landing: [0.0; 4], in_court: false,
+            eye: [0.0; 4],
+        }
     }
 }
 
@@ -586,6 +615,11 @@ impl Trigger {
         self.world[3]
     }
 
+    /// Where it stands.
+    pub fn pos3(&self) -> [f32; 3] {
+        [self.world[3][0], self.world[3][1], self.world[3][2]]
+    }
+
     /// Face along `dir`, keeping the position.
     fn face(&mut self, dir: [f32; 4]) {
         let pos = self.world[3];
@@ -643,7 +677,7 @@ impl Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
-            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, ..Trigger::default()
+            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, armed: o.armed, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -904,7 +938,24 @@ impl Trigger {
         sounds
     }
 
-    /// The type's own behaviour on message `msg` (2 each tick, 4 at a reset); the sounds started.
+    /// The match's messages, sent whether it is active or not: 6 the point decided, 7 the scoreboard's pause over,
+    /// 8 a game's end (just before its reset); the sounds started.
+    pub fn message(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        self.callback(row, msg, near, roll)
+    }
+
+    /// Type 2's matrix: at the landing spot, turned (about Y) to face the camera's eye.
+    fn facing_eye(&self, near: &Near) -> M4 {
+        let l = self.landing.unwrap_or_default();
+        let (x, z) = (ps2::sub(near.eye[0], l[0]), ps2::sub(near.eye[2], l[2]));
+        let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(x, x), z, z)));
+        let (f, u) = ([ps2::mul(x, q), 0.0, ps2::mul(z, q), 0.0], [0.0, 1.0, 0.0, 0.0]);
+        let cross = |a: usize, b: usize| ps2::sub(ps2::mul(u[a], f[b]), ps2::mul(u[b], f[a]));
+        [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], u, f, [l[0], l[1], l[2], 1.0]]
+    }
+
+    /// The type's own behaviour on message `msg` (2 each tick, 4 at a reset; 6–8 as [`Trigger::message`]); the
+    /// sounds started.
     fn callback(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         let mut sounds = Vec::new();
         let u = |r: u32| ps2::mul(2.3283064e-10, ps2::utof(r));
@@ -1097,10 +1148,126 @@ impl Trigger {
                     self.animating = false;
                 }
             }
+            // court 1: where the point's first bounce landed (in the court, no body hit), shown facing the camera
+            // after a game or set won on a plain call with a named point
+            (2, 2) => {
+                if near.bounces == 1 && self.counter != 1 {
+                    self.landing = near.in_court.then_some(near.landing);
+                    self.counter = 1;
+                } else {
+                    self.counter = near.bounces;
+                }
+                if self.on {
+                    self.world = self.facing_eye(near);
+                }
+            }
+            (2, 6) if near.game && self.landing.is_some() && near.named && near.call == 0 => {
+                self.set_frame(1.0, row);
+                (self.animating, self.on, near.flags[ty]) = (true, true, true);
+                self.world = self.facing_eye(near);
+            }
+            (2, 4) => {
+                (self.counter, self.landing, self.on, self.moving, self.world, self.animating) = (0, None, false, false, self.home, false);
+                self.restart_anim();
+                near.flags[ty] = false;
+            }
+            // court 2: the flyover after a game or set won on a plain call with a named point: its sound follows it,
+            // fading with |z|; it steers along its reset's leg at y −60
+            (6, 7) if near.game && near.named && near.call == 0 => {
+                (self.animating, self.on, near.flags[ty]) = (true, true, true);
+                self.restart_anim();
+                sounds.push(row.sound);
+                self.volume = flyover_volume(pos[2]);
+            }
+            (6, 2) if self.on => {
+                let (p, y) = heading(unit3(self.vel));
+                self.pitch = wrap(ps2::add(self.pitch, turn(p, self.pitch)));
+                self.yaw = wrap(ps2::add(self.yaw, turn(y, self.yaw)));
+                self.world = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(self.pitch)), &world::rot_y(self.yaw));
+                self.world[3] = [ps2::add(pos[0], self.vel[0]), -60.0, ps2::add(pos[2], self.vel[2]), ps2::add(pos[3], self.vel[3])];
+                self.volume = flyover_volume(self.world[3][2]);
+            }
+            (6, 4) => {
+                (self.on, self.moving, self.world, self.animating, self.volume) = (false, false, self.home, false, -1);
+                near.flags[ty] = false;
+            }
+            // court 5's and court 8's: a game's end rolls one in two to arm a sound for its reset, once a match;
+            // 33 plays its sound there, 19 sweeps its own round the stereo field over 6 s
+            (19 | 33, 8) => {
+                if roll() >> 16 & 1 == 0 && !self.done {
+                    self.armed = true;
+                }
+            }
+            (19 | 33, 4) => {
+                (self.on, self.animating, self.playing) = (false, false, false);
+                if std::mem::take(&mut self.armed) {
+                    if ty == 33 {
+                        sounds.push(row.sound);
+                        (self.volume, self.done) = (0x80, true);
+                    } else {
+                        (self.playing, self.angle, self.vol, self.counter, self.volume) = (true, 135.0, 0.0, 0, -1);
+                    }
+                }
+            }
+            (19, 2) if self.playing => {
+                let c = self.counter;
+                if 360 <= c {
+                    (self.done, self.playing) = (true, false);
+                } else if c % 10 == 0 {
+                    // ponytail: the call's arguments read as (bearing, volume); a guess from their ranges
+                    sounds.push(row.sound);
+                    (self.bearing, self.volume) = (self.angle as i32, self.vol as i32);
+                }
+                let t = c as f32;
+                if t < 180.0 {
+                    self.vol = ps2::mul(ps2::sub(1.0, libm::powf(ps2::msub(1.0, t, 0.0055555557), 4.0)), 128.0);
+                    self.angle = ps2::sub(self.angle, 0.5);
+                } else if t == 180.0 {
+                    (self.vol, self.angle) = (128.0, 45.0);
+                } else {
+                    self.vol = ps2::mul(ps2::sub(1.0, libm::powf(ps2::mul(ps2::sub(t, 180.0), 0.0055555557), 4.0)), 128.0);
+                    self.angle = ps2::sub(self.angle, 0.5);
+                    if self.angle <= 0.0 {
+                        self.angle = 359.0;
+                    }
+                }
+                self.counter += 1;
+            }
+            // court 6's: in the deciding set it stands (its head following the ball) and the gallery's manager pauses
+            // ponytail: the head's look-at is not drawn
+            (22, 4) => {
+                (self.world, self.moving, self.animating, self.on) = (self.home, false, false, near.deciding);
+                near.paused = self.on;
+                if self.on {
+                    (self.pitch, self.yaw) = heading(self.home[2]);
+                }
+            }
+            (22, 8) => near.paused = self.on,
+            (44, 8) => near.paused = near.deciding,
+            // court 9's: cheers when a team with no human wins a game or set in three shots or fewer
+            (40, 4) => {
+                self.on = false;
+                self.armed = near.humans[0] != near.humans[1];
+                self.team = !near.humans[0] as i32;
+                self.animating = false;
+            }
+            (40, 7) if self.armed && near.game && near.winner == (self.team != 1) as i32 && near.shots < 3 => {
+                sounds.push(row.sound);
+                self.volume = 0x80;
+            }
             _ => {}
         }
         sounds
     }
+}
+
+/// The flyover's volume at `z`: full at 0, silent past ±550.
+fn flyover_volume(z: f32) -> i32 {
+    let a = z.abs();
+    if 550.0 < a {
+        return 0;
+    }
+    ps2::mul(ps2::sub(1.0, libm::powf(ps2::sub(1.0, ps2::sub(1.0, ps2::div(a, 550.0))), 2.0)), 128.0) as i32
 }
 
 impl Default for Trigger {
@@ -1158,6 +1325,12 @@ impl Default for Trigger {
             routes: [[[0.0; 4]; 2]; 3],
             done: false,
             weight: 0.0,
+            landing: None,
+            armed: false,
+            team: 0,
+            vol: 0.0,
+            volume: 0,
+            bearing: 0,
         }
     }
 }

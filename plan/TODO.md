@@ -191,7 +191,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **P14c3e** A struck toss and message 0x14's other listeners (in P14c3d) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c3f** Startled creatures' model weight, replay save, +0x280 (in P14c3d) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
-- [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14f** Court 1's chickens don't move (user 2026-10-08): in the app the background chickens stand still. Seen in `--stage 1 --play`: trg_sa-01/02 (types 0, 1) stay `on = false` (they run only once startled, so a player or ball must come near), trg_sa-03 (type 2) is on but its frame stays 0; and `play/npcs.rs` step copies `t.world` into the transform only for types 15 and 44, so a startled creature that walks in `npc.rs` stays put on screen. Record court 1 in the original (idle pecking? wandering?) and make the app match: apply every trigger's world each tick, find why type 2's frame doesn't advance, check the startled walk → `play/npcs.rs` · `hst-sim/src/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc

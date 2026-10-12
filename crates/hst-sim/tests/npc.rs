@@ -743,3 +743,99 @@ fn passing_ball_matches_the_game() {
     eprintln!("{ticks} ticks, {resets} resets, {sounds} bounce sounds");
     assert!(rolled && sounds == 4, "the ball did not play through");
 }
+
+/// The match-event creatures (ported from the game's code, no recording: in-match presentation): court 1's
+/// landing-spot creature, court 2's flyover, courts 5 and 8's game-end rolls, court 6's and 10's deciding-set pause,
+/// court 9's cheer. Their draws: only the game-end roll (one each, armed or not).
+#[test]
+fn match_event_creatures() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let make = |ty: u8| {
+        let row = game.trigger(ty);
+        let mut t = npc::Trigger { ty, len: 30.0, ..Default::default() };
+        t.home[3] = [1.0, 0.0, 2.0, 1.0];
+        t.reset(&row, &mut || 0);
+        (t, row)
+    };
+    let mut none = || -> u32 { panic!("no draw") };
+
+    // 33: a game's end arms its sound one time in two, played at the reset, once a match
+    let (mut t, row) = make(33);
+    let mut near = npc::Near::default();
+    assert!(t.message(&row, 8, &mut near, &mut || 1 << 16).is_empty() && !t.armed);
+    t.message(&row, 8, &mut near, &mut || 0);
+    assert_eq!(t.reset_near(&row, &mut near, &mut none), vec![row.sound]);
+    t.message(&row, 8, &mut near, &mut || 0);
+    assert!(!t.armed);
+    assert!(t.reset_near(&row, &mut near, &mut none).is_empty());
+
+    // 19: its sweep, a call every 10 ticks for 360, louder to the middle and turning; then gone for the match
+    let (mut t, row) = make(19);
+    t.message(&row, 8, &mut near, &mut || 0);
+    assert!(t.reset_near(&row, &mut near, &mut none).is_empty() && t.playing);
+    let mut calls = Vec::new();
+    for _ in 0..400 {
+        if !t.step_near(&row, &mut near, &mut none).is_empty() {
+            calls.push((t.bearing, t.volume));
+        }
+    }
+    assert_eq!((calls.len(), calls[0], calls[18]), (36, (135, 0), (45, 128)));
+    assert!(t.done && !t.playing);
+    t.reset_near(&row, &mut near, &mut none);
+    assert!(!t.active);
+
+    // 40: cheers when the team with no human wins a game in under three shots
+    let (mut t, row) = make(40);
+    near.humans = [true, false];
+    t.reset_near(&row, &mut near, &mut none);
+    near.game = true;
+    for (winner, shots, cheer) in [(1, 2, true), (0, 2, false), (1, 3, false)] {
+        (near.winner, near.shots) = (winner, shots);
+        assert_eq!(t.message(&row, 7, &mut near, &mut none) == vec![row.sound], cheer);
+    }
+    near.humans = [true, true];
+    t.reset_near(&row, &mut near, &mut none);
+    (near.winner, near.shots) = (1, 1);
+    assert!(t.message(&row, 7, &mut near, &mut none).is_empty());
+
+    // 2: at the first bounce's spot (in the court) after a game won on a plain call with a named point, facing the eye
+    let (mut t, row) = make(2);
+    (near.bounces, near.landing, near.in_court, near.eye, near.named, near.call) = (1, [3.0, 0.0, 4.0, 1.0], true, [3.0, 5.0, 10.0, 1.0], true, 0);
+    t.step_near(&row, &mut near, &mut none);
+    near.bounces = 2;
+    t.step_near(&row, &mut near, &mut none);
+    assert_eq!(t.landing, Some([3.0, 0.0, 4.0, 1.0]));
+    t.message(&row, 6, &mut near, &mut none);
+    assert!(t.on && near.flags[2]);
+    assert_eq!((t.world[2], t.world[3]), ([0.0, 0.0, 1.0, 0.0], [3.0, 0.0, 4.0, 1.0]));
+    t.reset_near(&row, &mut near, &mut none);
+    assert!(!t.on && t.landing.is_none() && !near.flags[2]);
+
+    // 6: the flyover's sound fades with |z|; it flies on at y −60
+    let (mut t, row) = make(6);
+    t.vel = [0.0, 0.0, 1.0, 0.0];
+    assert_eq!(t.message(&row, 7, &mut near, &mut none), vec![row.sound]);
+    assert_eq!(t.volume, 127);
+    t.step_near(&row, &mut near, &mut none);
+    assert_eq!(t.world[3][1..3], [-60.0, 3.0]);
+    near.game = false;
+    t.reset_near(&row, &mut near, &mut none);
+    assert!(t.message(&row, 7, &mut near, &mut none).is_empty() && !t.on);
+
+    // 22 and 44: the gallery's manager paused at a game's end in the deciding set only
+    for ty in [22, 44] {
+        let (mut t, row) = make(ty);
+        for deciding in [true, false] {
+            near.deciding = deciding;
+            t.reset_near(&row, &mut near, &mut || 0);
+            near.paused = !deciding;
+            t.message(&row, 8, &mut near, &mut none);
+            assert_eq!(near.paused, deciding);
+        }
+    }
+}
