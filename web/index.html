@@ -94,6 +94,13 @@ console.log = (...a) => {
   if (!m.includes('Quitting the application')) return;
   // WebGPU that fails before the first frame (B109): the WebGL2 build instead
   if (!shown && window.hstWebGL2?.()) return;
+  // a GPU device lost later (B121: iOS drops it under memory pressure, e.g. a phone turned during a loading screen)
+  // can't be rebuilt in place: start again, unless that already happened in the last minute
+  if (/DeviceLost/.test(renderError)) {
+    let last = 0;
+    try { last = +sessionStorage.getItem('hstLost') || 0; sessionStorage.setItem('hstLost', Date.now()); } catch {}
+    if (Date.now() - last > 60000) { console.warn('hst: GPU device lost, reloading'); location.reload(); return; }
+  }
   fail(renderError);
 };
 addEventListener('error', e => fail(e.error ?? e.message));
