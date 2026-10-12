@@ -1,4 +1,4 @@
-//! The main menu (remaster-only flow in the original menus' art): Local, Online, Settings and Quit. Local goes through
+//! The main menu (remaster-only flow in the original menus' art): Local, Online, Settings and Quit (not on web). Local goes through
 //! singles/doubles, controller assignment, the character select (a cursor per player, at once) and the match
 //! confirmation (court, sets, games, umpire), then starts the match as a child process of this executable with the
 //! choices as flags (`--chars`, `--outfits`, `--umpire`, `--pads`, …) and comes back here when it ends.
@@ -310,7 +310,11 @@ impl Default for Menu {
 }
 
 /// Rows per screen.
+#[cfg(not(target_arch = "wasm32"))]
 const MAIN: [&str; 4] = ["Local", "Online", "Settings", "Quit"];
+/// A web page can't close itself (an `AppExit` there only freezes it), so the browser build has no Quit.
+#[cfg(target_arch = "wasm32")]
+const MAIN: [&str; 3] = ["Local", "Online", "Settings"];
 const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
