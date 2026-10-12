@@ -45,6 +45,9 @@ pub struct Mod {
     pub voice: String,
     /// The mod's own motions `.glb` (§6 `motions`), relative to `dir`: drawn in place of the donor's, same timing.
     pub motions: Option<String>,
+    /// Online (M2i): the skeleton every peer simulates this mod on (its owner's costume's, from the lobby), in place
+    /// of the one its looks load with. `None` offline.
+    pub skeleton: Option<std::sync::Arc<Skeleton>>,
 }
 
 /// The mods playing in a match, by match slot (`--slot-mod N DIR` from the character select, or `--mod DIR
@@ -112,6 +115,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
     };
     Ok(Mod {
+        skeleton: None,
         motions,
         dir: dir.to_path_buf(),
         id: text("id")?,
@@ -158,6 +162,10 @@ const COLUMNS: [&str; 67] = [
 fn column(name: &str) -> Option<usize> {
     let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     COLUMNS.iter().position(|c| squash(c) == squash(name))
+}
+
+pub fn is_column(name: &str) -> bool {
+    column(name).is_some()
 }
 
 /// The mod's TParam.csv row as cells: row `base` with the overrides (`play.rs` reads rows the same way).
@@ -498,6 +506,58 @@ fn prim(p: &gltf::Primitive, blob: &[u8], names: &[String]) -> Result<Prim, Stri
     })
 }
 
+/// The skin's joints in game space (below `game_space`): each joint's world there, its parent the nearest joint above it.
+fn joints_of(doc: &gltf::Document, blob: &[u8]) -> Vec<Joint> {
+    let Some(skin) = doc.skins().next() else { return Vec::new() };
+    let nodes: Vec<_> = skin.joints().collect();
+    let index: HashMap<usize, usize> = nodes.iter().enumerate().map(|(k, n)| (n.index(), k)).collect();
+    let mut up = vec![None; doc.nodes().len()];
+    for n in doc.nodes() {
+        n.children().for_each(|c| up[c.index()] = Some(n.index()));
+    }
+    let w = worlds(&doc);
+    let space = doc.default_scene().or_else(|| doc.scenes().next()).and_then(|s| s.nodes().next()).map_or(Mat4::IDENTITY, |r| w[r.index()].inverse());
+    let ibm: Vec<Mat4> = skin.reader(|_| Some(blob)).read_inverse_bind_matrices().map(|i| i.map(|m| Mat4::from_cols_array_2d(&m)).collect()).unwrap_or_else(|| vec![Mat4::IDENTITY; nodes.len()]);
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(k, n)| {
+            let mut p = up[n.index()];
+            while let Some(i) = p.filter(|i| !index.contains_key(i)) {
+                p = up[i];
+            }
+            let parent = p.map(|i| index[&i]);
+            let world = space * w[n.index()];
+            let local = parent.map_or(world, |q| (space * w[nodes[q].index()]).inverse() * world);
+            Joint { name: n.name().unwrap_or("").replace(' ', ""), parent, rest: Transform::from_matrix(local), inverse_bind: ibm[k] }
+        })
+        .collect()
+}
+
+fn skeleton_of(joints: &[Joint]) -> Skeleton {
+    Skeleton {
+        names: joints.iter().map(|j| j.name.clone()).collect(),
+        parent: joints.iter().map(|j| j.parent).collect(),
+        rest: joints.iter().map(|j| j.rest.to_matrix().to_cols_array_2d()).collect(),
+    }
+}
+
+/// The skeleton costume `costume` of `m` plays on, as [`load`] builds it (the online lobby sends it: M2i).
+pub fn skeleton(m: &Mod, costume: usize) -> Result<Skeleton, String> {
+    let file = m.dir.join(m.costumes.get(costume).ok_or_else(|| format!("{}: no costume {costume}", m.id))?);
+    let (doc, blob) = open(&file)?;
+    conform(&doc, &blob, false).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(skeleton_of(&joints_of(&doc, &blob)))
+}
+
+/// §7's checks on every costume of `m` (a mod that came over the network, before it's used).
+pub fn check(m: &Mod) -> Result<(), String> {
+    m.costumes.iter().try_for_each(|c| {
+        let (doc, blob) = open(&m.dir.join(c))?;
+        conform(&doc, &blob, false).map(drop).map_err(|e| format!("{c}: {e}"))
+    })
+}
+
 /// Loads costume `costume` of mod `m` (motions, faces and arm table from the donor on the disc).
 pub fn load(
     iso: &mut Iso,
@@ -521,29 +581,10 @@ pub fn load(
     for n in doc.nodes() {
         n.children().for_each(|c| up[c.index()] = Some(n.index()));
     }
-    // game space is below `game_space`: each joint's world there, its parent the nearest joint above it
     let w = worlds(&doc);
     let space = doc.default_scene().or_else(|| doc.scenes().next()).and_then(|s| s.nodes().next()).map_or(Mat4::IDENTITY, |r| w[r.index()].inverse());
-    let ibm: Vec<Mat4> = skin.reader(|_| Some(&blob[..])).read_inverse_bind_matrices().map(|i| i.map(|m| Mat4::from_cols_array_2d(&m)).collect()).unwrap_or_else(|| vec![Mat4::IDENTITY; nodes.len()]);
-    let joints: Vec<Joint> = nodes
-        .iter()
-        .enumerate()
-        .map(|(k, n)| {
-            let mut p = up[n.index()];
-            while let Some(i) = p.filter(|i| !index.contains_key(i)) {
-                p = up[i];
-            }
-            let parent = p.map(|i| index[&i]);
-            let world = space * w[n.index()];
-            let local = parent.map_or(world, |q| (space * w[nodes[q].index()]).inverse() * world);
-            Joint { name: n.name().unwrap_or("").replace(' ', ""), parent, rest: Transform::from_matrix(local), inverse_bind: ibm[k] }
-        })
-        .collect();
-    let skeleton = Skeleton {
-        names: joints.iter().map(|j| j.name.clone()).collect(),
-        parent: joints.iter().map(|j| j.parent).collect(),
-        rest: joints.iter().map(|j| j.rest.to_matrix().to_cols_array_2d()).collect(),
-    };
+    let joints = joints_of(&doc, &blob);
+    let skeleton = skeleton_of(&joints);
 
     let mut gs = HashMap::new();
     let handles = materials_of(&doc, &blob, upscaled_dir(m, &file).as_deref(), images, materials, &mut gs).map_err(ctx)?;

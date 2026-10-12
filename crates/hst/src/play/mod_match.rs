@@ -24,7 +24,25 @@ pub(super) fn load(
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
 ) -> Arc<CharacterData> {
-    Arc::new(mods::load(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id)))
+    let mut d = if m.costumes.is_empty() {
+        // an online mod whose looks this machine declined (M2i): the donor, recoloured
+        let d = crate::character::load_disc(iso, m.donor, outfit, meshes, materials, images, bindposes)
+            .or_else(|_| crate::character::load_disc(iso, m.donor, 0, meshes, materials, images, bindposes))
+            .unwrap_or_else(|e| panic!("mod {} stand-in: {e}", m.id));
+        crate::mods_online::tint(&d, materials, images);
+        d
+    } else {
+        mods::load(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id))
+    };
+    if let Some(sk) = &m.skeleton {
+        // online: every peer poses the owner's skeleton for the game (contacts, toss, body hits), whatever it draws
+        let mo = crate::character::disc_motions(iso, m.donor, sk, |_| None).unwrap_or_else(|e| panic!("mod {}: {e}", m.id));
+        if d.visual.is_empty() {
+            d.visual = std::mem::take(&mut d.motions);
+        }
+        (d.motions, d.paths, d.pelvis, d.arm, d.stance_ball, d.skeleton) = (mo.motions, mo.paths, mo.pelvis, mo.arm, mo.stance_ball, (**sk).clone());
+    }
+    Arc::new(d)
 }
 
 /// Player `i`'s TParam.csv row: the mod's in its slot, else character `c`'s.
@@ -53,7 +71,7 @@ pub(super) fn apply(g: &mut Game, i: usize, iso: &mut Iso, m: &Mod, outfit: usiz
     g.smash_heights[i] = [smash[0] / 100.0, smash[1] / 100.0];
     g.reaches[i] = super::reach_of(&g.reach, &row, m.hand);
     g.timing[i].restat(&row);
-    if let Some(mut bank) = mods::voice(m) {
+    if let Some(mut bank) = (!m.costumes.is_empty()).then(|| mods::voice(m)).flatten() {
         // programs the mod has no wav for play the donor's disc takes (standard §5)
         if let Some(donor) = &voices[i] {
             (bank.hd, bank.bd) = (donor.hd.clone(), donor.bd.clone());
@@ -178,5 +196,33 @@ mod tests {
         assert_eq!(g.reaches[1].reach, hst_sim::ps2::add(hst_sim::ps2::div(o("リーチ(cm)") as f32, 100.0), hst_sim::ps2::div(30.0, 100.0)));
         assert_eq!(p.ai, super::super::ai_params(&mut iso, m.ai_row, 0, false));
         assert_ne!(m.ai_row, m.donor, "Emi's AI row should follow her play style, not her body donor");
+    }
+
+    /// Online (M2i): the mod with its looks and a stand-in from the same wire hand the game the same skeleton and
+    /// motions, so a peer that declined the looks plays the same match.
+    #[test]
+    fn stand_in_simulates_like_the_mod() {
+        if !Path::new(ISO).is_file() || !Path::new(MOD).is_dir() {
+            return eprintln!("no ISO or context/mods/test_pc00, skipped");
+        }
+        let w = crate::mods_online::Wire::of(&mods::read(Path::new(MOD)).unwrap(), 0).unwrap();
+        let mut iso = Iso::open(ISO).unwrap();
+        let mut one = |m: &Mod| {
+            load(&mut iso, m, 0, &mut Assets::default(), &mut Assets::default(), &mut Assets::default(), &mut Assets::default())
+        };
+        let (real, stand) = (one(&crate::mods_online::for_match(&w, Some(Path::new(MOD)))), one(&crate::mods_online::for_match(&w, None)));
+        assert_eq!((&real.skeleton.names, &real.skeleton.parent), (&stand.skeleton.names, &stand.skeleton.parent));
+        assert!(real.skeleton.rest == stand.skeleton.rest && real.pelvis == stand.pelvis);
+        let mut ids: Vec<_> = real.motions.keys().copied().collect();
+        ids.sort();
+        assert_eq!(ids, { let mut s: Vec<_> = stand.motions.keys().copied().collect(); s.sort(); s });
+        for id in ids {
+            let (a, b) = (&real.motions[&id], &stand.motions[&id]);
+            for k in 0..8 {
+                let t = a.length * k as f32 / 7.0;
+                assert!(a.locals(&real.skeleton, t) == b.locals(&stand.skeleton, t), "motion {id:#x} at {t}");
+            }
+        }
+        assert!(!stand.visual.is_empty() && real.joints.len() != stand.joints.len(), "the stand-in draws the donor's own rig");
     }
 }

@@ -137,11 +137,19 @@ impl Online {
 
 // ---------------------------------------------------------------- lobby data
 
-/// One local player's pick: disc character and costume.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One local player's pick: disc character (a mod's donor) and costume, and a mod's gameplay data (M2i).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pick {
     pub char: usize,
     pub costume: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#mod: Option<Box<crate::mods_online::Wire>>,
+}
+
+impl Pick {
+    pub fn disc(char: usize, costume: usize) -> Pick {
+        Pick { char, costume, r#mod: None }
+    }
 }
 
 /// A taken seat: whose peer (endpoint ID) and their pick.
@@ -170,6 +178,9 @@ pub struct Room {
     /// Lockstep (M2g) instead of rollback (M2h): the host's `HST_NET_LOCKSTEP`.
     #[serde(default)]
     pub lockstep: bool,
+    /// Counts the line-up's changes: a peer's [`Msg::Ready`] is for one line-up.
+    #[serde(default)]
+    pub ver: u32,
 }
 
 impl Room {
@@ -183,13 +194,25 @@ impl Room {
             return false;
         }
         let mut free = (0..self.seats.len()).filter(|&i| self.seats[i].is_none()).collect::<Vec<_>>().into_iter();
-        for &pick in picks {
-            self.seats[free.next().unwrap()] = Some(Seat { peer: peer.into(), pick });
+        for pick in picks {
+            self.seats[free.next().unwrap()] = Some(Seat { peer: peer.into(), pick: pick.clone() });
         }
+        self.ver += 1;
         true
     }
 
+    /// The mods' looks (pack hashes) in the seats, and who brought each.
+    pub fn mods(&self) -> impl Iterator<Item = (&Seat, &crate::mods_online::Wire)> {
+        self.seats.iter().flatten().filter_map(|s| Some((s, s.pick.r#mod.as_deref()?)))
+    }
+
+    /// Every mod pick one this game can play.
+    fn check(&self) -> Result<(), String> {
+        self.mods().try_for_each(|(_, w)| w.check())
+    }
+
     fn leave(&mut self, peer: &str) {
+        self.ver += 1;
         for s in &mut self.seats {
             if s.as_ref().is_some_and(|s| s.peer == peer) {
                 *s = None;
@@ -286,6 +309,10 @@ pub enum Msg {
     Hash { tick: u32, hash: u64 },
     Pause(bool),
     Bye(String),
+    /// The lobby with mods (M2i): a peer asks the host for a mod's looks (its pack hash; the host asks the mod's
+    /// owner in turn), and a peer has every mod's looks or stand-in settled for line-up `ver`.
+    Want(u64),
+    Ready(u32),
 }
 
 impl Msg {
@@ -337,7 +364,8 @@ async fn recv(r: &mut RecvStream) -> Result<Msg, String> {
     let mut n = [0; 4];
     r.read_exact(&mut n).await.map_err(|e| e.to_string())?;
     let n = u32::from_le_bytes(n) as usize;
-    if n > 64 << 10 {
+    // a lobby message with mods carries their skeletons (~30 KB a mod)
+    if n > 1 << 20 {
         return Err("message too long".into());
     }
     let mut b = vec![0; n];
@@ -364,6 +392,9 @@ pub enum Cmd {
     Send(Msg),
     /// In the match: a datagram (unreliable, unordered: rollback's messages) to one peer, through the host.
     Datagram(String, Vec<u8>),
+    /// In the lobby: a mod's looks wanted (its pack hash), and this machine settled for the room's line-up `ver`.
+    Want(u64),
+    Ready(u32),
 }
 
 /// What the network tells the app.
@@ -385,6 +416,8 @@ pub enum Event {
     Dropped(String),
     /// In the match: a peer's datagram (`Cmd::Datagram`), with who sent it.
     Datagram(String, Vec<u8>),
+    /// In the lobby: a mod's looks (`Cmd::Want`): its hash and the pack, as received (unchecked).
+    Pack(u64, Vec<u8>),
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
@@ -565,7 +598,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             }
             Cmd::Quick(room) => {
                 cx.say(Event::Status("Looking for a lobby...".into()));
-                let mine: Vec<Pick> = room.seats.iter().flatten().map(|s| s.pick).collect();
+                let mine: Vec<Pick> = room.seats.iter().flatten().map(|s| s.pick.clone()).collect();
                 let mut joined = false;
                 n0_future::time::sleep(LAN_WAIT).await;
                 for l in quick_pick(&find_all(&cx).await, room.doubles, mine.len()) {
@@ -581,7 +614,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             Cmd::Join(code, picks) => {
                 join(&cx, &code, picks, &mut cmds).await;
             }
-            Cmd::Leave | Cmd::Send(_) | Cmd::Datagram(..) => {}
+            Cmd::Leave | Cmd::Send(_) | Cmd::Datagram(..) | Cmd::Want(_) | Cmd::Ready(_) => {}
         }
     }
     cx.ep.close().await;
@@ -642,6 +675,62 @@ enum Guest {
     Gone(String),
     /// A datagram from the first peer for the second.
     Datagram(String, String, Vec<u8>),
+    /// A mod's looks from its owner: hash, pack.
+    Pack(u64, Vec<u8>),
+}
+
+/// Mod packs (M2i) go on their own uni streams, one each: the hash (u64 LE), then the pack. Each received one goes to
+/// `out` as it was sent.
+async fn read_packs(c: Connection, out: impl Fn(u64, Vec<u8>)) {
+    while let Ok(mut r) = c.accept_uni().await {
+        if let Ok(b) = r.read_to_end(crate::mods_online::CAP + 8).await
+            && b.len() >= 8
+        {
+            out(u64::from_le_bytes(b[..8].try_into().unwrap()), b[8..].to_vec());
+        }
+    }
+}
+
+fn send_pack(c: &Connection, h: u64, b: std::sync::Arc<Vec<u8>>) {
+    let c = c.clone();
+    n0_future::task::spawn(async move {
+        if let Ok(mut s) = c.open_uni().await {
+            let _ = s.write_all(&h.to_le_bytes()).await;
+            let _ = s.write_all(&b).await;
+            let _ = s.finish();
+        }
+    });
+}
+
+type Packs = std::collections::HashMap<u64, std::sync::Arc<Vec<u8>>>;
+
+/// Peer `to` wants mod `h`'s looks: the pack if the host has it (its own mod's, or one passed through already), else
+/// the mod's owner is asked (once) and `to` waits for it.
+fn want(to: &str, h: u64, room: &Room, joined: &[(String, Link, Connection)], packs: &mut Packs, wants: &mut std::collections::HashMap<u64, Vec<String>>) -> Option<std::sync::Arc<Vec<u8>>> {
+    if let Some(b) = packs.get(&h) {
+        return Some(b.clone());
+    }
+    let (seat, _) = room.mods().find(|(_, w)| w.looks == h)?;
+    if seat.peer == "host" {
+        let b = std::sync::Arc::new(own_pack(room.seats.iter().flatten().filter(|s| s.peer == "host").map(|s| s.pick.clone()), h)?);
+        packs.insert(h, b.clone());
+        return Some(b);
+    }
+    let waiting = wants.entry(h).or_default();
+    if waiting.is_empty()
+        && let Some((_, l, _)) = joined.iter().find(|(p, ..)| *p == seat.peer)
+    {
+        l.send(&Msg::Want(h));
+    }
+    waiting.push(to.into());
+    None
+}
+
+/// Mod `h`'s pack, if this machine has the mod (its own pick).
+fn own_pack(picks: impl IntoIterator<Item = Pick>, h: u64) -> Option<Vec<u8>> {
+    let w = picks.into_iter().filter_map(|p| p.r#mod).find(|w| w.looks == h)?;
+    let b = crate::mods_online::pack(w.dir.as_deref()?).ok()?;
+    (crate::mods_online::hash(&b) == h).then_some(b)
 }
 
 /// The host's clock for the round-trip probes, in µs.
@@ -664,7 +753,27 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     // a host with every seat (`HST_NET_SYNCTEST`) starts at once
     let mut starting: Option<(Vec<String>, n0_future::time::Instant)> = room.seats.iter().all(Option::is_some).then(|| (Vec::new(), t0));
     let mut ping = n0_future::time::interval(Duration::from_secs(1));
+    // mods (M2i): the packs passed through, who waits for which, who has settled every mod's looks for this line-up
+    let mut packs: Packs = Default::default();
+    let mut wants: std::collections::HashMap<u64, Vec<String>> = Default::default();
+    let mut ready: std::collections::HashSet<String> = Default::default();
+    let deliver = |to: &str, h: u64, b: &std::sync::Arc<Vec<u8>>, joined: &[(String, Link, Connection)]| {
+        if to == "host" {
+            cx.say(Event::Pack(h, b.to_vec()));
+        } else if let Some((.., c)) = joined.iter().find(|(p, ..)| p == to) {
+            send_pack(c, h, b.clone());
+        }
+    };
     loop {
+        // full, and with mods everyone has their looks or stand-ins: a last round trip before the start
+        if starting.is_none()
+            && room.open() == 0
+            && (room.mods().next().is_none() || std::iter::once("host").chain(joined.iter().map(|(p, ..)| p.as_str())).all(|p| ready.contains(p)))
+        {
+            // a fresh round trip from everyone before the input delay is picked (3 s at most)
+            broadcast(&joined, &Msg::Ping(micros(t0)));
+            starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), n0_future::time::Instant::now() + Duration::from_secs(3)));
+        }
         if dirty {
             dirty = false;
             // listing in the background: a slow DHT put never holds up a join
@@ -696,6 +805,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     let Ok((tx, mut rx)) = conn.accept_bi().await else { return };
                     if let Ok(Msg::Hello { build, picks }) = recv(&mut rx).await {
                         let _ = gtx.send(Guest::In { peer: peer.clone(), picks, build, tx, conn: conn.clone() });
+                        let g = gtx.clone();
+                        n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b)))));
                         // everything they say, until they leave or drop
                         while let Ok(m) = recv(&mut rx).await {
                             let _ = gtx.send(Guest::Said(peer.clone(), m));
@@ -708,6 +819,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Guest::In { peer, picks, build, mut tx, conn } => {
                     let why = if build != BUILD {
                         Some(format!("different version (host {BUILD}, you {build})"))
+                    } else if let Err(e) = picks.iter().filter_map(|p| p.r#mod.as_deref()).try_for_each(crate::mods_online::Wire::check) {
+                        Some(e)
                     } else if starting.is_some() || !room.take(&peer, &picks) {
                         Some(format!("not enough open seats ({} open, you bring {})", room.open(), picks.len()))
                     } else {
@@ -724,14 +837,23 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     let link = Link::new(tx);
                     link.send(&Msg::Ping(micros(t0)));
                     joined.push((peer, link, conn));
+                    ready.clear();
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
-                    if room.open() == 0 {
-                        // a fresh round trip from everyone before the input delay is picked (3 s at most)
-                        broadcast(&joined, &Msg::Ping(micros(t0)));
-                        starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), n0_future::time::Instant::now() + Duration::from_secs(3)));
+                }
+                Guest::Said(peer, Msg::Ready(v)) if v == room.ver => drop(ready.insert(peer)),
+                Guest::Said(peer, Msg::Want(h)) => {
+                    if let Some(b) = want(&peer, h, &room, &joined, &mut packs, &mut wants) {
+                        deliver(&peer, h, &b, &joined);
                     }
+                }
+                Guest::Pack(h, b) if crate::mods_online::hash(&b) == h => {
+                    let b = std::sync::Arc::new(b);
+                    for to in wants.remove(&h).unwrap_or_default() {
+                        deliver(&to, h, &b, &joined);
+                    }
+                    packs.insert(h, b);
                 }
                 Guest::Said(peer, Msg::Pong(sent)) => {
                     rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
@@ -739,8 +861,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         waiting.retain(|p| *p != peer);
                     }
                 }
-                Guest::Said(..) | Guest::Datagram(..) => {}
+                Guest::Said(..) | Guest::Datagram(..) | Guest::Pack(..) => {}
                 Guest::Gone(peer) => {
+                    ready.clear();
                     room.leave(&peer);
                     joined.retain(|(p, ..)| *p != peer);
                     starting = None;
@@ -752,13 +875,22 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => broadcast(&joined, &Msg::Ping(micros(t0))),
             _ = tick.tick() => dirty = true,
-            c = cmds.recv() => if matches!(c, Some(Cmd::Leave) | None) {
-                for (_, _, conn) in &joined {
-                    conn.close(0u32.into(), b"host left");
+            c = cmds.recv() => match c {
+                Some(Cmd::Ready(v)) if v == room.ver => drop(ready.insert("host".into())),
+                Some(Cmd::Want(h)) => {
+                    if let Some(b) = want("host", h, &room, &joined, &mut packs, &mut wants) {
+                        deliver("host", h, &b, &joined);
+                    }
                 }
-                cx.ep.set_user_data_for_address_lookup(None);
-                // an empty listing ages out in STALE; a full one isn't shown
-                return;
+                Some(Cmd::Leave) | None => {
+                    for (_, _, conn) in &joined {
+                        conn.close(0u32.into(), b"host left");
+                    }
+                    cx.ep.set_user_data_for_address_lookup(None);
+                    // an empty listing ages out in STALE; a full one isn't shown
+                    return;
+                }
+                Some(_) => {}
             },
         }
     }
@@ -800,7 +932,7 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, gtx: amp::Unbo
                         send_datagram(c, &from, &data);
                     }
                 }
-                Guest::Said(..) => {}
+                Guest::Said(..) | Guest::Pack(..) => {}
             },
             c = cmds.recv() => match c {
                 Some(Cmd::Send(m)) => broadcast(&joined, &m),
@@ -906,7 +1038,7 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
         cx.say(Event::Failed("The host closed the connection.".into()));
         return false;
     };
-    if send(&mut tx, &Msg::Hello { build: BUILD.into(), picks }).await.is_err() {
+    if send(&mut tx, &Msg::Hello { build: BUILD.into(), picks: picks.clone() }).await.is_err() {
         cx.say(Event::Failed("The host closed the connection.".into()));
         return false;
     }
@@ -922,14 +1054,30 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
             }
         }
     });
+    let ev = cx.ev.clone();
+    n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(ev.send(Event::Pack(h, b)))));
     let mut seated = false;
     let mut playing = false;
     loop {
         tokio::select! {
             m = inbox.recv() => match m.unwrap_or_else(|| Err("closed".into())) {
+                Ok(Msg::Room(r)) | Ok(Msg::Start(r)) if r.check().is_err() => {
+                    cx.say(Event::Failed(format!("Left: {}", r.check().unwrap_err())));
+                    conn.close(0u32.into(), b"left");
+                    return seated;
+                }
                 Ok(Msg::Room(r)) => {
                     seated = true;
                     cx.say(Event::Room(r));
+                }
+                Ok(Msg::Want(h)) => {
+                    // the host passes on a peer's ask for this machine's mod
+                    let (picks, conn) = (picks.clone(), conn.clone());
+                    n0_future::task::spawn(async move {
+                        if let Some(b) = own_pack(picks, h) {
+                            send_pack(&conn, h, std::sync::Arc::new(b));
+                        }
+                    });
                 }
                 Ok(Msg::Start(r)) => {
                     playing = true;
@@ -962,6 +1110,8 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
             },
             c = cmds.recv() => match c {
                 Some(Cmd::Send(m)) => link.send(&m),
+                Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
+                Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
                 Some(Cmd::Datagram(to, data)) => send_datagram(&conn, &to, &data),
                 Some(Cmd::Leave) | None => {
                     n0_future::time::sleep(Duration::from_millis(if playing { LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200 } else { 0 })).await;
@@ -998,7 +1148,7 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
     }
     let doubles = a.iter().any(|x| x == "doubles");
     let players = a.iter().filter_map(|x| x.parse::<usize>().ok()).next().unwrap_or(1);
-    let picks: Vec<Pick> = (0..players).map(|i| Pick { char: i, costume: 0 }).collect();
+    let picks: Vec<Pick> = (0..players).map(|i| Pick::disc(i, 0)).collect();
     let mut room = Room { name: cfg.name.clone(), doubles, court: 0, sets: 0, games, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() };
     room.take("host", &picks);
     let net = Net::start(cfg);
@@ -1050,9 +1200,9 @@ mod tests {
     #[test]
     fn seats_fill_and_free() {
         let mut r = room(true);
-        assert!(r.take("a", &[Pick { char: 1, costume: 0 }, Pick { char: 2, costume: 0 }]));
-        assert!(!r.take("b", &[Pick { char: 3, costume: 0 }; 3]));
-        assert!(r.take("b", &[Pick { char: 3, costume: 0 }]));
+        assert!(r.take("a", &[Pick::disc(1, 0), Pick::disc(2, 0)]));
+        assert!(!r.take("b", &vec![Pick::disc(3, 0); 3]));
+        assert!(r.take("b", &[Pick::disc(3, 0)]));
         assert_eq!(r.open(), 1);
         r.leave("a");
         assert_eq!(r.open(), 3);
@@ -1099,7 +1249,7 @@ mod tests {
             let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
             let cx = Ctx { ep, dht: a, lan: Lan::default(), ev: mpsc::channel().0 };
             let mut r = room(true);
-            r.take("host", &[Pick { char: 0, costume: 0 }]);
+            r.take("host", &[Pick::disc(0, 0)]);
             announce(&cx, 4242, &r).await;
             let list = find(&b).await;
             assert_eq!(list.len(), 1);
@@ -1112,7 +1262,7 @@ mod tests {
         let mut r = room(true);
         // the longest name: 24 four-byte characters
         r.name = "🎾".repeat(24);
-        r.take("host", &[Pick { char: 0, costume: 0 }]);
+        r.take("host", &[Pick::disc(0, 0)]);
         let id = SecretKey::generate().public();
         let data = lan_data(&Listing::of(id, &r)).expect("fits in 245 bytes");
         let l = lan_listing(id, Some(&data)).unwrap();
@@ -1130,7 +1280,7 @@ mod tests {
             let (guest, gm) = endpoint(&Relay::Off).await.unwrap();
             let lan = watch_lan(gm);
             let mut r = room(false);
-            r.take("host", &[Pick { char: 0, costume: 0 }]);
+            r.take("host", &[Pick::disc(0, 0)]);
             host.set_user_data_for_address_lookup(lan_data(&Listing::of(host.id(), &r)));
             let t = tokio::time::Instant::now();
             while lan_list(&lan).is_empty() && t.elapsed() < Duration::from_secs(15) {
@@ -1162,5 +1312,62 @@ mod tests {
             // stopped hosting: off the list once its record updates
             host.set_user_data_for_address_lookup(None);
         });
+    }
+
+    /// M2i on loopback: the host brings a mod; the guest sees its wire, asks for its looks and gets the folder's pack;
+    /// the match waits until both have said they're settled for this line-up.
+    #[test]
+    fn mod_looks_peer_to_peer_and_the_ready_gate() {
+        let dir = std::env::temp_dir().join(format!("hst-m2i-net-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), "{}").unwrap();
+        let pack = crate::mods_online::pack(&dir).unwrap();
+        let h = crate::mods_online::hash(&pack);
+        let wire = crate::mods_online::Wire {
+            id: "x".into(), name: "X".into(), donor: 3, hand: 1.0, base: 3, overrides: vec![], ai_row: 3,
+            names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: h, dir: Some(dir.clone()),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep, dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx }, rx)
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick { r#mod: Some(Box::new(wire.clone())), ..Pick::disc(3, 0) }]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            // the next event `want` matches (10 s at most)
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.open() == 0)).await else { unreachable!() };
+            let (_, w) = seen.mods().next().expect("the mod's wire");
+            assert_eq!((w.looks, w.dir.is_none(), &w.names), (h, true, &wire.names));
+            gcmd.send(Cmd::Want(h)).unwrap();
+            assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(h, pack));
+            // the guest settled, the host not yet: no start
+            gcmd.send(Cmd::Ready(seen.ver)).unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(gev.try_iter().all(|e| !matches!(e, Event::Start(..))), "started before everyone was ready");
+            hcmd.send(Cmd::Ready(seen.ver)).unwrap();
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            assert_eq!(r.seats[0].as_ref().unwrap().pick.r#mod.as_ref().unwrap().looks, h);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

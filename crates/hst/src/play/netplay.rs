@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn flags_put_each_seat_in_match_order() {
         use crate::net::{Pick, Seat};
-        let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick { char, costume: char % 3 } });
+        let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick::disc(char, char % 3) });
         let room = Room { doubles: true, court: 2, sets: 1, games: 3, umpire: 1, seats: vec![s("host", 5), s("g", 6), s("g", 7), s("host", 8)], ..Default::default() };
         let a = flags(&room, "g", &[Some(super::super::controls::Seat::Keys), Some(super::super::controls::Seat::Pad(0))], &[]);
         let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
@@ -536,7 +536,7 @@ mod tests {
         const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
         fn room(delay: u32) -> Room {
-            let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick { char, costume: 0 } });
+            let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick::disc(char, 0) });
             // 1P and 2P (a team) on the host, 3P and 4P on the guest
             Room { doubles: true, games: 1, sets: 0, umpire: 4, seats: vec![s("host", 6), s("host", 1), s("g", 2), s("g", 3)], delay, seed: 0x28c7c4a1, ..Default::default() }
         }
