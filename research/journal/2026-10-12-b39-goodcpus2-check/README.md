@@ -66,3 +66,7 @@ change.
   contact record n−1. They should be the same point, but I didn't compare them.
 - **(e) camera:** the team-vs-single inputs of the cut-away picker can't be checked frame by frame, because the app
   can't replay a p2m2. Only the modes chosen were compared.
+
+## Re-landed (2026-10-12)
+The first merge of this work (00e8b77) was dropped from main by the parallel runner's failed-merge reset (fixed in
+e2e08e1). The commit was cherry-picked onto a fresh task/B39 unchanged; `tools/check.sh` passes (416 tests).
