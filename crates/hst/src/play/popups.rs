@@ -1280,6 +1280,16 @@ fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&Banner
 mod banner_tests {
     use super::*;
 
+    /// B44b: the original draws the finish word and Set / Match Point centred on the 640 screen (x 208 + 224/2 and
+    /// 192 + 256/2), so they stay on the centred 4:3 screen rather than pinning to a side like the mph readout.
+    #[test]
+    fn centred() {
+        let f = Finish { banner: Some((2, true, 2, 10)), point: Some((true, 1, 30)), ..default() };
+        for q in banners(&f).iter().filter(|q| q.0 != BannerTex::OnLine) {
+            assert_eq!(q.2[0] + q.2[2] / 2.0, 320.0, "{:?}", q.0);
+        }
+    }
+
     #[test]
     fn kinds() {
         assert_eq!(finish_kind(1, Call::In, (0, false)), Some(0));
