@@ -103,9 +103,12 @@ const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
 const GRAPHICS_LABELS: [&str; 6] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode"];
 
+/// Widescreen and upscaled textures on, music off (user 2026-10-12).
+const SETTING_DEFAULTS: [bool; 3] = [true, true, false];
+
 impl Default for Settings {
     fn default() -> Self {
-        Settings([true; 3], Graphics::default())
+        Settings(SETTING_DEFAULTS, Graphics::default())
     }
 }
 
@@ -877,7 +880,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings([true; 3], if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: crate::store::read_to_string(Settings::path(&args.iso)).map_or_else(|_| first(), |t| Settings::parse(&t)), mods, ..default() });
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
@@ -1104,7 +1107,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
                 1 => "Use the upscaled textures in mods/texture-replacements.".into(),
-                2 => "Play each court's music in matches.".into(),
+                2 => "Play music in the menus and on each court.".into(),
                 3 => "Resolution, shadows, frame limit and vsync.".into(),
                 4 => "Change the keys and buttons (controls.txt).".into(),
                 _ => text.msg(190).to_string(),
@@ -1605,7 +1608,7 @@ fn load_bgm(mut commands: Commands, args: Res<Args>) {
 /// The overlay switches track only when the screen's track changes: the new one from its start at volume 55, no fade.
 fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>, mut on: Local<Option<usize>>) {
     let (Some(tracks), Some(sound)) = (tracks, sound) else { return };
-    let want = menu.screen.bgm();
+    let want = menu.screen.bgm().filter(|_| menu.settings.0[2]); // the Music switch covers the menus too
     if want == *on {
         return;
     }

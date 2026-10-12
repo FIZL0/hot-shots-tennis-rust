@@ -35,6 +35,8 @@ ggrs = { version = "0.13", features = ["wasm-bindgen"] }
 web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "Storage", "UrlSearchParams", "Window", "MessageEvent", "RtcPeerConnection", "RtcPeerConnectionState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelState", "RtcDataChannelType", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "RtcIceGatheringState"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# the window icon (`main.rs` window_icon), on bevy's own winit
+winit = { version = "0.30", default-features = false }
 # lobbies: addresses and lobby list on the mainline DHT and LAN mDNS (UDP: not in the browser)
 iroh-mainline-address-lookup = "0.6"
 n0-mainline = "0.7"

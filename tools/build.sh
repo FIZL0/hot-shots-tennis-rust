@@ -29,6 +29,10 @@ linux() {
             /cache/cargo/bin/cargo build --release -p hst'
     mkdir -p dist/linux
     strip -o dist/linux/hst target/steamrt/release/hst
+    # the icon on Wayland/X11 docks (the window's app id is "hst"): hst.desktop into ~/.local/share/applications, hst.png into
+    # ~/.local/share/icons, hst on the PATH
+    cp crates/hst/icon/hst.png dist/linux/hst.png
+    printf '[Desktop Entry]\nType=Application\nName=Hot Shots Tennis\nExec=hst\nIcon=hst\nStartupWMClass=hst\nCategories=Game;\n' > dist/linux/hst.desktop
     local need glibc=2.31
     need=$(objdump -T dist/linux/hst | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
     echo "dist/linux/hst needs $need (sniper has GLIBC_$glibc)"

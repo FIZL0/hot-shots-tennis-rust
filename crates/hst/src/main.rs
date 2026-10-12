@@ -241,7 +241,9 @@ fn start(argv: Vec<String>) {
     if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
         resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
     }
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, resolution, ..default() }), ..default() }));
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, window_icon);
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
@@ -1072,4 +1074,20 @@ fn auto_shot(mut commands: Commands, args: Res<Args>, time: Res<Time>, mut taken
     if *taken && std::path::Path::new(path).exists() {
         exit.write(AppExit::Success);
     }
+}
+
+/// The window's icon (taskbar, title bar; Wayland takes it from `hst.desktop` by the window's name instead), set once
+/// the window exists. `icon/hst-128.rgba` is web/icon.svg at 128×128.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_icon(mut done: Local<bool>, _main_thread: bevy::ecs::system::NonSendMarker) {
+    if *done {
+        return;
+    }
+    bevy::winit::WINIT_WINDOWS.with_borrow(|w| {
+        for win in w.windows.values() {
+            let icon = winit::window::Icon::from_rgba(include_bytes!("../icon/hst-128.rgba").to_vec(), 128, 128).ok();
+            win.set_window_icon(icon);
+            *done = true;
+        }
+    });
 }

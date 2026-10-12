@@ -3612,6 +3612,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "winit",
 ]
 
 [[package]]
