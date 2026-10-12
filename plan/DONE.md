@@ -193,6 +193,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B42a** Court intro title plate and ✕ Skip (B42): the court name, surface and ball-row plate at the top left and "✕ Skip" at the bottom right during the flyover, from the original's textures (find them: INPANE or the court's archives), positions and fade in/out, pinned/scaled for any aspect ratio; hide the score panel, balloons and markers while the intro runs → `plan/B42.md` · `play/intro.rs` · `play/popups.rs` · `play/widescreen.rs`
 - [x] **P3f6** HIGH PRIORITY (user 2026-10-11) Intro length from its source (P3f2 gap): `Rngs::intro_ticks` is a recorded per-court table; port what sets it (the intro phase 0x324810 waits on the timer at *(*(gm+0x84)+0x138)+0x3c, the streamed sound 0x167310 and the doubles presentation 0x43b1d8+0xd94/0xd95) and record court 3 in doubles and court 10 in singles (research/p3f2_intro_log.py) → `rng.rs` · `play.rs` | t: rng.rs
 - [x] **B42b** "Start the Match!" banner after the intro flyover (B42): the banner, "N Sets N Games" pill and "Set 1" over the match camera for the intro's last ticks, the original's textures/animation, any aspect ratio → `plan/B42.md` · `play/intro.rs` · `play/popups.rs`
+- [x] **B42d** Court intro in doubles and other modes (B42): the doubles player presentation phase 0 waits for (presentation flags), record intros on courts 1, 5, 11 (orbit segments / 3 shots) and a doubles match, compare side by side; check the intro length per mode → `plan/B42.md` · `play/intro.rs` · `research/b42_intro_camera.py`
 
 
 ### Shots

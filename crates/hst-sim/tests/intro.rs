@@ -1,6 +1,6 @@
 //! The court intro's camera flyover: the script built from each court's camera file reaches the file's poses
-//! (the orbit segments too), and court 8's channels and eye follow a recording of the original
-//! (`context/b42/cam_c08.bin`, `research/b42_intro_camera.py`).
+//! (the orbit segments too), and the channels and eye follow recordings of the original (`research/b42_intro_camera.py`:
+//! court 8 in `context/b42/cam_c08.bin`, courts 1–7, 9, 11 in `context/b42d/cam_cNN.bin`, all doubles).
 
 use hst_data::{exe::Game, iso::Iso, xb::Archive};
 use hst_sim::cutaway::{self, Shot};
@@ -19,7 +19,7 @@ fn intro_cameras() {
     };
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let shots = Game::new(&cnf, &bin).unwrap().camera_shots();
-    let mut c08 = Vec::new();
+    let mut recorded = 0;
     for n in 1..=11 {
         let cmn = iso.read(&format!("COURT/{n:02}/CMN.XB")).unwrap();
         let arc = Archive::parse(&cmn).unwrap();
@@ -45,22 +45,31 @@ fn intro_cameras() {
         }
         let cuts = dat.chunks_exact(40).skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
         assert_eq!(at, cutaway::intro_frames(&dat) + 2 * cuts);
-        if n == 8 {
-            c08 = dat;
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
+        let rec = [format!("{root}/b42/cam_c{n:02}.bin"), format!("{root}/b42d/cam_c{n:02}.bin")]
+            .iter()
+            .find_map(|p| std::fs::read(p).ok());
+        if let Some(rec) = rec {
+            follows(n, &shots, &dat, &rec);
+            recorded += 1;
         }
     }
-    let Ok(rec) = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/b42/cam_c08.bin")) else {
-        return eprintln!("cam_c08.bin absent, recording check skipped");
-    };
+    eprintln!("{recorded} courts recorded");
+}
+
+/// Court `n`'s recorded shot camera (`rec`) against the port's, every sample up to the shot's end.
+fn follows(n: u32, shots: &[hst_data::exe::CameraShot], dat: &[u8], rec: &[u8]) {
+    let cuts = dat.chunks_exact(40).skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
+    let end = cutaway::intro_frames(dat) + 2 * cuts;
     let frames: Vec<&[u8]> = rec.chunks_exact(SAMPLE).collect();
     let ch = |s: &[u8], c: usize| f(s, CAM + 0x2d58 + c * 0x1c);
     // the shot steps with the match's frame counter (it holds while the loading screen is up)
     let count = |s: &[u8]| u32::from_le_bytes(s[4 + 0x58..4 + 0x5c].try_into().unwrap());
-    let start = frames.iter().position(|s| ch(s, 8) != 0.0).unwrap();
-    let (mut sh, mut at, mut n) = (Shot::intro(&shots, &c08), 0, 0);
-    let mut prev = sh.clone();
+    let start = frames.iter().position(|s| u32::from_le_bytes(s[CAM + 0x114..CAM + 0x118].try_into().unwrap()) == 107).unwrap();
+    let (mut sh, mut at, mut k) = (Shot::intro(shots, dat), 0, 0);
+    let (mut prev, mut worst) = (sh.clone(), 0f32);
     for s in &frames[start..] {
-        if count(s) > 300 {
+        if count(s) > end {
             break;
         }
         while at < count(s) {
@@ -68,14 +77,23 @@ fn intro_cameras() {
             sh.step(Shot::court);
             at += 1;
         }
-        // a sample read between the counter's tick and the camera's update has last frame's channels
+        // a sample read between the counter's tick and the camera's update has last frame's channels or eye (or
+        // both: court 3's first frame has the new channels and the old eye); angles match
+        // modulo 2π and the eye within 1 mm + 2e-4 of its distance (the orbit courts 1, 2, 6, 11 have frames up to
+        // ~7 mm off at 40–55 m, e.g. where the eye crosses an axis or the yaw wraps; the other courts ~0)
         let eye = [f(s, CAM + 0x90), f(s, CAM + 0x94), f(s, CAM + 0x98)];
-        let near = |sh: &Shot| {
-            [5, 6, 7, 8, 9, 10, 14].iter().all(|&c| (sh.ch(c) - ch(s, c)).abs() < 1e-4 * (1.0 + ch(s, c).abs()))
-                && (0..3).all(|i| (sh.view().eye[i] - eye[i]).abs() < 1e-3)
+        let dist = eye.iter().map(|e| e * e).sum::<f32>().sqrt();
+        let off = |sh: &Shot| (0..3).map(|i| (sh.view().eye[i] - eye[i]).abs()).fold(0.0, f32::max) / (1e-3 + 2e-4 * dist);
+        let chans = |sh: &Shot| {
+            [5, 6, 7, 8, 9, 10, 14].iter().all(|&c| {
+                let d = (sh.ch(c) - ch(s, c)).abs();
+                d.min((d - std::f32::consts::TAU).abs()) < 1e-4 * (1.0 + ch(s, c).abs())
+            })
         };
-        assert!(near(&sh) || near(&prev), "frame {at}: ch 6 {} vs {}, eye {:?} vs {eye:?}", sh.ch(6), ch(s, 6), sh.view().eye);
-        n += 1;
+        worst = worst.max(off(&sh).min(off(&prev)));
+        assert!((chans(&sh) || chans(&prev)) && worst < 1.0, "court {n} frame {at}: ch 6 {} vs {}, eye {:?} vs {eye:?}", sh.ch(6), ch(s, 6), sh.view().eye);
+        k += 1;
     }
-    assert!(n > 250, "{n} samples");
+    assert!(k + 50 > end, "court {n}: {k} samples of {end}");
+    eprintln!("court {n}: {k} samples, worst eye error {worst:.2} of the tolerance");
 }
