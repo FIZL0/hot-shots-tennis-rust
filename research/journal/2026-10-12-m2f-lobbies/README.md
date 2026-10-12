@@ -31,6 +31,9 @@ that WIP onto task/M2c HEAD (M2c + M13a) and finishing what can be finished on o
 - PLAN *Needs the human* has the two-network test.
 
 ## Verified
+- Re-run by s2 on task/M2c after the port (`context/m2f/net1/`): `hst net host singles 1 --relay off`, then
+  `hst net join <code> 1 --relay off` from a second process reached Room and Start on both sides; `hst net find` on
+  the public mainline DHT listed the host's lobby.
 - `cargo test -p hst --bin hst -- main_menu net::` gives 16 passed. This includes the handoff's `find_on_a_testnet`,
   which runs offline.
 - `tools/check.sh`: everything passes except `hst-sim`'s `motion::match_serve_walk`, which panics because its
