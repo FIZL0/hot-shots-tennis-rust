@@ -64,6 +64,7 @@ mod snapshot;
 mod tick_input;
 mod timing;
 mod tornado;
+mod replay_pace;
 mod weather;
 mod widescreen;
 pub(crate) mod main_menu;
@@ -556,6 +557,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(surprise::plugin);
     app.add_plugins(tick_input::plugin);
     app.add_plugins(tornado::plugin);
+    app.add_plugins(replay_pace::plugin);
     app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))

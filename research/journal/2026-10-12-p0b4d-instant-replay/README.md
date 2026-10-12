@@ -7,3 +7,4 @@ fast-forward/slow-mo schedule, its own cameras and the pad handling between poin
 
 P0b4d1 wired the decision into the app (`play/instant_replay.rs`), see `2-WIRED-FINAL.md`.
 P0b4d2 runs the replay (snapshot at each serve set-up, restore + logged pads), see `3-RUN-FINAL.md`.
+P0b4d3 paces it (skip to the highlighted shot, slow-motion ramps, tornado in-betweens, replay debris), see `4-PACE-FINAL.md`.
