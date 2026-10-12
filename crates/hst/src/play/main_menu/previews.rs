@@ -349,7 +349,7 @@ fn sync(
     time: Res<Time>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut slots: Query<(&Slot, &ChildOf, &mut ZIndex), Without<Shot>>,
-    mut nodes: Query<(&mut Node, &mut ZIndex), With<Shot>>,
+    mut nodes: Query<(&mut Node, &mut ZIndex, &mut UiTransform), With<Shot>>,
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
     mut images: ResMut<Assets<Image>>,
@@ -458,10 +458,15 @@ fn sync(
             }
         }
         if let (Some(s), Some((i, q))) = (slot.as_ref(), want)
-            && let Ok((mut node, mut z)) = nodes.get_mut(s.node)
+            && let Ok((mut node, mut z, mut flip)) = nodes.get_mut(s.node)
         {
             place(&mut node, q.dst, q.anchor);
             z.0 = i as i32;
+            // the hand toggle: the drawing mirrored (the model faces the camera, so its mirror is the picture's)
+            let x = if menu.players[p].swap { -1.0 } else { 1.0 };
+            if flip.scale.x != x {
+                flip.scale.x = x;
+            }
         }
     }
     // the stress run's check: is a card on screen showing its hovered key (else blank or another character; a key not

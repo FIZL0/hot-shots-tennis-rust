@@ -210,6 +210,8 @@ struct Press {
     next: bool,
     /// □ / Tab: the disc or custom page.
     page: bool,
+    /// Select / − (keyboard: the camera key, C): the hand toggle.
+    hand: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -244,6 +246,8 @@ struct Player {
     /// The custom list's entry, and whether the player is on it (else on the grid).
     pick: usize,
     modded: bool,
+    /// Select / −: plays the character with the other hand (`hand_swap`), kept across characters.
+    swap: bool,
 }
 
 impl Player {
@@ -359,6 +363,15 @@ impl Menu {
             Who::Disc(c) => COSTUMES + self.mods.iter().filter(|m| m.costume_of == Some(c)).map(|m| m.costumes.len()).sum::<usize>(),
             Who::Mod(i) => self.mods[i].costumes.len(),
         }
+    }
+
+    /// Player `p`'s hand in the match: their pick's (a mod's own), the other one with the toggle on.
+    fn hand(&self, text: &Text, p: usize) -> f32 {
+        let h = match self.pick(p).0 {
+            Who::Disc(c) => text.hands[c],
+            Who::Mod(i) => self.mods[i].hand,
+        };
+        if self.players[p].swap { -h } else { h }
     }
 
     /// Whether player `p`'s character and costume are locked in by someone else.
@@ -543,6 +556,10 @@ impl Menu {
                     me.card = !me.card;
                     out.push(Sound(0));
                 }
+                if k.hand && !me.ready {
+                    me.swap = !me.swap;
+                    out.push(Sound(0));
+                }
                 if !me.ready {
                     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
                     if (dx != 0.0 || dy != 0.0) && me.modded {
@@ -648,8 +665,12 @@ impl Menu {
         let mut chars = vec![0; order.len()];
         let mut outfits = vec![0; order.len()];
         let mut slot_mods = Vec::new();
+        let mut swaps = vec!["0"; order.len()];
         for (p, &m) in order.iter().enumerate() {
             chars[m] = self.players[p].char();
+            if self.players[p].swap {
+                swaps[m] = "1";
+            }
             let (who, costume) = self.pick(p);
             outfits[m] = costume;
             if let Who::Mod(i) = who {
@@ -684,6 +705,9 @@ impl Menu {
             Seat::flag(&seats),
         ]);
         a.extend(slot_mods);
+        if swaps.contains(&"1") {
+            a.extend(["--swap-hands".into(), swaps.join(",")]);
+        }
         a.extend(self.settings.flags());
         a
     }
@@ -794,6 +818,8 @@ struct Text {
     grades: [[u8; 5]; 14],
     /// Play style (0 all-round, 1 baseline, 2 net, 3 big server) by character.
     style: [usize; 14],
+    /// Hand by character: +1 right, −1 left (TParam.csv's 利き腕, right only when exactly 右).
+    hands: [f32; 14],
     /// The custom roster's play style and △ numbers (`MOD_STATS`), from each one's TParam.csv row.
     mods: Vec<(usize, [String; 5])>,
 }
@@ -836,6 +862,18 @@ fn messages(d: &[u8]) -> Vec<String> {
 
 /// TParam.csv's type cell (column 7, Shift-JIS) as the select's label: オール, ベース, ネット, ビッグ (the mods' are
 /// `mod_style`'s).
+fn hands(csv: &[u8]) -> [f32; 14] {
+    let mut out = [-1.0; 14];
+    for line in csv.split(|&b| b == b'\n') {
+        let cells: Vec<&[u8]> = line.split(|&b| b == b',').collect();
+        let Some(c) = std::str::from_utf8(cells[0]).ok().and_then(|s| s.trim().parse::<usize>().ok()).filter(|&c| c < 14) else { continue };
+        if cells.get(6).is_some_and(|h| h.trim_ascii() == [0x89, 0x45]) {
+            out[c] = 1.0;
+        }
+    }
+    out
+}
+
 fn styles(csv: &[u8]) -> [usize; 14] {
     let mut out = [0; 14];
     for line in csv.split(|&b| b == b'\n') {
@@ -918,7 +956,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         .collect();
     info!("{} custom characters in {}", roster.len(), mods_dir.display());
     let (mod_text, mods) = roster.into_iter().unzip();
-    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, mods: mod_text }));
+    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), mods: mod_text }));
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
@@ -1268,9 +1306,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
             d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
         }
-        if !m.mods.is_empty() {
-            d.centred(&format!("Tab / Square: {} custom characters", m.mods.len()), 320.0, 159.0, 12.0, WHITE);
-        }
+        let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
+        d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
     for p in 0..n {
@@ -1329,6 +1366,10 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             if !(pl.card && modded.is_none()) {
                 d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
                 d.text(&format!("{}", pl.costume + 1), x + 6.0, y + 26.0, 18.0, WHITE);
+                let hand = if m.hand(text, p) >= 0.0 { "Right-handed" } else { "Left-handed" };
+                let w = d.width(hand, 13.0);
+                d.q(Tex::Solid, [0.0; 4], [x + 132.0 - w, y + 28.0, w + 8.0, 15.0], [0.0; 3], 70.0);
+                d.text(hand, x + 136.0 - w, y + 28.0, 13.0, if pl.swap { [128.0, 110.0, 30.0] } else { WHITE });
             }
         } else {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
@@ -1509,6 +1550,7 @@ fn step(
                 k.prev = keys.any_just_pressed([KeyCode::KeyQ, KeyCode::PageUp]);
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
+                k.hand = bind.key_just_pressed(&keys, Action::Camera);
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -1520,6 +1562,7 @@ fn step(
                 k.prev = g.just_pressed(GamepadButton::LeftTrigger);
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
                 k.page = g.just_pressed(GamepadButton::West);
+                k.hand = g.just_pressed(GamepadButton::Select);
             }
         }
         let mut dirs = [false; 4];
@@ -1961,6 +2004,58 @@ mod tests {
         assert_eq!((flag("--chars"), flag("--outfits")), ("0,0".into(), "0,0".into()));
         let mods: Vec<_> = a.windows(3).filter(|w| w[0] == "--slot-mod").map(|w| (w[1].clone(), w[2].clone())).collect();
         assert_eq!(mods, [("0".into(), "mods/z".into()), ("1".into(), "mods/x".into())]);
+    }
+
+    /// B79: Select flips the hand. Ashley (right) + Select and Will (left) + Select go to the match as
+    /// `--swap-hands 1,1`, and the match starts with her left-handed and him right-handed (the AI's strong side stays
+    /// TParam's). The match half needs the ISO at the repository root (skipped without it).
+    #[test]
+    fn select_swaps_the_hand() {
+        let ok = press(|p| &mut p.ok);
+        let hand = press(|p| &mut p.hand);
+        let mut m = Menu::default();
+        for _ in 0..3 {
+            m.step(Dev::Keys, ok);
+        }
+        assert_eq!(m.screen, Screen::Chars);
+        assert_eq!(m.who(0), Who::Disc(0), "Ashley");
+        m.step(Dev::Keys, hand);
+        m.step(Dev::Keys, hand);
+        assert!(!m.players[0].swap, "a second press flips it back");
+        m.step(Dev::Keys, hand);
+        m.step(Dev::Keys, ok);
+        assert!(m.players[0].swap && m.players[0].ready);
+        // 1P drives the computer's 2P now: Will
+        m.players[1].cursor = 13;
+        assert_eq!(m.who(1), Who::Disc(11));
+        m.step(Dev::Keys, hand);
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Confirm);
+        let a = m.args(&[]);
+        let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!((flag("--chars"), flag("--swap-hands")), ("0,11".into(), "1,1".into()));
+        assert!(!Menu::default().args(&[]).contains(&"--swap-hands".to_string()));
+
+        const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, match half skipped");
+        }
+        let cli = crate::parse(std::iter::once(ISO.to_string()).chain(a));
+        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
+        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.insert_resource(cli.args).insert_resource(cli.swap_hands);
+        app.init_resource::<super::super::Pads>().init_resource::<super::super::tick_input::TickPads>();
+        app.world_mut().spawn((crate::GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, super::super::setup);
+        app.update();
+        let g = app.world().resource::<super::super::Game>();
+        assert_eq!(g.chars[..2], [0, 11]);
+        assert_eq!([g.players[0].hand, g.players[1].hand], [-1.0, 1.0], "Ashley left-handed, Will right-handed");
+        assert_eq!([g.reaches[0].hand, g.reaches[1].hand], [-1.0, 1.0], "the contact search's forehand side follows");
+        assert_eq!(g.strong_hand[..2], [1.0, -1.0], "the AI's strong side is TParam's");
     }
 
     #[test]

@@ -57,6 +57,7 @@ mod doubles_ai;
 mod flare;
 mod markers;
 mod mod_match;
+pub mod hand_swap;
 pub mod net_hide;
 mod match_stats;
 mod menu;
@@ -408,6 +409,8 @@ struct Game {
     smash_heights: Vec<[f32; 2]>,
     /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
     reaches: Vec<Reach>,
+    /// Per player TParam's hand (+1 right, −1 left) before the select's hand toggle (`hand_swap`): the AI's strong side.
+    strong_hand: [f32; 4],
     /// The doubles AI's rally state (`doubles_ai`).
     doubles_ai: doubles_ai::Shared,
     marks: Marks,
@@ -835,7 +838,7 @@ fn ai_params(iso: &mut Iso, n: usize, outfit: usize, doubles: bool) -> hst_sim::
 /// A character's hand (+1 right, −1 left): right only when TParam.csv's 利き腕 column is exactly 右, as the game's
 /// parser. The game keeps it on the model as a left-hand flag, set to (left XOR the player's "switch hand" toggle on
 /// character select), and the player's hand follows that flag: Carol (左) picked with the toggle on plays right-handed.
-// ponytail: no character select yet, so the toggle is always off; XOR it in here when the menu exists.
+// the toggle is applied after this, by `hand_swap::apply`
 fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     let data = iso
         .read("PCDATA/PCDATA.XB")
@@ -1221,6 +1224,7 @@ fn setup(
     (match_rng, pads, weather): (Option<Res<MatchRng>>, Res<Pads>, Option<Res<crate::weather::Weather>>),
     mut gallery_used: Local<[bool; 4]>,
     match_mod: Option<Res<crate::mods::MatchMod>>,
+    swap: Option<Res<hand_swap::SwapHands>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
@@ -1318,6 +1322,7 @@ fn setup(
         hit_effect: None,
         smash_heights: Vec::new(),
         reaches: Vec::new(),
+        strong_hand: [1.0; 4],
         doubles_ai: default(),
         marks: Marks::default(),
         finish: default(),
@@ -1393,6 +1398,7 @@ fn setup(
         if let Some(m) = modded {
             mod_match::apply(&mut game, i, &mut iso, m, outfit, &mut voices);
         }
+        hand_swap::apply(&mut game, i, swap.as_deref());
         // a CPU gets an AI object, and so does a human beside a CPU partner; making one restarts the AI generator
         // ponytail: who is human is taken from the pads at setup
         let cpu = |k: usize| pads.slot_of(k, n).is_none();
@@ -3244,7 +3250,7 @@ fn ai_stand_x(g: &mut Game, i: usize, b: V3) -> f32 {
             let run = p.ai.run_round(beside_human, &mut || rng.next());
             let width = run.then(|| p.ai.run_round_width(g.players.len() == 2));
             // the strong side is TParam's hand (the game's +0x12dc ignores the select-screen hand toggle)
-            let strong = if g.reaches[i].hand >= 0.0 { 1 } else { 2 };
+            let strong = if g.strong_hand[i] >= 0.0 { 1 } else { 2 };
             let spot = Some((1, [b[0], b[2]]));
             let at = [p.pos[0], p.pos[2]];
             let minus = hst_sim::ai::stand_side(spot, spot, at, reach, p.end, 0.0, strong, width) == Some(true);
