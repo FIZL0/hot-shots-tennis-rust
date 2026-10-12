@@ -820,19 +820,21 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let inpane = Archive::parse(&inpane).expect("xb archive");
     let hand = inpane.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("hsm_yubi.tm2")).expect("hsm_yubi");
     art.push(panel::image(&mut images, &inpane.read(hand).expect("INPANE bytes")));
-    for (xb, name) in SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03")]) {
-        art.push(panel::image(&mut images, &read(&mut iso, xb, &format!("/{name}.tm2"))));
-    }
+    // Z1: read every sheet first so their replacements decode on all cores at once
+    let mut sheets: Vec<Vec<u8>> =
+        SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03")]).map(|(xb, name)| read(&mut iso, xb, &format!("/{name}.tm2"))).collect();
     for u in 0..5 {
-        art.push(panel::image(&mut images, &read(&mut iso, "MENU/MENU60.XB0", &format!("/item_umpire{u:02}.tm2"))));
+        sheets.push(read(&mut iso, "MENU/MENU60.XB0", &format!("/item_umpire{u:02}.tm2")));
     }
     let shots = ["cs2_shots_nomal_a", "cs2_shots_nomal_b", "cs2_shots_cos_a", "cs2_shots_cos_b"]
         .into_iter()
         .map(String::from)
         .chain((0..CHARS).map(|c| format!("cs2_shots_{c:02}")));
     for name in shots {
-        art.push(panel::image(&mut images, &read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2"))));
+        sheets.push(read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2")));
     }
+    let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
+    art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
     // the font's ink span per glyph, from its alpha
     let pic = hst_data::tim2::decode_alpha8(&font).expect("TIM2").remove(0);
     let mut glyphs = std::collections::HashMap::new();

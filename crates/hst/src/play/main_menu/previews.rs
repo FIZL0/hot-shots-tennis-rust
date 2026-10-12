@@ -34,6 +34,7 @@ use bevy::prelude::*;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::window::PrimaryWindow;
+use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use hst_data::iso::Iso;
 
 use super::{Art, Dev, GRID, Menu, Screen, Slot, Tex, Who, layout};
@@ -466,6 +467,8 @@ struct Job {
     /// The read-back's entity, once asked; the result lands in `done`.
     reading: Option<Entity>,
     done: Arc<Mutex<Option<Vec<u8>>>>,
+    /// The PNG being written (true: written).
+    saving: Option<Task<bool>>,
 }
 
 fn start_baker(mut commands: Commands, menu: Res<Menu>) {
@@ -510,19 +513,24 @@ fn bake(
         job.frames += 1;
         let wait = if baker.jobs == 0 { 30 } else { 4 };
         let data = job.done.lock().unwrap().take();
-        if let Some(data) = data {
-            let key = job.key;
+        if let Some(saving) = &mut job.saving {
+            // Z1: the PNG encode (~20 ms) runs on the IO pool; the next job waits for the file
+            if let Some(ok) = check_ready(saving) {
+                if ok {
+                    info!("baked {}", job.path.display());
+                } else {
+                    baker.failed.insert(job.key);
+                }
+                baker.job = None;
+                baker.jobs += 1;
+            }
+        } else if let Some(data) = data {
             if let Some(r) = job.reading {
                 gone.0.push(r);
             }
             gone.0.extend(preview_entities(job.cam, &cams, &parents));
-            if save(&data, &job.path) {
-                info!("baked {}", job.path.display());
-            } else {
-                baker.failed.insert(key);
-            }
-            baker.job = None;
-            baker.jobs += 1;
+            let path = job.path.clone();
+            job.saving = Some(IoTaskPool::get().spawn(async move { save(&data, &path) }));
         } else if job.frames >= wait && job.reading.is_none() {
             let done = job.done.clone();
             let r = commands
@@ -563,7 +571,7 @@ fn bake(
                 let image = inspect::target(&mut images, BAKE);
                 images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
                 let cam = inspect::spawn_into(&mut commands, &data, c, hand, BAKE_LAYER, image.clone());
-                baker.job = Some(Job { key, path, cam, image, frames: 0, reading: None, done: default() });
+                baker.job = Some(Job { key, path, cam, image, frames: 0, reading: None, done: default(), saving: None });
                 return;
             }
         }
