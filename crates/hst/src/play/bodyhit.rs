@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::bodyhit::{self, Popup, Word};
+use hst_sim::bodyhit::{self, BounceWords, Popup, Word};
 use hst_sim::player::ReachStats;
 use hst_sim::pose::Nodes;
 
@@ -32,8 +32,8 @@ struct View(Handle<StandardMaterial>, [Handle<Image>; 2]);
 pub fn plugin(app: &mut App) {
     app.init_resource::<Posed>()
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, (detect.before(super::simulate), age.after(super::simulate), pose.after(crate::character::tick)))
-        .add_systems(Update, draw.after(super::balloons));
+        .add_systems(FixedUpdate, (detect.before(super::simulate), (age, bounce_words).after(super::simulate), pose.after(crate::character::tick)))
+        .add_systems(Update, (draw, draw_words).after(super::balloons));
 }
 
 fn setup(
@@ -67,7 +67,20 @@ fn setup(
         cull_mode: None,
         ..default()
     });
-    commands.spawn((View(m.clone(), words), Mesh3d(quad), MeshMaterial3d(m), Transform::default(), Visibility::Hidden));
+    commands.spawn((View(m.clone(), words), Mesh3d(quad.clone()), MeshMaterial3d(m), Transform::default(), Visibility::Hidden));
+    // the bounce words: one quad per word a point can make
+    let textures: Vec<_> = (1..=15)
+        .map(|k| {
+            let name = format!("panel/cf00-{}.tm2", bodyhit::bounce_texture(k).unwrap());
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)).expect("bounce word in EFFCT");
+            super::panel::image(&mut images, &arc.read(e).expect("word bytes"))
+        })
+        .collect();
+    commands.insert_resource(Words { words: BounceWords::default(), on: false, textures });
+    for i in 0..10 {
+        let m = materials.add(StandardMaterial { unlit: true, alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, ..default() });
+        commands.spawn((WordView(i, m.clone()), Mesh3d(quad.clone()), MeshMaterial3d(m), Transform::default(), Visibility::Hidden));
+    }
 }
 
 /// Swinging, diving or whiffing players aren't tested (the game's stroke state).
@@ -231,6 +244,57 @@ fn draw(
             // between the last two ticks' alphas (a fresh pop-up starts at its own)
             let a = if hits.alpha == 0.0 { p.alpha } else { hits.alpha + (p.alpha - hits.alpha) * time.overstep_fraction() };
             m.base_color = Color::srgba(1.0, 1.0, 1.0, a / 128.0);
+        }
+        *vis = Visibility::Visible;
+    }
+}
+
+/// The point's bounce words (`hst_sim::bodyhit::BounceWords`), made from the serve's hit until the next point's
+/// setup, and their textures by effect kind − 1.
+#[derive(Resource)]
+struct Words {
+    words: BounceWords,
+    on: bool,
+    textures: Vec<Handle<Image>>,
+}
+
+#[derive(Component)]
+struct WordView(usize, Handle<StandardMaterial>);
+
+fn bounce_words(g: Res<Game>, mut w: ResMut<Words>) {
+    if g.phase == Phase::Serve {
+        (w.words, w.on) = (BounceWords::default(), false);
+        return;
+    }
+    w.on |= g.phase == Phase::Rally;
+    if w.on {
+        let (at, m) = g.flight.landing;
+        w.words.frame(g.flight.bounces, at, &m);
+    }
+}
+
+fn draw_words(
+    g: Res<Game>,
+    w: Res<Words>,
+    cam: Query<&Transform, (With<crate::Orbit>, Without<WordView>)>,
+    mut q: Query<(&WordView, &mut Transform, &mut Visibility)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Ok(cam) = cam.single() else { return };
+    let game = |w: Vec3| [w.x, -w.y, -w.z];
+    let world = |p: [f32; 3]| Vec3::new(p[0], -p[1], -p[2]);
+    let rows = [game(*cam.right()), game(-*cam.up()), game(*cam.forward())];
+    let depth = |at: [f32; 3]| (world(at) - cam.translation).dot(*cam.forward());
+    for (v, mut tr, mut vis) in &mut q {
+        let Some(p) = w.words.pops.get(v.0) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let (at, hw, hh) = p.quad(rows, depth, g.cam.view.fov.tan());
+        (tr.translation, tr.rotation, tr.scale) = (world(at), cam.rotation, Vec3::new(2.0 * hw, 2.0 * hh, 1.0));
+        if let Some(mut m) = materials.get_mut(&v.1) {
+            m.base_color_texture = Some(w.textures[p.effect as usize - 1].clone());
+            m.base_color = Color::srgba(1.0, 1.0, 1.0, p.alpha / 128.0);
         }
         *vis = Visibility::Visible;
     }
