@@ -14,7 +14,8 @@ Picking: open `- [ ] **ID**` lines in plan/TODO.md, in order, skipping split par
 Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Mode p (priority):
 each free slot takes the next such task, exactly in order, files may overlap. Mode d (different): two running tasks
 never share a file named on their lines, except SHARED (play.rs: nearly every task names it); the first open "Next"
-task always leads and the rest of "Next" waits for it. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
+task always leads and the rest of "Next" waits for it; the same for any section headed "in this order" (one task
+at a time each). `dir/*.rs` on a line counts as every file in that dir. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
 context/, mods/ (+ the old replacements/ link) and the ISO are symlinked in. Each slot N has its own PCSX2 (HST_PCSX2=N: copy
 N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
 tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
@@ -139,20 +140,24 @@ def tasks():
             if after and after.group(1) in open_ids:
                 continue
             files = set(re.findall(r'[\w-]+\.rs', m.group(2).split('|')[0]))
+            for d in re.findall(r'([\w-]+)/\*\.rs', m.group(2).split('|')[0]):  # `play/*.rs` = every file in play/
+                files |= {os.path.basename(f) for f in glob.glob(f'{ROOT}/crates/*/src/{d}/*.rs')}
             out.append((m.group(1), section, files))
     return out
 
 
 def pick(running, tried):
-    busy, next_seen = list(running.values()), False
+    busy, seen = list(running.values()), set()
     for tid, section, files in tasks():
         if MODE == 'p':
             if tid not in tried and all(tid != b[0] for b in busy):
                 return tid, section, files
             continue
-        if tid in tried or (section.startswith('Next') and next_seen):
-            continue  # the user's ordered list: only its first untried task is ever eligible
-        next_seen |= section.startswith('Next')
+        ordered = section.startswith('Next') or 'in this order' in section
+        if tid in tried or (ordered and section in seen):
+            continue  # an ordered section (Next, "in this order"): only its first untried task is ever eligible
+        if ordered:
+            seen.add(section)
         if all(tid != b[0] and not (files & b[2]) - SHARED for b in busy):
             return tid, section, files
     return None
