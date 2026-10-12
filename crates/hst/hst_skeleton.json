@@ -1,5 +1,5 @@
 {
- "about": "HST player skeleton (game space: metres, Y down, feet at y=0, facing +Z). Canonical frames from pc00; see modding/HST-CHARACTER-STANDARD.md.",
+ "about": "HST player skeleton (game space: metres, Y down, feet at y=0, facing +Z). Canonical frames from pc00; see standard/HST-CHARACTER-STANDARD.md.",
  "joints": [
   {
    "name": "Bip01",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Upscale every mod's textures with chaiNNer, skipping the ones already done.
 
-    python3 modding/tools/upscale_mods.py MODEL.pth [MODS_DIR ...] [--chain tools/chainner/upscale.chn]
+    python3 tools/upscale_mods.py MODEL.pth [MODS_DIR ...] [--chain tools/chainner/upscale.chn]
 
 For each `mod.json` under MODS_DIR (default `mods/`), every image embedded in its costume `.glb`s and
 `racket.glb` without a `textures/upscaled/<glb stem>/<name>.png` yet is upscaled with the chain (its folders and
@@ -16,7 +16,7 @@ loop with `return asyncio.run_coroutine_threadsafe(coroutine, loop).result()` (2
 import argparse, glob, hashlib, json, os, shutil, signal, struct, subprocess, sys, tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[1]
 
 
 def glb_images(path):

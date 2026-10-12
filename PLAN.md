@@ -57,7 +57,7 @@ Open tasks: `plan/TODO.md` (index: `tools/ctx.py`, next: `tools/ctx.py next`). F
 
 `crates/hst-gltf` — exports HST's own characters (all motions, faces) to `.glb` as modding reference rigs (`hst-gltf hst context/xb DIR`); other games' extraction and mod packaging live in ../HST-MODS
 
-`modding/` — character mod standard, tutorial, `hst_skeleton.json`; `tools/` rerig/check/render/make_skeleton (Python)
+`MODDING.md` — link to the mods repo (../HST-MODS: standard, tutorial, extract/rerig tools); `crates/hst/hst_skeleton.json` is the game's copy of its skeleton
 
 `crates/hst-sim/src/` — the game, bit-exact, no Bevy
 
