@@ -55,6 +55,7 @@ mod markers;
 mod mod_match;
 mod match_stats;
 mod menu;
+pub mod netplay;
 mod npcs;
 mod panel;
 mod popups;
@@ -549,6 +550,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(markers::plugin);
     app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);
+    app.add_plugins(netplay::plugin);
     app.add_plugins(npcs::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
@@ -4201,6 +4203,7 @@ fn play_sounds(
     music: Option<Res<MusicBanks>>,
     mut whistle: Local<(u32, u64)>,
     mut bgm: Local<Bgm>,
+    mut voice_left: Local<u32>,
 ) {
     let g = &mut *g;
     if let (Some(sound), Some(music)) = (&sound, &music) {
@@ -4267,19 +4270,22 @@ fn play_sounds(
         voices.as_ref().and_then(|v| v.0.get(4).cloned().flatten()),
     ) {
         sound.stop(g.umpire_voice);
-        g.umpire_voice = sound.play_centre(
-            &b,
-            sound::Play {
-                slot: 5,
-                program,
-                key: key as u8,
-                volume: 0x80,
-                speed: 1.0,
-            },
-        );
+        let p = sound::Play {
+            slot: 5,
+            program,
+            key: key as u8,
+            volume: 0x80,
+            speed: 1.0,
+        };
+        g.umpire_voice = sound.play_centre(&b, p);
+        *voice_left = sound.centre_frames(&b, p);
     }
-    if g.umpire_voice != 0 && !sound.playing(g.umpire_voice) {
-        g.umpire_voice = 0;
+    // timed in ticks, not by the audio thread, so the post-point timeline is the same on every machine (netplay)
+    if g.umpire_voice != 0 {
+        *voice_left = voice_left.saturating_sub(1);
+        if *voice_left == 0 {
+            g.umpire_voice = 0;
+        }
     }
 }
 

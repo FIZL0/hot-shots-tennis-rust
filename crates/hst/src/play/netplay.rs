@@ -1,0 +1,640 @@
+//! Lockstep netplay (M2g): a tick runs only once every seat's pads for it are in. Each machine sends its own seats'
+//! pads `delay` ticks ahead (the host picks the delay from the slowest guest's round trip, `net::delay_for`), so at
+//! steady speed nobody waits; a peer that falls behind stalls everyone, and after [`STALL`] the screen says whose pads
+//! it waits for. The first `delay` ticks are idle for every seat.
+//!
+//! The gate (`mode::Gate`) runs before each of the match's ticks: it hands the tick's `[Pad; 4]` to the match as a
+//! one-tick `Replay` (`tick_input`), so the match never reads local devices itself. Before every [`HASH_EVERY`]th tick
+//! each machine sends its `snapshot::state_hash`; a mismatch stops the match for everyone and saves the inputs (every
+//! seat's, every tick, the same on every machine) with the line-up beside the disc as `desync-*.json` (each machine
+//! its own copy; the ignored test `replays_a_desync` runs one again). The pause screen opens and closes on every machine; the post-point
+//! press is a pad press, so it travels with the pads. A peer dropping ends the match for everyone with a message,
+//! then it goes back to the menu (no bot takes the seat).
+
+use super::tick_input::{self, IDLE, Replay};
+use super::{Game, Pads, menu, snapshot};
+use crate::net::{Cmd, Event, Msg, Net, Room};
+use bevy::prelude::*;
+use hst_sim::replay::Pad;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Hashes are compared before every this many ticks.
+pub const HASH_EVERY: u32 = 30;
+/// A stall this long (real seconds) puts up "Waiting for ...".
+const STALL: f32 = 0.25;
+/// How long the end message stays up before the match closes.
+const END: f32 = 5.0;
+/// The desync message's start (a peer that hears it saves its inputs too).
+const DESYNC: &str = "Out of sync";
+
+/// `--pads`' gamepad for a peer's seat.
+const REMOTE: usize = 99;
+
+/// The online match's seed for the match setup (`main.rs`, the weather generator's), `u64::MAX` offline.
+pub static SEED: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// The online match's seed, once (the next match is offline unless it sets one again).
+pub fn seed() -> Option<u32> {
+    u32::try_from(SEED.swap(u64::MAX, Ordering::Relaxed)).ok()
+}
+
+pub fn wire(p: Pad) -> [u8; 6] {
+    let b = p.buttons.to_le_bytes();
+    [b[0], b[1], p.rx, p.ry, p.lx, p.ly]
+}
+
+pub fn unwire(w: [u8; 6]) -> Pad {
+    Pad { buttons: u16::from_le_bytes([w[0], w[1]]), rx: w[2], ry: w[3], lx: w[4], ly: w[5] }
+}
+
+/// The lockstep bookkeeping: every seat's pads by tick as they come in, this machine's hashes and the peers'.
+pub struct Lockstep {
+    /// The next tick to run.
+    pub tick: u32,
+    pub delay: u32,
+    /// Seats 1P..4P taken (an empty seat is always idle).
+    seats: [bool; 4],
+    /// This machine's seats.
+    pub mine: Vec<usize>,
+    pending: BTreeMap<u32, [Option<Pad>; 4]>,
+    /// Every tick's pads as run.
+    pub log: Vec<[Pad; 4]>,
+    own: BTreeMap<u32, u64>,
+    theirs: Vec<(u32, u64)>,
+}
+
+impl Lockstep {
+    pub fn new(seats: [bool; 4], mine: Vec<usize>, delay: u32) -> Self {
+        let mut l = Lockstep { tick: 0, delay, seats, mine, pending: BTreeMap::new(), log: Vec::new(), own: BTreeMap::new(), theirs: Vec::new() };
+        for t in 0..delay {
+            *l.slot(t) = [Some(IDLE); 4];
+        }
+        l
+    }
+
+    fn slot(&mut self, t: u32) -> &mut [Option<Pad>; 4] {
+        let seats = self.seats;
+        self.pending.entry(t).or_insert(seats.map(|s| if s { None } else { Some(IDLE) }))
+    }
+
+    /// A peer's pads for `tick`.
+    pub fn heard(&mut self, tick: u32, seats: &[(u8, [u8; 6])]) {
+        if tick < self.tick {
+            return;
+        }
+        let slot = self.slot(tick);
+        for &(s, p) in seats {
+            if let Some(x) = slot.get_mut(s as usize) {
+                *x = Some(unwire(p));
+            }
+        }
+    }
+
+    /// The seats whose pads for the next tick aren't in.
+    pub fn missing(&self) -> Vec<usize> {
+        match self.pending.get(&self.tick) {
+            Some(s) => (0..4).filter(|&i| s[i].is_none()).collect(),
+            None => (0..4).filter(|&i| self.seats[i]).collect(),
+        }
+    }
+
+    /// Runs the next tick (`missing` empty): its pads, and the message carrying this machine's `local` pads (its seats
+    /// in order) for the tick `delay` on.
+    pub fn advance(&mut self, local: &[Pad]) -> ([Pad; 4], Msg) {
+        let now = self.pending.remove(&self.tick).expect("the tick's pads").map(|p| p.expect("every seat's pad"));
+        let at = self.tick + self.delay;
+        let mine = self.mine.clone();
+        let slot = self.slot(at);
+        for (&s, &p) in mine.iter().zip(local) {
+            slot[s] = Some(p);
+        }
+        self.log.push(now);
+        self.tick += 1;
+        (now, Msg::Pads { tick: at, seats: mine.iter().zip(local).map(|(&s, &p)| (s as u8, wire(p))).collect() })
+    }
+
+    /// This machine's hash before tick `t`; a mismatch with a peer's: (tick, ours, theirs).
+    pub fn own_hash(&mut self, t: u32, h: u64) -> Option<(u32, u64, u64)> {
+        self.own.insert(t, h);
+        self.check()
+    }
+
+    pub fn their_hash(&mut self, t: u32, h: u64) -> Option<(u32, u64, u64)> {
+        self.theirs.push((t, h));
+        self.check()
+    }
+
+    fn check(&mut self) -> Option<(u32, u64, u64)> {
+        let mut bad = None;
+        // ponytail: our hashes are all kept (one per 30 ticks, ~16 bytes each)
+        self.theirs.retain(|&(t, h)| match self.own.get(&t) {
+            Some(&o) => {
+                if o != h && bad.is_none() {
+                    bad = Some((t, o, h));
+                }
+                false
+            }
+            None => true,
+        });
+        bad
+    }
+}
+
+/// The online match: the lockstep, the line-up, what goes out to the peers.
+#[derive(Resource)]
+pub struct Netplay {
+    pub lock: Lockstep,
+    pub room: Room,
+    /// This machine's peer name in `room`.
+    pub me: String,
+    /// For the peers (the pump hands them to `Net`; without one, e.g. in tests, whoever runs it carries them).
+    pub out: Vec<Msg>,
+    /// Why the match ended; it closes `END` seconds later.
+    pub end: Option<String>,
+    paused: bool,
+    /// The last hashed tick and its state's text (`snapshot::state_text`), for a desync's report.
+    state: (u32, String),
+    stalled: f32,
+    ended: f32,
+    /// `HST_NET_MASH=seed`: this machine's seats press random buttons (unattended tests).
+    mash: Option<u64>,
+}
+
+impl Netplay {
+    pub fn new(room: Room, me: String) -> Self {
+        let taken = |i: usize| room.seats.get(i).is_some_and(|s| s.is_some());
+        let mine = (0..room.seats.len()).filter(|&i| room.seats[i].as_ref().is_some_and(|s| s.peer == me)).collect();
+        let mash = std::env::var("HST_NET_MASH").ok().and_then(|v| v.parse::<u64>().ok()).map(|s| s | 1);
+        Netplay {
+            lock: Lockstep::new(std::array::from_fn(taken), mine, room.delay.max(1)),
+            room,
+            me,
+            out: Vec::new(),
+            end: None,
+            paused: false,
+            state: (0, String::new()),
+            stalled: 0.0,
+            ended: 0.0,
+            mash,
+        }
+    }
+
+    /// Ends the match (the first reason stays), telling the peers if `tell`.
+    fn finish(&mut self, why: String, tell: bool) {
+        if self.end.is_none() {
+            if tell {
+                self.out.push(Msg::Bye(why.clone()));
+            }
+            info!("online match over: {why}");
+            self.end = Some(why);
+        }
+    }
+
+    /// The next random pad for seat `s` (`HST_NET_MASH`): the d-pad changes every half second, a face button pressed
+    /// about every 20 ticks.
+    fn mashed(&mut self, s: usize) -> Pad {
+        let r = self.mash.as_mut().unwrap();
+        *r ^= *r << 13;
+        *r ^= *r >> 7;
+        *r ^= *r << 17;
+        let t = self.lock.tick as u64 + s as u64 * 7;
+        let dir = [0, 0x10, 0x20, 0x40, 0x80, 0x30, 0x60, 0xc0, 0x90][((t / 30).wrapping_mul(0x9e37_79b9) >> 7) as usize % 9];
+        let press = if *r % 20 == 0 { [0x1000, 0x2000, 0x4000, 0x8000][(*r >> 8) as usize % 4] } else { 0 };
+        Pad { buttons: dir | press, ..IDLE }
+    }
+}
+
+/// Every seat's pads, every tick, and the line-up: written when hashes differ.
+fn save_desync(w: &World, why: &str) -> String {
+    let np = w.resource::<Netplay>();
+    let iso = w.get_resource::<crate::Args>().map_or(String::new(), |a| a.iso.clone());
+    let unix = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let me: String = np.me.chars().take(8).collect();
+    let path = crate::net::Online::path(&iso).with_file_name(format!("desync-{unix}-{me}.json"));
+    let pads: Vec<[[u8; 6]; 4]> = np.lock.log.iter().map(|t| t.map(wire)).collect();
+    let json = serde_json::json!({ "why": why, "room": np.room, "me": np.me, "pads": pads, "state_tick": np.state.0, "state": np.state.1 });
+    match std::fs::write(&path, json.to_string()) {
+        Ok(()) => path.display().to_string(),
+        Err(e) => format!("(not saved: {e})"),
+    }
+}
+
+fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
+    let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x}): the match stops.");
+    let path = save_desync(w, &why);
+    w.resource_mut::<Netplay>().finish(format!("{why}\nInputs saved to {path}"), true);
+}
+
+/// A network event into the match.
+pub fn take(w: &mut World, e: Event) {
+    let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
+    match e {
+        Event::Match(Msg::Pads { tick, seats }) => np.lock.heard(tick, &seats),
+        Event::Match(Msg::Hash { tick, hash }) => {
+            if let Some(bad) = np.lock.their_hash(tick, hash) {
+                desync(w, bad);
+            }
+        }
+        Event::Match(Msg::Pause(open)) => {
+            np.paused = open;
+            menu::set_paused(w, open);
+        }
+        Event::Match(Msg::Bye(why)) | Event::Dropped(why) => {
+            if why.starts_with(DESYNC) && np.end.is_none() {
+                let path = save_desync(w, &why);
+                w.resource_mut::<Netplay>().finish(format!("{why}\nInputs saved to {path}"), false);
+            } else {
+                np.finish(format!("{why} The match is over."), false);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The network's events in, the match's messages out.
+fn pump(w: &mut World) {
+    let Some(net) = w.get_resource::<Net>() else { return };
+    for e in net.poll() {
+        take(w, e);
+    }
+    let out = w.get_resource_mut::<Netplay>().map(|mut n| std::mem::take(&mut n.out)).unwrap_or_default();
+    let net = w.resource::<Net>();
+    for m in out {
+        net.send(Cmd::Send(m));
+    }
+}
+
+/// The match's tick gate: true runs the next tick on every seat's pads.
+pub fn gate(w: &mut World) -> bool {
+    pump(w);
+    let Some(np) = w.get_resource::<Netplay>() else { return true };
+    if np.end.is_some() || !np.lock.missing().is_empty() {
+        return false;
+    }
+    let t = np.lock.tick;
+    if t % HASH_EVERY == 0 {
+        let text = snapshot::state_text(w);
+        let h = snapshot::fnv(&text);
+        if t % (HASH_EVERY * 60) == 0 {
+            info!("online tick {t}: hash {h:016x}");
+        }
+        let mut np = w.resource_mut::<Netplay>();
+        np.state = (t, text);
+        np.out.push(Msg::Hash { tick: t, hash: h });
+        if let Some(bad) = np.lock.own_hash(t, h) {
+            desync(w, bad);
+            pump(w);
+            return false;
+        }
+    }
+    // this machine's seats' pads (each seat's local device sits in the slot of the same number, `--pads`)
+    let mine = w.resource::<Netplay>().lock.mine.clone();
+    let mut local: Vec<Pad> = {
+        let mut pads = w.resource_mut::<Pads>();
+        mine.iter().map(|&s| tick_input::take(&mut pads.slots[s])).collect()
+    };
+    let mut np = w.resource_mut::<Netplay>();
+    if np.mash.is_some() {
+        local = mine.iter().map(|&s| np.mashed(s)).collect();
+    }
+    let (now, msg) = np.lock.advance(&local);
+    np.out.push(msg);
+    np.stalled = 0.0;
+    w.get_resource_or_insert_with(|| Replay(Default::default())).0.push_back(now);
+    pump(w);
+    true
+}
+
+/// The "waiting" / end text.
+#[derive(Component)]
+struct Say;
+
+fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
+    if np.is_none() {
+        return;
+    }
+    commands.insert_resource(crate::mode::Gate(gate));
+    // the match reads only the pads the gate hands it
+    commands.insert_resource(Replay(Default::default()));
+    commands.spawn((
+        Say,
+        Text::new(""),
+        // the 448-line screen's 20 px, at any window size
+        TextFont { font_size: bevy::text::FontSize::Vh(20.0 / 448.0 * 100.0), ..default() },
+        TextColor(Color::WHITE),
+        TextLayout::justify(bevy::text::Justify::Center),
+        TextShadow::default(),
+        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), top: Val::Percent(38.0), justify_content: JustifyContent::Center, ..default() },
+        GlobalZIndex(50),
+    ));
+}
+
+/// Each frame: the network, the pause going out, the stall/end text, and closing the match after the end.
+fn watch(w: &mut World) {
+    pump(w);
+    let dt = w.resource::<Time<Real>>().delta_secs();
+    let open = menu::paused(w);
+    let result = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
+    let mut np = w.resource_mut::<Netplay>();
+    if open != np.paused {
+        np.paused = open;
+        np.out.push(Msg::Pause(open));
+    }
+    if np.end.is_some() {
+        np.ended += dt;
+    } else if !open {
+        np.stalled += dt;
+    }
+    let text = match &np.end {
+        Some(why) => why.clone(),
+        None if np.stalled > STALL && !result => {
+            let who: Vec<String> = np.lock.missing().iter().map(|s| format!("{}P", s + 1)).collect();
+            format!("Waiting for {}...", who.join(", "))
+        }
+        None => String::new(),
+    };
+    let close = np.ended > END;
+    pump(w);
+    let mut q = w.query_filtered::<&mut Text, With<Say>>();
+    for mut t in q.iter_mut(w) {
+        if t.0 != text {
+            t.0 = text.clone();
+        }
+    }
+    if close {
+        w.write_message(AppExit::Success);
+    }
+}
+
+pub fn plugin(app: &mut App) {
+    app.add_systems(Startup, setup).add_systems(Update, watch.run_if(resource_exists::<Netplay>));
+}
+
+/// The match's flags (as `main_menu`'s) for `room`, this machine being `me`: its seats driven by `devices` in seat
+/// order, the other taken seats by their peers: a human seat on a gamepad no machine has (`REMOTE`; it may pick up a
+/// spare local pad, which the gate never reads), so every machine sets the match up with the same humans.
+pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], extra: &[String]) -> Vec<String> {
+    let order: &[usize] = if room.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
+    let pick = |s: usize| room.seats.get(s).cloned().flatten().map(|x| x.pick);
+    let join = |v: Vec<usize>| v.iter().map(usize::to_string).collect::<Vec<_>>().join(",");
+    let mut mine = devices.iter();
+    let seats: Vec<_> = (0..room.seats.len())
+        .map(|s| match &room.seats[s] {
+            Some(x) if x.peer == me => mine.next().copied().flatten().or(Some(super::controls::Seat::Pad(REMOTE))),
+            Some(_) => Some(super::controls::Seat::Pad(REMOTE)),
+            None => None,
+        })
+        .collect();
+    let court = (room.court + 1).to_string();
+    let mut a = vec!["--play".to_string(), "--stage".into(), court.clone(), "--court".into(), court];
+    if !room.doubles {
+        a.push("--singles".into());
+    }
+    a.extend([
+        "--chars".into(),
+        join(order.iter().map(|&s| pick(s).map_or(0, |p| p.char)).collect()),
+        "--outfits".into(),
+        join(order.iter().map(|&s| pick(s).map_or(0, |p| p.costume)).collect()),
+        "--umpire".into(),
+        room.umpire.to_string(),
+        "--sets".into(),
+        (([1, 3, 5][room.sets.min(2)] + 1) / 2).to_string(),
+        "--games".into(),
+        room.games.to_string(),
+        "--pads".into(),
+        super::controls::Seat::flag(&seats),
+    ]);
+    a.extend(extra.iter().cloned());
+    a
+}
+
+/// The online match as a mode: `flags(…)`'s match with the lockstep on `net`; it goes back to `back` when it ends.
+pub fn mode(iso: &str, flags: &[String], back: crate::mode::Mode, net: Net, room: Room, me: String) -> crate::mode::Mode {
+    SEED.store(room.seed as u64, Ordering::Relaxed);
+    crate::match_mode(iso, flags, back).and(move |app| {
+        app.insert_resource(Netplay::new(room, me)).insert_resource(net);
+    })
+}
+
+/// `hst net … --play`: the match `main` starts instead of the menu (it was waiting for the lobby).
+pub static PENDING: Mutex<Option<(Net, Room, String)>> = Mutex::new(None);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pad(b: u16) -> Pad {
+        Pad { buttons: b, ..IDLE }
+    }
+
+    /// Two machines, 2 seats each, a link `lag` ticks long: both run the same pads, every tick, in order.
+    #[test]
+    fn lockstep_over_a_slow_link() {
+        let (lag, delay) = (6u32, 7u32);
+        let mut m = [Lockstep::new([true; 4], vec![0, 2], delay), Lockstep::new([true; 4], vec![1, 3], delay)];
+        let mut wire: Vec<(usize, u32, Msg)> = Vec::new();
+        let mut stalls = [0; 2];
+        for round in 0..2000u32 {
+            for (to, at, msg) in std::mem::take(&mut wire) {
+                if at <= round {
+                    if let Msg::Pads { tick, seats } = &msg {
+                        m[to].heard(*tick, seats);
+                    }
+                } else {
+                    wire.push((to, at, msg));
+                }
+            }
+            for i in 0..2 {
+                if !m[i].missing().is_empty() {
+                    stalls[i] += 1;
+                    continue;
+                }
+                let t = m[i].tick;
+                let local: Vec<Pad> = m[i].mine.iter().map(|&s| pad((t * 4 + s as u32) as u16)).collect();
+                let (_, msg) = m[i].advance(&local);
+                wire.push((1 - i, round + lag, msg));
+            }
+        }
+        let n = m[0].tick.min(m[1].tick) as usize;
+        assert!(n > 1900, "ran {n} of 2000 ticks; stalls {stalls:?}");
+        assert_eq!(m[0].log[..n], m[1].log[..n]);
+        // seat s's pad for tick t was sent at tick t - delay
+        assert_eq!(m[0].log[100][3], pad(((100 - delay) * 4 + 3) as u16));
+        assert_eq!(m[0].log[3], [IDLE; 4]);
+        // a delay shorter than the link stalls
+        let mut a = Lockstep::new([true, true, false, false], vec![0], 2);
+        a.advance(&[IDLE]);
+        a.advance(&[IDLE]);
+        assert_eq!(a.missing(), vec![1]);
+    }
+
+    #[test]
+    fn hashes_compare_whichever_comes_first() {
+        let mut l = Lockstep::new([true; 4], vec![0], 3);
+        assert_eq!(l.their_hash(30, 5), None);
+        assert_eq!(l.own_hash(30, 5), None);
+        assert_eq!(l.own_hash(60, 6), None);
+        assert_eq!(l.their_hash(60, 7), Some((60, 6, 7)));
+    }
+
+    #[test]
+    fn pads_wire_round_trip() {
+        let p = Pad { buttons: 0xa0f1, rx: 1, ry: 2, lx: 0x80, ly: 0xff };
+        assert_eq!(unwire(wire(p)), p);
+    }
+
+    #[test]
+    fn flags_put_each_seat_in_match_order() {
+        use crate::net::{Pick, Seat};
+        let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick { char, costume: char % 3 } });
+        let room = Room { doubles: true, court: 2, sets: 1, games: 3, umpire: 1, seats: vec![s("host", 5), s("g", 6), s("g", 7), s("host", 8)], ..Default::default() };
+        let a = flags(&room, "g", &[Some(super::super::controls::Seat::Keys), Some(super::super::controls::Seat::Pad(0))], &[]);
+        let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!((flag("--chars"), flag("--outfits")), ("5,7,6,8".into(), "2,1,0,2".into()));
+        assert_eq!((flag("--pads"), flag("--court"), flag("--sets"), flag("--games")), ("99,k,0,99".into(), "3".into(), "2".into(), "3".into()));
+    }
+
+    /// The match on two headless apps (`snapshot.rs`'s harness, doubles): what each gate sends reaches the other
+    /// `lag` rounds (ticks) later.
+    mod matches {
+        use super::super::super::*;
+        use super::super::{Lockstep, Netplay, gate, take, unwire};
+        use crate::net::{Event, Msg, Pick, Room, Seat};
+        use crate::{Args, GameSpace};
+        use std::path::Path;
+
+        const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+        fn room(delay: u32) -> Room {
+            let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick { char, costume: 0 } });
+            // 1P and 2P (a team) on the host, 3P and 4P on the guest
+            Room { doubles: true, games: 1, sets: 0, umpire: 4, seats: vec![s("host", 6), s("host", 1), s("g", 2), s("g", 3)], delay, seed: 0x28c7c4a1, ..Default::default() }
+        }
+
+        fn app(room: &Room, me: &str) -> App {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+            app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+            app.init_asset::<crate::gs::GsMaterial>();
+            let chars = [0, 2, 1, 3].map(|s| room.seats[s].as_ref().unwrap().pick.char).to_vec();
+            app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games as i32, pads: None });
+            app.insert_resource(Pads { seats: Some([true; 4]), autoplay: false, ..default() });
+            app.init_resource::<tick_input::TickPads>();
+            app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+            app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin));
+            app.add_systems(PostStartup, setup);
+            app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
+            app.finish();
+            app.cleanup();
+            app.world_mut().run_schedule(Startup);
+            app.world_mut().run_schedule(PostStartup);
+            let mut np = Netplay::new(room.clone(), me.into());
+            np.mash = Some(if me == "host" { 0x1234_5679 } else { 0x9abc_def1 });
+            app.insert_resource(np).insert_resource(tick_input::Replay(Default::default()));
+            app
+        }
+
+        /// Rounds until the match is over or `limit`, `bad` changes the guest's pads at that tick; the two apps.
+        fn play(lag: u32, limit: u32, bad: Option<u32>) -> [App; 2] {
+            let room = room(crate::net::delay_for(std::time::Duration::from_millis(2 * lag as u64 * 1000 / 60)));
+            let mut apps = [app(&room, "host"), app(&room, "g")];
+            let mut wire: Vec<(usize, u32, Msg)> = Vec::new();
+            for round in 0..limit {
+                for (to, at, msg) in std::mem::take(&mut wire) {
+                    if at <= round {
+                        take(apps[to].world_mut(), Event::Match(msg));
+                    } else {
+                        wire.push((to, at, msg));
+                    }
+                }
+                for i in 0..2 {
+                    let w = apps[i].world_mut();
+                    if gate(w) {
+                        if i == 1 && bad == Some(w.resource::<Netplay>().lock.tick) {
+                            w.resource_mut::<tick_input::Replay>().0.back_mut().unwrap()[2].buttons ^= !0;
+                        }
+                        w.run_schedule(FixedUpdate);
+                    }
+                    let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+                    wire.extend(out.into_iter().map(|m| (1 - i, round + lag, m)));
+                }
+                let over = |a: &App| a.world().resource::<Game>().match_stats.result.is_some() || a.world().resource::<Netplay>().end.is_some();
+                if apps.iter().all(over) && wire.is_empty() {
+                    break;
+                }
+            }
+            apps
+        }
+
+        /// M2g's acceptance: a doubles match, 2 seats on each machine, 100 ms each way, random pads, to the end
+        /// with the same state on both (every 30 ticks' hashes agree: no desync). ~20 min unoptimised:
+        /// `cargo test -p hst full_doubles -- --ignored`; `tools/check.sh` runs its first minute.
+        #[test]
+        #[ignore]
+        fn full_doubles_match_at_100ms_stays_in_sync() {
+            in_sync(200_000, true);
+        }
+
+        #[test]
+        fn doubles_at_100ms_stays_in_sync() {
+            in_sync(3600, false);
+        }
+
+        fn in_sync(limit: u32, to_the_end: bool) {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let apps = play(6, limit, None);
+            for a in &apps {
+                let np = a.world().resource::<Netplay>();
+                assert_eq!(np.end, None);
+                assert!(!to_the_end || a.world().resource::<Game>().match_stats.result.is_some(), "the match didn't finish in {} ticks", np.lock.tick);
+            }
+            let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
+            let n = a.lock.log.len().min(b.lock.log.len());
+            assert_eq!(a.lock.log[..n], b.lock.log[..n]);
+            eprintln!("in sync over {n} ticks");
+        }
+
+        /// A tick run on different pads: both stop at the next hash with the desync message and save the inputs.
+        #[test]
+        fn a_desync_stops_both_and_saves() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            // tick 119's pads are in the state hashed before tick 120
+            let apps = play(6, 2000, Some(119));
+            for a in &apps {
+                let end = a.world().resource::<Netplay>().end.clone().expect("the match ended");
+                assert!(end.starts_with("Out of sync at tick 120"), "{end}");
+                let path = end.rsplit("Inputs saved to ").next().unwrap();
+                let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("saved")).unwrap();
+                assert!(saved["pads"].as_array().unwrap().len() >= 120);
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+
+        /// `HST_DESYNC=desync-….json cargo test -p hst replays_a_desync -- --ignored`: runs the saved inputs again,
+        /// printing the hash every 30 ticks (the machines' `Hash` ticks).
+        #[test]
+        #[ignore]
+        fn replays_a_desync() {
+            let path = std::env::var("HST_DESYNC").expect("HST_DESYNC=file");
+            let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let room: Room = serde_json::from_value(saved["room"].clone()).unwrap();
+            let pads: Vec<[[u8; 6]; 4]> = serde_json::from_value(saved["pads"].clone()).unwrap();
+            let mut a = app(&room, "replay");
+            a.world_mut().remove_resource::<Netplay>();
+            for (t, p) in pads.iter().enumerate() {
+                if t % 30 == 0 {
+                    println!("tick {t}: {:016x}", super::super::snapshot::state_hash(a.world_mut()));
+                }
+                a.insert_resource(tick_input::Replay([p.map(unwire)].into()));
+                a.world_mut().run_schedule(FixedUpdate);
+            }
+            let _ = Lockstep::new;
+        }
+    }
+}

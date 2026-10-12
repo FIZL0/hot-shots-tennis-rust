@@ -145,7 +145,7 @@ pub struct Seat {
 }
 
 /// A lobby as the host keeps it: seats in menu order (1P..4P), `None` open.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
     pub name: String,
     pub doubles: bool,
@@ -154,6 +154,12 @@ pub struct Room {
     pub games: i32,
     pub umpire: u8,
     pub seats: Vec<Option<Seat>>,
+    /// Set by the host at the start (M2g): the match's seed (the weather generator's, `main.rs`) and the input delay
+    /// in ticks, from the slowest guest's measured round trip.
+    #[serde(default)]
+    pub seed: u32,
+    #[serde(default)]
+    pub delay: u32,
 }
 
 impl Room {
@@ -251,6 +257,56 @@ pub enum Msg {
     Room(Room),
     Refused(String),
     Start(Room),
+    /// The host's round-trip probe (its clock in µs) and the guest's echo.
+    Ping(u64),
+    Pong(u64),
+    /// In the match (`play/netplay.rs`): seats' pads for one tick (`Pad` as `[buttons lo, hi, rx, ry, lx, ly]`), a
+    /// peer's state hash before a tick, a pause opened or closed, a peer ending the match (why).
+    Pads { tick: u32, seats: Vec<(u8, [u8; 6])> },
+    Hash { tick: u32, hash: u64 },
+    Pause(bool),
+    Bye(String),
+}
+
+impl Msg {
+    /// A match message (relayed to every peer).
+    fn in_match(&self) -> bool {
+        matches!(self, Msg::Pads { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_))
+    }
+}
+
+/// `HST_NET_LAG=ms`: every message waits this long before it goes out (simulated one-way latency, for tests).
+pub static LAG_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The input delay for a round trip of `rtt`: enough ticks to cover one way, plus one for jitter (2..=15).
+pub fn delay_for(rtt: Duration) -> u32 {
+    ((rtt.as_secs_f64() / 2.0 * 60.0).ceil() as u32 + 1).clamp(2, 15)
+}
+
+/// Messages out through one stream, each after [`LAG_MS`], in order.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct Link(amp::UnboundedSender<(tokio::time::Instant, Msg)>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Link {
+    fn new(mut tx: SendStream) -> Link {
+        let (s, mut r) = amp::unbounded_channel::<(tokio::time::Instant, Msg)>();
+        tokio::spawn(async move {
+            while let Some((due, m)) = r.recv().await {
+                tokio::time::sleep_until(due).await;
+                if send(&mut tx, &m).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Link(s)
+    }
+
+    fn send(&self, m: &Msg) {
+        let lag = Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed));
+        let _ = self.0.send((tokio::time::Instant::now() + lag, m.clone()));
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -286,8 +342,10 @@ pub enum Cmd {
     Quick(Room),
     /// Join by code (a ticket, or a bare endpoint ID looked up on the DHT) with these picks.
     Join(String, Vec<Pick>),
-    /// Leave the lobby (or stop hosting).
+    /// Leave the lobby (or stop hosting, or leave the match).
     Leave,
+    /// In the match: to every other peer.
+    Send(Msg),
 }
 
 /// What the network tells the app.
@@ -299,9 +357,14 @@ pub enum Event {
     Found(Vec<Listing>),
     /// The lobby as it is now (host and joiners alike).
     Room(Room),
-    /// Every seat taken: the match's line-up. The connections stay open for the match (M2g).
-    Start(Room),
+    /// Every seat taken: the match's line-up and which peer this machine is (its seats' `peer`). The connections stay
+    /// open for the match.
+    Start(Room, String),
     Failed(String),
+    /// In the match: another peer's message.
+    Match(Msg),
+    /// In the match: a peer is gone (why).
+    Dropped(String),
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
@@ -315,6 +378,9 @@ pub struct Net {
 #[cfg(not(target_arch = "wasm32"))]
 impl Net {
     pub fn start(cfg: Online) -> Net {
+        if let Some(ms) = std::env::var("HST_NET_LAG").ok().and_then(|v| v.parse().ok()) {
+            LAG_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+        }
         let (cmd, cmd_rx) = amp::unbounded_channel();
         let (ev, events) = mpsc::channel();
         std::thread::Builder::new()
@@ -419,7 +485,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             Cmd::Join(code, picks) => {
                 join(&cx, &code, picks, &mut cmds).await;
             }
-            Cmd::Leave => {}
+            Cmd::Leave | Cmd::Send(_) => {}
         }
     }
     cx.ep.close().await;
@@ -468,7 +534,14 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 /// A joiner's side, inside the host task.
 enum Guest {
     In { peer: String, picks: Vec<Pick>, build: String, tx: SendStream, conn: Connection },
+    Said(String, Msg),
     Gone(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The host's clock for the round-trip probes, in µs.
+fn micros(t0: tokio::time::Instant) -> u64 {
+    t0.elapsed().as_micros() as u64
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -478,9 +551,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     cx.say(Event::Room(room.clone()));
     let n = lobby_number(cx.ep.id());
     let (gtx, mut guests) = amp::unbounded_channel::<Guest>();
-    let mut joined: Vec<(String, SendStream, Connection)> = Vec::new();
+    let mut joined: Vec<(String, Link, Connection)> = Vec::new();
     let mut tick = tokio::time::interval(REPUBLISH);
     let mut dirty = true;
+    // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
+    let t0 = tokio::time::Instant::now();
+    let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
+    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = None;
+    let mut ping = tokio::time::interval(Duration::from_secs(1));
     loop {
         if dirty {
             dirty = false;
@@ -488,6 +566,18 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             let l = room.clone();
             let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), ev: cx.ev.clone() };
             tokio::spawn(async move { announce(&cx2, n, &l).await });
+        }
+        if let Some((waiting, until)) = &starting
+            && (waiting.is_empty() || tokio::time::Instant::now() >= *until)
+        {
+            // ponytail: no probe answer in time counts as 250 ms; a slower peer just stalls the match more
+            let worst = joined.iter().map(|(p, ..)| rtt.get(p).copied().unwrap_or(Duration::from_millis(250))).max().unwrap_or_default();
+            room.delay = delay_for(worst);
+            room.seed = (SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as u32) | 1;
+            broadcast(&joined, &Msg::Start(room.clone()));
+            cx.say(Event::Status(format!("Round trip {} ms, input delay {} ticks.", worst.as_millis(), room.delay)));
+            cx.say(Event::Start(room.clone(), "host".into()));
+            return relay(cx, joined, guests, cmds).await;
         }
         tokio::select! {
             Some(inc) = cx.ep.accept() => {
@@ -498,8 +588,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     let Ok((tx, mut rx)) = conn.accept_bi().await else { return };
                     if let Ok(Msg::Hello { build, picks }) = recv(&mut rx).await {
                         let _ = gtx.send(Guest::In { peer: peer.clone(), picks, build, tx, conn: conn.clone() });
-                        // the stream ends when they leave or drop
-                        let _ = recv(&mut rx).await;
+                        // everything they say, until they leave or drop
+                        while let Ok(m) = recv(&mut rx).await {
+                            let _ = gtx.send(Guest::Said(peer.clone(), m));
+                        }
                         let _ = gtx.send(Guest::Gone(peer));
                     }
                 });
@@ -508,7 +600,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Guest::In { peer, picks, build, mut tx, conn } => {
                     let why = if build != BUILD {
                         Some(format!("different version (host {BUILD}, you {build})"))
-                    } else if !room.take(&peer, &picks) {
+                    } else if starting.is_some() || !room.take(&peer, &picks) {
                         Some(format!("not enough open seats ({} open, you bring {})", room.open(), picks.len()))
                     } else {
                         None
@@ -521,27 +613,36 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         continue;
                     }
                     cx.say(Event::Status(format!("{} joined.", short(&peer))));
-                    joined.push((peer, tx, conn));
-                    broadcast(&mut joined, &Msg::Room(room.clone())).await;
+                    let link = Link::new(tx);
+                    link.send(&Msg::Ping(micros(t0)));
+                    joined.push((peer, link, conn));
+                    broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
                     if room.open() == 0 {
-                        broadcast(&mut joined, &Msg::Start(room.clone())).await;
-                        cx.say(Event::Start(room.clone()));
-                        // ponytail: the lobby ends here; M2g takes the connections into the match
-                        wait_leave(cmds).await;
-                        return;
+                        // a fresh round trip from everyone before the input delay is picked (3 s at most)
+                        broadcast(&joined, &Msg::Ping(micros(t0)));
+                        starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), tokio::time::Instant::now() + Duration::from_secs(3)));
                     }
                 }
+                Guest::Said(peer, Msg::Pong(sent)) => {
+                    rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
+                    if let Some((waiting, _)) = &mut starting {
+                        waiting.retain(|p| *p != peer);
+                    }
+                }
+                Guest::Said(..) => {}
                 Guest::Gone(peer) => {
                     room.leave(&peer);
                     joined.retain(|(p, ..)| *p != peer);
+                    starting = None;
                     cx.say(Event::Status(format!("{} left.", short(&peer))));
-                    broadcast(&mut joined, &Msg::Room(room.clone())).await;
+                    broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
                 }
             },
+            _ = ping.tick() => broadcast(&joined, &Msg::Ping(micros(t0))),
             _ = tick.tick() => dirty = true,
             c = cmds.recv() => if matches!(c, Some(Cmd::Leave) | None) {
                 for (_, _, conn) in &joined {
@@ -555,9 +656,47 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn broadcast(to: &mut [(String, SendStream, Connection)], m: &Msg) {
-    for (_, tx, _) in to.iter_mut() {
-        let _ = send(tx, m).await;
+/// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
+/// a guest dropping ends the match for everyone.
+async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) {
+    loop {
+        tokio::select! {
+            Some(g) = guests.recv() => match g {
+                Guest::Said(peer, m) if m.in_match() => {
+                    joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&m));
+                    cx.say(Event::Match(m));
+                }
+                Guest::Gone(peer) => {
+                    let why = format!("Player {} left.", short(&peer));
+                    joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&Msg::Bye(why.clone())));
+                    cx.say(Event::Dropped(why));
+                }
+                // a join while the match runs: no seat
+                Guest::In { mut tx, .. } => {
+                    let _ = send(&mut tx, &Msg::Refused("the match has started".into())).await;
+                }
+                Guest::Said(..) => {}
+            },
+            c = cmds.recv() => match c {
+                Some(Cmd::Send(m)) => broadcast(&joined, &m),
+                Some(Cmd::Leave) | None => {
+                    // the goodbyes go out with the lag, then the connections close
+                    tokio::time::sleep(Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200)).await;
+                    for (_, _, conn) in &joined {
+                        conn.close(0u32.into(), b"host left");
+                    }
+                    return;
+                }
+                Some(_) => {}
+            },
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn broadcast(to: &[(String, Link, Connection)], m: &Msg) {
+    for (_, l, _) in to {
+        l.send(m);
     }
 }
 
@@ -617,31 +756,56 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
         cx.say(Event::Failed("The host closed the connection.".into()));
         return false;
     }
+    let link = Link::new(tx);
+    // its own task: `recv` isn't cancel-safe, so it can't sit in the `select!` (a command mid-read lost bytes)
+    let (got, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let m = recv(&mut rx).await;
+            let end = m.is_err();
+            if got.send(m).is_err() || end {
+                return;
+            }
+        }
+    });
     let mut seated = false;
+    let mut playing = false;
     loop {
         tokio::select! {
-            m = recv(&mut rx) => match m {
+            m = inbox.recv() => match m.unwrap_or_else(|| Err("closed".into())) {
                 Ok(Msg::Room(r)) => {
                     seated = true;
                     cx.say(Event::Room(r));
                 }
                 Ok(Msg::Start(r)) => {
-                    cx.say(Event::Start(r));
-                    wait_leave(cmds).await;
-                    return true;
+                    playing = true;
+                    cx.say(Event::Start(r, cx.ep.id().to_string()));
                 }
+                Ok(Msg::Ping(t)) => link.send(&Msg::Pong(t)),
+                Ok(m) if playing && m.in_match() => cx.say(Event::Match(m)),
                 Ok(Msg::Refused(why)) => {
                     cx.say(Event::Failed(format!("Refused: {why}")));
                     return false;
                 }
                 Ok(Msg::Hello { .. }) | Err(_) => {
-                    cx.say(Event::Failed(if seated { "The host left." } else { "The host closed the connection." }.into()));
+                    if playing {
+                        cx.say(Event::Dropped("The host left.".into()));
+                        wait_leave(cmds).await;
+                    } else {
+                        cx.say(Event::Failed(if seated { "The host left." } else { "The host closed the connection." }.into()));
+                    }
                     return seated;
                 }
+                Ok(_) => {}
             },
-            c = cmds.recv() => if matches!(c, Some(Cmd::Leave) | None) {
-                conn.close(0u32.into(), b"left");
-                return true;
+            c = cmds.recv() => match c {
+                Some(Cmd::Send(m)) => link.send(&m),
+                Some(Cmd::Leave) | None => {
+                    tokio::time::sleep(Duration::from_millis(if playing { LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200 } else { 0 })).await;
+                    conn.close(0u32.into(), b"left");
+                    return true;
+                }
+                Some(_) => {}
             },
         }
     }
@@ -652,7 +816,8 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
 #[cfg(not(target_arch = "wasm32"))]
 /// `hst net host [doubles] [players] | find | quick [doubles] [players] | join <code> [players]`, with `online.txt`'s
 /// relay (or `--relay n0|off|<url>`): the lobby flow without menus, for testing across machines. Prints the events.
-pub fn cli(mut a: Vec<String>) {
+/// With `play`, returns once everyone's in: the lobby, the room and this machine's peer name, for the match.
+pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
     let mut cfg = Online::default();
     if let Some(i) = a.iter().position(|x| x == "--relay") {
         let v = a.get(i + 1).cloned().unwrap_or_default();
@@ -663,10 +828,15 @@ pub fn cli(mut a: Vec<String>) {
         };
         a.drain(i..(i + 2).min(a.len()));
     }
+    let mut games = 4;
+    if let Some(i) = a.iter().position(|x| x == "--games") {
+        games = a.get(i + 1).and_then(|g| g.parse().ok()).unwrap_or(games);
+        a.drain(i..(i + 2).min(a.len()));
+    }
     let doubles = a.iter().any(|x| x == "doubles");
     let players = a.iter().filter_map(|x| x.parse::<usize>().ok()).next().unwrap_or(1);
     let picks: Vec<Pick> = (0..players).map(|i| Pick { char: i, costume: 0 }).collect();
-    let mut room = Room { name: cfg.name.clone(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }] };
+    let mut room = Room { name: cfg.name.clone(), doubles, court: 0, sets: 0, games, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() };
     room.take("host", &picks);
     let net = Net::start(cfg);
     let cmd = match a.first().map(String::as_str) {
@@ -675,8 +845,8 @@ pub fn cli(mut a: Vec<String>) {
         Some("quick") => Cmd::Quick(room),
         Some("join") => Cmd::Join(a.get(1).cloned().unwrap_or_default(), picks),
         _ => {
-            eprintln!("usage: hst net host|find|quick [doubles] [players] | join <code> [players]  [--relay n0|off|<url>]");
-            return;
+            eprintln!("usage: hst net host|find|quick [doubles] [players] | join <code> [players]  [--relay n0|off|<url>] [--games N] [--play [disc] [flags]]");
+            return None;
         }
     };
     let find = matches!(cmd, Cmd::Find);
@@ -685,8 +855,9 @@ pub fn cli(mut a: Vec<String>) {
         for e in net.poll() {
             println!("{e:?}");
             match e {
-                Event::Found(_) if find => return,
-                Event::Start(_) | Event::Failed(_) => return,
+                Event::Found(_) if find => return None,
+                Event::Start(r, me) if play => return Some((net, r, me)),
+                Event::Start(..) | Event::Failed(_) => return None,
                 _ => {}
             }
         }
@@ -728,7 +899,7 @@ mod tests {
     use super::*;
 
     fn room(doubles: bool) -> Room {
-        Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }] }
+        Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() }
     }
 
     #[test]

@@ -31,6 +31,18 @@ impl Mode {
         Mode { build: Box::new(build), back: None }
     }
 
+    /// This mode with `more` built on top.
+    pub fn and(self, more: impl FnOnce(&mut App) + Send + Sync + 'static) -> Self {
+        let build = self.build;
+        Mode {
+            build: Box::new(move |app| {
+                build(app);
+                more(app);
+            }),
+            back: self.back,
+        }
+    }
+
     /// Where this mode's `AppExit` goes instead of closing the app.
     pub fn back(mut self, to: Mode) -> Self {
         self.back = Some(Box::new(to));
@@ -41,6 +53,10 @@ impl Mode {
 /// The mode to switch to at the start of the next frame.
 #[derive(Resource, Default)]
 pub struct Next(pub Option<Mode>);
+
+/// Whether the running mode's next fixed tick may run (online play waits for the peers' pads).
+#[derive(Resource)]
+pub struct Gate(pub fn(&mut World) -> bool);
 
 /// The running mode's schedules.
 #[derive(Resource)]
@@ -104,7 +120,11 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, zoom)
         .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
         .add_systems(FixedPreUpdate, |w: &mut World| run(w, FixedPreUpdate))
-        .add_systems(FixedUpdate, |w: &mut World| run(w, FixedUpdate))
+        .add_systems(FixedUpdate, |w: &mut World| {
+            if w.get_resource::<Gate>().map(|g| g.0).is_none_or(|gate| gate(w)) {
+                run(w, FixedUpdate)
+            }
+        })
         .add_systems(FixedPostUpdate, |w: &mut World| run(w, FixedPostUpdate))
         // before the base's `texture_faces` (after the match's `animate`) and the UI layout (after `widescreen`'s fit)
         .add_systems(Update, (|w: &mut World| run(w, Update)).before(crate::character::texture_faces))

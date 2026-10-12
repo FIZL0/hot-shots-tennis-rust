@@ -190,10 +190,15 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
-    if std::env::args().nth(1).as_deref() == Some("net") {
-        return net::cli(std::env::args().skip(2).collect());
-    }
+    // `hst net … --play [disc] [flags]`: the online match once everyone's in
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("net") {
+        let play = argv.iter().position(|x| x == "--play");
+        let rest = play.map(|i| argv.split_off(i)[1..].to_vec());
+        let Some(started) = net::cli(argv.split_off(1), rest.is_some()) else { return };
+        *play::netplay::PENDING.lock().unwrap() = Some(started);
+        argv = rest.unwrap_or_default();
+    }
     disc::resolve(&mut argv);
     start(argv);
 }
@@ -231,7 +236,17 @@ fn start(argv: Vec<String>) {
         app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
     }
     if menu {
-        app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(mode::Mode::new(menu_mode))));
+        // `hst net … --play`: this machine's players on the keyboard, then pads 0, 1
+        let first = match play::netplay::PENDING.lock().unwrap().take() {
+            Some((net, room, me)) => {
+                use play::controls::Seat;
+                let devices: Vec<_> = (0..4).map(|j| Some(if j == 0 { Seat::Keys } else { Seat::Pad(j - 1) })).collect();
+                let flags = play::netplay::flags(&room, &me, &devices, &[]);
+                play::netplay::mode(&args.iso, &flags, mode::Mode::new(menu_mode), net, room, me)
+            }
+            None => mode::Mode::new(menu_mode),
+        };
+        app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first)));
     } else if args.play {
         add_match(&mut app, viewer_mod, mod_slot, slot_mods);
     } else if let Some(r) = roster {
@@ -396,9 +411,9 @@ fn load(
             // directly (slot 5's was 0x28c7c4a1)
             // the menus' `rand()` calls before the match are the character select's flame (`rng::MenuFlame`), drawing
             // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
-            // online, the host's seed (`handshake::MatchSeed`) is taken as is
+            // online, the host's seed (`handshake::MatchSeed`, or `hst net`'s room seed) is taken as is
             let seed = seed.map(|s| s.0).unwrap_or_else(|| {
-                std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).map_or_else(
+                std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).or_else(play::netplay::seed).map_or_else(
                     || hst_sim::rng::Seed::after(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536)),
                     hst_sim::rng::Seed::shared,
                 )

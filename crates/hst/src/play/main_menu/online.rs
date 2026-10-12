@@ -69,7 +69,7 @@ impl Menu {
         for (s, pick) in seats.iter_mut().zip(self.picks()) {
             *s = Some(Seat { peer: "host".into(), pick });
         }
-        Room { name: cfg.name, doubles: self.doubles, court: self.court, sets: self.sets, games: self.games, umpire: self.umpire, seats }
+        Room { name: cfg.name, doubles: self.doubles, court: self.court, sets: self.sets, games: self.games, umpire: self.umpire, seats, ..Default::default() }
     }
 
     /// Every one of this machine's players ready on the select: on to the confirm screen (host) or the lobby.
@@ -189,11 +189,12 @@ impl Menu {
                 v.list = l;
             }
             Event::Room(r) => v.room = Some(r),
-            Event::Start(r) => {
+            Event::Start(r, _) => {
                 v.room = Some(r);
                 v.started = true;
-                v.status = "Everyone's in. (The online match itself comes with lockstep netplay, M2g.)".into();
+                v.status = "Everyone's in.".into();
             }
+            Event::Match(_) | Event::Dropped(_) => {}
         }
     }
 }
@@ -302,9 +303,20 @@ fn qr(code: &str) -> Option<Image> {
 }
 
 /// The network's events into the menu, and the QR of the menu's code whenever the code changes.
-pub(super) fn poll(net: Option<Res<Net>>, mut menu: ResMut<Menu>, mut images: ResMut<Assets<Image>>, made: Option<Res<QrImage>>, mut commands: Commands) {
+pub(super) fn poll(
+    net: Option<Res<Net>>,
+    mut menu: ResMut<Menu>,
+    mut images: ResMut<Assets<Image>>,
+    made: Option<Res<QrImage>>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    args: Res<crate::Args>,
+    mut commands: Commands,
+) {
     if let Some(net) = net {
         for e in net.poll() {
+            if let Event::Start(r, me) = &e {
+                launch(&menu, r.clone(), me.clone(), &gamepads, &args, &mut commands);
+            }
             menu.heard(e);
         }
     }
@@ -321,9 +333,34 @@ pub(super) fn poll(net: Option<Res<Net>>, mut menu: ResMut<Menu>, mut images: Re
 pub(super) fn sample(m: &mut Menu) {
     let pick = |char| Pick { char, costume: 0 };
     let seats = vec![Some(Seat { peer: "host".into(), pick: pick(6) }), Some(Seat { peer: "k51qzi5uqu5d".into(), pick: pick(1) }), None, None];
-    m.net.room = Some(Room { name: "Player".into(), doubles: true, court: 0, sets: 1, games: 4, umpire: 4, seats });
+    m.net.room = Some(Room { name: "Player".into(), doubles: true, court: 0, sets: 1, games: 4, umpire: 4, seats, ..Default::default() });
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
     m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
+}
+
+/// Everyone's in: the online match (`netplay`), this machine's players on their devices; it ends back in the menu.
+fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepad)>, args: &crate::Args, commands: &mut Commands) {
+    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| super::controls::readable(g)).map(|(e, _)| e).collect();
+    pads.sort();
+    let devices: Vec<_> = (0..menu.players())
+        .filter_map(|p| menu.seats[p])
+        .map(|d| match d {
+            super::Dev::Keys => Some(super::Seat::Keys),
+            super::Dev::Pad(e) => pads.iter().position(|x| *x == e).map(super::Seat::Pad),
+        })
+        .collect();
+    let flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    info!("starting the online match: {}", flags.join(" "));
+    let base = args.clone();
+    commands.queue(move |w: &mut World| {
+        let Some(net) = w.remove_resource::<Net>() else { return };
+        let back = crate::mode::Mode::new(move |app| {
+            app.insert_resource(base);
+            crate::menu_mode(app);
+        });
+        let iso = w.resource::<crate::Args>().iso.clone();
+        w.insert_resource(crate::mode::Next(Some(crate::play::netplay::mode(&iso, &flags, back, net, room, me))));
+    });
 }
 
 /// An Online effect (from `Menu::step`).
