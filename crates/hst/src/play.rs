@@ -49,6 +49,7 @@ mod bodyhit;
 pub mod controls;
 mod cutaway;
 mod foot_fx;
+mod heard;
 mod instant_replay;
 mod doubles_ai;
 mod markers;
@@ -379,7 +380,7 @@ struct Game {
     data: Const<Vec<std::sync::Arc<CharacterData>>>,
     /// The team that won the last point.
     post_winner: i32,
-    /// The chair umpire, and her last voice's play id (0 none).
+    /// The chair umpire, and whether her word is still sounding (1; 0 none).
     umpire: Umpire,
     umpire_voice: u64,
     /// The court number (the gallery's banks and keys).
@@ -563,6 +564,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(replay_pace::plugin);
     app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
+    app.add_plugins(heard::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .init_resource::<CamMode>()
@@ -4143,7 +4145,8 @@ struct Bgm {
 impl Bgm {
     const FULL: f32 = 55.0;
 
-    fn step(&mut self, g: &mut Game, sound: &Sound, music: &MusicBanks) {
+    /// A re-run tick (`heard`) starts its jingle only if the first run didn't, and leaves the level alone.
+    fn step(&mut self, g: &mut Game, sound: &Sound, music: &MusicBanks, played: &mut heard::Played, tick: u32) {
         if !self.started {
             self.started = true;
             if let Some((bank, mid)) = &music.bgm {
@@ -4151,17 +4154,19 @@ impl Bgm {
             }
         }
         if let (Some(key), Some(b)) = (g.jingle.take(), &music.jingles) {
-            sound.stop(self.jingle);
-            self.jingle = sound.play_centre(
-                b,
-                sound::Play {
-                    slot: 8,
-                    program: 0,
-                    key,
-                    volume: 0x80,
-                    speed: 1.0,
-                },
-            );
+            if played.first(tick, ("jingle", key)) {
+                sound.stop(self.jingle);
+                self.jingle = sound.play_centre(
+                    b,
+                    sound::Play {
+                        slot: 8,
+                        program: 0,
+                        key,
+                        volume: 0x80,
+                        speed: 1.0,
+                    },
+                );
+            }
             // ponytail: the match-end jingles (3, 4) leave the BGM as it is, as the game's match end does
             if key < 3 {
                 // the change-ends tune fades the BGM without a hold of its own: after a game the game jingle's
@@ -4169,6 +4174,9 @@ impl Bgm {
                 self.fading = true;
                 g.music_hold |= key > 0;
             }
+        }
+        if !played.fresh {
+            return;
         }
         if self.jingle != 0 && !sound.playing(self.jingle) {
             self.jingle = 0;
@@ -4195,8 +4203,9 @@ fn flight_sound(g: &mut Game, who: usize, h: &sound::Hit, class: u8, vel: V3) {
     g.special_serve = class == 0 && h.strong_toss && h.offset.abs() < 2 && matches!((h.kind, c), (0, 11 | 12) | (1, 10));
 }
 
-/// Plays the sounds due on the court's bank.
+/// Plays the sounds due on the court's bank, each once however often its tick runs (`heard`).
 /// The flight whistle follows the ball: started at the hit, re-placed and re-pitched each tick, stopped at the bounce.
+#[allow(clippy::too_many_arguments)]
 fn play_sounds(
     mut g: ResMut<Game>,
     sound: Option<Res<Sound>>,
@@ -4204,13 +4213,14 @@ fn play_sounds(
     voices: Option<Res<VoiceBanks>>,
     gallery: Option<Res<GalleryBank>>,
     music: Option<Res<MusicBanks>>,
-    mut whistle: Local<(u32, u64)>,
     mut bgm: Local<Bgm>,
-    mut voice_left: Local<u32>,
+    mut heard: ResMut<heard::Heard>,
+    mut played: ResMut<heard::Played>,
 ) {
     let g = &mut *g;
+    let (tick, played) = (heard.tick, &mut *played);
     if let (Some(sound), Some(music)) = (&sound, &music) {
-        bgm.step(g, sound, music);
+        bgm.step(g, sound, music, played, tick);
     }
     for w in &mut g.whooshes {
         w.0 = w.0.saturating_sub(1);
@@ -4224,8 +4234,23 @@ fn play_sounds(
     let cheers = std::mem::take(&mut g.cheers);
     if let (Some(sound), Some(Some(b))) = (&sound, gallery.map(|b| b.0.clone())) {
         for (p, angle) in cheers {
-            sound.play_toward(&b, p, angle);
+            if played.first(tick, ("cheer", p, angle)) {
+                sound.play_toward(&b, p, angle);
+            }
         }
+    }
+    // the flight sound steps each tick after the one it started on; its last step ends the whistle
+    let ball = g.flight.ball.pos;
+    if heard.whistle.0 != g.whistle.1 {
+        heard.whistle = (g.whistle.1, tick);
+    }
+    let mut step = None;
+    if let (true, true, Some(f)) = (g.whistle.0, heard.whistle.1 != tick, &mut g.flight_sound) {
+        let (angle, dist) = sound::place(ball);
+        let volume = sound::falloff(f.play(ball[1]).volume, dist);
+        let (p, q) = f.frame(ball[1], sound::kmh(g.flight.ball.vel), volume);
+        g.whistle.0 &= q != Some(0);
+        step = Some((p, q, angle));
     }
     let (Some(sound), Some(Some(bank))) = (sound, bank.map(|b| b.0.clone())) else {
         return;
@@ -4240,39 +4265,34 @@ fn play_sounds(
                 .as_ref()
                 .and_then(|v| v.0.get(p.slot as usize - 1)?.as_ref())
         };
-        if let Some(b) = b {
+        if let Some(b) = b
+            && played.first(tick, ("sound", p, at))
+        {
             sound.play_at(b, p, at);
         }
     }
-    let ball = g.flight.ball.pos;
-    if whistle.0 != g.whistle.1 || !g.whistle.0 {
-        sound.stop(whistle.1);
-        whistle.1 = 0;
-    }
-    if let (true, 0, true, Some(f)) = (g.whistle.0, whistle.1, whistle.0 != g.whistle.1, g.flight_sound) {
-        whistle.1 = sound.play_at(&bank, f.play(ball[1]), ball);
-    } else if let (true, Some(f)) = (whistle.1 != 0, &mut g.flight_sound) {
-        let (angle, dist) = sound::place(ball);
-        let volume = sound::falloff(f.play(ball[1]).volume, dist);
-        match f.frame(ball[1], sound::kmh(g.flight.ball.vel), volume) {
-            (p, None) => sound.update(whistle.1, p, ball),
-            (_, Some(0)) => {
-                sound.stop(whistle.1);
-                (whistle.1, g.whistle.0) = (0, false);
+    // the whistle sounding is the sim's, as of the last tick heard
+    if played.fresh {
+        let want = (g.whistle.0 && g.flight_sound.is_some()).then_some(heard.whistle.1);
+        let id = played.whistle.1;
+        if played.whistle.0 != want {
+            sound.stop(id);
+            played.whistle = (want, 0);
+            if let (Some(_), Some(f)) = (want, g.flight_sound) {
+                played.whistle.1 = sound.play_at(&bank, f.play(ball[1]), ball);
             }
-            (p, Some(q)) => {
-                sound.update(whistle.1, p, ball);
-                sound.turn(whistle.1, q, angle);
+        } else if let Some((p, q, angle)) = step {
+            sound.update(id, p, ball);
+            if let Some(q) = q {
+                sound.turn(id, q, angle);
             }
         }
     }
-    whistle.0 = g.whistle.1;
     // her voice (slot 5, non-positional): a new word stops the last
     if let (Some((program, key)), Some(b)) = (
         g.umpire.voice.take(),
         voices.as_ref().and_then(|v| v.0.get(4).cloned().flatten()),
     ) {
-        sound.stop(g.umpire_voice);
         let p = sound::Play {
             slot: 5,
             program,
@@ -4280,13 +4300,17 @@ fn play_sounds(
             volume: 0x80,
             speed: 1.0,
         };
-        g.umpire_voice = sound.play_centre(&b, p);
-        *voice_left = sound.centre_frames(&b, p);
+        if played.first(tick, ("umpire", p)) {
+            sound.stop(played.umpire);
+            played.umpire = sound.play_centre(&b, p);
+        }
+        g.umpire_voice = (played.umpire != 0) as u64;
+        heard.voice_left = sound.centre_frames(&b, p);
     }
     // timed in ticks, not by the audio thread, so the post-point timeline is the same on every machine (netplay)
     if g.umpire_voice != 0 {
-        *voice_left = voice_left.saturating_sub(1);
-        if *voice_left == 0 {
+        heard.voice_left = heard.voice_left.saturating_sub(1);
+        if heard.voice_left == 0 {
             g.umpire_voice = 0;
         }
     }

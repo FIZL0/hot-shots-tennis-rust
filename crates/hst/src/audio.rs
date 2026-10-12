@@ -332,6 +332,12 @@ impl Sound {
         Self(Arc::new(Mutex::new(mix(iso))))
     }
 
+    /// How many plays have started (the BGM counts 16), for tests.
+    #[cfg(test)]
+    pub fn plays(&self) -> u64 {
+        self.0.lock().unwrap().ids
+    }
+
     /// The play `id` still has key-ons to come or voices sounding.
     pub fn playing(&self, id: u64) -> bool {
         let m = self.0.lock().unwrap();

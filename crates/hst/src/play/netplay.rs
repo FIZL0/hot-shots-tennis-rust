@@ -523,7 +523,7 @@ mod tests {
             app.insert_resource(Pads { seats: Some([true; 4]), autoplay: false, ..default() });
             app.init_resource::<tick_input::TickPads>();
             app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-            app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin));
+            app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
             app.add_systems(PostStartup, setup);
             app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
             app.finish();
