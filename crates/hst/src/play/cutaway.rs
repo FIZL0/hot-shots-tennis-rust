@@ -125,7 +125,7 @@ fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion
                 game_end,
                 lost: !winner(shown),
                 low: frames.shown[0][2][3][1] > -0.8,
-                replays: 0,
+                replays: g.instant.replays,
                 character: g.chars[shown],
             },
         );

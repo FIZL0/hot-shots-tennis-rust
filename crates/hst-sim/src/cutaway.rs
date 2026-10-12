@@ -538,7 +538,7 @@ pub struct PickInput {
     pub lost: bool,
     /// The shown player's head (frame 61) is below 0.8 m (crouched).
     pub low: bool,
-    /// Replays shown so far in the match (none until replays are ported).
+    /// Replays shown so far in the match (gm+0x358).
     pub replays: i32,
     pub character: i32,
 }
@@ -547,7 +547,7 @@ pub struct PickInput {
 /// before; the server and receiver until the return): `a`, unless it isn't on the last hitter's (`last`, −1 for
 /// none) team; on a point that ends a game whichever of the two is on the winning team (`winner`, team = index & 1).
 /// ponytail: the original also swaps them on every third instant replay (unless the other one's character has
-/// some flag); replays aren't ported (P0b4d), so the count is always 0 here
+/// some flag); not ported yet (P0b4d4)
 pub fn roles([a, b]: [usize; 2], last: i32, game_end: bool, winner: i32) -> [usize; 2] {
     let swap = if game_end { a as i32 & 1 != (winner != 0) as i32 } else { last >= 0 && a as i32 & 1 != last & 1 };
     if swap { [b, a] } else { [a, b] }

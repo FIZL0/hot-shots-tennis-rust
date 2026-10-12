@@ -545,6 +545,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(cutaway::plugin);
     app.add_plugins(ball_shadow::plugin);
     app.add_plugins(foot_fx::plugin);
+    app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);

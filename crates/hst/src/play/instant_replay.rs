@@ -1,10 +1,18 @@
 //! The instant replay's decision at each decided point (`hst_sim::instant::decide`), fed from the port's state.
-//! The replay run itself (P0b4d2), its pacing (P0b4d3), cameras (P0b4d4) and the buttons that cancel or ask for
-//! one (P0b4d5) come later; this keeps the decision for them.
+//!
+//! The run (`run`, the serve phase's entry, message 0xe): each serve set-up keeps the whole match state
+//! (`snapshot::save`; the original's copies of its match globals, rally block and RNG seed) and the tick's pads from
+//! then on. At the next serve set-up with a replay pending it puts that state back and plays the logged pads again:
+//! the point, its post-point phase and the serve set-up replay as they went, the scoreboard awards the point onto the
+//! score as it was before it (so it isn't scored twice) and every generator draws what it drew, so the match goes on
+//! exactly as without the replay, only later. Its pacing (P0b4d3), cameras (P0b4d4) and the buttons that skip or ask
+//! for one (P0b4d5) come later.
 
-use super::Game;
+use super::{Game, snapshot, tick_input};
+use bevy::prelude::*;
 use hst_sim::instant::{self, Decision, Point};
 use hst_sim::score::Event;
+use std::collections::VecDeque;
 
 /// The decision's own state across a point.
 #[derive(Clone, Debug, Default)]
@@ -18,6 +26,85 @@ pub(super) struct Instant {
     pub mark: [[f32; 2]; 2],
     /// The last point's decision (the recorder's flags carry into the next point's set-up).
     pub decision: Decision,
+    /// The serve was set up this tick (`run` takes it).
+    pub set_up: bool,
+    /// A replay is playing (gm+0x344): its point makes no decision.
+    pub replaying: bool,
+    /// Replays shown this match (gm+0x358), and those a button asked for (gm+0x354, P0b4d5).
+    pub replays: i32,
+    pub asked: i32,
+}
+
+/// The run's state outside `Game`: the match as the last serve set-up left it and the pads since.
+#[derive(Resource, Default)]
+pub(super) struct Recorder {
+    serve: Option<snapshot::Snapshot>,
+    pads: Vec<[hst_sim::replay::Pad; 4]>,
+    /// Pads an outside replay source still had queued when ours took over (given back after ours).
+    outside: Option<VecDeque<[hst_sim::replay::Pad; 4]>>,
+    /// The match as the serve set-up that started the last replay left it (the test compares the replay's end).
+    #[cfg(test)]
+    back: Option<Game>,
+}
+
+pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<Recorder>().add_systems(FixedUpdate, run.after(super::play_sounds));
+}
+
+/// End of each match tick: log the pads; at a serve set-up keep the state, or with a replay pending put the point's
+/// serve back and queue its pads.
+pub(super) fn run(w: &mut World) {
+    let Some(g) = w.get_resource::<Game>() else { return };
+    let (set_up, pending) = (g.instant.set_up, g.instant.decision.replay && !g.instant.replaying);
+    let now = w.get_resource::<tick_input::TickPads>().map_or([tick_input::IDLE; 4], |t| t.now());
+    w.resource_mut::<Game>().instant.set_up = false;
+    w.init_resource::<Recorder>();
+    let first = w.resource::<Recorder>().serve.is_none();
+    if pending && set_up && !first {
+        start(w);
+    } else if set_up || first {
+        // the match's first tick has no set-up through `next_point`: its serve is kept from there
+        w.resource_mut::<Game>().instant.replaying = false;
+        end_queue(w);
+        let s = snapshot::save(w);
+        let mut r = w.resource_mut::<Recorder>();
+        (r.serve, r.pads) = (Some(s), vec![]);
+    } else {
+        w.resource_mut::<Recorder>().pads.push(now);
+    }
+}
+
+/// The serve phase's entry with a replay pending: back to the point's serve, counted, its pads queued.
+fn start(w: &mut World) {
+    let g = w.resource::<Game>();
+    let (replays, asked) = (g.instant.replays + 1, g.instant.asked);
+    #[cfg(test)]
+    let back = g.clone();
+    let mut r = w.resource_mut::<Recorder>();
+    #[cfg(test)]
+    {
+        r.back = Some(back);
+    }
+    let s = r.serve.take().expect("kept at the serve");
+    let queue: VecDeque<_> = std::mem::take(&mut r.pads).into();
+    snapshot::restore(w, &s);
+    w.resource_mut::<Recorder>().serve = Some(s);
+    let i = &mut w.resource_mut::<Game>().instant;
+    (i.replays, i.asked, i.replaying) = (replays, asked, true);
+    bevy::log::info!("instant replay {replays}: {} ticks", queue.len());
+    // an outside source (a recording, later the network) goes on after the replay
+    let outside = w.remove_resource::<tick_input::Replay>().map(|o| o.0);
+    w.resource_mut::<Recorder>().outside = Some(outside.unwrap_or_default());
+    w.insert_resource(tick_input::Replay(queue));
+}
+
+/// The replay's own pads are spent at its serve set-up: an outside source's queue comes back, else the devices.
+fn end_queue(w: &mut World) {
+    let Some(outside) = w.resource_mut::<Recorder>().outside.take() else { return };
+    w.remove_resource::<tick_input::Replay>();
+    if !outside.is_empty() {
+        w.insert_resource(tick_input::Replay(outside));
+    }
 }
 
 /// The serve's set-up (message 0xe without a replay pending): the match block from +0x340 is cleared (allowed,
@@ -27,6 +114,7 @@ pub(super) fn new_point(g: &mut Game) {
     (i.ticks, i.mark) = (0, [[0.0; 2]; 2]);
     i.decision.allowed = false;
     i.decision.recorded = false;
+    i.set_up = true;
 }
 
 /// A first bounce on the court during the rally leaves the ball mark the decision reads.
@@ -41,7 +129,7 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
     let p = Point {
         players: g.rules.players as i32,
         awarded: event.is_some(),
-        replaying: false,
+        replaying: g.instant.replaying,
         allowed: g.instant.decision.allowed,
         // ponytail: the rally's cancel (over 1799 ticks / the long-rally option) is P0b4d5's
         cancelled: false,
@@ -87,13 +175,12 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::Decision;
+    use super::{Decision, Recorder};
     use crate::{Args, GameSpace};
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    /// Every decided point's (shots, match won, decision) of a bot match, 1P flagged human when `human`.
-    fn points(human: bool) -> Vec<(i32, bool, Decision)> {
+    fn app(human: bool) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
@@ -102,10 +189,17 @@ mod tests {
         app.init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         app.add_systems(Startup, setup);
-        app.add_systems(FixedUpdate, (remember, tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.init_resource::<Recorder>();
+        app.add_systems(FixedUpdate, (remember, tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball, super::run).chain());
         app.update();
         // ponytail: the bot plays 1P; flagging it human only opens the decision's human branches
         app.world_mut().resource_mut::<Game>().humans[0] = human;
+        app
+    }
+
+    /// Every decided point's (shots, match won, decision) of a bot match, 1P flagged human when `human`.
+    fn points(human: bool) -> Vec<(i32, bool, Decision)> {
+        let mut app = app(human);
         let (mut out, mut was_post) = (vec![], false);
         for _ in 0..60 * 60 * 30 {
             app.world_mut().run_schedule(FixedUpdate);
@@ -138,5 +232,38 @@ mod tests {
                 assert_eq!(pts.iter().filter(|p| p.2.replay).count(), 1, "a bot point other than match point replayed");
             }
         }
+    }
+
+    /// The match-ending point replays at the next serve set-up: back at its serve with the score before it, played
+    /// again from its pads, it ends at the same serve set-up with the whole match state as it was without the replay
+    /// (score awarded once, every generator where it was), counted once.
+    #[test]
+    fn the_replay_ends_where_the_point_left_the_match() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = app(false);
+        let (mut seen, mut over_seen) = (false, false);
+        for _ in 0..60 * 60 * 30 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let g = app.world().resource::<Game>();
+            if g.instant.replaying && !seen {
+                seen = true;
+                let back = app.world().resource::<Recorder>().back.as_ref().unwrap();
+                assert_eq!(g.instant.replays, 1);
+                // back at the point's serve: the score before the match ended
+                assert!(back.score.games != g.score.games || back.score.sets != g.score.sets, "the score wasn't put back");
+            }
+            over_seen |= seen && g.score.match_over;
+            if seen && !g.instant.replaying {
+                assert!(over_seen, "the replay didn't decide the match again");
+                let mut back = app.world().resource::<Recorder>().back.clone().unwrap();
+                back.instant = g.instant.clone();
+                assert_eq!(format!("{back:?}"), format!("{g:?}"), "the replay left the match elsewhere");
+                assert_eq!(g.instant.replays, 1);
+                return;
+            }
+        }
+        panic!("no replay ran (seen {seen})");
     }
 }
