@@ -46,6 +46,7 @@ use snapshot::Const;
 
 mod ball_shadow;
 mod bodyhit;
+mod change_ends;
 pub mod controls;
 mod cutaway;
 mod foot_fx;
@@ -551,6 +552,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(bodyhit::plugin);
     app.add_plugins(controls::plugin);
     app.add_plugins(cutaway::plugin);
+    app.add_plugins(change_ends::plugin);
     app.add_plugins(ball_shadow::plugin);
     app.add_plugins(net_hide::plugin);
     app.add_plugins(foot_fx::plugin);
