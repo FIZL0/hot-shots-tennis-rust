@@ -36,14 +36,36 @@ from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WT = ROOT + '-slots'
+HELP = """\
+tools/parallel.sh — run several Claude agents on plan/TODO.md tasks at once (run it inside tmux)
+
+  tools/parallel.sh N [p|d] [f] [m]
+
+  N   number of agents at once, e.g. 5                       default: 3
+  p   priority: the next open tasks in plan/TODO.md order,
+      even if two of them edit the same files
+  d   different files: the first open task, then later tasks   default
+      that don't touch the same files
+  f   force: keep starting tasks past 94% weekly usage          default: pause until the weekly reset
+  m   multiple builds: a target/ per slot (no waiting on        default: one shared target/
+      each other's builds; ~45 GB and a full Bevy build each)
+
+Examples:
+  tmux new -s hst tools/parallel.sh 5 p      5 agents, strict TODO order
+  tools/parallel.sh 3                        3 agents on different files
+  tools/parallel.sh 5 p f m                  all options
+
+While it runs: type s + Enter to stop starting new tasks (again to undo). Log: context/notes/overnight.log
+"""
 _args = sys.argv[1:]
+if not _args or any(a in ('-h', '--help', 'help') for a in _args):
+    raise SystemExit(HELP)
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
 MODE = next((a for a in _args if a in ('p', 'd')), 'd')
 FORCE = 'f' in _args
 MULTI = 'm' in _args
 if any(a not in ('p', 'd', 'f', 'm') and not a.isdigit() for a in _args) or SLOTS < 1:
-    raise SystemExit('usage: tools/parallel.sh [N] [p|d] [f] [m]   (N sessions, p = priority order, d = different files, '
-                     'f = ignore the 94% weekly usage cap, m = a build dir per slot)')
+    raise SystemExit(f'unknown option: {" ".join(_args)}\n\n{HELP}')
 WEEKLY_MAX = 94  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes

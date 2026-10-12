@@ -1,9 +1,3 @@
 #!/usr/bin/env bash
-# Parallel unattended run (tools/parallel.py): tools/parallel.sh [N] [p|d] [f] [m] inside tmux, e.g. tmux new -s hst tools/parallel.sh 5 p
-#   N  sessions at once (default 3)
-#   p  priority: tasks exactly in plan/TODO.md order, the next open one to each free slot, files may overlap
-#   d  different (default): the first open "Next" task leads, the others pick later tasks that touch different files
-#   f  force: keep starting tasks past 94% weekly usage (WEEKLY_MAX in parallel.py)
-#   m  multiple builds: each slot compiles into its own target/ (faster, ~45 GB and a full Bevy build per slot);
-#      default: all slots share the main checkout's target/ (Bevy built once; builds take turns on cargo's lock)
+# Parallel unattended run; options and examples: run it with no arguments (help text in tools/parallel.py).
 exec "$(dirname "$(realpath "$0")")/parallel.py" "$@"
