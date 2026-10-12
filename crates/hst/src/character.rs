@@ -429,6 +429,7 @@ pub fn load_disc(
         .ok_or("no body model")?;
     let model = mdl::parse(&find(&format!("{body}.mdl")).ok_or("no body model")?).map_err(|e| e.0)?;
     let mats = mtl::parse(&find(&format!("{body}.mtl")).ok_or("no body MTL")?, find(&format!("{body}.mti")).as_deref()).map_err(|e| e.0)?;
+    let _pre = crate::textures::prefetch(&mats);
     let handles = materials_of(&mats, images, materials);
     let mut gs = gs_of(&model, &mats, &handles, images);
 
@@ -574,6 +575,7 @@ pub fn disc_racket(
     if let (Some(rm), Some(rt)) = (find(&format!("{rk}.mdl")), find(&format!("{rk}.mtl"))) {
         let rmodel = mdl::parse(&rm).map_err(|e| e.0)?;
         let rmats = mtl::parse(&rt, find(&format!("{rk}.mti")).as_deref()).map_err(|e| e.0)?;
+        let _pre = crate::textures::prefetch(&rmats);
         let rh = materials_of(&rmats, images, materials);
         gs.extend(gs_of(&rmodel, &rmats, &rh, images));
         // the gut (TEST mode 25 in an ABE batch): A ≥ 0x70 writes colour and Z, the rest colour only, both blended
@@ -633,6 +635,7 @@ pub fn load_npc(
     };
     let model = mdl::parse(&find(&format!("{stem}.mdl"))?).ok()?;
     let mats = mtl::parse(&find(&format!("{stem}.mtl"))?, find(&format!("{stem}.mti")).as_deref()).ok()?;
+    let _pre = crate::textures::prefetch(&mats);
     let handles = materials_of(&mats, images, materials);
     let gs = gs_of(&model, &mats, &handles, images);
     // their texture alpha is coverage: TEST mode 10..19 keeps A ≥ 0x40, 20..29 blends (the ground shadow quad)

@@ -88,6 +88,7 @@ pub(crate) fn model(
     let file = |ext: &str| get(&format!("{s}.{ext}")).ok_or(format!("{s}.{ext} missing"));
     let model = mdl::parse(&file("mdl")?).map_err(|e| e.0)?;
     let mtl = mtl::parse(&file("mtl")?, get(&format!("{s}.mti")).as_deref()).map_err(|e| e.0)?;
+    let _pre = crate::textures::prefetch(&mtl);
     let effect = Effect::new(
         &model,
         // the landing markers have no ANI: rest pose

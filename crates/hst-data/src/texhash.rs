@@ -381,23 +381,20 @@ impl Overrides {
 
     /// The replacement for a texture (width, height, straight RGBA8): mod file, then pack, else `None` (disc).
     pub fn load(&self, key: &str, names: &[String]) -> Option<(u32, u32, Vec<u8>)> {
-        if let Some(t) = self.mods.get(key).and_then(|(p, _)| read_png(p)) {
-            return Some(t);
+        self.files(key, names).load()
+    }
+
+    /// Where [`load`](Self::load) reads from, to read it without holding `self` (the decode is the slow part).
+    pub fn files(&self, key: &str, names: &[String]) -> Files {
+        Files {
+            m: self.mods.get(key).map(|(p, _)| p.clone()),
+            pack: names.iter().find_map(|n| self.pack.get(n)).cloned(),
         }
-        self.from_pack(names)
     }
 
     /// The pack's PNG under any of PCSX2's names, alpha expanded.
     pub fn from_pack(&self, names: &[String]) -> Option<(u32, u32, Vec<u8>)> {
-        let (w, h, mut rgba) = names
-            .iter()
-            .find_map(|n| self.pack.get(n))
-            .and_then(|p| read_png(p))?;
-        rgba.iter_mut()
-            .skip(3)
-            .step_by(4)
-            .for_each(|a| *a = (*a as u32 * 255 / 128).min(255) as u8);
-        Some((w, h, rgba))
+        Files { m: None, pack: names.iter().find_map(|n| self.pack.get(n)).cloned() }.load()
     }
 
     /// Write every disc texture as it is on the disc (native size, straight 0..255 alpha) to
@@ -415,6 +412,27 @@ impl Overrides {
             }
         });
         n
+    }
+}
+
+/// A texture's replacement files: the mod folder's, then the pack's.
+pub struct Files {
+    m: Option<PathBuf>,
+    pack: Option<PathBuf>,
+}
+
+impl Files {
+    /// The replacement (width, height, straight RGBA8), the pack's alpha expanded, else `None` (disc).
+    pub fn load(&self) -> Option<(u32, u32, Vec<u8>)> {
+        if let Some(t) = self.m.as_deref().and_then(read_png) {
+            return Some(t);
+        }
+        let (w, h, mut rgba) = read_png(self.pack.as_deref()?)?;
+        rgba.iter_mut()
+            .skip(3)
+            .step_by(4)
+            .for_each(|a| *a = (*a as u32 * 255 / 128).min(255) as u8);
+        Some((w, h, rgba))
     }
 }
 

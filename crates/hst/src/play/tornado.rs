@@ -57,6 +57,7 @@ fn setup(
     let mdl = mdl::parse(&get("mdl").expect("tornado mdl")).expect("tornado mdl");
     let mtl = mtl::parse(&get("mtl").expect("tornado mtl"), get("mti").as_deref()).expect("tornado mtl");
     let uva = mor::parse(&get("uva").expect("tornado uva"), 4).expect("tornado uva");
+    let _pre = crate::textures::prefetch(&mtl);
     let (_, view) = model(&arc, s, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("tornado model");
     // raw texels, by the first packet's PRIM, as `character::gs_of`
     let tex: Vec<Handle<Image>> = mtl

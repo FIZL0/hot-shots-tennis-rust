@@ -616,6 +616,7 @@ fn load(
 fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, StandardMaterial)>)> {
     let mut out = Vec::new();
     for_models(data, keep, |model_stem, model, mats| {
+        let _pre = textures::prefetch(&mats);
         let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| textures::add_mtl(images, image(t), t)).collect();
         let mut parts = Vec::new();
         {
@@ -731,6 +732,7 @@ fn gs_models_anim(
     };
     let mut out = Vec::new();
     for_models(data, keep, |stem, model, mats| {
+        let _pre = textures::prefetch(&mats);
         let anim = hst_sim::court_anim::CourtAnim::new(&model, tracks(&stem, "uva", 4).as_ref(), tracks(&stem, "mta", 1).as_ref(), &mats.materials);
         let mut parts = Vec::new();
         for (mi, packets) in model.materials.iter().enumerate() {
@@ -975,9 +977,14 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
     }
 }
 
-/// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr (for profiling, P23).
+/// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr, and each frame over 33 ms as it happens
+/// (for profiling, P23, Z1).
 fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32)>) {
     let dt = time.delta_secs();
+    // a stutter: any frame over two 60 Hz frames, with when it happened
+    if dt > 1.0 / 30.0 {
+        eprintln!("slow frame {:.1} ms at {:.2} s", dt * 1e3, time.elapsed_secs());
+    }
     *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt));
     if acc.1 >= 5.0 {
         eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
