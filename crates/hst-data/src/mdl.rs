@@ -67,6 +67,10 @@ pub struct Packet {
     pub group: i16,
     /// Bounding box min, max (packet header +0, +0x10).
     pub bounds: [[f32; 3]; 2],
+    /// The batch is static (batch header +0 = 1).
+    pub fixed: bool,
+    /// Bounding sphere centre (packet header +0x20).
+    pub centre: [f32; 3],
     /// Per position entry, its share of the noise deformer (the VIF unpack after the bounding boxes, when packet
     /// header +0x56 is set); empty when the packet has none.
     pub noise: Vec<f32>,
@@ -337,6 +341,8 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 pk.group = i16::from_le_bytes([bh[0x2a], bh[0x2b]]);
                 pk.noise = noise;
                 pk.bounds = [0, 0x10].map(|o| std::array::from_fn(|k| f32_at(ph, o + 4 * k)));
+                pk.fixed = i32_at(bh, 0) == 1;
+                pk.centre = std::array::from_fn(|k| f32_at(ph, 0x20 + 4 * k));
                 packets.push(pk);
             }
         }
