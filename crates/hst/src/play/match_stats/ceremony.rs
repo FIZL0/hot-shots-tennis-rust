@@ -3,7 +3,8 @@
 //! mark (`AZUMA/PRIZE/ANI/WINANI.XB`, `LOSTANI.XB`), confetti for a winner, the "NARROW WIN" etc. banner from
 //! `result_gameset05` and in doubles the team's name plate (`inpane_team`), and the match-end sounds: the shown
 //! character's prize voice (a bit of the sound generator), the gallery's ovation or groan and, for a winner, four
-//! cheers and the BGM fading out over 270 ticks. It runs for the camera clip's length, then the result page opens;
+//! cheers, and the result music (`bgmm_10`, win or lose) coming in once the match-end jingle has ended. It runs for
+//! the camera clip's length, then the result page opens (the music plays on);
 //! the figures and the clip's last view stay behind the result page. The sim and its generators are never touched:
 //! the ending is copied in `match_over` and the voice's bit drawn from that copy.
 
@@ -35,9 +36,14 @@ const LOST_B: [bool; 14] = [false, false, true, false, true, true, false, true, 
 /// The four cheers for a winner: bearings and volume (gallery program 10 key 1).
 const CHEERS: [i32; 4] = [45, 135, 225, 325];
 const CHEER_VOLUME: i32 = 0x20;
-/// The BGM's level and its fade-out's length.
+/// The result music (`SND/BGM/BGMM_10.XB`, menu BGM 7) for a win and a loss alike, the tick it starts on (silent;
+/// the original's loader thread got to it 44 ticks into the ceremony) and its full level, reached 55/60 a tick once
+/// the match-end jingle has ended. The court BGM went with the match.
+const RESULT_BGM: &str = "bgmm_10";
+const BGM_AT: u32 = 44;
 const BGM: f32 = 55.0;
-const FADE: u32 = 270;
+/// The match-end jingle's play (`Sound` id), for the result music to wait on.
+pub(in super::super) static END_JINGLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Motion slots.
 const WIN: usize = 0;
@@ -180,6 +186,9 @@ pub(super) struct Ceremony {
     court_rng: Mt,
     sound_rng: Mt,
     voice: Option<Arc<SoundBank>>,
+    /// The result music (with `--music`) and its level.
+    music: Option<(Arc<SoundBank>, Vec<u8>)>,
+    level: f32,
     flakes: Vec<Flake>,
     confetti: Option<Entity>,
     flake_rng: u32,
@@ -286,6 +295,8 @@ pub(super) fn begin(
         court_rng: g.rng.court.clone(),
         sound_rng,
         voice,
+        music: args.music.then(|| SoundBank::music(&mut iso, "Menu", RESULT_BGM)).flatten().map(|(b, m)| (Arc::new(b), m)),
+        level: 0.0,
         flakes: Vec::new(),
         confetti: None,
         flake_rng: 0x2545_f491,
@@ -341,8 +352,19 @@ pub(super) fn tick(c: &mut Ceremony, players: u32, court: u8, sound: Option<&Sou
             }
         }
     }
-    if let Some(s) = sound.filter(|_| !c.plan.lost) {
-        s.music_volume((BGM * FADE.saturating_sub(c.t + 1) as f32 / FADE as f32) as u32);
+    if let (Some(s), Some((bank, mid))) = (sound, &c.music) {
+        if c.t == 0 {
+            s.stop_music();
+        }
+        if c.t == BGM_AT {
+            s.music(bank, mid, 0);
+        }
+        if c.t >= BGM_AT {
+            let step = BGM / 60.0;
+            let jingle = END_JINGLE.load(std::sync::atomic::Ordering::Relaxed);
+            c.level = if jingle != 0 && s.playing(jingle) { c.level - step } else { c.level + step }.clamp(0.0, BGM);
+            s.music_volume(c.level as u32);
+        }
     }
     c.t += 1;
     for i in 0..c.slot.len() {
@@ -457,8 +479,12 @@ pub(super) fn hide(
     }
 }
 
-/// Continue: the ceremony's confetti goes, the BGM comes back with the match's ticks.
-pub(super) fn end(commands: &mut Commands, cer: Option<&Ceremony>) {
+/// Continue: the ceremony's confetti goes, the court BGM starts again from the top (the original's rematch reloads
+/// it) and comes back with the match's ticks.
+pub(super) fn end(commands: &mut Commands, cer: Option<&Ceremony>, sound: Option<&Sound>, court: Option<&crate::audio::MusicBanks>) {
+    if let (Some(s), Some((bank, mid))) = (sound.filter(|_| cer.is_some_and(|c| c.music.is_some())), court.and_then(|m| m.bgm.as_ref())) {
+        s.music(bank, mid, BGM as u32);
+    }
     if let Some(root) = cer.and_then(|c| c.confetti) {
         commands.entity(root).despawn();
     }
