@@ -20,7 +20,7 @@ pub fn now() -> u8 {
 }
 
 /// The match's schedule and the game it is on; `fixed` forces one weather (`HST_WEATHER`).
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Weather {
     pub schedule: [Game; GAMES],
     pub game: usize,

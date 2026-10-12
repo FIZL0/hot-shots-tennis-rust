@@ -11,8 +11,8 @@ use super::{Figure, Game, Phase, Player, player_matrix};
 use crate::Args;
 use crate::character::{CharacterData, Motion};
 
-#[derive(Resource)]
-struct Director {
+#[derive(Resource, Clone)]
+pub(super) struct Director {
     shots: Vec<CameraShot>,
     lists: [Vec<u8>; 3],
     /// Each list's own counter.

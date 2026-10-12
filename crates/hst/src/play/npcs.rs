@@ -35,8 +35,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, draw_cheers.after(super::camera));
 }
 
-#[derive(Resource)]
-struct Npcs {
+#[derive(Resource, Clone)]
+pub(super) struct Npcs {
     umpire: Option<(Entity, Anim)>,
     /// Each walker with where it stands (its home; it turns there, `npc::walker_facing`).
     walkers: Vec<(Entity, npc::Walker, [f32; 4])>,
@@ -68,7 +68,7 @@ struct Npcs {
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Anim {
     frame: f32,
     next: f32,

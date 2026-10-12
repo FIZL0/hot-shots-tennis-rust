@@ -7,7 +7,7 @@ use hst_sim::ai::{Guess, Phase as Ai, Play};
 use hst_sim::rally::{Ball as PathBall, Body, Human, Out, PATH_MAX, PathCopy, Rally, SEEN, Shot, World};
 
 /// The doubles AI state the players share (the path copy and the shot records) and each one's own.
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub(super) struct Shared {
     /// Bumped once a tick (when a player steps a second time): the path copy's stamp; who stepped since.
     frame: i32,
@@ -22,7 +22,7 @@ pub(super) struct Shared {
     claim: (i32, i32),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 struct Mine {
     rally: Rally,
     lost: i32,

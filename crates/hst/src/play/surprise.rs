@@ -16,8 +16,8 @@ use crate::character::Rig;
 use crate::Args;
 
 /// Live pop-ups, and whether the point was over last tick.
-#[derive(Resource, Default)]
-struct Pops(Vec<Pop>, bool);
+#[derive(Resource, Default, Clone)]
+pub(super) struct Pops(Vec<Pop>, bool);
 
 /// Pop-up quad `.0` of the list (its own material).
 #[derive(Component)]

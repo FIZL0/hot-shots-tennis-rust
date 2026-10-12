@@ -17,6 +17,7 @@ use crate::{
     ps2, world,
 };
 
+#[derive(Clone)]
 pub(crate) struct Track {
     /// Morph target or material index.
     target: usize,
@@ -25,6 +26,7 @@ pub(crate) struct Track {
     cursor: usize,
 }
 
+#[derive(Clone)]
 pub(crate) struct Channel {
     tracks: Vec<Track>,
     ticks_per_frame: f32,
@@ -53,6 +55,7 @@ impl Channel {
     }
 }
 
+#[derive(Clone)]
 pub struct Effect {
     pub skeleton: Skeleton,
     pub clip: Clip,
@@ -137,7 +140,7 @@ impl Effect {
 
 /// One entry of the landing marker's predicted ball path (y up, as the game stores it): position, velocity and
 /// bounces so far.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PathEntry {
     pub pos: [f32; 3],
     pub vel: [f32; 3],
@@ -148,6 +151,7 @@ pub struct PathEntry {
 /// predicted ball, having risen to that player's smash top, comes back down below the middle of the smash window
 /// moving away from the net at least 1.5 m from it. Searched a frame's worth of new path entries at a time; two
 /// players' points are drawn at their midpoint.
+#[derive(Clone, Debug)]
 pub struct SmashSearch {
     /// Per candidate: smash top, middle height, state (0 rising, 1 falling, 2 placed, −1 gave up).
     cands: Vec<(f32, f32, i32)>,
@@ -347,6 +351,7 @@ const BURSTS: [Burst; 5] = {
 };
 const LIFE: [i32; 2] = [10, 40];
 
+#[derive(Clone)]
 pub struct Sparks {
     pub sparks: [Spark; SPARKS],
     pub rolls: [Roll; SPARKS],
@@ -706,6 +711,7 @@ impl Puff {
 /// The ball's bounce effects: on the first bounce off the court a mark and a puff of dust, and the `ballbound` ring
 /// model lying in the bounce; a second bounce puffs again. A smash landing (more than one player, 85 km/h or more)
 /// plays the court's `chakudan` crater model instead, with a drifting dust cloud and no mark.
+#[derive(Clone)]
 pub struct Bounce {
     pub marks: Vec<Mark>,
     pub puffs: Vec<Puff>,

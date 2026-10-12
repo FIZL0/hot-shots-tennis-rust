@@ -42,6 +42,7 @@ use crate::audio::{
 use crate::character::{self, CharacterData, Motion};
 use crate::effects;
 use crate::{Args, GameSpace, Orbit};
+use snapshot::Const;
 
 mod ball_shadow;
 mod bodyhit;
@@ -58,6 +59,7 @@ mod panel;
 mod popups;
 mod reaction_voices;
 mod surprise;
+mod snapshot;
 mod tick_input;
 mod timing;
 mod tornado;
@@ -93,7 +95,7 @@ const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// of it (measured on the court lines against the real game).
 const SHOWN_ASPECT: f32 = 0.75;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Player {
     pos: V3,
     prev: V3,
@@ -218,7 +220,7 @@ struct Player {
 
 /// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
 /// w carried as the game's), and the frames it has run.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Root {
     motion: usize,
     base: [f32; 4],
@@ -227,7 +229,7 @@ struct Root {
 }
 
 /// A motion set by the game's code (the motion setter): number, speed, looping, crossfade hold.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Cmd {
     id: usize,
     speed: f32,
@@ -252,7 +254,7 @@ fn set_motion(p: &mut Player, id: i32, speed: f32, looping: bool, hold: Option<i
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
 /// and the body's step into the shot.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Contact {
     frames: u32,
     swing: swing::Swing,
@@ -260,7 +262,7 @@ struct Contact {
     offset: i32,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 enum Phase {
     Serve,
     Rally,
@@ -269,26 +271,26 @@ enum Phase {
     ChangeEnds(u32),
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, Debug)]
 struct Game {
     rules: Rules,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
-    serve_tables: Vec<[Vec<(Table, f32, f32)>; 2]>,
+    serve_tables: Const<Vec<[Vec<(Table, f32, f32)>; 2]>>,
     /// Per player: the character's special-shot effects and, when its special slice serve flies by the `up1`
     /// variant, that table with its spin and side angle (see `serve_specials`).
-    specials: Vec<(hst_data::exe::ShotEffects, Option<(Table, f32, f32)>)>,
+    specials: Const<Vec<(hst_data::exe::ShotEffects, Option<(Table, f32, f32)>)>>,
     /// Per player: the character's smash trajectory tables, smash kinds 0 (✕/○) and 1 (△).
-    smash_tables: Vec<Vec<Table>>,
+    smash_tables: Const<Vec<Vec<Table>>>,
     /// Per player: the spin of the character's smash records, smash kinds 0 and 1.
     smash_spins: Vec<[f32; 2]>,
     /// Per player: the character's [stroke, volley] trajectory tables by kind (see `rally_tables`).
-    rally_tables: Vec<[Vec<Table>; 2]>,
+    rally_tables: Const<Vec<[Vec<Table>; 2]>>,
     /// Per player: the character's stroke and volley shot records (classes 1, 2) by kind, for their spins.
-    rally_records: Vec<[[[f32; 13]; 5]; 2]>,
+    rally_records: Const<Vec<[[[f32; 13]; 5]; 2]>>,
     /// Per player: its character's timing data (see `timing`).
-    timing: Vec<timing::Timing>,
+    timing: Const<Vec<timing::Timing>>,
     /// The timing error of the stroke or volley being struck, set at its contact.
     timing_error: Option<swing::TimingError>,
     /// The mis-hit roll of the stroke, volley or dive being struck, set at its contact.
@@ -298,7 +300,7 @@ struct Game {
     /// The smash being struck's timing scatter (`timing::smash`), set at its contact.
     smash_scatter: Option<(f32, f32)>,
     /// Per player: the serve (see `serve_data`).
-    serve_data: Vec<ServeData>,
+    serve_data: Const<Vec<ServeData>>,
     /// The serve in progress (server's toss and swing).
     serving: Serving,
     reach: Reach,
@@ -333,7 +335,7 @@ struct Game {
     post_press: bool,
     board: ScoreboardTiming,
     /// The stage's collision world (`--stage`, else court 10's) and the material table: court, net, posts, walls.
-    world: (World, Vec<Material>),
+    world: Const<(World, Vec<Material>)>,
     court: usize,
     message: String,
     /// The game's generators (`hst_sim::rng`): every draw the app shares with the original comes from one.
@@ -361,7 +363,7 @@ struct Game {
     /// The human whose end the camera follows (the original turns round to stay behind its human).
     cam_owner: Option<usize>,
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
-    pelvis: Vec<Vec<[f32; 2]>>,
+    pelvis: Const<Vec<Vec<[f32; 2]>>>,
     /// Each player's character number and data.
     chars: Vec<i32>,
     /// Each player's last shouts.
@@ -370,7 +372,7 @@ struct Game {
     first_serve: bool,
     /// Who has made their match-point serve call this match (`serve_call`).
     serve_called: [bool; 4],
-    data: Vec<std::sync::Arc<CharacterData>>,
+    data: Const<Vec<std::sync::Arc<CharacterData>>>,
     /// The team that won the last point.
     post_winner: i32,
     /// The chair umpire, and her last voice's play id (0 none).
@@ -411,7 +413,7 @@ struct Game {
 
 /// The landing markers, as the original: the red one at the shot's aim (from the serve return on), the yellow one
 /// where a receiving human can smash the ball, searched along a predicted path grown 15 entries a frame.
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 struct Marks {
     red: Option<[f32; 2]>,
     /// The smash search, its path so far (y up) and the predictor's flight at the path's end.
@@ -436,7 +438,7 @@ fn path_entry(f: &Flight) -> PathEntry {
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
 /// (ball in the hand until the toss animation releases it), and the swing locked onto a contact frame.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct Serving {
     toss: Option<Toss>,
     /// Frames since the toss press (or, before it, since the serve was set up).
@@ -451,7 +453,7 @@ struct Serving {
     scatter: V3,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ServeSwing {
     left: u32,
     frames: u32,
@@ -461,7 +463,7 @@ struct ServeSwing {
 }
 
 /// One controller slot's state, gathered every display frame and consumed by the 60 Hz simulation.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct SlotPad {
     /// The left stick alone (after the pad driver, `pad_stick`).
     stick: Vec2,
@@ -475,7 +477,7 @@ struct SlotPad {
 
 /// Controller slots 1P..4P (without `--pads` the keyboard and the first gamepad drive 1P). See `slot_of` for which
 /// player each drives.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 struct Pads {
     slots: [SlotPad; 4],
     /// Gamepads connected.
@@ -1207,18 +1209,18 @@ fn setup(
     let reach = reach(&mut iso);
     let mut game = Game {
         rules,
-        serve_tables: Vec::new(),
-        specials: Vec::new(),
-        smash_tables: Vec::new(),
+        serve_tables: default(),
+        specials: default(),
+        smash_tables: default(),
         smash_spins: Vec::new(),
-        rally_tables: Vec::new(),
-        rally_records: Vec::new(),
-        timing: Vec::new(),
+        rally_tables: default(),
+        rally_records: default(),
+        timing: default(),
         timing_error: None,
         mis_hit: None,
         aim: Default::default(),
         smash_scatter: None,
-        serve_data: Vec::new(),
+        serve_data: default(),
         serving: Serving::default(),
         reach,
         flight: Flight::new(
@@ -1256,7 +1258,7 @@ fn setup(
         post: None,
         post_press: false,
         board,
-        world,
+        world: world.into(),
         court: args.court.min(COURTS.len() - 1),
         message: String::new(),
         rng: match_rng.map_or_else(|| Rngs::new(Rand::default(), Mt::new(1)), |r| r.0.clone()),
@@ -1272,13 +1274,13 @@ fn setup(
         prev_view: Camera::new().view,
         cam_cut: false,
         cam_owner: Some(0),
-        pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize],
+        pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize].into(),
         chars: vec![0; rules.players as usize],
         body_hit: None,
         voices: vec![default(); rules.players as usize],
         first_serve: true,
         serve_called: [false; 4],
-        data: Vec::new(),
+        data: default(),
         post_winner: 0,
         umpire,
         umpire_voice: 0,

@@ -504,8 +504,8 @@ const CALL_SCALE: f32 = 5.7;
 #[derive(Component)]
 struct CallCamera;
 
-#[derive(Resource)]
-struct Calls {
+#[derive(Resource, Clone)]
+pub(super) struct Calls {
     models: Vec<(hst_sim::effect::Effect, crate::effects::Shown)>,
     playing: Option<usize>,
     alpha: f32,
@@ -998,7 +998,7 @@ use hst_sim::ps2::{add, div, mul, sub};
 use hst_sim::score::{Rules, Score};
 
 /// What the banners follow through the match (the original's shot record, scoreboard flags and bounce mark).
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub(super) struct Finish {
     /// Per player: the character's TParam Strk POW and Voley POW.
     pub power: Vec<[i32; 2]>,
