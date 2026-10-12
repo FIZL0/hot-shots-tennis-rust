@@ -97,8 +97,6 @@ pub struct Runner {
     pub lunge: f32,
     /// The dive's streak stops (the player's dive is done).
     pub dive_over: bool,
-    /// Where the current motion set off (a dive's debris flies on from there through the player).
-    pub anchor: V4,
 }
 
 /// A player's dive as the run object reads it from the player: the hit event's dive branch fires on the frame a
@@ -321,11 +319,12 @@ impl Feet {
     }
 
     /// A new group of bits of `kind` (0 clods, 1 blades) out of `r`'s dive: thrown ahead of the right toe, along
-    /// the way from where the motion set off through the player, up to the row's `reach` and `spread` around it.
+    /// the way from the head (the motion object's head node) through the player, up to the row's `reach` and `spread`
+    /// around it.
     fn throw(&mut self, t: &Foot, court: usize, kind: usize, r: &Runner, rand: &mut impl FnMut() -> u32) {
         use ps2::{add, div, madd, mul, sub};
         let lunge = (r.lunge as f64 * 0.3) as f32;
-        let (dx, dz) = (sub(r.m[3][0], r.anchor[0]), sub(r.m[3][2], r.anchor[2]));
+        let (dx, dz) = (sub(r.m[3][0], r.head[0]), sub(r.m[3][2], r.head[2]));
         let q = div(1.0, ps2::sqrt(madd(mul(dx, dx), dz, dz)));
         let dir = [mul(mul(dx, q), lunge), 0.08, mul(mul(dz, q), lunge), mul(lunge, 0.0)];
         let o = [r.toes[0][0], -0.05, r.toes[0][2], r.toes[0][3]];

@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::bodyhit::{self, Popup, Word};
 use hst_sim::player::ReachStats;
+use hst_sim::pose::Nodes;
 
 use super::{Figure, Game, Phase};
 use crate::Args;
@@ -29,8 +30,9 @@ struct Hits {
 struct View(Handle<StandardMaterial>, [Handle<Image>; 2]);
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, (detect.before(super::simulate), age.after(super::simulate)))
+    app.init_resource::<Posed>()
+        .add_systems(PostStartup, setup.after(super::setup))
+        .add_systems(FixedUpdate, (detect.before(super::simulate), age.after(super::simulate), pose.after(crate::character::tick)))
         .add_systems(Update, draw.after(super::balloons));
 }
 
@@ -69,7 +71,7 @@ fn setup(
 }
 
 /// Swinging, diving or whiffing players aren't tested (the game's stroke state).
-fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, q: Query<(&Figure, &Motion)>) {
+fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, posed: Res<Posed>, q: Query<&Figure, With<Motion>>) {
     let last = std::mem::replace(&mut hits.last, g.flight.ball.pos);
     if g.phase == Phase::Serve {
         g.body_hit = None;
@@ -86,18 +88,18 @@ fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, q: Query<(&Figure, &Motio
         return;
     }
     let ball = g.flight.ball.pos;
-    for (f, m) in &q {
+    for f in &q {
         let (p, data) = (&g.players[f.0], &g.data[f.0]);
         if p.swing.is_some() || p.wait_swing.is_some() || p.dive.is_some() || p.whiff.is_some() {
             continue;
         }
         let sk = &data.skeleton;
         let bone = |n: &str| sk.names.iter().position(|b| b == n);
-        let (Some(locals), Some(head), Some(neck), Some(spine)) = (posed(data, m), bone("Bip01Head"), bone("Bip01Neck"), bone("Bip01Spine")) else {
+        let (Some(locals), Some(head), Some(neck), Some(spine)) = (posed.locals(f.0), bone("Bip01Head"), bone("Bip01Neck"), bone("Bip01Spine")) else {
             continue;
         };
         let player = super::player_matrix(p);
-        let at = |n: usize| hst_sim::pose::node_world(sk, &locals, n, &player);
+        let at = |n: usize| hst_sim::pose::node_world(sk, locals, n, &player);
         let point = |n: usize| {
             let r = at(n)[3];
             [r[0], r[1], r[2]]
@@ -111,35 +113,51 @@ fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, q: Query<(&Figure, &Motio
     }
 }
 
-/// Every node's local matrix as the motion player last posed it: the clip at its sampled time, mid-crossfade mixed
-/// with the other motion over the first 23 tracks by this tick's weight (as `character::animate` draws it).
-// ponytail: a node the base clip doesn't key mixes from the other clip's own value (the game's from what it last held)
-pub(super) fn posed(data: &crate::character::CharacterData, m: &Motion) -> Option<Vec<[[f32; 4]; 4]>> {
-    let (sk, new) = (&data.skeleton, data.motions.get(&m.id)?);
-    let old = data.motions.get(&(m.fade.id as usize)).filter(|_| m.fade.clip);
-    let (base, t, over) = match (m.mix, old) {
-        (Some((w, true)), Some(old)) => (old, m.fade.sampled, Some((new, 0.0, w))),
-        (Some((w, false)), Some(old)) => (new, m.clock.sampled, Some((old, m.fade.sampled, w))),
-        _ => (new, m.clock.sampled, None),
-    };
-    let mut local = base.locals(sk, t);
-    let Some((other, ot, w)) = over else { return Some(local) };
-    for k in 0..other.tracks.len().min(23) {
-        let n = other.tracks[k].node;
-        let (rot, pos) = other.sample(k, ot);
-        let mine = base.tracks.iter().position(|tr| tr.node == n).map(|j| base.sample(j, t));
-        let cur_q = mine.and_then(|s| s.0).or(rot).unwrap_or([0.0, 0.0, 0.0, 1.0]);
-        let r = local[n][3];
-        let cur_p = mine.and_then(|s| s.1).unwrap_or([r[0], r[1], r[2]]);
-        let (q, p) = hst_sim::motion::mix((cur_q, cur_p), (rot.unwrap_or(cur_q), pos.unwrap_or(cur_p)), w);
-        if rot.is_some() {
-            local[n][..3].copy_from_slice(&hst_sim::pose::q_matrix(q)[..3]);
+/// Per player (by figure) the clip bound to its nodes and the nodes as the motion player last posed them.
+#[derive(Resource, Default)]
+pub(super) struct Posed(Vec<Option<(usize, Nodes)>>);
+
+impl Posed {
+    /// Player `i`'s nodes' local matrices as of this tick's motion step.
+    pub(super) fn locals(&self, i: usize) -> Option<&[[[f32; 4]; 4]]> {
+        Some(&self.0.get(i)?.as_ref()?.1.local)
+    }
+}
+
+/// One frame of the motion player after the motions step: a new motion binds its clip (rows back to rest); the
+/// clip is sampled at its time, and mid-crossfade the other motion is mixed over the first 23 tracks by this
+/// tick's weight from each node's held value (as `character::animate` draws it). The held fade samples the frozen
+/// outgoing pose and mixes the new motion's frame 0 over it.
+// ponytail: a same-motion restart through the point's reset to no motion doesn't rebind (only a change of motion does)
+pub(super) fn pose(mut posed: ResMut<Posed>, g: Res<Game>, q: Query<(&Figure, &Motion)>) {
+    for (f, m) in &q {
+        let Some(data) = g.data.get(f.0) else { continue };
+        let (sk, Some(new)) = (&data.skeleton, data.motions.get(&m.id)) else { continue };
+        if posed.0.len() <= f.0 {
+            posed.0.resize(f.0 + 1, None);
         }
-        if pos.is_some() {
-            local[n][3] = [p[0], p[1], p[2], r[3]];
+        let slot = &mut posed.0[f.0];
+        if slot.as_ref().is_none_or(|(_, n)| n.local.len() != sk.rest.len()) {
+            *slot = Some((usize::MAX, Nodes::new(sk)));
+        }
+        let (bound, nodes) = slot.as_mut().unwrap();
+        if *bound != m.id {
+            *bound = m.id;
+            nodes.bind(sk, new);
+        }
+        let old = data.motions.get(&(m.fade.id as usize)).filter(|_| m.fade.clip);
+        match (m.mix, old) {
+            (Some((w, true)), Some(old)) => {
+                nodes.sample(old, m.fade.sampled);
+                nodes.mix(new, 0.0, w, 23);
+            }
+            (Some((w, false)), Some(old)) => {
+                nodes.sample(new, m.clock.sampled);
+                nodes.mix(old, m.fade.sampled, w, 23);
+            }
+            _ => nodes.sample(new, m.clock.sampled),
         }
     }
-    Some(local)
 }
 
 /// The hit as the original's handler takes it: the ball's extra step back off the player; the player faces against
