@@ -2944,7 +2944,10 @@ dependencies = [
  "gltf",
  "hst-data",
  "hst-sim",
+ "js-sys",
  "serde_json",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

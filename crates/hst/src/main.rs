@@ -19,6 +19,7 @@
 mod audio;
 mod character;
 mod court_anim;
+#[cfg(not(target_arch = "wasm32"))]
 mod disc;
 mod effects;
 mod graphics;
@@ -35,6 +36,8 @@ mod shade;
 mod shadow;
 mod textures;
 mod weather;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -178,9 +181,19 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster }
 }
 
+// the browser build starts from `web::run` once the page has the disc pack
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     disc::resolve(&mut argv);
+    start(argv);
+}
+
+/// The app for `argv` = disc, flags (see the module doc).
+fn start(argv: Vec<String>) {
     let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(argv.into_iter());
     if upscale {
         textures::init(&args.iso);

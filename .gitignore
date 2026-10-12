@@ -19,3 +19,4 @@ research/journal/**/*
 /dist
 tools/upscale_mods.sh
 /cache
+target-wasm/
