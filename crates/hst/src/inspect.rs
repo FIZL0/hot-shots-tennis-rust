@@ -364,7 +364,9 @@ fn spawn_roster(
         }
     }
     for dir in &roster.1 {
-        match crate::mods::read(dir.as_ref()).and_then(|m| Ok((crate::mods::load(&mut iso, &m, 0, &mut meshes, &mut materials, &mut images, &mut bindposes)?, m))) {
+        // `DIR:C`: costume C
+        let (dir, costume) = dir.rsplit_once(':').and_then(|(d, c)| Some((d, c.parse().ok()?))).unwrap_or((dir.as_str(), 0));
+        match crate::mods::read(dir.as_ref()).and_then(|m| Ok((crate::mods::load(&mut iso, &m, costume, &mut meshes, &mut materials, &mut images, &mut bindposes)?, m))) {
             Ok((d, m)) => {
                 spawn(&mut commands, &Arc::new(d), m.donor, m.hand, layer, Rect::default());
                 layer += 1;
