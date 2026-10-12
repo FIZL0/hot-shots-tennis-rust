@@ -62,3 +62,14 @@ over iroh with the relay off. Logs and any `desync-*.json` in `context/m2g/runN/
   count, the same everywhere (offline too; same length as before, now not jittered by the audio thread).
 - Run 2: the guest saw "The host left." mid-match: `recv` (two `read_exact`s) sat in a `tokio::select!` and isn't
   cancel-safe, so a ping/send wake-up cut a message in half. The guest now reads in its own task into a channel.
+- Run 4 (both fixes): the doubles match (2 seats per process, 100 ms each way) played to its result (1-1 → tiebreak
+  7-4, ~9300 ticks); every hash agreed (`online tick` lines identical on both), no `desync-*.json`, both opened the
+  result screen within 5 ms of each other. Logs: `context/m2g/run4/`.
+
+## Not verified / not 1:1 (continued)
+
+- The umpire voice's length is now its solo render's frame count (one 60 Hz frame per mixer render) instead of the
+  live mixer's: a word that's cut by the next word or by mixer voice stealing (not ported) is timed as if alone.
+  The original times it by its SPU; neither version was checked against it frame for frame.
+- After the result screen the `--play` processes were killed by hand; going back to the menu after an online match
+  wasn't exercised in the two-process run (the headless test ends at the result).
