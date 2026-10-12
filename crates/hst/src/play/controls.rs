@@ -219,7 +219,7 @@ impl Bindings {
 
     /// Write these bindings to `controls.txt` beside `iso`.
     pub fn save(&self, iso: &str) -> std::io::Result<()> {
-        std::fs::write(path(iso), self.text())
+        crate::store::write(path(iso), self.text())
     }
 }
 
@@ -230,7 +230,7 @@ fn path(iso: &str) -> PathBuf {
 
 fn load(mut commands: Commands, args: Res<crate::Args>, pads: Option<ResMut<super::Pads>>) {
     let path = path(&args.iso);
-    let b = match std::fs::read_to_string(&path) {
+    let b = match crate::store::read_to_string(&path) {
         Ok(text) => {
             let (b, errors) = Bindings::parse(&text);
             for e in errors {
@@ -240,7 +240,7 @@ fn load(mut commands: Commands, args: Res<crate::Args>, pads: Option<ResMut<supe
         }
         Err(_) => {
             let b = Bindings::default();
-            if std::fs::write(&path, b.text()).is_ok() {
+            if crate::store::write(&path, b.text()).is_ok() {
                 info!("wrote default controls to {}", path.display());
             }
             b

@@ -23,7 +23,7 @@ qrcode = { version = "0.14", default-features = false }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 ggrs = { version = "0.13", features = ["wasm-bindgen"] }
-web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "UrlSearchParams", "Window"] }
+web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "Storage", "UrlSearchParams", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # netplay transport and lobbies (`net.rs`): iroh QUIC, addresses and lobby list on the mainline DHT and LAN mDNS, tickets for codes/QR

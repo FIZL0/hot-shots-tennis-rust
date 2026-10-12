@@ -42,6 +42,14 @@ mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// settings.txt and controls.txt: files beside the disc, or in the browser its localStorage.
+mod store {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use std::fs::{read_to_string, write};
+    #[cfg(target_arch = "wasm32")]
+    pub use crate::web::{read_to_string, write};
+}
+
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::mesh::{Indices, PrimitiveTopology};

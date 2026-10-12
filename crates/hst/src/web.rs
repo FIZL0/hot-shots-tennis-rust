@@ -9,7 +9,7 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReaderSync, FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
-/// The path the mounted pack answers to (settings.txt etc. "beside" it don't exist: defaults).
+/// The path the mounted pack answers to (settings.txt and controls.txt "beside" it are in localStorage).
 const PACK: &str = "disc.pack";
 
 fn io_err(e: JsValue) -> io::Error {
@@ -113,4 +113,18 @@ pub fn run(pack: js_sys::Uint8Array) {
         }
     }
     crate::start(argv);
+}
+
+/// localStorage under the file's path (`crate::store`): settings.txt and controls.txt last between visits.
+pub fn read_to_string(path: impl AsRef<std::path::Path>) -> io::Result<String> {
+    let key = path.as_ref().to_string_lossy();
+    local()?.get_item(&key).map_err(io_err)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.into_owned()))
+}
+
+pub fn write(path: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) -> io::Result<()> {
+    local()?.set_item(&path.as_ref().to_string_lossy(), &String::from_utf8_lossy(text.as_ref())).map_err(io_err)
+}
+
+fn local() -> io::Result<web_sys::Storage> {
+    web_sys::window().unwrap().local_storage().map_err(io_err)?.ok_or_else(|| io::Error::other("no localStorage"))
 }

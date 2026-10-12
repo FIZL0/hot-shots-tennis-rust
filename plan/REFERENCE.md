@@ -53,8 +53,11 @@ and the ISO can go. `hst <iso> …` still runs straight from an ISO.
 
 In the browser (M13a): `tools/web.sh` builds `web/pkg`; serve `web/` on localhost or https (`python3 -m http.server -d
 web 8765`). The first visit asks for the ISO and imports the pack into the browser's storage (OPFS); later visits run
-from it. Flags go in the URL (`?play&singles&stage=1` = `--play --singles --stage 1`); `?forget` drops the pack. Only
-`?play` works yet (the menus spawn threads, M3).
+from it. Flags go in the URL (`?play&singles&stage=1` = `--play --singles --stage 1`); `?forget` drops the pack. No
+query = the main menu. M9: installable (manifest, "Add to Home Screen"; fullscreen landscape), plays offline once loaded
+(`web/sw.js`), on-screen touch controls on touch screens (`web/touch.js`: a virtual standard gamepad, hidden while a
+real pad is connected; `?touch` forces them on a desktop), settings/controls in localStorage, phones start on the Low
+graphics preset. Check: `tools/web_check.mjs` (import), then `tools/web_touch.mjs` (phone viewport, taps, offline).
 
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected, players 3 and 4 (the other team) = controllers 3 and 4 when connected; the other slots are CPU. `--pads a,b,c,d` seats

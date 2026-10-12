@@ -8,15 +8,17 @@ import { resolve } from 'node:path';
 const [iso, out, query = 'play', secs = '60'] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
 const log = [];
+// HST_WEB_PORT / HST_CDP_PORT: other ports (runs side by side)
+const WEB = process.env.HST_WEB_PORT ?? 8765, CDP = process.env.HST_CDP_PORT ?? 9333;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function visit(n, pick) {
-  const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=9333', `--user-data-dir=${resolve(out, 'profile')}`,
+  const chrome = spawn('chromium', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${resolve(out, 'profile')}`,
     '--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--window-size=1280,720', 'about:blank'], { stdio: 'ignore' });
   let targets;
   for (let i = 0; i < 50 && !targets; i++) {
     await sleep(200);
-    targets = await fetch('http://127.0.0.1:9333/json').then(r => r.json()).catch(() => null);
+    targets = await fetch(`http://127.0.0.1:${CDP}/json`).then(r => r.json()).catch(() => null);
   }
   const ws = new WebSocket(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
   await new Promise(r => (ws.onopen = r));
@@ -32,7 +34,7 @@ async function visit(n, pick) {
   const evaluate = async e => (await send('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: true })).result?.result?.value;
   await send('Runtime.enable');
   await send('Page.enable');
-  await send('Page.navigate', { url: `http://localhost:8765/?${query}` });
+  await send('Page.navigate', { url: `http://localhost:${WEB}/?${query}` });
   if (pick) {
     for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden")); i++) await sleep(200);
     const doc = await send('DOM.getDocument');

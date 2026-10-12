@@ -37,7 +37,13 @@ struct VertexOutput {
     // its specular term (the vertex alpha HIGHLIGHT2 adds)
     @location(8) spec: f32,
     // the fog coefficient F VU1 writes to the vertex (0..255); the GS interpolates it linearly on screen
+#ifdef GS_NO_LINEAR
+    // WebGL2 has no linear (noperspective) interpolation: F·w and w, both perspective-correct, divide to F linear on
+    // screen
+    @location(9) fog: vec2<f32>,
+#else
     @location(9) @interpolate(linear) fog: f32,
+#endif
 }
 
 #ifdef MORPH_TARGETS
@@ -118,7 +124,12 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let w = -dot(vec4(vz[0].z, vz[1].z, vz[2].z, vz[3].z), out.world_position);
     let lift = clamp((view_bindings::view.world_position.y - 30.0) * 0.02, 0.0, 0.7);
     let ends = gs.fog.xy + lift * (255.0 - gs.fog.xy);
-    out.fog = floor(max(min(ends.x + (w - gs.fog.z) * (ends.y - ends.x) / (gs.fog.w - gs.fog.z), ends.x), ends.y));
+    let f = floor(max(min(ends.x + (w - gs.fog.z) * (ends.y - ends.x) / (gs.fog.w - gs.fog.z), ends.x), ends.y));
+#ifdef GS_NO_LINEAR
+    out.fog = vec2(f, 1.0) * out.position.w;
+#else
+    out.fog = f;
+#endif
     // FTOI0 to the GS's 8 bits
     out.color = floor(min(c * 128.0, vec4(255.0)) + 1e-3) / 128.0;
     return out;
@@ -191,7 +202,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
 #ifdef GS_FOG
     // GS: the interpolated F truncated to 8 bits, (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values
+#ifdef GS_NO_LINEAR
+    let fog = floor(in.fog.x / in.fog.y);
+#else
     let fog = floor(in.fog);
+#endif
     rgb = (floor(fog * floor(rgb * 255.0) / 256.0) + floor((255.0 - fog) * floor(gs.fog_color.rgb * 255.0 + 0.5) / 256.0)) / 255.0;
 #endif
     // shadow: (0 − Cd)·A + Cd on the frame buffer, the same as darkening every layer drawn there
