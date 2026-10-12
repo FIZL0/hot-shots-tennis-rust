@@ -30,7 +30,8 @@ matrix rotY(yaw) and translation **main view eye + (0, lift, 0)**. They follow t
 - Rotation uses glam sin/cos, the game uses its VU0 sincos approximation (sky tiny-angle sin 3.45e-4 vs 1e-4 on
   court 10): sub-milliradian, not bit-exact.
 - Beach and courts other than 10 have no original screenshot (no save state there; needs a menu drive) → **B74b**.
-  The hard-edged dark band at the top of `port_c02_up.png` is unverified.
+  The hard-edged dark band at the top of `port_c02_up.png` is unverified. → B74b: untextured draws were 2× bright
+  (gs.wgsl), fixed; beach, courts 1, 4, 10 sky screenshots match (2-B74B-FINAL.md).
 - Courts 3, 5–9, 11 checked only by code path (no RAM dump of them); `_acc` (courts 3, 9) never seen in RAM.
 - Season row = 0 from the decompile and the RAM copy; no non-zero-season singles state checked.
 - clo/acc weather draw gates only as already ported.
