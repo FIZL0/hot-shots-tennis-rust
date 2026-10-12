@@ -357,10 +357,16 @@ fn sync(
     mut cards: Local<([Option<Shown>; 4], [Option<(Key, f32)>; 4])>,
     mut loader: ResMut<Loader>,
     mut gone: ResMut<Gone>,
-    (baker, mut pending): (Res<Baker>, ResMut<Pending>),
+    (baker, mut pending, slide): (Res<Baker>, ResMut<Pending>, Res<super::slide::Slide>),
 ) {
     let Some(art) = art else { return };
-    let quads = if menu.screen == Screen::Chars { layout(&menu, &art.2, &bind, &[], 0.0).0 } else { Vec::new() };
+    // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
+    let mut quads = match slide.incoming() {
+        Some(_) if menu.screen == Screen::Chars => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        _ => Vec::new(),
+    };
+    let dx = slide.incoming().map_or(0.0, |s| s.0);
+    quads.iter_mut().for_each(|q| q.dst[0] += dx);
     let mut root = None;
     for (Slot(i), parent, mut z) in &mut slots {
         root = Some(parent.parent());
