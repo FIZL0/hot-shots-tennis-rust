@@ -43,6 +43,7 @@ cargo run --release -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 - `--singles`: 1 vs 1 instead of doubles.
 - `--chars 6,1,2,3`: characters on court, in player order (the default is Carol for player 1).
 - `HST_AUTOPLAY=1`: every player is a CPU.
+- `HST_TEXTURE_RELOAD=1`: re-read changed `mods/texture-replacements/` files while running (texture authoring).
 
 **Players:** player 1 uses the keyboard or the first controller. In doubles, a second controller plays player 1's
 partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other player is a CPU.
@@ -73,7 +74,7 @@ of the repository. Each texture is taken from the first match:
 
 1. **Key-named files** (`<name>-<key>.png`, in any subfolder or flat): your own textures, edited or upscaled, at
    any size and with straight (0–255) alpha. A file is matched by the part of its name after the last `-`.
-   Changed files reload while the game runs.
+   With `HST_TEXTURE_RELOAD=1` changed files reload while the game runs (off by default: the folder is read once).
 2. **A PCSX2 texture pack**: the hash-named PNGs PCSX2 dumps or loads, at the folder's top level. The port computes
    PCSX2's hash for each disc texture, so a pack made for the original game works as is.
 3. The disc.

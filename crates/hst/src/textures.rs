@@ -1,5 +1,5 @@
 //! Replaced textures from `mods/texture-replacements/` beside the ISO: key-named files over a PCSX2 pack's, over the disc.
-//! Mod files are re-read when they change while running.
+//! The folder is read once; with `HST_TEXTURE_RELOAD=1` mod files are re-read when they change while running.
 
 use bevy::prelude::*;
 use bevy::render::render_resource::Extent3d;
@@ -55,8 +55,11 @@ pub fn on() -> bool {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, reload)
-        .add_systems(PostUpdate, ui_rects);
+    app.add_systems(PostUpdate, ui_rects);
+    // B83: a full re-walk every second stutters on slow storage (microSD), so live reload is for texture authors only
+    if std::env::var_os("HST_TEXTURE_RELOAD").is_some() {
+        app.add_systems(Update, reload);
+    }
 }
 
 /// Add `img`, made from the texture with this key and these PCSX2 names, replaced if the mod folder or pack has it.
@@ -202,7 +205,7 @@ fn apply(img: &mut Image, (w, h, rgba): (u32, u32, Vec<u8>)) {
 
 type Scan = HashMap<String, (std::path::PathBuf, std::time::SystemTime)>;
 
-/// Once a second, re-read mod files that are new or changed since the last look. The folder walk runs on the IO pool
+/// `HST_TEXTURE_RELOAD` only: once a second, re-read mod files that are new or changed since the last look. The folder walk runs on the IO pool
 /// (it's a big folder: tens of ms on the main thread).
 // ponytail: a deleted mod file keeps its image until restart (the disc pixels aren't kept around)
 fn reload(time: Res<Time>, mut next: Local<f32>, mut scan: Local<Option<Task<Scan>>>, mut images: ResMut<Assets<Image>>) {
