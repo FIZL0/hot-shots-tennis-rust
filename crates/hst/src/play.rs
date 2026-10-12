@@ -2079,6 +2079,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         g.players[i].serve_anim = None;
         g.players[i].stance = pos[0].abs();
         strike(g, i, 0, sw.kind, target, (0, sw.grade, sw.offset));
+        g.finish.strong = toss == Toss::Strong;
         let p = &mut g.players[i];
         p.served = Some(0);
         p.recover = motion::serve_recovery(toss == Toss::Strong, sw.kind);
@@ -3791,9 +3792,10 @@ fn simulate(mut g: ResMut<Game>) {
         _ => None,
     };
     let applause = if g.gallery_game {
-        sound::favoured(&g.humans)[team as usize]
+        sound::favoured(&g.humans)[team as usize].then_some(false)
     } else {
-        g.smashed && g.last_hitter & 1 == team as i32
+        let won = g.last_hitter & 1 == team as i32;
+        g.finish.applause(&g.rally, won, g.body_hit.is_some(), g.flight.contacts, g.players.len() > 2)
     };
     if let Some(r) = sound::reaction(verdict.call, g.gallery_game, applause, &mut g.errors) {
         // taken in `npcs::step`, after the cheerers are picked

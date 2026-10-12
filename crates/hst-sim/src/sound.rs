@@ -581,12 +581,10 @@ pub struct Reaction {
 }
 
 /// The gallery's reaction to the judge's `call` (`judge::Verdict::call`) on a point that wins a `game` (or set) or
-/// not. `applause`: the point was won outright — on a plain point a smash winner, on a game point a side the
-/// gallery favours (`favoured`). `errors` counts the errors in a row (every second one draws a shout); none for a
-/// fault or let.
-/// ponytail: a plain point is also applauded for an ace with a strong toss, a return winner, a dive winner and a
-/// ground or volley winner that passes the receivers; only smash winners are told apart yet.
-pub fn reaction(call: u8, game: bool, applause: bool, errors: &mut u32) -> Option<Reaction> {
+/// not. `applause`: the gallery applauds — on a game point a side it favours (`favoured`), on a plain point one
+/// won outright (`play::popups::Finish::applause`) — `Some(true)` with a shout after it (plain points only).
+/// `errors` counts the errors in a row (every second one draws a shout); none for a fault or let.
+pub fn reaction(call: u8, game: bool, applause: Option<bool>, errors: &mut u32) -> Option<Reaction> {
     let error = matches!(call, 1 | 3 | 5 | 6);
     match call {
         2 | 4 => None,
@@ -596,7 +594,7 @@ pub fn reaction(call: u8, game: bool, applause: bool, errors: &mut u32) -> Optio
         }
         _ if game => {
             *errors = 0;
-            Some(Reaction { cheer: true, event: applause.then_some(0), chain: false })
+            Some(Reaction { cheer: true, event: applause.map(|_| 0), chain: false })
         }
         6 => Some(Reaction { cheer: false, event: Some(1), chain: false }),
         _ if error => {
@@ -605,7 +603,7 @@ pub fn reaction(call: u8, game: bool, applause: bool, errors: &mut u32) -> Optio
         }
         _ => {
             *errors = 0;
-            Some(Reaction { cheer: true, event: applause.then_some(0), chain: false })
+            Some(Reaction { cheer: true, event: applause.map(|_| 0), chain: applause == Some(true) })
         }
     }
 }
