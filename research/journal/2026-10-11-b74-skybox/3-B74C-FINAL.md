@@ -6,7 +6,7 @@ scale 0.445, code `"\0" "4" "\0" "\0"`: code byte 1 = 4 → a 4·π/36 = 20° ti
 built that matrix (tilt from byte 1, extra turn from byte 0) for the collision world and the shade map, but `main.rs`
 drew props with only translation · rotY(yaw) · scale. The model and the sway are not involved.
 
-Court 2 has six records with a code tilt/turn (four trees, two structures, one with 'I' = 18 → π/2 folded to −π/2 + …).
+Court 2 has six records with a code tilt (four trees, two structures; one structure's 'I' = 18 is a 90° tilt).
 
 ## Fix
 `main.rs` plant placement draws each prop with `world::place`'s matrix (row vectors → `Mat4::from_cols_array_2d`)
