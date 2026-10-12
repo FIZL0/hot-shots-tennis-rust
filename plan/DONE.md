@@ -346,6 +346,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P0b4d** Instant replay decision (in P0b4; split 2026-10-12 into P0b4d1–P0b4d5, the rest of "instant replay and between-points skipping, just like the original"): port the point message's replay decision (which points replay: option, human hitter, ace/fast/special shots, line calls, long rallies, match-winning point) and check it against the original's own function over generated points → `hst-sim/src/instant.rs` | t: hst-oracle instant.rs | j: 2026-10-12-p0b4d-instant-replay
 - [x] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
 - [x] **P14c3e** A struck toss and message 0x14's other listeners (in P14c3d) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [x] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 - [x] **M2b** Tick input from outside the match: `read_input` latches devices into `Pads` and `Pads::slot_of` picks humans from the gamepad count and `HST_AUTOPLAY`; make the match step take `[Pad; 4]` per tick (`hst_sim::replay::Pad`, the wire format) from an input source (local devices / network / replay), seats fixed at match start. Done when offline play is unchanged and the replay harness drives the app's match through the same entry → `play.rs` read_input/control/Pads · `play/controls.rs`

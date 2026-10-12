@@ -65,6 +65,11 @@ pub(super) struct Npcs {
     started: bool,
     /// The match was decided: whether the favoured team won, until the next serve.
     over: Option<bool>,
+    /// The decided point ended a game or set (its new point's resets follow the game's end message); the
+    /// scoreboard's pause was over last tick; court 2's flyover sound playing.
+    game_end: bool,
+    reacted: bool,
+    flyover: Option<u64>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -110,7 +115,7 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false, flyover: None };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -140,7 +145,17 @@ fn setup(
                 if npc::EMITTERS.contains(&t) {
                     npcs.figures.push(None);
                 }
-                let Some((model, base, clips)) = game.trigger_model(t) else { continue };
+                // courts 5's and 9's sound-only creatures (19, 40) have no model but still hear the match
+                let Some((model, base, clips)) = game.trigger_model(t) else {
+                    if matches!(t, 19 | 40) {
+                        let row = game.trigger(t);
+                        let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, ..default() };
+                        tr.reset(&row, &mut roll);
+                        npcs.figures.push(Some(npcs.triggers.len()));
+                        npcs.triggers.push((Entity::PLACEHOLDER, tr, row));
+                    }
+                    continue;
+                };
                 let Some(data) = load(layout::trigger_files(&model, &base, clips)) else { continue };
                 let row = game.trigger(t);
                 // ponytail: no path (the creatures that move along one stand at their home); a two-clip creature
@@ -209,6 +224,8 @@ fn step(
     mut shown: Query<&mut Visibility, With<character::Rig>>,
     mut commands: Commands,
     children: Query<&Children>,
+    audio: Option<Res<crate::audio::Sound>>,
+    bank: Option<Res<crate::audio::CourtBank>>,
 ) {
     let Some(mut npcs) = npcs else {
         // no court figures: the gallery and the emitters still step
@@ -255,6 +272,7 @@ fn step(
     npcs.near.deciding = g.score.tiebreak && played + 1 == 2 * g.rules.sets - 1;
     // a decided point turns the walkers to the middle of the winners' half (by the side their first player is on)
     let side = if 0.0 <= g.players.get(g.post_winner as usize).map_or(0.0, |p| p.pos[2]) { 6.4 } else { -6.4 };
+    match_news(&mut npcs.near, &g);
     let g = &mut *g;
     let rng = &mut g.rng.court;
     let mut roll = || rng.next();
@@ -292,13 +310,26 @@ fn step(
         }
         npcs.near.paused = false;
     }
+    let mut heard = Vec::new();
     if decided {
         for (e, w, home) in &mut npcs.walkers {
             w.react();
             face(&mut turn, *e, *home, side);
         }
         npcs.decided = true;
+        npcs.game_end = npcs.near.game;
+        for (_, t, row) in &mut npcs.triggers {
+            heard.extend(t.message(row, 6, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+        }
     }
+    // the scoreboard's pause over (a game, set or match decided)
+    let reacted = g.post.as_ref().is_some_and(|p| p.reacted && p.event.is_some());
+    if reacted && !npcs.reacted {
+        for (_, t, row) in &mut npcs.triggers {
+            heard.extend(t.message(row, 7, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+        }
+    }
+    npcs.reacted = reacted;
     // the serve after it: a new point
     if npcs.decided && serve {
         npcs.decided = false;
@@ -311,8 +342,14 @@ fn step(
             // only ends when the idle loops restart
             w.new_point(true);
         }
+        // ponytail: the game's end message (and its resets) is sent here with the new point's, not when the game's
+        // end state starts
+        let game_end = std::mem::take(&mut npcs.game_end);
         for (_, t, row) in &mut npcs.triggers {
-            t.reset_near(row, &mut npcs.near, &mut roll);
+            if game_end {
+                heard.extend(t.message(row, 8, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+            }
+            heard.extend(t.reset_near(row, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
     }
     // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
@@ -363,6 +400,7 @@ fn step(
         npcs.tick += 1;
     }
     let mut emitters = 0..g.emitters.len();
+    let mut flyover = None;
     for &f in &npcs.figures {
         let Some(k) = f else {
             if let Some(k) = emitters.next() {
@@ -374,8 +412,22 @@ fn step(
         // ponytail: a type's startled flag stays set until the next point (the original clears it sooner, from code
         // not found)
         for s in t.step_near(row, &mut npcs.near, &mut roll) {
+            if t.ty == 19 {
+                heard.push((s, t.ty, t.pos3()));
+                continue;
+            }
             let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
             g.sounds.push((npc::trigger_sound(t.ty, s), at));
+        }
+        // the landing-spot creature and the flyover: shown while on, where they are
+        if matches!(t.ty, 2 | 6) {
+            if let Ok(mut v) = shown.get_mut(*e) {
+                *v = if t.active && t.on { Visibility::Inherited } else { Visibility::Hidden };
+            }
+            if let Ok(mut tf) = turn.get_mut(*e) {
+                let scale = tf.scale;
+                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
+            }
         }
         // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
         // (a struck toss too: the plane step's miss stops it dead, and its bounce has the server toss again);
@@ -403,6 +455,9 @@ fn step(
                 *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
             }
         }
+        if t.ty == 6 {
+            flyover = Some((t.on, t.volume, t.pos3()));
+        }
         if t.ty == 15 {
             if let Ok(mut v) = shown.get_mut(*e) {
                 *v = if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden };
@@ -413,6 +468,44 @@ fn step(
             }
         }
     }
+    let (Some(audio), Some(Some(bank))) = (audio, bank.map(|b| b.0.clone())) else { return };
+    let play = |key: i32, volume: i32| sound::Play { slot: 0, program: 7, key: key as u8, volume, speed: 1.0 };
+    for (s, ty, at) in heard {
+        let t = npcs.triggers.iter().find(|(_, t, _)| t.ty == ty).map(|(_, t, _)| t);
+        match (ty, t) {
+            // 19's sweep: from its bearing at its volume
+            (19, Some(t)) => _ = audio.play_toward(&bank, play(s, t.volume), t.bearing),
+            (6, Some(t)) => npcs.flyover = Some(audio.play_at(&bank, play(s, t.volume), at)),
+            _ => _ = audio.play_at(&bank, play(s, 0x80), at),
+        }
+    }
+    // the flyover's sound follows it, fading with |z|; its reset stops it
+    match (npcs.flyover, flyover) {
+        (Some(id), Some((true, volume, at))) => audio.update(id, play(30, volume), at),
+        (Some(id), _) => {
+            audio.stop(id);
+            npcs.flyover = None;
+        }
+        _ => {}
+    }
+}
+
+/// What the match-event creatures hear about the point (`npc::Near`): a game or set won short of the match, a named
+/// point (an ace, return winner or smash winner by the last hitter's team), the call, winner and shots, the teams
+/// with a human, the ball's first bounce and the camera's eye.
+// ponytail: a passing or diving winner (the game's fourth named kind) is not told apart: not named
+fn match_news(near: &mut npc::Near, g: &Game) {
+    let hitter_won = g.last_hitter & 1 == g.post_winner;
+    (near.game, near.call, near.winner, near.shots) = (g.gallery_game && !g.score.match_over, g.rally.judge(g.body_hit).call, g.post_winner, g.shots);
+    near.named = hitter_won && ((1..=2).contains(&g.shots) || g.smashed);
+    near.humans = [false; 2];
+    for (i, &h) in g.humans.iter().enumerate() {
+        near.humans[i & 1] |= h;
+    }
+    let (at, material) = g.flight.landing;
+    (near.bounces, near.landing, near.in_court) = (g.flight.bounces, [at[0], at[1], at[2], 1.0], material.court && g.body_hit.is_none());
+    let e = g.cam.view.eye;
+    near.eye = [e[0], e[1], e[2], 1.0];
 }
 
 /// The cheer marks' sprites, drawn while the gallery's manager runs and it isn't raining: each faces the camera,
