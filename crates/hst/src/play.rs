@@ -69,6 +69,7 @@ mod reaction_voices;
 mod replay_camera;
 mod surprise;
 mod snapshot;
+mod serve_check;
 mod tick_input;
 mod timing;
 mod tornado;
@@ -458,6 +459,8 @@ struct Serving {
     tossed: bool,
     swing: Option<ServeSwing>,
     whiffed: bool,
+    /// `t` at the whiffed press: its swing reaches the contact pose `SWEET_FRAME` ticks on (`serve_whiff`).
+    whiff_t: u32,
     /// Stand-in AI: the contact frame it aims its press at, and its aim.
     bot_due: Option<usize>,
     bot_aim: Vec2,
@@ -1965,7 +1968,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     s.t += 1;
     if !s.tossed {
         g.serving = s;
-        if s.t < serve::TOSS_RELEASE {
+        // released TOSS_RELEASE ticks after the press tick (`s.t` counts it as 1), as the original
+        if s.t <= serve::TOSS_RELEASE {
             hold_ball(g);
         } else {
             let (hand, apex) = serve::toss_points(&g.serve_data[i], toss, &player_matrix(&g.players[i]));
@@ -2015,12 +2019,8 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
                         whoosh(g, i, 0, kind);
                     }
                     None => {
-                        // a missed serve swing shouts with its miss motion, never muted by an earlier whiff
                         s.whiffed = true;
-                        let r = g.rng.shared.r15();
-                        let shout =
-                            g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
-                        g.whooshes.push((0, i, shout));
+                        s.whiff_t = s.t;
                     }
                 }
             }
@@ -2032,6 +2032,9 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         None => {}
     }
     g.serving = s;
+    if serve_whiff(g, i) {
+        return;
+    }
     // swing animation: wind up to contact, follow through
     g.players[i].serve_anim = Some(match s.swing {
         Some(sw) => 0.35 + 0.3 * (1.0 - sw.left as f32 / sw.frames.max(1) as f32),
@@ -2098,6 +2101,29 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         };
         hold_ball(g);
     }
+}
+
+/// The server's whiffed serve swing, as the original: the swing plays on and turns into its miss motion after its
+/// contact pose, `SWEET_FRAME` + 1 ticks after the press, with the miss shout (never muted by an earlier whiff); the
+/// press already started the rally, so the toss landing untouched is called out with no shot struck, a fault
+/// (`Rally::check`), not tossed again. Whether the serve was whiffed (`serve_turn` stops there).
+fn serve_whiff(g: &mut Game, i: usize) -> bool {
+    let s = g.serving;
+    if !s.whiffed {
+        return false;
+    }
+    g.players[i].serve_anim = Some(0.9);
+    // the tick after the swing's contact pose, as its miss motion starts
+    if s.t == s.whiff_t + SWEET_FRAME as u32 + 1 {
+        let r = g.rng.shared.r15();
+        let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
+        g.whooshes.push((0, i, shout));
+    }
+    if g.flight.bounces > 0 {
+        g.flight.call = hst_sim::judge::Call::Out;
+        g.phase = Phase::Rally;
+    }
+    true
 }
 
 /// A stick axis (−1..1, +1 right/up) as the pad's byte (0x00 full left/up, 0x80 centre, 0xff full right/down;
@@ -3731,7 +3757,7 @@ fn simulate(mut g: ResMut<Game>) {
         .extend(g.bounces.frame(bounce, smash).into_iter().map(|p| (p, at)));
     g.whistle.0 &= n == 0;
     g.since_hit += 1;
-    if g.phase != Phase::Rally || g.shots == 0 {
+    if g.phase != Phase::Rally || g.shots == 0 && !g.serving.whiffed {
         return;
     }
     let f = &g.flight;
@@ -4054,7 +4080,8 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         let i = f.0;
         let p = &g.players[i];
         m.arm = p.arm;
-        let serving = g.phase == Phase::Serve && g.score.server == i as i32;
+        // a whiffed serve's miss motion plays on through the fault's call
+        let serving = (g.phase == Phase::Serve || g.serving.whiffed) && g.score.server == i as i32;
         if serving {
             let s = g.serving;
             let under = s.toss == Some(Toss::Under);
@@ -4072,11 +4099,13 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
                     };
                     m.play(id as usize, speed, false);
                 }
-                (Some(_), None) if s.whiffed => m.play(
-                    motion::whiff(if under { 0x26 } else { 0x25 }).unwrap_or(0x29) as usize,
-                    1.0,
-                    false,
-                ),
+                // a whiffed swing plays at speed 1 through its contact pose, then its miss motion (`serve_whiff`)
+                (Some(_), None) if s.whiffed => {
+                    let swing = motion::serve_swing(under, 0).0 as usize;
+                    let miss = motion::whiff(swing as i32).unwrap_or(0x29) as usize;
+                    let id = if m.id == miss || m.id == swing && m.clock.time > SWEET_FRAME as f32 { miss } else { swing };
+                    m.play(id, 1.0, false)
+                }
                 (Some(_), None) => m.play(motion::serve_toss(under) as usize, 1.0, false),
             }
             continue;
