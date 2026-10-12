@@ -190,6 +190,62 @@ fn goodcpus2_lobs_and_fence_hits_match_the_game() {
     assert!(r.exact > 2000 && lobs > 100 && r.touches.get(&14).is_some_and(|&n| n >= 6), "{:?}", r.touches);
 }
 
+/// B85: the word a net touch pops up — THIP off the cord (rally and serve), THUP into the net, GONG off the post
+/// (`research/b85_net_rec.py`, `context/b85/*.bin`: slot 5 with one velocity overwrite, the ball and the game's pop-up
+/// object every frame). From the frame after the overwrite the port's ball flies on by itself; every frame its bounce
+/// words (`bodyhit::BounceWords`) must be the game's: same texture, same place (bit for bit), same opacity.
+#[test]
+fn net_touch_words_match_the_game() {
+    use hst_sim::bodyhit::BounceWords;
+    const SIZE: usize = 4 + 0x290 + 0xf0 + 0x720 + 0x88 + 0x60;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Some((world, materials)) = disc(COURT as u32) else {
+        return eprintln!("disc missing, skipped");
+    };
+    // recording, overwrite vsync, the net word's texture (12 + effect kind)
+    let cases = [("cord_over3", 7864, 14), ("serve_let", 7785, 14), ("net_low", 7864, 15), ("post_back", 7864, 13)];
+    let mut seen = 0;
+    for (name, poke, word) in cases {
+        let Ok(data) = std::fs::read(format!("{root}/context/b85/{name}.bin")) else {
+            eprintln!("{name}.bin missing, skipped");
+            continue;
+        };
+        let s: Vec<(i32, &[u8], &[u8])> = data.chunks_exact(SIZE).map(|w| (i(w, 0), &w[4..0x294], &w[0x384..0x384 + 0x720])).collect();
+        let start = s.iter().position(|f| f.0 == poke + 1).expect("frame after the overwrite");
+        let (mut fl, shot) = load(s[start].1);
+        let mut words = BounceWords::default();
+        let (mut made, mut frames) = (vec![], 0);
+        for w in s[start..].windows(2) {
+            let ((va, a, _), (vb, b, game)) = (w[0], w[1]);
+            // the ball's own flight: consecutive frames of one shot, in play
+            if vb != va + 1 || i(b, 0xac) != i(a, 0xac) + 1 || b[0xa4] > 1 {
+                break;
+            }
+            fl.step_world(&shot, &COURTS[COURT], &world, &materials);
+            assert_eq!(fl.ball.pos.map(f32::to_bits), v3(b, 0xe0).map(f32::to_bits), "{name} vsync {vb}: ball");
+            words.frame(fl.bounces, fl.landing.0, &fl.landing.1);
+            // the game's bounce words: balloon-table row 2 among its entries (0x30 each from +0x150)
+            let theirs: Vec<(u8, [f32; 3], f32)> = (0..i(game, 0x6f0 - 0x130) as usize)
+                .map(|k| &game[0x20 + 0x30 * k..0x50 + 0x30 * k])
+                .filter(|e| e[0x29] == 2)
+                .map(|e| (e[0x1c], v3(e, 0), f(e, 0x18)))
+                .collect();
+            let ours: Vec<(u8, [f32; 3], f32)> = words.pops.iter().map(|p| (12 + p.effect, p.pos, p.alpha)).collect();
+            assert_eq!(ours, theirs, "{name} vsync {vb}: words");
+            frames += 1;
+            for o in ours {
+                if !made.contains(&o.0) {
+                    made.push(o.0);
+                }
+            }
+        }
+        assert_eq!(made.first(), Some(&word), "{name}: the net's word first");
+        eprintln!("{name}: {frames} frames, words {made:?}");
+        seen += 1;
+    }
+    eprintln!("{seen} net touches checked");
+}
+
 #[test]
 fn every_court_builds_its_world() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");

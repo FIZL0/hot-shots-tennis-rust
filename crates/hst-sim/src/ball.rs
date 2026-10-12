@@ -357,7 +357,12 @@ impl Flight {
         let r = shot.params.radius;
         self.advance(shot, surface, |pos, target, ghosts| {
             let ignore: &[u32] = if ghosts == 0 { &[] } else { &[GHOST] };
-            world.sweep(pos, target, r, ignore).map(|h| (h.contact(), [h.point[0], h.point[1], h.point[2]], materials[h.material as usize], h.material == GHOST))
+            // the contact record's point is the world-space centre less radius × normal (B85: not the model-space
+            // point carried through the node, which differs in the last bits off the net's tilted faces)
+            world.sweep(pos, target, r, ignore).map(|h| {
+                let p = std::array::from_fn(|k| crate::ps2::sub(h.centre[k], crate::ps2::mul(h.normal[k], r)));
+                (h.contact(), p, materials[h.material as usize], h.material == GHOST)
+            })
         });
     }
 

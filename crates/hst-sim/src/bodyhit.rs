@@ -181,7 +181,7 @@ impl BouncePop {
 /// A point's bounce words. They are made from the rally's start until the next point's setup (on after the point is
 /// decided too, unlike the bounce sounds), by the same rules as `sound::Bounces`' material sounds: a new contact count
 /// below 6, not within 4 frames of the last word, a soft obstacle's (the net's) word not again before a court
-/// contact, never effect kind 5; at most 10 a point.
+/// contact, never effect kind 5; at most 10 on screen at once (the game counts the live ones down as they fade out).
 /// ponytail: the game's word for a ball rolling on a material (kusa) is left out; no capture shows one.
 #[derive(Clone, Debug, Default)]
 pub struct BounceWords {
@@ -189,7 +189,6 @@ pub struct BounceWords {
     last: i32,
     cooldown: i32,
     soft: bool,
-    made: i32,
 }
 
 impl BounceWords {
@@ -200,13 +199,12 @@ impl BounceWords {
             self.last = 0;
         } else if self.last != n && n < 6 {
             self.last = n;
-            if self.cooldown < 1 && self.made < 10 {
+            if self.cooldown < 1 && self.pops.len() < 10 {
                 self.soft &= !m.court;
                 if !(self.soft && m.effect == 2) && m.effect != 5 {
                     if m.effect != 0 {
                         self.pops.push(BouncePop { effect: m.effect, pos: at, alpha: 128.0, timer: 20, fading: false });
                         self.cooldown = 4;
-                        self.made += 1;
                     }
                     self.soft = m.effect == 2;
                 }
