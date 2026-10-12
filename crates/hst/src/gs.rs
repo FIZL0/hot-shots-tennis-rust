@@ -311,6 +311,9 @@ pub struct GsMaterial {
     #[sampler(2)]
     pub texture: Option<Handle<Image>>,
     pub key: GsKey,
+    /// Added to the view depth the blended draws are sorted by (farthest first): the court hole's parts go first, in
+    /// its material order, as the game draws them.
+    pub order: f32,
 }
 
 impl From<&GsMaterial> for GsKey {
@@ -345,8 +348,33 @@ impl GsMaterial {
                 uniform,
                 texture: texture.clone().filter(|_| textured),
                 key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0, cull: !m.two_sided, mirror: false },
+                order: 0.0,
             })
             .collect()
+    }
+
+    /// [`Self::for_batch`] for a court model as the game loads and draws it. At load a MODULATE material turns on
+    /// ABE in all its batches and an `@add` batch (ALPHA 0x48) drops FGE. The hole model (`hole`) is drawn faded:
+    /// every batch ABE, TFX MODULATE, TEST "A ≥ 0x80: colour and Z, else colour only" (GEQUAL 0x80, FB_ONLY), with
+    /// the model's vertex alpha (not the highlight) as the GS alpha, which fades the decals (grass, dirt) into the
+    /// ground under them.
+    pub fn for_court_batch(m: &mtl::Material, prim: u8, texture: Option<Handle<Image>>, hole: bool) -> Vec<GsMaterial> {
+        let modulate = hole || (m.color[3] * 128.0) as i32 != 0x80 || m.name.contains("@vert");
+        let mut prim = if modulate { prim | 0x40 } else { prim };
+        if m.blend() == mtl::Blend::Add {
+            prim &= !0x20;
+        }
+        let mut draws = Self::for_batch(m, prim, texture);
+        if hole {
+            let mut lt = draws.swap_remove(0);
+            lt.key.modulate = true;
+            lt.uniform.highlight = 0.0;
+            // where A ≥ 0x80 = 1.0, the normal blend gives the source colour exactly
+            let ge = GsMaterial { key: GsKey { test: Test::Ge80, blend: lt.key.blend.filter(|&b| b != mtl::Blend::Normal), ..lt.key }, ..lt.clone() };
+            lt.key.test = Test::Lt80;
+            draws = vec![ge, lt];
+        }
+        draws
     }
 }
 
@@ -361,6 +389,10 @@ impl Material for GsMaterial {
 
     fn prepass_fragment_shader() -> ShaderRef {
         "embedded://hst/gs_prepass.wgsl".into()
+    }
+
+    fn depth_bias(&self) -> f32 {
+        self.order
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -502,6 +534,28 @@ mod tests {
         assert!((u.shininess - 39.46).abs() < 0.05 && u.highlight == 0.9, "{u:?}");
         assert_eq!(GsMaterial::for_batch(&material("x", 5, 1.0), 0x30, tex.clone())[0].uniform.shininess, 1.0);
         assert!(!keys(&material("x", 5, 1.0), 0x10)[0].fog);
+    }
+
+    #[test]
+    fn for_court_batch_keys() {
+        // checked against the GS state the game loads for all 11 courts' models (RAM, slot-8 matches)
+        let tex = Some(Handle::default());
+        let keys = |m: &mtl::Material, prim, hole| GsMaterial::for_court_batch(m, prim, tex.clone(), hole).iter().map(|g| g.key).collect::<Vec<_>>();
+        // opaque, no @vert: unchanged
+        assert_eq!(keys(&material("grass", 5, 1.0), 0x30, false), GsMaterial::for_batch(&material("grass", 5, 1.0), 0x30, tex.clone()).iter().map(|g| g.key).collect::<Vec<_>>());
+        // MODULATE (translucent colour or @vert) → ABE on every batch
+        assert_eq!(keys(&material("leaf", 5, 0.5), 0x30, false)[0].blend, Some(mtl::Blend::Normal));
+        assert_eq!(keys(&material("fence@vert", 5, 1.0), 0x30, false)[0].blend, Some(mtl::Blend::Normal));
+        // @add loses fog; @sub keeps it
+        assert!(!keys(&material("glow@add", 5, 1.0), 0x30, false)[0].fog);
+        assert!(keys(&material("line@add@sub", 5, 1.0), 0x30, false)[0].fog);
+        // the hole: MODULATE, A ≥ 0x80 opaque with Z, below blended without
+        let k = keys(&material("abb_zassou", 5, 1.0), 0x30, true);
+        let base = GsKey { textured: true, modulate: true, test: Test::Ge80, blend: None, fog: true, cull: true, mirror: false };
+        assert_eq!(k, [base, GsKey { test: Test::Lt80, blend: Some(mtl::Blend::Normal), ..base }]);
+        assert_eq!(GsMaterial::for_court_batch(&material("abb_zassou", 5, 1.0), 0x30, tex.clone(), true)[1].uniform.highlight, 0.0);
+        // a hole @add batch keeps its add in both draws
+        assert!(keys(&material("x@add", 25, 1.0), 0x30, true).iter().all(|k| k.blend == Some(mtl::Blend::Add) && !k.fog));
     }
 
     #[test]

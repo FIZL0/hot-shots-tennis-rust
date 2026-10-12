@@ -256,7 +256,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh
         let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
         for test in [Test::Ge80, Test::Lt80] {
             let key = GsKey { textured: true, modulate: true, test, blend: Some(hst_data::mtl::Blend::Normal), fog: true, cull: false, mirror: false };
-            let m = materials.add(GsMaterial { uniform, texture: texture.clone(), key });
+            let m = materials.add(GsMaterial { uniform, texture: texture.clone(), key, order: 0.0 });
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), Transform::from_rotation(Quat::from_rotation_x(PI)), NoFrustumCulling, bevy::light::NotShadowCaster));
         }
         views.push(mesh);
