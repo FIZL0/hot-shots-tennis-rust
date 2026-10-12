@@ -36,6 +36,7 @@ use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
 
+mod cursor;
 pub(crate) mod flame;
 mod online;
 mod previews;
@@ -733,6 +734,8 @@ enum Tex {
     Solid,
     Font,
     Hand,
+    /// The 3D pointing hand (`cursor.rs`).
+    Cursor,
     /// `SHEETS[k]`.
     Sheet(usize),
     /// A portrait sheet: costume 0 (characters 0–7, 8–13), costume 9 (same), costumes 1..8.
@@ -1044,7 +1047,7 @@ impl Draw<'_> {
             self.pill(x, yy, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
             self.centred(l, x + w / 2.0, yy + 7.0, 24.0, if on { WHITE } else { [100.0; 3] });
         }
-        self.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + 44.0 * sel as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
+        self.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + 44.0 * sel as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
     }
 
     /// The description bar along the bottom.
@@ -1188,7 +1191,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                     d.text(&s, 300.0, y, 22.0, if on && m.rebinding.is_some() { [128.0, 110.0, 40.0] } else { rgb });
                 }
             }
-            d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [56.0 + hand_x, 68.0 + 28.0 * m.sel as f32, 64.0, 32.0], WHITE, 128.0);
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [56.0 + hand_x, 68.0 + 28.0 * m.sel as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(if m.rebinding.is_some() { "Press the new key or button (Escape cancels)." } else { "Choose an action to rebind." });
         }
         Screen::Mode => {
@@ -1197,7 +1200,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 let on = (i == 1) == m.doubles;
                 d.q(CS0, src, [134.0, 150.0 + 70.0 * i as f32, 372.0, 44.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
             }
-            d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
         }
         Screen::Assign => {
@@ -1419,7 +1422,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
         d.text(value, x + w - 18.0 - vw, y + 4.0, 20.0, if on { WHITE } else { [60.0; 3] });
     }
     let [hx, hy, _] = pos[m.sel];
-    d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [hx - 50.0 + hand_x, hy + 2.0, 64.0, 32.0], WHITE, 128.0);
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hx - 50.0 + hand_x, hy + 2.0, 64.0, 32.0], WHITE, 128.0);
     let info = match m.sel {
         0 => text.msg(323).to_string(),
         1 => format!("{} {}", text.msg(581 + 2 * m.court), text.msg(582 + 2 * m.court)),
@@ -1566,12 +1569,13 @@ fn draw(
     mut ticker: ResMut<Ticker>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform)>,
     qr: Option<Res<online::QrImage>>,
+    cursor: Option<Res<cursor::Cursor>>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
     pads.sort();
-    // the hand swings out and back (the pause menu's `Hand` is the original's; here a plain sine)
-    let hand_x = -8.0 + 8.0 * (time.elapsed_secs() * 5.5).cos();
+    // the original's menu hand wags in place (`cursor.rs`), it doesn't swing out and back as the pause menu's
+    let hand_x = 0.0;
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
     let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
@@ -1589,6 +1593,10 @@ fn draw(
             Tex::Solid => art.0[0].clone(),
             Tex::Font => art.0[1].clone(),
             Tex::Hand => art.0[2].clone(),
+            Tex::Cursor => match &cursor {
+                Some(c) => c.image.clone(),
+                None => art.0[2].clone(),
+            },
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
@@ -1601,7 +1609,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
@@ -1665,10 +1673,10 @@ fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>,
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin))
-        .add_systems(Startup, (setup, load_bgm))
+        .add_systems(Startup, (setup, load_bgm, cursor::setup))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
-        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm));
+        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
     app.add_systems(Update, (online::poll.before(draw), online::typing.before(step)));
     previews::plugin(app);
 }
