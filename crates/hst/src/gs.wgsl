@@ -152,7 +152,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb += min(spec, 1.0);
 #endif
 #else
-    rgb = min(rgb + spec * 255.0 / 128.0, vec3(255.0 / 128.0));
+    // untextured: the GS draws VU1's 8-bit colour as it is (0x80 is 128 of 255, not 1.0 as MODULATE makes it)
+    rgb = min(rgb + spec * 255.0 / 128.0, vec3(255.0 / 128.0)) * 128.0 / 255.0;
 #endif
     // alpha test on the 8-bit value
     let a8 = floor(a * 128.0);
