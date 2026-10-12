@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -52,6 +52,12 @@ async function visit(n, pick) {
     AudioBufferSourceNode.prototype.start = function (...a) { __played += this.buffer?.duration ?? 0; (self.__starts ??= []).push([+(a[0] ?? 0).toFixed(3), +this.context.currentTime.toFixed(3), +(this.buffer?.duration ?? 0).toFixed(4)]); return start.apply(this, a); };
     self.__audioRate = () => { const t = __ctx[0]?.currentTime ?? 0, r = (__played - __rate[0]) / Math.max(t - __rate[1], 1e-9); __rate = [__played, t]; return +r.toFixed(2); };
 ` });
+  // WEB_ROTATE=ms: a phone (touch) turned portrait ↔ landscape every ms from the first navigation on (B121)
+  const rotate = +process.env.WEB_ROTATE || 0;
+  let turned = false, turns = 0;
+  const turn = () => send('Emulation.setDeviceMetricsOverride', turned ? { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'portraitPrimary', angle: 0 } } : { width: 844, height: 390, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } }).then(() => { turned = !turned; turns++; });
+  if (rotate) { await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }); await send('Emulation.setEmitTouchEventsForMouse', { enabled: true }); await turn(); }
+  const rotating = rotate && setInterval(turn, rotate);
   await send('Page.navigate', { url: `http://localhost:${web}/?${query}` });
   if (pick) {
     for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden")); i++) await sleep(200);
@@ -89,6 +95,7 @@ async function visit(n, pick) {
       log.push(`[${n}] ${t}s audio: ${await audio()}`);
     }
   }
+  if (rotating) { clearInterval(rotating); log.push(`[${n}] turned ${turns} times`); }
   writeFileSync(resolve(out, `frames${n}.json`), await evaluate('JSON.stringify(__frames)') ?? '[]');
   if (stallMs) log.push(`[${n}] buffers started [when, context time, length]: ${await evaluate('JSON.stringify(__starts)')}`);
   log.push(`[${n}] canvas: ${await evaluate("JSON.stringify([...document.querySelectorAll('canvas')].map(c => [c.width, c.height]))")}`);
