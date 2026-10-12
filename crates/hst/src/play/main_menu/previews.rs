@@ -48,7 +48,7 @@ use crate::Args;
 use crate::play::controls::{Action, Bindings};
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 1;
+const RENDER: u32 = 2;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
 /// row, so the read-back has no row padding.
 const BAKE: UVec2 = UVec2::new(384, 480);
