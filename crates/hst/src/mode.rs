@@ -132,6 +132,8 @@ pub fn plugin(app: &mut App) {
         .insert_resource(compiling)
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
+        .add_systems(First, unwarm.before(switch))
+        .add_systems(PostUpdate, warm.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
         // before the fixed ticks (the court intro holds them: `play/intro.rs`)
         .add_systems(RunFixedMainLoop, (|w: &mut World| run(w, RunFixedMainLoop)).in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
@@ -144,7 +146,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(FixedPostUpdate, |w: &mut World| run(w, FixedPostUpdate))
         // before the base's `texture_faces` (after the match's `animate`) and the UI layout (after `widescreen`'s fit)
         .add_systems(Update, (|w: &mut World| run(w, Update)).before(crate::character::texture_faces))
-        .add_systems(PostUpdate, (|w: &mut World| run(w, PostUpdate)).before(bevy::ui::UiSystems::Layout))
+        .add_systems(PostUpdate, (|w: &mut World| run(w, PostUpdate)).before(bevy::ui::UiSystems::Layout).before(warm))
         // before winit drops the windows on an `AppExit`
         .add_systems(Last, ((|w: &mut World| run(w, Last)), back).chain().before(bevy::window::ExitSystems));
 }
@@ -285,6 +287,35 @@ fn loaded(world: &mut World) {
     world.entity_mut(e).despawn();
     if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
         t.unpause();
+    }
+}
+
+/// A mesh drawn under the loading screen this frame: its own visibility and whether it was frustum culled.
+#[derive(Component)]
+struct Warming(Visibility, bool);
+
+/// While the loading screen is up over the new mode, every mesh is drawn under it, hidden or out of view too, so the
+/// pipelines a hidden effect needs (a hit's sparks, a lob's landing marks) compile behind the cover, not on its first
+/// show mid-match: the browser compiles them on the main thread (B110). `loaded` waits for them.
+fn warm(mut commands: Commands, loading: Query<&Loading>, mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>), (With<Mesh3d>, Without<Warming>)>) {
+    if !loading.iter().any(|l| l.built) {
+        return;
+    }
+    for (e, mut v, unculled) in &mut q {
+        commands.entity(e).insert((Warming(*v, !unculled), bevy::camera::visibility::NoFrustumCulling));
+        *v = Visibility::Visible;
+    }
+}
+
+/// Each warmed mesh back as its systems left it, before they run again.
+fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming)>) {
+    for (e, mut v, w) in &mut q {
+        *v = w.0;
+        let mut e = commands.entity(e);
+        e.remove::<Warming>();
+        if w.1 {
+            e.remove::<bevy::camera::visibility::NoFrustumCulling>();
+        }
     }
 }
 
