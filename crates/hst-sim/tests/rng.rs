@@ -557,10 +557,16 @@ fn setup_draws_like_the_game() {
     };
     // P3f's states (research/p3d3_setup_ram.py --chars: the characters after each record) have players of one
     // character; p3d3's have none (all-different characters stand in)
-    let same = std::fs::read(format!("{root}/context/p3f/setup_ram.bin")).unwrap_or_else(|_| {
-        eprintln!("p3f/setup_ram.bin missing: no same-character states");
-        Vec::new()
-    });
+    // P3f4's (research/p3f4_four_of_one.py) have all four players on character 1
+    let same: Vec<u8> = ["p3f", "p3f4"]
+        .iter()
+        .flat_map(|t| {
+            std::fs::read(format!("{root}/context/{t}/setup_ram.bin")).unwrap_or_else(|_| {
+                eprintln!("{t}/setup_ram.bin missing: no same-character states from {t}");
+                Vec::new()
+            })
+        })
+        .collect();
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let exe = hst_data::exe::Game::new(&cnf, &bin).unwrap();
     // rand()'s step backwards: its multiplier's inverse mod 2⁶⁴ is a^(2⁶³ − 1)

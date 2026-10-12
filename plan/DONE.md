@@ -323,6 +323,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P3** Timing grade effects → `swing.rs` · `play.rs` find_contact | t: swing.rs, timing.rs | j: 2026-10-07-p3-timing-grades — DONE: per-character grades/bias, timing error, scatter, table mode/variants (up1/dw1/dw2/dw3, lob POW), late lift wired into strike (`play/timing.rs`); 211 recorded launches, grades/error/target exact, scattered velocity ~1e-4 off; mis-hits, reactions and slices left
 - [x] **P5** Shot selection by input → `play.rs` read_input/press/human · `shot.rs` press_kind | t: shot_tables.rs, player.rs | j: 2026-10-08-p5-shot-input — DONE: edge-only ✕>○>△, no hold/charge; d-pad reaches pad_dir (full-length diagonals); 0x408e60 list and blend were P3
 - [x] **P15** Court collision mesh (mostly done by P0c3/4; check what's left) → `hst-sim/src/mesh.rs` `court.rs` `ball.rs` | t: live.rs
+- [x] **P3f4** Four players of one character's voice banks (P3f gap): `rng::voice_bank`'s four-of-one cases are ported from the code, not recorded. Record one and add it to `setup_draws_like_the_game` → `rng.rs` | t: rng.rs
 
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
