@@ -28,6 +28,20 @@ pub struct Npc {
     pub kind: Kind,
     pub world: M4,
     pub scale: f32,
+    /// A trigger creature's path (`Trigger::path`, `radii`) and the node it starts from (`Trigger::start`).
+    pub path: Vec<[f32; 4]>,
+    pub radii: Vec<f32>,
+    pub start: i16,
+}
+
+/// The path a creature's link (`(category, index)`) names: the linked category-14 marker's `sub` is the path's id,
+/// its nodes every marker with that id in file order; and the linked marker's place among them.
+pub fn path(plants: &[Placement], link: Option<(u8, u16)>) -> (Vec<[f32; 4]>, Vec<f32>, i16) {
+    let markers: Vec<&Placement> = plants.iter().filter(|p| p.category == 14).collect();
+    let Some(at) = link.filter(|l| l.0 == 14).and_then(|(_, i)| markers.get(i as usize)) else { return (Vec::new(), Vec::new(), 0) };
+    let nodes: Vec<&&Placement> = markers.iter().filter(|p| p.sub == at.sub).collect();
+    let start = nodes.iter().position(|p| std::ptr::eq(**p, *at)).unwrap_or(0) as i16;
+    (nodes.iter().map(|p| [p.pos[0], p.pos[1], p.pos[2], 1.0]).collect(), nodes.iter().map(|p| p.radius).collect(), start)
 }
 
 /// Where each category-23 record stands, in file order (links resolved against the anchors' positions).
@@ -62,7 +76,8 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
             };
             let mut world = world::mat_mul(&world::IDENTITY, &world::rot_y(p.yaw));
             world[3] = [pos[record][0], pos[record][1], pos[record][2], 1.0];
-            Some(Npc { record, kind, world, scale: p.scale })
+            let (path, radii, start) = if matches!(kind, Kind::Trigger(_)) { path(plants, p.link) } else { (Vec::new(), Vec::new(), 0) };
+            Some(Npc { record, kind, world, scale: p.scale, path, radii, start })
         })
         .collect()
 }
@@ -878,9 +893,9 @@ impl Emitter {
 }
 
 /// A trigger creature's state for the generic engine (`step`), driven by its type's [`TriggerRow`].
-/// ponytail: the turn eased through a pause, spline legs, random points about the area,
-/// randomised waypoints (rows without `exact`), ground snapping and start modes 2–3 are not ported: no recorded
-/// idle creature uses them (they are taken as the plain node / left alone). Add with P14c3–5's recordings.
+/// ponytail: the turn eased through a pause, spline legs, random points about the area, ground snapping, start
+/// modes 2–3 and start mode 1's random point about the node (rows without `exact`) are not ported: no recorded
+/// creature needs them (they are taken as the plain node / left alone). Add with P14c3–5's recordings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trigger {
     pub ty: u8,
@@ -889,6 +904,8 @@ pub struct Trigger {
     /// Its layout record's position (start point, circle centre) and its path's nodes.
     pub anchor: [f32; 4],
     pub path: Vec<[f32; 4]>,
+    /// Each node's radius: a row without `exact` aims at a random point on that circle about the node.
+    pub radii: Vec<f32>,
     /// The path node a reset starts from.
     pub start: i16,
     /// Matrix set by a reset (its layout placement).
@@ -1193,7 +1210,7 @@ impl Trigger {
         // ponytail: those whose model starts animating are not modelled
         let o = std::mem::take(self);
         *self = Trigger {
-            ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
+            ty: o.ty, anchor: o.anchor, path: o.path, radii: o.radii, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
             playing: o.playing, route: o.route, routes: o.routes, done: o.done, kept_done: o.kept_done, kept: o.kept, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, armed: o.armed, ..Trigger::default()
@@ -1226,6 +1243,18 @@ impl Trigger {
             let u = ps2::mul(2.3283064e-10, ps2::utof(roll()));
             self.gap = ps2::mul(voice.1 as f32, ps2::msub(1.0, row.idle.1, u)) as i32;
         }
+    }
+
+    /// Node `i`, or with a row without `exact` a random point on the circle of the node's radius about it.
+    pub fn node_at(&self, i: usize, row: &TriggerRow, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
+        let p = self.path[i];
+        if row.exact {
+            return p;
+        }
+        let u = ps2::mul(2.3283064e-10, ps2::utof(roll()));
+        let a = ps2::madd(ps2::add(0.0, -world::PI), world::TWO_PI, u);
+        let (f, r) = (world::mat_mul(&world::IDENTITY, &world::rot_y(a))[2], self.radii.get(i).copied().unwrap_or(0.0));
+        [ps2::add(p[0], ps2::mul(f[0], r)), ps2::madd(ps2::add(0.0, p[1]), f[1], r), ps2::madd(ps2::add(0.0, p[2]), f[2], r), ps2::madd(ps2::add(0.0, p[3]), f[3], r)]
     }
 
     /// Next waypoint: the leg's target, pause, velocity; `first` (from a reset) also turns to face it.
@@ -1274,7 +1303,7 @@ impl Trigger {
                 if self.reverse {
                     i = n - 1 - i;
                 }
-                self.path[i as usize]
+                self.node_at(i as usize, row, roll)
             }
             6 => self.anchor,
             _ => self.target, // ponytail: spline legs (mode 4)
@@ -1857,6 +1886,7 @@ impl Default for Trigger {
             msg: 0,
             anchor: [0.0; 4],
             path: Vec::new(),
+            radii: Vec::new(),
             start: 0,
             home: world::IDENTITY,
             world: world::IDENTITY,

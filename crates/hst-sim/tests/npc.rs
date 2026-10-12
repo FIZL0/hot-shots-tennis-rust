@@ -103,7 +103,58 @@ fn creatures_match_ram_on_four_courts() {
             still += *walker as usize;
             assert_eq!(*mtx, want, "court {court} record {}: matrix", m.record);
         }
-        eprintln!("court {court}: {} records, {} figures, {still} walkers checked at their spot", n, theirs.len());
+        // each trigger creature's path: its link (+0x58: path id, start node) into the path manager's list (+0x50 of
+        // the layout object: a ring of [last, next, id, count, nodes], nodes 0x70 bytes with the position at +0x50)
+        let (mut paths, mut resets) = (0, 0);
+        for a in (0x10_0000..0x200_0000u32).step_by(4) {
+            if r.u(a) != TRIGGER {
+                continue;
+            }
+            let m = made.iter().find(|m| m.record == ((r.u(a + 0x54) - recs) / 0x90) as usize).unwrap();
+            let link = r.u(a + 0x58);
+            if link == 0 {
+                assert!(m.path.is_empty(), "court {court} record {}: a path the game has not", m.record);
+                continue;
+            }
+            let (head, id) = (r.u(layout + 0x50), r.u(link));
+            let mut e = head;
+            while r.u(e + 8) != id {
+                assert_ne!(e, r.u(head), "court {court}: path {id} not in the list");
+                e = r.u(e + 4);
+            }
+            let nodes: Vec<Vec<u32>> = (0..r.u(e + 12)).map(|k| r.bits(r.u(e + 16) + 0x70 * k + 0x50, 4)).collect();
+            let radii: Vec<u32> = (0..r.u(e + 12)).map(|k| r.u(r.u(e + 16) + 0x70 * k + 0x10)).collect();
+            let ours: Vec<Vec<u32>> = m.path.iter().map(|p| p.map(f32::to_bits).to_vec()).collect();
+            let our_radii: Vec<u32> = m.radii.iter().map(|r| r.to_bits()).collect();
+            assert_eq!((ours, our_radii, m.start as u32), (nodes, radii, r.u(link + 4)), "court {court} record {}: path {id}", m.record);
+            // the reset's first leg heads where the game's does (its direction bit, +0x134, as the game drew it; a
+            // row without `exact` aims about the node: some draw gives the game's target bit for bit)
+            let ty = r.u(a + 0x50) as u8;
+            let (row, reverse) = (game.trigger(ty), r.u(a + 0x134) & 0xff != 0);
+            let mut t = npc::Trigger { ty, anchor: m.world[3], home: m.world, world: m.world, path: m.path.clone(), radii: m.radii.clone(), start: m.start, ..Default::default() };
+            t.reset(&row, &mut || if reverse { 0x1_0000 } else { 0 });
+            let f4 = |o: u32| r.bits(a + o, 4);
+            if m.path.len() > 1 && r.u(a + 0x135) & 0xff == 0 && f4(0x1e0) == m.world[3].map(f32::to_bits).to_vec() {
+                assert_eq!(t.node as u16 as u32, r.u(a + 0x130) & 0xffff, "court {court} record {} type {ty}: reset's node", m.record);
+                let n = m.path.len() as i16;
+                let i = if reverse { n - 1 - t.node % n } else { t.node % n } as usize;
+                // a row that snaps each waypoint to the ground (ponytail: not ported) has the court's height in y
+                let want: Vec<u32> = f4(0x150);
+                let same = |p: [f32; 4]| (0..4).all(|c| (c == 1 && row.snap == -1) || p[c].to_bits() == want[c]);
+                let hit = if row.exact {
+                    same(t.target)
+                } else {
+                    // the draw whose angle points at the target, and its neighbours
+                    let (dx, dz) = (f32::from_bits(want[0]) - m.path[i][0], f32::from_bits(want[2]) - m.path[i][2]);
+                    let guess = ((dx.atan2(dz) as f64 + std::f64::consts::PI) / std::f64::consts::TAU * 4294967296.0) as i64;
+                    (-0x10000..0x10000).any(|d| same(t.node_at(i, &row, &mut || (guess + d).clamp(0, u32::MAX as i64) as u32)))
+                };
+                assert!(hit, "court {court} record {} type {ty}: reset's target {want:x?} (node {:?}, exact {}, snap {})", m.record, m.path[i], row.exact, row.snap);
+                resets += 1;
+            }
+            paths += 1;
+        }
+        eprintln!("court {court}: {} records, {} figures, {still} walkers checked at their spot, {paths} paths, {resets} resets", n, theirs.len());
         if court == 1 {
             assert_eq!(still, 4, "court 1's walkers have not moved");
         }
@@ -510,7 +561,13 @@ fn startled_creatures_match_the_game() {
             flags: std::array::from_fn(|t| s[x + 0x50 + t] != 0),
             ..Default::default()
         };
-        let (mut ticks, mut startles, mut turns, mut blocked, mut struck, mut sounds) = (0, 0, 0, 0, 0, 0);
+        let (mut ticks, mut startles, mut turns, mut blocked, mut struck, mut sounds, mut legs, mut aimed) = (0, 0, 0, 0, 0, 0, 0, 0);
+        // the creatures' paths from the disc, by their home position
+        let (entries, plants) = court_layout(&mut iso, court);
+        let paths: Vec<([f32; 4], Vec<[f32; 4]>, Vec<f32>, i16)> = npc::spawn(&entries, &plants, &game.npc_roster(court), &game.walkers(court), 2)
+            .into_iter()
+            .map(|m| (m.world[3], m.path, m.radii, m.start))
+            .collect();
         let kinds: Vec<(usize, u8)> = (0..n)
             .map(|k| (k, samples[0][wo(k) + 0x50]))
             .filter(|&(_, ty)| matches!(ty, 0 | 1 | 5 | 27..=29 | 31 | 32 | 39 | 48))
@@ -529,7 +586,12 @@ fn startled_creatures_match_the_game() {
                     scrub: if ty == 48 { (u(s, x + 0x90 + 8 * k) as i32, u(s, x + 0x94 + 8 * k) as i32) } else { (0, 0) },
                     ..trigger_at(s, o, &row, v(s, 0x160), v(s, 0x150), 0)
                 };
-                let (mut before, after) = (state(a), state(b));
+                let (mut before, mut after) = (state(a), state(b));
+                if let Some((_, path, radii, start)) = paths.iter().find(|p| p.0 == before.home[3] && !p.1.is_empty()) {
+                    (before.path, before.radii, before.start) = (path.clone(), radii.clone(), *start);
+                    (after.path, after.radii, after.start) = (path.clone(), radii.clone(), *start);
+                }
+                let disc = !before.path.is_empty() && paths.iter().any(|p| p.1 == before.path);
                 // a poke moved it before the tick (HST_POKE): it starts from there
                 let poked = !before.moving && before.world[3] != after.world[3];
                 if poked {
@@ -540,7 +602,7 @@ fn startled_creatures_match_the_game() {
                 if new14 {
                     before.msg = 0x14;
                 }
-                if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || before.target != after.target {
+                if u(b, 0) != u(a, 0) + 1 || before.msg != after.msg || (before.target != after.target && !disc) {
                     // not stepped; a reset message (0xc a game's end, 0xe a point's end, 0x1a) clears its type's flag
                     if before.msg != after.msg && matches!(after.msg, 0xc | 0xe | 0x1a) {
                         let mut seen = npc::Near { flags, ..near(b) };
@@ -585,6 +647,8 @@ fn startled_creatures_match_the_game() {
                 })) as usize;
                 flags = seen.flags;
                 ticks += 1;
+                legs += (disc && t.moving) as usize;
+                aimed += (disc && !row.exact && t.target != before.target) as usize;
             }
             // where 27–29 stand, a new 0x14 came from one of them
             if let Some(&(k, _)) = kinds.iter().find(|&&(_, ty)| (27..=29).contains(&ty)) {
@@ -595,12 +659,31 @@ fn startled_creatures_match_the_game() {
                 assert_eq!(flags[ty as usize], near(b).flags[ty as usize], "court {court} vsync {}: type {ty}'s flag", u(b, 0));
             }
         }
-        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag, {struck} struck, {sounds} sounds");
+        eprintln!("court {court}: {ticks} ticks, {startles} startles, {turns} scrub turns, {blocked} ticks held back by the flag, {struck} struck, {sounds} sounds, {legs} moving along the disc's paths, {aimed} legs aimed about a node");
+        assert!(court != 1 || legs > 0, "court 1: nothing moved along a disc path");
         assert!(court != 7 || struck > 0, "court 7: no creature struck by the ball");
         assert!(startles + turns > 0, "court {court}: nothing startled");
         courts.push(court);
     }
     assert!(courts.is_empty() || courts.len() >= 3, "fewer than three courts checked: {courts:?}");
+}
+
+/// Court `court`'s entry list and hole-01 placement records.
+fn court_layout(iso: &mut Iso, court: u32) -> (Vec<layout::Entry>, Vec<layout::Placement>) {
+    let (mut entries, mut plants) = (Vec::new(), Vec::new());
+    for arc in ["CMN.XB", "HOL01.XB"] {
+        let data = iso.read(&format!("COURT/{court:02}/{arc}")).unwrap();
+        let a = Archive::parse(&data).unwrap();
+        for e in &a.entries {
+            let name = e.name.to_ascii_lowercase();
+            if name.ends_with(&format!("entry_c{court:02}.txt")) {
+                entries = layout::entries(&String::from_utf8_lossy(&a.read(e).unwrap()));
+            } else if name.ends_with(&format!("plant_c{court:02}_h01_0.dat")) {
+                plants = layout::plants(&a.read(e).unwrap()).unwrap();
+            }
+        }
+    }
+    (entries, plants)
 }
 
 /// A trigger creature's engine state from its recorded object at `o` in sample `s` (`trig` layout); the path is the
