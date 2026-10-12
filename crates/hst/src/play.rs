@@ -50,6 +50,7 @@ pub mod controls;
 mod cutaway;
 mod foot_fx;
 mod heard;
+mod intro;
 mod instant_replay;
 mod doubles_ai;
 mod markers;
@@ -568,6 +569,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
     app.add_plugins(heard::plugin);
+    app.add_plugins(intro::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .init_resource::<CamMode>()
