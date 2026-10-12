@@ -187,7 +187,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 - [ ] **P14c3f** Startled creatures' model weight, replay save, +0x280 (in P14c3d) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4a** The ball's spin-rotated box and kept last move for the ball-hit obstacles (in P14c4) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
-- [ ] **P14c4b** Record type 21's ball hits on court 6 (in P14c4) → `tools/record_npc.py` · `hst-sim/tests/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [~] **P14c4b** Record type 21's ball hits on court 6 (in P14c4) → `tools/record_npc.py` · `hst-sim/tests/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc BLOCKED: Hyprland runs --safe-mode --locked since 02:13 and copy 4 takes no vpad input (pick.py fails); unlock/restart the desktop, then make the court 6 state per journal 12-COURT6-READY
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs

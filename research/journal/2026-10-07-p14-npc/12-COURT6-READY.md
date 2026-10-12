@@ -9,3 +9,15 @@
   and since then copy 4 takes no virtual-pad input: even `tools/pick.py 0 9` stops at "match didn't reach the
   serve", although PCSX2's log shows "HST vpad 4" opened. PINE reads work. Next: restart copy 4 once the desktop
   shows its window again, re-run pick.py to confirm the pad, then the plan above.
+
+## Blocked (needs the human)
+- `pgrep -a Hyprland` → `Hyprland --watchdog-fd 4 --safe-mode --locked`, started 02:13, before this run. The
+  compositor lists no windows; screenshots (F8 via hyprctl) write nothing.
+- The vpad device (`/dev/input/event26`, "HST vpad 4") does emit events (read back directly), and PCSX2's log
+  opened it, but the game reacts to none of them: `pick.py 0 9` failed twice, once before and once after restarting
+  copy 4. PINE reads and writes work.
+- Unblock: unlock or restart the desktop session, then `tools/pcsx2-hst.sh` (copy 4) and `tools/pick.py 0 9` to
+  confirm the pad. After that, follow the plan above.
+
+## Not verified / not 1:1
+- Everything for type 21: no recording yet (above).
