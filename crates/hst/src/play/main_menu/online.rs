@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 use crate::mods_online::{self as mo, Ask, Wire};
-use crate::net::{Cmd, Event, Listing, Net, Online, Pick, Relay, Room, Seat};
+use crate::net::{Cmd, Event, Listing, Net, Online, Pick, Relay, Room, SHORT, SYMBOLS, Seat, is_short};
 
 /// What Online does once this machine's players are picked.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,8 +29,12 @@ pub struct View {
     pub cfg: Option<Online>,
     pub status: String,
     pub code: String,
-    /// Join by Code's pasted code.
+    /// Hosting: the short code (B104; empty until it's on the DHT, or if it can't be).
+    pub short: String,
+    /// Join by Code's code to join (typed, pasted or from the link).
     pub paste: String,
+    /// Join by Code's typed short code so far.
+    pub entry: String,
     pub room: Option<Room>,
     pub list: Vec<Listing>,
     pub started: bool,
@@ -57,6 +61,8 @@ pub enum Fx {
     Ask(Ask),
 }
 
+/// Join by Code's symbol keys (then its four buttons).
+const KEYS: usize = SYMBOLS.len();
 const ROWS: [&str; 6] = ["Host", "Find", "Quickplay", "Join by Code", "Relay", "Back"];
 /// The prompt for a mod this machine doesn't have: fetch its looks or not, and whether to ask again.
 const ASK_ROWS: [(&str, bool, Ask); 4] =
@@ -147,7 +153,9 @@ impl Menu {
                     cfg.next_relay();
                     out.extend([Sound(0), Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
                 } else if k.ok && self.sel == 3 {
-                    out.push(Effect::Online(Fx::Paste));
+                    self.net.entry.clear();
+                    self.net.status.clear();
+                    self.go(Screen::Code, out);
                 } else if k.ok && self.sel < 3 {
                     self.net.go = Some([Go::Host, Go::Find, Go::Quick][self.sel]);
                     self.go(Screen::Mode, out);
@@ -170,6 +178,41 @@ impl Menu {
                     out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Find))]);
                 } else if k.ok || k.back {
                     self.back_to_online(out);
+                }
+            }
+            Screen::Code => {
+                // 8 columns of symbols, 4 rows, then Delete, Paste, Join, Back (two columns each)
+                let s = self.sel;
+                if k.left || k.right {
+                    self.sel = if s < KEYS { s / 8 * 8 + (s % 8 + if k.right { 1 } else { 7 }) % 8 } else { KEYS + (s - KEYS + if k.right { 1 } else { 3 }) % 4 };
+                    out.push(Sound(0));
+                }
+                if k.up || k.down {
+                    let (row, col) = if s < KEYS { (s / 8, s % 8) } else { (4, (s - KEYS) * 2) };
+                    let row = (row + if k.down { 1 } else { 4 }) % 5;
+                    self.sel = if row == 4 { KEYS + col / 2 } else { row * 8 + col };
+                    out.push(Sound(0));
+                }
+                if k.ok {
+                    match self.sel {
+                        s if s < KEYS => {
+                            self.type_char(SYMBOLS[s] as char);
+                            out.push(Sound(0));
+                        }
+                        32 => out.push(Sound(if self.net.entry.pop().is_some() { 1 } else { 0 })),
+                        33 => out.push(Effect::Online(Fx::Paste)),
+                        34 if is_short(&self.net.entry) => {
+                            self.net.paste = self.net.entry.clone();
+                            self.net.go = Some(Go::Code);
+                            self.go(Screen::Mode, out);
+                        }
+                        34 => out.push(Sound(1)),
+                        _ => self.code_back(out),
+                    }
+                } else if k.back && self.net.entry.pop().is_some() {
+                    out.push(Sound(1));
+                } else if k.back {
+                    self.code_back(out);
                 }
             }
             Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
@@ -198,26 +241,43 @@ impl Menu {
         }
     }
 
+    fn code_back(&mut self, out: &mut Vec<Effect>) {
+        (self.screen, self.sel) = (Screen::Online, 3);
+        self.net.status.clear();
+        out.push(Effect::Sound(1));
+    }
+
+    /// A symbol typed into Join by Code (any case; others ignored); the code full: the cursor to Join.
+    pub(super) fn type_char(&mut self, c: char) {
+        let c = c.to_ascii_uppercase();
+        if self.net.entry.len() < SHORT && SYMBOLS.contains(&(c as u8)) {
+            self.net.entry.push(c);
+            if self.net.entry.len() == SHORT {
+                self.sel = KEYS + 2;
+            }
+        }
+    }
+
     pub(super) fn back_to_online(&mut self, out: &mut Vec<Effect>) {
         self.sel = [Go::Host, Go::Find, Go::Quick, Go::Code].iter().position(|g| Some(*g) == self.net.go).unwrap_or(0);
         self.net.go = None;
         self.net.code.clear();
+        self.net.short.clear();
         self.screen = Screen::Online;
         out.push(Effect::Sound(1));
     }
 
     /// The pasted text as Join by Code's code: on to the picks if it parses.
     pub(super) fn pasted(&mut self, text: Option<String>, out: &mut Vec<Effect>) {
-        let code = text.unwrap_or_default().trim().to_string();
-        if crate::net::is_code(&code) {
+        if let Some(code) = text.as_deref().and_then(crate::net::code_in) {
             self.net.paste = code;
             self.net.go = Some(Go::Code);
             self.go(Screen::Mode, out);
         } else {
             self.net.status = if cfg!(target_arch = "wasm32") {
-                "Paste a lobby code on the page first (Ctrl+V, or open the page with ?code=<code>), then choose Join by Code."
+                "Paste a lobby link or code on the page first (Ctrl+V), then choose Paste."
             } else {
-                "Copy a lobby code first (the host's code, or a lobby ID), then choose Join by Code."
+                "Copy a lobby link or code first, then choose Paste."
             }
             .into();
             out.push(Effect::Sound(1));
@@ -231,6 +291,7 @@ impl Menu {
             Event::Status(s) => v.status = s,
             Event::Failed(s) => v.status = s,
             Event::Code(c) => v.code = c,
+            Event::Short(c) => v.short = c,
             Event::Found(l) => {
                 v.status = format!("{} open lobb{}.", l.len(), if l.len() == 1 { "y" } else { "ies" });
                 v.list = l;
@@ -310,7 +371,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 0 => "Open a lobby for players over the internet or on this network; the match starts when every seat is taken.".into(),
                 1 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
                 2 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
-                3 => "Copy a host's code, then choose this to join their lobby.".into(),
+                3 => "Type the host's 4-character code, or paste their link or code.".into(),
                 4 if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
                 4 => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
                 _ => "Back to the main menu.".into(),
@@ -331,6 +392,32 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 None if m.net.status.is_empty() => "Looking for lobbies...".into(),
                 None => m.net.status.clone(),
             };
+            d.info(&info);
+        }
+        Screen::Code => {
+            d.frame(0, 5);
+            const ON: [f32; 3] = [128.0, 110.0, 40.0];
+            const OFF: [f32; 3] = [70.0, 70.0, 80.0];
+            // the code so far, a pill a symbol
+            for i in 0..SHORT {
+                let x = 320.0 - 128.0 + 64.0 * i as f32 + 4.0;
+                d.pill(x, 76.0, 56.0, if i == m.net.entry.len() { ON } else { [40.0, 40.0, 50.0] });
+                if let Some(c) = m.net.entry.get(i..i + 1) {
+                    d.centred(c, x + 28.0, 80.0, 30.0, WHITE);
+                }
+            }
+            for (i, c) in SYMBOLS.iter().enumerate() {
+                let (x, y) = (320.0 - 232.0 + 58.0 * (i % 8) as f32 + 3.0, 132.0 + 44.0 * (i / 8) as f32);
+                d.pill(x, y, 52.0, if m.sel == i { ON } else { OFF });
+                d.centred(&(*c as char).to_string(), x + 26.0, y + 7.0, 24.0, if m.sel == i { WHITE } else { [100.0; 3] });
+            }
+            for (i, l) in ["Delete", "Paste", "Join", "Back"].iter().enumerate() {
+                let (x, y, on) = (320.0 - 232.0 + 116.0 * i as f32 + 2.0, 132.0 + 44.0 * 4.0 + 8.0, m.sel == KEYS + i);
+                let dim = i == 2 && !is_short(&m.net.entry);
+                d.pill(x, y, 112.0, if on { ON } else { OFF });
+                d.centred(l, x + 56.0, y + 7.0, 24.0, if on && !dim { WHITE } else if dim { [60.0; 3] } else { [100.0; 3] });
+            }
+            let info = if m.net.status.is_empty() { "Type the host's code (or pick each symbol), or Paste their link or code.".to_string() } else { m.net.status.clone() };
             d.info(&info);
         }
         Screen::Lobby => {
@@ -371,7 +458,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             if !m.net.code.is_empty() {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
                 d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [400.0, 120.0, 200.0, 200.0], WHITE, 128.0);
-                d.centred("Scan it, or OK copies the code", 500.0, 326.0, 18.0, WHITE);
+                if m.net.short.is_empty() {
+                    d.centred("Scan it, or OK copies the code", 500.0, 326.0, 18.0, WHITE);
+                } else {
+                    // the short code, big enough to read out (the QR is its link)
+                    d.centred(&m.net.short, 500.0, 322.0, 46.0, [128.0, 110.0, 40.0]);
+                    d.centred("OK: Copy Link", 500.0, 372.0, 18.0, WHITE);
+                }
             }
             let info = if m.net.status.is_empty() { "Waiting for players...".to_string() } else { m.net.status.clone() };
             d.info(&info);
@@ -426,12 +519,64 @@ pub(super) fn poll(
             menu.settle(&args.iso, &net);
         }
     }
-    let code = &menu.net.code;
-    if !code.is_empty()
+    let code = if menu.net.short.is_empty() { menu.net.code.clone() } else { crate::net::link(&menu.net.short) };
+    let code = &code;
+    if !menu.net.code.is_empty()
         && made.is_none_or(|m| m.1 != *code)
         && let Some(img) = qr(code)
     {
         commands.insert_resource(QrImage(images.add(img), code.clone()));
+    }
+}
+
+/// Started from a lobby link (the browser's `?code=`, or `HST_CODE`): straight to this machine's character pick
+/// for that lobby, as a singles pick (one player; the first device to press anything is it).
+pub(super) fn linked(m: &mut Menu) {
+    #[cfg(target_arch = "wasm32")]
+    let text = crate::web::pasted();
+    #[cfg(not(target_arch = "wasm32"))]
+    let text = std::env::var("HST_CODE").ok();
+    let Some(code) = text.as_deref().and_then(crate::net::code_in) else { return };
+    let net = View { paste: code, go: Some(Go::Code), ..default() };
+    *m = Menu { screen: Screen::Chars, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
+}
+
+/// Join by Code's keyboard: typed symbols and Backspace go into the code, not to the menu's key bindings (the
+/// browser's on-screen keyboard too, `web.rs`).
+pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCode>>, mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>, mut was: Local<bool>) {
+    use bevy::input::keyboard::Key;
+    let on = menu.screen == Screen::Code;
+    if on != *was {
+        *was = on;
+        #[cfg(target_arch = "wasm32")]
+        crate::web::code_entry(on);
+    }
+    if !on {
+        typed.clear();
+        return;
+    }
+    for e in typed.read().filter(|e| e.state.is_pressed()) {
+        match &e.logical_key {
+            Key::Character(c) => {
+                if !e.repeat {
+                    c.chars().for_each(|c| menu.type_char(c));
+                }
+                keys.clear_just_pressed(e.key_code);
+            }
+            Key::Backspace => {
+                menu.net.entry.pop();
+                keys.clear_just_pressed(e.key_code);
+            }
+            _ => {}
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    for c in crate::web::typed().chars() {
+        if c == '\u{8}' {
+            menu.net.entry.pop();
+        } else {
+            menu.type_char(c);
+        }
     }
 }
 
@@ -446,6 +591,7 @@ pub(super) fn sample(m: &mut Menu) {
         m.net.room.as_mut().unwrap().seats[1].as_mut().unwrap().pick.r#mod = Some(Box::new(w));
         m.net.ask = Some(7);
     }
+    (m.net.short, m.net.entry) = ("K7QX".into(), "K7".into());
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
     m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
 }
@@ -514,6 +660,11 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             let text = text.or_else(crate::web::pasted);
             menu.pasted(text, &mut out);
         }
+        Fx::Copy if !menu.net.short.is_empty() => {
+            let link = crate::net::link(&menu.net.short);
+            let ok = clipboard.set_text(link.clone()).is_ok();
+            menu.net.status = if ok { "Link copied: send it to a friend (it opens this lobby), or they type the code in Join by Code.".into() } else { link };
+        }
         Fx::Copy => {
             let ok = clipboard.set_text(menu.net.code.clone()).is_ok();
             menu.net.status = if ok { "Code copied: send it to the other players (they paste it in Join by Code).".into() } else { format!("Code: {}", menu.net.code) };
@@ -566,5 +717,46 @@ mod tests {
         assert_eq!(m.screen, Screen::Online);
         m.pasted(Some(iroh::SecretKey::generate().public().to_string()), &mut out);
         assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Code)));
+    }
+
+    #[test]
+    fn join_by_typing_a_short_code() {
+        let mut m = Menu { screen: Screen::Online, sel: 3, seats: [Some(super::super::Dev::Keys), None, None, None], ..default() };
+        let dev = super::super::Dev::Keys;
+        let ok = Press { ok: true, ..default() };
+        m.step(dev, ok);
+        assert_eq!(m.screen, Screen::Code);
+        // "k" from the keyboard, the rest picked on the grid: 7 (row 0, column 5), Q, X
+        m.type_char('k');
+        m.type_char('0');
+        for c in ['7', 'Q', 'X'] {
+            let i = SYMBOLS.iter().position(|&s| s as char == c).unwrap();
+            m.sel = 0;
+            for _ in 0..i / 8 {
+                m.step(dev, Press { down: true, ..default() });
+            }
+            for _ in 0..i % 8 {
+                m.step(dev, Press { right: true, ..default() });
+            }
+            m.step(dev, ok);
+        }
+        assert_eq!((m.net.entry.as_str(), m.sel), ("K7QX", KEYS + 2), "full: on Join");
+        m.step(dev, ok);
+        assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Code)));
+        m.step(dev, ok);
+        m.step(dev, ok);
+        let fx = m.step(dev, ok);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
+        // Back deletes, then leaves
+        let mut m = Menu { screen: Screen::Code, net: View { entry: "AB".into(), ..default() }, ..default() };
+        m.step(dev, Press { back: true, ..default() });
+        assert_eq!((m.screen, m.net.entry.as_str()), (Screen::Code, "A"));
+        m.step(dev, Press { back: true, ..default() });
+        m.step(dev, Press { back: true, ..default() });
+        assert_eq!((m.screen, m.sel), (Screen::Online, 3));
+        // a pasted link joins its code
+        let mut out = Vec::new();
+        m.pasted(Some(crate::net::link("K7QX")), &mut out);
+        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Mode, "K7QX"));
     }
 }

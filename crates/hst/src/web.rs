@@ -2,7 +2,8 @@
 //! `import_disc` with the picked `File` (read by extent with `File.slice`, never whole) and an OPFS file to write the
 //! pack into (`Iso::write_pack_to`). Every later visit reads that pack and calls `run`, which mounts it in memory
 //! (`hst_data::iso::mount`) where every `Iso::open` finds it. Flags come from the URL: `?play&stage=1` = `--play --stage 1`;
-//! `?code=<lobby code>` is what Join by Code takes, as is the last text pasted on the page (`paste`).
+//! `?code=<lobby code>` (a lobby link, B104) starts on that lobby's character pick (`online::linked`); Join by Code's
+//! Paste takes the last text pasted on the page (`paste`), and a phone types the code on its own keyboard (`typed_code`).
 
 use hst_data::iso::Iso;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -153,4 +154,25 @@ pub fn write(path: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) -> io::R
 
 fn local() -> io::Result<web_sys::Storage> {
     web_sys::window().unwrap().local_storage().map_err(io_err)?.ok_or_else(|| io::Error::other("no localStorage"))
+}
+
+/// The page's on-screen keyboard's keys (`index.html`; Backspace as `\u{8}`) for Join by Code, since the last call.
+static TYPED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Page: text typed on the phone's keyboard while Join by Code's code entry is up.
+#[wasm_bindgen]
+pub fn typed_code(text: String) {
+    TYPED.lock().unwrap().push_str(&text);
+}
+
+pub fn typed() -> String {
+    std::mem::take(&mut *TYPED.lock().unwrap())
+}
+
+/// Join by Code's code entry shown or gone: the page puts a tap target up that opens the phone's keyboard.
+pub fn code_entry(on: bool) {
+    let f = js_sys::Reflect::get(&web_sys::window().unwrap(), &"hstCodeEntry".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    if let Some(f) = f {
+        let _ = f.call1(&JsValue::NULL, &on.into());
+    }
 }

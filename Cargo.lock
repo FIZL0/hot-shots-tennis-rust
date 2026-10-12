@@ -3605,6 +3605,8 @@ dependencies = [
  "n0-future",
  "n0-mainline",
  "qrcode",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

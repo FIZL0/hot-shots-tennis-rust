@@ -226,6 +226,8 @@ enum Screen {
     Online,
     Lobbies,
     Lobby,
+    /// Join by Code's code entry (B104).
+    Code,
     /// A match is running (the window is hidden).
     Playing,
 }
@@ -373,6 +375,10 @@ impl Menu {
                 out.push(Sound(0));
             }
         };
+        // a lobby link's start (`online::linked`): the first device to press anything is this machine's player
+        if self.screen == Screen::Chars && self.online() && self.seats[0].is_none() {
+            self.seats[0] = Some(dev);
+        }
         let host = self.seats[0];
         match self.screen {
             Screen::Main => {
@@ -587,7 +593,7 @@ impl Menu {
                     out.push(Sound(1));
                 }
             }
-            Screen::Online | Screen::Lobbies | Screen::Lobby => self.online_step(k, &mut out),
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
             _ => {}
         }
         out
@@ -895,8 +901,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
         "lobby" | "lobby-ask" => Screen::Lobby,
+        "code" => Screen::Code,
         _ => Screen::Main,
     };
+    if fresh && menu.screen == Screen::Main {
+        online::linked(&mut menu);
+    }
     if !fresh {
         (menu.screen, menu.sel) = (Screen::Main, 0);
     } else if menu.screen != Screen::Main {
@@ -1169,7 +1179,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, hand_x),
-        Screen::Online | Screen::Lobbies | Screen::Lobby => online::layout(&mut d, m, hand_x),
+        Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
     }
     (d.out, d.said)
 }
@@ -1593,7 +1603,7 @@ impl Screen {
             Screen::Main | Screen::Settings | Screen::Graphics | Screen::Controls => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
-            Screen::Online | Screen::Lobbies | Screen::Lobby => Some(0),
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
             Screen::Playing => None,
         }
     }
@@ -1626,7 +1636,7 @@ pub fn plugin(app: &mut App) {
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
         .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm));
-    app.add_systems(Update, online::poll.before(draw));
+    app.add_systems(Update, (online::poll.before(draw), online::typing.before(step)));
     previews::plugin(app);
 }
 
