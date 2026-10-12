@@ -100,7 +100,8 @@ impl Menu {
         for (s, pick) in seats.iter_mut().zip(self.picks()) {
             *s = Some(Seat { peer: "host".into(), pick });
         }
-        Room { name: cfg.name, doubles: self.doubles, court: self.court, sets: self.sets, games: self.games, umpire: self.umpire, seats, ..Default::default() }
+        let (court, umpire) = self.venue();
+        Room { name: cfg.name, doubles: self.doubles, court, sets: self.sets, games: self.games, umpire, seats, ..Default::default() }
     }
 
     /// Every one of this machine's players ready on the select: on to the confirm screen (host) or the lobby.

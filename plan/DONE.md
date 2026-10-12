@@ -239,6 +239,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B24b** Creature sounds in the app (ball 33 at its route's sound points, ×1.2) (in B24) → `play/npcs.rs` · `play/audio` | t: npc.rs | j: 2026-10-08-b24-court-events
 - [x] **B31c** GS integer truncation on `@add`/MODULATE draws (gap from B31b): the GS truncates texel×vc>>7, As = ta·va>>7 and the add Cs·As>>7 each step; the port blends in float. On the tornado this adds faint pixels (raster without truncation 65.0k vs 57.7k sum, 1687 vs 1540 px > 3). Port it bit for bit (e.g. premultiplied, floored output with One/One blend for `@add` in `gs.wgsl`) and check against `research/b31b_rast.py` → `gs.wgsl` · `gs.rs` | j: 2026-10-08-p17q-tornado
 - [x] **B40e4** Select extras: BEG/INT/EXP frames, key hints, handedness (Select), COM Lv pills (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
+- [x] **B40e5** Confirm extras: COM play style + Lv, umpire face/name, surface, ball icons, random court/umpire (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 
 
 ### Shots
