@@ -25,6 +25,7 @@ mod effects;
 mod graphics;
 mod gs;
 mod mods;
+mod net;
 mod hud_gamma;
 mod inspect;
 mod mash;
@@ -187,6 +188,10 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    // `hst net …`: the lobby flow in a terminal (`net::cli`)
+    if std::env::args().nth(1).as_deref() == Some("net") {
+        return net::cli(std::env::args().skip(2).collect());
+    }
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     disc::resolve(&mut argv);
     start(argv);
