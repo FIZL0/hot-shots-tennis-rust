@@ -41,10 +41,10 @@ tools/parallel.sh — run several Claude agents on plan/TODO.md tasks at once (r
 
   tools/parallel.sh N [p|d] [f] [m]
 
-  N   number of agents at once, e.g. 5                       default: 3
+  N   number of agents at once, e.g. 5                          default: 3
   p   priority: the next open tasks in plan/TODO.md order,
       even if two of them edit the same files
-  d   different files: the first open task, then later tasks   default
+  d   different files: the first open task, then later tasks    default
       that don't touch the same files
   f   force: keep starting tasks past 94% weekly usage          default: pause until the weekly reset
   m   multiple builds: a target/ per slot (no waiting on        default: one shared target/
