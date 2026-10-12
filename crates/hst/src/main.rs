@@ -391,7 +391,6 @@ fn load(
         };
         let mut look = weather::CourtLook {
             envir: envir.clone().unwrap_or_default(),
-            season,
             sky: None,
             looks: exe.weather_looks(),
             players: exe.player_light(n),

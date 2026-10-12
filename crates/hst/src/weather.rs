@@ -42,7 +42,6 @@ impl Weather {
 #[derive(Resource)]
 pub struct CourtLook {
     pub envir: Vec<u8>,
-    pub season: usize,
     pub sky: Option<[f32; 3]>,
     pub looks: [[f32; 6]; 6],
     /// The players' light factors (`exe::Game::player_light`).
@@ -78,9 +77,9 @@ pub(crate) fn apply(
     }
     look.last = Some(w);
     let l = look.looks.get(w as usize).map_or(weather::Look::CLEAR, |r| weather::look(w, *r));
-    let fog = gs::court_fog(&look.envir, look.season, &l);
-    let light = gs::court_light(&look.envir, look.season, &l).zip(sun.as_deref());
-    let intensity = gs::court_intensity(&look.envir, look.season, &l).unwrap_or(0.0);
+    let fog = gs::court_fog(&look.envir, &l);
+    let light = gs::court_light(&look.envir, &l).zip(sun.as_deref());
+    let intensity = gs::court_intensity(&look.envir, &l).unwrap_or(0.0);
     let darken = sun.as_deref().map_or(0.0, |s| crate::shadow::darken_s(weather::shadow(crate::shadow::strength(s.strength, intensity), w)));
     for (id, m) in materials.iter_mut() {
         if let Some((main, bg, sky, colour)) = fog {
@@ -102,7 +101,7 @@ pub(crate) fn apply(
             m.uniform.shadow = darken;
         }
     }
-    if let Some([r, g, b]) = look.sky.and_then(|c| gs::court_clear(&look.envir, look.season, c, &l)) {
+    if let Some([r, g, b]) = look.sky.and_then(|c| gs::court_clear(&look.envir, c, &l)) {
         commands.insert_resource(ClearColor(Color::srgb_u8(r, g, b)));
     }
     let (acc, clo, _sun) = weather::shows(w);

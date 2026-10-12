@@ -153,8 +153,8 @@ fn light(
         lit.1 = Some(key);
         let court = look.as_deref().zip(w).map(|(look, w)| {
             let l = look.looks.get(w as usize).map_or(hst_sim::weather::Look::CLEAR, |r| hst_sim::weather::look(w, *r));
-            let light = if player { gs::player_light(&look.envir, look.season, &l, look.players) } else { gs::model_light(&look.envir, look.season, &l) };
-            (light, gs::court_fog(&look.envir, look.season, &l))
+            let light = if player { gs::player_light(&look.envir, &l, look.players) } else { gs::model_light(&look.envir, &l) };
+            (light, gs::court_fog(&look.envir, &l))
         });
         let (mut dir, mut colour, mut ambient) = gs::DEFAULT_LIGHT;
         let (mut dir2, mut second) = (Vec4::ZERO, Vec4::ZERO);
