@@ -576,13 +576,20 @@ fn tick_calls(mut g: ResMut<Game>, calls: Option<ResMut<Calls>>) {
 fn draw_calls(
     calls: Option<Res<Calls>>,
     window: Query<&Window>,
-    mut cam: Query<&mut Projection, With<CallCamera>>,
+    mut cam: Query<(&mut Projection, &mut Camera), With<CallCamera>>,
     mut q: Query<(&mut Visibility, &mut bevy::mesh::morph::MorphWeights)>,
     mut joints: Query<&mut Transform>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Some(calls) = calls else { return };
-    if let Ok(mut proj) = cam.single_mut()
+    // the overlay camera only draws while a call is on show: idle, it would still cost a second shadow pass,
+    // light clustering and GPU preprocessing every frame (P23)
+    if let Ok((_, mut c)) = cam.single_mut()
+        && c.is_active != calls.playing.is_some()
+    {
+        c.is_active = calls.playing.is_some();
+    }
+    if let Ok((mut proj, _)) = cam.single_mut()
         && let Projection::Perspective(p) = &mut *proj
     {
         let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));

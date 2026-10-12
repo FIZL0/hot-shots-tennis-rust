@@ -20,6 +20,29 @@ pub(super) struct Shared {
     humans: [Human; 4],
     /// The path object's claim: the player whose swing last found its contact (−1 none), and the tick it did.
     claim: (i32, i32),
+    /// The last ball path stepped (`step`) and what it was stepped from.
+    built: Built,
+}
+
+#[cfg(test)]
+static NO_CACHE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tests step the path per player again, to compare.
+fn no_cache() -> bool {
+    #[cfg(test)]
+    return NO_CACHE.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(test))]
+    false
+}
+
+/// A cache, so not part of the state (`snapshot::state_hash` prints `Game`).
+#[derive(Default, Clone)]
+struct Built(String, Vec<PathBall>);
+
+impl std::fmt::Debug for Built {
+    fn fmt(&self, _: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Ok(())
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -130,15 +153,24 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         path_gap: 0.0,
     };
     if g.doubles_ai.path.stamp != w.frame {
-        let mut f = g.flight;
-        f.net = false;
-        for _ in 0..PATH_MAX {
-            let e = path_entry(&f);
-            let [x, y, z] = e.pos;
-            let [u, v, s] = e.vel;
-            w.path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
-            f.step(&g.shot, &COURTS[g.court]);
+        // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
+        // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
+        // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
+        let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
+        if g.doubles_ai.built.0 != key || no_cache() {
+            let mut path = Vec::with_capacity(PATH_MAX);
+            let mut f = g.flight;
+            f.net = false;
+            for _ in 0..PATH_MAX {
+                let e = path_entry(&f);
+                let [x, y, z] = e.pos;
+                let [u, v, s] = e.vel;
+                path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
+                f.step(&g.shot, &COURTS[g.court]);
+            }
+            g.doubles_ai.built = Built(key, path);
         }
+        w.path = g.doubles_ai.built.1.clone();
     }
     let row = p.ai;
     let me = &mut g.doubles_ai.me[i];
@@ -376,15 +408,24 @@ pub(super) fn human(g: &mut Game, i: usize) {
         ..Default::default()
     };
     if g.doubles_ai.path.stamp != w.frame {
-        let mut f = g.flight;
-        f.net = false;
-        for _ in 0..PATH_MAX {
-            let e = path_entry(&f);
-            let [x, y, z] = e.pos;
-            let [u, v, s] = e.vel;
-            w.path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
-            f.step(&g.shot, &COURTS[g.court]);
+        // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
+        // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
+        // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
+        let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
+        if g.doubles_ai.built.0 != key || no_cache() {
+            let mut path = Vec::with_capacity(PATH_MAX);
+            let mut f = g.flight;
+            f.net = false;
+            for _ in 0..PATH_MAX {
+                let e = path_entry(&f);
+                let [x, y, z] = e.pos;
+                let [u, v, s] = e.vel;
+                path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
+                f.step(&g.shot, &COURTS[g.court]);
+            }
+            g.doubles_ai.built = Built(key, path);
         }
+        w.path = g.doubles_ai.built.1.clone();
     }
     let row = p.ai;
     let d = &mut g.doubles_ai;
@@ -422,5 +463,45 @@ pub(super) fn formations(g: &mut Game, draws: &[u32]) {
         let at = serve_placement(i as i32, &g.score, g.rally.faults, p.stance, p.formation, g.score.swapped);
         let p = &mut g.players[i];
         (p.pos, p.prev, p.home, p.body.pos) = (at.pos, at.pos, at.pos, at.pos);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Args, GameSpace};
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// The shared path (P23) plays a 4-bot doubles match tick for tick as stepping it per player did.
+    #[test]
+    fn path_cache_keeps_the_match() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let hashes = |cache: bool| {
+            NO_CACHE.store(!cache, std::sync::atomic::Ordering::Relaxed);
+            // SAFETY: only `Pads::slot_of` reads it; every player is a bot
+            unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+            app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+            app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 1, stage: None, play: true, singles: false, chars: vec![0, 1, 2, 3], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+            app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+            app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+            app.add_systems(Startup, setup);
+            app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
+            app.update();
+            let mut v = Vec::new();
+            for _ in 0..60 * 60 {
+                app.world_mut().run_schedule(FixedUpdate);
+                v.push(snapshot::state_hash(app.world_mut()));
+            }
+            (v, app.world().resource::<Game>().shots)
+        };
+        let (with, _) = hashes(true);
+        let (without, shots) = hashes(false);
+        assert!(shots > 0);
+        assert_eq!(with.iter().zip(&without).position(|(a, b)| a != b), None);
     }
 }

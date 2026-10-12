@@ -1023,16 +1023,25 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
 
 /// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr, and each frame over 33 ms as it happens
 /// (for profiling, P23, Z1).
-fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32)>) {
+fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
     let dt = time.delta_secs();
     // a stutter: any frame over two 60 Hz frames, with when it happened
     if dt > 1.0 / 30.0 {
         eprintln!("slow frame {:.1} ms at {:.2} s", dt * 1e3, time.elapsed_secs());
     }
-    *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt));
+    *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt), acc.3);
     if acc.1 >= 5.0 {
         eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
-        *acc = default();
+        // the process's CPU time (all threads) per frame: steadier than fps on a busy machine
+        let cpu = std::fs::read_to_string("/proc/self/stat").ok().and_then(|s| {
+            let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
+            Some(f.iter().sum::<u64>() as f32 * 10.0)
+        });
+        if let Some(cpu) = cpu {
+            eprintln!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
+            acc.3 = cpu;
+        }
+        *acc = (0, 0.0, 0.0, acc.3);
     }
 }
 
