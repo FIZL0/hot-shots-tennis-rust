@@ -116,8 +116,13 @@ of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo'
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
 Lobbies are found over the public BitTorrent DHT. Players connect peer to peer with [iroh](https://iroh.computer), and
 a relay steps in when a direct path can't be made. In the browser everything goes through the relay: join by code
-(paste the code on the page with Ctrl+V, or open the page with `?code=<code>`) or host; Find and LAN play aren't there
-(no UDP in a browser), and Quick play hosts. Browser and desktop players can play together.
+(paste the code on the page with Ctrl+V, or open the page with `?code=<code>`) or host; Find isn't there (no UDP in a
+browser), and Quick play hosts. Browser and desktop players can play together.
+
+Browsers on one network can also play with no internet and no server (WebRTC): the host sets the relay to Off and
+hosts; each player scans the host's QR with their phone camera (it opens the game with the code), joins, and shows a
+QR of their own, which the host scans in turn (the tab it opens hands the code to the game tab), or the codes are
+pasted both ways. Browser-only: desktop builds can't join these lobbies.
 
 LAN play needs no internet: put everyone on one network (a router, or one player's hotspot with mobile data off) and
 set the relay to Off. Find lists the lobbies on that network first (mDNS), and a host's code holds its LAN address,

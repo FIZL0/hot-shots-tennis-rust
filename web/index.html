@@ -26,8 +26,18 @@
   <input id="iso" type="file" accept=".iso">
   <p id="status"></p>
 </div>
+<script>
+// A LAN answer's link (M2k, `net/rtc.rs`), opened by the host scanning a guest's screen: hand it to the game's tab
+// and stop here (the game isn't loaded twice).
+const answer = new URLSearchParams(location.search).get('code')?.startsWith('rtca');
+if (answer) {
+  new BroadcastChannel('hst-rtc').postMessage(new URLSearchParams(location.search).get('code'));
+  document.body.textContent = 'Sent to the game in your other tab: switch back to it. You can close this one.';
+}
+</script>
 <script type="module" src="touch.js"></script>
 <script type="module">
+if (answer) await new Promise(() => {});
 // installable and playable offline (sw.js)
 navigator.serviceWorker?.register('sw.js').catch(() => {});
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
@@ -58,6 +68,8 @@ async function start() {
   await init();
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
+  // a LAN answer from a tab opened by scanning a guest's code
+  new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));
   try {
     run(bytes);
   } catch (e) {
