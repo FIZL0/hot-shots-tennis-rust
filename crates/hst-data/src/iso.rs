@@ -1,17 +1,31 @@
 //! Minimal ISO 9660 reader: enough to pull files straight out of the retail disc image. It also opens a disc
 //! *pack* (`write_pack`): the files the remaster reads, copied out of the user's ISO once so the ISO can go.
+//! A pack can also be `mount`ed from memory (the browser build, which has no file system): `Iso::open` of the mounted
+//! path reads it from there.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::hash::Hasher;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use twox_hash::XxHash3_64;
 
 const SECTOR: u64 = 2048;
 
+/// Where an `Iso` reads from: a file, a mounted pack, or (browser import) the picked `File`.
+pub trait Source: Read + Seek {}
+impl<T: Read + Seek> Source for T {}
+
+static MOUNTS: Mutex<BTreeMap<PathBuf, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
+
+/// From now on `Iso::open(path)` reads `bytes` (a pack or an ISO image) instead of the file system.
+pub fn mount(path: impl AsRef<Path>, bytes: Arc<[u8]>) {
+    MOUNTS.lock().unwrap().insert(path.as_ref().to_path_buf(), bytes);
+}
+
 pub struct Iso {
-    file: File,
+    file: Box<dyn Source>,
     /// Upper-case path with `/` separators and no `;1` suffix -> (byte offset, size).
     pub files: BTreeMap<String, (u64, u32)>,
     /// A pack's content hash (XXH3-64 of everything after its header); `None` for an ISO.
@@ -29,7 +43,16 @@ fn packed(path: &str) -> bool {
 
 impl Iso {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        let mut iso = Self { file: File::open(path)?, files: BTreeMap::new(), pack_hash: None };
+        let mounted = MOUNTS.lock().unwrap().get(path.as_ref()).cloned();
+        match mounted {
+            Some(bytes) => Self::from_source(Box::new(io::Cursor::new(bytes))),
+            None => Self::from_source(Box::new(File::open(path)?)),
+        }
+    }
+
+    /// An ISO image or a pack read through any `Source`.
+    pub fn from_source(file: Box<dyn Source>) -> io::Result<Self> {
+        let mut iso = Self { file, files: BTreeMap::new(), pack_hash: None };
         if iso.read_at(0, 8).ok().as_deref() == Some(PACK_MAGIC) {
             iso.read_index()?;
             return Ok(iso);
@@ -65,7 +88,18 @@ impl Iso {
 
     /// Copy every file the remaster can read (`packed`) into a pack at `out`, after checking this is the supported
     /// disc (SCUS-97610, US 1.00). Written to `out` + `.part` and renamed when complete. Returns the pack's hash.
-    pub fn write_pack(&mut self, out: &Path, mut progress: impl FnMut(usize, usize)) -> io::Result<u64> {
+    pub fn write_pack(&mut self, out: &Path, progress: impl FnMut(usize, usize)) -> io::Result<u64> {
+        let part = out.with_extension("part");
+        let mut w = BufWriter::new(File::create(&part)?);
+        let hash = self.write_pack_to(&mut w, progress)?;
+        let f = w.into_inner().map_err(|e| e.into_error())?;
+        f.sync_all()?;
+        std::fs::rename(&part, out)?;
+        Ok(hash)
+    }
+
+    /// `write_pack` into any writer (the browser's OPFS file); the caller makes it durable.
+    pub fn write_pack_to(&mut self, w: &mut (impl Write + Seek), mut progress: impl FnMut(usize, usize)) -> io::Result<u64> {
         let invalid = |e: crate::xb::Error| io::Error::new(io::ErrorKind::InvalidData, e.0);
         let (cnf, bin) = (self.read("SYSTEM.CNF")?, self.read("ZZBIN/GAME.BIN")?);
         crate::exe::Game::new(&cnf, &bin).map_err(invalid)?;
@@ -81,8 +115,6 @@ impl Iso {
             index.extend(size.to_le_bytes());
             off += size as u64;
         }
-        let part = out.with_extension("part");
-        let mut w = BufWriter::new(File::create(&part)?);
         let mut h = XxHash3_64::new();
         w.write_all(PACK_MAGIC)?;
         w.write_all(&[0; 8])?;
@@ -95,11 +127,9 @@ impl Iso {
             progress(i + 1, names.len());
         }
         let hash = h.finish();
-        let mut f = w.into_inner().map_err(|e| e.into_error())?;
-        f.seek(SeekFrom::Start(8))?;
-        f.write_all(&hash.to_le_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&part, out)?;
+        w.seek(SeekFrom::Start(8))?;
+        w.write_all(&hash.to_le_bytes())?;
+        w.flush()?;
         Ok(hash)
     }
 

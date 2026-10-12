@@ -19,11 +19,13 @@
 mod audio;
 mod character;
 mod court_anim;
+#[cfg(not(target_arch = "wasm32"))]
 mod disc;
 mod effects;
 mod graphics;
 mod gs;
 mod mods;
+mod net;
 mod hud_gamma;
 mod inspect;
 mod mash;
@@ -35,6 +37,8 @@ mod shade;
 mod shadow;
 mod textures;
 mod weather;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -178,9 +182,23 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster }
 }
 
+// the browser build starts from `web::run` once the page has the disc pack
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    // `hst net …`: the lobby flow in a terminal (`net::cli`)
+    if std::env::args().nth(1).as_deref() == Some("net") {
+        return net::cli(std::env::args().skip(2).collect());
+    }
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     disc::resolve(&mut argv);
+    start(argv);
+}
+
+/// The app for `argv` = disc, flags (see the module doc).
+fn start(argv: Vec<String>) {
     let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(argv.into_iter());
     if upscale {
         textures::init(&args.iso);
@@ -376,7 +394,7 @@ fn load(
             // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
             let mut r = hst_sim::weather::Rand::default();
             let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
-                let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
+                let skip = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
                 (0..skip).for_each(|_| _ = r.next());
                 r.next()
             });

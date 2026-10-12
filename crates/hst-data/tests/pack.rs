@@ -23,6 +23,13 @@ fn pack_reads_like_the_disc() {
     assert!(p * 5 < i, "pack {p} bytes vs ISO {i}");
     // the same disc always gives the same pack (M2e: peers compare this hash)
     assert_eq!(iso.write_pack(&out, |_, _| {}).unwrap(), hash);
+    // the browser's path: written into any writer, mounted from memory, opened by its mount path
+    let mut mem = std::io::Cursor::new(Vec::new());
+    assert_eq!(iso.write_pack_to(&mut mem, |_, _| {}).unwrap(), hash);
+    assert_eq!(mem.get_ref(), &std::fs::read(&out).unwrap());
+    hst_data::iso::mount("mounted.pack", mem.into_inner().into());
+    let mut m = Iso::open("mounted.pack").unwrap();
+    assert_eq!((m.pack_hash, m.read("zzbin/game.bin").unwrap()), (Some(hash), iso.read("ZZBIN/GAME.BIN").unwrap()));
     std::fs::remove_file(&out).unwrap();
     std::fs::remove_dir(&dir).unwrap();
 }

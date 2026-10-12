@@ -22,8 +22,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (draw.after(super::camera), draw_dash, draw_bits.after(super::camera)));
 }
 
-#[derive(Resource)]
-struct FootFx {
+#[derive(Resource, Clone)]
+pub(super) struct FootFx {
     table: Foot,
     feet: Feet,
     court: usize,

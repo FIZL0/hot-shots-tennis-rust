@@ -145,10 +145,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let spec = in.spec;
 #ifdef GS_TEXTURED
     // TEX1 as the game sets it: LCM 0, L 0, K per model material, MMIN linear-mipmap-nearest, MXL = the levels
-    // uploaded. Q = 1/w (VU1), w the view depth (m), so LOD = log2(w) + K, rounded off to a level
+    // uploaded. Q = 1/w (VU1), w the view depth (m), so LOD = log2(w) + K, rounded off to a level; the sampler
+    // clamps it to the last level (MXL; textureNumLevels doesn't exist on WebGL2)
     let vz = view_bindings::view.view_from_world;
     let w = -dot(vec4(vz[0].z, vz[1].z, vz[2].z, vz[3].z), in.world_position);
-    let level = clamp(floor(log2(w) + gs.lod_k + 0.5), 0.0, f32(textureNumLevels(gs_texture) - 1u));
+    let level = max(floor(log2(w) + gs.lod_k + 0.5), 0.0);
     let t = textureSampleLevel(gs_texture, gs_sampler, in.uv + gs.uv_offset, level);
     rgb = t.rgb * rgb;
 #ifdef GS_MODULATE

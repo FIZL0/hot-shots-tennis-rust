@@ -17,13 +17,14 @@ use hst_sim::rng::Mt;
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
 /// The entities drawing one effect model.
+#[derive(Clone)]
 pub(crate) struct Shown {
     pub(crate) root: Entity,
     joints: Vec<Entity>,
     pub(crate) materials: Vec<Handle<StandardMaterial>>,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Impacts {
     models: Vec<(Effect, Shown)>,
     /// The impact playing (the game has one).
@@ -32,7 +33,7 @@ pub struct Impacts {
 
 /// A shot leaving the racket: shot kind (0 top … 4 drop; a smash's own kind), whether it is a smash (its own
 /// model), the ball's position and velocity.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Hit {
     pub kind: i32,
     pub smash: bool,
@@ -182,7 +183,7 @@ pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct HitSparks {
     sparks: Sparks,
     mesh: Handle<Mesh>,
@@ -337,7 +338,7 @@ pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<As
 }
 
 /// The ball's flight ribbon and glow, each one mesh.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct BallFlight {
     flight: Flight,
     glow: Glow,
@@ -443,7 +444,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
 }
 
 /// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct BallBounce {
     bounce: Bounce,
     ring: Shown,
@@ -576,7 +577,7 @@ pub fn draw_bounce(
 
 /// The landing markers: `chakudan_p` (red, a looping pulse) at the shot's aim and `smash_p` (yellow, one 120-frame
 /// play, then held) at the smash point; each placed on the court at (x, z) or hidden.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct LandingMarks {
     red: (Effect, Shown),
     smash: (Effect, Shown),

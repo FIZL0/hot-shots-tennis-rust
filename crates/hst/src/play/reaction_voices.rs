@@ -7,11 +7,15 @@ use hst_sim::sound;
 use super::Game;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(FixedUpdate, step.after(super::simulate).before(super::start_effects));
+    app.init_resource::<Frames>().add_systems(FixedUpdate, step.after(super::simulate).before(super::start_effects));
 }
 
-/// `frames`: frames since the reactions started.
-fn step(mut g: ResMut<Game>, mut frames: Local<u32>) {
+/// Frames since the reactions started.
+#[derive(Resource, Default, Clone)]
+pub(super) struct Frames(u32);
+
+fn step(mut g: ResMut<Game>, mut frames: ResMut<Frames>) {
+    let frames = &mut frames.0;
     if !g.post.as_ref().is_some_and(|p| p.reacted) {
         return *frames = 0;
     }

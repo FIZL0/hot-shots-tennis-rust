@@ -16,8 +16,8 @@ use crate::character::Motion;
 
 /// Per player its character's collision size (m); the point's pop-up, and whether it has been made; the ball's
 /// position a tick ago (its last move is the way it came); the pop-up's alpha a tick ago (drawn between the two).
-#[derive(Resource)]
-struct Hits {
+#[derive(Resource, Clone)]
+pub(super) struct Hits {
     radius: Vec<f32>,
     pop: Option<Popup>,
     made: bool,

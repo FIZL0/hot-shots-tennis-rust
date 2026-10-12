@@ -427,6 +427,7 @@ impl Screen {
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Screen>()
+        .init_resource::<Serving>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(super::simulate))
         .add_systems(Update, (step, draw, draw_banner).chain());
@@ -480,9 +481,13 @@ fn setup(
         });
 }
 
+/// The last tick was in the serve.
+#[derive(Resource, Default, Clone)]
+pub(super) struct Serving(bool);
+
 /// A frame of the match: its time, a new serve, the serve's speed the frame after it is struck.
-fn tick(mut g: ResMut<Game>, mut serving: Local<bool>) {
-    let g = &mut *g;
+fn tick(mut g: ResMut<Game>, mut serving: ResMut<Serving>) {
+    let (g, serving) = (&mut *g, &mut serving.0);
     g.match_stats.tick();
     let serve = g.phase == Phase::Serve;
     if serve && !*serving {

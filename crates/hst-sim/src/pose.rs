@@ -8,6 +8,7 @@ use crate::{libm, ps2};
 pub type M4 = [[f32; 4]; 4];
 
 /// A skeleton: node names, parents (index before child) and rest local matrices.
+#[derive(Clone)]
 pub struct Skeleton {
     pub names: Vec<String>,
     pub parent: Vec<Option<usize>>,

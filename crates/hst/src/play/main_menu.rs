@@ -36,6 +36,7 @@ use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
 
+mod online;
 mod previews;
 
 /// Characters on the select screen.
@@ -215,6 +216,10 @@ enum Screen {
     Assign,
     Chars,
     Confirm,
+    /// Online (`online.rs`): its menu, Find's list, the lobby.
+    Online,
+    Lobbies,
+    Lobby,
     /// A match is running (the window is hidden).
     Playing,
 }
@@ -262,6 +267,8 @@ struct Menu {
     /// The custom roster, and whether the select shows it.
     mods: Vec<crate::mods::Mod>,
     custom: bool,
+    /// The Online screens' state; `net.go` is set while the local screens pick this machine's players for Online.
+    net: online::View,
 }
 
 impl Default for Menu {
@@ -280,6 +287,7 @@ impl Default for Menu {
             rebinding: None,
             mods: Vec::new(),
             custom: false,
+            net: online::View::default(),
         }
     }
 }
@@ -295,6 +303,7 @@ enum Effect {
     SaveSettings,
     Launch,
     Quit,
+    Online(online::Fx),
 }
 
 impl Menu {
@@ -337,7 +346,7 @@ impl Menu {
         let n = self.players();
         if let Some(p) = (0..n).find(|&p| self.seats[p] == Some(dev)) {
             let humans_ready = (0..n).all(|q| self.seats[q].is_none() || self.players[q].ready);
-            if !self.players[p].ready || p != 0 || !humans_ready {
+            if !self.players[p].ready || p != 0 || !humans_ready || self.online() {
                 return Some(p);
             }
             return (0..n).find(|&q| self.seats[q].is_none() && !self.players[q].ready).or(Some(p));
@@ -365,8 +374,12 @@ impl Menu {
                             self.seats = [Some(dev), None, None, None];
                             self.go(Screen::Mode, &mut out);
                         }
-                        // ponytail: Online is M2's; the row is there, it does nothing yet
-                        1 => out.push(Sound(1)),
+                        1 => {
+                            self.seats = [Some(dev), None, None, None];
+                            self.net.status.clear();
+                            out.push(Effect::Online(online::Fx::Load));
+                            self.go(Screen::Online, &mut out);
+                        }
                         2 => self.go(Screen::Settings, &mut out),
                         _ => out.push(Quit),
                     }
@@ -422,6 +435,8 @@ impl Menu {
                 }
                 if k.ok {
                     self.go(Screen::Assign, &mut out);
+                } else if k.back && self.online() {
+                    self.back_to_online(&mut out);
                 } else if k.back {
                     self.sel = 0;
                     self.screen = Screen::Main;
@@ -444,6 +459,7 @@ impl Menu {
                         out.push(Sound(1));
                     }
                 } else if k.ok && seated.is_none() {
+                    let n = if self.online() { self.local_max() } else { n };
                     if let Some(p) = (0..n).find(|&p| self.seats[p].is_none()) {
                         self.seats[p] = Some(dev);
                         out.push(Sound(2));
@@ -451,7 +467,7 @@ impl Menu {
                 } else if (k.left || k.right || k.up || k.down) && let Some(p) = seated {
                     // the next free seat that way (1P stays the host's)
                     let d = if k.right || k.down { 1 } else { n - 2 };
-                    let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none());
+                    let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none() && !(self.online() && q >= self.local_max()));
                     if let Some(q) = to {
                         self.seats.swap(p, q);
                         out.push(Sound(0));
@@ -511,7 +527,9 @@ impl Menu {
                     } else {
                         self.players[p].ready = true;
                         out.push(Sound(2));
-                        if (0..self.players()).all(|q| self.players[q].ready) {
+                        if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
+                            self.online_ready(&mut out);
+                        } else if (0..self.players()).all(|q| self.players[q].ready) {
                             self.go(Screen::Confirm, &mut out);
                         }
                     }
@@ -547,7 +565,9 @@ impl Menu {
                         out.push(Sound(0));
                     }
                 }
-                if k.ok && self.sel == 0 {
+                if k.ok && self.sel == 0 && self.online() {
+                    self.online_host(&mut out);
+                } else if k.ok && self.sel == 0 {
                     out.extend([Sound(2), Launch]);
                     self.screen = Screen::Playing;
                 } else if k.back {
@@ -558,6 +578,7 @@ impl Menu {
                     out.push(Sound(1));
                 }
             }
+            Screen::Online | Screen::Lobbies | Screen::Lobby => self.online_step(k, &mut out),
             _ => {}
         }
         out
@@ -671,6 +692,8 @@ enum Tex {
     Shots(usize),
     /// Player `p`'s 3D preview (`previews.rs`), in place of the portrait.
     Preview(usize),
+    /// The lobby code's QR (`online::QrImage`).
+    Qr,
 }
 
 const SHEETS: [(&str, &str); 14] = [
@@ -856,6 +879,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "assign" => Screen::Assign,
         "chars" | "mods" => Screen::Chars,
         "confirm" => Screen::Confirm,
+        "online" => Screen::Online,
+        "lobbies" => Screen::Lobbies,
+        "lobby" => Screen::Lobby,
         _ => Screen::Main,
     };
     if !fresh {
@@ -866,6 +892,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.custom = screen == "mods" && !menu.mods.is_empty();
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
+        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
+            online::sample(&mut menu);
+        }
     }
     commands.insert_resource(menu);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
@@ -1102,6 +1131,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, 
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, hand_x),
+        Screen::Online | Screen::Lobbies | Screen::Lobby => online::layout(&mut d, m, hand_x),
     }
     (d.out, d.said)
 }
@@ -1320,6 +1350,7 @@ fn step(
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
+    (net, mut clipboard): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>),
 ) {
     let play = |key: u8| {
         if let (Some(s), Some(Art(_, Some(b), _))) = (&sound, art.as_deref()) {
@@ -1414,6 +1445,11 @@ fn step(
                     });
                     commands.insert_resource(crate::mode::Next(Some(crate::match_mode(&args.iso, &a, back))));
                 }
+                Effect::Online(fx) => {
+                    for s in online::apply(fx, &mut menu, &mut commands, net.as_deref(), &mut clipboard, &args.iso) {
+                        play(s);
+                    }
+                }
             }
         }
         return;
@@ -1429,6 +1465,7 @@ fn draw(
     time: Res<Time>,
     mut ticker: Local<(String, f32)>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
+    qr: Option<Res<online::QrImage>>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -1457,18 +1494,34 @@ fn draw(
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 1 + 5 + k].clone(),
             Tex::Preview(_) => continue,
+            Tex::Qr => match &qr {
+                Some(qr) => qr.0.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr).then(|| Rect::new(u, v, u + w, v + h));
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        let (left, width) = super::widescreen::place(x, w, share, quad.anchor);
+        let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
+        let (mut top, mut height) = (y / 4.48, h / 4.48);
+        if quad.tex == Tex::Qr
+            && let Ok(win) = window.single()
+        {
+            // a QR stays square (scannable) at any aspect: the largest square in its rect, centred
+            let side = (width * win.width()).min(height * win.height());
+            (left, top) = (left + (width - side / win.width()) / 2.0, top + (height - side / win.height()) / 2.0);
+            (width, height) = (side / win.width(), side / win.height());
+        }
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(h / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }
@@ -1484,6 +1537,7 @@ impl Screen {
             Screen::Main | Screen::Settings | Screen::Graphics | Screen::Controls => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
+            Screen::Online | Screen::Lobbies | Screen::Lobby => Some(0),
             Screen::Playing => None,
         }
     }
@@ -1515,6 +1569,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, (setup, load_bgm))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), draw).chain(), bgm));
+    app.add_systems(Update, online::poll.before(draw));
     previews::plugin(app);
 }
 

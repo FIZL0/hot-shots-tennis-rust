@@ -102,6 +102,30 @@ games' characters and package them as mods are in the mods repo:
 <https://github.com/FIZL0/hot-shots-tennis-rust-mods> (`standard/`, `tools/`). The game checks models against its copy
 of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo's `standard/hst_skeleton.json`.
 
+## Online play
+
+Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
+Lobbies are found over the public BitTorrent DHT. Players connect peer to peer with [iroh](https://iroh.computer), and
+a relay steps in when a direct path can't be made. Starting a match online isn't in yet. The browser build has no
+online play yet.
+
+Settings live in `online.txt` beside the ISO. The Online screen writes this file, or you can edit it yourself:
+
+```
+name = Tennis            # your lobby's name
+relay = n0               # n0 (iroh's public relays), own (relay_url), off (direct only)
+relay_url = https://relay.example.org
+```
+
+To run your own relay, install it with `cargo install iroh-relay --features server`. On a machine with a public IP and
+a domain, run it with a TLS config (`iroh-relay --config-path relay.toml`, see iroh-relay's docs). Then set
+`relay = own` and `relay_url = https://your.domain` on every player. `iroh-relay --dev` serves plain HTTP on
+`:3340` for local tests.
+
+The same flow runs in a terminal without the window. Each command prints the events:
+`hst net host|find|quick [doubles] [players]`, `hst net join <code> [players]`, each with an optional
+`--relay n0|off|<url>`.
+
 ## Development
 
 - `crates/hst-data`: readers for the disc and its formats (ISO, XB archives, TIM2 textures, models, motions,

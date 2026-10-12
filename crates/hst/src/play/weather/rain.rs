@@ -261,7 +261,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut meshes: ResMut<Assets<Mesh
         }
         views.push(mesh);
     }
-    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
+    let seed = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() | 1);
     let winds = COURT_LEAVES.get(court as usize).copied().unwrap_or_default().iter().map(|&(kind, strength)| Wind { kind, strength, speed: -1, ..default() }).collect();
     commands.insert_resource(Particles { seed, rng: Lcg(seed), tick: 0, rain: false, streaks: [Vec3::ZERO; STREAKS], fall: Vec3::ZERO, camera: None, ground: Vec2::ZERO, winds, serving: false, views });
 }
