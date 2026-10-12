@@ -183,12 +183,17 @@ fn main() {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     let mut app = App::new();
     let present_mode = gfx.present_mode();
-    // a `--shot` window has its own title so the desktop can keep test windows out of the way (tools/shot.sh)
-    let title = if args.shot.is_some() { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
+    // a `--shot` window, or any run under the unattended runners (HST_BG=1), has its own title so the desktop can keep
+    // test windows out of the way (tools/shot.sh); those runs are also silent
+    let bg = args.shot.is_some() || std::env::var_os("HST_BG").is_some();
+    let title = if bg { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
     // Steam's Big Picture (`SteamGamepadUI`) and the Steam Deck (`SteamDeck`) start games full screen
     let full = std::env::args().any(|a| a == "--fullscreen") || ["SteamGamepadUI", "SteamDeck"].iter().any(|v| std::env::var(v).is_ok_and(|v| v == "1"));
     let mode = if full && args.shot.is_none() { bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current) } else { default() };
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, ..default() }), ..default() }));
+    if bg {
+        app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
+    }
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(graphics::plugin).insert_resource(gfx);

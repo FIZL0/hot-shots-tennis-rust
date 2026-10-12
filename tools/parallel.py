@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 94% weekly usage; progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 94% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -28,7 +28,8 @@ hit the usage limit is discarded and its slot sleeps until the reset; one that h
 hook spares it) and Claude Code continues it at the reset.
 
 Weekly cap: no new task starts once the account's 7-day usage is at WEEKLY_MAX % (read from the same endpoint as /usage,
-no tokens spent); running ones finish and the run ends. `f` ignores the cap.
+no tokens spent); running ones finish and the run waits (rechecking every 5 min) until the weekly limit resets.
+`f` ignores the cap.
 """
 import glob, json, os, re, select, shlex, subprocess as sp, sys, threading, time, uuid
 from datetime import datetime, timedelta
@@ -197,7 +198,7 @@ def start(n, task):
              f"don't gather it again.\n\n{brief}"
     cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}'])
+    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1'])
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since
 
@@ -405,11 +406,14 @@ def main():
             if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 if capped():
                     if not cap_logged:
-                        log(f'weekly usage {weekly()}% >= {WEEKLY_MAX}%: starting nothing new (restart with f to go on)')
+                        log(f'weekly usage {weekly()}% >= {WEEKLY_MAX}%: waiting for the weekly reset (restart with f to go on now)')
                         cap_logged = True
                     continue
+                if cap_logged:
+                    log(f'weekly usage {weekly()}%: below the cap again, starting tasks')
+                    cap_logged = False
                 procs[n], running[n] = start(n, task), task
-        if not done and not procs and (stopping or capped() or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
+        if not done and not procs and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
             done = True
             if 'master' in panes() or queued():
                 report('RUN DONE')

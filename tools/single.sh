@@ -12,7 +12,7 @@
 set -u
 cd "$(dirname "$(realpath "$0")")/.."
 pgrep -f '^python3 .*([o]vernight-parallel|tools/[p]arallel)\.py' >/dev/null && { echo "a parallel run is going; wait for it to end"; exit 1; }
-export HST_PCSX2=6 HST_PCSX2_MAX_HOLD=${HST_PCSX2_MAX_HOLD:-1200}
+export HST_BG=1 HST_PCSX2=6 HST_PCSX2_MAX_HOLD=${HST_PCSX2_MAX_HOLD:-1200}
 cfg=../$(basename "$PWD")-slots/pcsx2/s6/PCSX2
 [ -d "$cfg" ] || { echo "no PCSX2 copy at $cfg (needs its own PINESlot 28017)"; exit 1; }
 # the copy's save states start as the user's (their [Folders] SaveStates, relative to ~/.config/PCSX2)
