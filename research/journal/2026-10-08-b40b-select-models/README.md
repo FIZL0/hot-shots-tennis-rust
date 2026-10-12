@@ -189,3 +189,31 @@ were already in place (B40b1 loads any costume through `load_disc`); no code cha
 - `tools/check.sh` at wrap-up: 138 pass, 1 unrelated failure: `play::mod_match::tests::get_a_grip_stats_reach_the_match`
   asserts Emi's `ai_row` ≠ `donor`, but `context/mods/getagrip_pc00_emi/mod.json` was repackaged today (10:20,
   M1l sizing) with donor 0 = ai_row 0. Local data vs a stale assertion, not touched here (M2i's test).
+
+# B40b5 — eye UV animation in the match (2026-10-12)
+
+## Found (match decompile, the motion setter)
+- The setter that starts a player's motion picks the face index once (motion number; +0x1404 for team
+  reactions ≥ 0x30 unless the co flag matches; 0x1c/0x1d keep the old one) and selects it in **both** slot 0 (MOR)
+  and slot 1 (UVA). It then copies the same loop flag and speed into every controller and sets every controller's time
+  to 0. So the UV player is the morph player's clock (same restart, loop and speed) wrapped/clamped by the `.UVA`'s
+  own length. An index without a `.UVA` unbinds, so the offset is 0 (as in the menu).
+- Correction to the N1d4/B40b2 notes ("only gu_set uses UVA"): bound in-match UVAs exist for reactions 0x2c..0x2f
+  of characters 1, 2, 4, 6, 8, 10, 12 (various), and for 24 motions of character 3 (stance 0..2, the strokes
+  0x10..0x17, whiffs, reactions). Test `character::uv_tests::match_reactions_play_the_eyes_uva` pins the list.
+
+## Built
+- `character.rs`: `Motion::uv_clock`. `set` restarts it as the face clock, `play` copies speed and loop into it,
+  `tick` keeps its speed equal to the face clock's (the serve follow-through sets only the face clock's) and ticks it
+  by `uv_length`. New system `character::uv_offsets` (registered in `main.rs` next to `texture_faces`) writes
+  `inspect::part_uv` into each part's `GsMaterial.uv_offset` for every rig except the inspect previews, which
+  keep their own `UvClock`. Rigs without `part_nodes` (umpire, NPCs) are skipped. Mods use the same path (M1i's
+  `EYES`). No sim state is read or written; `play.rs` is untouched.
+
+## Not verified / not 1:1
+- No live PCSX2 comparison of an in-match eye offset. The timing comes from the decompiled setter only.
+  In-match presentation needs no PINE proof (PLAN), and the sampler/binding is the one B40b2 verified live.
+- No side-by-side screenshot: a single `--shot` frame can't show scrolling, and the offsets are small (±0.02 UV).
+- "At contact all controllers are set to time 5.0" (N1d4) isn't ported for the face or UV clock. It was a gap
+  before this task too (the face clock doesn't do it either).
+- The UV offset is sampled at the tick's sampled time, not interpolated within a frame (same as the face weights).

@@ -250,6 +250,9 @@ pub struct Motion {
     /// The face playing (`CharacterData::faces`) and its clock.
     pub face: usize,
     pub face_clock: Clock,
+    /// The face's `.UVA` clock: the game's motion start gives the UV player (anim slot 1) the face's index, loop,
+    /// speed and time 0 as the morph player's, but it wraps by the `.UVA`'s own length.
+    pub uv_clock: Clock,
     /// The crossfade from the outgoing motion, and this frame's mix weight (`true`: the held fade, the new motion's
     /// frame 0 over the frozen outgoing pose; else the outgoing pose over the new one).
     pub fade: Fade,
@@ -261,7 +264,7 @@ pub struct Motion {
 impl Default for Motion {
     fn default() -> Self {
         let clock = Clock::start(1.0, true, None);
-        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, fade: Fade::default(), mix: None, sets: 0 }
+        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, uv_clock: clock, fade: Fade::default(), mix: None, sets: 0 }
     }
 }
 
@@ -281,7 +284,7 @@ impl Motion {
         let mut fade = self.fade;
         fade.start(frames, id as i32, hold.is_some(), self.id as i32, true, &self.clock);
         let face_clock = Clock::start(speed, looping, None);
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, fade, mix: None, sets: self.sets.wrapping_add(1) };
+        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, uv_clock: face_clock, fade, mix: None, sets: self.sets.wrapping_add(1) };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
@@ -293,6 +296,8 @@ impl Motion {
             self.clock.looping = looping;
             self.face_clock.speed = speed;
             self.face_clock.looping = looping;
+            self.uv_clock.speed = speed;
+            self.uv_clock.looping = looping;
         }
     }
 }
@@ -801,6 +806,30 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
     }
 }
 
+/// The eyes' texture offset (`.UVA`) of every rig but the inspect previews (they hold their own clock): the face's
+/// UV tracks at the UV clock's sampled time, on the parts whose palette holds their node (`inspect::part_uv`).
+pub fn uv_offsets(
+    rigs: Query<(Entity, &Rig, &Motion), Without<crate::inspect::UvClock>>,
+    children: Query<&Children>,
+    parts: Query<(&Mesh3d, &MeshMaterial3d<crate::gs::GsMaterial>)>,
+    mut gs: ResMut<Assets<crate::gs::GsMaterial>>,
+) {
+    for (root, rig, m) in &rigs {
+        let d = &rig.data;
+        // nothing to bind (the umpire, the court NPCs)
+        if d.part_nodes.is_empty() {
+            continue;
+        }
+        let offset = crate::inspect::part_uv(d, m.face, m.uv_clock.sampled);
+        for (mesh, mat) in parts.iter_many(children.iter_descendants(root)) {
+            let o = d.parts.iter().position(|p| p.0.id() == mesh.0.id()).map_or(Vec2::ZERO, |k| offset[k]);
+            if gs.get(&mat.0).is_some_and(|g| g.uniform.uv_offset != o) {
+                gs.get_mut(&mat.0).unwrap().uniform.uv_offset = o;
+            }
+        }
+    }
+}
+
 /// Advance every motion by one game frame, as the game's motion player.
 pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
     for (rig, mut m) in &mut q {
@@ -814,6 +843,11 @@ pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
         }
         let face = rig.data.faces.get(&m.face).map_or(0.0, |f| f.length);
         m.face_clock.tick(face);
+        // the UV player's speed always follows the morph player's (set together; the serve's follow-through sets
+        // only the face clock's)
+        m.uv_clock.speed = m.face_clock.speed;
+        let uv = rig.data.faces.get(&m.face).map_or(0.0, |f| f.uv_length);
+        m.uv_clock.tick(uv);
     }
 }
 
@@ -897,5 +931,45 @@ mod tests {
         }
         assert_eq!(held[..8], [69.0, 61.0, 0.0, 62.0, 0.0, 66.0, 0.0, 57.0]);
         assert_eq!((held[12], held[13]), (0.0, 64.0));
+    }
+}
+
+#[cfg(test)]
+mod uv_tests {
+    use super::*;
+
+    /// The match motions that carry a bound `.UVA`: the point reactions 0x2c..0x2f for some characters, and nearly
+    /// every motion of character 3's (stance, run, strokes, whiffs, reactions); the motion setter restarts the UV clock with the face's, and it holds at the `.UVA`'s end.
+    #[test]
+    fn match_reactions_play_the_eyes_uva() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+        let mut with = Vec::new();
+        for n in 0..14 {
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).unwrap();
+            let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
+            let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+            let m = disc_motions(&mut iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name)).unwrap();
+            let mut ids: Vec<usize> = m.faces.iter().filter(|(id, f)| **id != POSE && !f.uv.is_empty()).map(|(&id, _)| id).collect();
+            ids.sort();
+            with.extend(ids.into_iter().map(|id| (n, id)));
+            if n == 1 {
+                let f = &m.faces[&0x2e];
+                let mut mo = Motion::default();
+                mo.set(0x00, 1.0, true, None, 0);
+                mo.set(0x2e, 1.0, false, None, 1);
+                assert_eq!(mo.uv_clock, mo.face_clock);
+                for _ in 0..1000 {
+                    mo.uv_clock.tick(f.uv_length);
+                }
+                assert_eq!(mo.uv_clock.sampled, f.uv_length, "held at the end");
+            }
+        }
+        let chris = [0, 1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 28, 29, 31, 39, 40, 41, 42, 44, 45, 46, 47];
+        let mut want = vec![(1, 44), (1, 46), (2, 44), (2, 46)];
+        want.extend(chris.map(|id| (3, id)));
+        want.extend([(4, 46), (6, 44), (8, 44), (8, 45), (8, 46), (8, 47), (10, 44), (10, 45), (10, 46), (12, 46)]);
+        assert_eq!(with, want);
     }
 }
