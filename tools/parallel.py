@@ -281,9 +281,15 @@ def merge(tid):
         sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
         if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
             git('commit', '-qam', f'{tid}: archive ticked tasks into plan/DONE.md')
+        merged = git('rev-parse', 'HEAD').stdout.strip()
         chk = sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
         if chk.returncode:
+            later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
             git('reset', '-q', '--keep', pre)
+            if later and git('cherry-pick', *later).returncode:
+                git('cherry-pick', '--abort')
+                git('reset', '-q', '--keep', later[-1])  # can't replay them alone: keep them with the merge, master sorts it
+                return 'tests fail after the merge, and main got commits meanwhile: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
             return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
         git('branch', '-d', f'task/{tid}')
         pushed = git('push', '-q', 'origin', 'main').returncode == 0
