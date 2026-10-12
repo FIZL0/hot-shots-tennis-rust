@@ -2786,7 +2786,7 @@ fn played_out(mut g: ResMut<Game>, q: Query<(&Figure, &Motion, &character::Rig)>
 /// from the point's reactions until the next serve. A press after the dead ball but before the reactions still
 /// searches the last hitter's ball, so it whiffs with its miss motion.
 fn press(g: &mut Game, i: usize, kind: i32) {
-    if input_off(g) {
+    if input_off(g) || bodyhit::standing(g, i) {
         return;
     }
     let p = &mut g.players[i];
