@@ -73,6 +73,10 @@ pub(super) struct Recorder {
     caught_up: Option<Game>,
 }
 
+/// Replays off in the app (user 2026-10-12): a replay counted as a point (B127: a won game went back to deuce).
+// ponytail: tests still run them (the replay tests stay); flip back once B127 is fixed
+const REPLAYS: bool = cfg!(test);
+
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<Recorder>().add_systems(FixedUpdate, run.after(super::play_sounds));
 }
@@ -97,7 +101,7 @@ pub(super) fn run(w: &mut World) {
         }
     }
     let g = w.resource::<Game>();
-    let (set_up, pending) = (g.instant.set_up, g.instant.pending);
+    let (set_up, pending) = (g.instant.set_up, g.instant.pending && REPLAYS);
     let now = w.get_resource::<tick_input::TickPads>().map_or([tick_input::IDLE; 4], |t| t.now());
     w.resource_mut::<Game>().instant.set_up = false;
     let first = w.resource::<Recorder>().serve.is_none();
