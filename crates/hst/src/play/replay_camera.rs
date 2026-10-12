@@ -25,7 +25,7 @@ struct Rec {
     lead: i32,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub(super) struct ReplayCamera {
     shots: Vec<CameraShot>,
     picks: ReplayPicks,

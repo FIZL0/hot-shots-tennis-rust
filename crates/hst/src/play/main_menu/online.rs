@@ -194,7 +194,7 @@ impl Menu {
                 v.started = true;
                 v.status = "Everyone's in.".into();
             }
-            Event::Match(_) | Event::Dropped(_) => {}
+            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) => {}
         }
     }
 }

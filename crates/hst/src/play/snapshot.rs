@@ -102,6 +102,9 @@ fn modules(w: &World) -> Vec<Box<dyn Fn(&mut World) + Send + Sync>> {
         }
     }
     let mut out = Vec::new();
+    // the instant replay's recorder and cameras
+    keep::<super::instant_replay::Recorder>(w, &mut out);
+    keep::<super::replay_camera::ReplayCamera>(w, &mut out);
     keep::<super::cutaway::Director>(w, &mut out);
     keep::<super::foot_fx::FootFx>(w, &mut out);
     keep::<super::match_stats::Serving>(w, &mut out);

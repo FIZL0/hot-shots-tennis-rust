@@ -174,6 +174,9 @@ pub struct Room {
     pub seed: u32,
     #[serde(default)]
     pub delay: u32,
+    /// Lockstep (M2g) instead of rollback (M2h): the host's `HST_NET_LOCKSTEP`.
+    #[serde(default)]
+    pub lockstep: bool,
 }
 
 impl Room {
@@ -374,6 +377,8 @@ pub enum Cmd {
     Leave,
     /// In the match: to every other peer.
     Send(Msg),
+    /// In the match: a datagram (unreliable, unordered: rollback's messages) to one peer, through the host.
+    Datagram(String, Vec<u8>),
 }
 
 /// What the network tells the app.
@@ -393,6 +398,8 @@ pub enum Event {
     Match(Msg),
     /// In the match: a peer is gone (why).
     Dropped(String),
+    /// In the match: a peer's datagram (`Cmd::Datagram`), with who sent it.
+    Datagram(String, Vec<u8>),
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
@@ -553,7 +560,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             Cmd::Join(code, picks) => {
                 join(&cx, &code, picks, &mut cmds).await;
             }
-            Cmd::Leave | Cmd::Send(_) => {}
+            Cmd::Leave | Cmd::Send(_) | Cmd::Datagram(..) => {}
         }
     }
     cx.ep.close().await;
@@ -613,6 +620,8 @@ enum Guest {
     In { peer: String, picks: Vec<Pick>, build: String, tx: SendStream, conn: Connection },
     Said(String, Msg),
     Gone(String),
+    /// A datagram from the first peer for the second.
+    Datagram(String, String, Vec<u8>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -634,7 +643,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = tokio::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
-    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = None;
+    // a host with every seat (`HST_NET_SYNCTEST`) starts at once
+    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = room.seats.iter().all(Option::is_some).then(|| (Vec::new(), t0));
     let mut ping = tokio::time::interval(Duration::from_secs(1));
     loop {
         if dirty {
@@ -651,12 +661,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             // ponytail: no probe answer in time counts as 250 ms; a slower peer just stalls the match more
             let worst = joined.iter().map(|(p, ..)| rtt.get(p).copied().unwrap_or(Duration::from_millis(250))).max().unwrap_or_default();
             room.delay = delay_for(worst);
+            room.lockstep = std::env::var_os("HST_NET_LOCKSTEP").is_some();
             room.seed = (SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as u32) | 1;
             broadcast(&joined, &Msg::Start(room.clone()));
             cx.say(Event::Status(format!("Round trip {} ms, input delay {} ticks.", worst.as_millis(), room.delay)));
             cx.say(Event::Start(room.clone(), "host".into()));
             cx.ep.set_user_data_for_address_lookup(None);
-            return relay(cx, joined, guests, cmds).await;
+            return relay(cx, joined, gtx, guests, cmds).await;
         }
         tokio::select! {
             Some(inc) = cx.ep.accept() => {
@@ -710,7 +721,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         waiting.retain(|p| *p != peer);
                     }
                 }
-                Guest::Said(..) => {}
+                Guest::Said(..) | Guest::Datagram(..) => {}
                 Guest::Gone(peer) => {
                     room.leave(&peer);
                     joined.retain(|(p, ..)| *p != peer);
@@ -738,7 +749,18 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
 #[cfg(not(target_arch = "wasm32"))]
 /// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
 /// a guest dropping ends the match for everyone.
-async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) {
+async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, gtx: amp::UnboundedSender<Guest>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) {
+    for (peer, _, conn) in &joined {
+        let (peer, conn, gtx) = (peer.clone(), conn.clone(), gtx.clone());
+        tokio::spawn(async move {
+            while let Ok(d) = conn.read_datagram().await {
+                if let Some((to, data)) = undatagram(&d) {
+                    let _ = gtx.send(Guest::Datagram(peer.clone(), to, data.to_vec()));
+                }
+            }
+        });
+    }
+    let to = |peer: &str| joined.iter().find(|(p, ..)| p == peer).map(|(_, _, c)| c);
     loop {
         tokio::select! {
             Some(g) = guests.recv() => match g {
@@ -755,10 +777,21 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: am
                 Guest::In { mut tx, .. } => {
                     let _ = send(&mut tx, &Msg::Refused("the match has started".into())).await;
                 }
+                Guest::Datagram(from, to_, data) if to_ == "host" => cx.say(Event::Datagram(from, data)),
+                Guest::Datagram(from, to_, data) => {
+                    if let Some(c) = to(&to_) {
+                        send_datagram(c, &from, &data);
+                    }
+                }
                 Guest::Said(..) => {}
             },
             c = cmds.recv() => match c {
                 Some(Cmd::Send(m)) => broadcast(&joined, &m),
+                Some(Cmd::Datagram(peer, data)) => {
+                    if let Some(c) = to(&peer) {
+                        send_datagram(c, "host", &data);
+                    }
+                }
                 Some(Cmd::Leave) | None => {
                     // the goodbyes go out with the lag, then the connections close
                     tokio::time::sleep(Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200)).await;
@@ -770,6 +803,38 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: am
                 Some(_) => {}
             },
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// A datagram on the wire: the other end's peer name (the sender's from the host, the receiver's to it), then the data.
+fn datagram(peer: &str, data: &[u8]) -> Vec<u8> {
+    let mut d = vec![peer.len() as u8];
+    d.extend_from_slice(peer.as_bytes());
+    d.extend_from_slice(data);
+    d
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn undatagram(d: &[u8]) -> Option<(String, &[u8])> {
+    let n = *d.first()? as usize;
+    Some((String::from_utf8(d.get(1..1 + n)?.to_vec()).ok()?, d.get(1 + n..)?))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Sends after [`LAG_MS`] (simulated latency); a datagram that doesn't fit or finds the connection gone is lost, as
+/// datagrams are.
+fn send_datagram(c: &Connection, peer: &str, data: &[u8]) {
+    let d = datagram(peer, data);
+    let lag = LAG_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if lag == 0 {
+        let _ = c.send_datagram(d.into());
+    } else {
+        let c = c.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(lag)).await;
+            let _ = c.send_datagram(d.into());
+        });
     }
 }
 
@@ -860,6 +925,14 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
                 Ok(Msg::Start(r)) => {
                     playing = true;
                     cx.say(Event::Start(r, cx.ep.id().to_string()));
+                    let (conn, ev) = (conn.clone(), cx.ev.clone());
+                    tokio::spawn(async move {
+                        while let Ok(d) = conn.read_datagram().await {
+                            if let Some((from, data)) = undatagram(&d) {
+                                let _ = ev.send(Event::Datagram(from, data.to_vec()));
+                            }
+                        }
+                    });
                 }
                 Ok(Msg::Ping(t)) => link.send(&Msg::Pong(t)),
                 Ok(m) if playing && m.in_match() => cx.say(Event::Match(m)),
@@ -880,6 +953,7 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
             },
             c = cmds.recv() => match c {
                 Some(Cmd::Send(m)) => link.send(&m),
+                Some(Cmd::Datagram(to, data)) => send_datagram(&conn, &to, &data),
                 Some(Cmd::Leave) | None => {
                     tokio::time::sleep(Duration::from_millis(if playing { LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200 } else { 0 })).await;
                     conn.close(0u32.into(), b"left");

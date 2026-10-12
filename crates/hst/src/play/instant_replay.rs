@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use hst_sim::instant::{self, Decision, Point};
 use hst_sim::score::Event;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 const CROSS: u16 = 0x2000;
 const CIRCLE: u16 = 0x4000;
@@ -56,10 +57,11 @@ pub(super) struct Instant {
     pub shot_ticks: Vec<i32>,
 }
 
-/// The run's state outside `Game`: the match as the last serve set-up left it and the pads since.
-#[derive(Resource, Default)]
+/// The run's state outside `Game`: the match as the last serve set-up left it and the pads since. In the snapshot
+/// (a rollback puts it back with the match).
+#[derive(Resource, Default, Clone)]
 pub(super) struct Recorder {
-    serve: Option<snapshot::Snapshot>,
+    serve: Option<Arc<snapshot::Snapshot>>,
     pads: Vec<[hst_sim::replay::Pad; 4]>,
     /// Pads an outside replay source still had queued when ours took over (given back after ours).
     outside: Option<VecDeque<[hst_sim::replay::Pad; 4]>>,
@@ -108,9 +110,11 @@ pub(super) fn run(w: &mut World) {
         // the match's first tick has no set-up through `next_point`: its serve is kept from there
         w.resource_mut::<Game>().instant.replaying = false;
         end_queue(w);
-        let s = snapshot::save(w);
+        // emptied first, so the serve's state doesn't hold the serve before it
         let mut r = w.resource_mut::<Recorder>();
-        (r.serve, r.pads) = (Some(s), vec![]);
+        (r.serve, r.pads) = (None, vec![]);
+        let s = snapshot::save(w);
+        w.resource_mut::<Recorder>().serve = Some(Arc::new(s));
     }
 }
 
@@ -184,7 +188,13 @@ fn start(w: &mut World) {
     }
     let s = r.serve.take().expect("kept at the serve");
     let queue: VecDeque<_> = std::mem::take(&mut r.pads).into();
+    // the serve's state has this recorder and the replay cameras as they were then: these stay
+    let keep = (r.clone(), w.get_resource::<super::replay_camera::ReplayCamera>().cloned());
     snapshot::restore(w, &s);
+    w.insert_resource(keep.0);
+    if let Some(c) = keep.1 {
+        w.insert_resource(c);
+    }
     w.resource_mut::<Recorder>().serve = Some(s);
     // the serve's entry with a replay pending keeps the point's flags and counts; the tick count and the mark restart
     let i = &mut w.resource_mut::<Game>().instant;
@@ -204,6 +214,11 @@ fn start(w: &mut World) {
     let outside = w.remove_resource::<tick_input::Replay>().map(|o| o.0);
     w.resource_mut::<Recorder>().outside = Some(outside.unwrap_or_default());
     w.insert_resource(tick_input::Replay(queue));
+}
+
+/// A replay is playing its own pads (an outside source's wait).
+pub(super) fn playing(w: &World) -> bool {
+    w.get_resource::<Recorder>().is_some_and(|r| r.outside.is_some())
 }
 
 /// The replay's own pads are spent: an outside source's queue comes back, else the devices.
