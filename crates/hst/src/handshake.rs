@@ -162,6 +162,7 @@ mod tests {
             no_face: false,
             voice: "voice/".into(),
             motions: None,
+            costume_of: None,
             skeleton: None,
         };
         let h = gameplay_hash(&m);

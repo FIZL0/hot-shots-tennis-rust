@@ -46,6 +46,10 @@ pub struct Mod {
     pub voice: String,
     /// The mod's own motions `.glb` (§6 `motions`), relative to `dir`: drawn in place of the donor's, same timing.
     pub motions: Option<String>,
+    /// §6 `costume_of`: a costume pack for this disc character (0..13): the select lists its costumes after the
+    /// character's own, and it plays exactly as that character (`donor`, `params.base` and `ai_row` are it, no
+    /// overrides).
+    pub costume_of: Option<usize>,
     /// Online (M2i): the skeleton every peer simulates this mod on (its owner's costume's, from the lobby), in place
     /// of the one its looks load with. `None` offline.
     pub skeleton: Option<std::sync::Arc<Skeleton>>,
@@ -92,6 +96,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     if costumes.is_empty() {
         return Err(err("`costumes` must list at least one .glb that exists".into()));
     }
+    let costume_of = if j["costume_of"].is_null() { None } else { Some(num(&j["costume_of"], "costume_of", 13)?) };
     let donor = num(&j["donor"], "donor", 13)?;
     let hand = match j["hand"].as_str() {
         Some("right") => 1.0,
@@ -123,8 +128,15 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         serde_json::Value::String(f) if dir.join(f).is_file() => Some(f.clone()),
         v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
     };
+    let ai_row = num(&j["ai_row"], "ai_row", 13)?;
+    if let Some(c) = costume_of
+        && (donor != c || base != c || ai_row != c || !overrides.is_empty())
+    {
+        return Err(err(format!("`costume_of` {c} needs `donor`, `params.base` and `ai_row` {c} and no `params.override`")));
+    }
     Ok(Mod {
         skeleton: None,
+        costume_of,
         motions,
         dir: dir.to_path_buf(),
         id: text("id")?,
@@ -135,7 +147,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         hand,
         base,
         overrides,
-        ai_row: num(&j["ai_row"], "ai_row", 13)?,
+        ai_row,
         texture_face,
         no_face: j["face"] == "none",
         voice: j["voice"].as_str().unwrap_or("voice/").to_string(),
@@ -1184,6 +1196,13 @@ mod tests {
             let e = try_(&bad).err().unwrap_or_default();
             assert!(!e.is_empty(), "accepted {field}");
             eprintln!("{e}");
+        }
+        // a costume pack plays exactly as its disc character: donor, base and AI row it, no overrides
+        let pack = ok.replace("\"donor\"", "\"costume_of\":3,\"donor\"").replace(",\"override\":{\"Strk POW\":5}", "");
+        assert_eq!(try_(&pack).unwrap().costume_of, Some(3));
+        assert_eq!(try_(ok).unwrap().costume_of, None);
+        for bad in [ok.replace("\"donor\"", "\"costume_of\":3,\"donor\""), pack.replace("\"ai_row\":3", "\"ai_row\":4"), pack.replace("\"costume_of\":3", "\"costume_of\":14")] {
+            assert!(try_(&bad).is_err(), "accepted {bad}");
         }
         std::fs::remove_dir_all(&dir).ok();
     }

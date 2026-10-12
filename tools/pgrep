@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pgrep/pkill (tools/pkill links here) that skip the caller's own ancestors (pkill: and every claude process): from a Bash tool
+# call, `pkill -f pat` matched its own `bash -c '... pat ...'` (killing the caller) and agents' prompts, and
+# `pgrep -f pat` always found itself. tools/guard_decomp.py points bare pgrep/pkill commands here.
+skip=" " p=$PPID
+while [ "${p:-0}" -gt 1 ]; do skip+="$p "; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+kill=; [ "$(basename "$0")" = pkill ] && kill=1
+[ -n "$kill" ] && skip+="$(/usr/bin/pgrep -x claude | tr '\n' ' ')"  # pgrep still lists them (is a slot live?)
+sig=TERM args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --signal) sig=$2; shift ;;
+    --signal=*) sig=${1#*=} ;;
+    -e|--echo) [ -n "$kill" ] || args+=("$1") ;;
+    -[0-9]*|-SIG*|-HUP|-INT|-QUIT|-KILL|-TERM|-USR1|-USR2|-STOP|-CONT) [ -n "$kill" ] && sig=${1#-} || args+=("$1") ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+# ponytail: filters on the first field, so pgrep -c (a count) isn't filtered
+skip+="$$ "
+out=$(/usr/bin/pgrep "${args[@]}")
+hits=()
+while read -r pid rest; do  # also skip this script's own subshells (same command line, parent $$)
+  [ -n "$pid" ] && [[ "$skip" != *" $pid "* ]] && [ "$(ps -o ppid= -p "$pid" | tr -d ' ')" != $$ ] && hits+=("$pid${rest:+ $rest}")
+done <<< "$out"
+[ ${#hits[@]} -gt 0 ] || exit 1
+if [ -n "$kill" ]; then kill -"$sig" "${hits[@]%% *}"; else printf '%s\n' "${hits[@]}"; fi

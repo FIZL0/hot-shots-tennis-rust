@@ -329,18 +329,38 @@ impl Menu {
         if pl.modded { Who::Mod(pl.pick) } else { Who::Disc(pl.char()) }
     }
 
+    /// Player `p`'s character and costume as drawn and played: a disc character's own costume, else (past its
+    /// [`COSTUMES`]) the costume pack's (`Mod::costume_of`) it lands on.
+    fn pick(&self, p: usize) -> (Who, usize) {
+        self.resolve(self.who(p), self.players[p].costume)
+    }
+
+    fn resolve(&self, w: Who, costume: usize) -> (Who, usize) {
+        if let Who::Disc(c) = w
+            && costume >= COSTUMES
+        {
+            let mut k = costume - COSTUMES;
+            for (i, m) in self.mods.iter().enumerate().filter(|(_, m)| m.costume_of == Some(c)) {
+                if k < m.costumes.len() {
+                    return (Who::Mod(i), k);
+                }
+                k -= m.costumes.len();
+            }
+        }
+        (w, costume)
+    }
+
     fn costumes(&self, w: Who) -> usize {
         match w {
-            Who::Disc(_) => COSTUMES,
+            Who::Disc(c) => COSTUMES + self.mods.iter().filter(|m| m.costume_of == Some(c)).map(|m| m.costumes.len()).sum::<usize>(),
             Who::Mod(i) => self.mods[i].costumes.len(),
         }
     }
 
     /// Whether player `p`'s character and costume are locked in by someone else.
     fn blocked(&self, p: usize) -> bool {
-        let me = self.players[p];
-        matches!(self.who(p), Who::Mod(i) if self.broken.contains(&(i, me.costume)))
-            || (0..self.players()).any(|q| q != p && self.players[q].ready && self.who(q) == self.who(p) && self.players[q].costume == me.costume)
+        matches!(self.pick(p), (Who::Mod(i), k) if self.broken.contains(&(i, k)))
+            || (0..self.players()).any(|q| q != p && self.players[q].ready && self.pick(q) == self.pick(p))
     }
 
     /// Player `p` picking again, on the page shown.
@@ -507,7 +527,7 @@ impl Menu {
                     }
                 }
                 let costumes = self.costumes(self.who(p));
-                let broken = |c: usize| matches!(self.who(p), Who::Mod(i) if self.broken.contains(&(i, c)));
+                let broken = |c: usize| matches!(self.resolve(self.who(p), c), (Who::Mod(i), k) if self.broken.contains(&(i, k)));
                 let broken: Vec<bool> = (0..costumes).map(broken).collect();
                 let n_mods = self.mods.len();
                 let me = &mut self.players[p];
@@ -622,8 +642,9 @@ impl Menu {
         let mut slot_mods = Vec::new();
         for (p, &m) in order.iter().enumerate() {
             chars[m] = self.players[p].char();
-            outfits[m] = self.players[p].costume;
-            if let Who::Mod(i) = self.who(p) {
+            let (who, costume) = self.pick(p);
+            outfits[m] = costume;
+            if let Who::Mod(i) = who {
                 // the donor's number: the match's tables and voice draw go by it
                 chars[m] = self.mods[i].donor;
                 slot_mods.extend(["--slot-mod".to_string(), m.to_string(), self.mods[i].dir.display().to_string()]);
@@ -1335,17 +1356,16 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     let order: &[usize] = if m.doubles { &[0, 1, 3, 2] } else { &[0, 1] };
     let w = 600.0 / order.len() as f32;
     for (k, &p) in order.iter().enumerate() {
-        let pl = m.players[p];
         let x = 20.0 + w * k as f32 + (w - 112.0) / 2.0;
-        match m.who(p) {
-            Who::Mod(i) => {
+        match m.pick(p) {
+            (Who::Mod(i), costume) => {
                 // ponytail: no 3D preview on this screen; the name and costume on a dark card
                 d.q(Tex::Solid, [0.0; 4], [x, 64.0, 112.0, 147.0], [30.0, 30.0, 40.0], 110.0);
                 d.fitted(&m.mods[i].name, x + 56.0, 120.0, 20.0, 104.0);
-                d.centred(&format!("{}", pl.costume + 1), x + 56.0, 146.0, 18.0, WHITE);
+                d.centred(&format!("{}", costume + 1), x + 56.0, 146.0, 18.0, WHITE);
             }
-            Who::Disc(c) => {
-                let (sheet, src) = portrait(c, pl.costume);
+            (Who::Disc(c), costume) => {
+                let (sheet, src) = portrait(c, costume);
                 d.q(sheet, src, [x, 64.0, 112.0, 147.0], WHITE, 128.0);
             }
         }
@@ -1818,6 +1838,7 @@ mod tests {
             no_face: false,
             voice: "voice/".into(),
             motions: None,
+            costume_of: None,
             skeleton: None,
         };
         let ok = press(|p| &mut p.ok);
@@ -1871,6 +1892,55 @@ mod tests {
         assert_eq!(m.players[0].costume, 2, "0 → 2 → 0 → 2");
         m.players[0].costume = 1;
         assert!(m.blocked(0));
+    }
+
+    /// M1: a costume pack (`costume_of`) adds its costumes after the disc character's own on L1 / R1; picked, the match
+    /// plays that disc character in the pack's model (`--slot-mod`, the pack's costume number).
+    #[test]
+    fn costume_pack_extends_a_disc_character() {
+        let pack = |id: &str, of: usize, n: usize| crate::mods::Mod {
+            dir: format!("mods/{id}").into(),
+            id: id.into(),
+            name: id.into(),
+            source: String::new(),
+            costumes: (0..n).map(|c| format!("model/c{c:02}.glb")).collect(),
+            donor: of,
+            hand: 1.0,
+            base: of,
+            overrides: vec![],
+            ai_row: of,
+            texture_face: false,
+            no_face: false,
+            voice: "voice/".into(),
+            motions: None,
+            costume_of: Some(of),
+            skeleton: None,
+        };
+        // Ashley (grid 0, character 0) gets 2 + 1 more; Cody none
+        let m = Menu { mods: vec![pack("x", 0, 2), pack("y", 1, 3), pack("z", 0, 1)], ..default() };
+        assert_eq!((m.costumes(Who::Disc(0)), m.costumes(Who::Disc(1)), m.costumes(Who::Disc(2))), (13, 13, 10));
+        assert_eq!(m.resolve(Who::Disc(0), 9), (Who::Disc(0), 9));
+        assert_eq!(m.resolve(Who::Disc(0), 11), (Who::Mod(0), 1));
+        assert_eq!(m.resolve(Who::Disc(0), 12), (Who::Mod(2), 0));
+        let ok = press(|p| &mut p.ok);
+        let mut m = m;
+        for _ in 0..3 {
+            m.step(Dev::Keys, ok);
+        }
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(Dev::Keys, press(|p| &mut p.prev)); // 0 → 12: pack z's only costume
+        assert_eq!(m.pick(0), (Who::Mod(2), 0));
+        m.step(Dev::Keys, ok);
+        // the computer's 2P on the same pack costume: closed
+        m.players[1].costume = 12;
+        assert!(m.blocked(1));
+        m.players[1].costume = 10;
+        m.step(Dev::Keys, ok);
+        let a = m.args(&[]);
+        let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
+        assert_eq!((flag("--chars"), flag("--outfits")), ("0,0".into(), "0,0".into()));
+        let mods: Vec<_> = a.windows(3).filter(|w| w[0] == "--slot-mod").map(|w| (w[1].clone(), w[2].clone())).collect();
+        assert_eq!(mods, [("0".into(), "mods/z".into()), ("1".into(), "mods/x".into())]);
     }
 
     #[test]
