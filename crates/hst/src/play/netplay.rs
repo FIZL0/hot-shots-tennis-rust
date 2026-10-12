@@ -4,7 +4,8 @@
 //! it waits for. The first `delay` ticks are idle for every seat.
 //!
 //! The gate (`mode::Gate`) runs before each of the match's ticks: it hands the tick's `[Pad; 4]` to the match as a
-//! one-tick `Replay` (`tick_input`), so the match never reads local devices itself. Before every [`HASH_EVERY`]th tick
+//! one-tick `Replay` (`tick_input`), so the match never reads local devices itself (while an instant replay plays its
+//! own queue, only the tick's presses go in, for its ✕/○ skip: `run_on`). Before every [`HASH_EVERY`]th tick
 //! each machine sends its `snapshot::state_hash`; a mismatch stops the match for everyone and saves the inputs (every
 //! seat's, every tick, the same on every machine) with the line-up beside the disc as `desync-*.json` (each machine
 //! its own copy; the ignored test `replays_a_desync` runs one again). The pause screen opens and closes on every machine; the post-point
@@ -307,9 +308,25 @@ pub fn gate(w: &mut World) -> bool {
     let (now, msg) = np.lock.advance(&local);
     np.out.push(msg);
     np.stalled = 0.0;
-    w.get_resource_or_insert_with(|| Replay(Default::default())).0.push_back(now);
+    let last = np.lock.log.len().checked_sub(2).map_or([IDLE; 4], |p| np.lock.log[p]);
+    run_on(w, now, last);
     pump(w);
     true
+}
+
+/// Hands a tick's synced pads (`last`: the tick before's) to the match: as a one-tick `Replay`, or while an instant
+/// replay plays its own queue, as the presses its ✕/○ skip reads (every seat's, the same on every machine; this
+/// machine's unsent latches are dropped), as rollback's `handle` does.
+pub(super) fn run_on(w: &mut World, now: [Pad; 4], last: [Pad; 4]) {
+    if !super::instant_replay::playing(w) {
+        w.get_resource_or_insert_with(|| Replay(Default::default())).0.push_back(now);
+        return;
+    }
+    let Some(mut pads) = w.get_resource_mut::<Pads>() else { return };
+    for s in 0..4 {
+        let d = tick_input::decode(now[s], last[s]);
+        (pads.slots[s].shot, pads.slots[s].serve) = (d.shot, d.serve);
+    }
 }
 
 /// The "waiting" / end text.
@@ -511,7 +528,7 @@ mod tests {
     /// `lag` rounds (ticks) later.
     mod matches {
         use super::super::super::*;
-        use super::super::{Lockstep, Netplay, gate, take, unwire, wire};
+        use super::super::{Lockstep, Netplay, gate, run_on, take, unwire, wire};
         use crate::net::{Event, Msg, Pick, Room, Seat};
         use crate::{Args, GameSpace};
         use std::path::Path;
@@ -522,6 +539,12 @@ mod tests {
             let s = |peer: &str, char| Some(Seat { peer: peer.into(), pick: Pick { char, costume: 0 } });
             // 1P and 2P (a team) on the host, 3P and 4P on the guest
             Room { doubles: true, games: 1, sets: 0, umpire: 4, seats: vec![s("host", 6), s("host", 1), s("g", 2), s("g", 3)], delay, seed: 0x28c7c4a1, ..Default::default() }
+        }
+
+        thread_local! {
+            /// Instant replays in the harness's matches. A full match's mashed pads keep asking for them (△ during one
+            /// asks again), so it never ends with them on.
+            static REPLAYS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
         }
 
         fn app(room: &Room, me: &str) -> App {
@@ -537,6 +560,9 @@ mod tests {
             app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
             app.add_systems(PostStartup, setup);
             app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
+            if REPLAYS.get() {
+                app.add_systems(FixedUpdate, instant_replay::run.after(held_ball));
+            }
             app.finish();
             app.cleanup();
             app.world_mut().run_schedule(Startup);
@@ -552,6 +578,8 @@ mod tests {
             let room = room(crate::net::delay_for(std::time::Duration::from_millis(2 * lag as u64 * 1000 / 60)));
             let mut apps = [app(&room, "host"), app(&room, "g")];
             let mut wire: Vec<(usize, u32, Msg)> = Vec::new();
+            // an instant replay's queue as each tick of it runs: it only plays its own pads (M2h1)
+            let mut queue = [None; 2];
             for round in 0..limit {
                 for (to, at, msg) in std::mem::take(&mut wire) {
                     if at <= round {
@@ -566,6 +594,11 @@ mod tests {
                         if i == 1 && bad == Some(w.resource::<Netplay>().lock.tick) {
                             w.resource_mut::<tick_input::Replay>().0.back_mut().unwrap()[2].buttons ^= !0;
                         }
+                        let q = instant_replay::playing(w).then(|| (w.resource::<Game>().instant.replays, w.resource::<tick_input::Replay>().0.len()));
+                        if let (Some((r, a)), Some((s, b))) = (queue[i], q) {
+                            assert!(r != s || b < a, "a network tick's pads went into instant replay {r}'s queue");
+                        }
+                        queue[i] = q;
                         w.run_schedule(FixedUpdate);
                     }
                     let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
@@ -597,6 +630,7 @@ mod tests {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
+            REPLAYS.set(!to_the_end);
             let apps = play(6, limit, None);
             for a in &apps {
                 let np = a.world().resource::<Netplay>();
@@ -606,7 +640,10 @@ mod tests {
             let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
             let n = a.lock.log.len().min(b.lock.log.len());
             assert_eq!(a.lock.log[..n], b.lock.log[..n]);
-            eprintln!("in sync over {n} ticks");
+            // a mashed match asks for instant replays all the time: they start and end in lockstep (M2h1)
+            let replays = apps[0].world().resource::<Game>().instant.replays;
+            assert!(to_the_end || replays > 1, "{replays} instant replays");
+            eprintln!("in sync over {n} ticks, {replays} instant replays");
         }
 
         /// A tick run on different pads: both stop at the next hash with the desync message and save the inputs.
@@ -627,6 +664,25 @@ mod tests {
             }
         }
 
+        /// A lockstep match's inputs run again as `replays_a_desync` does come out the same, instant replays and all.
+        #[test]
+        fn saved_inputs_replay_the_same() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let room = room(crate::net::delay_for(std::time::Duration::from_millis(200)));
+            let mut host = play(6, 2400, None).into_iter().next().unwrap();
+            let log = host.world().resource::<Netplay>().lock.log.clone();
+            assert!(host.world().resource::<Game>().instant.replays > 1);
+            let mut a = app(&room, "replay");
+            a.world_mut().remove_resource::<Netplay>();
+            for (t, &p) in log.iter().enumerate() {
+                run_on(a.world_mut(), p, t.checked_sub(1).map_or([tick_input::IDLE; 4], |l| log[l]));
+                a.world_mut().run_schedule(FixedUpdate);
+            }
+            assert_eq!(super::super::snapshot::state_hash(a.world_mut()), super::super::snapshot::state_hash(host.world_mut()));
+        }
+
         /// `HST_DESYNC=desync-….json cargo test -p hst replays_a_desync -- --ignored`: runs the saved inputs again,
         /// printing the hash every 30 ticks (the machines' `Hash` ticks).
         #[test]
@@ -642,7 +698,8 @@ mod tests {
                 if t % 30 == 0 {
                     println!("tick {t}: {:016x}", super::super::snapshot::state_hash(a.world_mut()));
                 }
-                a.insert_resource(tick_input::Replay([p.map(unwire)].into()));
+                let last = t.checked_sub(1).map_or([tick_input::IDLE; 4], |l| pads[l].map(unwire));
+                run_on(a.world_mut(), p.map(unwire), last);
                 a.world_mut().run_schedule(FixedUpdate);
             }
             let _ = Lockstep::new;
@@ -722,6 +779,7 @@ mod tests {
             }
             assert!(rollback::DELAY <= 2);
             let t0 = std::time::Instant::now();
+            REPLAYS.set(!to_the_end);
             let apps = play_rollback(5, limit, false);
             for a in &apps {
                 let np = a.world().resource::<Netplay>();
@@ -737,7 +795,9 @@ mod tests {
             assert!(reruns.iter().all(|&r| r > 100), "re-run ticks {reruns:?}");
             let checked = a.state.0.min(b.state.0);
             assert!(checked >= (n as u32).saturating_sub(120), "the checksums stopped at tick {checked} of {n}");
-            eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {:.0?}", t0.elapsed());
+            let replays = apps[0].world().resource::<Game>().instant.replays;
+            assert!(to_the_end || replays > 1, "{replays} instant replays");
+            eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {replays} instant replays, {:.0?}", t0.elapsed());
         }
 
         /// A tick that runs differently on one machine: both stop at the next checksum and save their inputs.

@@ -113,8 +113,6 @@ match was over. 5168 and 9633 ticks were re-run. It took 23 s.
 - **A full mashed match in the real app**: random mashing keeps requesting instant replays, so the two-process run
   and the in-app sync test never reach the result screen. A full match to its result is verified only in the
   headless harness, which has no instant replays.
-- **M2g's lockstep (`HST_NET_LOCKSTEP`) with instant replays**: its gate pushes each tick's pads behind the replay's
-  queue, so the replay never ends and the match runs that many ticks late. The replay's skip there reads this
-  machine's devices. Opened as M2h1.
+- **M2g's lockstep (`HST_NET_LOCKSTEP`) with instant replays**: fixed in M2h1 (`2-M2H1-LOCKSTEP-REPLAYS-FINAL.md`).
 - **Original game**: it has no online play, so there is nothing to match 1:1. Offline matches don't go through this
   gate, and the replay tests stay bit-exact.
