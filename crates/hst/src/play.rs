@@ -49,6 +49,7 @@ mod bodyhit;
 pub mod controls;
 mod cutaway;
 mod foot_fx;
+mod instant_replay;
 mod doubles_ai;
 mod markers;
 mod mod_match;
@@ -409,6 +410,8 @@ struct Game {
     /// stays faded until the next point.
     jingle: Option<u8>,
     music_hold: bool,
+    /// The instant replay's decision and what it reads (`instant_replay`).
+    instant: instant_replay::Instant,
 }
 
 /// The landing markers, as the original: the red one at the shot's aim (from the serve return on), the yellow one
@@ -1293,6 +1296,7 @@ fn setup(
         humans: Vec::new(),
         jingle: None,
         music_hold: false,
+        instant: default(),
         stage: args.stage.map_or(args.court, |s| s as usize) as u8,
         hit_effect: None,
         smash_heights: Vec::new(),
@@ -1837,6 +1841,7 @@ fn strike(
     }
     g.smashed = branch == 4 && g.rules.players > 1;
     g.last_sweet = branch != 3 && offset.abs() < 2;
+    g.instant.timing[who] = offset;
     match_stats::hit(g, who, branch, grade, offset);
     flight_sound(g, who, &hit, class, vel);
     g.whistle = if g.flight_sound.is_some() {
@@ -3617,6 +3622,7 @@ fn remember(mut g: ResMut<Game>) {
 
 fn simulate(mut g: ResMut<Game>) {
     let g2 = &mut *g;
+    g2.instant.ticks += 1;
     // ponytail: she steps first, so this tick's phase messages reach her a tick later than in the original
     let playing = g2.umpire_voice != 0;
     g2.umpire.step(playing, g2.flight.ball.pos);
@@ -3697,6 +3703,9 @@ fn simulate(mut g: ResMut<Game>) {
     let bounce = (n != before && n > 0 && g.phase == Phase::Rally).then_some((n, &material));
     if n != before && n == 1 && material.court {
         g.finish.bounce(at, g.flight.ball.vel);
+        if g.phase == Phase::Rally {
+            instant_replay::bounce(g, at, g.flight.ball.vel);
+        }
     }
     let smash = g.smashed.then(|| sound::kmh(g.flight.ball.vel));
     g.sounds
@@ -3743,6 +3752,7 @@ fn simulate(mut g: ResMut<Game>) {
     match_stats::scored(g, &before, event, team as usize);
     g.umpire
         .point_over(event, team as i32, g.score.swapped, verdict.call as u8);
+    instant_replay::point(g, team as usize, event, verdict.call as u8);
     g.score.note_tiebreak_start();
     g.gallery_game = matches!(event, Some(Event::Game | Event::Set));
     // ponytail: played at the verdict; the game's director cues it a little later in the post-point sequence
@@ -3853,6 +3863,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.score.next_point(&g.rules);
     g.rally.next_point();
     g.rally.new_point();
+    instant_replay::new_point(g);
     g.shots = 0;
     g.last_hitter = -1;
     g.marks = Marks::default();
