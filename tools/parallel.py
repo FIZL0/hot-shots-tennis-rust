@@ -357,7 +357,7 @@ def master_busy():
     except (FileNotFoundError, ValueError):
         return os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))  # a merge in main we didn't start (restart)
     md = os.path.join(NOTES, 'master.md')
-    new = open(md).read()[int(size):] if os.path.exists(md) else ''
+    new = open(md, 'rb').read()[int(size):].decode(errors='replace') if os.path.exists(md) else ''  # size is in bytes
     global idle_since
     idle_since = (idle_since or time.time()) if master_idle() else None
     # done: its master.md line, or idle 2 min (a report it had nothing to do for, e.g. already merged); never mid-merge
