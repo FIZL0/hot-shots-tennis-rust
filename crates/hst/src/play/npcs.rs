@@ -32,7 +32,7 @@ use crate::{Args, GameSpace};
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
-        .add_systems(Update, draw_cheers.after(super::camera));
+        .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd));
 }
 
 #[derive(Resource, Clone)]
@@ -70,6 +70,9 @@ pub(super) struct Npcs {
     game_end: bool,
     reacted: bool,
     flyover: Option<u64>,
+    /// Court 5's own creatures (`npc::Crowd`), each with its parts' materials and, per material, its `.UVA` track's
+    /// offset at each atlas frame.
+    crowd: Vec<(npc::Crowd, Vec<(Handle<StandardMaterial>, Vec<[f32; 2]>)>)>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -115,7 +118,8 @@ fn setup(
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false, flyover: None };
+    let mut crowd = Vec::new();
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false, flyover: None, crowd: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -175,9 +179,19 @@ fn setup(
                 npcs.figures.push(Some(npcs.triggers.len()));
                 npcs.triggers.push((e, tr, row));
             }
-            // ponytail: court 5's own creatures are not drawn (their models are not found yet)
-            npc::Kind::Court5(_) => {}
+            npc::Kind::Court5(t) => {
+                crowd.push((npc::Crowd::new(&mut roll), t, c.world, c.scale));
+            }
         }
+    }
+    for (c, t, world, scale) in crowd {
+        npcs.crowd.push((c, crowd_model(&arc, t, &world, scale, &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes)));
+    }
+    // the match's start (more than one player): court 5's creatures stand up
+    // ponytail: drawn after every creature is made; the original's start message reaches them in its object tree's
+    // order among the walkers' and gallery's draws (not recorded)
+    if players > 1 {
+        npcs.crowd.iter_mut().for_each(|(c, _)| c.cheer(&mut roll));
     }
     // then the manager's match start zeroes the walkers' marks; court 5 shows its own (with more than one player)
     npcs.cheers.clear();
@@ -297,6 +311,7 @@ fn step(
     if serve && !npcs.started {
         npcs.started = true;
         npcs.tick = 0;
+        npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         npcs.walkers.iter_mut().for_each(|(_, w, _)| w.new_point(players > 1));
     }
@@ -321,6 +336,13 @@ fn step(
         for (_, t, row) in &mut npcs.triggers {
             heard.extend(t.message(row, 6, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
+        // court 5's creatures stand up unless the point gets an instant replay
+        // ponytail: drawn after the trigger creatures' reactions; the original's order among them follows its object
+        // tree (not recorded)
+        let event = g.gallery_game || g.score.match_over;
+        if npc::crowd_cheers_point(g.instant.decision.replay, event, g.rally.judge(g.body_hit).call) {
+            npcs.crowd.iter_mut().for_each(|(c, _)| c.cheer(&mut roll));
+        }
     }
     // the scoreboard's pause over (a game, set or match decided)
     let reacted = g.post.as_ref().is_some_and(|p| p.reacted && p.event.is_some());
@@ -334,6 +356,7 @@ fn step(
     if npcs.decided && serve {
         npcs.decided = false;
         npcs.tick = 0;
+        npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         for (e, w, home) in &mut npcs.walkers {
             // the serve placement turns them back to the court centre
@@ -355,6 +378,7 @@ fn step(
     // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
     if ends && !npcs.ends {
         (npcs.near.ends, npcs.near.players) = (true, players);
+        npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         for (_, t, row) in npcs.triggers.iter_mut().filter(|(_, t, _)| t.ty == 15) {
             t.reset_near(row, &mut npcs.near, &mut roll);
@@ -380,6 +404,7 @@ fn step(
         }
     }
     npcs.motion = motion;
+    npcs.crowd.iter_mut().for_each(|(c, _)| c.step());
     for (k, (e, w, home)) in npcs.walkers.iter_mut().enumerate() {
         let react = w.mode == 1;
         w.step(players, cheer[k], npcs.tick, &mut roll);
@@ -555,5 +580,65 @@ fn emit(e: &mut npc::Emitter, sounds: &mut Vec<(sound::Play, [f32; 3])>, roll: &
     if e.step(roll) {
         debug!("emitter type {} sound {}", e.ty, e.row.sound);
         sounds.push((sound::Play { slot: 0, program: 7, key: e.row.sound as u8, volume: 0x40, speed: 1.0 }, e.pos));
+    }
+}
+
+/// Court 5's creature `t` (`creatureMdl/wim-0N`) placed at `world`: its parts' materials, each with its `.UVA`
+/// track's offset at every atlas frame (the track `@mtluva_<material>`, one key a frame).
+#[allow(clippy::too_many_arguments)]
+fn crowd_model(
+    arc: &Archive,
+    t: u8,
+    world: &[[f32; 4]; 4],
+    scale: f32,
+    commands: &mut Commands,
+    root: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+) -> Vec<(Handle<StandardMaterial>, Vec<[f32; 2]>)> {
+    let stem = format!("wim-{t:02}");
+    let get = |p: String| arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&p)).and_then(|e| arc.read(e).ok());
+    let shown = match crate::effects::model(arc, &format!("creaturemdl/{stem}"), commands, root, meshes, materials, images, bindposes) {
+        Ok((_, shown)) => shown,
+        Err(e) => {
+            warn!("court 5 creature {stem}: {e}");
+            return Vec::new();
+        }
+    };
+    // (an effect's root starts hidden)
+    commands.entity(shown.root).insert((Transform::from_matrix(Mat4::from_cols_array_2d(world)).with_scale(Vec3::splat(scale)), Visibility::Inherited));
+    let names = get(format!("creaturemdl/{stem}.mtl")).and_then(|m| hst_data::mtl::parse(&m, get(format!("creaturemdl/{stem}.mti")).as_deref()).ok());
+    let uva = get(format!("creatureani/{stem}.uva")).and_then(|u| hst_data::mor::parse(&u, 4).ok());
+    let (Some(names), Some(uva)) = (names, uva) else {
+        warn!("court 5 creature {stem}: no materials or .UVA");
+        return Vec::new();
+    };
+    shown
+        .materials
+        .iter()
+        .zip(&names.materials)
+        .map(|(h, m)| {
+            let track = uva.tracks.iter().find(|tr| tr.name.strip_prefix("@mtluva_") == Some(&m.name));
+            // the frame's key: the last at or before it
+            let at = |f: i32| track.and_then(|tr| tr.ticks.iter().rposition(|&k| k <= f * uva.ticks_per_frame as i32).map(|k| [tr.values[k][0], tr.values[k][1]]));
+            (h.clone(), (0..16).map(|f| at(f).unwrap_or([0.0; 2])).collect())
+        })
+        .collect()
+}
+
+/// Court 5's creatures' atlas frames on their materials.
+// ponytail: the original sets the frame at the start of the creature's tick (the frame drawn lags its state by a
+// tick) and skips types 63 and 66 when a point behind them is off screen; both left out (rendering only)
+fn draw_crowd(npcs: Option<Res<Npcs>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Some(npcs) = npcs else { return };
+    for (c, parts) in &npcs.crowd {
+        for (h, uv) in parts {
+            let off = Vec2::from(uv[c.frame.clamp(0, 15) as usize]);
+            if materials.get(h).is_some_and(|m| m.uv_transform.translation != off) {
+                materials.get_mut(h).unwrap().uv_transform = bevy::math::Affine2::from_translation(off);
+            }
+        }
     }
 }
