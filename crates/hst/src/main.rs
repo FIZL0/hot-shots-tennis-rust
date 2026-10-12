@@ -30,6 +30,7 @@ mod mods_online;
 mod net;
 mod hud_gamma;
 mod inspect;
+mod loading;
 mod mash;
 mod mode;
 mod noise;
@@ -309,6 +310,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     play::main_menu::WIDE.store(true, std::sync::atomic::Ordering::Relaxed);
     let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
+    let cover = loading::cover(args.iso.clone(), args.court);
     mode::Mode::new(move |app| {
         app.insert_resource(gfx);
         // the app's own `--shot` goes on through the match
@@ -318,6 +320,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         add_match(app, viewer_mod, mod_slot, slot_mods);
     })
     .back(back)
+    .cover(cover)
 }
 
 /// Court `n`'s entry list and hole-01 placement records.
