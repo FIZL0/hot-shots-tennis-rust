@@ -249,7 +249,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins(shade::plugin);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin));
-    app.add_systems(Update, character::texture_faces.after(character::animate));
+    app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, log_fps);
     }
