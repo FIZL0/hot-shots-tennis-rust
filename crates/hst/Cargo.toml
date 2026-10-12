@@ -26,6 +26,8 @@ n0-future = "0.3"
 tokio = { version = "1", features = ["macros", "sync"] }
 # the browser's LAN codes (M2k, `net/rtc.rs`)
 data-encoding = "2"
+# short lobby codes through a pkarr relay (`net.rs`; iroh already builds it: rustls natively, fetch in the browser)
+reqwest = { version = "0.13", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -40,6 +42,8 @@ winit = { version = "0.30", default-features = false }
 # lobbies: addresses and lobby list on the mainline DHT and LAN mDNS (UDP: not in the browser)
 iroh-mainline-address-lookup = "0.6"
 n0-mainline = "0.7"
+# the crypto reqwest uses for the pkarr relay (`net.rs` relay_put): iroh's own ring
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 iroh-mdns-address-lookup = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 

@@ -18,9 +18,12 @@
   #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
   canvas { display: block; width: 100% !important; height: 100% !important; }
   button { font: inherit; }
+  /* Join by Code on a touch screen: a tap anywhere but the controls opens the keyboard (typed_code) */
+  #codekeys { position: fixed; inset: 0; z-index: 5; opacity: 0; font-size: 16px; border: 0; padding: 0; caret-color: transparent; }
 </style>
 </head>
 <body>
+<input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" aria-label="Lobby code">
 <div id="disc" hidden>
   <p>Pick your own <b>Hot Shots Tennis (USA)</b> disc image (SCUS-97610). The game copies what it needs (≈ 170 MB)
      into this browser's storage once; the ISO isn't needed after that.</p>
@@ -46,7 +49,7 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 // (`?webgl2` forces it).
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await navigator.gpu?.requestAdapter().catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
-const { default: init, run, paste } = await import(webgpu ? './pkg-webgpu/hst.js' : './pkg/hst.js');
+const { default: init, run, paste, typed_code } = await import(webgpu ? './pkg-webgpu/hst.js' : './pkg/hst.js');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
 const q = new URLSearchParams(location.search);
@@ -69,6 +72,11 @@ async function start() {
   await init();
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
+  // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
+  // to the game one at a time (a space kept in it so Backspace always fires)
+  const keys = document.getElementById('codekeys');
+  window.hstCodeEntry = on => { keys.hidden = !(on && matchMedia('(pointer: coarse)').matches); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };
   // a LAN answer from a tab opened by scanning a guest's code
   new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));
   try {

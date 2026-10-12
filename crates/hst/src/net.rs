@@ -465,6 +465,8 @@ pub enum Event {
     Status(String),
     /// Hosting: the code (ticket) to share.
     Code(String),
+    /// Hosting: the short code that also finds the lobby (B104).
+    Short(String),
     Found(Vec<Listing>),
     /// The lobby as it is now (host and joiners alike).
     Room(Room),
@@ -881,8 +883,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     // iroh: the ticket; the browser's LAN: a WebRTC offer per guest, a fresh one each time one is answered
     let mut answers = rtc::answers();
     let mut offer = None;
+    let mut code = None;
     match &cx.ep {
-        Some(ep) => cx.say(Event::Code(EndpointTicket::new(ep.addr()).to_string())),
+        Some(ep) => {
+            cx.say(Event::Code(EndpointTicket::new(ep.addr()).to_string()));
+            code = roll(&cx.dht, &code_ticket(ep)).await;
+            cx.say(Event::Short(code.clone().unwrap_or_default()));
+        }
         None => {
             offer = new_offer(cx).await;
             cx.say(Event::Status("Players scan this code, then you scan the one their screen shows (or paste it here).".into()));
@@ -928,7 +935,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)));
                 let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone() };
                 let n = lobby_number(ep.id());
-                n0_future::task::spawn(async move { announce(&cx2, n, &l).await });
+                let (code, ticket) = (code.clone(), code_ticket(ep));
+                n0_future::task::spawn(async move {
+                    if let Some(c) = code {
+                        publish(&cx2.dht, &c, &ticket).await;
+                    }
+                    announce(&cx2, n, &l).await
+                });
             }
         }
         if let Some((waiting, until)) = &starting
@@ -1192,6 +1205,18 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
             }
         }
     }
+    let resolved;
+    let code = if is_short(code) {
+        cx.say(Event::Status(format!("Looking up {code}...")));
+        let Some(t) = resolve(&cx.dht, code).await else {
+            cx.say(Event::Failed(format!("No open lobby has the code {code}.")));
+            return None;
+        };
+        resolved = t;
+        resolved.as_str()
+    } else {
+        code
+    };
     let Some(ep) = &cx.ep else {
         cx.say(Event::Failed("That's an internet lobby code: set Relay (Online) to n0 or your own relay to join it.".into()));
         return None;
@@ -1357,9 +1382,181 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
     }
 }
 
-/// `code` is a join code: a host's ticket or a bare endpoint ID.
+/// `code` is a join code: a host's ticket, a bare endpoint ID or a short code.
 pub fn is_code(code: &str) -> bool {
-    rtc::is_offer(code) || code.parse::<EndpointTicket>().is_ok() || code.parse::<EndpointId>().is_ok()
+    is_short(code) || rtc::is_offer(code) || code.parse::<EndpointTicket>().is_ok() || code.parse::<EndpointId>().is_ok()
+}
+
+/// The join code in pasted or typed text: the code itself, or a lobby link's `?code=` (short codes in capitals).
+pub fn code_in(text: &str) -> Option<String> {
+    let t = text.trim();
+    let t = t.split_once("code=").map_or(t, |(_, c)| c.split(['&', '#']).next().unwrap_or(""));
+    let up = t.to_ascii_uppercase();
+    if is_short(&up) {
+        Some(up)
+    } else {
+        is_code(t).then(|| t.to_string())
+    }
+}
+
+// ---------------------------------------------------------------- short codes (B104)
+//
+// A hosted lobby also gets a [`SHORT`]-symbol code that people can read out and type. The code names a well-known
+// ed25519 key (its seed is the code, [`code_key`]); the host puts its ticket under that key as a BEP 44 mutable item
+// on the mainline DHT (no salt; seq = unix µs), as a one-TXT-record DNS packet so the same item is also a pkarr record.
+// The browser has no DHT and goes through a pkarr relay ([`PKARR`], an HTTP gateway onto the same DHT items; native hosts put
+// there too, as the relay's own lookup can miss a fresh DHT put). A host
+// re-rolls a code someone wrote less than [`STALE`] ago and republishes with its listing; once it stops (match
+// started, left), the code goes stale and is free again. Anyone may overwrite a code's item (the key is public):
+// the joiner still dials the ticket's endpoint, authenticated by QUIC.
+
+/// The short codes' symbols: digits and capitals without the look-alikes 0/O and 1/I (32^4 ≈ 1M codes).
+pub const SYMBOLS: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+pub const SHORT: usize = 4;
+/// The browser build's page: a lobby link is this with `?code=<short code>`.
+pub const SITE: &str = "https://fizl0.github.io/hot-shots-tennis-rust/";
+/// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
+/// theirs there too.
+const PKARR: &str = "https://relay.pkarr.org";
+
+pub fn is_short(code: &str) -> bool {
+    code.len() == SHORT && code.bytes().all(|b| SYMBOLS.contains(&b))
+}
+
+/// The link that opens `short`'s lobby in the browser build.
+pub fn link(short: &str) -> String {
+    format!("{SITE}?code={short}")
+}
+
+/// A random short code.
+fn new_short() -> String {
+    // ponytail: a fresh key's bytes as the randomness (no rand dependency); 5 bits of each of the first 4
+    SecretKey::generate().to_bytes()[..SHORT].iter().map(|b| SYMBOLS[(b & 31) as usize] as char).collect()
+}
+
+/// The (public) key a short code's record is written under.
+fn code_key(code: &str) -> SecretKey {
+    let mut seed = [0u8; 32];
+    let s = format!("hst-lobby-code/1/{code}");
+    seed[..s.len()].copy_from_slice(s.as_bytes());
+    SecretKey::from_bytes(&seed)
+}
+
+/// `text` as a DNS response with one TXT record `_hst` (strings of ≤ 255 bytes): a pkarr relay only takes DNS packets.
+fn dns_txt(text: &str) -> Vec<u8> {
+    let mut rdata = Vec::new();
+    for c in text.as_bytes().chunks(255) {
+        rdata.push(c.len() as u8);
+        rdata.extend(c);
+    }
+    let mut p = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, b'_', b'h', b's', b't', 0, 0, 16, 0, 1, 0, 0, 1, 44];
+    p.extend((rdata.len() as u16).to_be_bytes());
+    p.extend(rdata);
+    p
+}
+
+/// The first answer's TXT strings, joined (`dns_txt` read back).
+fn txt_of(p: &[u8]) -> Option<String> {
+    let mut i = 12;
+    loop {
+        match *p.get(i)? {
+            0 => break i += 1,
+            l if l >= 0xc0 => break i += 2,
+            l => i += 1 + l as usize,
+        }
+    }
+    let n = u16::from_be_bytes(p.get(i + 8..i + 10)?.try_into().ok()?) as usize;
+    let mut r = p.get(i + 10..i + 10 + n)?;
+    let mut out = Vec::new();
+    while let Some((&l, rest)) = r.split_first() {
+        out.extend(rest.get(..l as usize)?);
+        r = &rest[l as usize..];
+    }
+    String::from_utf8(out).ok()
+}
+
+fn unix_micros() -> i64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64)
+}
+
+/// Written less than `STALE` ago.
+fn fresh(seq: i64) -> bool {
+    unix_micros().saturating_sub(seq) <= STALE as i64 * 1_000_000
+}
+
+/// The ticket under `code` and when it was written.
+#[cfg(not(target_arch = "wasm32"))]
+async fn lookup(dht: &Dht, code: &str) -> Option<(String, i64)> {
+    let item = dht.get_mutable_most_recent(code_key(code).public().as_bytes(), None).await.ok().flatten()?;
+    Some((txt_of(item.value())?, item.seq()))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn lookup(_: &Dht, code: &str) -> Option<(String, i64)> {
+    let r = reqwest::get(format!("{PKARR}/{}", code_key(code).public().to_z32())).await.ok()?;
+    let b = r.error_for_status().ok()?.bytes().await.ok()?;
+    // the relay's payload: signature, seq (big-endian), the packet
+    Some((txt_of(b.get(72..)?)?, i64::from_be_bytes(b.get(64..72)?.try_into().ok()?)))
+}
+
+/// Put `ticket` under `code`; true if it went out.
+#[cfg(not(target_arch = "wasm32"))]
+async fn publish(dht: &Dht, code: &str, ticket: &str) -> bool {
+    let item = MutableItem::new(&SigningKey::from_bytes(&code_key(code).to_bytes()), &dns_txt(ticket), unix_micros(), None);
+    let put = dht.put_mutable(item, None).await.map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok();
+    // ponytail: the relay's own DHT lookup misses our put now and then, so browsers read it from the relay directly
+    relay_put(code, ticket).await | put
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn publish(_: &Dht, code: &str, ticket: &str) -> bool {
+    relay_put(code, ticket).await
+}
+
+/// Puts the code's record on the pkarr relay (which also puts it on the DHT).
+async fn relay_put(code: &str, ticket: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let key = code_key(code);
+    let (v, seq) = (dns_txt(ticket), unix_micros());
+    // BEP 44's signed form: bencoded seq and v
+    let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
+    let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
+    let r = reqwest::Client::new().put(format!("{PKARR}/{}", key.public().to_z32())).body(body).send().await;
+    r.and_then(|r| r.error_for_status()).map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok()
+}
+
+/// A short code for the lobby with `ticket`: a free one, published (None: the DHT or relay can't be reached).
+async fn roll(dht: &Dht, ticket: &str) -> Option<String> {
+    for _ in 0..5 {
+        let code = new_short();
+        match n0_future::time::timeout(Duration::from_secs(15), lookup(dht, &code)).await {
+            Ok(Some((_, seq))) if fresh(seq) => continue,
+            _ => return publish(dht, &code, ticket).await.then_some(code),
+        }
+    }
+    None
+}
+
+/// The ticket the short code `code` stands for, if its lobby is open.
+async fn resolve(dht: &Dht, code: &str) -> Option<String> {
+    let (t, seq) = n0_future::time::timeout(Duration::from_secs(30), lookup(dht, code)).await.ok()??;
+    fresh(seq).then_some(t)
+}
+
+/// The ticket put under a short code: the endpoint's whole address if it fits a DHT item (1000 bytes), else its ID
+/// and relay.
+fn code_ticket(ep: &Endpoint) -> String {
+    let addr = ep.addr();
+    let t = EndpointTicket::new(addr.clone()).to_string();
+    if t.len() <= 900 {
+        return t;
+    }
+    let mut a = EndpointAddr::new(addr.id);
+    for u in addr.relay_urls() {
+        a = a.with_relay_url(u.clone());
+    }
+    EndpointTicket::new(a).to_string()
 }
 
 #[cfg(test)]
@@ -1542,5 +1739,63 @@ mod tests {
             assert_eq!(r.seats[0].as_ref().unwrap().pick.r#mod.as_ref().unwrap().looks, h);
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn short_code_parts() {
+        let t = "endpointabc".repeat(60);
+        assert_eq!(txt_of(&dns_txt(&t)).as_deref(), Some(t.as_str()));
+        assert_eq!(code_in(" k7qx "), Some("K7QX".into()));
+        assert_eq!(code_in(&link("K7QX")), Some("K7QX".into()));
+        assert_eq!(code_in("https://fizl0.github.io/hot-shots-tennis-rust/?code=k7qx&x=1"), Some("K7QX".into()));
+        assert_eq!(code_in("K0QX"), None, "0 isn't a symbol");
+        assert_eq!(code_in("K7QXY"), None);
+        let c = new_short();
+        assert!(is_short(&c), "{c}");
+        assert_ne!(code_key("AAAA").public(), code_key("AAAB").public());
+        assert!(fresh(unix_micros() - 80_000_000) && !fresh(unix_micros() - 100_000_000));
+    }
+
+    #[test]
+    fn short_code_on_a_testnet() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(10).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx }, rx)
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let (_gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(3, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            // the host's short code, read off its lobby, typed into the second instance
+            let Event::Short(code) = next(&hev, |e| matches!(e, Event::Short(_))).await else { unreachable!() };
+            assert!(is_short(&code), "no short code: {code:?}");
+            // a code no lobby has
+            let (_, mut nrx) = amp::unbounded_channel();
+            let other = if code == "2222" { "3333" } else { "2222" };
+            assert!(connect(&gcx, other, &mut nrx).await.is_none());
+            assert!(matches!(next(&gev, |e| matches!(e, Event::Failed(_))).await, Event::Failed(f) if f.contains(other)));
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let Event::Start(r, me) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            assert_ne!(me, "host");
+            assert_eq!(r.open(), 0);
+            assert!(matches!(next(&hev, |e| matches!(e, Event::Start(..))).await, Event::Start(_, h) if h == "host"));
+        });
     }
 }
