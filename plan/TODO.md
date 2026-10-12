@@ -166,7 +166,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [~] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs BLOCKED: no recorded let serve (round1's 4 cord serves were net faults); turned serves/effects done | j: 2026-10-08-p6-serve-details
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
-- [ ] **P17b** Court fog (FGE): far court and props haze toward the court's fog colour as in the original (compare court 10, slot 5, against PCSX2) → `gs.rs` gs.wgsl · `main.rs` load | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering/4-FOG-FINAL.md
 
 ### Stretch
 
