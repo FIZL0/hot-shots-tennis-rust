@@ -652,8 +652,8 @@ fn draw(
             layout(&View {
                 players: n,
                 slots: std::array::from_fn(|i| if i < n { slot(i) } else { 4 }),
-                // ponytail: COM rank row 0, as the panel
-                ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then_some(0)),
+                // the plates read the panel's rank int: COMs their AI row's rank, humans none (17)
+                ranks: std::array::from_fn(|i| (i < n && slot(i) == 4).then(|| g.players[i].ai.rank as usize)),
                 pill: colours.0,
                 rank_rgb: colours.1,
                 points: g.score.points,
