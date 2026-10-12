@@ -242,6 +242,10 @@ struct FrameFlags {
     plane: bool,
 }
 
+/// The normal a plane step that misses its plane responds to: what the original's hit record holds there, never
+/// written by the sweep (recorded on court 7: a creature struck by the falling serve toss).
+const MISSED_NORMAL: V4 = [f32::from_bits(0x0098_8fcc), 0.0, 0.0, 0.0];
+
 /// Constants of the original's contact code (exact bit patterns).
 mod k {
     pub const ROLL_SPEED: f32 = 0.02;
@@ -316,7 +320,8 @@ impl Flight {
 
     /// The extra step the original gives the ball when it hits a player: no acceleration, wind or curve; the step
     /// is swept once against the plane through its end point facing back along the ball's heading (`material`,
-    /// the table's material 0), and responds as a first special touch. The ball stays where it is; only its
+    /// the table's material 0), and responds as a first special touch, also when the sweep misses (a slow ball
+    /// such as a falling toss: then off `MISSED_NORMAL`, which stops it dead). The ball stays where it is; only its
     /// velocity (and spin, frame, counts) change. No line calls.
     // ponytail: the ball model's extra spin turn in this step is not carried (the app turns it from `spin` each tick)
     pub fn step_plane(&mut self, shot: &Shot, surface: &Surface, material: Material) {
@@ -327,12 +332,15 @@ impl Flight {
         let pos: V4 = [self.ball.pos[0], self.ball.pos[1], self.ball.pos[2], 1.0];
         let d: V4 = [v[0], v[1], v[2], 0.0];
         let end: V4 = std::array::from_fn(|k| madd(add(0.0, pos[k]), d[k], 1.0));
-        if let Some(h) = crate::contact::sweep(pos, end, shot.params.radius, end, n, f32::MAX) {
+        // the original responds whether or not the sweep met the plane; on a miss its hit record keeps the normal
+        // its stack held (MISSED_NORMAL) and the contact point is the step's end
+        let h = crate::contact::sweep(pos, end, shot.params.radius, end, n, f32::MAX);
+        {
             let mut f = FrameFlags { plane: true, ..Default::default() };
-            let d = self.respond(shot, surface, d, h.normal, material, false, &mut f);
+            let d = self.respond(shot, surface, d, h.map_or(MISSED_NORMAL, |h| h.normal), material, false, &mut f);
             if f.counted {
                 // the record holds the ball's centre at the contact
-                let c = crate::contact::contact_point(Some(&h), pos, end, shot.params.radius);
+                let c = crate::contact::contact_point(h.as_ref(), pos, end, shot.params.radius);
                 self.landing = ([c[0], c[1], c[2]], material);
             }
             let d = if self.in_play && !self.rolling && self.bounces == 1 && shot.bounce_turn != 0.0 { turn(d, 0.0, shot.bounce_turn) } else { d };

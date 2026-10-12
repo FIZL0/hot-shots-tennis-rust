@@ -84,3 +84,35 @@ fn ball_off_a_player_s05() {
     fl.step_world(&shot, &COURTS[10], &world, &materials);
     same(&fl, ball(frames[n + 1]), "frame after");
 }
+
+/// A creature struck by the falling serve toss on court 7 (`context/fixtures/prox_c07_ball.bin`, tools/record_npc.py
+/// `prox` with HST_BALL=1, the poke at sample 125 putting a creature on the ball; not in git, skipped when absent):
+/// the game's message 0x14 gives the ball a plane step whose sweep misses (the toss moves too little to reach the
+/// plane), which responds all the same, then the ball's own step. Both must give the next sample's ball bit for bit,
+/// and the sample after must follow by the ordinary step.
+#[test]
+fn struck_toss_c07() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(data), Ok(mut iso), Ok(cnf), Ok(bin)) = (
+        std::fs::read(format!("{root}/context/fixtures/prox_c07_ball.bin")),
+        Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")),
+        std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
+        std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
+    ) else {
+        return eprintln!("prox_c07_ball.bin or disc absent, skipped");
+    };
+    let (world, materials) = (hst_sim::court::world(&mut iso, 7), hst_sim::court::materials(&exe::Game::new(&cnf, &bin).unwrap()));
+    // header: creature count and addresses; a sample: vsync, globals, generator, gallery, judge, creatures, the
+    // ball's and players' positions, type flags, scrub states, then the ball's object
+    let n = i(&data, 0) as usize;
+    let at = 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + n * 0x300 + 0x90 + 8 * n;
+    let frames: Vec<&[u8]> = data[4 + 4 * n..].chunks_exact(at + 0x290).collect();
+    let ball = |k: usize| &frames[k][at..];
+    let (mut fl, shot) = load(ball(124));
+    fl.step_plane(&shot, &COURTS[7], materials[0]);
+    fl.step_world(&shot, &COURTS[7], &world, &materials);
+    same(&fl, ball(125), "struck frame");
+    let (mut fl, shot) = load(ball(125));
+    fl.step_world(&shot, &COURTS[7], &world, &materials);
+    same(&fl, ball(126), "frame after");
+}

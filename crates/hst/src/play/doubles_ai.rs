@@ -32,6 +32,8 @@ struct Mine {
     shots: i32,
     /// The re-entry's return-to-centre draw, made in the hit message (`heard_hit`).
     early: Option<u32>,
+    /// A creature struck the ball (message 0x14) since its last step: back to the start of its state, as on 0x16.
+    struck: bool,
 }
 
 fn up(v: V3) -> [f32; 4] {
@@ -157,6 +159,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     (x.mind.net, x.mind.net_rate, x.mind.net_left) = (mind.net, mind.net_rate, mind.net_left);
     let (entered, new_shot) = (me.phase != Some(mind.phase), me.shots != g.shots);
     (me.phase, me.shots) = (Some(mind.phase), g.shots);
+    let struck = std::mem::take(&mut me.struck);
     if new_shot {
         // the hit message's timing draw: the reaction (or the guess walk) and the guess
         x.wait = p.ai_hold;
@@ -182,9 +185,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     // state (the app already drew the net repick those messages make, so theirs is dropped)
     let kept = x.mind;
     match mind.phase {
-        Ai::Receive if entered || (new_shot && x.state != 3) => x.enter_receive(&mut roll),
+        Ai::Receive if entered || ((new_shot || struck) && x.state != 3) => x.enter_receive(&mut roll),
         // singles re-enters on the new path, not on the hit
-        Ai::Rally if entered || (new_shot && (singles || g.shots > 1) && x.sub != 3) => {
+        Ai::Rally if entered || (((new_shot && (singles || g.shots > 1)) || struck) && x.sub != 3) => {
             x.enter_rally(&b, &mut w, &mut roll);
             x.mind = kept;
         }
@@ -284,6 +287,12 @@ impl Shared {
             self.claim.0 = -1;
         }
         self.records.iter_mut().for_each(|r| r.n = -1);
+        if msg == 0x14 {
+            // only an AI in its receive or rally hears it
+            for (m, p) in self.me.iter_mut().zip(players) {
+                m.struck = p.ai_mind.is_some_and(|x| matches!(x.phase, Ai::Receive | Ai::Rally));
+            }
+        }
         if matches!(msg, 0x14 | 0x15 | 0x16 | 0xe) {
             self.path = PathCopy { stamp: -1, balls: Vec::new() };
             for (h, p) in self.humans.iter_mut().zip(players) {
