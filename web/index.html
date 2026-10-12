@@ -132,7 +132,7 @@ window.hstWebGL2 = () => {
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
-const { default: init, run, paste, typed_code } = await import(pkg + 'hst.js');
+const { default: init, run, paste, typed_code, add_card } = await import(pkg + 'hst.js');
 say('Opening this browser\'s storage…');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
@@ -170,6 +170,11 @@ async function start() {
   } catch {}
   await init({ module_or_path: wasm() });
   say('Starting…');
+  // the select's baked cards (web.rs add_card): read now, written back as the game bakes them
+  const cards = await dir.getDirectoryHandle('previews', { create: true });
+  for await (const [name, h] of cards.entries()) if (h.kind === 'file') add_card(name, new Uint8Array(await (await h.getFile()).arrayBuffer()));
+  window.hstCard = (name, bytes) => cards.getFileHandle(name, { create: true }).then(async h => { const w = await h.createWritable(); await w.write(bytes); await w.close(); }).catch(e => console.warn(`hst: card ${name}: ${e}`));
+  window.hstCardDrop = name => cards.removeEntry(name).catch(() => {});
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go

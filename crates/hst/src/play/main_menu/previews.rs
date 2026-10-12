@@ -11,6 +11,9 @@
 //! uncached one first); a later launch only reads them. A mod may ship its own as `previews/<costume>.png` (the mods
 //! repo's standard); else its costumes bake in the background after the disc's (a hovered one first). `HST_BAKE=all`
 //! quits once every mod's costumes are baked (the mods repo's packaging). Bump [`RENDER`] when the preview's drawing changes.
+//! B120: in the browser the cache is OPFS `previews/` (`web.rs`; the page reads it all before the game starts), and
+//! a held hover keeps the card (the live model loads only for a press); a live rig stays hidden until it's posed
+//! (`inspect.rs`), never showing its rest T-pose.
 //!
 //! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms; a disc
 //! character only the preview's motions, B102: ~8 ms, ~10 ms in the browser, where a load runs inside a frame), the newest ask
@@ -33,7 +36,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::render_resource::TextureUsages;
 use bevy::window::PrimaryWindow;
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use hst_data::iso::Iso;
@@ -140,8 +143,8 @@ impl Loader {
             self.png_order.push_back(key);
             return self.pngs.get(&key).cloned().flatten();
         }
-        let path = self.path(key, menu).filter(|p| p.is_file())?;
-        let image = std::fs::read(&path).ok().and_then(|b| {
+        let path = self.path(key, menu)?;
+        let image = read(&path).and_then(|b| {
             Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD)
                 .map_err(|e| warn!("{}: {e}", path.display()))
                 .ok()
@@ -258,18 +261,28 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
     }
     let mut iso = Iso::open(&args.iso).ok();
     let boot = iso.as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
-    let root = super::Settings::path(&args.iso).with_file_name("cache").join("previews");
     let name = format!("{boot}-r{RENDER}");
-    // older drawings' folders go
-    for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-        if e.file_name().to_string_lossy() != name.as_str() && e.path().is_dir() {
-            let _ = std::fs::remove_dir_all(e.path());
+    #[cfg(not(target_arch = "wasm32"))]
+    let dir = {
+        let root = super::Settings::path(&args.iso).with_file_name("cache").join("previews");
+        // older drawings' folders go
+        for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy() != name.as_str() && e.path().is_dir() {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
         }
-    }
-    let dir = root.join(name);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        warn!("{}: {e}", dir.display());
-    }
+        let dir = root.join(name);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("{}: {e}", dir.display());
+        }
+        dir
+    };
+    // B120: the browser's cards are OPFS files named `<folder>~<file>` (`web.rs`); older drawings' go
+    #[cfg(target_arch = "wasm32")]
+    let dir = {
+        crate::web::cards_keep(&format!("{name}~"));
+        PathBuf::from(name)
+    };
     commands.insert_resource(Loader {
         ask,
         done: Mutex::new(done),
@@ -389,8 +402,10 @@ fn sync(
             Some(k) if mode() != "live" => loader.png(k, &menu, &mut images),
             _ => None,
         };
-        // a press, or a key not baked yet (nothing to show until the live model), loads the live model straight away
-        let settled = (since[p].is_some_and(|(_, t)| now - t >= SETTLE) || pending.0[p].is_some() || png.is_none()) && mode() != "png";
+        // a press, or a key not baked yet (nothing to show until the live model), loads the live model straight away;
+        // B120: in the browser (a load runs inside a frame, ~30 ms on a phone) a held hover keeps the card
+        let held = since[p].is_some_and(|(_, t)| now - t >= SETTLE) && !cfg!(target_arch = "wasm32");
+        let settled = (held || pending.0[p].is_some() || png.is_none()) && mode() != "png";
         let modded = |w: Who| match w {
             Who::Mod(i) => menu.mods.get(i),
             Who::Disc(_) => None,
@@ -539,9 +554,7 @@ fn bake(
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
 ) {
-    // ponytail: no PNG cache in the browser (no files): its cards always draw the live model; an OPFS cache if
-    // scrolling there hitches
-    if cfg!(target_arch = "wasm32") || menu.screen != Screen::Chars && baker.job.is_none() {
+    if menu.screen != Screen::Chars && baker.job.is_none() {
         return;
     }
     // a hovered card without a PNG jumps the queue
@@ -591,7 +604,7 @@ fn bake(
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
         let path = loader.path(key, &menu);
-        let Some(path) = path.filter(|p| !p.is_file() && !baker.failed.contains(&key)) else {
+        let Some(path) = path.filter(|p| !cached(p) && !baker.failed.contains(&key)) else {
             baker.queue.pop();
             continue;
         };
@@ -648,14 +661,45 @@ fn save(data: &[u8], path: &Path) -> bool {
         warn!("{}: the preview drew nothing", path.display());
         return false;
     }
-    let image = Image::new(Extent3d { width: BAKE.x, height: BAKE.y, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::MAIN_WORLD);
-    match image.try_into_dynamic().map_err(|e| e.to_string()).and_then(|d| d.to_rgba8().save(path).map_err(|e| e.to_string())) {
+    // B120: fast deflate (~4× quicker than the default, a bigger file): in the browser the encode runs inside a frame
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut png, image::codecs::png::CompressionType::Fast, image::codecs::png::FilterType::Adaptive);
+    let r = image::ImageEncoder::write_image(encoder, &rgba, BAKE.x, BAKE.y, image::ExtendedColorType::Rgba8).map_err(|e| e.to_string());
+    match r.and_then(|()| write(path, png).map_err(|e| e.to_string())) {
         Ok(()) => true,
         Err(e) => {
             warn!("{}: {e}", path.display());
             false
         }
     }
+}
+
+/// Whether the card cache has `path`: a file natively, an OPFS file in the browser (B120, `web.rs`).
+fn cached(path: &Path) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::card(&card_name(path)).is_some();
+    #[cfg(not(target_arch = "wasm32"))]
+    path.is_file()
+}
+
+fn read(path: &Path) -> Option<Vec<u8>> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::card(&card_name(path)).map(|b| b.to_vec());
+    #[cfg(not(target_arch = "wasm32"))]
+    std::fs::read(path).ok()
+}
+
+fn write(path: &Path, png: Vec<u8>) -> std::io::Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::put_card(card_name(path), png);
+    #[cfg(not(target_arch = "wasm32"))]
+    std::fs::write(path, png)
+}
+
+/// A cache path's OPFS file name (no folders there): `<folder>~<file>`.
+#[cfg(target_arch = "wasm32")]
+fn card_name(path: &Path) -> String {
+    path.to_string_lossy().replace(['/', '\\'], "~")
 }
 
 /// Previews to despawn, in `Last`: by then every `Update`/`PostUpdate` system that reacted to a new rig (noise,

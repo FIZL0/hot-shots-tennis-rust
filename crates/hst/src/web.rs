@@ -186,3 +186,43 @@ pub fn code_entry(on: bool) {
         let _ = f.call1(&JsValue::NULL, &on.into());
     }
 }
+
+/// The select's baked cards (B120, `play/main_menu/previews.rs`): OPFS `previews/` files by name, all read by the page
+/// before `run` (`add_card`); new ones written back through the page's `hstCard`, old drawings' dropped by `hstCardDrop`.
+static CARDS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<[u8]>>>> = std::sync::Mutex::new(None);
+
+/// Page: one cached card's file.
+#[wasm_bindgen]
+pub fn add_card(name: String, bytes: js_sys::Uint8Array) {
+    CARDS.lock().unwrap().get_or_insert_default().insert(name, bytes.to_vec().into());
+}
+
+pub fn card(name: &str) -> Option<Arc<[u8]>> {
+    CARDS.lock().unwrap().as_ref()?.get(name).cloned()
+}
+
+/// Keep `name` and write it to OPFS (the page's write lands a little later; a closed tab loses only that card).
+pub fn put_card(name: String, png: Vec<u8>) -> io::Result<()> {
+    let f = page_fn("hstCard").ok_or_else(|| io::Error::other("no hstCard"))?;
+    f.call2(&JsValue::NULL, &name.as_str().into(), &js_sys::Uint8Array::from(png.as_slice())).map_err(io_err)?;
+    CARDS.lock().unwrap().get_or_insert_default().insert(name, png.into());
+    Ok(())
+}
+
+/// Drop every card whose name doesn't start with `prefix` (an older drawing's).
+pub fn cards_keep(prefix: &str) {
+    let mut cards = CARDS.lock().unwrap();
+    let Some(cards) = cards.as_mut() else { return };
+    let drop = page_fn("hstCardDrop");
+    cards.retain(|name, _| {
+        let keep = name.starts_with(prefix);
+        if !keep && let Some(f) = &drop {
+            let _ = f.call1(&JsValue::NULL, &name.as_str().into());
+        }
+        keep
+    });
+}
+
+fn page_fn(name: &str) -> Option<js_sys::Function> {
+    js_sys::Reflect::get(&web_sys::window().unwrap(), &name.into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+}

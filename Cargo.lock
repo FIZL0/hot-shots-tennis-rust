@@ -3597,6 +3597,7 @@ dependencies = [
  "gltf",
  "hst-data",
  "hst-sim",
+ "image",
  "iroh",
  "iroh-mainline-address-lookup",
  "iroh-mdns-address-lookup",
