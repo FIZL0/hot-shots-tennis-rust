@@ -106,8 +106,11 @@ of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo'
 
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
 Lobbies are found over the public BitTorrent DHT. Players connect peer to peer with [iroh](https://iroh.computer), and
-a relay steps in when a direct path can't be made. Starting a match online isn't in yet. The browser build has no
-online play yet.
+a relay steps in when a direct path can't be made. The browser build has no online play yet.
+
+LAN play needs no internet: put everyone on one network (a router, or one player's hotspot with mobile data off) and
+set the relay to Off. Find lists the lobbies on that network first (mDNS), and a host's code holds its LAN address,
+so joining by code works there too. Your firewall must let mDNS (UDP 5353) and the game's UDP port through.
 
 Settings live in `online.txt` beside the ISO. The Online screen writes this file, or you can edit it yourself:
 
