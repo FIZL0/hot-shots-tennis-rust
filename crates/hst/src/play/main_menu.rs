@@ -685,8 +685,6 @@ impl Repeat {
 enum Tex {
     Solid,
     Font,
-    /// The description bar's font (`ascii.bmp`), the last of `Art`'s images.
-    Bar,
     Hand,
     /// `SHEETS[k]`.
     Sheet(usize),
@@ -847,7 +845,6 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             }
         }
     }
-    art.push(images.add(bar_font(&read(&mut iso, "CMN/GFFONT.XB", "/ascii.bmp"))));
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
     let grades = hst_data::exe::Menu::new(&cnf, &bin).expect("supported disc").grades();
@@ -910,6 +907,14 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         for i in 0..POOL {
             p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
+        // the description bar's text over its bar (`ticker_text`)
+        let clip = Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() };
+        p.spawn((TickerClip, clip, ZIndex(POOL as i32), Visibility::Hidden)).with_child((
+            bevy::ui::widget::Text::new(""),
+            TextColor(Color::srgb_u8(223, 223, 223)),
+            TextLayout::no_wrap(),
+            Node { position_type: PositionType::Absolute, ..default() },
+        ));
     });
 }
 
@@ -918,8 +923,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 struct Draw<'a> {
     out: Vec<Quad>,
     text: &'a Text,
-    /// Frames (60 Hz) since the description bar's text changed, and that text.
-    tick: u32,
+    /// The description bar's text (`ticker_text` draws it).
     said: String,
     /// Where `q` puts its quads on a wide window.
     anchor: Anchor,
@@ -994,20 +998,8 @@ impl Draw<'_> {
     fn info(&mut self, s: &str) {
         self.anchor = Anchor::Span;
         self.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 404.0, 640.0, 32.0], [0.0; 3], 90.0);
-        // ponytail: the ticker's text stays on the 4:3 screen (it enters at x 656 and clips at 0..640 there)
         self.anchor = Anchor::Centre;
         self.said = s.into();
-        // the boot program's text printer: `ascii.bmp` cell char - 0x1f (21 a row, 12×23), 11×22 texels drawn
-        // 11×22 at an 11 px pitch, from y 408; a glyph is skipped once it is off either edge
-        let mut x = ticker_x(self.tick, s.chars().count());
-        for c in s.chars() {
-            let g = (c as u32).wrapping_sub(0x1f).min(224);
-            if x + 11.0 > 0.0 && x < 640.0 {
-                let (u, v) = ((g % 21 * 12) as f32, (g / 21 * 23) as f32);
-                self.q(Tex::Bar, [u, v, 11.0, 22.0], [x, 408.0, 11.0, 22.0], WHITE, 128.0);
-            }
-            x += 11.0;
-        }
     }
 }
 
@@ -1023,36 +1015,64 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
 /// The description bar's first glyph x `f` frames after its text (`n` glyphs) changed, as the MENU overlay moves it:
 /// in from x 656 at 32 px a frame to x 16; a text wider than 616 px (`n` × 11) then scrolls left 2 px a frame from
 /// frame 160, round a loop of `(n × 11 + 656) / 2` frames that re-enters at x 656.
+#[cfg(test)]
 fn ticker_x(f: u32, n: usize) -> f32 {
+    ticker_x_in(f, n, 656)
+}
+
+/// `ticker_x` on a bar whose right edge is `right - 16` (656 on the 4:3 screen, further on a wide one): the text
+/// enters and re-enters at `right`, the same speeds, the same 616 px test.
+fn ticker_x_in(f: u32, n: usize, right: i32) -> f32 {
     let w = 11 * n as i32;
-    let x = if w <= 616 { 16 } else { 656 - 2 * ((f as i32 + 160) % ((w + 656) >> 1)) };
-    if f < 160 { (656 - 32 * f as i32).max(16) as f32 } else { x as f32 }
+    let x = if w <= 616 { 16 } else { right - 2 * ((f as i32 + (right - 16) / 2 - 160) % ((w + right) >> 1)) };
+    if f < 160 { (right - 32 * f as i32).max(16) as f32 } else { x as f32 }
 }
 
-/// `ascii.bmp` (4-bit, bottom-up) as the bar's palette draws it: ink 200 under the text's 0x8f tint (223), its
-/// alpha by pixel index from a ramp (index 15 opaque, 0–4 clear).
-fn bar_font(bmp: &[u8]) -> Image {
-    const ALPHA: [u8; 16] = [0, 0, 0, 0, 0, 0x1a, 0x1a, 0x1a, 0x1a, 0x33, 0x33, 0x33, 0x4c, 0x4c, 0x66, 0x80];
-    let off = u32::from_le_bytes(bmp[10..14].try_into().unwrap()) as usize;
-    let mut rgba = Vec::with_capacity(256 * 256 * 4);
-    for y in 0..256 {
-        for x in 0..256 {
-            let b = bmp[off + (255 - y) * 128 + x / 2];
-            let i = if x % 2 == 0 { b >> 4 } else { b & 15 };
-            rgba.extend([223, 223, 223, (ALPHA[i as usize] as u32 * 255 / 128) as u8]);
-        }
+/// `ticker_x_in` at a fractional frame count: between the original's 60 Hz steps, a glide from one to the next (not
+/// across a wrap, which jumps).
+fn ticker_glide(f: f32, n: usize, right: i32) -> f32 {
+    let (a, b) = (ticker_x_in(f as u32, n, right), ticker_x_in(f as u32 + 1, n, right));
+    if (b - a).abs() > 32.0 { a } else { a + (b - a) * f.fract() }
+}
+
+/// The description bar's clip rect; its child is the text.
+#[derive(Component)]
+struct TickerClip;
+
+/// Frames (60 Hz, fractional) since the description bar's text changed, and that text.
+#[derive(Resource, Default)]
+struct Ticker(String, f32);
+
+/// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font) sized so its advance
+/// is the original's 11 px pitch on the 640-wide screen, in its tint (223), centred on the bar (y 404..436). Its bar
+/// spans the window (`Anchor::Span`), so a wide window's text enters and wraps at the window's right edge.
+fn ticker_text(
+    ticker: Res<Ticker>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut clip: Query<(&mut Node, &mut Visibility, &Children), With<TickerClip>>,
+    mut text: Query<(&mut bevy::ui::widget::Text, &mut TextFont, &mut Node), Without<TickerClip>>,
+) {
+    let (Ok(win), Ok((mut cnode, mut vis, kids))) = (window.single(), clip.single_mut()) else { return };
+    let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
+    *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
+    let share = super::widescreen::window_share(&window);
+    let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
+    (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
+    (cnode.top, cnode.height) = (Val::Percent(404.0 / 4.48), Val::Percent(32.0 / 4.48));
+    // one 640-space unit in logical px; the font's advance is 0.6 em
+    let unit = share * win.width() / 640.0;
+    let em = 11.0 / 0.6 * unit;
+    font.font_size = bevy::text::FontSize::Px(em);
+    let right = (width / 100.0 * win.width() / unit).round() as i32 + 16;
+    node.left = Val::Px(ticker_glide(ticker.1, ticker.0.chars().count(), right) * unit);
+    node.top = Val::Px((32.0 / 448.0 * win.height() - 1.2 * em) / 2.0);
+    if t.0 != ticker.0 {
+        t.0.clone_from(&ticker.0);
     }
-    Image::new(
-        bevy::render::render_resource::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
-        bevy::render::render_resource::TextureDimension::D2,
-        rgba,
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    )
 }
 
-fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, tick: u32) -> (Vec<Quad>, String) {
-    let mut d = Draw { out: Vec::new(), text, tick, said: String::new(), anchor: Anchor::Centre };
+fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> (Vec<Quad>, String) {
+    let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre };
     match m.screen {
         Screen::Main => {
             d.frame(0, 5);
@@ -1485,7 +1505,7 @@ fn draw(
     gamepads: Query<(Entity, &Gamepad)>,
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
-    mut ticker: Local<(String, f32)>,
+    mut ticker: ResMut<Ticker>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
     qr: Option<Res<online::QrImage>>,
 ) {
@@ -1496,10 +1516,9 @@ fn draw(
     let hand_x = -8.0 + 8.0 * (time.elapsed_secs() * 5.5).cos();
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
-    let (mut quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x, ticker.1 as u32);
+    let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
     if said != ticker.0 {
-        *ticker = (said, 0.0);
-        quads = layout(&menu, &art.2, &bind, &pads, hand_x, 0).0;
+        *ticker = Ticker(said, 0.0);
     }
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
     let share = super::widescreen::window_share(&window);
@@ -1511,7 +1530,6 @@ fn draw(
         img.image = match quad.tex {
             Tex::Solid => art.0[0].clone(),
             Tex::Font => art.0[1].clone(),
-            Tex::Bar => art.0[art.0.len() - 1].clone(),
             Tex::Hand => art.0[2].clone(),
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 1 + 5 + k].clone(),
@@ -1590,7 +1608,8 @@ pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin))
         .add_systems(Startup, (setup, load_bgm))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
-        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), draw).chain(), bgm));
+        .init_resource::<Ticker>()
+        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), draw, ticker_text).chain(), bgm));
     app.add_systems(Update, online::poll.before(draw));
     previews::plugin(app);
 }
@@ -1610,6 +1629,21 @@ mod tests {
         assert_eq!(ticker_x(1000, 37), 16.0);
         // the overlay's test: 616 px (56 glyphs) still holds, 57 scroll
         assert_eq!([ticker_x(10, 56), ticker_x(1000, 56), ticker_x(161, 57)], [336.0, 16.0, 14.0]);
+    }
+
+    #[test]
+    fn ticker_glides() {
+        // whole frames land on the 60 Hz positions; between them, the share of the step
+        for f in [0, 1, 19, 20, 160, 161, 612, 613, 1385] {
+            assert_eq!(ticker_glide(f as f32, 81, 656), ticker_x(f, 81));
+        }
+        assert_eq!([ticker_glide(0.25, 81, 656), ticker_glide(19.5, 81, 656), ticker_glide(160.5, 81, 656)], [648.0, 32.0, 15.0]);
+        // a wrap jumps (no glide from -888 back across the bar)
+        assert_eq!(ticker_glide(612.5, 81, 656), -888.0);
+        // a wide bar (right edge at 1120): enters there, scrolls on from 16 at the same 2 px a frame, re-enters there
+        let x = |f| ticker_x_in(f, 81, 1136);
+        assert_eq!([x(0), x(1), x(35), x(160), x(161)], [1136.0, 1104.0, 16.0, 16.0, 14.0]);
+        assert_eq!([x(160 + 452), x(160 + 453)], [-888.0, 1136.0]);
     }
 
     #[test]
