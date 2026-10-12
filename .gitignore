@@ -18,3 +18,4 @@ research/journal/**/*
 /controls.txt
 /dist
 tools/upscale_mods.sh
+/cache
