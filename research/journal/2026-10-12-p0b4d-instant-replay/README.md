@@ -10,3 +10,4 @@ P0b4d2 runs the replay (snapshot at each serve set-up, restore + logged pads), s
 P0b4d5 adds the between-points buttons, the rally cancel and the replay starting at the board's pause end, see `4-BUTTONS-FINAL.md`.
 P0b4d4 gives the replay its own cameras (`play/replay_camera.rs`, `cutaway::ReplayPicks`), see `4-CAMERAS-FINAL.md`.
 P0b4d3 paces it (skip to the highlighted shot, slow-motion ramps, tornado in-betweens, replay debris), see `4-PACE-FINAL.md`.
+P0b4d6 sounds the replay footsteps on the close-up closing shots, see `5-STEPS-FINAL.md`.

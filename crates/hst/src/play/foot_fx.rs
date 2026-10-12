@@ -80,7 +80,7 @@ fn setup(
 /// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
 /// step the sim. The run object updates after the players (it takes their hit events the same frame), so the dive
 /// rings draw from the sound manager's generator after the frame's strokes.
-fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, q: Query<(&Figure, &Motion)>) {
+fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, q: Query<(&Figure, &Motion)>, rc: Option<Res<super::replay_camera::ReplayCamera>>) {
     let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
     // the game clears the run object as a point is set up
@@ -134,6 +134,9 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
     fx.feet.replay = g.instant.replaying;
     let mt = &mut g.rng.sound;
     fx.feet.tick(&fx.table, c, dusty, fx.wet, wind, &runners, true, &mut || mt.next());
+    if g.instant.replaying && g.players.len() < 3 && rc.is_some_and(|rc| rc.close_up()) {
+        steps(&mut g, &fx.feet, &states);
+    }
     // the streak plays from each dive's start while it shows
     for (p, (e, _)) in fx.dash.iter_mut().enumerate() {
         if fx.feet.dash_start[p] {
@@ -141,6 +144,26 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
         }
         if fx.feet.dash[p].is_some() {
             e.tick();
+        }
+    }
+}
+
+/// A singles replay's close-up hears each footfall of a running player in front of the camera (`sound::step_heard`
+/// at their origin), played there.
+fn steps(g: &mut Game, feet: &Feet, states: &[u8; 4]) {
+    let v = g.cam.view;
+    let [x, y, z] = v.eye;
+    let eye = [x, y, z, 1.0];
+    let [x, y, z] = v.rot[2];
+    let look = [x, y, z, 0.0];
+    let view = super::reaction_voices::matrix(&v);
+    let focal = 240.0 / hst_sim::musl::tanf(v.fov);
+    for i in 0..g.players.len() {
+        let p = &g.players[i];
+        let at = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+        for _ in feet.stepped[i].iter().filter(|&&s| s && states[i] == 1 && hst_sim::sound::step_heard(eye, look, &view, focal, at)) {
+            debug!("replay footstep, player {i}");
+            g.whooshes.push((0, i, hst_sim::sound::step(crate::weather::now())));
         }
     }
 }
@@ -288,5 +311,55 @@ fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>
     }
     if let Some(mut mesh) = meshes.get_mut(empty) {
         fill(&mut mesh, vec![], vec![], vec![], vec![]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use crate::{Args, GameSpace};
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// Singles bot matches' replays sound footfalls only on their close-up closing shots, and do sound some there.
+    #[test]
+    fn replay_steps_sound_on_close_ups_only() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.init_asset::<crate::gs::GsMaterial>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 2, pads: None });
+        app.insert_resource(Pads { seats: Some([false; 4]), autoplay: true, ..default() });
+        app.init_resource::<tick_input::TickPads>();
+        app.init_resource::<instant_replay::Recorder>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, super::plugin, weather::plugin, heard::plugin));
+        app.add_systems(PostStartup, setup);
+        app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball, instant_replay::run).chain());
+        app.finish();
+        app.cleanup();
+        app.world_mut().run_schedule(Startup);
+        app.world_mut().run_schedule(PostStartup);
+        let step = hst_sim::sound::step(crate::weather::now());
+        let (mut close, mut steps, mut replays) = (0, 0, 0);
+        for _ in 0..60 * 60 * 120 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let up = app.world().resource::<super::super::replay_camera::ReplayCamera>().close_up();
+            let mut g = app.world_mut().resource_mut::<Game>();
+            let n = g.whooshes.iter().filter(|w| w.2 == step).count();
+            g.whooshes.clear();
+            assert!(n == 0 || up, "a footstep off the close-ups");
+            replays += g.instant.replaying as u32;
+            close += up as u32;
+            steps += n;
+            if steps > 0 && !g.instant.replaying {
+                break;
+            }
+        }
+        eprintln!("{replays} replay ticks, {close} on close-ups, {steps} footsteps");
+        assert!(close > 0 && steps > 0, "no footstep on a close-up");
     }
 }
