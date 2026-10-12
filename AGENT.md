@@ -44,7 +44,7 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`; remaster `--shot`s in a fixed-size floating window: `tools/shot.sh`) and
 `PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/single.sh`
-(one task at a time) or `tools/parallel.sh [N] [p|d] [f] [m]` (N at once in worktrees; p = TODO order, d = different files, f = past the 94% weekly cap, m = a build dir per slot; by default slots share the main `target/` via `CARGO_TARGET_DIR`, so run binaries as `${CARGO_TARGET_DIR:-target}/…`, never `./target/…`). Multi-step game drives
+(one task at a time) or `tools/parallel.sh [N] [p|d] [f] [m]` (N at once in worktrees; p = TODO order, d = different files, f = past the 94% weekly cap, m = a build dir per slot, `m 2` = two shared round-robin; by default slots share the main `target/` via `CARGO_TARGET_DIR`, so run binaries as `${CARGO_TARGET_DIR:-target}/…`, never `./target/…`). Multi-step game drives
 go under `tools/pcsx2.sh <cmd>`; pine.py tools take the same lock by themselves. In a parallel run `HST_PCSX2=N` gives
 each agent its own PCSX2 copy (tools, pad, PINE and lock all follow it). When you're done with the game for your task,
 close yours: `tools/pcsx2.sh tools/pcsx2-hst.sh stop` (waits for anything mid-use). Never `pkill pcsx2-qt`.
