@@ -43,7 +43,8 @@ pub struct Point {
     pub ball_bounces: i32,
     /// The side the ball went out on is set (the game's −1 = none).
     pub out_side: bool,
-    /// The ball's last two bounce spots (x, z), last first.
+    /// The ball mark of the last first bounce on the court (x, z): the landing spot, then its tail (the spot pushed
+    /// along the ball's ground speed × 0.8).
     pub bounces: [[f32; 2]; 2],
     /// The judge's verdict kind (0 = a plain point).
     pub verdict: u8,
