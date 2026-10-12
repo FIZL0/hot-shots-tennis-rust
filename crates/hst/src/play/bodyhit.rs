@@ -32,7 +32,7 @@ struct View(Handle<StandardMaterial>, [Handle<Image>; 2]);
 pub fn plugin(app: &mut App) {
     app.init_resource::<Posed>()
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(FixedUpdate, (detect.before(super::simulate), (age, bounce_words).after(super::simulate), pose.after(crate::character::tick)))
+        .add_systems(FixedUpdate, (detect.before(super::simulate), place_ball.before(super::simulate), (age, bounce_words).after(super::simulate), pose.after(crate::character::tick)))
         .add_systems(Update, (draw, draw_words).after(super::balloons));
 }
 
@@ -123,6 +123,16 @@ fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, posed: Res<Posed>, q: Que
             struck(&mut g, f.0, last);
             return;
         }
+    }
+}
+
+/// `HST_BALL=x,y,z,vx,vy,vz` (game space): the ball is put there 30 frames into each rally, for `--shot` checks of
+/// a net touch's word against `research/b85_net_rec.py` (which overwrites the original's ball the same way).
+fn place_ball(mut g: ResMut<Game>) {
+    let Some(v) = std::env::var("HST_BALL").ok().map(|e| e.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 6) else { return };
+    if g.phase == Phase::Rally && g.since_hit == 30 {
+        (g.flight.ball.pos, g.flight.ball.vel) = ([v[0], v[1], v[2]], [v[3], v[4], v[5]]);
+        info!("HST_BALL: ball placed");
     }
 }
 
@@ -261,7 +271,7 @@ struct Words {
 #[derive(Component)]
 struct WordView(usize, Handle<StandardMaterial>);
 
-fn bounce_words(g: Res<Game>, mut w: ResMut<Words>) {
+fn bounce_words(g: Res<Game>, time: Res<Time>, mut w: ResMut<Words>) {
     if g.phase == Phase::Serve {
         (w.words, w.on) = (BounceWords::default(), false);
         return;
@@ -269,7 +279,11 @@ fn bounce_words(g: Res<Game>, mut w: ResMut<Words>) {
     w.on |= g.phase == Phase::Rally;
     if w.on {
         let (at, m) = g.flight.landing;
+        let n = w.words.pops.len();
         w.words.frame(g.flight.bounces, at, &m);
+        if w.words.pops.len() > n {
+            info!("bounce word {} at {at:?}, {:.3} s in", w.words.pops[n].effect, time.elapsed_secs());
+        }
     }
 }
 
