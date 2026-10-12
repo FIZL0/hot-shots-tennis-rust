@@ -105,7 +105,8 @@ pub struct CharacterData {
     /// Faces by motion number (`.MOR` and `.UVA`, `hst_sim::face`).
     pub faces: HashMap<usize, Face>,
     /// Per part (as `parts`): the nodes its packets' palettes hold (a `.UVA` track binds by node) and whether its
-    /// texture coordinates are stored swapped (`mdl::Packet::uv_swap`).
+    /// texture coordinates are stored swapped (`mdl::Packet::uv_swap`). A mod's eye materials (standard §4c) hold
+    /// [`EYES`].
     pub part_nodes: Vec<(Vec<usize>, bool)>,
     /// The ball's track through the serve stance (0x20; `*_serve_ad00_ball`).
     pub stance_ball: Option<Path>,
@@ -185,7 +186,13 @@ pub struct Face {
     pub length: f32,
     pub uv: Vec<(usize, Vec<i32>, Vec<[f32; 4]>)>,
     pub uv_length: f32,
+    /// The `.UVA` tracks whose node the skeleton lacks, by name (they never play on a disc character; a mod's eye
+    /// materials take those its donor's model has, as [`EYES`]).
+    pub uv_unbound: Vec<(String, Vec<i32>, Vec<[f32; 4]>)>,
 }
+
+/// The node a mod's eye materials hold in `part_nodes`, and its donor's eye tracks bind to (standard §4c).
+pub const EYES: usize = usize::MAX;
 
 /// A motion's face from its `.MOR` and `.UVA` files (`None` without either): MOR tracks bind by `target`, UVA
 /// tracks to the skeleton node of their name (the game's node binding; unmatched tracks never play).
@@ -201,7 +208,12 @@ fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &im
     }
     if let Some(t) = uva {
         f.uv_length = hst_sim::face::length(t.tracks.iter().map(|t| &t.ticks[..]), t.ticks_per_frame);
-        f.uv = t.tracks.into_iter().filter_map(|tr| Some((skeleton.names.iter().position(|n| *n == tr.name)?, tr.ticks, tr.values))).collect();
+        for tr in t.tracks {
+            match skeleton.names.iter().position(|n| *n == tr.name) {
+                Some(n) => f.uv.push((n, tr.ticks, tr.values)),
+                None => f.uv_unbound.push((tr.name, tr.ticks, tr.values)),
+            }
+        }
     }
     Some(f)
 }
@@ -464,6 +476,14 @@ pub fn load_disc(
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
+}
+
+/// The node names of disc character `n`'s body model (costume 0; every costume shares the skeleton).
+pub fn disc_nodes(iso: &mut Iso, n: usize) -> Result<Vec<String>, String> {
+    let data = iso.read(&format!("PC/PC{n:02}C00.XB")).map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).ok_or("no body model")?;
+    Ok(mdl::parse(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.node_names)
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the

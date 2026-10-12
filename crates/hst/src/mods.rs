@@ -109,6 +109,9 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         Some("texture") => return Err(err("`face` \"texture\" needs a face.json".into())),
         _ => return Err(err("`face` must be \"morph\", \"texture\" or \"none\"".into())),
     };
+    if !j["eyes"].is_null() && !j["eyes"].as_array().is_some_and(|a| a.iter().all(|m| m.is_string())) {
+        return Err(err("`eyes` must list the eyes' glTF material names".into()));
+    }
     let motions = match &j["motions"] {
         serde_json::Value::Null => None,
         serde_json::Value::String(f) if dir.join(f).is_file() => Some(f.clone()),
@@ -595,6 +598,12 @@ pub fn load(
     }
     let texture_face = if m.texture_face { Some(texture_face(&m.dir, &doc, &handles, images, materials, &mut gs, &mut names)?) } else { None };
     let mut parts = Vec::new();
+    let mut part_nodes = Vec::new();
+    // §4c: the eye materials the donor's `.UVA` eye track moves
+    let eyes = eye_materials(&m.dir);
+    for e in eyes.iter().filter(|e| !doc.materials().any(|x| x.name() == Some(e.as_str()))) {
+        warn!("{}: `eyes` names no material `{e}` in the costume", file.display());
+    }
     let mut deformers = Vec::new();
     let mut swaying = Vec::new();
     // a mesh without a skin rides the nearest joint at or above its node (Get a Grip's heads and faces), whole
@@ -627,6 +636,8 @@ pub fn load(
                 v.weights.fill([1.0, 0.0, 0.0, 0.0]);
             }
             let count = v.pos.len();
+            // the joints the part's vertices ride (a disc packet's palette): a `.UVA` track on one of them moves it
+            let mut nodes: Vec<usize> = v.joints.iter().zip(&v.weights).flat_map(|(j, w)| (0..4).filter(|&k| w[k] > 0.0).map(|k| j[k] as usize)).collect();
             let moved = moved(&v, first, deformers.len(), &joints);
             // VU1's per-bone normals from one glTF normal: the first joint's share in the normal slot, the rest in the
             // tangent slot, which gs.wgsl turns by the other joints' weight blend
@@ -651,6 +662,12 @@ pub fn load(
             if !moved.is_empty() {
                 swaying.push((parts.len(), moved));
             }
+            if p.material().name().is_some_and(|n| eyes.iter().any(|e| e == n)) {
+                nodes.push(character::EYES);
+            }
+            nodes.sort();
+            nodes.dedup();
+            part_nodes.push((nodes, false));
             parts.push((meshes.add(mesh), mat, morphed));
         }
     }
@@ -682,7 +699,15 @@ pub fn load(
     };
 
     // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix
-    let Motions { motions, paths, pelvis, arm, faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
+    let Motions { motions, paths, pelvis, arm, mut faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
+    // the donor's eye tracks on nodes the costume lacks drive its §4c eye materials (those the donor's own model
+    // binds: a track naming no node of it plays on neither)
+    if !eyes.is_empty() {
+        let donor = character::disc_nodes(iso, m.donor)?;
+        for f in faces.values_mut() {
+            f.uv.extend(f.uv_unbound.drain(..).filter(|t| donor.contains(&t.0)).map(|(_, ticks, values)| (character::EYES, ticks, values)));
+        }
+    }
     let visual = match &m.motions {
         Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions)?,
         None => HashMap::new(),
@@ -690,7 +715,13 @@ pub fn load(
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes: Vec::new(), stance_ball, skeleton, noise, gs, texture_face, visual })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
+}
+
+/// `mod.json`'s `eyes` (§4c): the glTF materials the donor's `.UVA` eye track moves (`read` checked the list).
+fn eye_materials(dir: &Path) -> Vec<String> {
+    let j: serde_json::Value = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    j["eyes"].as_array().into_iter().flatten().filter_map(|m| m.as_str().map(str::to_string)).collect()
 }
 
 /// A mod's own motions (§6 `motions`): each animation, named by its motion (`re_gu`, `sh_f_t`: the disc name
@@ -1008,6 +1039,57 @@ mod tests {
             }
             assert!(moved > 0.1, "{id:#x} draws like the donor's");
         }
+    }
+
+    /// The eye offset each part of `c` draws on the inspect pose of donor `donor` (the held frame, as `inspect`).
+    fn pose_eyes(c: &CharacterData, donor: usize) -> Vec<[u32; 2]> {
+        let t = character::pose_frame(donor, c.motions[&character::POSE].length);
+        let t = hst_sim::pose::wrap(t, c.faces[&character::POSE].uv_length, true);
+        crate::inspect::part_uv(c, character::POSE, t).iter().map(|o| [o.x.to_bits(), o.y.to_bits()]).collect()
+    }
+
+    /// M1i: a rerigged pc00 (eye node `s_me` kept as a joint) draws the disc pc00's eye offset on the inspect pose,
+    /// on its eye material only; a costume without the donor's eye node takes it through `eyes` (§4c), and a donor
+    /// whose track names no node of its own model (7) moves nothing.
+    #[test]
+    fn mod_eyes_follow_the_donors_uva() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        if !["test_pc00", "fore_pc00_phoebe"].iter().all(|m| Path::new(MODS).join(m).is_dir()) {
+            return eprintln!("no context/mods/test_pc00 or fore_pc00_phoebe, skipped");
+        }
+        let mut s = Stores(default(), default(), default(), default());
+        let disc = character::load_disc(&mut iso, 0, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let held: Vec<_> = pose_eyes(&disc, 0).into_iter().filter(|o| *o != [0, 0]).collect();
+        assert!(!held.is_empty() && held.iter().all(|o| *o == [0xbca3_d70a, 0x3ca3_d70a]), "{held:?}");
+        let (_, c) = load_mod(&mut iso, &mut s, "test_pc00").unwrap();
+        let moved: Vec<_> = pose_eyes(&c, 0).into_iter().filter(|o| *o != [0, 0]).collect();
+        assert_eq!(moved, held, "the mod's moved parts vs the disc's");
+
+        // Phoebe's rig has no eye node of donor 6's: only `eyes` binds the track, on that material's parts
+        let dir = std::env::temp_dir().join(format!("hst_m1i_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let glb = Path::new(MODS).join("fore_pc00_phoebe/model/pc00_phoebe_c00.glb").canonicalize().unwrap();
+        let disc6 = character::load_disc(&mut iso, 6, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let want6: Vec<_> = pose_eyes(&disc6, 6).into_iter().filter(|o| *o != [0, 0]).collect();
+        assert!(!want6.is_empty());
+        for (donor, eyes) in [(6, "[]"), (6, r#"["eye"]"#), (7, r#"["eye"]"#)] {
+            let json = format!(r#"{{"standard":1,"id":"m1i","name":"m1i","costumes":[{:?}],"donor":{donor},"hand":"right","params":{{"base":{donor}}},"ai_row":{donor},"face":"morph","eyes":{eyes}}}"#, glb);
+            std::fs::write(dir.join("mod.json"), json).unwrap();
+            let m = read(&dir).unwrap();
+            let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+            let o = pose_eyes(&c, donor);
+            let moved: Vec<_> = o.iter().filter(|o| **o != [0, 0]).collect();
+            match (donor, eyes) {
+                (6, "[]") | (7, _) => assert!(moved.is_empty(), "donor {donor} eyes {eyes}: {moved:?}"),
+                _ => {
+                    assert!(!moved.is_empty() && moved.iter().all(|o| **o == want6[0]), "{moved:?} vs {want6:?}");
+                    // only the parts of the `eye` material
+                    let eye_parts = c.part_nodes.iter().filter(|p| p.0.contains(&character::EYES)).count();
+                    assert_eq!(moved.len(), eye_parts);
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A packaged rerig.py mod (Fore!'s Phoebe on donor 6) plays the forehand and run without breaking up.
