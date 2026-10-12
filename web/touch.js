@@ -13,6 +13,21 @@ if (AC) {
     constructor(...a) {
       super(...a);
       contexts.push(this);
+      this.end = 0;
+    }
+    // cpal's WebAudio output plays two buffers in turn, each started at its own time cursor. After the page stalls
+    // (loading, a slow frame, a hidden tab) that cursor lags the context's clock, both buffers start "now" and overlap,
+    // and the game's audio (music tempo included) is pulled at twice real time until the cursor catches up: queue every
+    // buffer after the one before instead, so audio always plays at real time.
+    createBufferSource() {
+      const s = super.createBufferSource();
+      const start = s.start;
+      s.start = (when = 0, ...rest) => {
+        const at = Math.max(when, this.currentTime, this.end);
+        this.end = at + (s.buffer?.duration ?? 0);
+        start.call(s, at, ...rest);
+      };
+      return s;
     }
   };
 }

@@ -8,6 +8,7 @@
 use hst_data::iso::Iso;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
+use bevy::prelude::Res;
 use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReaderSync, FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
@@ -123,6 +124,15 @@ pub fn run(pack: js_sys::Uint8Array) {
         }
     }
     crate::start(argv);
+}
+
+/// The page's boot status (`index.html`) goes once the game has drawn its first frames.
+pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
+    if frames.0 == 3 {
+        if let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"hstShown".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
+            let _ = f.call0(&JsValue::NULL);
+        }
+    }
 }
 
 /// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).
