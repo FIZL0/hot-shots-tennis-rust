@@ -17,7 +17,7 @@ AIM_SERVE=1 records P1's serve aims instead (the swing's aim at the countdown's 
 tosses with the next button (✕ mostly: the strong toss, whose mistiming nudges +0x3f10..+0x3f1c), holds the next stick
 and swings AIM_SERVE_DELAY frames later (cycled, for every timing grade). Aims re-run by an instant replay (+0x4088
 set: the replay's recorded stick, not the live pad) are never kept.
-Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
+Usage: record_aim.py <slot> <out.bin> <aims> [max frames]. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
 from vpad import FIFO

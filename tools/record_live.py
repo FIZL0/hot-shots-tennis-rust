@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the live ball every frame from a save-state load (bot games: slot 5).
-Usage: record_live.py <slot> <frames> <out.bin> [--vel vsync,vx,vy,vz]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
+Usage: record_live.py <slot> <frames> <out.bin> [--vel vsync,vx,vy,vz]. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25).
 Sample = u32 vsync + live ball *(gm+0x88) 0x290 + predictor *(gm+0x98) 0x290 + rally block 0x3165f0 0x40.
 --vel: right after sampling that vsync, overwrite the live ball's velocity once (net cord, post and net tests;
 pick it by stepping hst-sim from the same state); everything after is the game's own physics. That vsync goes to

@@ -2,13 +2,11 @@
 """Minimal PCSX2 PINE client. Usage: pine.py [hexaddr ...]  -> prints game id/status, then u32 at each addr.
 
 Copies (HST_PCSX2=N) run at 1x (B24): recorders poll the running game with next_frame() and lose next to nothing
-(a torn read is skipped and logged). HST_LOCKSTEP=1, for a capture that must have every frame: recorders
-(Pine(step=True)) step the game one frame at a time instead: pause, FrameAdvance (pad R3, bound by
-tools/pcsx2-hst.sh), read while paused; never torn, but ~10 frames/s at 2x and unwatchable. HST_REALTIME=1 launches
-the copy at 0.25 for the wall-clock tools. Tools that poll by wall-clock without next_frame call require_realtime()."""
-import atexit, fcntl, os, signal, socket, struct, sys, time
+(a torn read is skipped and logged). No lock-step: pausing/frame-stepping a copy stalled agents in menus (user
+2026-10-11); copies run at full speed or HST_SPEED. HST_REALTIME=1 launches the copy at 0.25 for the wall-clock tools. Tools that poll by wall-clock without next_frame call require_realtime()."""
+import fcntl, os, signal, socket, struct, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vpad import send  # a copy's pad: pause, FrameAdvance
+from vpad import send  # a copy's pad: pause
 
 VSYNC, VSYNC_STALL = 0x1d5780, 10  # the game's vsync counter (every recorder's frame clock)
 INST = os.environ.get("HST_PCSX2", "")  # parallel runs: this agent's own PCSX2 copy N (tools/pcsx2-hst.sh)
@@ -40,16 +38,13 @@ def _take_lock():
         signal.alarm(hold)
 
 class Pine:
-    def __init__(self, step=False):
-        """step: lock-step on a copy (next_frame, settle, load_state below); else the game runs free as before."""
+    def __init__(self, step=False):  # step: ignored (lock-step removed), kept so old callers still run
         _take_lock()
         path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "pcsx2.sock" if SLOT == 28011 else f"pcsx2.sock.{SLOT}")
         self.s = socket.socket(socket.AF_UNIX); self.s.settimeout(10); self.s.connect(path)  # a frozen PCSX2 fails, not hangs
-        self.lockstep = step and INST and os.environ.get("HST_LOCKSTEP") == "1"
         self.speed = speed = open(SPEED).read().strip() if INST and os.path.exists(SPEED) else None
         self.fast = fast = speed is not None and (float(speed) == 0 or float(speed) >= 1)  # 0 = unlimited
         self.resume()
-        if self.lockstep: atexit.register(self.resume)  # leave it running, as found
 
     def pause(self):
         """Pause a copy (pad N's Guide toggles pause) and wait until it is."""
@@ -65,21 +60,10 @@ class Pine:
                                "restart it slowed: tools/pcsx2-hst.sh stop; HST_REALTIME=1 tools/pcsx2-hst.sh")
 
     def next_frame(self, last, delay=0.004):
-        """The vsync of the frame after `last` (the first one not seen yet). Lock-step: pause and FrameAdvance one
-        frame, so it is read whole while paused. Real time: poll until the counter moves, then wait `delay` s for the
-        game's tick (a read right after the tick can still see last frame's values: B24 journal)."""
-        if not self.lockstep:
-            while (v := self.read32(VSYNC)) == last: pass
-            time.sleep(delay)
-            return v
-        self.pause()
-        v0 = self._u32(VSYNC)
-        if v0 != last: return v0
-        t = time.monotonic()
-        send(["press r3 4"])  # FrameAdvance; R3 is no PS2 button in the copies' pad map
-        while (v := self._u32(VSYNC)) == v0 or self.status() != "paused":
-            if time.monotonic() - t > 5: sys.exit("pine: FrameAdvance (pad R3) didn't step PCSX2; was the copy "
-                                                  "launched by this tools/pcsx2-hst.sh (it binds R3)?")
+        """The vsync of the frame after `last` (the first one not seen yet): poll until the counter moves, then wait
+        `delay` s for the game's tick (a read right after the tick can still see last frame's values: B24 journal)."""
+        while (v := self.read32(VSYNC)) == last: pass
+        time.sleep(delay)
         return v
 
     def resume(self):
@@ -115,7 +99,7 @@ class Pine:
     def _u32(self, a): return struct.unpack("<I", self._call(2, struct.pack("<I", a)))[0]
     def read32(self, a):
         v = self._u32(a)
-        if a == VSYNC and not self.lockstep: self._watch(v)
+        if a == VSYNC: self._watch(v)
         return v
 
     def _watch(self, v):
@@ -138,10 +122,8 @@ class Pine:
 
     def settle(self, regions, v):
         """read_regions until two reads agree within frame v (the EE runs while PINE reads); None if the frame
-        ticks first (at full speed it can tick on every try: waiting for v again would spin forever). Lock-step: the
-        game is paused, one read."""
+        ticks first (at full speed it can tick on every try: waiting for v again would spin forever)."""
         a = self.read_regions(regions)
-        if self.lockstep: return a
         while True:
             b = self.read_regions(regions)
             if self.read32(VSYNC) != v: return None
@@ -156,12 +138,7 @@ class Pine:
         return body
 
     def save_state(self, slot): self._call(9, bytes([slot]))
-    def load_state(self, slot):
-        # lock-step: pause right after, so captures start a frame or two after the state. Not before: a load into a
-        # paused copy leaves the game's vsync counter 2 behind its state for good (B24 journal)
-        if self.lockstep: self.resume()
-        self._call(0x0A, bytes([slot]))
-        if self.lockstep: self.pause()
+    def load_state(self, slot): self._call(0x0A, bytes([slot]))
     def version(self): return self._str(8)
     def title(self):   return self._str(0x0B)
     def game_id(self): return self._str(0x0C)

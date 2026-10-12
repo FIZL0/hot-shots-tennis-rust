@@ -2,7 +2,7 @@
 """Record a bot game (slot 5) whose smashes are all △ smashes: whenever a player's contact search locks onto a
 smash (+0x3ec1 == 4, countdown +0x3ec4 >= 0), its pressed button (+0x3ee4) is set to △ (4) before the hit, so
 the game's own hit code launches smash kind 1. Usage: record_lob_smash.py <slot> <out.bin> <frames>.
-Same sample layout as record_p2m2.py (`hst_sim::replay::frames_live`). A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
+Same sample layout as record_p2m2.py (`hst_sim::replay::frames_live`). A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import struct, sys, time
 from pine import Pine
 

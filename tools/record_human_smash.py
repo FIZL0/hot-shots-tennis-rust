@@ -5,7 +5,7 @@ once per incoming ball 4 frames before it comes down through 2.8 m, steering the
 smash locks; smash kinds 0, 0, 1).
 With nothing to hit for 2 s it presses ✕ (point-over skip; serving, every 40 frames: toss, hit). Needs tools/vpad.py serve (pcsx2-hst.sh
 starts it for HST_PCSX2 copies). Usage: record_human_smash.py <slot> <out.bin> <frames>. Same sample layout as
-record_p2m2.py (`hst_sim::replay::frames_live`). A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
+record_p2m2.py (`hst_sim::replay::frames_live`). A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25)."""
 import os, struct, sys, time
 from pine import Pine
 from vpad import FIFO

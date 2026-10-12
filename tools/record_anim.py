@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record each player's motion player (anim object *(player+0x54)) every frame from a save-state load (slot 5).
-Usage: record_anim.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
+Usage: record_anim.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25).
 Sample = u32 vsync + gm 0x100 + per player (4): player +0x3c00 0x400, anim object 0x80, its clip's length (f32, clip +0x2c)."""
 import struct, sys, time
 from pine import Pine

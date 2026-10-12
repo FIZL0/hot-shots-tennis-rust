@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the sound command ring every frame from a save-state load, next to the live ball (bot games: slot 5).
-Usage: record_sound.py <slot> <frames> <out.bin> [hits]. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
+Usage: record_sound.py <slot> <frames> <out.bin> [hits]. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25).
 Sample = record_live.py's (u32 vsync + live ball 0x290 + predictor 0x290 + rally block 0x40), the live ball's
 first 6 contact records (6 × 0x50, from the pointer at ball+0x8f8; zeros without one), then the sound library's
 last positional play (angle, distance, volume: 3 × i32), u32 n and the n ring commands

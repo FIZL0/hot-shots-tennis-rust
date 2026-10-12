@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the in-match cameras every frame from a save-state load (bot games: slot 5), for P16.
-Usage: record_camera.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
+Usage: record_camera.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25).
 Sample = u32 vsync + gm 0x100 + camera handler *(gm+0xbc) 0x200 + its cameras *(+0x5c) 0x140, *(+0x60) and
 *(+0x64) (0x200 head + 0x2f40..0x3100 each) + 4 player positions (+0x3d40 matrix, 0x40) + live ball 0x290."""
 import struct, sys, time

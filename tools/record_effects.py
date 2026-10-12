@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the hit-effect manager every frame from a save-state load (bot games: slot 5).
-Usage: record_effects.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x (tools/pine.py; HST_LOCKSTEP=1: every frame, slowly); the user's own PCSX2: run it slowed (NominalScalar 0.25).
+Usage: record_effects.py <slot> <frames> <out.bin>. A PCSX2 copy runs at 1x; the user's own PCSX2: run it slowed (NominalScalar 0.25).
 
 Header: u32 n models (6), then per impact model u32 MOR entry count, u32 MTA entry count.
 Sample: u32 vsync, effects object 0x100, impact effect (+0xa0 object) 0x60, ball 0x290, court marker 8 (0x40),

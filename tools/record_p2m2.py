@@ -4,7 +4,7 @@ Usage: record_p2m2.py <state.p2s | slot> <out.bin> <frames>. With a .p2s: start 
 arms on that state's load (vsync counter jumps). With a slot number it loads the state itself (bot games: slot 5).
 Writes `frames` samples. It polls the running game (a PCSX2 copy runs at 1x; the user's own PCSX2
 slowed: NominalScalar 0.5 or 0.25), taking a sample only when two reads in a row are identical, so it is never torn
-mid-frame (a frame that ticks mid-read is skipped and logged). HST_LOCKSTEP=1 steps it frame by frame (tools/pine.py).
+mid-frame (a frame that ticks mid-read is skipped and logged).
 Sample = u32 vsync counter + the regions in REGIONS order (fixed size; layout in README of the P0 journal), then
 the live ball *(gm+0x88) and the rally block 0x3165f0 (not in round1.bin, which predates them)."""
 import struct, sys, time, zipfile

@@ -30,14 +30,12 @@ else
 fi
 INI=${XDG_CONFIG_HOME:-$HOME/.config}/PCSX2/inis/PCSX2.ini
 sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the ini on exit; keep PINE on
-# copies: muted, no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause and
-# R3 (taken off the PS2 pad; the game doesn't use it) is FrameAdvance, pressed by pine.py's lock-step
-# (HST_LOCKSTEP=1); 1x speed (B24: recorders poll it with next to no loss), or HST_REALTIME=1 for the wall-clock tools (0.25).
+# copies: muted, no keyboard (a new window takes focus, so the user's Space would pause it); pad N's Guide toggles pause;
+# 1x speed (B24: recorders poll it with next to no loss), or HST_REALTIME=1 for the wall-clock tools (0.25).
 if [ -n "$N" ]; then
     speed=${HST_SPEED:-$([ "${HST_REALTIME:-}" = 1 ] && echo 0.25 || echo 1)}  # HST_SPEED: slow motion for screenshots
     sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' \
-        -e '/^FrameAdvance = /d' -e '/^R3 = SDL-0\/RightStick/d' -e 's|^\[Hotkeys\]|&\nFrameAdvance = SDL-0/RightStick|' \
-        -e "s/^NominalScalar = .*/NominalScalar = $speed/" -e 's/^OutputMuted = false/OutputMuted = true/' "$INI"
+        -e '/^FrameAdvance = /d' -e "s/^NominalScalar = .*/NominalScalar = $speed/" -e 's/^OutputMuted = false/OutputMuted = true/' "$INI"
     echo "$speed" >"${PID%.pid}.speed"
 fi
 [ -z "$N" ] && { echo $$ >"$PID"; exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"; }  # exec keeps the pid
