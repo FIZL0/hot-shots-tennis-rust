@@ -339,6 +339,14 @@ def report(msg):
 LOCK = os.path.join(NOTES, 'master.lock')  # "<ID> <master.md size> <time>" while the master handles a report
 
 
+idle_since = None  # when the master's TUI was first seen idle while it holds the lock
+
+
+def master_idle():
+    screen = sp.run(['tmux', 'capture-pane', '-p', '-t', panes().get('master', ['master'])[0]], capture_output=True, text=True).stdout
+    return not re.search(r'…\s\(\d|esc to interrupt', screen)  # ponytail: the TUI spinner ("✽ Working… (2m 3s"); breaks if Claude Code redraws it
+
+
 def master_busy():
     """True while the master is on a report: until it appends `<ID>: …` to master.md and main has no merge going.
     Stale after 90 min (the master died or forgot): logged and freed so merges don't stall forever."""
@@ -348,7 +356,11 @@ def master_busy():
         return os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))  # a merge in main we didn't start (restart)
     md = os.path.join(NOTES, 'master.md')
     new = open(md).read()[int(size):] if os.path.exists(md) else ''
-    done = re.search(rf'^{re.escape(tid)}:', new, re.M) and not os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))
+    global idle_since
+    idle_since = (idle_since or time.time()) if master_idle() else None
+    # done: its master.md line, or idle 2 min (a report it had nothing to do for, e.g. already merged); never mid-merge
+    done = (re.search(rf'^{re.escape(tid)}:', new, re.M) or time.time() - (idle_since or time.time()) >= 120) \
+        and not os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))
     if not done and time.time() - float(since) < 90 * 60:
         return True
     if not done:
@@ -370,12 +382,13 @@ def flush():
         return  # one merge into main at a time: the master's report, or the runner's own merge
     master()
     m = panes().get('master', ['master'])[0]  # master gone: send-keys fails quietly, as it always did
-    screen = sp.run(['tmux', 'capture-pane', '-p', '-t', m], capture_output=True, text=True).stdout
-    if re.search(r'…\s\(\d|esc to interrupt', screen):
-        return  # ponytail: busy = the TUI's spinner line ("✽ Working… (2m 3s"); breaks if Claude Code redraws it
+    if not master_idle():
+        return
     if not (enter(m, '/clear') and enter(m, ' '.join(MASTER.format(slots=SLOTS).split('\n')) + ' ' + q[0])):
         return  # not taken: the line stays queued for the next look
     open(OUTBOX, 'w').write(''.join(l + '\n' for l in q[1:]))
+    global idle_since
+    idle_since = None
     if m := re.match(r'REPORT (\S+)', q[0]):
         md = os.path.join(NOTES, 'master.md')
         open(LOCK, 'w').write(f'{m.group(1)} {os.path.getsize(md) if os.path.exists(md) else 0} {time.time()}')
