@@ -7,10 +7,11 @@
 //! Function addresses live in `research/oracle.txt` (research notes), never in this crate.
 //!
 //! Covered: EE integer ops (64-bit GPRs, the 128-bit ones only for `lq`/`sq` and a few MMI moves), COP1 through
-//! `hst_sim::ps2` (PCSX2's FPU model). Not timing, frame flow, VU0 or hardware registers: an op it does not know
-//! panics with its address, so add it here when a function needs it.
+//! `hst_sim::ps2` (PCSX2's FPU model), the VU0 macro ops the walkers' code runs through `hst_sim::vu0`. Not
+//! timing, frame flow, VU0 micro programs or hardware registers: an op it does not know panics with its address,
+//! so add it here when a function needs it.
 
-use hst_sim::ps2;
+use hst_sim::{ps2, vu0};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +29,10 @@ pub struct Ee {
     pub fpr: [u32; 32],
     pub acc: u32,
     pub cond: bool,
+    /// VU0 float registers (vf0 reads (0, 0, 0, 1)), accumulator and Q.
+    pub vf: [[f32; 4]; 32],
+    pub vacc: [f32; 4],
+    pub q: f32,
     pub pc: u32,
     npc: u32,
     pub ram: Vec<u8>,
@@ -36,6 +41,9 @@ pub struct Ee {
     pub written: BTreeSet<u32>,
     /// Instructions run by the last `call`.
     pub steps: u64,
+    /// Functions replaced by Rust (a port already checked on its own, or one needing VU0 micro programs): reaching
+    /// the address runs the hook, which reads its arguments from the registers, then returns to `ra`.
+    pub hooks: std::collections::BTreeMap<u32, Box<dyn FnMut(&mut Ee)>>,
 }
 
 /// The repo root (for `context/` and `research/`).
@@ -113,12 +121,16 @@ impl Ee {
             fpr: [0; 32],
             acc: 0,
             cond: false,
+            vf: std::array::from_fn(|k| if k == 0 { [0.0, 0.0, 0.0, 1.0] } else { [0.0; 4] }),
+            vacc: [0.0; 4],
+            q: 0.0,
             pc: 0,
             npc: 0,
             ram,
             spr: vec![0; 0x4000],
             written: BTreeSet::new(),
             steps: 0,
+            hooks: Default::default(),
         }
     }
 
@@ -139,6 +151,13 @@ impl Ee {
         self.steps = 0;
         while self.pc != DONE {
             assert!(self.steps < budget, "call {addr:06x}: over {budget} steps (pc {:06x})", self.pc);
+            if let Some(mut h) = self.hooks.remove(&self.pc) {
+                h(self);
+                self.hooks.insert(self.pc, h);
+                self.pc = self.r(31) as u32;
+                self.npc = self.pc + 4;
+                continue;
+            }
             self.step();
             self.steps += 1;
         }
@@ -286,6 +305,15 @@ impl Ee {
             0xe => self.set(rt, s ^ (w & 0xffff) as u64),
             0xf => self.set(rt, sx32(w << 16)),
             0x11 => self.cop1(w, here),
+            0x12 => self.cop2(w, here),
+            0x36 => {
+                let v = self.read(ea & !15, 16);
+                self.put_vf(rt, 0xf, std::array::from_fn(|k| f32::from_bits((v >> (32 * k)) as u32)));
+            }
+            0x3e => {
+                let v = self.vf[rt].iter().enumerate().fold(0u128, |a, (k, f)| a | (f.to_bits() as u128) << (32 * k));
+                self.write(ea & !15, 16, v);
+            }
             0x18 | 0x19 => self.set(rt, s.wrapping_add(imm)),
             0x1c => self.mmi(w, here),
             0x1e => {
@@ -406,6 +434,94 @@ impl Ee {
             0x14 if fun == 0x20 => self.fpr[fdn] = ps2::chop(self.fpr[fs] as i32 as f64).to_bits(),
             _ => bad(),
         }
+    }
+
+    /// Write the `dest` lanes (bit 3 = x … bit 0 = w) of a VU0 register; vf0 stays constant.
+    fn put_vf(&mut self, r: usize, dest: u32, v: [f32; 4]) {
+        for k in 0..4 {
+            if r != 0 && dest >> (3 - k) & 1 == 1 {
+                self.vf[r][k] = v[k];
+            }
+        }
+    }
+
+    /// VU0 macro mode (COP2): register moves and the vector ops PCSX2 runs with chop rounding (`hst_sim::vu0`).
+    fn cop2(&mut self, w: u32, here: u32) {
+        let (k, rt, rd) = (w >> 21 & 31, (w >> 16 & 31) as usize, (w >> 11 & 31) as usize);
+        let bad = || panic!("unknown COP2 op {w:08x} at {here:06x}");
+        if k < 16 {
+            match k {
+                1 => {
+                    let v = self.vf[rd].iter().enumerate().fold(0u128, |a, (k, f)| a | (f.to_bits() as u128) << (32 * k));
+                    if rt != 0 {
+                        self.gpr[rt] = v;
+                    }
+                }
+                5 => {
+                    let v = self.gpr[rt];
+                    self.put_vf(rd, 0xf, std::array::from_fn(|k| f32::from_bits((v >> (32 * k)) as u32)));
+                }
+                _ => bad(),
+            }
+            return;
+        }
+        let (dest, ft, fs, fdn, fun) = (w >> 21 & 15, (w >> 16 & 31) as usize, (w >> 11 & 31) as usize, (w >> 6 & 31) as usize, w & 63);
+        let (a, b, acc, q) = (self.vf[fs], self.vf[ft], self.vacc, self.q);
+        let bc = [b[(w & 3) as usize]; 4];
+        let lanes = |f: &dyn Fn(usize) -> f32| -> [f32; 4] { std::array::from_fn(f) };
+        let (add, sub, mul, madd, msub) = (vu0::add, vu0::sub, vu0::mul, vu0::madd, vu0::msub);
+        let mut to_acc = None;
+        let out = match fun {
+            0..=3 => lanes(&|i| add(a[i], bc[i])),
+            4..=7 => lanes(&|i| sub(a[i], bc[i])),
+            8..=11 => lanes(&|i| madd(acc[i], a[i], bc[i])),
+            12..=15 => lanes(&|i| msub(acc[i], a[i], bc[i])),
+            0x18..=0x1b => lanes(&|i| mul(a[i], bc[i])),
+            0x1c => lanes(&|i| mul(a[i], q)),
+            0x20 => lanes(&|i| add(a[i], q)),
+            0x24 => lanes(&|i| sub(a[i], q)),
+            0x28 => lanes(&|i| add(a[i], b[i])),
+            0x29 => lanes(&|i| madd(acc[i], a[i], b[i])),
+            0x2a => lanes(&|i| mul(a[i], b[i])),
+            0x2c => lanes(&|i| sub(a[i], b[i])),
+            0x2d => lanes(&|i| msub(acc[i], a[i], b[i])),
+            0x2e => {
+                let (y, z) = ([1, 2, 0, 3], [2, 0, 1, 3]);
+                lanes(&|i| msub(acc[i], a[y[i]], b[z[i]]))
+            }
+            0x3c..=0x3f => {
+                let op = (w >> 6 & 31) << 2 | (w & 3);
+                let ftf = (w >> 23 & 3) as usize;
+                match op {
+                    0..=3 => to_acc = Some(lanes(&|i| add(a[i], bc[i]))),
+                    8..=11 => to_acc = Some(lanes(&|i| madd(acc[i], a[i], bc[i]))),
+                    0x18..=0x1b => to_acc = Some(lanes(&|i| mul(a[i], bc[i]))),
+                    0x2a => to_acc = Some(lanes(&|i| mul(a[i], b[i]))),
+                    0x29 => to_acc = Some(lanes(&|i| madd(acc[i], a[i], b[i]))),
+                    0x2e => {
+                        let (y, z) = ([1, 2, 0, 3], [2, 0, 1, 3]);
+                        to_acc = Some(lanes(&|i| mul(a[y[i]], b[z[i]])));
+                    }
+                    0x2f | 0x3b => {} // vnop, vwaitq
+                    0x30 => self.put_vf(ft, dest, a),
+                    0x31 => self.put_vf(ft, dest, [a[1], a[2], a[3], a[0]]),
+                    0x38 => self.q = vu0::div(a[(w >> 21 & 3) as usize], b[ftf]),
+                    0x39 => self.q = vu0::sqrt(b[ftf]),
+                    _ => bad(),
+                }
+                if let Some(v) = to_acc {
+                    // the accumulator only takes the dest lanes; vopmula writes xyz
+                    for i in 0..4 {
+                        if dest >> (3 - i) & 1 == 1 {
+                            self.vacc[i] = v[i];
+                        }
+                    }
+                }
+                return
+            }
+            _ => return bad(),
+        };
+        self.put_vf(fdn, dest, out);
     }
 
     fn mmi(&mut self, w: u32, here: u32) {

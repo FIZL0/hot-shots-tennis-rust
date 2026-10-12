@@ -2,7 +2,8 @@
 //! what, and where they stand. A creature linked to an anchor record (category 14) stands at the anchor's position
 //! minus its own (FPU subtractions); every figure's matrix is a turn by its yaw at that position.
 
-use crate::{libm, ps2, sound};
+use crate::vu0::V4;
+use crate::{contact, libm, mesh, ps2, sound};
 use crate::world::{self, M4};
 use hst_data::exe::{EmitterRow, NpcEntry, TriggerRow};
 use hst_data::layout::{self, Entry, Placement};
@@ -70,9 +71,8 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
 /// after, advancing by `speed`), whether it is reacting to a point, and the stagger that restarts the idle loop
 /// one walker per tick after a new point. Animations: 0 idle, 1 its variant, 2 (a quiet reaction), 3/5 loop
 /// (5 the cheer), 4 shown frozen.
-/// ponytail: dodging the ball and players (wander mode's walk, collision, ground height) moves the walker; no
-/// recording has a walker moving, so it is not ported (P14e). Its turns in place are [`walker_facing`].
-#[derive(Clone, Debug, PartialEq)]
+/// Its moves (dodging, turning back, collisions) are [`Wander`], stepped by [`Walker::step_around`].
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Walker {
     pub slot: u32,
     /// 0 idle, 1 a point to react to (taken on the next tick), 2 reacted.
@@ -87,13 +87,16 @@ pub struct Walker {
     pub advancing: bool,
     /// Length of each animation, in frames.
     pub lens: [f32; 7],
+    /// The animation loops (3 and 5 when set; a dodge's end stops animation 3 looping).
+    pub looping: bool,
+    pub wander: Wander,
 }
 
 impl Walker {
     fn set_frame(&mut self, t: f32) {
         let len = self.lens[self.anim as usize];
         let mut t = t;
-        if matches!(self.anim, 3 | 5) && len != 0.0 {
+        if self.looping && len != 0.0 {
             while len <= t {
                 t = ps2::sub(t, len);
             }
@@ -115,6 +118,7 @@ impl Walker {
 
     fn set_anim(&mut self, anim: u32, players: u32) {
         self.anim = anim;
+        self.looping = matches!(anim, 3 | 5);
         self.set_frame(0.0);
         // the idle loops play at double speed on alternate ticks with four players
         self.speed = if players >= 3 && anim < 2 { 2.0 } else { 1.0 };
@@ -162,6 +166,18 @@ impl Walker {
     /// ponytail: singles reactions and the game mode where the favoured side decides (cheer or turn away) are not
     /// recorded; singles always cheers.
     pub fn step(&mut self, players: u32, cheer: bool, tick: i32, roll: &mut impl FnMut() -> u32) {
+        self.stagger(players, roll);
+        self.animate(players, cheer, tick, roll);
+    }
+
+    /// [`Walker::step`] with its moves ([`Walker::wander`]) between the stagger and the animation.
+    pub fn step_around(&mut self, players: u32, cheer: bool, tick: i32, roll: &mut impl FnMut() -> u32, at: &mut Around) {
+        self.stagger(players, roll);
+        self.wander(players, at);
+        self.animate(players, cheer, tick, roll);
+    }
+
+    fn stagger(&mut self, players: u32, roll: &mut impl FnMut() -> u32) {
         if self.counter >= 0 {
             if self.counter == self.slot as i32 {
                 self.set_anim(0, players);
@@ -172,6 +188,9 @@ impl Walker {
                 self.counter = -1;
             }
         }
+    }
+
+    fn animate(&mut self, players: u32, cheer: bool, tick: i32, roll: &mut impl FnMut() -> u32) {
         if self.mode == 1 {
             if players == 1 {
                 self.set_anim(5, players);
@@ -211,6 +230,390 @@ pub fn walker_facing(home: [f32; 4], z: f32) -> M4 {
     let up = [0.0, 1.0, 0.0];
     let cross = |a: usize, b: usize| ps2::msub(ps2::mul(up[a], f[b]), up[b], f[a]);
     [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], home]
+}
+
+/// What a walker dodges and walks into on a tick: the players' positions, the ball's position and velocity (per
+/// frame), every walker's drawn position (the gallery's copy, this walker's updated by its tick), the court's
+/// collision world, and the z of the winners' half a reacting walker turns to (6.4 or −6.4, [`walker_facing`]).
+pub struct Around<'a> {
+    pub players: &'a [V4],
+    pub ball: V4,
+    pub ball_vel: V4,
+    pub walkers: &'a mut [V4],
+    pub world: &'a mesh::World,
+    pub side: f32,
+}
+
+/// A walker's moves: it steps away (a tenth of a metre a tick, for up to 30 ticks) from a player, another walker
+/// or the ball coming at it, sliding along the court's edges and whatever it walks into, and turns back to the
+/// court centre over 10 ticks once nothing is near; something near on 3 ticks of a 5-tick window stops it
+/// (animation 4) until nothing is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Wander {
+    pub home: V4,
+    /// The drawn matrix (rows, position).
+    pub world: M4,
+    pub dodging: bool,
+    pub ticks: i32,
+    /// Unit step direction (x, 0, z, 0).
+    pub dir: V4,
+    pub hits: i32,
+    pub window: i32,
+    pub frozen: bool,
+    pub turning: bool,
+    /// Yaw while turning back, its step per tick and the ticks turned.
+    pub angle: f32,
+    pub turn_step: f32,
+    pub turn_count: i32,
+    /// The court edge's point it slides against, or what is left of a blocked step.
+    pub push: V4,
+    /// Where the players and walkers stood last tick.
+    pub players: [V4; 4],
+    pub walkers: [V4; 6],
+}
+
+/// Walker radius.
+const WALKER_R: f32 = f32::from_bits(0x3e99_999a);
+const PI: f32 = f32::from_bits(0x4049_0fdb);
+/// The court rectangle the walkers keep out of: its sides' planes (normal, point) and corners (normal, point).
+const HALF_W: f32 = f32::from_bits(0x40af_851f); // 5.485
+const HALF_L: f32 = f32::from_bits(0x413e_28f6); // 11.885
+const SIDES: [(V4, V4); 4] = [
+    ([0.0, 0.0, 1.0, 0.0], [-HALF_W, 0.0, HALF_L, 0.0]),
+    ([0.0, 0.0, -1.0, 0.0], [-HALF_W, 0.0, -HALF_L, 0.0]),
+    ([-1.0, 0.0, 0.0, 0.0], [-HALF_W, 0.0, -HALF_L, 0.0]),
+    ([1.0, 0.0, 0.0, 0.0], [HALF_W, 0.0, -HALF_L, 0.0]),
+];
+const CORNERS: [(V4, V4); 4] = [
+    ([-1.0, 0.0, 1.0, 0.0], [-HALF_W, 0.0, HALF_L, 0.0]),
+    ([1.0, 0.0, 1.0, 0.0], [HALF_W, 0.0, HALF_L, 0.0]),
+    ([-1.0, 0.0, -1.0, 0.0], [-HALF_W, 0.0, -HALF_L, 0.0]),
+    ([1.0, 0.0, -1.0, 0.0], [HALF_W, 0.0, -HALF_L, 0.0]),
+];
+
+/// (x, 0, z, 0) scaled to unit length (`len` the squared length the caller's op order gives).
+fn unit_xz(v: V4, len: f32) -> V4 {
+    let inv = ps2::div(1.0, ps2::sqrt(len));
+    [ps2::mul(v[0], inv), 0.0, ps2::mul(v[2], inv), 0.0]
+}
+
+/// Rows of a matrix facing `f` (unit, xz): (up × f, up, f, identity's last).
+fn facing_rows(f: V4) -> M4 {
+    let up = [0.0, 1.0, 0.0];
+    let cross = |a: usize, b: usize| ps2::msub(ps2::mul(up[a], f[b]), up[b], f[a]);
+    [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], [0.0, 1.0, 0.0, 0.0], f, [0.0, 0.0, 0.0, 1.0]]
+}
+
+/// `n` turned by `a` about Y.
+fn turn_xz(a: f32, n: V4) -> V4 {
+    let (c, s) = (libm::cosf(a), libm::sinf(a));
+    [ps2::madd(ps2::mul(n[2], s), n[0], c), n[1], ps2::madd(ps2::mul(n[2], c), -n[0], s), n[3]]
+}
+
+/// Where a line from `a` through `b` passes `c`: the signed distance of `c` from it, in the plane through it
+/// perpendicular to (b − a) × (c − a).
+fn line_side(a: V4, b: V4, c: V4) -> f32 {
+    use ps2::{msub, mul, sub};
+    let u: [f32; 3] = std::array::from_fn(|k| sub(b[k], a[k]));
+    let w: [f32; 3] = std::array::from_fn(|k| sub(c[k], a[k]));
+    let n = [msub(mul(u[1], w[2]), u[2], w[1]), msub(mul(u[2], w[0]), u[0], w[2]), msub(mul(u[0], w[1]), u[1], w[0])];
+    let q = [msub(mul(u[1], n[2]), u[2], n[1]), msub(mul(u[2], n[0]), u[0], n[2]), msub(mul(u[0], n[1]), u[1], n[0])];
+    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(mul(q[1], q[1]), q[0], q[0]), q[2], q[2])));
+    let d: [f32; 3] = std::array::from_fn(|k| sub(a[k], c[k]));
+    ps2::madd(ps2::madd(mul(mul(q[1], inv), d[1]), mul(q[0], inv), d[0]), mul(q[2], inv), d[2])
+}
+
+impl Wander {
+    /// Standing at `home` facing the court centre, nothing moving (a new point after a decided one; the players
+    /// and walkers stand where given).
+    pub fn new(home: V4, players: &[V4], walkers: &[V4]) -> Wander {
+        let mut w = Wander { home, world: walker_facing(home, 0.0), ..Default::default() };
+        w.players[..players.len()].copy_from_slice(players);
+        w.walkers[..walkers.len()].copy_from_slice(walkers);
+        w
+    }
+
+    /// Turn back toward the court centre: the yaw to turn by, split into 10 steps on the first tick, then one step.
+    fn turn_back(&mut self, m: &M4) -> Option<M4> {
+        use ps2::{add, div, sub};
+        if self.turn_count == 0 {
+            let p = ps2::mul(m[1][2], m[2][1]);
+            let yaw = if p == 1.0 || p == -1.0 { 0.0 } else { libm::atan2f(m[2][0], m[2][2]) };
+            self.angle = add(yaw, PI);
+            let target = add(libm::atan2f(sub(0.0, m[3][0]), sub(0.0, m[3][2])), PI);
+            let mut diff = if self.angle <= target { sub(target, self.angle) } else { sub(self.angle, target) };
+            let mut alt = add(f32::from_bits(0x40c9_0fdb), if diff <= 0.0 { diff } else { -diff });
+            if !(diff <= 0.0) {
+                alt = -alt;
+            }
+            if alt.abs() <= diff.abs() {
+                diff = alt;
+            }
+            self.turn_step = div(diff, 10.0);
+            if !(add(self.angle, self.turn_step) < target) {
+                self.turn_step = -self.turn_step;
+            }
+            self.angle = sub(self.angle, PI);
+        }
+        let mut rows = None;
+        if self.turn_count < 10 {
+            let mut a = add(self.angle, self.turn_step);
+            self.angle = a;
+            if !(a < PI) || a <= -PI {
+                a = if a < PI { add(add(a, PI), PI) } else { sub(-PI, sub(a, PI)) };
+            }
+            rows = Some(world::mat_mul(&world::IDENTITY, &world::rot_y(a)));
+        }
+        self.turn_count += 1;
+        rows
+    }
+
+    /// The court rectangle ahead of a step `v` from `pos`: the plane (`push` = a point on it, the returned normal)
+    /// to slide along, or none (normal 0) when the step ends clear of it.
+    fn edge(&mut self, pos: V4, v: V4, r: f32) -> V4 {
+        use ps2::{add, madd, mul, sub};
+        let inv = ps2::div(1.0, ps2::sqrt(madd(madd(0.0, v[0], v[0]), v[2], v[2])));
+        let (fz, fy, fx) = (mul(v[2], inv), mul(0.0, inv), mul(v[0], inv));
+        let end = [add(pos[0], v[0]), add(pos[1], 0.0), add(pos[2], v[2]), add(pos[3], 0.0)];
+        if !(end[0].abs() <= add(HALF_W, r)) || !(end[2].abs() <= add(HALF_L, r)) {
+            self.push = [0.0; 4];
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+        let inside: [bool; 4] = std::array::from_fn(|i| {
+            let (n, p) = SIDES[i];
+            let d: [f32; 3] = std::array::from_fn(|k| sub(p[k], pos[k]));
+            madd(madd(mul(d[1], n[1]), d[0], n[0]), d[2], n[2]) < 0.0
+        });
+        if inside.iter().filter(|&&b| b).count() < 2 {
+            let (n, p) = match inside.iter().position(|&b| b) {
+                Some(i) => SIDES[i],
+                // past the sides' table the game reads the first corner's record
+                None => (CORNERS[0].0, CORNERS[0].1),
+            };
+            self.push = p;
+            return n;
+        }
+        let u = (!inside[2]) as usize + 2 * inside[1] as usize;
+        let (n, p) = CORNERS[u];
+        self.push = p;
+        let mut out = unit_xz(n, madd(mul(n[2], n[2]), n[0], n[0]));
+        let ahead = [add(end[0], mul(fx, r)), add(end[1], mul(fy, r)), add(end[2], mul(fz, r)), add(end[3], mul(fy, r))];
+        for (_, c) in CORNERS {
+            let d = [sub(c[0], pos[0]), sub(c[1], pos[1]), sub(c[2], pos[2])];
+            let (ex, ez) = (sub(ahead[0], pos[0]), sub(ahead[2], pos[2]));
+            let reach = ps2::sqrt(madd(mul(ez, ez), ex, ex));
+            if ps2::sqrt(madd(mul(d[2], d[2]), d[0], d[0])) < reach && line_side(pos, ahead, c) < r {
+                self.push = c;
+                let v: V4 = std::array::from_fn(|k| sub(pos[k], c[k]));
+                out = unit_xz(v, madd(mul(v[2], v[2]), v[0], v[0]));
+                break;
+            }
+        }
+        out
+    }
+
+    /// Move `pos` by `v`, sliding: against the plane (`push`, `n`) when there is one, else the court's world; each
+    /// hit stops the sphere at the contact and takes the velocity's part into the surface off (at most 30, until
+    /// a tenth of the step is left). Ends on the ground, outside |z| ≤ 1. Returns whether nothing was hit.
+    fn slide(&mut self, pos: &mut V4, v: V4, n: V4, r: f32, world: &mesh::World) -> bool {
+        use ps2::{add, madd, mul, sub};
+        let plane = ps2::sqrt(madd(mul(n[2], n[2]), n[0], n[0])) != 0.0;
+        let mut v = v;
+        if madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2]) == 0.0 {
+            return true;
+        }
+        let mut start = *pos;
+        start[1] = (-(r as f64) - 0.1) as f32;
+        let (mut k, mut hits) = (1.0f32, 0);
+        loop {
+            let end: V4 = std::array::from_fn(|i| madd(add(0.0, start[i]), v[i], k));
+            let hit = if plane {
+                contact::sweep(start, end, r, self.push, n, f32::MAX)
+            } else {
+                world.sweep(start, end, r, &[]).map(|h| h.contact())
+            };
+            let Some(hit) = hit else {
+                start = end;
+                break;
+            };
+            hits += 1;
+            start = contact::contact_point(Some(&hit), start, end, r);
+            let t = if hit.t <= f32::from_bits(0x3c23_d70a) { f32::from_bits(0x3c23_d70a) } else { hit.t };
+            k = mul(k, sub(1.0, t));
+            let m = hit.normal;
+            let dot = madd(madd(mul(v[1], m[1]), v[0], m[0]), v[2], m[2]);
+            v = std::array::from_fn(|i| sub(v[i], mul(m[i], dot)));
+            if k <= f32::from_bits(0x3dcc_cccd) || hits >= 30 {
+                break;
+            }
+        }
+        start[1] = 0.0;
+        if start[2].abs() <= 1.0 {
+            start[2] = if start[2] <= 0.0 { -1.0 } else { 1.0 };
+        }
+        *pos = [start[0], start[1], start[2], 1.0];
+        if hits != 0 {
+            self.push = v;
+        }
+        hits == 0
+    }
+}
+
+impl Walker {
+    /// Look for what comes at it: players and the ball, then the other walkers. Returns whether any is near.
+    fn detect(&mut self, at: &Around, pos: V4) -> bool {
+        use ps2::{add, madd, mul, sqrt, sub};
+        let mut best = 100.0;
+        let mut near = false;
+        let ball = at.players.len();
+        let mut look = |w: &mut Wander, p: V4, dir: Option<V4>, thr: f32| {
+            let dist = |p: V4, q: [f32; 3]| {
+                let (dy, dx, dz) = (sub(p[1], q[1]), sub(p[0], q[0]), sub(p[2], q[2]));
+                sqrt(madd(madd(mul(dy, dy), dx, dx), dz, dz))
+            };
+            let d = dist(p, [pos[0], pos[1], pos[2]]);
+            if !(d <= 3.0) || best <= d {
+                return;
+            }
+            best = d;
+            if !(d < thr) {
+                return;
+            }
+            near = true;
+            let Some(v) = dir else { return };
+            let n = unit_xz(v, madd(add(0.0, mul(v[2], v[2])), v[0], v[0]));
+            w.dodging = !w.frozen;
+            w.ticks = 0;
+            let t = sub(thr, d);
+            // step aside, to whichever side (90° or 270° from its way) takes it further from it
+            // ponytail: the walkers' "step straight away" setting (+0xc4) is never set, so its branch isn't ported
+            for i in 0..2 {
+                let a = mul(f32::from_bits(0x3c8e_fa35), (90 + 180 * i) as f32);
+                let s = turn_xz(a, n).map(|c| mul(c, t));
+                let q = [add(pos[0], s[0]), add(pos[1], s[1]), add(pos[2], s[2])];
+                if d < dist(p, q) {
+                    w.dir = turn_xz(a, n);
+                    break;
+                }
+            }
+        };
+        let w = &mut self.wander;
+        for i in 0..=ball {
+            if i < ball {
+                let (p, prev) = (at.players[i], w.players[i]);
+                let still = p.map(f32::to_bits) == prev.map(f32::to_bits);
+                let dir = (!still).then(|| std::array::from_fn(|k| sub(p[k], prev[k])));
+                look(w, p, dir, if w.dodging { 0.5 } else { 1.0 });
+            } else {
+                let v = at.ball_vel;
+                let dir = (sqrt(madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2])) != 0.0).then_some(v);
+                look(w, at.ball, dir, if w.dodging { 1.5 } else { 2.5 });
+            }
+        }
+        for k in 0..at.walkers.len() {
+            if k == self.slot as usize {
+                continue;
+            }
+            let (p, prev) = (at.walkers[k], w.walkers[k]);
+            let still = p.map(f32::to_bits) == prev.map(f32::to_bits);
+            let dir = (!still).then(|| std::array::from_fn(|k| sub(p[k], prev[k])));
+            look(w, p, dir, if w.dodging { 0.5 } else { 1.0 });
+        }
+        near
+    }
+
+    /// The walker's wander tick (before its animation's): what's near, the dodge, the turn back, the step and its
+    /// collisions; then its drawn matrix goes to `at.walkers` and it notes where everything stood.
+    pub fn wander(&mut self, players: u32, at: &mut Around) {
+        use ps2::{madd, mul, sqrt};
+        let mut rows = self.wander.world;
+        let mut p = self.wander.world;
+        let mut vel = [0.0; 4];
+        let mut seen = self.wander.world[3];
+        seen[1] = 0.0;
+        if self.mode == 0 {
+            let near = self.detect(at, seen);
+            let w = &mut self.wander;
+            if !w.dodging {
+                if self.anim == 3 {
+                    self.looping = false;
+                }
+                if !w.frozen {
+                    if w.turning {
+                        let mut m = w.world;
+                        m[3][1] = 0.0;
+                        if let Some(r) = w.turn_back(&m) {
+                            rows = r;
+                        }
+                        if w.turn_count >= 10 {
+                            w.turning = false;
+                        }
+                    }
+                } else {
+                    if near {
+                        (w.dodging, w.ticks) = (false, 0);
+                    } else if self.anim == 4 {
+                        (self.advancing, w.frozen) = (true, false);
+                    } else {
+                        w.frozen = false;
+                    }
+                    w.turn_count = 0;
+                }
+            } else {
+                if self.anim != 3 {
+                    self.set_anim(3, players);
+                }
+                let w = &mut self.wander;
+                if near {
+                    w.hits += 1;
+                }
+                let d = w.dir;
+                rows = facing_rows(unit_xz(d, madd(mul(d[2], d[2]), d[0], d[0])));
+                w.turn_count = 0;
+                w.turning = true;
+            }
+            let w = &mut self.wander;
+            if w.dodging {
+                w.ticks += 1;
+                vel = w.dir.map(|c| mul(c, f32::from_bits(0x3dcc_cccd)));
+                if w.ticks >= 30 {
+                    (w.window, w.ticks, w.dodging, w.hits) = (0, 0, false, 0);
+                    self.set_anim(0, players);
+                }
+                let w = &mut self.wander;
+                if w.window % 5 == 0 {
+                    if w.hits < 3 {
+                        w.hits = 0;
+                    } else {
+                        (w.ticks, w.dodging) = (0, false);
+                        self.set_anim(4, players);
+                        (self.wander.frozen, self.wander.hits) = (true, 0);
+                    }
+                }
+                self.wander.window += 1;
+            }
+        } else if self.mode == 1 {
+            rows = walker_facing(self.wander.home, at.side);
+        }
+        let w = &mut self.wander;
+        if sqrt(madd(mul(vel[2], vel[2]), vel[0], vel[0])) != 0.0 {
+            let n = w.edge(p[3], vel, WALKER_R);
+            if !w.slide(&mut p[3], vel, n, WALKER_R, at.world) {
+                let u = w.push;
+                let f = unit_xz(u, madd(mul(u[2], u[2]), u[0], u[0]));
+                (w.push, w.dir) = (f, f);
+                rows = facing_rows(f);
+            }
+        }
+        w.world = [rows[0], rows[1], rows[2], p[3]];
+        if let Some(slot) = at.walkers.get_mut(self.slot as usize) {
+            *slot = p[3];
+        }
+        let n = at.players.len().min(4);
+        w.players[..n].copy_from_slice(&at.players[..n]);
+        let n = at.walkers.len().min(6);
+        w.walkers[..n].copy_from_slice(&at.walkers[..n]);
+    }
 }
 
 /// Which of `count` walkers cheer a point (the gallery's pick): all of them below four, else three distinct ones
@@ -1554,7 +1957,7 @@ mod tests {
             let mut c = super::Cheers::new(court);
             let mut draws = 0;
             for slot in 0..4 {
-                let mut w = super::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7] };
+                let mut w = super::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7], ..Default::default() };
                 w.start(4, &mut || { draws += 1; 0x8000_0000 });
                 // the middle of its sixth of the cheer
                 assert_eq!((w.anim, w.counter, w.frame), (5, -1, 10.0 * slot as f32 + 5.0));
@@ -1568,7 +1971,7 @@ mod tests {
             assert_eq!(c.shown().len(), if court == 5 { 93 } else { 0 });
         }
         // singles too; one player draws nothing
-        let mut w = super::Walker { slot: 0, mode: 0, counter: 5, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7] };
+        let mut w = super::Walker { slot: 0, mode: 0, counter: 5, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens: [60.0; 7], ..Default::default() };
         w.start(1, &mut || unreachable!());
         assert_eq!((w.anim, w.counter), (0, 0));
     }

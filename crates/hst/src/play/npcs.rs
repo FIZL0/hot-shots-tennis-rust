@@ -136,12 +136,13 @@ fn setup(
                 let Some(data) = load(layout::walker_files(model, set)) else { continue };
                 let lens = std::array::from_fn(|a| data.motions.get(&a).map_or(0.0, |c| c.length));
                 let slot = npcs.walkers.len() as u32;
-                let mut w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens };
+                let mut w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens, ..Default::default() };
                 // the match's start: its cheer, and a mark where it stands
                 w.start(players, &mut roll);
                 npcs.cheers.add([c.world[3][0], c.world[3][1], c.world[3][2]], slot);
                 // the serve placement before the first point turns it to the court centre
                 let world = npc::walker_facing(c.world[3], 0.0);
+                w.wander = npc::Wander::new(c.world[3], &[], &[]);
                 npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
             }
             npc::Kind::Trigger(t) => {
@@ -218,6 +219,13 @@ fn face(turn: &mut Query<&mut Transform, With<character::Rig>>, e: Entity, home:
         let scale = t.scale;
         *t = Transform::from_matrix(Mat4::from_cols_array_2d(&npc::walker_facing(home, z))).with_scale(scale);
     }
+}
+
+/// Walkers back home facing the court centre, nothing moving (a new point, the first serve).
+fn home_walkers(walkers: &mut [(Entity, npc::Walker, [f32; 4])], players: &[super::Player]) {
+    let near: Vec<[f32; 4]> = players.iter().map(|p| [p.pos[0], p.pos[1], p.pos[2], 1.0]).collect();
+    let spots: Vec<[f32; 4]> = walkers.iter().map(|(_, _, h)| *h).collect();
+    walkers.iter_mut().for_each(|(_, w, home)| w.wander = npc::Wander::new(*home, &near, &spots));
 }
 
 /// Show clip `id` at `frame` (the tick's sampled time; `character::tick` already moved the last one to `prev`).
@@ -314,6 +322,7 @@ fn step(
         npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         npcs.walkers.iter_mut().for_each(|(_, w, _)| w.new_point(players > 1));
+        home_walkers(&mut npcs.walkers, &g.players);
     }
     // the match over: the manager resumes, court 5 shows its marks if the favoured team won, an unfavoured win
     // zeroes them
@@ -365,6 +374,7 @@ fn step(
             // only ends when the idle loops restart
             w.new_point(true);
         }
+        home_walkers(&mut npcs.walkers, &g.players);
         // ponytail: the game's end message (and its resets) is sent here with the new point's, not when the game's
         // end state starts
         let game_end = std::mem::take(&mut npcs.game_end);
@@ -405,15 +415,31 @@ fn step(
     }
     npcs.motion = motion;
     npcs.crowd.iter_mut().for_each(|(c, _)| c.step());
+    // the walkers' moves: what they dodge (players, ball, each other) and the court's world they bump into; none in
+    // the rain (the original skips their whole tick then)
+    // ponytail: rain still runs their animation here, as before
+    let mut spots: Vec<[f32; 4]> = npcs.walkers.iter().map(|(_, w, _)| w.wander.world[3]).collect();
+    let near: Vec<[f32; 4]> = g.players.iter().map(|p| at(p.pos)).collect();
+    let (b, v) = (g.flight.ball.pos, g.flight.ball.vel);
+    let raining = matches!(crate::weather::now(), 2 | 3);
     for (k, (e, w, home)) in npcs.walkers.iter_mut().enumerate() {
         let react = w.mode == 1;
-        w.step(players, cheer[k], npcs.tick, &mut roll);
+        if raining {
+            w.step(players, cheer[k], npcs.tick, &mut roll);
+        } else {
+            let mut around = npc::Around { players: &near, ball: at(b), ball_vel: [v[0], v[1], v[2], 0.0], walkers: &mut spots, world: &g.world.0, side };
+            w.step_around(players, cheer[k], npcs.tick, &mut roll, &mut around);
+            if let Ok(mut t) = turn.get_mut(*e) {
+                let scale = t.scale;
+                *t = Transform::from_matrix(Mat4::from_cols_array_2d(&w.wander.world)).with_scale(scale);
+            }
+        }
         // a walker breaking into its cheer leaves a mark where it stands
         if react && w.anim == 5 {
             npcs.cheers.add([home[0], home[1], home[2]], w.slot);
         }
         if let Ok((_, mut m)) = q.get_mut(*e) {
-            show(&mut m, w.anim as usize, w.frame, matches!(w.anim, 3 | 5));
+            show(&mut m, w.anim as usize, w.frame, w.looping);
         }
     }
     // the gallery's manager: paused by type 44 in the deciding set, silent in the rain
