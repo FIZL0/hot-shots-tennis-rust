@@ -23,6 +23,7 @@ mod gs;
 mod mods;
 mod hud_gamma;
 mod inspect;
+mod mash;
 mod mode;
 mod noise;
 mod play;
@@ -197,7 +198,7 @@ fn main() {
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
-    app.add_plugins(noise::plugin);
+    app.add_plugins((noise::plugin, mash::plugin));
     app.add_systems(Update, character::texture_faces.after(character::animate));
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, log_fps);
