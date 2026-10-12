@@ -2860,7 +2860,7 @@ fn control(mut g: ResMut<Game>, pads: Res<Pads>, tick: Res<tick_input::TickPads>
             Some(s) => {
                 let pad = &tick.slot(s);
                 let (shot, serve_press) = (pad.shot, pad.serve);
-                post_press(g, shot.is_some() || serve_press);
+                post_press(g, matches!(shot, Some(0 | 1)));
                 doubles_ai::human(g, i);
                 human(g, i, pad, shot, serve_press);
             }

@@ -5,14 +5,27 @@
 //! then on. At the next serve set-up with a replay pending it puts that state back and plays the logged pads again:
 //! the point, its post-point phase and the serve set-up replay as they went, the scoreboard awards the point onto the
 //! score as it was before it (so it isn't scored twice) and every generator draws what it drew, so the match goes on
-//! exactly as without the replay, only later. Its pacing (P0b4d3), cameras (P0b4d4) and the buttons that skip or ask
-//! for one (P0b4d5) come later.
+//! exactly as without the replay, only later. Its pacing (P0b4d3) and cameras (P0b4d4) come later.
+//!
+//! When it starts (the match handler's skip/button check, after each tick): the decision's own replay as the
+//! scoreboard's pause runs out (the post-point waits there for it); □ during the post-point asks for one of the last
+//! point once the board has paused and the point allows it (and △ again while a replay's post-point runs); either
+//! puts the serve back at the end of that tick and plays the pads up to it, then hands the pads back. During a
+//! replay ✕ fast-forwards to 20 ticks before the next shot, ○ to the replay's end. A rally that runs 1800 ticks
+//! cancels its replay (the pad recorder's limit).
 
-use super::{Game, snapshot, tick_input};
+use super::{Game, Phase, snapshot, tick_input};
 use bevy::prelude::*;
 use hst_sim::instant::{self, Decision, Point};
 use hst_sim::score::Event;
 use std::collections::VecDeque;
+
+const CROSS: u16 = 0x2000;
+const CIRCLE: u16 = 0x4000;
+const TRIANGLE: u16 = 0x1000;
+const SQUARE: u16 = 0x8000;
+/// A rally this long (match-handler ticks) cancels its replay.
+const LONG_RALLY: i32 = 1800;
 
 /// The decision's own state across a point.
 #[derive(Clone, Debug, Default)]
@@ -33,6 +46,14 @@ pub(super) struct Instant {
     /// Replays shown this match (gm+0x358), and those a button asked for (gm+0x354, P0b4d5).
     pub replays: i32,
     pub asked: i32,
+    /// The rally ran too long for a replay (gm+0x347).
+    pub cancelled: bool,
+    /// A replay starts at the end of this tick (gm+0x345).
+    pub pending: bool,
+    /// `ticks` as the scoreboard's pause ran out, outside a replay; 0 before (gm+0x360).
+    pub shown: i32,
+    /// `ticks` at each shot of the point (the shot recorder's records, for ✕'s skip).
+    pub shot_ticks: Vec<i32>,
 }
 
 /// The run's state outside `Game`: the match as the last serve set-up left it and the pads since.
@@ -45,22 +66,43 @@ pub(super) struct Recorder {
     /// The match as the serve set-up that started the last replay left it (the test compares the replay's end).
     #[cfg(test)]
     back: Option<Game>,
+    /// The match as the replay's last pad left it (the test compares it with `back`).
+    #[cfg(test)]
+    caught_up: Option<Game>,
 }
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<Recorder>().add_systems(FixedUpdate, run.after(super::play_sounds));
 }
 
-/// End of each match tick: log the pads; at a serve set-up keep the state, or with a replay pending put the point's
-/// serve back and queue its pads.
+/// End of each match tick: log the pads; the buttons; at a serve set-up keep the state, or with a replay pending put
+/// the point's serve back and queue its pads.
 pub(super) fn run(w: &mut World) {
-    let Some(g) = w.get_resource::<Game>() else { return };
-    let (set_up, pending) = (g.instant.set_up, g.instant.decision.replay && !g.instant.replaying);
+    if !w.contains_resource::<Game>() {
+        return;
+    }
+    w.init_resource::<Recorder>();
+    if w.resource::<Recorder>().outside.is_some() && w.get_resource::<tick_input::Replay>().is_none_or(|r| r.0.is_empty()) {
+        end_queue(w);
+    }
+    let pressed = presses(w);
+    let skip = buttons(&mut w.resource_mut::<Game>(), pressed);
+    if skip > 0 {
+        if let Some(mut t) = w.get_resource_mut::<Time<Fixed>>() {
+            // the skipped ticks run before the next frame, without drawing
+            let step = t.timestep();
+            t.accumulate_overstep(step * skip as u32);
+        }
+    }
+    let g = w.resource::<Game>();
+    let (set_up, pending) = (g.instant.set_up, g.instant.pending);
     let now = w.get_resource::<tick_input::TickPads>().map_or([tick_input::IDLE; 4], |t| t.now());
     w.resource_mut::<Game>().instant.set_up = false;
-    w.init_resource::<Recorder>();
     let first = w.resource::<Recorder>().serve.is_none();
-    if pending && set_up && !first {
+    if !set_up && !first {
+        w.resource_mut::<Recorder>().pads.push(now);
+    }
+    if pending && !first {
         start(w);
     } else if set_up || first {
         // the match's first tick has no set-up through `next_point`: its serve is kept from there
@@ -69,15 +111,70 @@ pub(super) fn run(w: &mut World) {
         let s = snapshot::save(w);
         let mut r = w.resource_mut::<Recorder>();
         (r.serve, r.pads) = (Some(s), vec![]);
-    } else {
-        w.resource_mut::<Recorder>().pads.push(now);
     }
+}
+
+/// This tick's presses (✕ ○ △ □ bits) from the people at the pads: during a replay from the devices' latches (the
+/// match reads the replay's pads), else from the tick's pads.
+fn presses(w: &mut World) -> u16 {
+    if w.resource::<Recorder>().outside.is_none() {
+        return w.get_resource::<tick_input::TickPads>().map_or(0, |t| t.pressed());
+    }
+    let Some(mut pads) = w.get_resource_mut::<super::Pads>() else { return 0 };
+    let mut b = 0;
+    for s in &mut pads.slots {
+        b |= match s.shot.take() {
+            Some(0) => CROSS,
+            Some(1) => CIRCLE,
+            Some(3) => TRIANGLE,
+            _ => 0,
+        };
+        b |= if std::mem::take(&mut s.serve) { SQUARE } else { 0 };
+    }
+    b
+}
+
+/// The match handler's skip/button check after the tick: the rally's cancel, the point's shot ticks, the board's
+/// pause end (the decision's replay starts there), □/△ asking for a replay in the post-point, ✕/○ skipping
+/// through one. Returns the ticks to fast-forward.
+fn buttons(g: &mut Game, pressed: u16) -> i32 {
+    let (phase, post) = (g.phase.clone(), g.post.as_ref().map(|p| p.pausing_out()));
+    let i = &mut g.instant;
+    if phase == Phase::Rally && !i.cancelled && i.ticks >= LONG_RALLY {
+        (i.cancelled, i.decision.allowed, i.decision.recorded) = (true, false, false);
+    }
+    if !i.replaying && g.shots as usize > i.shot_ticks.len() {
+        i.shot_ticks.push(i.ticks);
+    }
+    if phase == Phase::Post && post == Some(true) && !i.replaying {
+        i.shown = i.ticks;
+        i.pending |= i.decision.replay;
+    }
+    let can = i.decision.allowed && i.shown != 0;
+    match phase {
+        Phase::Post if can && (pressed & SQUARE != 0 || i.replaying && pressed & TRIANGLE != 0) => {
+            (i.pending, i.decision.replay) = (true, false);
+        }
+        Phase::Serve | Phase::Rally if can && i.replaying => {
+            let skip = if pressed & CROSS != 0 {
+                // ponytail: the shot recorder's clamps (after the last shot, its end) as the replay's end
+                i.shot_ticks.iter().map(|t| t - 20).find(|&t| t > i.ticks).unwrap_or(i.shown - 20) - i.ticks
+            } else if pressed & CIRCLE != 0 {
+                i.shown - i.ticks + 3
+            } else {
+                0
+            };
+            return skip.max(0);
+        }
+        _ => {}
+    }
+    0
 }
 
 /// The serve phase's entry with a replay pending: back to the point's serve, counted, its pads queued.
 fn start(w: &mut World) {
     let g = w.resource::<Game>();
-    let (replays, asked) = (g.instant.replays + 1, g.instant.asked);
+    let pre = g.instant.clone();
     #[cfg(test)]
     let back = g.clone();
     let mut r = w.resource_mut::<Recorder>();
@@ -89,18 +186,34 @@ fn start(w: &mut World) {
     let queue: VecDeque<_> = std::mem::take(&mut r.pads).into();
     snapshot::restore(w, &s);
     w.resource_mut::<Recorder>().serve = Some(s);
+    // the serve's entry with a replay pending keeps the point's flags and counts; the tick count and the mark restart
     let i = &mut w.resource_mut::<Game>().instant;
-    (i.replays, i.asked, i.replaying) = (replays, asked, true);
-    bevy::log::info!("instant replay {replays}: {} ticks", queue.len());
+    *i = Instant {
+        ticks: i.ticks,
+        timing: i.timing,
+        mark: i.mark,
+        replaying: true,
+        pending: false,
+        replays: pre.replays + 1,
+        asked: pre.asked + i32::from(!pre.decision.replay),
+        decision: Decision { replay: false, ..pre.decision },
+        ..pre
+    };
+    bevy::log::info!("instant replay {}: {} ticks", i.replays, queue.len());
     // an outside source (a recording, later the network) goes on after the replay
     let outside = w.remove_resource::<tick_input::Replay>().map(|o| o.0);
     w.resource_mut::<Recorder>().outside = Some(outside.unwrap_or_default());
     w.insert_resource(tick_input::Replay(queue));
 }
 
-/// The replay's own pads are spent at its serve set-up: an outside source's queue comes back, else the devices.
+/// The replay's own pads are spent: an outside source's queue comes back, else the devices.
 fn end_queue(w: &mut World) {
     let Some(outside) = w.resource_mut::<Recorder>().outside.take() else { return };
+    #[cfg(test)]
+    {
+        let g = w.resource::<Game>().clone();
+        w.resource_mut::<Recorder>().caught_up = Some(g);
+    }
     w.remove_resource::<tick_input::Replay>();
     if !outside.is_empty() {
         w.insert_resource(tick_input::Replay(outside));
@@ -114,6 +227,9 @@ pub(super) fn new_point(g: &mut Game) {
     (i.ticks, i.mark) = (0, [[0.0; 2]; 2]);
     i.decision.allowed = false;
     i.decision.recorded = false;
+    i.decision.replay = false;
+    (i.cancelled, i.pending, i.shown) = (false, false, 0);
+    i.shot_ticks.clear();
     i.set_up = true;
 }
 
@@ -131,8 +247,7 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
         awarded: event.is_some(),
         replaying: g.instant.replaying,
         allowed: g.instant.decision.allowed,
-        // ponytail: the rally's cancel (over 1799 ticks / the long-rally option) is P0b4d5's
-        cancelled: false,
+        cancelled: g.instant.cancelled,
         recorded: g.instant.decision.recorded,
         // ponytail: no shot recorder yet (P0b4d2); it holds every shot of the rally
         record_shots: g.shots,
@@ -234,36 +349,59 @@ mod tests {
         }
     }
 
-    /// The match-ending point replays at the next serve set-up: back at its serve with the score before it, played
-    /// again from its pads, it ends at the same serve set-up with the whole match state as it was without the replay
-    /// (score awarded once, every generator where it was), counted once.
+    /// Runs the app until the first replay's pads run out: (the match before the replay, the match after it).
+    fn caught_up(app: &mut App) -> (Game, Game) {
+        for _ in 0..60 * 60 * 30 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let r = app.world().resource::<Recorder>();
+            if let (Some(back), Some(now)) = (&r.back, &r.caught_up) {
+                return (back.clone(), now.clone());
+            }
+        }
+        panic!("no replay ran");
+    }
+
+    /// The same match, apart from the replay's own counts and flags.
+    fn same(mut back: Game, now: &Game) {
+        back.instant = now.instant.clone();
+        assert_eq!(format!("{back:?}"), format!("{now:?}"), "the replay left the match elsewhere");
+    }
+
+    /// The match-ending point replays as the scoreboard's pause runs out: back at its serve, played again from its
+    /// pads, it reaches the tick it left with the whole match state as it was (score awarded once, every generator
+    /// where it was), counted once and not as asked.
     #[test]
     fn the_replay_ends_where_the_point_left_the_match() {
         if !std::path::Path::new(ISO).is_file() {
             return eprintln!("no ISO, skipped");
         }
         let mut app = app(false);
-        let (mut seen, mut over_seen) = (false, false);
-        for _ in 0..60 * 60 * 30 {
+        let (back, now) = caught_up(&mut app);
+        assert!(back.score.match_over && back.post.as_ref().is_some_and(|p| p.pausing_out()), "not at the match point's pause end");
+        assert!(now.instant.replaying && now.instant.replays == 1 && now.instant.asked == 0);
+        same(back, &now);
+    }
+
+    /// □ after the first point's pause asks for its replay; it plays and the match carries on from the same tick.
+    #[test]
+    fn square_asks_for_the_last_point() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = app(false);
+        for _ in 0..60 * 60 * 5 {
             app.world_mut().run_schedule(FixedUpdate);
             let g = app.world().resource::<Game>();
-            if g.instant.replaying && !seen {
-                seen = true;
-                let back = app.world().resource::<Recorder>().back.as_ref().unwrap();
-                assert_eq!(g.instant.replays, 1);
-                // back at the point's serve: the score before the match ended
-                assert!(back.score.games != g.score.games || back.score.sets != g.score.sets, "the score wasn't put back");
-            }
-            over_seen |= seen && g.score.match_over;
-            if seen && !g.instant.replaying {
-                assert!(over_seen, "the replay didn't decide the match again");
-                let mut back = app.world().resource::<Recorder>().back.clone().unwrap();
-                back.instant = g.instant.clone();
-                assert_eq!(format!("{back:?}"), format!("{g:?}"), "the replay left the match elsewhere");
-                assert_eq!(g.instant.replays, 1);
-                return;
+            if g.instant.shown != 0 {
+                assert!(g.instant.decision.allowed, "the first point didn't allow a replay");
+                // a press the devices latched (read by `local` the next tick)
+                app.world_mut().resource_mut::<Pads>().slots[0].serve = true;
+                break;
             }
         }
-        panic!("no replay ran (seen {seen})");
+        let (back, now) = caught_up(&mut app);
+        assert!(!back.score.match_over && back.phase == Phase::Post);
+        assert!(now.instant.replays == 1 && now.instant.asked == 1);
+        same(back, &now);
     }
 }

@@ -53,6 +53,13 @@ impl TickPads {
     }
 }
 
+impl TickPads {
+    /// The buttons any seat pressed this tick (bits not held the tick before).
+    pub(super) fn pressed(&self) -> u16 {
+        self.now.iter().zip(&self.last).fold(0, |b, (n, l)| b | (n.buttons & !l.buttons))
+    }
+}
+
 /// Pads to play back, one entry per tick, in place of the local devices; idle once it runs out.
 #[derive(Resource)]
 pub struct Replay(pub VecDeque<[Pad; 4]>);
