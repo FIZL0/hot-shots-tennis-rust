@@ -186,3 +186,6 @@ were already in place (B40b1 loads any costume through `load_disc`); no code cha
   texture looks right under the donor's offsets depends on its texture layout (the standard tells authors to lay
   it out for them). No packaged mod sets `eyes` yet (the HST-MODS packagers weren't changed).
 - Palette `part_nodes` for mods use weight > 0 joints of each primitive, not the PS2 packet palette (mods have none).
+- `tools/check.sh` at wrap-up: 138 pass, 1 unrelated failure: `play::mod_match::tests::get_a_grip_stats_reach_the_match`
+  asserts Emi's `ai_row` ≠ `donor`, but `context/mods/getagrip_pc00_emi/mod.json` was repackaged today (10:20,
+  M1l sizing) with donor 0 = ai_row 0. Local data vs a stale assertion, not touched here (M2i's test).
