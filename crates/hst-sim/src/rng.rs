@@ -78,6 +78,30 @@ impl Mt {
     }
 }
 
+/// The match seed: `rand()`'s state as the setup finds it and the shared generator's seed. Every generator follows
+/// from these two (the AI's from shared draws, the court's and the sound manager's from `rand()`), so online the host
+/// picks it and the peers take it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Seed {
+    pub rand: Rand,
+    pub shared: u32,
+}
+
+impl Seed {
+    /// The menus drew `skip` `rand()`s before the setup, which seeds the shared generator with the next one.
+    pub fn after(skip: u32) -> Seed {
+        let mut rand = Rand::default();
+        (0..skip).for_each(|_| _ = rand.next());
+        let shared = rand.next();
+        Seed { rand, shared }
+    }
+
+    /// The shared generator's seed given directly, `rand()` as at boot.
+    pub fn shared(shared: u32) -> Seed {
+        Seed { rand: Rand::default(), shared }
+    }
+}
+
 /// The match's generators.
 #[derive(Clone, Debug)]
 pub struct Rngs {

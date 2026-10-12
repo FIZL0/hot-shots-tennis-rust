@@ -94,7 +94,7 @@ README *Character mods* — links the mods repo (../HST-MODS: standard, tutorial
 
 `crates/hst/src/` — the Bevy app
 
-- `main.rs` args, disc load, court models, orbit, auto_shot · `play.rs` (1.4k lines) the match: setup, input,
+- `handshake.rs` online match seed (`MatchSeed`) and peer handshake check (M2e) · `main.rs` args, disc load, court models, orbit, auto_shot · `play.rs` (1.4k lines) the match: setup, input,
   strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
   `character.rs` disc characters, rig, animate · `sandbox.rs`
 - tests: `line_calls.rs`, `shot_params.rs`

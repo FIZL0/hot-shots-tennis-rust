@@ -844,3 +844,13 @@ fn clouds_remade_like_the_game() {
         }
     }
 }
+
+/// The match seed: `after(n)` takes `rand()`'s (n+1)th output for the shared generator and leaves `rand()` past it.
+#[test]
+fn seed_after_skip() {
+    let mut r = Rand::default();
+    let outs: Vec<u32> = (0..4).map(|_| r.next()).collect();
+    let s = hst_sim::rng::Seed::after(3);
+    assert_eq!((s.shared, s.rand), (outs[3], r));
+    assert_eq!(hst_sim::rng::Seed::after(0).shared, outs[0]);
+}
