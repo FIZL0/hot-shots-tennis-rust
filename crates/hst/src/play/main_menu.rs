@@ -878,7 +878,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
     let first = || Settings([true; 3], if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
-    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: std::fs::read_to_string(Settings::path(&args.iso)).map_or_else(|_| first(), |t| Settings::parse(&t)), mods, ..default() });
+    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: crate::store::read_to_string(Settings::path(&args.iso)).map_or_else(|_| first(), |t| Settings::parse(&t)), mods, ..default() });
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
@@ -1476,7 +1476,7 @@ fn step(
                     // applied live: the menu draws with them too
                     gfx.set_if_neq(menu.settings.1);
                     let path = Settings::path(&args.iso);
-                    if let Err(e) = std::fs::write(&path, menu.settings.text()) {
+                    if let Err(e) = crate::store::write(&path, menu.settings.text()) {
                         warn!("{}: {e}", path.display());
                     }
                 }

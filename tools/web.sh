@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the browser version into web/pkg (WebGL2) and web/pkg-webgpu (WebGPU; the page picks): serve web/ over http
+# Builds the browser version into web/pkg (WebGL2) and web/pkg-webgpu (WebGPU; the page picks), an installable app (manifest, sw.js, touch.js): serve web/ over http
 # on localhost, or https (OPFS needs a secure context). Needs wasm-bindgen-cli at Cargo.lock's wasm-bindgen version and
 # wasm-opt (binaryen). WEB_FAST=1 skips wasm-opt.
 set -e

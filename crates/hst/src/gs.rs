@@ -433,6 +433,11 @@ impl Material for GsMaterial {
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never));
         }
+        // the browser build is WebGL2's (no noperspective)
+        #[cfg(target_arch = "wasm32")]
+        for defs in [Some(&mut descriptor.vertex.shader_defs), descriptor.fragment.as_mut().map(|f| &mut f.shader_defs)].into_iter().flatten() {
+            defs.push("GS_NO_LINEAR".into());
+        }
         // the shadow pass has no fragment stage for draws that cannot discard
         let Some(fragment) = descriptor.fragment.as_mut() else { return Ok(()) };
         let defs = &mut fragment.shader_defs;

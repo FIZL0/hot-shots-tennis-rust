@@ -58,7 +58,10 @@ browser's storage (OPFS); later visits run from it, menus and all. Flags go in t
 `--play --singles --stage 1`); `?forget` drops the pack. Sound starts on the first click/key. Online: relay only (no
 DHT/mDNS), host or join by code (`?code=<code>` or Ctrl+V on the page, then Join by Code); plays with desktop peers.
 Headless check: `tools/web_check.mjs` (`WEB_INPUT` key/click script, `PROFILE`, `CHROME_FLAGS="--enable-features=Vulkan
---use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device).
+--use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device). M9: installable (manifest, "Add to Home Screen"; fullscreen landscape), plays offline once loaded
+(`web/sw.js`), on-screen touch controls on touch screens (`web/touch.js`: a virtual standard gamepad, hidden while a
+real pad is connected; `?touch` forces them on a desktop), settings/controls in localStorage, phones start on the Low
+graphics preset. Touch check: `tools/web_touch.mjs` (phone viewport, taps, offline).
 
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected, players 3 and 4 (the other team) = controllers 3 and 4 when connected; the other slots are CPU. `--pads a,b,c,d` seats

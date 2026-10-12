@@ -2,10 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Hot Shots Tennis</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 16px system-ui, sans-serif; }
+  html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 16px system-ui, sans-serif;
+    overflow: hidden; overscroll-behavior: none; touch-action: none; -webkit-touch-callout: none; }
   #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
   canvas { display: block; width: 100% !important; height: 100% !important; }
   button { font: inherit; }
@@ -18,20 +26,10 @@
   <input id="iso" type="file" accept=".iso">
   <p id="status"></p>
 </div>
-<script>
-// Audio unlocked on the first tap or key: browsers start every AudioContext suspended until a user gesture.
-(() => {
-  const all = [];
-  const events = ['pointerdown', 'pointerup', 'touchend', 'keydown', 'mousedown', 'click'];
-  self.AudioContext = new Proxy(self.AudioContext, { construct: (t, a) => { const c = new t(...a); all.push(c); return c; } });
-  const resume = () => {
-    all.forEach(c => c.state === 'suspended' && c.resume());
-    if (all.length && all.every(c => c.state === 'running')) events.forEach(e => removeEventListener(e, resume, true));
-  };
-  events.forEach(e => addEventListener(e, resume, true));
-})();
-</script>
+<script type="module" src="touch.js"></script>
 <script type="module">
+// installable and playable offline (sw.js)
+navigator.serviceWorker?.register('sw.js').catch(() => {});
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
 // (`?webgl2` forces it).
@@ -51,6 +49,12 @@ async function start() {
   const pack = await dir.getFileHandle('disc.pack');
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
   document.getElementById('disc').hidden = true;
+  // first visit on a phone or tablet: the Low graphics preset (graphics.rs; changeable in Settings → Graphics).
+  // settings.txt lives in localStorage under its path beside the pack (web.rs)
+  try {
+    if (matchMedia('(pointer: coarse)').matches && localStorage.getItem('./settings.txt') === null)
+      localStorage.setItem('./settings.txt', 'frame_limit = 60\nvsync = off\nrender_scale = 67\nshadows = low\noriginal = off\n');
+  } catch {}
   await init();
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
