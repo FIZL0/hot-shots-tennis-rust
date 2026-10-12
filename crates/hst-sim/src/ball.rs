@@ -168,6 +168,39 @@ impl Ball {
     }
 }
 
+/// The drawn ball's model matrix after one ball step (+0xb0, the end of the original's step): a ball with spin and a
+/// spin axis (`frame`'s forward row) turns its rotation R to R·Fᵀ·Rx(−θ)·F (F the spin frame, θ = spin·`dt` wrapped to
+/// ±π), rebuilt orthonormal from its forward row; any ball is placed at `pos`.
+pub fn spin_model(model: &[V4; 4], frame: &[V4; 4], spin: f32, dt: f32, pos: V3) -> [V4; 4] {
+    use crate::{ps2, vu0, world};
+    let mut m = *model;
+    let a = frame[2];
+    if spin != 0.0 && ps2::add(ps2::add(ps2::madd(ps2::madd(ps2::mul(a[2], a[2]), a[0], a[0]), a[1], a[1]), 0.0), 0.0) != 0.0 {
+        let t: [V4; 4] = std::array::from_fn(|r| std::array::from_fn(|c| frame[c][r]));
+        let mut th = ps2::mul(spin, dt);
+        if world::PI < th {
+            th = ps2::sub(th, world::TWO_PI);
+        } else if th < -world::PI {
+            th = ps2::add(th, world::TWO_PI);
+        }
+        m[3] = [0.0, 0.0, 0.0, 1.0];
+        let r = world::mat_mul(&world::mat_mul(&world::mat_mul(&m, &t), &world::rot_x(-th)), frame);
+        let z = vu0::normalize(r[2]);
+        let x = vu0::normalize(vu0::cross(r[1], z));
+        let y = vu0::normalize(vu0::cross(z, x));
+        m = [x, y, z, r[3]];
+    }
+    m[3] = [pos[0], pos[1], pos[2], 1.0];
+    m
+}
+
+const IDENTITY: [V4; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// `rotation`'s first three rows with `pos` as the fourth (w = 1).
+fn placed(rotation: &[V4; 4], pos: V3) -> [V4; 4] {
+    [rotation[0], rotation[1], rotation[2], [pos[0], pos[1], pos[2], 1.0]]
+}
+
 /// Rows of a 4×4 from three basis rows (w = 0) plus the homogeneous row, as the game stores frames.
 pub fn rows4(r: [V3; 3]) -> [V4; 4] {
     let w = |v: V3| [v[0], v[1], v[2], 0.0];
@@ -207,6 +240,11 @@ pub struct Flight {
     pub line_distance: f32,
     /// A rally is on (shots this rally > 0); the first-bounce turn only happens then.
     pub in_play: bool,
+    /// The drawn ball's model matrix (+0xb0): its spin rotation, turned every step (`spin_model`), and its position.
+    pub model: [V4; 4],
+    /// The ball's last move (+0x140): the launch velocity, then each normal step's position change; kept while
+    /// the ball stands or takes a plane step.
+    pub last: V3,
 }
 
 /// Turns `d` by `pitch` and `yaw` (radians), keeping its length: pitch clamped to ±π/2, heading wrapped to ±π.
@@ -266,7 +304,12 @@ mod k {
 
 impl Flight {
     pub fn new(ball: Ball, spin_frame: [V4; 4], contact: [V4; 4]) -> Self {
-        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, landing: ([0.0; 3], COURT), spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0, in_play: true }
+        Self { ball, frame: 0, bounces: 0, contacts: 0, special_contacts: 0, rolling: false, landing: ([0.0; 3], COURT), spin_frame, contact, slide: 0.0, net: true, lines: None, call: crate::judge::Call::None, line_distance: 0.0, in_play: true, model: placed(&IDENTITY, ball.pos), last: ball.vel }
+    }
+
+    /// A struck ball: as `new`, with the model's rotation set to the shot's spin frame (the hit sets both).
+    pub fn struck(ball: Ball, spin_frame: [V4; 4], contact: [V4; 4]) -> Self {
+        Self { model: placed(&spin_frame, ball.pos), ..Self::new(ball, spin_frame, contact) }
     }
 
     /// Court contacts the original's predicted path holds `t` frames after this (just struck) ball left the
@@ -323,7 +366,6 @@ impl Flight {
     /// the table's material 0), and responds as a first special touch, also when the sweep misses (a slow ball
     /// such as a falling toss: then off `MISSED_NORMAL`, which stops it dead). The ball stays where it is; only its
     /// velocity (and spin, frame, counts) change. No line calls.
-    // ponytail: the ball model's extra spin turn in this step is not carried (the app turns it from `spin` each tick)
     pub fn step_plane(&mut self, shot: &Shot, surface: &Surface, material: Material) {
         use crate::ps2::{add, div, madd, mul, sqrt};
         let v = self.ball.vel;
@@ -349,6 +391,7 @@ impl Flight {
                 self.ball.vel[2] = add(self.ball.vel[2], mul(pos[2].signum(), NET_PUSH));
             }
         }
+        self.model = spin_model(&self.model, &self.spin_frame, self.ball.spin, 1.0, self.ball.pos);
         self.frame += 1;
     }
 
@@ -420,7 +463,10 @@ impl Flight {
         if f.special {
             self.ball.vel[2] = ps2::add(self.ball.vel[2], ps2::mul(pos[2].signum(), NET_PUSH));
         }
+        let old = self.ball.pos;
         self.ball.pos = [pos[0], pos[1], pos[2]];
+        self.last = std::array::from_fn(|k| ps2::sub(pos[k], old[k]));
+        self.model = spin_model(&self.model, &self.spin_frame, self.ball.spin, 1.0, self.ball.pos);
         self.frame += 1;
     }
 

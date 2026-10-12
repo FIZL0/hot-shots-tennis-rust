@@ -1178,3 +1178,75 @@ fn court5_crowd_like_the_game() {
     eprintln!("court 5: {ticks} creature ticks, {cheers} cheers, {resets} resets, {stalls} cheering frames not ticked");
     assert!(cheers >= 5 && resets >= 5 && stalls < samples.len() / 10);
 }
+
+/// The ball the ball-hit obstacles test (P14c4a) against `hit_c04.bin` and `hit_c09.bin` (`HST_BALL=1`; not in git,
+/// skipped when absent), every tick: each ball step turns its model matrix (+0xb0) by its spin (`ball::spin_model`,
+/// a tick with an obstacle's plane step takes two) and places it, and its last move (+0x140) is the step; a tick
+/// without a step keeps both; a launch (toss, serve hit, new point) takes `Flight::new`/`Flight::struck`'s.
+#[test]
+fn ball_model_and_last_move_match_the_game() {
+    use hst_sim::ball::{spin_model, Ball, Flight};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (mut steps, mut doubles, mut still, mut new, mut struck) = (0, 0, 0, 0, 0);
+    for name in ["hit_c04", "hit_c09"] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/{name}.bin")) else {
+            eprintln!("{name}.bin missing, skipped");
+            continue;
+        };
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let n = u(&d, 0) as usize;
+        let ball = 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + n * 0x300 + 0x90 + 8 * n;
+        let f = |s: &[u8], a: usize| f32::from_bits(u(s, ball + a));
+        let v = |s: &[u8], a: usize| -> [f32; 3] { std::array::from_fn(|c| f(s, a + 4 * c)) };
+        let m = |s: &[u8], a: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| std::array::from_fn(|c| f(s, a + 16 * r + 4 * c))) };
+        let bits = |m: [[f32; 4]; 4]| m.map(|r| r.map(f32::to_bits));
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(ball + 0x290 + 0x100).collect();
+        for w in samples.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if u(b, 0) != u(a, 0) + 1 {
+                continue;
+            }
+            let (pa, p, want, last) = (v(a, 0xe0), v(b, 0xe0), bits(m(b, 0xb0)), v(b, 0x140).map(f32::to_bits));
+            let turn = |x: &[[f32; 4]; 4], s: &[u8]| spin_model(x, &m(s, 0x160), f(s, 0x1a4), 1.0, p);
+            let at = format!("{name} vsync {}", u(b, 0));
+            let (fa, fb) = (u(a, ball + 0xac), u(b, ball + 0xac));
+            if fb == 0 && fa != 0 {
+                // launched this tick: the model as the launch sets it, the last move its velocity
+                let l = Ball { pos: p, vel: v(b, 0x130), spin: f(b, 0x1a4) };
+                let (fresh, hit) = (Flight::new(l, m(b, 0x160), m(b, 0x160)), Flight::struck(l, m(b, 0x160), m(b, 0x160)));
+                assert!(bits(fresh.model) == want || bits(hit.model) == want, "{at}: launch model {:?}", m(b, 0xb0));
+                if bits(hit.model) == want && bits(fresh.model) != want { struck += 1 } else { new += 1 }
+                assert_eq!(hit.last.map(f32::to_bits), last, "{at}: launch move");
+                continue;
+            }
+            // a still ball placed on the server's hand before the toss steps by nothing although it was moved
+            let held = v(a, 0x130) == [0.0; 3] && v(b, 0x130) == [0.0; 3] && last == [0; 3];
+            let diff: [u32; 3] = std::array::from_fn(|c| hst_sim::ps2::sub(p[c], pa[c]).to_bits());
+            let step = if held { [0; 3] } else { diff };
+            match fb - fa {
+                0 => {
+                    assert_eq!(bits(m(a, 0xb0))[..3], want[..3], "{at}: standing ball turned");
+                    assert_eq!(v(a, 0x140).map(f32::to_bits), last, "{at}: standing ball's move not kept");
+                    still += 1;
+                }
+                1 => {
+                    assert_eq!(bits(turn(&m(a, 0xb0), b)), want, "{at}: step turn");
+                    assert_eq!(step, last, "{at}: step move");
+                    steps += 1;
+                }
+                2 => {
+                    // the plane step's own frame and spin aren't recorded: it turned by the tick's start or end ones
+                    let x = m(a, 0xb0);
+                    assert!([turn(&turn(&x, b), b), turn(&turn(&x, a), b)].iter().any(|t| bits(*t) == want), "{at}: two-step turn");
+                    assert_eq!(step, last, "{at}: two-step move");
+                    doubles += 1;
+                }
+                k => panic!("{at}: {k} ball steps in a tick"),
+            }
+        }
+    }
+    eprintln!("{steps} steps, {doubles} two-step ticks, {still} standing, launches: {new} new, {struck} struck");
+    if steps > 0 {
+        assert!(steps > 300 && doubles >= 5 && still > 50 && new >= 2 && struck >= 2);
+    }
+}
