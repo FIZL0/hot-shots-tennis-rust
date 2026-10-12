@@ -112,7 +112,8 @@ pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Childre
             own.push(copy);
         }
         let noise = c.deformers.iter().map(|d| Noise::new(d.period)).collect();
-        commands.entity(root).insert(Sway { noise, meshes: own, sets: None });
+        // the select may have despawned a preview rig in the same frame (B84)
+        commands.entity(root).try_insert(Sway { noise, meshes: own, sets: None });
     }
 }
 

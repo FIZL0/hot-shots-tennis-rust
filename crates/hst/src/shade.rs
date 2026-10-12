@@ -90,19 +90,29 @@ fn own_materials(
                 let h = gs.add(d);
                 own.push(h.clone());
                 if k == 0 {
-                    commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+                    commands.entity(e).try_remove::<MeshMaterial3d<StandardMaterial>>().try_insert(MeshMaterial3d(h));
                     continue;
                 }
-                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), ChildOf(up.parent()), bevy::camera::visibility::NoFrustumCulling));
+                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), bevy::camera::visibility::NoFrustumCulling));
                 if let Some(s) = skin {
                     c.insert(s.clone());
                 }
                 if let Some(w) = morph {
                     c.insert(w.clone());
                 }
+                // the rig can be despawned before this lands (a select preview scrolled past): drop the copy with it
+                let (c, parent) = (c.id(), up.parent());
+                commands.queue(move |w: &mut bevy::ecs::world::World| match w.get_entity_mut(parent) {
+                    Ok(mut p) => {
+                        p.add_child(c);
+                    }
+                    Err(_) => {
+                        w.despawn(c);
+                    }
+                });
             }
         }
-        commands.entity(root).insert(Lit(own, None));
+        commands.entity(root).try_insert(Lit(own, None));
     }
 }
 
