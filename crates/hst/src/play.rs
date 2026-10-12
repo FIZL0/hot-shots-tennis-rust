@@ -1873,7 +1873,7 @@ fn strike(
     };
     // the ball launch's two uniforms (kept on the ball; nothing ported reads them)
     (g.rng.shared.next(), g.rng.shared.next());
-    g.flight = Flight::new(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
+    g.flight = Flight::struck(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
     ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);

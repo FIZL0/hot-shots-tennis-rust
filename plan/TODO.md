@@ -159,7 +159,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
 
-- [ ] **P14c4a** The ball's spin-rotated box and kept last move for the ball-hit obstacles (in P14c4) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [~] **P14c4b** Record type 21's ball hits on court 6 (in P14c4) → `tools/record_npc.py` · `hst-sim/tests/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc BLOCKED: Hyprland runs --safe-mode --locked since 02:13 and copy 4 takes no vpad input (pick.py fails); unlock/restart the desktop, then make the court 6 state per journal 12-COURT6-READY
 
 Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE.md`.

@@ -272,21 +272,19 @@ fn step(
         }
     }
     let at = |p: [f32; 3]| [p[0], p[1], p[2], 1.0];
-    let last = npcs.near.pos.last().map_or(g.flight.ball.pos, |b| [b[0], b[1], b[2]]);
     npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
     // the ball-hit obstacles' boxes: the players' model matrices (up, facing; the side row's sign doesn't matter to
     // the test) and the ball's
-    // ponytail: the ball's matrix carries its drawn spin in the original; the port has none (tracked in PLAN)
     let player = |p: &super::Player| {
         let d = p.body.face.dir;
         [[-d[2], 0.0, d[0], 0.0], [0.0, 1.0, 0.0, 0.0], d, at(p.pos)]
     };
-    let ball = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], at(g.flight.ball.pos)];
-    // its speed from its last move (since the last tick)
-    // ponytail: the original keeps the last move while the ball stands still between steps; here it is 0 then
+    let m = g.flight.model;
+    let ball = [m[0], m[1], m[2], at(g.flight.ball.pos)];
+    // its speed from its last move, kept while it stands
     // (the original's obstacles run before the ball and players move: what they see then is this, after this tick's
     // moves, and their message 0x14's step off them comes before the ball's next own step either way)
-    npcs.near.kmh = npc::ball_kmh([0, 1, 2].map(|c| hst_sim::ps2::sub(g.flight.ball.pos[c], last[c])));
+    npcs.near.kmh = npc::ball_kmh(g.flight.last);
     npcs.near.boxes = g.players.iter().map(player).chain([ball]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
     let ends = matches!(g.phase, Phase::ChangeEnds(_));
