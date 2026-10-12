@@ -5,3 +5,4 @@ frame_limit = uncapped
 vsync = off
 render_scale = 100
 shadows = high
+original = off
