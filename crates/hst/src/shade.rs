@@ -59,9 +59,9 @@ pub fn packet_box(model: &hst_data::mdl::Model) -> ([f32; 3], [f32; 3]) {
     (lo, hi)
 }
 
-/// The map of the casters' shadows cast along `dir` onto the hole's `ground` triangles (game space).
-pub fn build(frame: Frame, dir: Vec3, casters: &[shade::Caster], ground: &[[[f32; 3]; 3]], world: World) -> Shade {
-    let map = shade::build(&frame, dir.to_array(), casters, ground);
+/// The map of the casters' shadows cast along their light matrices onto the `hole` model.
+pub fn build(frame: Frame, casters: &[shade::Caster], hole: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl, world: World) -> Shade {
+    let map = shade::build(&frame, casters, hole, mats);
     if let Ok(path) = std::env::var("HST_SHADE_DUMP") {
         _ = std::fs::write(path, &map);
     }

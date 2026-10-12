@@ -65,7 +65,7 @@ fn court10_map_near_game() {
     ) else {
         return;
     };
-    let (mut models, mut shapes) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+    let (mut models, mut shapes, mut mtls) = (std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
     let mut read = |xb: &str, suffix: &str| {
         let d = iso.read(&format!("COURT/10/{xb}")).unwrap();
         let arc = Archive::parse(&d).unwrap();
@@ -77,6 +77,7 @@ fn court10_map_near_game() {
                 let key = stem.rsplit('\\').next().unwrap().to_ascii_lowercase();
                 if let Some(mats) = mtl.and_then(|t| mtl::parse(&t, mti.as_deref()).ok()) {
                     shapes.insert(key.clone(), Shape::new(&m, &mats));
+                    mtls.insert(key.clone(), mats);
                 }
                 models.insert(key, m);
             }
@@ -84,29 +85,27 @@ fn court10_map_near_game() {
         arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).map(|e| arc.read(e).unwrap())
     };
     let list = layout::entries(&String::from_utf8_lossy(&read("CMN.XB", "entry_c10.txt").unwrap()));
-    read("GRD01.XB", "-");
+    let envir = read("CMN.XB", "envir_c10.dat").unwrap();
+    let hole_envir = read("GRD01.XB", "envir_c10_h01.dat").unwrap();
     let plants = layout::plants(&read("HOL01.XB", "plant_c10_h01_0.dat").unwrap()).unwrap();
-    let tris = |m: &mdl::Model| -> Vec<[[f32; 3]; 3]> { m.materials.iter().flatten().flat_map(|pk| pk.triangles.iter().map(|t| t.map(|i| pk.vertices[i as usize].pos))).collect() };
+    let f = |d: &[u8], o: usize| f32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+    let axes = shade::sun_axes(shade::sun(f(&envir, 0x14), f(&envir, 0x18), f(&envir, 0x1c), f(&hole_envir, 0x58), 1).1);
     let hole = list.iter().find(|e| e.dir == "hole" && e.stem.contains("_h01") && layout::in_season(&e.stem, 0) && models.contains_key(&e.stem)).unwrap();
     let casters: Vec<Caster> = plants
         .iter()
         .filter(|p| p.code[3] != b'0' && (17..=19).contains(&p.category))
-        .filter_map(|p| {
-            let m = shapes.get(&layout::resolve(&list, p, 0)?.stem)?.clone();
-            let s = if p.scale > 0.0 { p.scale } else { 1.0 };
-            let (sn, c) = p.yaw.sin_cos();
-            Some(Caster { axes: [[c * s, 0.0, -sn * s], [0.0, s, 0.0], [sn * s, 0.0, c * s]], pos: p.pos, tris: m.tris, cut: m.cut })
-        })
+        .filter_map(|p| Some(Caster::new(shapes.get(&layout::resolve(&list, p, 0)?.stem)?, p, &axes)))
         .collect();
     assert_eq!(casters.len(), 17);
-    // the hole's frame (`frame_matches_game_ram`) and the sun as the game left them
+    // the hole's frame (`frame_matches_game_ram`)
     let f = Frame::new([-113.8475, -10.730181, -141.48601], [102.94255, 17.31305, 158.12808], 1.0, [0.0; 3]);
-    let map = shade::build(&f, [-0.5877856, 0.7694209, 0.2499991], &casters, &tris(&models[&hole.stem]));
+    let map = shade::build(&f, &casters, &models[&hole.stem], &mtls[&hole.stem]);
     let ones = |m: &[u8]| m.iter().map(|b| b.count_ones()).sum::<u32>();
     let both: Vec<u8> = map.iter().zip(&game).map(|(a, b)| a & b).collect();
     let either: Vec<u8> = map.iter().zip(&game).map(|(a, b)| a | b).collect();
     let iou = ones(&both) as f64 / ones(&either) as f64;
-    // ponytail: fitted screen (`shade::build`); bit for bit P17v
+    // ponytail: fitted screen (`shade::build`); rendering only has to look right
+    eprintln!("IoU {iou}");
     assert!(iou >= 0.975, "IoU {iou}");
 }
 
@@ -313,9 +312,9 @@ fn ball_scale_and_outline_match_the_game() {
     assert!(grown > 50);
 }
 
-/// The 17 court 10 casters' light matrices built from the disc (plant records, model boxes, the sun from the
-/// court's time-of-day row 0 at hour 1) against the game's (`context/p17v/rcv.txt` `L` rows, slot 5). Skips when
-/// absent.
+/// The 17 court 10 casters' light matrices and shadow-volume planes built from the disc (plant records, model boxes,
+/// the sun from the court's time-of-day row 0 at hour 1) against the game's (`context/p17v/rcv.txt` `L` rows and
+/// `context/p17v/cull.txt` `P` rows, slot 5). Skips when absent.
 #[test]
 fn light_matrices_match_the_game() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -341,7 +340,7 @@ fn light_matrices_match_the_game() {
     let f = |d: &[u8], o: usize| f32::from_le_bytes(d[o..o + 4].try_into().unwrap());
     let (_, sun) = shade::sun(f(&envir, 0x14), f(&envir, 0x18), f(&envir, 0x1c), f(&hole, 0x58), 1);
     let axes = shade::sun_axes(sun);
-    let built: Vec<[[u32; 4]; 4]> = plants
+    let built: Vec<_> = plants
         .iter()
         .filter(|p| p.code[3] != b'0' && (17..=19).contains(&p.category))
         .map(|p| {
@@ -352,9 +351,19 @@ fn light_matrices_match_the_game() {
             }
             let centre = [0, 1, 2].map(|k| ps2::mul(ps2::add(m.lo[k], m.hi[k]), 0.5));
             let half = [0, 1, 2].map(|k| ps2::mul(ps2::sub(m.hi[k], m.lo[k]), 0.5));
-            shade::light_matrix(&item, p.scale, centre, half, &axes).map(|r| r.map(f32::to_bits))
+            (shade::light_matrix(&item, p.scale, centre, half, &axes).map(|r| r.map(f32::to_bits)), shade::planes(&item, p.scale, centre, half, &axes))
         })
         .collect();
+    let (built, planes): (Vec<[[u32; 4]; 4]>, Vec<shade::Planes>) = built.into_iter().unzip();
+    // the planes against the game's (`context/p17v/cull.txt` `P` rows, the caster's two blocks as it left them)
+    if let Ok(cull) = std::fs::read_to_string(format!("{root}/context/p17v/cull.txt")) {
+        let want: Vec<Vec<u32>> = cull.lines().filter(|l| l.starts_with("P ")).map(|l| l.split_whitespace().skip(2).map(|h| u32::from_str_radix(h, 16).unwrap()).collect()).collect();
+        let got: Vec<Vec<u32>> = planes.iter().map(|p| p.as_flattened().as_flattened().iter().map(|x| x.to_bits()).collect()).collect();
+        assert_eq!(got.len(), want.len());
+        for (c, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g, w, "caster {c} planes");
+        }
+    }
     let want: Vec<[[u32; 4]; 4]> = txt
         .lines()
         .filter(|l| l.starts_with("L "))
