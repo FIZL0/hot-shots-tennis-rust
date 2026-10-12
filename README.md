@@ -94,6 +94,14 @@ The startup log line `textures: N PCSX2-named, M key-named in mods/texture-repla
 textures of our own into the remaster is planned (`PLAN.md` M5). Like everything else from the disc, they would be
 made on your machine, not shipped.
 
+## Character mods
+
+Custom characters go in `mods/<id>/` beside the ISO (`mod.json` and one `.glb` per costume) and show up in the
+character select. The mod standard, a tutorial for making your own, and the tools that extract the other Hot Shots
+games' characters and package them as mods are in the mods repo:
+<https://github.com/FIZL0/hot-shots-tennis-rust-mods> (`standard/`, `tools/`). The game checks models against its copy
+of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo's `standard/hst_skeleton.json`.
+
 ## Development
 
 - `crates/hst-data`: readers for the disc and its formats (ISO, XB archives, TIM2 textures, models, motions,
