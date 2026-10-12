@@ -15,7 +15,10 @@ if [ -n "${HST_PCSX2:-}" ]; then
     # hotkey instead (L3 + R3; set "Screenshot = SDL-0/LeftStick & SDL-0/RightStick" in the copy's PCSX2.ini)
     hyprctl dispatch "hl.dsp.send_shortcut({ mods = \"\", key = \"F8\", window = \"pid:$pid\" })" >/dev/null 2>&1 ||
         "$T/vpad.py" send "down l3" "down r3" "sleep 120" "up r3" "up l3"
-    for _ in $(seq 30); do sleep 0.3; [ "$(ls "$d" | wc -l)" != "$before" ] && break; done
+    for _ in $(seq 10); do sleep 0.3; [ "$(ls "$d" | wc -l)" != "$before" ] && break; done
+    # a copy whose ini binds Screenshot to the pad only ignores F8: press L3 + R3 too
+    [ "$(ls "$d" | wc -l)" != "$before" ] || "$T/vpad.py" send "down l3" "down r3" "sleep 120" "up r3" "up l3"
+    for _ in $(seq 20); do sleep 0.3; [ "$(ls "$d" | wc -l)" != "$before" ] && break; done
     [ "$(ls "$d" | wc -l)" != "$before" ] || { echo "PCSX2 copy $HST_PCSX2 wrote no screenshot (paused?)" >&2; exit 1; }
     f=$d/$(ls "$d" | sort -V | tail -1)
     # PCSX2 writes the PNG after creating the file: wait until its size settles

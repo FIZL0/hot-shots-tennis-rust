@@ -206,6 +206,11 @@ impl Ceremony {
 #[derive(Component)]
 pub(super) struct Confetti;
 
+/// A match has ended and its ceremony hasn't begun (`HST_STATS_PAGE=1` skips it).
+pub(super) fn pending() -> bool {
+    ENDING.lock().unwrap().is_some() && !std::env::var("HST_STATS_PAGE").is_ok_and(|p| p == "1")
+}
+
 /// Builds the ceremony when the match has ended: the plan, the clips, the voice bank, the confetti.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn begin(
@@ -214,13 +219,18 @@ pub(super) fn begin(
     g: Res<super::super::Game>,
     screen: Res<super::Screen>,
     cer: Option<Res<Ceremony>>,
+    mut dissolve: ResMut<super::dissolve::Dissolve>,
     art: Option<Res<super::Art>>,
     camera: Query<Entity, With<crate::Orbit>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Some(table) = g.match_stats.result.as_ref() else { return };
-    if screen.open || cer.is_some() || std::env::var("HST_STATS_PAGE").is_ok_and(|p| p == "1") {
+    if screen.open || cer.is_some() || !pending() {
+        return;
+    }
+    // the match's last frame dissolves into the ceremony
+    if !dissolve.cut(&mut commands, super::dissolve::TO_CEREMONY) {
         return;
     }
     let Some((swapped, sound_rng)) = ENDING.lock().unwrap().take() else { return };
