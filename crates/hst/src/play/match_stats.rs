@@ -20,6 +20,7 @@
 //! Before it, the original's first state: the winners' ceremony ([`ceremony`]), the banner already up.
 
 mod ceremony;
+mod dissolve;
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -433,6 +434,7 @@ impl Screen {
 }
 
 pub fn plugin(app: &mut App) {
+    dissolve::plugin(app);
     app.init_resource::<Screen>()
         .init_resource::<Serving>()
         .add_systems(PostStartup, setup.after(super::setup))
@@ -525,6 +527,7 @@ fn step(
     sound: Option<Res<crate::audio::Sound>>,
     gallery: Option<Res<crate::audio::GalleryBank>>,
     mut cer: Option<ResMut<ceremony::Ceremony>>,
+    mut dissolve: ResMut<dissolve::Dissolve>,
     mut commands: Commands,
     mut auto: Local<bool>,
     mut stick: Local<f32>,
@@ -563,7 +566,14 @@ fn step(
             return;
         }
     }
+    if !screen.open && cer.is_none() && ceremony::pending() {
+        return; // the ceremony begins once the match's last frame is held
+    }
     if !screen.open {
+        // the ceremony's last frame dissolves into the page
+        if cer.is_some() && !dissolve.cut(&mut commands, dissolve::TO_PAGE) {
+            return;
+        }
         info!("result screen opens");
         *screen = Screen::opened(std::env::var("HST_STATS_PAGE").map_or(0, |p| (p == "1") as usize));
         if let Some(b) = banner.as_mut().filter(|_| cer.is_none()) {
@@ -596,6 +606,11 @@ fn step(
         _ if confirm && !screen.seen => 1,
         _ => 0,
     };
+    // the page takes no input and stands still under the dissolve
+    let busy = dissolve.fading();
+    if busy {
+        input = 0;
+    }
     if input == 3 {
         if screen.seen {
             play(2);
@@ -612,7 +627,7 @@ fn step(
     screen.acc += time.delta_secs() * 60.0;
     while screen.acc >= 1.0 {
         screen.acc -= 1.0;
-        if screen.step(input) {
+        if !busy && screen.step(input) {
             play(0xc);
         }
         input = 0;
@@ -650,6 +665,7 @@ fn draw(
     pads: Res<Pads>,
     screen: Res<Screen>,
     cer: Option<Res<ceremony::Ceremony>>,
+    dissolve: Res<dissolve::Dissolve>,
     art: Option<Res<Art>>,
     panel_art: Option<Res<panel::Art>>,
     board_art: Option<Res<popups::Art>>,
@@ -690,8 +706,10 @@ fn draw(
             };
             quads.append(&mut page);
         }
-        quads.extend(bar(screen.page, screen.timer, screen.blink));
-    } else if let Some(c) = cer.filter(|c| c.running()) {
+        if !dissolve.fading() {
+            quads.extend(bar(screen.page, screen.timer, screen.blink));
+        }
+    } else if let Some(c) = cer.filter(|_| g.match_stats.result.is_some()) {
         quads = ceremony::quads(&c.plan, n > 2);
     }
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
@@ -738,7 +756,7 @@ fn draw_banner(
 ) {
     let Some(banner) = banner else { return };
     let (effect, shown) = (&banner.0, &banner.1);
-    let during = cer.is_some_and(|c| c.running()) && g.match_stats.result.is_some();
+    let during = cer.is_some() && !screen.open && g.match_stats.result.is_some();
     let x = if during { Some(0) } else { screen.page_x(0).filter(|_| screen.open && g.match_stats.result.is_some()) };
     let Some(x) = x else {
         if let Ok((mut v, _)) = q.get_mut(shown.root) {
