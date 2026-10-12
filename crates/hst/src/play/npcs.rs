@@ -356,14 +356,16 @@ fn step(
         };
         let (e, t, row) = &mut npcs.triggers[k];
         // ponytail: a type's startled flag stays set until the next point (the original clears it sooner, from code
-        // not found); of message 0x14's other listeners the landing markers don't hear it
+        // not found)
         for s in t.step_near(row, &mut npcs.near, &mut roll) {
             let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
             g.sounds.push((sound::Play { slot: 0, program: 7, key: s as u8, volume: 0x40, speed: 1.0 }, at));
         }
         // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
-        // ponytail: a struck toss doesn't match (the original stops it dead; tracked in PLAN)
+        // (a struck toss too: the plane step's miss stops it dead, and its bounce has the server toss again);
+        // the players, the AI and the path object hear 0x14 in `hear`; the landing markers hide
         if t.struck {
+            (g.marks.red, g.marks.smash) = (None, None);
             let (shot, material) = (g.shot, g.world.1[0]);
             g.flight.step_plane(&shot, &hst_sim::ball::COURTS[g.court], material);
             g.doubles_ai.hear(&g.players, 0x14);
