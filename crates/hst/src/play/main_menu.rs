@@ -1513,7 +1513,8 @@ fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>,
 pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin))
         .add_systems(Startup, (setup, load_bgm))
-        .add_systems(Update, ((step, draw).chain(), bgm));
+        // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
+        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), draw).chain(), bgm));
     previews::plugin(app);
 }
 
