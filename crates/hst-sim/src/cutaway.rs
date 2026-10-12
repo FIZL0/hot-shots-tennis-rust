@@ -781,3 +781,84 @@ pub fn head_frame(head: &M4, left: bool) -> M4 {
     let p: [f32; 4] = std::array::from_fn(|i| head[3][i] - 0.2 * head[0][i] - if i == 1 { 0.2 } else { 0.0 });
     [r(1, s), r(0, 1.0), r(2, -1.0), p]
 }
+
+/// The court intro's shot: its record only names the court centre as the subject, the script comes from the
+/// court's camera file.
+pub const INTRO_SHOT: u8 = 107;
+
+/// The court intro's script from the court's camera file (`data/camed/cam_cNN_00.dat`: 40-byte records of
+/// frames (0 starts a new segment), an orbit flag, ease, ease-out, eye x y z, pitch, yaw, roll in degrees and
+/// the field of view). Each record after the first moves every channel there over its frames; a segment
+/// whose first record has the flag set runs as an orbit around the court centre (framing angles and a distance
+/// instead of an eye), so its moves swing round rather than slide.
+pub fn intro_script(dat: &[u8]) -> Vec<(u8, f32)> {
+    let mut out = Vec::new();
+    let mut orbit = true;
+    for (i, r) in dat.chunks_exact(40).take(20).enumerate() {
+        let h = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]);
+        let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let time = h(0);
+        if time == 0 {
+            orbit = h(2) != 0;
+        }
+        if i != 0 {
+            let ease = if f(4) == 0.0 { 1.0 } else { f(4) };
+            out.extend([(0x11, time as f32), (0x17, ease), (0x18, f(8))]);
+        }
+        let (eye, (p, y, roll)) = ([f(0xc), f(0x10), f(0x14)], (f(0x18), f(0x1c), f(0x20)));
+        out.extend([(5, p), (6, y), (7, roll)]);
+        if orbit {
+            // the eye as framing angles and a distance from the court centre, seen from the view without roll
+            let cam = mul(&rot_y(y.to_radians()), &rot_x(p.to_radians()));
+            let l = local(&cam, eye);
+            let l = [-l[0], -l[1], -l[2], 0.0];
+            let (yl, pl) = (musl::atan2f(l[0], l[2]), pitch(l));
+            let a = musl::atanf(musl::tanf(pl) / musl::cosf(yl));
+            let d = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
+            out.extend([(0xb, -a.to_degrees()), (0xc, yl.to_degrees()), (0xd, d), (8, 0.0), (9, 0.0), (10, 0.0)]);
+        } else {
+            out.extend([(8, eye[0]), (9, eye[1]), (10, eye[2]), (0xb, 0.0), (0xc, 0.0), (0xd, 0.0)]);
+        }
+        out.push((0xe, f(0x24)));
+    }
+    out
+}
+
+/// The intro's frames: the camera file's record times added up.
+pub fn intro_frames(dat: &[u8]) -> u32 {
+    dat.chunks_exact(40).take(20).map(|r| i16::from_le_bytes([r[0], r[1]]).max(0) as u32).sum()
+}
+
+impl Shot {
+    /// The court intro (`shots`: the game's camera shots, `dat`: the court's camera file).
+    pub fn intro(shots: &[CameraShot], dat: &[u8]) -> Self {
+        let channels = compile(&intro_script(dat), false).into_iter().map(Channel::new).collect();
+        let mut s = Shot {
+            number: INTRO_SHOT,
+            record: shots[INTRO_SHOT as usize].record.clone(),
+            channels,
+            cam: IDENTITY,
+            fov: 0.0,
+            yaw_held: 0.0,
+            yaw_over: 0.0,
+        };
+        s.build(&Self::court);
+        s
+    }
+
+    /// The intro's only reference frame: the court centre (the others are unset).
+    pub fn court(i: u8) -> M4 {
+        if i == 1 { IDENTITY } else { [[0.0; 4]; 4] }
+    }
+
+    /// The view turned by the roll channel about its forward axis (the intro tilts the picture; the view the
+    /// shot builds never rolls).
+    pub fn rolled(&self) -> View {
+        let mut v = self.view();
+        let (s, c) = musl::sincosf(self.ch(7));
+        let [r, d, _] = v.rot;
+        v.rot[0] = std::array::from_fn(|i| r[i] * c + d[i] * s);
+        v.rot[1] = std::array::from_fn(|i| d[i] * c - r[i] * s);
+        v
+    }
+}

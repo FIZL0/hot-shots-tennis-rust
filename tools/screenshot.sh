@@ -11,7 +11,10 @@ if [ -n "${HST_PCSX2:-}" ]; then
     d="$(dirname "$(git -C "$T" rev-parse --path-format=absolute --git-common-dir)")-slots/pcsx2/s$HST_PCSX2/PCSX2/snaps"
     pid=$(cat "${XDG_RUNTIME_DIR:-/tmp}/hst-pcsx2$HST_PCSX2.pid")
     mkdir -p "$d"; before=$(ls "$d" | wc -l)
-    hyprctl dispatch "hl.dsp.send_shortcut({ mods = \"\", key = \"F8\", window = \"pid:$pid\" })" >/dev/null
+    # no Hyprland window (compositor without a monitor, stale signature): press the copy's pad-bound Screenshot
+    # hotkey instead (L3 + R3; set "Screenshot = SDL-0/LeftStick & SDL-0/RightStick" in the copy's PCSX2.ini)
+    hyprctl dispatch "hl.dsp.send_shortcut({ mods = \"\", key = \"F8\", window = \"pid:$pid\" })" >/dev/null 2>&1 ||
+        "$T/vpad.py" send "down l3" "down r3" "sleep 120" "up r3" "up l3"
     for _ in $(seq 30); do sleep 0.3; [ "$(ls "$d" | wc -l)" != "$before" ] && break; done
     [ "$(ls "$d" | wc -l)" != "$before" ] || { echo "PCSX2 copy $HST_PCSX2 wrote no screenshot (paused?)" >&2; exit 1; }
     f=$d/$(ls "$d" | sort -V | tail -1)
