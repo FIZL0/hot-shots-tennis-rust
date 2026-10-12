@@ -7,7 +7,7 @@
 //! Plain f32 like the match camera: the view never feeds back into play.
 
 use crate::camera::View;
-pub use hst_data::exe::CameraShot;
+pub use hst_data::exe::{CameraShot, ReplayCameras};
 
 pub type M4 = [[f32; 4]; 4];
 
@@ -546,11 +546,11 @@ pub struct PickInput {
 /// Who the cut-away shows and who is the other subject, from the roles `[a, b]` (a = the last hitter, b = the one
 /// before; the server and receiver until the return): `a`, unless it isn't on the last hitter's (`last`, −1 for
 /// none) team; on a point that ends a game whichever of the two is on the winning team (`winner`, team = index & 1).
-/// ponytail: the original also swaps them on every third instant replay (unless the other one's character has
-/// some flag); not ported yet (P0b4d4)
-pub fn roles([a, b]: [usize; 2], last: i32, game_end: bool, winner: i32) -> [usize; 2] {
+/// After every third instant replay of the match (`replays`) they swap again, unless the other one is `diving`.
+pub fn roles([a, b]: [usize; 2], last: i32, game_end: bool, winner: i32, replays: i32, diving: impl Fn(usize) -> bool) -> [usize; 2] {
     let swap = if game_end { a as i32 & 1 != (winner != 0) as i32 } else { last >= 0 && a as i32 & 1 != last & 1 };
-    if swap { [b, a] } else { [a, b] }
+    let [s, o] = if swap { [b, a] } else { [a, b] };
+    if replays != 0 && replays % 3 == 0 && !diving(o) { [o, s] } else { [s, o] }
 }
 
 /// Which post-point shot comes next: the point's list (a point, a game-ending point, a team reaction) cycled by
@@ -594,6 +594,122 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
         }
     }
     n
+}
+
+/// The instant replay's camera picks (`hst_data::exe::Game::replay_cameras`), each list with its own counter.
+#[derive(Clone, Debug)]
+pub struct ReplayPicks {
+    pub lists: ReplayCameras,
+    /// Per shot-type list (the last: other types on the stroke list), the closing lists, the tracking pairs.
+    pub by_type: [usize; 6],
+    pub end: [usize; 2],
+    pub tracking: usize,
+    /// A fast-forwarded replay's first shot (P0b4d3 shows it); a replayed close line call starts it over.
+    pub serve: usize,
+    /// The last shot picked from a list.
+    pub last: u8,
+}
+
+/// What a replay pick knows of a player: the costume (0..9) and the character.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Look {
+    pub costume: i32,
+    pub character: i32,
+}
+
+impl Look {
+    /// Costumes 5–9 of characters 0, 4, 10 and 12 lack some shots (or have their own).
+    fn special(&self) -> bool {
+        (5..10).contains(&self.costume) && matches!(self.character, 0 | 4 | 10 | 12)
+    }
+}
+
+impl ReplayPicks {
+    pub fn new(lists: ReplayCameras) -> Self {
+        ReplayPicks { lists, by_type: [0; 6], end: [0; 2], tracking: 0, serve: 0, last: 0 }
+    }
+
+    /// The camera for a recorded shot of type `ty` (the ball's class: 0 serve, 1–2 strokes, 3 smash; 4 the △
+    /// smash, 6 a dive) by a player who looks like `who`, skipping the shots their model lacks.
+    pub fn shot(&mut self, ty: u8, who: Look) -> u8 {
+        let (l, c) = match ty {
+            0 => (0, 0),
+            1 | 2 => (1, 1),
+            3 => (2, 2),
+            5 => (3, 3),
+            6 => (4, 4),
+            _ => (1, 5),
+        };
+        let list = &self.lists.by_type[l];
+        let counter = &mut self.by_type[c];
+        let mut next = || {
+            let n = list[*counter % list.len()];
+            *counter += 1;
+            n
+        };
+        // ponytail: the game holds a stroke's counter while its slow motion runs (P0b4d3's); it never runs here yet
+        let mut n = next();
+        let (special, ch) = (who.special(), who.character);
+        while special && n == 0x1d {
+            n = next();
+        }
+        while special && ch == 12 && n == 0x22 {
+            n = next();
+        }
+        if special {
+            while n == 0x38 || n == 0x30 {
+                n = next();
+            }
+            n = match n {
+                0x2b => 0x2c,
+                0x2d => 0x2e,
+                n => n,
+            };
+        }
+        while special && ch == 12 && n == 0x3b {
+            n = next();
+        }
+        if special {
+            if n == 0x45 {
+                n = 0x46;
+            }
+            if n == 0x47 {
+                n = next();
+            }
+        }
+        if matches!(ch, 0 | 2 | 4 | 6 | 10 | 12) && n == 0x4e {
+            n = next();
+        }
+        self.last = n;
+        n
+    }
+
+    /// The tracking camera between shots on the match's `replay`-th replay (from 0), with `players` on court.
+    pub fn tracking(&mut self, replay: i32, players: usize) -> u8 {
+        let pair = self.lists.tracking[replay.rem_euclid(5) as usize];
+        let count = pair.iter().filter(|&&n| n != 0).count().max(1);
+        let n = pair[self.tracking % count];
+        self.tracking += 1;
+        if n == 8 && players > 2 { 9 } else { n }
+    }
+
+    /// The closing shot once the last shot's window is over: after a close-up of the hitter its own list, else the
+    /// other; `a` and `b` are the last hitter and the one before.
+    pub fn end(&mut self, a: Look, b: Look) -> u8 {
+        let l = matches!(self.last, 0x41 | 0x3d | 0x33 | 0x4d | 0x37) as usize ^ 1;
+        let list = self.lists.end[l];
+        let mut n = list[self.end[l] % 3];
+        self.end[l] += 1;
+        if n == 0x56 && self.last == 0x47 {
+            n = list[self.end[l] % 3];
+            self.end[l] += 1;
+        }
+        match n {
+            0x56 if a.special() => 0x57,
+            0x58 if b.special() => 0x59,
+            n => n,
+        }
+    }
 }
 
 /// The reference frames the post-point shots look at, set when the cut-away starts.
