@@ -37,6 +37,8 @@ use hst_data::iso::Iso;
 
 use super::{Art, Dev, GRID, Menu, Screen, Slot, Tex, Who, layout};
 use crate::mods::Mod;
+use crate::audio::{Sound, SoundBank};
+use hst_sim::sound;
 use crate::character::{self, CharacterData, Motion, Staged};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use crate::inspect::{self, Act, Preview, PreviewMaterial};
@@ -59,7 +61,7 @@ const SETTLE: f32 = 0.3;
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(inspect::plugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .init_resource::<Gone>().init_resource::<Pending>()
+        .init_resource::<Gone>().init_resource::<Pending>().init_resource::<Voices>()
         .add_systems(Startup, start_loader)
         .add_systems(PostStartup, (hover_all, start_baker))
         .add_systems(FixedUpdate, character::tick)
@@ -617,6 +619,7 @@ fn buttons(
     data: Query<&character::Rig>,
     mut rigs: Query<(&mut Motion, &mut Transform, &mut inspect::UvClock)>,
     mut pending: ResMut<Pending>,
+    (args, sound, mut voices): (Res<Args>, Option<Res<Sound>>, ResMut<Voices>),
 ) {
     if menu.screen != Screen::Chars {
         return;
@@ -640,9 +643,65 @@ fn buttons(
         let Some(act) = pending.0[*player] else { continue };
         let Ok(rig) = data.get(p.rig) else { continue };
         pending.0[*player] = None;
+        // the original drops a press, motion and all, while that screen's R2/L2 voice still sounds
+        let busy = |id: u64| id != 0 && sound.as_ref().is_some_and(|s| s.playing(id));
+        let [itg, sample] = voices.playing[*player];
+        if busy(itg) {
+            continue;
+        }
         let d = rig.data.clone();
         inspect::apply(&mut p, act, &mut rigs, &d);
+        let Some(s) = &sound else { continue };
+        if act == Act::Pose && busy(sample) {
+            continue;
+        }
+        if let Some((bank, play)) = voice(act, menu.who(*player), menu.players[*player].costume, &menu.mods, &mut voices.banks, Path::new(&args.iso)) {
+            voices.playing[*player][(act == Act::Pose) as usize] = s.play_centre(&bank, play);
+        }
     }
+}
+
+/// Each card's last R2/L2 voice and △ sample (play ids), and the banks they came from.
+#[derive(Resource, Default)]
+struct Voices {
+    playing: [[u64; 2]; 4],
+    banks: HashMap<String, Option<Arc<SoundBank>>>,
+}
+
+/// The voice a press on a card plays as its motion starts (B86a), as the original's Data → Items → Characters screen,
+/// whose inspect the cards copy: R2 / L2 key 1 / 0 of program 0 of the character's `itgNN_n` bank (bank slot 0x16;
+/// `_c` from costume 5 on, the Costumes tab), △ the "Voice Sample", key = character of `mvc_it0` (slot 0x13;
+/// `mvc_it1`, slot 0x14, from costume 5 on). A mod: R2 / L2 its own `voice/` program 9 / 10 key 0 (the match's voices
+/// for the same motions, 0x2e / 0x2f), else its donor's costume-0 ones; △ its donor's sample only if it ships no voice.
+fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<String, Option<Arc<SoundBank>>>, iso: &Path) -> Option<(Arc<SoundBank>, sound::Play)> {
+    let (c, costume) = match who {
+        Who::Disc(c) => (c, costume),
+        Who::Mod(i) => {
+            let m = mods.get(i)?;
+            let own = banks.entry(format!("mod {}", m.dir.join(&m.voice).display())).or_insert_with(|| crate::mods::voice(m).map(Arc::new)).clone();
+            if let Some(own) = own {
+                // ponytail: no mod take stands in for the sample (the standard has none); a mod with voices gives none
+                let program: u8 = match act { Act::Win => 9, Act::Loss => 10, Act::Pose => return None };
+                if own.wav.contains_key(&(program as usize)) {
+                    return Some((own, sound::Play { slot: 0x16, program, key: 0, volume: 0x80, speed: 1.0 }));
+                }
+            }
+            (m.donor, 0)
+        }
+    };
+    let alt = costume >= 5;
+    let (xb, hd, play) = match act {
+        Act::Win | Act::Loss => {
+            let v = if alt { 'c' } else { 'n' };
+            (format!("SND/VOICE/MENU/ITG{c:02}_{}.XB0", v.to_ascii_uppercase()), format!("data/sound/VOICE/MENU/itg{c:02}_{v}.hd"), sound::Play { slot: 0x16, program: 0, key: (act == Act::Win) as u8, volume: 0x80, speed: 1.0 })
+        }
+        Act::Pose => {
+            let n = alt as u8;
+            (format!("SND/VOICE/MENU/MVC_IT{n}.XB0"), format!("data/sound/VOICE/MENU/mvc_it{n}.hd"), sound::Play { slot: 0x13 + n, program: 0, key: c as u8, volume: 0x80, speed: 1.0 })
+        }
+    };
+    let bank = banks.entry(hd.clone()).or_insert_with(|| Iso::open(iso).ok().and_then(|mut iso| SoundBank::load(&mut iso, &xb, &hd)).map(Arc::new)).clone()?;
+    Some((bank, play))
 }
 
 /// Each player's R2/L2/△ pressed on a card not yet showing its live model.
@@ -716,5 +775,52 @@ fn stress(secs: f32) -> impl FnMut(ResMut<Menu>, Res<Time>, MessageWriter<AppExi
             let n = if pl.modded { m.mods[pl.pick].costumes.len() } else { super::COSTUMES };
             pl.costume = rnd(n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R2 / L2 / △ on a disc character and a mod start the matching voice (B86a).
+    #[test]
+    fn presses_start_voices() {
+        let iso = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"));
+        let Ok(mut disc) = Iso::open(iso) else { return eprintln!("no ISO, skipped") };
+        let sound = Sound::test(&mut disc);
+        let dir = std::env::temp_dir().join(format!("hst-b86a-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("voice")).unwrap();
+        // a 0.1 s silent PCM16 mono wav as the mod's R2 voice (program 9); no L2 take, so L2 falls back to the donor
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x22\x56\0\0\x44\xac\0\0\x02\0\x10\0data".to_vec();
+        wav.extend((4410u32 * 2).to_le_bytes());
+        wav.extend(vec![0u8; 4410 * 2]);
+        std::fs::write(dir.join("voice/9_0.wav"), &wav).unwrap();
+        let m = |voice: &str| Mod {
+            dir: dir.clone(), id: "t".into(), name: "t".into(), costumes: vec![], donor: 3, hand: 1.0, base: 3,
+            overrides: vec![], ai_row: 3, texture_face: false, no_face: false, voice: voice.into(), motions: None,
+        };
+        let mods = [m("voice/"), m("none/")];
+        let mut banks = HashMap::new();
+        let mut go = |act, who, costume| {
+            let (bank, play) = voice(act, who, costume, &mods, &mut banks, iso).unwrap_or_else(|| panic!("no voice {act:?} {who:?} {costume}"));
+            let id = sound.play_centre(&bank, play);
+            assert!(sound.playing(id), "{act:?} {who:?} {costume}");
+            (Arc::as_ptr(&bank), play.slot, play.program, play.key)
+        };
+        let (win, s, p, k) = go(Act::Win, Who::Disc(2), 0);
+        assert_eq!((s, p, k), (0x16, 0, 1));
+        assert_eq!(go(Act::Loss, Who::Disc(2), 0), (win, 0x16, 0, 0));
+        assert_ne!(go(Act::Win, Who::Disc(2), 5).0, win, "costume 5 on: the _c bank");
+        let tail = |(_, s, p, k)| (s, p, k);
+        assert_eq!(tail(go(Act::Pose, Who::Disc(2), 0)), (0x13, 0, 2));
+        assert_eq!(go(Act::Pose, Who::Disc(2), 7).1, 0x14);
+        // the mod: its own R2 take; L2 the donor's costume-0 bank; △ none (it has a voice); no voice → all the donor's
+        assert_eq!(tail(go(Act::Win, Who::Mod(0), 7)), (0x16, 9, 0));
+        let donor = go(Act::Win, Who::Disc(3), 0).0;
+        assert_eq!(go(Act::Loss, Who::Mod(0), 7), (donor, 0x16, 0, 0));
+        assert!(voice(Act::Pose, Who::Mod(0), 0, &mods, &mut HashMap::new(), iso).is_none());
+        assert_eq!(go(Act::Win, Who::Mod(1), 7), (donor, 0x16, 0, 1));
+        assert_eq!(tail(go(Act::Pose, Who::Mod(1), 7)), (0x13, 0, 3));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

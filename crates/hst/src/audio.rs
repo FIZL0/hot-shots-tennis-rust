@@ -306,6 +306,12 @@ impl Sound {
         self.play(bank, p.program as usize, p.key as usize, level, 0x1000)
     }
 
+    /// A mixer on `iso`'s banks with no output, for tests.
+    #[cfg(test)]
+    pub fn test(iso: &mut Iso) -> Self {
+        Self(Arc::new(Mutex::new(mix(iso))))
+    }
+
     /// The play `id` still has key-ons to come or voices sounding.
     pub fn playing(&self, id: u64) -> bool {
         let m = self.0.lock().unwrap();
