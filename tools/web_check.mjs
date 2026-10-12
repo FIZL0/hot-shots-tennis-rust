@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -40,6 +40,11 @@ async function visit(n, pick) {
   await send('Network.enable');
   await send('Page.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
+  // MOBILE=1: a phone held sideways, touch only (as web_touch.mjs): the page's phone settings
+  if (process.env.MOBILE) {
+    await send('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 2, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `
     self.__ctx = []; self.__peak = 0; self.__frames = [];
     ${process.env.WEB_PRELOAD ?? ''}

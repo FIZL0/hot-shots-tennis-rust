@@ -55,7 +55,7 @@ pub fn plugin(app: &mut App) {
     if !app.world().contains_resource::<Assets<PreviewMaterial>>() {
         render(app);
     }
-    app.add_systems(FixedUpdate, tick_uv).add_systems(Update, (place, centre.after(character::animate), uv_offsets));
+    app.add_systems(FixedUpdate, tick_uv).add_systems(Update, (place, centre.after(character::animate), uv_offsets, reveal.after(centre)));
 }
 
 /// The previews' Bevy plugins, which set up the render app too.
@@ -118,7 +118,8 @@ pub enum Act {
 pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand: f32, layer: usize, rect: Rect) -> Entity {
     let layers = RenderLayers::layer(layer);
     // game space, as `GameSpace`: the GS shader lights in it
-    let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(PI)), Visibility::default(), Propagate(layers.clone()))).id();
+    // B120: hidden until `character::animate` has posed it (else its first frame can draw the rest T-pose)
+    let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(PI)), Visibility::Hidden, Unposed(false), Propagate(layers.clone()))).id();
     let rig = character::spawn(commands, data, space);
     let t = character::pose_frame(n, data.motions.get(&POSE).map_or(0.0, |c| c.length));
     let uv = uv_held(t, data);
@@ -140,6 +141,21 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand:
             Preview { rect, crop: CROP, n, rig, centre: false },
         ))
         .id()
+}
+
+/// A preview's game space not shown yet: true once a [`reveal`] has seen it, so `character::animate` has run on it
+/// since (its spawn's commands may land after that frame's `animate`).
+#[derive(Component)]
+struct Unposed(bool);
+
+fn reveal(mut commands: Commands, mut spaces: Query<(Entity, &mut Unposed, &mut Visibility)>) {
+    for (e, mut seen, mut vis) in &mut spaces {
+        if seen.0 {
+            *vis = Visibility::Inherited;
+            commands.entity(e).remove::<Unposed>();
+        }
+        seen.0 = true;
+    }
 }
 
 /// The inspect screen's light (direction, colour, ambient, second direction, second colour).
