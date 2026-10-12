@@ -122,4 +122,5 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - Stored-path fixtures can't verify net hits (the game records paths against the court plane only); live-ball
   recordings do (`tests/live.rs`). The app without `--stage` collides with court 10's mesh (court drawn flat).
 - `libm::sinf` ports only |x| ≤ 2^7·π/2 (asserts beyond); the game's callers stay in [0, π].
-- Disc court folder ↔ physics court index mapping is unverified (slot 5 = court index 10).
+- Disc court folder = RAM court index (0x422f90), checked for 7 (indoor gym) and 10 (ruins, slot 5) in B92. Court
+  carousel order from the court-select start (s2's slot 08 save): steps right 0…10 → courts 5 1 4 6 2 8 9 11 10 3 7.
