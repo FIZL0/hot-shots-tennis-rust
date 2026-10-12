@@ -1423,6 +1423,7 @@
    "name": "Ashley",
    "bip01_height": 0.8276,
    "head_height": 1.2242,
+   "top_height": 1.5935,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1444,6 +1445,7 @@
    "name": "Cody",
    "bip01_height": 0.9048,
    "head_height": 1.3317,
+   "top_height": 1.7126,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1465,6 +1467,7 @@
    "name": "Jun",
    "bip01_height": 0.8276,
    "head_height": 1.2242,
+   "top_height": 1.589,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1488,6 +1491,7 @@
    "name": "Kaito",
    "bip01_height": 0.9127,
    "head_height": 1.4596,
+   "top_height": 1.8313,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1511,6 +1515,7 @@
    "name": "Momoko",
    "bip01_height": 0.8276,
    "head_height": 1.2242,
+   "top_height": 1.6045,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1534,6 +1539,7 @@
    "name": "JJ",
    "bip01_height": 0.4599,
    "head_height": 0.89,
+   "top_height": 1.3017,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1557,6 +1563,7 @@
    "name": "Carol",
    "bip01_height": 0.7589,
    "head_height": 1.1224,
+   "top_height": 1.6341,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1580,6 +1587,7 @@
    "name": "Big Chief",
    "bip01_height": 0.8087,
    "head_height": 1.4955,
+   "top_height": 1.8591,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1600,6 +1608,7 @@
    "name": "Miranda",
    "bip01_height": 0.8576,
    "head_height": 1.2676,
+   "top_height": 1.6935,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1623,6 +1632,7 @@
    "name": "Kent",
    "bip01_height": 0.9048,
    "head_height": 1.3317,
+   "top_height": 1.712,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1647,6 +1657,7 @@
    "name": "Lola",
    "bip01_height": 0.9463,
    "head_height": 1.3715,
+   "top_height": 1.7203,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1671,6 +1682,7 @@
    "name": "Will",
    "bip01_height": 0.9278,
    "head_height": 1.4452,
+   "top_height": 1.8418,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1692,6 +1704,7 @@
    "name": "Gloria",
    "bip01_height": 0.8554,
    "head_height": 1.2638,
+   "top_height": 1.6547,
    "face_targets": [
     "anger_eye",
     "anger_mouth",
@@ -1716,6 +1729,7 @@
    "name": "Suzuki",
    "bip01_height": 0.6382,
    "head_height": 1.191,
+   "top_height": 1.5741,
    "face_targets": [
     "anger_eye",
     "anger_mouth",

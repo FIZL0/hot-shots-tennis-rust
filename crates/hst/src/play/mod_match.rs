@@ -171,9 +171,9 @@ mod tests {
     /// are its `params.override` cells (Get a Grip's stats ranked onto TParam), its AI row is `ai_row`.
     #[test]
     fn get_a_grip_stats_reach_the_match() {
-        const GAG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/getagrip_pc00_emi");
+        const GAG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/getagrip_pc03_wendy");
         if !Path::new(ISO).is_file() || !Path::new(GAG).is_dir() {
-            return eprintln!("no ISO or mods/hst-mods/getagrip_pc00_emi, skipped");
+            return eprintln!("no ISO or mods/hst-mods/getagrip_pc03_wendy, skipped");
         }
         let m = mods::read(Path::new(GAG)).unwrap();
         let o = |k: &str| m.overrides.iter().find(|(c, _)| c == k).unwrap_or_else(|| panic!("no {k} override")).1.parse::<i32>().unwrap();
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(g.aim_stats[1].con, [o("Strk CON"), o("Voley CON"), o("Serv CON")]);
         assert_eq!(g.reaches[1].reach, hst_sim::ps2::add(hst_sim::ps2::div(o("リーチ(cm)") as f32, 100.0), hst_sim::ps2::div(30.0, 100.0)));
         assert_eq!(p.ai, super::super::ai_params(&mut iso, m.ai_row, 0, false));
-        assert_ne!(m.ai_row, m.donor, "Emi's AI row should follow her play style, not her body donor");
+        assert_ne!(m.ai_row, m.donor, "Wendy's AI row should follow her play style, not her body donor");
     }
 
     /// Online (M2i): the mod with its looks and a stand-in from the same wire hand the game the same skeleton and
