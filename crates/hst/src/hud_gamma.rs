@@ -10,6 +10,12 @@
 //! linear light, which makes translucent pieces read stronger (the serve panel's 35 % strip ≈ 0.45 over the court
 //! instead of ≈ 0.3).
 //!
+//! While a match runs (`Persist`) the scene also keeps 25 % of the last frame shown, as the game's last draw does:
+//! a full-screen sprite of the other frame buffer at FIX 0x20 over the new frame (its fields shifted by half a line
+//! to line up, which a progressive frame needs not). Two images take turns as this frame's mix and last frame's.
+//! ponytail: the game draws a sun glare (a half-pixel blur of the frame, up to 71 %) instead of it while the camera
+//! looks within ~37° of the sun; not ported (B31e).
+//!
 //! ponytail: UI pieces overlapping each other still blend in linear among themselves; only their sum goes over the
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
 
@@ -23,10 +29,11 @@ use bevy::window::PrimaryWindow;
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "hud_gamma.wgsl");
-    app.add_plugins(UiMaterialPlugin::<Composite>::default())
+    bevy::asset::embedded_asset!(app, "persist.wgsl");
+    app.add_plugins((UiMaterialPlugin::<Composite>::default(), UiMaterialPlugin::<Mix>::default()))
         .add_systems(Startup, setup)
         .add_systems(Update, encode_pbr_output)
-        .add_systems(PostUpdate, (retarget, clear, follow_window).chain().before(bevy::camera::CameraUpdateSystems))
+        .add_systems(PostUpdate, (retarget, clear, follow_window, persist).chain().before(bevy::camera::CameraUpdateSystems))
         .add_systems(PostUpdate, pixel_aspect.after(bevy::camera::CameraUpdateSystems));
 }
 
@@ -35,6 +42,32 @@ struct Targets {
     scene: Handle<Image>,
     hud: Handle<Image>,
     composite: Handle<Composite>,
+    /// The persistence's two images, cameras and mixes: frame parity `i` draws `mixes[i]` into `last[i]` with
+    /// cameras[i], from the scene and `last[1 - i]`.
+    last: [Handle<Image>; 2],
+    cameras: [Entity; 2],
+    mixes: [Handle<Mix>; 2],
+}
+
+/// Present while a match runs (the game's match scene turns its frame persistence on, menus have none).
+#[derive(Resource)]
+pub struct Persist;
+
+#[derive(AsBindGroup, Asset, TypePath, Clone)]
+struct Mix {
+    #[texture(0)]
+    scene: Handle<Image>,
+    #[texture(1)]
+    last: Handle<Image>,
+    /// x: how much of the last frame (vec4 for WebGL's 16-byte uniforms)
+    #[uniform(2)]
+    weight: Vec4,
+}
+
+impl UiMaterial for Mix {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://hst/persist.wgsl".into()
+    }
 }
 
 #[derive(AsBindGroup, Asset, TypePath, Clone)]
@@ -55,7 +88,7 @@ impl UiMaterial for Composite {
 /// The composite camera's layer, so no sprite or mesh of the game's ends up on it.
 const LAYER: usize = 31;
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<Composite>>) {
+fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<Composite>>, mut mixes: ResMut<Assets<Mix>>) {
     let target = |f| Image::new_target_texture(1, 1, f, None);
     let (scene, hud) = (images.add(target(TextureFormat::Rgba8Unorm)), images.add(target(TextureFormat::Rgba8UnormSrgb)));
     commands.spawn((
@@ -74,7 +107,29 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         MaterialNode(composite.clone()),
         UiTargetCamera(out),
     ));
-    commands.insert_resource(Targets { scene, hud, composite });
+    // HDR like the scene cameras, so the mix lands in the image unencoded
+    let last = [(); 2].map(|_| images.add(target(TextureFormat::Rgba8Unorm)));
+    let mixes = [0, 1].map(|i| mixes.add(Mix { scene: scene.clone(), last: last[1 - i].clone(), weight: Vec4::ZERO }));
+    let cameras = [0, 1].map(|i| {
+        let cam = commands
+            .spawn((
+                Camera2d,
+                Camera { order: 48 + i as isize, is_active: false, ..default() },
+                RenderTarget::Image(ImageRenderTarget { handle: last[i].clone(), scale_factor: 1.0 }),
+                bevy::camera::Hdr,
+                bevy::core_pipeline::tonemapping::DebandDither::Disabled,
+                Msaa::Off,
+                RenderLayers::layer(LAYER - 1),
+            ))
+            .id();
+        commands.spawn((
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            MaterialNode(mixes[i].clone()),
+            UiTargetCamera(cam),
+        ));
+        cam
+    });
+    commands.insert_resource(Targets { scene, hud, composite, last, cameras, mixes });
 }
 
 /// A 3D camera drawing into the scene image.
@@ -130,6 +185,7 @@ fn follow_window(
     window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<Composite>>,
+    mut mixes: ResMut<Assets<Mix>>,
     mut targets: Query<&mut RenderTarget>,
     mut stale: Local<u8>,
 ) {
@@ -144,21 +200,27 @@ fn follow_window(
         ((size((pw * k).floor(), (ph * k).floor()), k), (size(pw, ph), 1.0))
     };
     let sampler = if g.original { ImageSampler::nearest() } else { ImageSampler::Default };
-    for (h, size) in [(&t.scene, scene), (&t.hud, hud)] {
+    for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
             *stale = 2;
         }
     }
-    if images.get(&t.scene).is_some_and(|i| i.sampler != sampler) {
-        images.get_mut(&t.scene).unwrap().sampler = sampler;
-        *stale = 2;
+    // the composite samples whichever of these it shows
+    for h in [&t.scene, &t.last[0], &t.last[1]] {
+        if images.get(h).is_some_and(|i| i.sampler != sampler) {
+            images.get_mut(h).unwrap().sampler = sampler.clone();
+            *stale = 2;
+        }
     }
     // the material's bind group holds the old texture views until it is prepared again, which can happen before the
     // resized images are: again the frame after
     if *stale > 0 {
         *stale -= 1;
         materials.get_mut(&t.composite).map(|m| m.into_inner());
+        for m in &t.mixes {
+            mixes.get_mut(m).map(|m| m.into_inner());
+        }
     }
     for mut target in &mut targets {
         let Some(scale) = (match &*target {
@@ -174,6 +236,31 @@ fn follow_window(
             let handle = i.handle.clone();
             *target = RenderTarget::Image(ImageRenderTarget { handle, scale_factor: scale });
         }
+    }
+}
+
+/// Each frame in a match: this parity's camera mixes the last frame into the scene, and the composite shows that.
+/// The game mixes 25 % per 60 Hz frame; at a higher frame rate more per frame, so the trail fades as fast.
+fn persist(on: Option<Res<Persist>>, time: Res<Time<Real>>, t: Res<Targets>, mut cams: Query<&mut Camera>, mut mixes: ResMut<Assets<Mix>>, mut materials: ResMut<Assets<Composite>>, mut parity: Local<usize>) {
+    *parity ^= 1;
+    let i = *parity;
+    for (k, &e) in t.cameras.iter().enumerate() {
+        if let Ok(mut c) = cams.get_mut(e)
+            && c.is_active != (on.is_some() && k == i)
+        {
+            c.is_active = !c.is_active;
+        }
+    }
+    let shown = if on.is_some() {
+        if let Some(mut m) = mixes.get_mut(&t.mixes[i]) {
+            m.weight.x = 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0));
+        }
+        &t.last[i]
+    } else {
+        &t.scene
+    };
+    if materials.get(&t.composite).is_some_and(|c| c.scene != *shown) {
+        materials.get_mut(&t.composite).unwrap().scene = shown.clone();
     }
 }
 

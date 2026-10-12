@@ -15,7 +15,8 @@ use crate::gs::GsMaterial;
 use crate::Args;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, setup.after(super::setup))
+    // the game's match scene turns on the frame persistence its last draw does (`hud_gamma::Persist`)
+    app.add_systems(PostStartup, (setup.after(super::setup), |mut c: Commands| c.insert_resource(crate::hud_gamma::Persist)))
         .add_systems(FixedUpdate, tick.before(super::start_effects).after(super::simulate))
         .add_systems(Update, (own_materials, draw).chain().after(crate::weather::apply));
 }
