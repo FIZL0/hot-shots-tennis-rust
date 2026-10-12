@@ -143,7 +143,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t = textureSampleLevel(gs_texture, gs_sampler, in.uv + gs.uv_offset, level);
     rgb = t.rgb * rgb;
 #ifdef GS_MODULATE
-    a = t.a * a;
+    // Av = (At·Af) >> 7 on the GS's integers: At 0..0x80 (stored ·255/0x80), Af the interpolated vertex alpha,
+    // truncated (+1/64 takes up float error, so a constant 0x80 stays 0x80 and passes A ≥ 0x80)
+    a = round(t.a * 128.0) * floor(a * 128.0 + 1.0 / 64.0) / 16384.0;
 #else
     // HIGHLIGHT2: + vertex alpha (0..0xff), which carries the highlight
     a = t.a;
