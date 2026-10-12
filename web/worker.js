@@ -14,7 +14,8 @@ onmessage = async ({ data: file }) => {
     } finally {
       h.close();
     }
-    if (part.move) await part.move('disc.pack');
+    // (directory, name): WebKit's move takes no name-only form ("TypeError: Not enough arguments")
+    if (part.move) await part.move(dir, 'disc.pack');
     else {
       const out = await (await dir.getFileHandle('disc.pack', { create: true })).createWritable();
       await out.write(await part.getFile());
