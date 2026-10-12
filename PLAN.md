@@ -16,6 +16,10 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
   `research/fn.sh <addr>`), port it, prove it against the real game: a test compares the port to a PINE recording
   or save-state capture and passes bit-exact (f32 via `hst_sim::ps2`) or frame-exact.
   This covers gameplay only: physics, AI, shots, scoring, rules and match timing.
+- **Rendering only has to look right** (user 2026-10-12): shadows, shade maps, lighting, effects and GS output
+  match the original by eye or within a small tolerance against a capture, not bit for bit. Don't replay GS/VU1
+  rounding to close the last few pixels, and don't open a follow-up "(X gap)" task just to chase remaining
+  bit-level render differences: note them in the journal and move on.
 - **The main menu and front-end don't have to match the original** (user 2026-10-12): title, mode menus, character/
   court/umpire select, settings, loading and result screens are ours to design. The original is a reference for
   them, not a spec; no bit-/frame-exact proof needed. Where a task in `plan/TODO.md` says a menu must look or behave
