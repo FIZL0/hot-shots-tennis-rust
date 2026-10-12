@@ -55,21 +55,6 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 | Camera (original / free) | C | Select |
 | Turn free camera | Arrow keys | Right stick |
 
-### Steam / Big Picture
-
-Add the launcher as a non-Steam game. Under Big Picture and on the Steam Deck it starts full screen (`--fullscreen`
-elsewhere), Steam Input layouts apply, and every menu works from a controller.
-
-On a Wayland desktop, set the shortcut's launch options to run it under X11 (Xwayland), which the Steam overlay needs.
-Environment variables go before `%command%`, the game's own arguments (the ISO, if the launcher doesn't find it) after:
-
-```
-WAYLAND_DISPLAY= %command% "/path/to/Hot Shots Tennis (USA).iso"
-```
-
-The Steam overlay opens on a Linux desktop but doesn't work properly yet: it stays at the window's starting size
-and ignores clicks (task Z3). The Steam Deck's own session draws the overlay itself and isn't affected.
-
 ## Texture replacements
 
 Upscaled or edited textures are read at runtime from `mods/texture-replacements/` beside the ISO, which is not part

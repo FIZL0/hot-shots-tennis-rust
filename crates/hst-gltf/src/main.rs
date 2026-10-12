@@ -1,9 +1,9 @@
-//! hst-gltf — export Hot Shots Golf Fore! (and Hot Shots Tennis) characters to glTF 2.0 binaries.
+//! hst-gltf — export Hot Shots Tennis characters to glTF 2.0 binaries (reference rigs for modding; other games'
+//! characters are extracted by the HST-MODS tools).
 //!
 //! ```text
 //! hst-gltf info <file.mdl>                    node tree of a model
 //! hst-gltf hst  <HST xb root> <out dir>       HST pc00 costume 0 + racket + its PCANI motions (reference rig)
-//! hst-gltf fore <out/files/fore> <out root>   every Fore character × costume, and per character its motions
 //! hst-gltf retarget <mdl> <mtl> <out.glb> <ani2…>  Biped motions (e.g. HST's) onto a model, names matched sans spaces
 //! ```
 //! A .glb holds the model's node tree as joints (game space: Y down, feet at the origin, under a `game_space`
@@ -20,13 +20,6 @@ use serde_json::{Value, json};
 
 type M4 = [[f32; 4]; 4];
 type R<T> = Result<T, String>;
-
-/// Fore character names, by pcNN: SYSTEM.BIN's 0x40-byte character records at 0xfde40 (the record's first byte
-/// is the body type, which matches every `pcNN_tTT` model file name).
-const FORE_NAMES: [&str; 24] = [
-    "Phoebe", "Mike", "Emma", "Sam", "Misaki", "Brad", "Chaos", "Regis", "Maya", "Falcon", "Renee", "Z", "Mel", "Allan",
-    "Tiffany", "Kamala", "Toni", "T-Bone", "Lin", "Louise", "Zeus", "Hubert", "Ratchet", "Jak",
-];
 
 struct Motion {
     name: String,
@@ -596,44 +589,6 @@ fn hst(root: &Path, out: &Path) -> R<()> {
     Ok(())
 }
 
-fn fore(root: &Path, out: &Path) -> R<()> {
-    for (n, name) in FORE_NAMES.iter().enumerate() {
-        let slug = name.to_ascii_lowercase().replace('-', "");
-        let pc = root.join(format!("PC/PC{n:02}"));
-        for c in 0..8 {
-            let files = walk(&pc.join(format!("PC{n:02}{c:02}.XB")));
-            let mdl = files.iter().find(|p| ext_is(p, "mdl")).ok_or(format!("pc{n:02} c{c:02}: no mdl"))?;
-            let mtl = files.iter().find(|p| ext_is(p, "mtl")).ok_or(format!("pc{n:02} c{c:02}: no mtl"))?;
-            let (model, mats) = load_model(mdl, mtl)?;
-            write(&out.join(format!("models/fore/pc{n:02}/pc{n:02}_{slug}_c{c:02}.glb")), &export(&model, &mats, &deformers(mdl), &[], &[]))?;
-        }
-        // motions per body variant: costumes 0–3 share one model (01p), 4–7 another (05p)
-        for v in 0..2 {
-            let c = v * 4;
-            let files = walk(&pc.join(format!("PC{n:02}{c:02}.XB")));
-            let mdl = files.iter().find(|p| ext_is(p, "mdl")).unwrap();
-            let mtl = files.iter().find(|p| ext_is(p, "mtl")).unwrap();
-            let (model, mats) = load_model(mdl, mtl)?;
-            let mut list = Vec::new();
-            let mut sources = Vec::new();
-            let mut sets = vec![walk(&pc.join(format!("PC{n:02}SW{c:02}.XB")))];
-            for k in 0..8 {
-                sets.push(walk(&pc.join(format!("PC{n:02}{c:02}{k:02}.XB"))));
-            }
-            sets.push(walk(&root.join(format!("RESULT/PC{n:02}/COL{c:02}.XB"))));
-            sets.push(walk(&root.join(format!("MENU/M_CHAR/COL{c}/MC{n:02}.XB"))));
-            for s in &sets {
-                motions(s, "ani", &mut list, &mut sources);
-            }
-            let path = out.join(format!("anims/fore/pc{n:02}_{slug}_{}.glb", ["c00-03", "c04-07"][v]));
-            write(&path, &export(&model, &mats, &deformers(mdl), &list, &[]))?;
-            let names: Vec<&str> = list.iter().map(|m| m.name.as_str()).collect();
-            println!("  {} motions: {}", list.len(), names.join(" "));
-        }
-    }
-    Ok(())
-}
-
 /// HST (or any Biped) motions onto a model whose node names differ only by spaces (`Bip01LThigh` ↔ `Bip01 L Thigh`).
 fn retarget(mdl_path: &Path, mtl_path: &Path, out: &Path, anis: &[String]) -> R<()> {
     let (model, mats) = load_model(mdl_path, mtl_path)?;
@@ -654,9 +609,8 @@ fn main() {
     let r = match a.get(1).map(String::as_str) {
         Some("info") if a.len() == 3 => info(Path::new(&a[2])),
         Some("hst") if a.len() == 4 => hst(Path::new(&a[2]), Path::new(&a[3])),
-        Some("fore") if a.len() == 4 => fore(Path::new(&a[2]), Path::new(&a[3])),
         Some("retarget") if a.len() >= 6 => retarget(Path::new(&a[2]), Path::new(&a[3]), Path::new(&a[4]), &a[5..]),
-        _ => Err("usage: hst-gltf info <mdl> | hst <xb root> <out dir> | fore <files/fore> <out root> | retarget <mdl> <mtl> <out.glb> <ani2…>".into()),
+        _ => Err("usage: hst-gltf info <mdl> | hst <xb root> <out dir> | retarget <mdl> <mtl> <out.glb> <ani2…>".into()),
     };
     if let Err(e) = r {
         eprintln!("{e}");

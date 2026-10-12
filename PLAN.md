@@ -55,7 +55,7 @@ Open tasks: `plan/TODO.md` (index: `tools/ctx.py`, next: `tools/ctx.py next`). F
   (the only place with retail offsets) · `bin/` xbdump, tm2png, mdlstat
 - tests: `characters.rs`, `collision.rs`
 
-`crates/hst-gltf` — exports HST characters (all motions, faces) to `.glb` for modding (`hst-gltf hst context/xb DIR`)
+`crates/hst-gltf` — exports HST's own characters (all motions, faces) to `.glb` as modding reference rigs (`hst-gltf hst context/xb DIR`); other games' extraction and mod packaging live in ../HST-MODS
 
 `modding/` — character mod standard, tutorial, `hst_skeleton.json`; `tools/` rerig/check/render/make_skeleton (Python)
 
