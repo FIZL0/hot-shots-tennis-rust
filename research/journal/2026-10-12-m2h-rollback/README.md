@@ -22,6 +22,17 @@
   - The streams still carry pause, the end of the match and drops (M2g).
 - Lockstep is still available: when the host sets `HST_NET_LOCKSTEP`, the `Room` field `lockstep` picks M2g's gate.
   Rollback is the default.
+- Instant replays online: its recorder (`instant_replay::Recorder`, now holding the serve's state in an `Arc`) and
+  `replay_camera::ReplayCamera` are in the snapshot now, so a rollback puts them back too. The recorder keeps itself
+  across its own serve restore, and empties itself before saving the serve, so serve states don't chain.
+  - While a replay plays, the gate leaves the replay's pad queue alone. Before, the gate's per-tick `Replay([now])`
+    replaced it, which played the point again on live pads. Rollback's state carries the queue only while a replay
+    plays (the general snapshot doesn't, so an outside recording isn't rewound).
+  - The replay's ✕/○ skip presses come from the synced pads (`tick_input::decode` into the `Pads` latches), not this
+    machine's devices.
+- `HST_NET_SYNCTEST=n` with a host that has every seat (`hst net host doubles 4 … --play`, which now starts at once)
+  runs ggrs' `SyncTestSession` in the real app. Each tick it goes back `n` ticks, and when a re-run tick's state differs
+  it writes `synctest-<tick>-first.txt`/`-rerun.txt`.
 - ggrs builds on wasm32 too (`wasm-bindgen` feature), like the rest of netplay.
 
 ## Verified (crates/hst/src/play/netplay.rs tests, `matches`)
@@ -39,7 +50,27 @@
 - `rollback_desync_stops_both_and_saves`: the guest reseeds its AI generator at tick 300. Both machines then stop at
   tick 330, the next checksum, with "Out of sync at tick 330" and the desync files saved.
 - Not on the wire: the datagram framing (`datagram`/`undatagram`) and the host relay are exercised only by the real
-  run below.
+  runs below.
+
+## Real app (two `hst` processes over iroh, relay off, `HST_NET_LAG=75`: 150 ms RTT, `HST_NET_MASH`)
+
+Built from main plus this branch, since main has M2d. Logs are in `context/m2h/runN/`, sync tests in
+`context/m2h/syncN/`.
+
+- run1 (this branch alone, without M2d): out of sync at tick 120. Only `umpire_voice` differed, the voice timer that
+  M2d moves into the snapshot.
+- run2 (main + M2h): out of sync at tick 1830, with player positions differing. The headless harness couldn't
+  reproduce it, so I added `HST_NET_SYNCTEST`.
+  - sync1/2: at tick 321, `Game.prev_view` differed. The instant replay's `ReplayCamera` (and its `Recorder`) weren't
+    in the snapshot, so a re-run started from a camera and a replay queue left over from the predicted run.
+  - sync3: at tick 696, after both went into the snapshot, the replay's pad queue (`Replay`) was still left from the
+    predicted run.
+  - sync4: with the fixes above, 400 s (~24k ticks) with check distance 7 and no mismatch, through 93 instant
+    replays. The mashed pads keep asking for another replay (□/△ in the post-point), so that match never ends.
+  - sync5: the replay cameras also stay across the replay's own serve restore (`replay_camera` test); 240 s with no
+    mismatch.
+- run3 (main + M2h with the fixes): 15 minutes in sync, until the 900 s timeout stopped both processes. That was 783
+  instant replays on each, the same count on both (mashing again), with no desync and no drop.
 
 ## Tick cost (`rollback_tick_cost`, ignored; release, Ryzen 7 9800X3D)
 
@@ -69,15 +100,21 @@ match was over. 5168 and 9633 ticks were re-run. It took 23 s.
 - **Tick cost on a low-end phone**: not measured. Native mobile was dropped (user 2026-10-12) and no phone or
   browser-on-phone run was available unattended. The prediction window is set from the desktop measurement and an
   assumed 6–8× slowdown. Measure in the browser build (M3/M9) on a phone and adjust `WINDOW`.
-- **Two real machines / real network loss**: the two-machine 150 ms test is in-process with a simulated wire (no
-  datagram loss or reordering). ggrs resends unacked inputs, so loss only delays confirmation, but loss was not
+- **Two real machines / real network loss**: the 150 ms runs are on one machine (two processes over iroh with the
+  relay off, or in-process with a simulated wire), with no datagram loss or reordering. ggrs resends unacked inputs, so loss only delays confirmation, but loss was not
   exercised. Cross-network runs are already a human item (M2f).
 - **Sounds of mispredicted ticks**: a tick run on a guessed pad may play a sound that the corrected re-run doesn't.
-  It can't be taken back, because it has already played. M2d (branch task/M2d, not yet merged when this was written)
-  dedupes sounds by tick, so a re-run doesn't play them twice. M2h relies on that merge.
+  It can't be taken back, because it has already played. M2d (merged into main, not on this branch) dedupes sounds
+  by tick and keeps the umpire voice's timer in the snapshot. M2h needs it: without it, run1 desynced at tick 120.
 - **Datagrams before the match has loaded** are dropped by the menu. ggrs resends until acked, so it only delays the
   sync handshake.
 - **Star topology through the host**: a guest-to-guest datagram goes through the host (the same as M2g), so guest
   pairs see up to two hops of latency.
+- **A full mashed match in the real app**: random mashing keeps requesting instant replays, so the two-process run
+  and the in-app sync test never reach the result screen. A full match to its result is verified only in the
+  headless harness, which has no instant replays.
+- **M2g's lockstep (`HST_NET_LOCKSTEP`) with instant replays**: its gate pushes each tick's pads behind the replay's
+  queue, so the replay never ends and the match runs that many ticks late. The replay's skip there reads this
+  machine's devices. Opened as M2h1.
 - **Original game**: it has no online play, so there is nothing to match 1:1. Offline matches don't go through this
   gate, and the replay tests stay bit-exact.

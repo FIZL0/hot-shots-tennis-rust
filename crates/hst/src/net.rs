@@ -643,7 +643,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = tokio::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
-    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = None;
+    // a host with every seat (`HST_NET_SYNCTEST`) starts at once
+    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = room.seats.iter().all(Option::is_some).then(|| (Vec::new(), t0));
     let mut ping = tokio::time::interval(Duration::from_secs(1));
     loop {
         if dirty {

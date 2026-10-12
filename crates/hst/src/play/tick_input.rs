@@ -61,7 +61,7 @@ impl TickPads {
 }
 
 /// Pads to play back, one entry per tick, in place of the local devices; idle once it runs out.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Replay(pub VecDeque<[Pad; 4]>);
 
 fn encode(s: &SlotPad) -> Pad {
@@ -70,7 +70,7 @@ fn encode(s: &SlotPad) -> Pad {
     Pad { buttons: s.dpad | shot | serve, lx: stick_byte(s.stick.x), ly: stick_byte(-s.stick.y), ..IDLE }
 }
 
-fn decode(p: Pad, last: Pad) -> SlotPad {
+pub(super) fn decode(p: Pad, last: Pad) -> SlotPad {
     let axis = |b: u8| {
         let b = b as f32 - 128.0;
         b / if b < 0.0 { 128.0 } else { 127.0 }
