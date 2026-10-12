@@ -20,15 +20,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Build = Box<dyn FnOnce(&mut App) + Send + Sync>;
+type Cover = Box<dyn FnOnce(&mut World, Entity) + Send + Sync>;
 
 pub struct Mode {
     build: Build,
     back: Option<Box<Mode>>,
+    cover: Option<Cover>,
 }
 
 impl Mode {
     pub fn new(build: impl FnOnce(&mut App) + Send + Sync + 'static) -> Self {
-        Mode { build: Box::new(build), back: None }
+        Mode { build: Box::new(build), back: None, cover: None }
     }
 
     /// This mode with `more` built on top.
@@ -40,12 +42,19 @@ impl Mode {
                 more(app);
             }),
             back: self.back,
+            cover: self.cover,
         }
     }
 
     /// Where this mode's `AppExit` goes instead of closing the app.
     pub fn back(mut self, to: Mode) -> Self {
         self.back = Some(Box::new(to));
+        self
+    }
+
+    /// What this mode's loading screen shows on its black cover (the match's hint screen, `loading.rs`).
+    pub fn cover(mut self, f: impl FnOnce(&mut World, Entity) + Send + Sync + 'static) -> Self {
+        self.cover = Some(Box::new(f));
         self
     }
 }
@@ -250,7 +259,10 @@ fn show_loading(world: &mut World) {
     }
     // a plain black cover while the new mode loads (the old "Loading..." text was a placeholder: user 2026-10-11)
     let node = Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-    world.spawn((Loading::default(), node, BackgroundColor(Color::BLACK), GlobalZIndex(i32::MAX - 1)));
+    let e = world.spawn((Loading::default(), node, BackgroundColor(Color::BLACK), GlobalZIndex(i32::MAX - 1))).id();
+    if let Some(cover) = world.resource_mut::<Next>().0.as_mut().and_then(|m| m.cover.take()) {
+        cover(world, e);
+    }
 }
 
 /// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling

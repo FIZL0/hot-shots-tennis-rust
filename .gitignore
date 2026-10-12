@@ -16,6 +16,7 @@ research/journal/**/*
 !research/journal/**/
 !research/journal/**/*.md
 /controls.txt
+/hints.txt
 /dist
 tools/upscale_mods.sh
 /cache
