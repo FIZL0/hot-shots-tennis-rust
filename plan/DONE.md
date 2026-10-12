@@ -237,6 +237,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B124** No Quit in the web build (user 2026-10-12, mobile): the main menu's Quit (`MAIN` in `main_menu.rs`) freezes the page in the browser, since a web page can't exit. Leave it out of the main menu on wasm (desktop keeps it) so the list is Local / Online / Settings, with cursor wrap and touch hit areas following; also check other quit/exit paths (pause menu "quit to menu" stays, anything that calls `AppExit` on wasm) don't freeze. Done when the web main menu shows no Quit and nothing on web stops the app → `play/main_menu.rs` · `web.rs`
 - [x] **B40e2** Menu screens' slide-in/out (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 - [x] **B24b** Creature sounds in the app (ball 33 at its route's sound points, ×1.2) (in B24) → `play/npcs.rs` · `play/audio` | t: npc.rs | j: 2026-10-08-b24-court-events
+- [x] **B31c** GS integer truncation on `@add`/MODULATE draws (gap from B31b): the GS truncates texel×vc>>7, As = ta·va>>7 and the add Cs·As>>7 each step; the port blends in float. On the tornado this adds faint pixels (raster without truncation 65.0k vs 57.7k sum, 1687 vs 1540 px > 3). Port it bit for bit (e.g. premultiplied, floored output with One/One blend for `@add` in `gs.wgsl`) and check against `research/b31b_rast.py` → `gs.wgsl` · `gs.rs` | j: 2026-10-08-p17q-tornado
 
 
 ### Shots

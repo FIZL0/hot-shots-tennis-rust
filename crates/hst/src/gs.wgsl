@@ -213,6 +213,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if gs.shadow > 0.0 {
         rgb *= 1.0 - gs.shadow * (1.0 - sun_visibility(in));
     }
+#ifdef GS_PREMUL
+    // `@add`/`@sub`: the GS adds Cs·As >> 7 on its integers, Cs (texel × vertex >> 7, clamped) and As truncated, so
+    // the blend is One/One on this already-floored 8-bit term (the scene is Rgba8Unorm: k/255 lands on k exactly)
+#ifdef GS_SUB
+    // (0 − Cs)·As >> 7 shifts a negative: the GS takes off the term rounded up
+    rgb = ceil(floor(rgb * 255.0 + 1e-4) * a8 / 128.0) / 255.0;
+#else
+    rgb = floor(floor(rgb * 255.0 + 1e-4) * a8 / 128.0) / 255.0;
+#endif
+#endif
     // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs)
     return vec4(rgb, clamp(a, 0.0, 1.0));
 }
