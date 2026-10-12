@@ -28,8 +28,8 @@ pub struct Sun {
     pub dir: Vec3,
     /// The sun as VU1 lights the court with it (game space, sun → ground).
     pub light: Vec3,
-    /// The shadow's strength S (0..255) in clear weather (`darken_s`, `hst_sim::weather::shadow`).
-    pub strength: u32,
+    /// The court's shadow strength row value (0..1; `strength` turns it into S).
+    pub strength: f32,
 }
 
 pub fn plugin(app: &mut App) {
@@ -50,7 +50,7 @@ impl Sun {
         let k = 0;
         let row = 0x10 + k * 0x30;
         let dir = sun_dir(f(&envir, row + 4)?, f(&envir, row + 8)?, f(&envir, row + 12)?, f(&hole, 0x58)?, 1.0);
-        let strength = (f(&envir, 0x410 + k * 0x10)? * 255.0) as u32;
+        let strength = f(&envir, 0x410 + k * 0x10)?;
         Some(Sun { dir: clamp_elevation(dir, 50f32.to_radians()), light: dir, strength })
     }
 }
@@ -88,6 +88,12 @@ fn clamp_elevation(d: Vec3, min: f32) -> Vec3 {
 #[cfg(test)]
 fn darken(strength: f32) -> f32 {
     darken_s((strength * 255.0) as u32)
+}
+
+/// The shadow's strength S (0..255) before the weather scales it: ⌊row·255⌋, or ⌊intensity·128⌋ (the court light's,
+/// weather-scaled) when the row is 0 (court 7's first time of day).
+pub fn strength(row: f32, intensity: f32) -> u32 {
+    if row == 0.0 { (intensity * 128.0) as u32 } else { (row * 255.0) as u32 }
 }
 
 /// How much a shadow of strength S takes off the ground colour.
@@ -133,5 +139,10 @@ mod tests {
         // shadow texel 0x2c on court 10 (0.18), 0x4b on court 04 (0.3)
         assert_eq!(darken(0.18) * 128.0, 44.0);
         assert_eq!(darken(0.29999998) * 128.0, 75.0);
+        // PINE court 10 weather 3: intensity 0x3ee8f5c0 (0.455) → S 58 when the row is 0
+        assert_eq!((strength(0.0, f32::from_bits(0x3ee8_f5c0)), strength(0.18, 0.455)), (58, 45));
+        // PINE slot 5 (court 10) switched to weather 3: texel 0x0a; with the row poked to 0, 0x0d
+        let texel = |row| darken_s(hst_sim::weather::shadow(strength(row, f32::from_bits(0x3ee8_f5c0)), 3)) * 128.0;
+        assert_eq!((texel(0.18), texel(0.0)), (10.0, 13.0));
     }
 }

@@ -34,7 +34,7 @@ sed -i 's/^EnablePINE = false/EnablePINE = true/' "$INI"  # PCSX2 rewrites the i
 # R3 (taken off the PS2 pad; the game doesn't use it) is FrameAdvance, pressed by pine.py's lock-step
 # (HST_LOCKSTEP=1); 1x speed (B24: recorders poll it with next to no loss), or HST_REALTIME=1 for the wall-clock tools (0.25).
 if [ -n "$N" ]; then
-    speed=$([ "${HST_REALTIME:-}" = 1 ] && echo 0.25 || echo 1)
+    speed=${HST_SPEED:-$([ "${HST_REALTIME:-}" = 1 ] && echo 0.25 || echo 1)}  # HST_SPEED: slow motion for screenshots
     sed -i -e 's/^Keyboard = true/Keyboard = false/' -e 's|^TogglePause = .*|TogglePause = SDL-0/Guide|' \
         -e '/^FrameAdvance = /d' -e '/^R3 = SDL-0\/RightStick/d' -e 's|^\[Hotkeys\]|&\nFrameAdvance = SDL-0/RightStick|' \
         -e "s/^NominalScalar = .*/NominalScalar = $speed/" -e 's/^OutputMuted = false/OutputMuted = true/' "$INI"
