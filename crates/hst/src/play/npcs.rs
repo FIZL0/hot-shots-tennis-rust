@@ -162,11 +162,11 @@ fn setup(
                 };
                 let Some(data) = load(layout::trigger_files(&model, &base, clips)) else { continue };
                 let row = game.trigger(t);
-                // ponytail: no path (the creatures that move along one stand at their home); a two-clip creature
-                // plays its first
+                // a two-clip creature plays its first
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
                 let routes = game.ball_routes();
-                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, len, routes, ..default() };
+                let (path, radii, start) = (c.path.clone(), c.radii.clone(), c.start);
+                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, path, radii, start, len, routes, ..default() };
                 tr.clip_lens = [0, 1].map(|k| data.motions.get(&k).map_or(0.0, |c| c.length));
                 if t == 44 {
                     tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
@@ -470,14 +470,15 @@ fn step(
             let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
             g.sounds.push((npc::trigger_sound(t.ty, s), at));
         }
-        // the landing-spot creature and the flyover: shown while on, where they are
+        // every creature stands where its tick put it (a startled one runs along its path)
+        if let Ok(mut tf) = turn.get_mut(*e) {
+            let scale = tf.scale;
+            *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
+        }
+        // the landing-spot creature and the flyover: shown while on
         if matches!(t.ty, 2 | 6) {
             if let Ok(mut v) = shown.get_mut(*e) {
                 *v = if t.active && t.on { Visibility::Inherited } else { Visibility::Hidden };
-            }
-            if let Ok(mut tf) = turn.get_mut(*e) {
-                let scale = tf.scale;
-                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
             }
         }
         // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
@@ -499,23 +500,12 @@ fn step(
         }
         // the passing ball: drawn while on with its fade (+0x274) above 0, from where its route starts
         // ponytail: the fade's alpha over its last 10 frames is not drawn; the other types' `on` is not used to hide them
-        // type 44 stands turned to the court centre in the deciding set
-        if t.ty == 44 {
-            if let Ok(mut tf) = turn.get_mut(*e) {
-                let scale = tf.scale;
-                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
-            }
-        }
         if t.ty == 6 {
             flyover = Some((t.on, t.volume, t.pos3()));
         }
         if t.ty == 15 {
             if let Ok(mut v) = shown.get_mut(*e) {
                 *v = if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden };
-            }
-            if let Ok(mut tf) = turn.get_mut(*e) {
-                let scale = tf.scale;
-                *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
             }
         }
     }

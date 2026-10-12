@@ -60,6 +60,8 @@ pub struct Placement {
     /// Creatures (category 23) only: the record whose position this one hangs off, as (category, index among that
     /// category's records in file order); `pos` is then an offset subtracted from the anchor's position.
     pub link: Option<(u8, u16)>,
+    /// Path markers (category 14): how far about the node a walk's target may land (rows without `exact`).
+    pub radius: f32,
 }
 
 pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
@@ -78,6 +80,7 @@ pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
             code: r[0x28..0x2c].try_into().unwrap(),
             link: (r[2].wrapping_add(0x11) == 23 && r[0x2d] & 0x80 != 0)
                 .then(|| (r[0x2e].wrapping_add(0x11), u16::from_le_bytes([r[0x2c], r[0x2d]]) & 0x7fff)),
+            radius: f(r, 0x30),
         })
         .collect())
 }
