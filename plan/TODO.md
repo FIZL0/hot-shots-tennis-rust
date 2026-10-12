@@ -183,7 +183,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
 
-- [ ] **P14c3f** Startled creatures' model weight, replay save, +0x280 (in P14c3d) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4a** The ball's spin-rotated box and kept last move for the ball-hit obstacles (in P14c4) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c4b** Record type 21's ball hits on court 6 (in P14c4) → `tools/record_npc.py` · `hst-sim/tests/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs

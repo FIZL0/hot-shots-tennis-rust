@@ -960,3 +960,54 @@ fn match_event_creatures() {
         }
     }
 }
+
+/// The serve set-up's message against `context/fixtures/trig_replay_s05.bin` (tools/record_npc.py 5 1400 … trig with
+/// HST_GM=1, HST_REPLAY=1 and HST_BYTE="10:0:0xbc:1;500:0:0xbc:0;500:2:0xbc:1": court 10's creatures with `done`
+/// poked on before the first serve set-up and swapped during the point, then a forced replay; not in git, skipped
+/// when absent): at each of its three arrivals (the match's first serve, the replay's start, the serve after it) every
+/// creature's `done`, kept `done`, kept matrix and place and `active` must be the game's.
+#[test]
+fn serve_setup_keeps_and_restores_like_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let Ok(d) = std::fs::read(format!("{root}/context/fixtures/trig_replay_s05.bin")) else {
+        return eprintln!("trig_replay_s05.bin missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let h = |b: &[u8], o: usize| i16::from_le_bytes([b[o], b[o + 1]]);
+    let m = |b: &[u8], o: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| std::array::from_fn(|c| f32::from_bits(u(b, o + 16 * r + 4 * c)))) };
+    let n = u(&d, 0) as usize;
+    let wo = |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300;
+    let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(wo(n) + 0x360).collect();
+    let gm = wo(n);
+    let (mut arrivals, mut restored) = (Vec::new(), 0);
+    for i in 1..samples.len() {
+        let (a, b) = (samples[i - 1], samples[i]);
+        if u(b, wo(0) + 0xc0) != 0xe || u(a, wo(0) + 0xc0) == 0xe {
+            continue;
+        }
+        // (the replay's start can miss a frame: a tick between only steps, which leaves these fields alone)
+        let (replaying, phase) = (b[gm + 0x344] != 0, b[gm + 0x54]);
+        arrivals.push((replaying, phase));
+        for k in 0..n {
+            let o = wo(k);
+            let row = game.trigger(a[o + 0x50]);
+            let mut t = trigger_at(a, o, &row, [0.0; 4], [0.0; 4], 0);
+            // the drawn matrix (the one kept) is the step's copy of the matrix
+            (t.world, t.kept_done) = (m(a, o + 0x1f0), a[o + 0xbd] != 0);
+            t.kept = (m(a, o + 0xe0), h(a, o + 0x120), h(a, o + 0x122), h(a, o + 0x124), h(a, o + 0xda));
+            t.serve_setup(&row, replaying, phase, &mut npc::Near::default(), &mut || panic!("rolled"));
+            let what = format!("sample {i}, creature {k} (type {})", t.ty);
+            assert_eq!((t.done, t.kept_done, t.active), (b[o + 0xbc] != 0, b[o + 0xbd] != 0, b[o + 0x12c] != 0), "{what}");
+            assert_eq!(t.kept, (m(b, o + 0xe0), h(b, o + 0x120), h(b, o + 0x122), h(b, o + 0x124), h(b, o + 0xda)), "{what}");
+            restored += (replaying && a[o + 0xbc] != b[o + 0xbc]) as usize;
+        }
+    }
+    eprintln!("serve set-ups {arrivals:?}, {restored} done flags put back");
+    assert_eq!(arrivals.iter().map(|a| a.0).collect::<Vec<_>>(), [false, true, false]);
+    assert_eq!(restored, 2, "the poked creatures' done not put back at the replay");
+}
