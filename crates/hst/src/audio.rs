@@ -308,7 +308,7 @@ impl Sound {
     pub fn play_centre(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u64 {
         let bank_volume = self.0.lock().unwrap().bank_volumes[p.slot as usize];
         let level = Level { seq: [p.volume as u32; 2], bank: bank_volume, pan: [0x40; 3], ..default() };
-        self.play(bank, p.program as usize, p.key as usize, level, 0x1000)
+        self.play(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed))
     }
 
     /// How many 60 Hz frames `play_centre(bank, p)` sounds for: rendered alone on a silent copy of the mixer, so
