@@ -15,6 +15,15 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
 - **Match the original exactly** — no approximations or placeholders. Find it in the decompile (`context/decomp/`,
   `research/fn.sh <addr>`), port it, prove it against the real game: a test compares the port to a PINE recording
   or save-state capture and passes bit-exact (f32 via `hst_sim::ps2`) or frame-exact.
+  This covers gameplay only: physics, AI, shots, scoring, rules and match timing.
+- **The main menu and front-end don't have to match the original** (user 2026-10-12): title, mode menus, character/
+  court/umpire select, settings, loading and result screens are ours to design. The original is a reference for
+  them, not a spec; no bit-/frame-exact proof needed. Where a task in `plan/TODO.md` says a menu must look or behave
+  "like the original" / "1:1", treat that as a starting point, not a requirement.
+- **Additions are layered on top** (character/texture mods, other games'
+  characters, widescreen, upscaled textures): with them off or unused, a match must still play
+  exactly like the original (the replay tests stay bit-exact). A mod character uses the same physics and AI code
+  paths as a stock one, fed its own data.
 - **PS2 arithmetic**: EE FPU chops, masks the smaller addend to exponent diff − 1 guard bit; `madd.s` = that add of
   acc + truncated product. Use `hst_sim::ps2` / `hst_sim::vu0`.
 - **Game data from the user's disc at runtime**, never committed (`hst_data::iso`, `xb`, `exe` — only `exe` knows
@@ -98,5 +107,4 @@ recorders · `overnight.sh` unattended runs. `research/` — RE scripts (`fn.sh`
   2. *Second serves*: a bot-only singles match that runs until the bots fault several first serves (a long match, or easier costumes so the bots err more) → `context/recordings/bots_singles_faults.p2m2`.
   3. *Serve net dash*: a bot-only singles match with a net-rushing (serve-and-volley) character serving at the hardest costume, several of its service games → `context/recordings/bots_singles_net.p2m2`.
   Agents then replay them with `tools/record_ai_serve.py` / `record_ai_aim.py … singles` and extend `crates/hst-sim/tests/ai_serve.rs` — j: 2026-10-07-p11-ai/10-P11I-BOTS-FINAL.md
-- **B93 "the blue game receiver and between-points issue"**: the Game/Server/Receiver banner and when it shows match the original in every case (journal 2026-10-07-p12b-popups/6-B93-BANNER-FLOW-FINAL.md). If you meant something else, e.g. the camera between points (the original cuts to the winner close-up, ours shows a wide shot, sometimes under a flat blue sky = B48/B72), say which and it gets its own task.
 - P13 umpire: record a long match (let, deuce again, set/tiebreak/match announcements) — j: 2026-10-07-p13-umpire/2-RECORDING-READY.md
