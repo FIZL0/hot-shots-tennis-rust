@@ -42,6 +42,11 @@ impl TickPads {
         self.last = std::mem::replace(&mut self.now, pads);
     }
 
+    /// This tick's pads, seats 1P..4P.
+    pub fn now(&self) -> [Pad; 4] {
+        self.now
+    }
+
     /// Seat `s`'s pad this tick, as `control` reads it (the shot and serve presses in `shot`/`serve`).
     pub(super) fn slot(&self, s: usize) -> SlotPad {
         decode(self.now[s], self.last[s])
