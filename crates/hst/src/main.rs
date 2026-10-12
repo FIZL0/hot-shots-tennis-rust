@@ -245,6 +245,8 @@ fn start(argv: Vec<String>) {
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Last, web::shown);
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }

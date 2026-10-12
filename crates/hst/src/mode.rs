@@ -110,7 +110,7 @@ struct Snapshot {
 const FADE: f32 = 0.5;
 const ZOOM: f32 = 1.5;
 
-/// Render pipelines still compiling (the render world's count, a frame or two behind).
+/// Render pipelines still compiling (the render world's count, a frame or two behind; compute ones aren't counted).
 #[derive(Resource, Clone, Default)]
 struct Compiling(Arc<AtomicUsize>);
 
@@ -119,7 +119,12 @@ pub fn plugin(app: &mut App) {
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
         r.insert_resource(compiling.clone()).add_systems(
             bevy::render::Render,
-            (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| c.0.store(cache.waiting_pipelines().count(), Ordering::Relaxed))
+            (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| {
+                // render pipelines only: on WebGL2 (no compute) Bevy's sparse buffer update compute pipeline stays
+                // queued for good, which held every loading screen to its cap (B101)
+                let render = |id| matches!(cache.pipelines().nth(id).map(|p| &p.descriptor), Some(bevy::render::render_resource::PipelineDescriptor::RenderPipelineDescriptor(_)));
+                c.0.store(cache.waiting_pipelines().filter(|&id| render(id)).count(), Ordering::Relaxed)
+            })
                 .in_set(bevy::render::RenderSystems::Cleanup),
         );
     }

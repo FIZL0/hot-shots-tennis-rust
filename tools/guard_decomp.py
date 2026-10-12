@@ -15,3 +15,9 @@ cmd = i.get('command', '')
 if t.get('tool_name') == 'Bash' and DUMP.search(cmd) and not re.search(
         r'fn\.sh|xref\.py|\|\s*(head|tail|wc|sed -n)|\bgrep\b[^|]*\s-[a-zA-Z]*[mcl]|\bwc\b|\bsed -n', cmd):
     sys.exit(print(HOW, file=sys.stderr) or 2)
+# pgrep/pkill as commands -> tools/pgrep, which skips the caller's own shell (pkill -f pat used to kill it)
+ROOT = __file__.rsplit('/tools/', 1)[0]
+fixed = re.sub(r'(^|[;&|(`]\s*|\n\s*|\b(?:sudo|timeout \S+|watch(?: -n ?\S+)?)\s+)(pgrep|pkill)\b', rf'\1{ROOT}/tools/\2', cmd)
+if t.get('tool_name') == 'Bash' and fixed != cmd:
+    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
+                                             'updatedInput': {**i, 'command': fixed}}}))
