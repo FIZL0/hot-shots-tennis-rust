@@ -374,7 +374,7 @@ fn sync(
     let (shown, since) = &mut *cards;
     for (p, slot) in shown.iter_mut().enumerate() {
         let want = quads.iter().enumerate().find(|(_, q)| q.tex == Tex::Preview(p));
-        let key = want.map(|_| (menu.who(p), menu.players[p].costume));
+        let key = want.map(|_| menu.pick(p));
         if since[p].map(|s| s.0) != key {
             since[p] = key.map(|k| (k, now));
             pending.0[p] = None;
@@ -468,7 +468,7 @@ fn sync(
     // baked yet counted apart)
     for (p, s) in shown.iter().enumerate() {
         if quads.iter().any(|q| q.tex == Tex::Preview(p)) {
-            let key = (menu.who(p), menu.players[p].costume);
+            let key = menu.pick(p);
             let i = if s.as_ref().is_some_and(|s| s.key == key) { 1 } else if loader.pngs.get(&key).is_some_and(Option::is_some) { 0 } else { 2 };
             CHECK[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -534,7 +534,7 @@ fn bake(
         return;
     }
     // a hovered card without a PNG jumps the queue
-    let now: Vec<Key> = (0..menu.players()).map(|p| (menu.who(p), menu.players[p].costume)).collect();
+    let now: Vec<Key> = (0..menu.players()).map(|p| menu.pick(p)).collect();
     for k in &now {
         if !hovered.contains(k) && !baker.failed.contains(k) {
             baker.queue.push(*k);
@@ -712,7 +712,7 @@ fn buttons(
         if act == Act::Pose && busy(sample) {
             continue;
         }
-        if let Some((bank, play)) = voice(act, menu.who(*player), menu.players[*player].costume, &menu.mods, &mut voices.banks, Path::new(&args.iso)) {
+        if let Some((bank, play)) = voice(act, menu.pick(*player).0, menu.pick(*player).1, &menu.mods, &mut voices.banks, Path::new(&args.iso)) {
             voices.playing[*player][(act == Act::Pose) as usize] = s.play_centre(&bank, play);
         }
     }
@@ -766,10 +766,12 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
 struct Pending([Option<Act>; 4]);
 
 /// `HST_SELECT=c,c,c,c`: every player seated on the keyboard, hovering those characters (grid order is not
-/// character order: each is looked up).
+/// character order: each is looked up); `c/k` on costume `k`.
 fn hover_all(mut menu: ResMut<Menu>) {
     let Ok(list) = std::env::var("HST_SELECT") else { return };
     for (p, c) in list.split(',').map(str::trim).take(4).enumerate() {
+        let (c, k) = c.split_once('/').unwrap_or((c, "0"));
+        menu.players[p].costume = k.parse().unwrap_or(0);
         if let Some(i) = c.strip_prefix('m').and_then(|i| i.parse::<usize>().ok()).filter(|&i| i < menu.mods.len()) {
             menu.custom = true;
             menu.players[p].pick = i;
@@ -888,7 +890,7 @@ mod tests {
         std::fs::write(dir.join("voice/9_0.wav"), &wav).unwrap();
         let m = |voice: &str| Mod {
             dir: dir.clone(), id: "t".into(), name: "t".into(), source: String::new(), costumes: vec![], donor: 3, hand: 1.0, base: 3,
-            overrides: vec![], ai_row: 3, texture_face: false, no_face: false, voice: voice.into(), motions: None, skeleton: None,
+            overrides: vec![], ai_row: 3, texture_face: false, no_face: false, voice: voice.into(), motions: None, costume_of: None, skeleton: None,
         };
         let mods = [m("voice/"), m("none/")];
         let mut banks = HashMap::new();

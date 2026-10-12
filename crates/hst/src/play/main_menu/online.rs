@@ -81,14 +81,13 @@ impl Menu {
     /// This machine's players' picks, in seat order.
     fn picks(&self) -> Vec<Pick> {
         let pick = |p: usize| {
-            let costume = self.players[p].costume;
-            match self.who(p) {
+            match self.pick(p) {
                 // a mod: its donor, and its gameplay data for every peer
-                super::Who::Mod(i) => {
+                (super::Who::Mod(i), costume) => {
                     let m = &self.mods[i];
                     Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new) }
                 }
-                super::Who::Disc(c) => Pick::disc(c, costume),
+                (super::Who::Disc(c), costume) => Pick::disc(c, costume),
             }
         };
         (0..self.players()).filter(|&p| self.seats[p].is_some()).map(pick).collect()
