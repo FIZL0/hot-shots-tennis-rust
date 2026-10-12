@@ -84,7 +84,7 @@ fn retarget(mut commands: Commands, t: Res<Targets>, mut q: Query<(Entity, &mut 
     for (e, mut target) in &mut q {
         if matches!(*target, RenderTarget::Window(_)) {
             *target = RenderTarget::Image(ImageRenderTarget { handle: t.scene.clone(), scale_factor: 1.0 });
-            commands.entity(e).insert((Scene, bevy::camera::Hdr));
+            commands.entity(e).try_insert((Scene, bevy::camera::Hdr));
         }
     }
 }

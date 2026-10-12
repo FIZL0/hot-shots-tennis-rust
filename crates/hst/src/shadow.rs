@@ -105,7 +105,7 @@ pub fn darken_s(s: u32) -> f32 {
 fn casters(mut commands: Commands, new: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, cast: Query<(), Or<(With<Caster>, With<crate::character::Rig>)>>) {
     for e in &new {
         if !parents.iter_ancestors(e).any(|a| cast.contains(a)) {
-            commands.entity(e).insert(NotShadowCaster);
+            commands.entity(e).try_insert(NotShadowCaster);
         }
     }
 }
