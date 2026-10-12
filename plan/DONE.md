@@ -222,6 +222,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B45** AI levels wrong during the score pop-up (bug, (user 2026-10-08); after B35): the CPU levels shown during the score pop-up are still wrong. Match the level shown there to the original → `play/popups.rs` · `play/panel.rs`
 - [x] **P23b** Anti-aliasing setting (split from P23, user 2026-10-09: FXAA dropped, too ugly): an MSAA off/on (2×/4×) row in Settings → Graphics (`graphics.rs` `Graphics`, settings.txt `anti_aliasing`). The first try inserted `Msaa::Off` on `hud_gamma`'s `Scene` cameras and the court shots came out blank; but the same 10 s `--shot` was blank for some other flag combinations that render fine at 25 s (still loading), so re-check with `--shot-at 25` first: if it still blanks, it's the scene cameras (the court's + `popups.rs`'s order-1 overlay, same target) needing matching MSAA → `graphics.rs` · `hud_gamma.rs` · `play/popups.rs` camera | after P23
 - [x] **B40e2** Menu screens' slide-in/out (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
+- [x] **B31c** GS integer truncation on `@add`/MODULATE draws (gap from B31b): the GS truncates texel×vc>>7, As = ta·va>>7 and the add Cs·As>>7 each step; the port blends in float. On the tornado this adds faint pixels (raster without truncation 65.0k vs 57.7k sum, 1687 vs 1540 px > 3). Port it bit for bit (e.g. premultiplied, floored output with One/One blend for `@add` in `gs.wgsl`) and check against `research/b31b_rast.py` → `gs.wgsl` · `gs.rs` | j: 2026-10-08-p17q-tornado
 
 
 ### Shots

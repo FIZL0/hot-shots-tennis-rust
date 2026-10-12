@@ -467,12 +467,20 @@ impl Material for GsMaterial {
         // so a part drawn only blended (a mod's BLEND cloth, M1k) still shows; over an opaque draw it stays ≥ 0
         let keep_alpha = BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add };
         let color = |dst_factor, operation| BlendComponent { src_factor: BlendFactor::SrcAlpha, dst_factor, operation };
+        // `@add`/`@sub` premultiply Cs·As in the shader, truncated as the GS does
+        let premul = |operation| BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::One, operation };
+        if matches!(k.blend, Some(mtl::Blend::Add | mtl::Blend::Sub)) {
+            defs.push("GS_PREMUL".into());
+        }
+        if k.blend == Some(mtl::Blend::Sub) {
+            defs.push("GS_SUB".into());
+        }
         let blend = k.blend.map(|b| BlendState {
             color: match b {
                 mtl::Blend::Normal => color(BlendFactor::OneMinusSrcAlpha, BlendOperation::Add),
-                mtl::Blend::Add => color(BlendFactor::One, BlendOperation::Add),
+                mtl::Blend::Add => premul(BlendOperation::Add),
                 // dst·1 − src·As
-                mtl::Blend::Sub => color(BlendFactor::One, BlendOperation::ReverseSubtract),
+                mtl::Blend::Sub => premul(BlendOperation::ReverseSubtract),
             },
             alpha: keep_alpha,
         });
