@@ -699,6 +699,102 @@ pub fn receiver_vertex(item: &[vu0::V4; 4], vp: &[vu0::V4; 4], tex: &[vu0::V4; 4
     ([ftoi4(clip[0]), ftoi4(clip[1])], [vu0::mul(st[0], q), vu0::mul(st[1], q), vu0::mul(st[2], q)])
 }
 
+/// A caster's shadow-volume planes as the game keeps them: two blocks of four planes, row k of a block holding
+/// component k (nx, ny, nz, d) of each; block 0 is the cap and sides 1–3, block 1 sides 4–6 and the plane facing
+/// the sun. A point is inside a plane where d + n·p > 0.
+pub type Planes = [[vu0::V4; 4]; 2];
+
+/// `planes` taken into a receiver node's space by its matrix `m` (VU0: row k = P0·Mk.x + P1·Mk.y + P2·Mk.z +
+/// P3·Mk.w). The hole's nodes are identity.
+pub fn node_planes(planes: &Planes, m: &[vu0::V4; 4]) -> Planes {
+    planes.map(|p| m.map(|r| std::array::from_fn(|j| vu0::madd(vu0::madd(vu0::madd(vu0::mul(p[0][j], r[0]), p[1][j], r[1]), p[2][j], r[2]), p[3][j], r[3]))))
+}
+
+/// The game's box test (VU0): a box is out when for some plane ((((((d + |nz|·hz) + |ny|·hy) + |nx|·hx) + nz·cz)
+/// + ny·cy) + nx·cx) ≤ 0, −0 included.
+pub fn box_out(p: &Planes, centre: [f32; 3], half: [f32; 3]) -> bool {
+    p.iter().any(|b| {
+        (0..4).any(|j| {
+            let v = [(b[2][j].abs(), half[2]), (b[1][j].abs(), half[1]), (b[0][j].abs(), half[0]), (b[2][j], centre[2]), (b[1][j], centre[1]), (b[0][j], centre[0])];
+            v.iter().fold(b[3][j], |a, &(n, x)| vu0::madd(a, n, x)) <= 0.0
+        })
+    })
+}
+
+/// Per plane, whether `v` is outside it: ((d + nz·z) + ny·y) + nx·x is negative or −0.
+fn outside(p: &Planes, v: [f32; 3]) -> [bool; 8] {
+    std::array::from_fn(|i| {
+        let b = &p[i / 4];
+        let j = i % 4;
+        vu0::madd(vu0::madd(vu0::madd(b[3][j], b[2][j], v[2]), b[1][j], v[1]), b[0][j], v[0]).is_sign_negative()
+    })
+}
+
+/// Whether the triangle a strip vertex closes is culled: all three corners outside one plane, or, with a corner
+/// outside the cap, its normal ((v2 − v1)·−w × (v3 − v1), `w` the closing vertex's winding) facing away from the
+/// sun plane's normal (the dot below zero).
+fn tri_out(p: &Planes, v1: [f32; 3], v2: [f32; 3], v3: [f32; 3], w: f32) -> bool {
+    let s = [v1, v2, v3].map(|v| outside(p, v));
+    if (0..8).any(|k| s.iter().all(|s| s[k])) {
+        return true;
+    }
+    if !s.iter().any(|s| s[0]) {
+        return false;
+    }
+    let a: [f32; 3] = std::array::from_fn(|k| vu0::mul(vu0::sub(v2[k], v1[k]), -w));
+    let b: [f32; 3] = std::array::from_fn(|k| vu0::sub(v3[k], v1[k]));
+    let n = [vu0::msub(vu0::mul(a[1], b[2]), b[1], a[2]), vu0::msub(vu0::mul(a[2], b[0]), b[2], a[0]), vu0::msub(vu0::mul(a[0], b[1]), b[0], a[1])];
+    let sun = &p[1];
+    vu0::madd(vu0::madd(vu0::mul(sun[2][3], n[2]), sun[1][3], n[1]), sun[0][3], n[0]) < 0.0
+}
+
+/// One packet's strip as a caster's receiver pass draws it, the game's load-time cull: each vertex closes a
+/// triangle (none while `flags` bit 15, no-kick, is set) that is tested ([`tri_out`]); on a third culled one in a
+/// row the previous vertex and this one are kept as no-kick, else the vertex is kept with its own flag; culled
+/// vertices left at the end are dropped. Returns the kept vertices and their no-kick flags.
+pub fn receiver_strip(p: &Planes, pos: &[[f32; 3]], flags: &[u16], uv_w: &[f32]) -> Vec<([f32; 3], bool)> {
+    let (mut out, mut h): (Vec<([f32; 3], bool)>, u32) = (Vec::new(), 0);
+    for (i, &v) in pos.iter().enumerate() {
+        let skip = flags[i] & 0x8000 != 0; // a strip's first two vertices always are
+        h = (h & 3) << 1 | (skip || i < 2 || tri_out(p, pos[i - 2], pos[i - 1], v, uv_w[i])) as u32;
+        if h == 7 {
+            h = 3;
+            let n = out.len();
+            out[n - 2] = (out[n - 1].0, true);
+            out[n - 1] = (v, true);
+        } else {
+            out.push((v, skip));
+        }
+    }
+    while h & 1 != 0 {
+        out.pop();
+        h >>= 1;
+    }
+    out
+}
+
+/// The hole triangles (model space) a caster's receiver pass draws: the ones the game collides with (static
+/// batches of attribute-mapped materials), every packet whose box (header centre, half the bounds' extent) isn't
+/// out ([`box_out`]), through [`receiver_strip`].
+///
+/// ponytail: the game also tests each node's and batch's box first and skips materials whose lighting flags or
+/// colour differ; on court 10 neither drops a triangle the packet test keeps (P17v6).
+pub fn receiver_tris(p: &Planes, hole: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl) -> Vec<[[f32; 3]; 3]> {
+    let p = &node_planes(p, &[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+    let mut tris = Vec::new();
+    let hits = |m: usize| mats.materials.get(m).is_some_and(|m| m.attributes.is_some());
+    for pk in hole.materials.iter().enumerate().filter(|&(m, _)| hits(m)).flat_map(|(_, ps)| ps).filter(|pk| pk.fixed && pk.flags & 8 != 0) {
+        let [lo, hi] = pk.bounds;
+        if box_out(p, pk.centre, std::array::from_fn(|k| ps2::mul(ps2::sub(hi[k], lo[k]), 0.5))) {
+            continue;
+        }
+        let pos: Vec<[f32; 3]> = pk.vertices.iter().map(|v| v.pos).collect();
+        let o = receiver_strip(p, &pos, &pk.entry_flags, &pk.uv_w);
+        tris.extend((2..o.len()).filter(|&i| !o[i].1).map(|i| [o[i - 2].0, o[i - 1].0, o[i].0]));
+    }
+    tris
+}
+
 /// A vertex of the shadow texture pass: position in the 256² target (12.4 fixed point), texture coordinates (STQ
 /// with Q = 1) and alpha (0x80 opaque).
 #[derive(Clone, Copy, Debug)]

@@ -366,3 +366,49 @@ fn light_matrices_match_the_game() {
     assert_eq!(want.len(), 17);
     assert_eq!(built, want);
 }
+
+/// The hole triangles each court 10 caster's receiver pass draws, culled from the disc's hole model with the
+/// caster's planes as the game left them, against the game's (`context/p17v/cull.txt` from
+/// `research/p17v6_cull.py -w`: the planes and, per caster, the receiver triangles of `context/p17v/cap0.pkl` as
+/// x z, slot 5). Skips when absent.
+#[test]
+fn receiver_triangles_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(txt), Ok(mut iso)) = (std::fs::read_to_string(format!("{root}/context/p17v/cull.txt")), Iso::open(format!("{root}/Hot Shots Tennis (USA).iso"))) else {
+        eprintln!("recording or disc missing, skipped");
+        return;
+    };
+    let d = iso.read("COURT/10/GRD01.XB").unwrap();
+    let arc = Archive::parse(&d).unwrap();
+    let file = |ext: &str| arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("hole\\greece_h01_s1111.{ext}"))).unwrap()).unwrap();
+    let hole = mdl::parse(&file("mdl")).unwrap();
+    let mats = mtl::parse(&file("mtl"), Some(&file("mti"))).unwrap();
+    type Tri = [[u32; 2]; 3];
+    let key = |t: [[f32; 3]; 3]| -> Option<Tri> {
+        let mut k = t.map(|p| [p[0].to_bits(), p[2].to_bits()]);
+        k.sort();
+        (k[0] != k[1] && k[1] != k[2]).then_some(k) // y is flattened away
+    };
+    let (mut planes, mut want) = (Vec::new(), Vec::<std::collections::BTreeSet<Tri>>::new());
+    for l in txt.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<u32> = l.split_whitespace().skip(2).map(|h| u32::from_str_radix(h, 16).unwrap()).collect();
+        match l.as_bytes()[0] {
+            b'P' => {
+                planes.push(std::array::from_fn(|b| std::array::from_fn(|r| std::array::from_fn(|j| f32::from_bits(w[16 * b + 4 * r + j])))));
+                want.push(Default::default());
+            }
+            b'T' => {
+                let mut t: Tri = std::array::from_fn(|i| [w[2 * i], w[2 * i + 1]]);
+                t.sort();
+                want.last_mut().unwrap().insert(t);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(planes.len(), 17);
+    for (c, p) in planes.iter().enumerate() {
+        let got: std::collections::BTreeSet<Tri> = shade::receiver_tris(p, &hole, &mats).into_iter().filter_map(key).collect();
+        let (miss, extra): (Vec<_>, Vec<_>) = (want[c].difference(&got).collect(), got.difference(&want[c]).collect());
+        assert!(miss.is_empty() && extra.is_empty(), "caster {c}: missing {miss:?}, extra {extra:?}");
+    }
+}

@@ -291,6 +291,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P25a** Body hit, the rest (split from P25): the ball's own course after it hits a player (it flies on through now), the hit player's motion 0x2b and voice at the moment of the hit, the bone test on the game's crossfaded pose, pop-up alpha between ticks, practice's message 0x15 → `play/bodyhit.rs` · `hst-sim/src/bodyhit.rs` `ball.rs` · `play.rs` react · `plan/P25a.md` | t: bodyhit.rs | j: 2026-10-07-p25a-body-hit-rest
 - [x] **P16a** Post-point cut-aways in play (low priority, user 2026-10-06) → `hst-sim/src/cutaway.rs` `flow.rs` `pose.rs` · `play.rs` camera/next_point · `tools/record_cutaway.py` | t: cutaway.rs | j: 2026-10-06-p16-cutaway
 - [x] **P16c** Cut-away court views 0x0c/0x0d/0x11: the players-framing yaw (record block 0x48..0x70) → `hst-sim/src/cutaway.rs` | t: cutaway.rs | j: 2026-10-06-p16-cutaway/2-DIRECTOR-FINAL.md
+- [x] **P17v6** Receiver triangles per caster (P17v1 gap): which hole triangles each caster's pass draws is decided at load by culling against the caster's shadow-volume planes and per-packet bounding spheres (radius × 0.55); the port tests triangle corners against the f64 planes. Port the cull in game floats. Done when: the triangle set per caster texture equals cap0.pkl's receiver draws → hst-sim/shade.rs
 
 
 ### Confirmations
