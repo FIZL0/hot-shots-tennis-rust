@@ -111,6 +111,8 @@ struct Cli {
     mod_slot: usize,
     slot_mods: Vec<(usize, String)>,
     roster: Option<inspect::Roster>,
+    /// `--swap-hands 1,0`: the select's hand toggle by match slot (`play::hand_swap`).
+    swap_hands: play::hand_swap::SwapHands,
 }
 
 fn parse(mut a: impl Iterator<Item = String>) -> Cli {
@@ -122,6 +124,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let mut music = false;
     let mut shot_at = 0.5;
     let mut sound = None;
+    let mut swap_hands = play::hand_swap::SwapHands::default();
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
     let mut mod_slot = 0;
@@ -186,6 +189,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
                 std::process::exit(0);
             }
+            "--swap-hands" => swap_hands = play::hand_swap::SwapHands::parse(&a.next().unwrap_or_default()),
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
@@ -197,7 +201,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
         upscale = false;
     }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands }
 }
 
 // the browser build starts from `web::run` once the page has the disc pack
@@ -222,7 +226,7 @@ fn main() {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
-    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(argv.into_iter());
+    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
     if upscale {
         textures::init(&args.iso);
     }
@@ -275,6 +279,7 @@ fn start(argv: Vec<String>) {
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first)));
     } else if args.play {
         add_match(&mut app, viewer_mod, mod_slot, slot_mods);
+        app.insert_resource(swap_hands);
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);
     } else if args.viewer.is_some() {
@@ -312,7 +317,7 @@ pub fn menu_mode(app: &mut App) {
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     play::main_menu::WIDE.store(true, std::sync::atomic::Ordering::Relaxed);
-    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
     mode::Mode::new(move |app| {
@@ -320,7 +325,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         // the app's own `--shot` goes on through the match
         let old = app.world().resource::<Args>();
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
-        app.insert_resource(args).add_systems(Startup, load);
+        app.insert_resource(args).insert_resource(swap_hands).add_systems(Startup, load);
         add_match(app, viewer_mod, mod_slot, slot_mods);
     })
     .back(back)

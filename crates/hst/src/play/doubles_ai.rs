@@ -101,7 +101,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             smash: [r.smash_top, g.smash_heights[i][1], r.smash_bottom],
             ..Default::default()
         },
-        strong: if r.hand >= 0.0 { 1 } else { 2 },
+        strong: if g.strong_hand[i] >= 0.0 { 1 } else { 2 },
         mate: up(g.players[mate].pos),
         opp: opp.map(|j| up(g.players[j].pos)),
         mate_voice: 0,
@@ -356,7 +356,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
             smash: [r.smash_top, g.smash_heights[i][1], r.smash_bottom],
             ..Default::default()
         },
-        strong: if r.hand >= 0.0 { 1 } else { 2 },
+        strong: if g.strong_hand[i] >= 0.0 { 1 } else { 2 },
         mate: up(g.players[i ^ 2].pos),
         ..Default::default()
     };
