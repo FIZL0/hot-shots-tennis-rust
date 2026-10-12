@@ -37,3 +37,12 @@
   `--import` (the same import code) was.
 - Windows: no file dialog (zenity/kdialog are Linux); there `hst --import <iso>` or dropping the ISO on hst.exe
   (runs from the ISO directly). Not built/tested on Windows.
+
+## Browser-build notes for M13a/M3 (handed over by the s5 session, 2026-10-12, not re-checked here)
+- `hst` builds for wasm32-unknown-unknown with no code changes: `rustup target add wasm32-unknown-unknown`, then
+  `CARGO_TARGET_DIR=$PWD/target-wasm cargo build -p hst --target wasm32-unknown-unknown --release` → 7 MB hst.wasm.
+- Missing: wasm-bindgen-cli matching Cargo.lock's wasm-bindgen 0.2.129 (`cargo install wasm-bindgen-cli --version
+  0.2.129`), wasm-opt/trunk, an index.html; never run in a browser.
+- Runtime blockers: every disc read is `Iso::open(path)` (std::fs, sync) — `main.rs load`, `textures::init`, the
+  play/ modules. On the web it must read the M13 pack from OPFS/memory. `std::env::args/var` are empty on wasm:
+  startup flags need another source (URL query, the menu). `disc.rs` (zenity, data dir) needs a `cfg(wasm32)` path.
