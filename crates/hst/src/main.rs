@@ -226,7 +226,12 @@ fn start(argv: Vec<String>) {
     // Steam's Big Picture (`SteamGamepadUI`) and the Steam Deck (`SteamDeck`) start games full screen
     let full = std::env::args().any(|a| a == "--fullscreen") || ["SteamGamepadUI", "SteamDeck"].iter().any(|v| std::env::var(v).is_ok_and(|v| v == "1"));
     let mode = if full && args.shot.is_none() { bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current) } else { default() };
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, ..default() }), ..default() }));
+    // `HST_WINDOW="3840 2160"`: the window's size in physical pixels (unattended shots at a set resolution)
+    let mut resolution = bevy::window::WindowResolution::default();
+    if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
+        resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
+    }
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), present_mode, mode, resolution, ..default() }), ..default() }));
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
