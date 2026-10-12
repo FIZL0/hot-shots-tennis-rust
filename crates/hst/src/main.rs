@@ -22,6 +22,7 @@ mod court_anim;
 mod disc;
 mod effects;
 mod graphics;
+mod handshake;
 mod gs;
 mod mods;
 mod hud_gamma;
@@ -295,6 +296,7 @@ fn load(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
+    (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
@@ -374,13 +376,16 @@ fn load(
             // directly (slot 5's was 0x28c7c4a1)
             // the menus' `rand()` calls before the match are the character select's flame (`rng::MenuFlame`), drawing
             // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
-            let mut r = hst_sim::weather::Rand::default();
-            let seed = std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or_else(|| {
-                let skip = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536);
-                (0..skip).for_each(|_| _ = r.next());
-                r.next()
+            // online, the host's seed (`handshake::MatchSeed`) is taken as is
+            let seed = seed.map(|s| s.0).unwrap_or_else(|| {
+                std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).map_or_else(
+                    || hst_sim::rng::Seed::after(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536)),
+                    hst_sim::rng::Seed::shared,
+                )
             });
-            let mut mt = hst_sim::weather::Mt::new(seed);
+            commands.insert_resource(handshake::Handshake::of(&args, iso.pack_hash, mods.as_deref(), seed));
+            let r = seed.rand;
+            let mut mt = hst_sim::weather::Mt::new(seed.shared);
             let schedule = hst_sim::weather::schedule(&odds, &wind, args.games, args.sets, players, || mt.next());
             // the match goes on drawing from the same generators (with a given seed, `rand()` is taken as at boot)
             let mut rngs = hst_sim::rng::Rngs::new(r, mt);
