@@ -128,6 +128,14 @@ fn light(
     let w = look.as_ref().and_then(|l| l.last);
     for (t, mut lit, ball, player, fixed) in &mut rigs {
         if let Some(FixedLight([dir, colour, ambient, dir2, second])) = fixed {
+            // a left-hander's inspect rig is mirrored too: cull as the match does (checked each frame, as its
+            // materials may not be loaded yet on the first)
+            let mirror = t.affine().matrix3.determinant() < 0.0;
+            for h in &lit.0 {
+                if materials.get(h).is_some_and(|m| m.key.mirror != mirror) {
+                    materials.get_mut(h).unwrap().key.mirror = mirror;
+                }
+            }
             if lit.1.is_none() {
                 lit.1 = Some((1.0, None, false, false));
                 for h in &lit.0 {
