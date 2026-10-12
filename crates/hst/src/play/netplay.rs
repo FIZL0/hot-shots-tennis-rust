@@ -155,11 +155,11 @@ pub struct Netplay {
     pub end: Option<String>,
     paused: bool,
     /// The last hashed tick and its state's text (`snapshot::state_text`), for a desync's report.
-    state: (u32, String),
-    stalled: f32,
+    pub(super) state: (u32, String),
+    pub(super) stalled: f32,
     ended: f32,
     /// `HST_NET_MASH=seed`: this machine's seats press random buttons (unattended tests).
-    mash: Option<u64>,
+    pub(super) mash: Option<u64>,
 }
 
 impl Netplay {
@@ -182,7 +182,7 @@ impl Netplay {
     }
 
     /// Ends the match (the first reason stays), telling the peers if `tell`.
-    fn finish(&mut self, why: String, tell: bool) {
+    pub(super) fn finish(&mut self, why: String, tell: bool) {
         if self.end.is_none() {
             if tell {
                 self.out.push(Msg::Bye(why.clone()));
@@ -194,7 +194,7 @@ impl Netplay {
 
     /// The next random pad for seat `s` (`HST_NET_MASH`): the d-pad changes every half second, a face button pressed
     /// about every 20 ticks.
-    fn mashed(&mut self, s: usize) -> Pad {
+    pub(super) fn mashed(&mut self, s: usize) -> Pad {
         let r = self.mash.as_mut().unwrap();
         *r ^= *r << 13;
         *r ^= *r >> 7;
@@ -221,7 +221,7 @@ fn save_desync(w: &World, why: &str) -> String {
     }
 }
 
-fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
+pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
     let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x}): the match stops.");
     let path = save_desync(w, &why);
     w.resource_mut::<Netplay>().finish(format!("{why}\nInputs saved to {path}"), true);
@@ -241,6 +241,7 @@ pub fn take(w: &mut World, e: Event) {
             np.paused = open;
             menu::set_paused(w, open);
         }
+        Event::Datagram(from, data) => super::rollback::heard(w, from, &data),
         Event::Match(Msg::Bye(why)) | Event::Dropped(why) => {
             if why.starts_with(DESYNC) && np.end.is_none() {
                 let path = save_desync(w, &why);
@@ -253,16 +254,20 @@ pub fn take(w: &mut World, e: Event) {
     }
 }
 
-/// The network's events in, the match's messages out.
-fn pump(w: &mut World) {
+/// The network's events in, the match's messages (and rollback's datagrams) out.
+pub(super) fn pump(w: &mut World) {
     let Some(net) = w.get_resource::<Net>() else { return };
     for e in net.poll() {
         take(w, e);
     }
     let out = w.get_resource_mut::<Netplay>().map(|mut n| std::mem::take(&mut n.out)).unwrap_or_default();
+    let datagrams = super::rollback::outgoing(w);
     let net = w.resource::<Net>();
     for m in out {
         net.send(Cmd::Send(m));
+    }
+    for (to, d) in datagrams {
+        net.send(Cmd::Datagram(to, d));
     }
 }
 
@@ -312,10 +317,14 @@ pub fn gate(w: &mut World) -> bool {
 struct Say;
 
 fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
-    if np.is_none() {
-        return;
+    let Some(np) = np else { return };
+    if np.room.lockstep {
+        commands.insert_resource(crate::mode::Gate(gate));
+    } else {
+        let rb = super::rollback::Rollback::new(&np.room, &np.me, crate::mode::run_fixed).expect("the room's seats");
+        commands.insert_resource(rb);
+        commands.insert_resource(crate::mode::Gate(super::rollback::gate));
     }
-    commands.insert_resource(crate::mode::Gate(gate));
     // the match reads only the pads the gate hands it
     commands.insert_resource(Replay(Default::default()));
     commands.spawn((
@@ -334,6 +343,8 @@ fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
 /// Each frame: the network, the pause going out, the stall/end text, and closing the match after the end.
 fn watch(w: &mut World) {
     pump(w);
+    super::rollback::poll(w);
+    let remote = w.get_resource::<super::rollback::Rollback>().map(|r| r.remote_seats());
     let dt = w.resource::<Time<Real>>().delta_secs();
     let open = menu::paused(w);
     let result = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
@@ -350,7 +361,7 @@ fn watch(w: &mut World) {
     let text = match &np.end {
         Some(why) => why.clone(),
         None if np.stalled > STALL && !result => {
-            let who: Vec<String> = np.lock.missing().iter().map(|s| format!("{}P", s + 1)).collect();
+            let who: Vec<String> = remote.unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
             format!("Waiting for {}...", who.join(", "))
         }
         None => String::new(),
@@ -500,7 +511,7 @@ mod tests {
     /// `lag` rounds (ticks) later.
     mod matches {
         use super::super::super::*;
-        use super::super::{Lockstep, Netplay, gate, take, unwire};
+        use super::super::{Lockstep, Netplay, gate, take, unwire, wire};
         use crate::net::{Event, Msg, Pick, Room, Seat};
         use crate::{Args, GameSpace};
         use std::path::Path;
@@ -635,6 +646,172 @@ mod tests {
                 a.world_mut().run_schedule(FixedUpdate);
             }
             let _ = Lockstep::new;
+        }
+
+        // ---------------------------------------------------------------- rollback (M2h)
+
+        use super::super::super::rollback::{self, Rollback};
+
+        fn step(w: &mut bevy::prelude::World) {
+            w.run_schedule(FixedUpdate);
+        }
+
+        /// A tick that comes out differently on one machine: tick 300 reseeds the AI's generator.
+        fn nudged(w: &mut bevy::prelude::World) {
+            if w.resource::<Rollback>().frame() == 300 {
+                w.resource_mut::<Game>().rng.ai = hst_sim::rng::Mt::new(7);
+            }
+            step(w);
+        }
+
+        /// The two apps with rollback sessions; their datagrams reach the other `lag` rounds (ticks) later. `bad`:
+        /// the guest's tick 300 comes out differently.
+        fn play_rollback(lag: u32, limit: u32, bad: bool) -> [App; 2] {
+            let room = room(0);
+            let mut apps = ["host", "g"].map(|me| {
+                let mut a = app(&room, me);
+                let f = if bad && me == "g" { nudged } else { step };
+                a.insert_resource(Rollback::new(&room, me, f as fn(&mut _)).unwrap());
+                a
+            });
+            let mut wire: Vec<(usize, u32, String, Vec<u8>)> = Vec::new();
+            for round in 0..limit {
+                for (to, at, from, d) in std::mem::take(&mut wire) {
+                    if at <= round {
+                        take(apps[to].world_mut(), Event::Datagram(from, d));
+                    } else {
+                        wire.push((to, at, from, d));
+                    }
+                }
+                for i in 0..2 {
+                    let w = apps[i].world_mut();
+                    rollback::gate(w);
+                    let me = w.resource::<Netplay>().me.clone();
+                    wire.extend(rollback::outgoing(w).into_iter().map(|(_, d)| (1 - i, round + lag, me.clone(), d)));
+                    let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+                    for m in out {
+                        take(apps[1 - i].world_mut(), Event::Match(m));
+                    }
+                }
+                let over = |a: &App| a.world().resource::<Game>().match_stats.result.is_some() || a.world().resource::<Netplay>().end.is_some();
+                if apps.iter().all(over) {
+                    break;
+                }
+            }
+            apps
+        }
+
+        /// M2h's acceptance: a doubles match (2 seats on each machine, random pads) at 150 ms round trip (5 ticks each
+        /// way: 167 ms) with 2 ticks of input delay, to the end: ggrs' checksums (every 30th tick's state hash) agree
+        /// on every confirmed tick and both ran the same pads. ~1 h unoptimised:
+        /// `cargo test --release -p hst full_doubles_match_rollback -- --ignored`; `tools/check.sh` runs 1200 ticks.
+        #[test]
+        #[ignore]
+        fn full_doubles_match_rollback_at_150ms_stays_in_sync() {
+            rollback_in_sync(400_000, true);
+        }
+
+        #[test]
+        fn rollback_at_150ms_stays_in_sync() {
+            rollback_in_sync(1200, false);
+        }
+
+        fn rollback_in_sync(limit: u32, to_the_end: bool) {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            assert!(rollback::DELAY <= 2);
+            let t0 = std::time::Instant::now();
+            let apps = play_rollback(5, limit, false);
+            for a in &apps {
+                let np = a.world().resource::<Netplay>();
+                assert_eq!(np.end, None);
+                assert!(!to_the_end || a.world().resource::<Game>().match_stats.result.is_some(), "the match didn't finish in {} ticks", np.lock.log.len());
+            }
+            let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
+            // the last few may still be guesses
+            let n = a.lock.log.len().min(b.lock.log.len()) - rollback::WINDOW;
+            assert_eq!(a.lock.log[..n], b.lock.log[..n]);
+            let reruns = apps.each_ref().map(|a| a.world().resource::<Rollback>().reruns);
+            // a guess is wrong whenever a peer's pad changes: that's what rollback is for
+            assert!(reruns.iter().all(|&r| r > 100), "re-run ticks {reruns:?}");
+            let checked = a.state.0.min(b.state.0);
+            assert!(checked >= (n as u32).saturating_sub(120), "the checksums stopped at tick {checked} of {n}");
+            eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {:.0?}", t0.elapsed());
+        }
+
+        /// A tick that runs differently on one machine: both stop at the next checksum and save their inputs.
+        #[test]
+        fn rollback_desync_stops_both_and_saves() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let apps = play_rollback(5, 1200, true);
+            for a in &apps {
+                let end = a.world().resource::<Netplay>().end.clone().expect("the match ended");
+                assert!(end.starts_with("Out of sync at tick 330"), "{end}");
+                let path = end.rsplit("Inputs saved to ").next().unwrap();
+                std::fs::remove_file(path).expect("saved");
+            }
+        }
+
+        /// ggrs' `SyncTestSession`: every tick, back 7 ticks and those again, each tick's state hash compared with its
+        /// first run's (it panics on a difference). The determinism check for rollback, in CI.
+        #[test]
+        fn synctest_reruns_every_tick_the_same() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let mut room = room(0);
+            room.seats.iter_mut().for_each(|s| s.as_mut().unwrap().peer = "host".into());
+            let mut a = app(&room, "host");
+            a.insert_resource(Rollback::new(&room, "host", step as fn(&mut _)).unwrap());
+            let mut sess = ggrs::SessionBuilder::<rollback::Cfg>::new().with_num_players(4).unwrap().with_check_distance(7).with_input_delay(rollback::DELAY).start_synctest_session().unwrap();
+            // into the first point's rally (the serve is around tick 200), mashing
+            for t in 0..420u32 {
+                let w = a.world_mut();
+                let mut np = w.resource_mut::<Netplay>();
+                np.lock.tick = t;
+                for s in 0..4 {
+                    let p = np.mashed(s);
+                    sess.add_local_input(s, rollback::Input(wire(p))).unwrap();
+                }
+                let reqs = sess.advance_frame().expect("the re-run ticks' hashes match the first run's");
+                rollback::handle(w, reqs, 1);
+            }
+            assert!(a.world().resource::<Rollback>().reruns > 2000);
+        }
+
+        /// What a tick costs (the match tick, the snapshot ggrs keeps, a state hash): sets `rollback::WINDOW`.
+        /// `cargo test --release -p hst rollback_tick_cost -- --ignored --nocapture`
+        #[test]
+        #[ignore]
+        fn rollback_tick_cost() {
+            let room = room(0);
+            let mut a = app(&room, "host");
+            let (mut tick, mut save, mut hash) = (Vec::new(), Vec::new(), Vec::new());
+            for t in 0..3000u32 {
+                let w = a.world_mut();
+                let mut np = w.resource_mut::<Netplay>();
+                np.lock.tick = t;
+                let p = [0, 1, 2, 3].map(|s| np.mashed(s));
+                w.insert_resource(tick_input::Replay([p].into()));
+                let c = std::time::Instant::now();
+                w.run_schedule(FixedUpdate);
+                tick.push(c.elapsed());
+                let c = std::time::Instant::now();
+                let s = super::super::super::snapshot::save(w);
+                save.push(c.elapsed());
+                let c = std::time::Instant::now();
+                super::super::super::snapshot::state_hash(w);
+                hash.push(c.elapsed());
+                drop(s);
+            }
+            for (what, mut v) in [("tick", tick), ("save", save), ("hash", hash)] {
+                v.sort();
+                let mean = v.iter().sum::<std::time::Duration>() / v.len() as u32;
+                println!("{what}: mean {mean:?}, median {:?}, 99% {:?}, max {:?}", v[v.len() / 2], v[v.len() * 99 / 100], v[v.len() - 1]);
+            }
         }
     }
 }

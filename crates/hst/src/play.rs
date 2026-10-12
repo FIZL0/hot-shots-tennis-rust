@@ -56,6 +56,7 @@ mod mod_match;
 mod match_stats;
 mod menu;
 pub mod netplay;
+mod rollback;
 mod npcs;
 mod panel;
 mod popups;

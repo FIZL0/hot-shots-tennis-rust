@@ -133,6 +133,11 @@ pub fn plugin(app: &mut App) {
         .add_systems(Last, ((|w: &mut World| run(w, Last)), back).chain().before(bevy::window::ExitSystems));
 }
 
+/// The running mode's fixed tick (rollback's gate runs the ticks itself).
+pub fn run_fixed(world: &mut World) {
+    run(world, FixedUpdate)
+}
+
 /// The running mode's schedule `label`, if it has one.
 fn run(world: &mut World, label: impl ScheduleLabel + Clone) {
     let Some(mut s) = world.get_resource_mut::<Running>().and_then(|mut r| r.s.remove(label)) else { return };
