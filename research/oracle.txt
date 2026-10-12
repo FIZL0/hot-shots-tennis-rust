@@ -12,3 +12,10 @@ score_award 38b820
 obstacle_box 3f8380
 # Ball speed in km/h (a0 ball, its last move at +0x140): hst_sim::npc::ball_kmh
 ball_kmh 375cb0
+# Walking spectator's tick (a0 = walker): hst_sim::npc::Walker::tick; its animation tick and set-animation
+# (stubbed in the test, ported as Walker::step / set_anim)
+walker_tick 39f160
+walker_animate 39e8b0
+walker_set_anim 39e3a0
+# Court + props sphere sweep (a1 hit record, a2 start {pos, r}, a3 end): hst_sim::mesh::World::sweep, hooked in
+world_sweep 32f690

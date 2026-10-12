@@ -102,11 +102,13 @@ fn court_draws_like_the_game() {
             mode: u(s, o + 0x210) as u8,
             counter: u(s, o + 0xd0) as i32,
             anim: u(s, o + 200),
+            looping: matches!(u(s, o + 200), 3 | 5),
             frame: f(s, c + 0x38),
             next: f(s, c + 0x3c),
             speed: f(s, c + 0x34),
             advancing: s[o + 0xcc] != 0,
             lens: lens[k],
+            wander: Default::default(),
         }
     };
     let walkers_at = |v: u32| at(&walk, wo(n), head, v).unwrap();
