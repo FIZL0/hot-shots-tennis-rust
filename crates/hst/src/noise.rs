@@ -38,6 +38,8 @@ pub(crate) struct Moved {
 pub struct Costume {
     pub(crate) deformers: Vec<noi::Deformer>,
     pub(crate) parts: Vec<(usize, Vec<Moved>)>,
+    /// A mod's spring joints (standard §3b, `crate::spring`); none on the disc.
+    pub(crate) springs: Vec<crate::spring::Mass>,
 }
 
 /// The costume's deformers over the parts `character::skinned_parts` built from `model` (one per material with
@@ -78,7 +80,7 @@ pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<St
             mesh.asset_usage = RenderAssetUsages::default();
         }
     }
-    (!out.is_empty()).then(|| Arc::new(Costume { deformers, parts: out }))
+    (!out.is_empty()).then(|| Arc::new(Costume { deformers, parts: out, springs: Vec::new() }))
 }
 
 /// A rig's deformers and its own copies of the swaying parts' meshes; the motion set last seen.
@@ -136,7 +138,7 @@ fn step(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway
 
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut meshes: ResMut<Assets<Mesh>>) {
+pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut meshes: ResMut<Assets<Mesh>>) {
     for (rig, s) in &rigs {
         let Some(c) = &rig.data.noise else { continue };
         // each joint's posed model matrix (its parents' first)

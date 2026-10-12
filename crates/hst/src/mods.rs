@@ -647,7 +647,8 @@ pub fn load(
         None => HashMap::new(),
     };
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    let noise = (!swaying.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying }));
+    let springs = crate::spring::masses(&nodes, &joints);
+    let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes: Vec::new(), stance_ball, skeleton, noise, gs, texture_face, visual })
 }
 
@@ -884,6 +885,46 @@ mod tests {
             let c = load(&mut iso, &m, k, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap_or_else(|e| panic!("costume {k}: {e}"));
             assert!(!c.visual.is_empty(), "costume {k} lost its own motions");
         }
+    }
+
+    /// An Out of Bounds mod's hair and earring chains (§3b `extras.spring`) reach the costume as spring joints. The
+    /// rig whips 0.2 m sideways over 10 frames, then stands: the hair's joints swing off where they hang at rest
+    /// (the pose plus gravity's sag), then settle back there; the head they hang on is never turned.
+    #[test]
+    fn oob_hair_swings_and_settles() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/oob_pc00_jasmine");
+        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/oob_pc00_jasmine, skipped") };
+        let mut s = Stores(default(), default(), default(), default());
+        let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        // 23 records, 5 of them chain anchors (pinned)
+        assert_eq!(c.noise.as_ref().map_or(0, |n| n.springs.len()), 18);
+        use bevy::ecs::system::RunSystemOnce;
+        let data = std::sync::Arc::new(c);
+        let run = |whip: f32| {
+            let mut w = World::new();
+            w.insert_resource(Time::<()>::default());
+            let joints: Vec<Entity> = data.joints.iter().map(|j| w.spawn(j.rest).id()).collect();
+            let root = w.spawn((crate::character::Rig { data: data.clone(), joints: joints.clone() }, GlobalTransform::IDENTITY, crate::spring::Spring::default())).id();
+            let mut frames = Vec::new();
+            for f in 0..240 {
+                for (e, j) in joints.iter().zip(&data.joints) {
+                    *w.get_mut::<Transform>(*e).unwrap() = j.rest;
+                }
+                *w.get_mut::<GlobalTransform>(root).unwrap() = GlobalTransform::from_translation(Vec3::X * whip * f.min(10) as f32);
+                w.resource_mut::<Time>().advance_by(std::time::Duration::from_micros(16_667));
+                w.run_system_once(crate::spring::swing).unwrap();
+                frames.push(joints.iter().map(|e| w.get::<Transform>(*e).unwrap().rotation).collect::<Vec<_>>());
+            }
+            frames
+        };
+        let (calm, whipped) = (run(0.0), run(0.02));
+        let head = data.joint("Bip01Head").unwrap();
+        let apart = |f: usize| calm[f].iter().zip(&whipped[f]).map(|(a, b)| a.angle_between(*b)).fold(0f32, f32::max).to_degrees();
+        eprintln!("whipped vs calm, largest joint difference every 10 frames: {:?}", (0..240).step_by(10).map(|f| apart(f).round()).collect::<Vec<_>>());
+        assert!((0..12).any(|f| apart(f) > 5.0), "the hair never trailed");
+        assert!(apart(239) < 0.5, "the hair never settled: {}", apart(239));
+        assert!(whipped.iter().all(|f| f[head] == data.joints[head].rest.rotation), "the hair turned the head");
     }
 
     /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's, on the donor's clip
