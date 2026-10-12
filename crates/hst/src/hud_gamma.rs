@@ -97,7 +97,8 @@ fn clear(colour: Res<ClearColor>, mut q: Query<&mut Camera, With<Scene>>, added:
         return;
     }
     let c = colour.0.to_srgba();
-    for mut cam in &mut q {
+    // an overlay drawing over the court (`ClearColorConfig::None`) keeps not clearing
+    for mut cam in q.iter_mut().filter(|c| !matches!(c.clear_color, ClearColorConfig::None)) {
         cam.clear_color = ClearColorConfig::Custom(Color::linear_rgba(c.red, c.green, c.blue, c.alpha));
     }
 }

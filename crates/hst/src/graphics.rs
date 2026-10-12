@@ -1,8 +1,7 @@
-//! Video settings (remaster-only): frame limit, vsync, render resolution scale, shadow quality and the original
+//! Video settings (remaster-only): frame limit, vsync, render resolution scale, shadow quality, MSAA and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also turns widescreen and upscaled textures off, `main.rs`).
-//! ponytail: no anti-aliasing setting: changing the scene cameras' MSAA blanks the court (TODO P23b).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
-//! (`--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--original`). The simulation stays a fixed
+//! (`--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--original`). The simulation stays a fixed
 //! 60 Hz tick whatever these are. Defaults draw as before these settings existed.
 
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
@@ -25,6 +24,8 @@ pub struct Graphics {
     /// The 3D scene's render size in percent of the window's (upscaled to it; the HUD stays at full size).
     pub scale: u32,
     pub shadows: Shadows,
+    /// MSAA samples on the 3D cameras: 1 (off), 2 or 4 (Bevy's default, how it drew before this setting).
+    pub msaa: u32,
     /// Draw as the PS2 did: the court at 640×448 and the HUD at 448 lines, scaled up unfiltered (overrides `scale`).
     pub original: bool,
 }
@@ -32,19 +33,20 @@ pub struct Graphics {
 pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
+pub const MSAA: [u32; 3] = [1, 2, 4];
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, original: false }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, original: false };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, original: false };
-    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, original: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false };
+    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -53,6 +55,7 @@ impl Graphics {
             "fps" | "frame_limit" => self.fps = if v == "uncapped" { 0 } else { v.parse().unwrap_or(self.fps) },
             "vsync" => self.vsync = v != "off",
             "scale" | "render_scale" => self.scale = v.trim_end_matches('%').parse::<u32>().map_or(self.scale, |s| s.clamp(25, 100)),
+            "msaa" | "anti_aliasing" => self.msaa = MSAA.into_iter().find(|&m| msaa_name(m) == v).unwrap_or(self.msaa),
             "original" => self.original = v != "off",
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             _ => return false,
@@ -63,12 +66,12 @@ impl Graphics {
     /// settings.txt lines.
     pub fn text(&self) -> String {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
-        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\noriginal = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), if self.original { "on" } else { "off" })
+        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" })
     }
 
     /// The match's flags.
     pub fn flags(&self) -> Vec<String> {
-        let mut f = vec!["--fps".into(), self.fps.to_string(), "--scale".into(), self.scale.to_string(), "--shadows".into(), self.shadows.name().into()];
+        let mut f = vec!["--fps".into(), self.fps.to_string(), "--scale".into(), self.scale.to_string(), "--shadows".into(), self.shadows.name().into(), "--msaa".into(), msaa_name(self.msaa).into()];
         if self.vsync {
             f.push("--vsync".into());
         }
@@ -87,6 +90,15 @@ impl Graphics {
     }
 }
 
+/// `anti_aliasing`'s value: off, 2x, 4x.
+pub fn msaa_name(m: u32) -> &'static str {
+    match m {
+        1 => "off",
+        2 => "2x",
+        _ => "4x",
+    }
+}
+
 impl Shadows {
     pub fn name(self) -> &'static str {
         ["off", "low", "high"][self as usize]
@@ -95,7 +107,7 @@ impl Shadows {
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Graphics>()
-        .add_systems(PostUpdate, (window, lights))
+        .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems)))
         .add_systems(Last, limit);
 }
 
@@ -104,6 +116,18 @@ fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
         for mut w in &mut w {
             w.present_mode = g.present_mode();
         }
+    }
+}
+
+/// Every scene camera (`hud_gamma::Scene`) at the same sample count: cameras sharing a target with different counts
+/// get separate main textures, and the later one (`popups.rs`'s overlay, which doesn't clear) covers the court blank.
+fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>, added: Query<(), Added<crate::hud_gamma::Scene>>) {
+    if !g.is_changed() && added.is_empty() {
+        return;
+    }
+    let m = Msaa::from_samples(g.msaa);
+    for mut c in &mut q {
+        c.set_if_neq(m);
     }
 }
 
@@ -153,7 +177,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, original: !p.original };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -161,6 +185,6 @@ mod tests {
         }
         assert_eq!(Graphics::default().preset(), "Default");
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
-        assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low"]);
+        assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
     }
 }
