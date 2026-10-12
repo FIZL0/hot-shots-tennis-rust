@@ -59,7 +59,7 @@ const SETTLE: f32 = 0.3;
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(inspect::plugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .init_resource::<Gone>()
+        .init_resource::<Gone>().init_resource::<Pending>()
         .add_systems(Startup, start_loader)
         .add_systems(PostStartup, (hover_all, start_baker))
         .add_systems(FixedUpdate, character::tick)
@@ -144,8 +144,9 @@ impl Loader {
             Who::Disc(c) => Some(self.dir.join(format!("d{c:02}-{k}.png"))),
             Who::Mod(i) => {
                 let m = menu.mods.get(i)?;
-                let own = m.dir.join("previews").join(format!("{k}.png"));
-                if own.is_file() {
+                // a mod may ship its own: `previews/<costume's glb stem>.png`
+                let own = m.costumes.get(k).and_then(|c| Path::new(c).file_stem()).map(|s| m.dir.join("previews").join(s).with_extension("png"));
+                if let Some(own) = own.filter(|p| p.is_file()) {
                     return Some(own);
                 }
                 let stamp = self.stamps.entry(i).or_insert_with(|| stamp(m));
@@ -339,7 +340,7 @@ fn sync(
     mut cards: Local<([Option<Shown>; 4], [Option<(Key, f32)>; 4])>,
     mut loader: ResMut<Loader>,
     mut gone: ResMut<Gone>,
-    baker: Res<Baker>,
+    (baker, mut pending): (Res<Baker>, ResMut<Pending>),
 ) {
     let Some(art) = art else { return };
     let quads = if menu.screen == Screen::Chars { layout(&menu, &art.2, &bind, &[], 0.0, 0).0 } else { Vec::new() };
@@ -359,8 +360,10 @@ fn sync(
         let key = want.map(|_| (menu.who(p), menu.players[p].costume));
         if since[p].map(|s| s.0) != key {
             since[p] = key.map(|k| (k, now));
+            pending.0[p] = None;
         }
-        let settled = since[p].is_some_and(|(_, t)| now - t >= SETTLE) && mode() != "png";
+        // a press loads the live model straight away
+        let settled = (since[p].is_some_and(|(_, t)| now - t >= SETTLE) || pending.0[p].is_some()) && mode() != "png";
         let modded = |w: Who| match w {
             Who::Mod(i) => menu.mods.get(i),
             Who::Disc(_) => None,
@@ -613,30 +616,38 @@ fn buttons(
     mut cams: Query<(&mut Preview, &Card)>,
     data: Query<&character::Rig>,
     mut rigs: Query<(&mut Motion, &mut Transform, &mut inspect::UvClock)>,
+    mut pending: ResMut<Pending>,
 ) {
     if menu.screen != Screen::Chars {
         return;
     }
-    for (mut p, Card(player)) in &mut cams {
-        let Some(dev) = menu.seats[*player] else { continue };
+    for player in 0..4 {
+        let Some(dev) = menu.seats[player] else { continue };
         let pressed = |b: GamepadButton, k: bool| match dev {
             Dev::Keys => k,
             Dev::Pad(e) => pads.get(e).is_ok_and(|g| g.just_pressed(b)),
         };
-        let act = if pressed(GamepadButton::RightTrigger2, keys.just_pressed(KeyCode::Digit1)) {
-            Act::Win
+        if pressed(GamepadButton::RightTrigger2, keys.just_pressed(KeyCode::Digit1)) {
+            pending.0[player] = Some(Act::Win);
         } else if pressed(GamepadButton::LeftTrigger2, keys.just_pressed(KeyCode::Digit2)) {
-            Act::Loss
+            pending.0[player] = Some(Act::Loss);
         } else if pressed(GamepadButton::North, bind.key_just_pressed(&keys, Action::Lob)) {
-            Act::Pose
-        } else {
-            continue;
-        };
+            pending.0[player] = Some(Act::Pose);
+        }
+    }
+    // a card still on its PNG keeps the press until `sync` has loaded and spawned its live model
+    for (mut p, Card(player)) in &mut cams {
+        let Some(act) = pending.0[*player] else { continue };
         let Ok(rig) = data.get(p.rig) else { continue };
+        pending.0[*player] = None;
         let d = rig.data.clone();
         inspect::apply(&mut p, act, &mut rigs, &d);
     }
 }
+
+/// Each player's R2/L2/△ pressed on a card not yet showing its live model.
+#[derive(Resource, Default)]
+struct Pending([Option<Act>; 4]);
 
 /// `HST_SELECT=c,c,c,c`: every player seated on the keyboard, hovering those characters (grid order is not
 /// character order: each is looked up).

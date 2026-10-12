@@ -57,6 +57,7 @@ installer's launcher as a non-Steam game; Big Picture and the Deck start it full
 Steam Input only Steam's virtual pad is read (the physical pads Steam lists in `SDL_GAMECONTROLLER_IGNORE_DEVICES` are
 skipped), so Steam's per-game layouts apply; the whole menu flow, including Quit, works from the pad. Launch options for X11 (Steam overlay on a Wayland desktop): README *Steam*. Wide windows show more court at the sides (the game's vertical view kept); the HUD stays on a centred 4:3 screen.
 `HST_AUTOPLAY=1` makes every slot CPU (unattended tests). `--stage 01..11` court, `--court 0..11` surface. Drawing runs uncapped (the simulation stays a fixed 60 Hz tick, visuals blend the last two ticks); `--vsync` caps it to the display.
+Character select previews: cached PNGs in `cache/previews/<boot file>-r<N>/` beside the ISO (drawn on first run, disc characters first; mods may ship `previews/<costume>.png`), the live model after 0.3 s on a card or on R2/L2/△. `HST_PREVIEW=png|live` forces one, `HST_BAKE=all` (with `HST_MENU=chars`) draws every mod costume and quits, `tools/select_stress.sh SECS DIR` scrolls the select at full speed under a VRAM watchdog.
 `--mod DIR [--mod-slot N]` puts a standard character mod (README *Character mods*) in player N (default the first), costume by `--outfits`.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
