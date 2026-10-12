@@ -809,6 +809,17 @@ mod tests {
         }
         let q = b.quads();
         assert_eq!((q[0].tex, q[0].dst[0], q[1].tex, q[1].src[1], q[1].dst[0], q[2].src[1]), (super::Tex::Result(0), 124.0, super::Tex::Result(3), 64.0, 276.0, 192.0));
+        // the other cases B93 screenshotted in the original: (set, server, winner) → word, sheet, x, row
+        for (set, server, winner, word, sheet, x, row) in
+            [(false, 0, 1, 0, 2, 276.0, 64.0), (false, 1, 1, 0, 2, 300.0, 0.0), (false, 0, 0, 0, 3, 300.0, 0.0), (true, 2, 0, 1, 3, 300.0, 0.0), (true, 2, 1, 1, 2, 276.0, 64.0)]
+        {
+            let mut b = super::Outcome::new(set, server, winner);
+            for _ in 0..40 {
+                b.step();
+            }
+            let q = b.quads();
+            assert_eq!((q[0].tex, q[1].tex, q[1].dst[0], q[1].src[1]), (super::Tex::Result(word), super::Tex::Result(sheet), x, row));
+        }
     }
 
     use super::*;
