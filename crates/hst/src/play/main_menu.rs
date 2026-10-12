@@ -13,7 +13,7 @@
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, mods = the custom page, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: a list of names, 2 columns of [`LIST_ROWS`] a
@@ -803,6 +803,12 @@ const CARD: Tex = Tex::Sheet(13);
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
 const ATTRS: Tex = Tex::Sheet(14);
 const CONFIRM: Tex = Tex::Sheet(15);
+/// After the portrait sheets: `info.tm2` (button icons), `Confirmation_04` (the rank labels and their pill),
+/// `KeyAssign_CharacterSelect2` (the select's key hint words).
+const EXTRA: usize = SHEETS.len() + 2 + 5 + 4 + CHARS;
+const INFO: Tex = Tex::Sheet(EXTRA);
+const RANKS: Tex = Tex::Sheet(EXTRA + 1);
+const KEYS: Tex = Tex::Sheet(EXTRA + 2);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -829,6 +835,8 @@ struct Text {
     style: [usize; 14],
     /// Hand by character: +1 right, −1 left (TParam.csv's 利き腕, right only when exactly 右).
     hands: [f32; 14],
+    /// AIParam.csv's rank (0 "Tennis Lv 5" … 16 "Tennis Superstar") by row: a computer player's label.
+    ranks: Vec<u8>,
     /// The custom roster's play style and △ numbers (`MOD_STATS`), from each one's TParam.csv row.
     mods: Vec<(usize, [String; 5])>,
 }
@@ -894,6 +902,13 @@ fn styles(csv: &[u8]) -> [usize; 14] {
     out
 }
 
+/// A computer player's rank label: its AIParam.csv row's rank, the row picked as the match picks it
+/// (`play.rs ai_params`).
+fn com_rank(ranks: &[u8], character: usize, costume: usize, doubles: bool) -> usize {
+    let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(character as u8, costume as u8) as u32, character as u8, doubles).row;
+    ranks.get(row).map_or(0, |&r| r as usize)
+}
+
 fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let mut archives = std::collections::HashMap::new();
@@ -929,6 +944,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     for name in shots {
         sheets.push(read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2")));
     }
+    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/info.tm2"));
+    sheets.push(read(&mut iso, "MENU/MENU12B.XB0", "/confirmation_04.tm2"));
+    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/keyassign_characterselect2.tm2"));
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
     art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
     // the font's ink span per glyph, from its alpha
@@ -951,6 +969,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let csv = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok()).unwrap_or_default();
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     let style = styles(&csv);
+    let ai = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("aiparam.csv")).and_then(|e| pc.read(e).ok()).unwrap_or_default();
+    let ranks = hst_sim::ai::AiParams::table(&ai).iter().map(|r| r.rank).collect();
     // the custom roster: a mod whose row can't be read is left out like a broken one
     let mods_dir = Settings::path(&args.iso).with_file_name("mods");
     let roster: Vec<_> = crate::mods::list(&mods_dir)
@@ -965,7 +985,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         .collect();
     info!("{} custom characters in {}", roster.len(), mods_dir.display());
     let (mod_text, mods) = roster.into_iter().unzip();
-    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), mods: mod_text }));
+    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
@@ -979,7 +999,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "mods" | "attrs" => Screen::Chars,
+        "chars" | "mods" | "attrs" | "coms" => Screen::Chars,
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
@@ -998,6 +1018,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.custom = screen == "mods" && !menu.mods.is_empty();
         menu.players[0].card = screen == "attrs";
+        menu.players[0].ready = screen == "coms";
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
         if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
             online::sample(&mut menu);
@@ -1304,6 +1325,7 @@ fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], x: f32
 
 fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
+    hints(d);
     let n = m.players();
     d.q(CS0, if m.doubles { [2.0, 34.0, 252.0, 30.0] } else { [2.0, 2.0, 252.0, 30.0] }, [194.0, 56.0, 252.0, 30.0], WHITE, 128.0);
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
@@ -1311,6 +1333,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     if m.custom {
         custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready), m.players[lead].pick);
     } else {
+        groups(d);
         // the faces, darkened where every costume of it is ... (all open in the remaster)
         for &(c, x, y) in &GRID {
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
@@ -1350,7 +1373,20 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 }
                 let style = modded.map_or(text.style[c], |i| text.mods[i].0);
                 let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
-                d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, y + 118.0, style[2] * 0.9, 22.0], WHITE, 128.0);
+                // a computer's label sits higher, over its rank pill
+                let sy = if human { y + 118.0 } else { y + 94.0 };
+                d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, sy, style[2] * 0.9, 22.0], WHITE, 128.0);
+                if !human {
+                    let (who, costume) = m.pick(p);
+                    let c = match who {
+                        Who::Mod(i) => m.mods[i].donor,
+                        Who::Disc(c) => c,
+                    };
+                    rank_pill(d, com_rank(&text.ranks, c, costume, m.doubles), COLOURS[p], x + 17.0, y + 114.0);
+                } else if modded.is_none() {
+                    let src = if m.hand(text, p) < 0.0 { [60.0, 184.0, 76.0, 22.0] } else { [60.0, 160.0, 76.0, 22.0] };
+                    d.q(CS0, src, [x + 70.0, y + 5.0, 66.0, 19.0], if pl.swap { [128.0, 110.0, 30.0] } else { WHITE }, 128.0);
+                }
                 match modded {
                     Some(i) => {
                         d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0);
@@ -1375,11 +1411,10 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             // the card's title box takes the top: no player/costume tag over it
             if !(pl.card && modded.is_none()) {
                 d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
-                d.text(&format!("{}", pl.costume + 1), x + 6.0, y + 26.0, 18.0, WHITE);
-                let hand = if m.hand(text, p) >= 0.0 { "Right-handed" } else { "Left-handed" };
-                let w = d.width(hand, 13.0);
-                d.q(Tex::Solid, [0.0; 4], [x + 132.0 - w, y + 28.0, w + 8.0, 15.0], [0.0; 3], 70.0);
-                d.text(hand, x + 136.0 - w, y + 28.0, 13.0, if pl.swap { [128.0, 110.0, 30.0] } else { WHITE });
+                // the costume number on a shirt in the player's colour, under the COM tag on a computer's card
+                let sy = if human { y + 26.0 } else { y + 50.0 };
+                d.q(CS0, [471.0, 66.0, 38.0, 28.0], [x + 6.0, sy, 38.0, 28.0], COLOURS[p], 128.0);
+                d.centred(&format!("{}", pl.costume + 1), x + 25.0, sy + 6.0, 18.0, WHITE);
             }
         } else {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
@@ -1399,6 +1434,58 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Square: custom characters)", text.msg(308 + c))),
         Who::Disc(c) => d.info(text.msg(308 + c)),
     }
+}
+
+/// The header's key hints as the original's: △ the attribute card, L1 / R1 the costume (`info.tm2`'s buttons,
+/// `KeyAssign_CharacterSelect2`'s words; places off a PCSX2 shot). The original swaps one shoulder button for the
+/// other in turn; both are shown here.
+fn hints(d: &mut Draw) {
+    d.anchor = Anchor::Sides;
+    d.q(INFO, [228.0, 4.0, 24.0, 24.0], [314.0, 26.0, 22.0, 22.0], WHITE, 128.0);
+    d.q(KEYS, [0.0, 4.0, 104.0, 16.0], [338.0, 29.0, 98.0, 15.0], WHITE, 128.0);
+    d.q(INFO, [160.0, 9.0, 32.0, 19.0], [440.0, 27.0, 30.0, 18.0], WHITE, 128.0);
+    d.q(INFO, [160.0, 73.0, 32.0, 19.0], [472.0, 27.0, 30.0, 18.0], WHITE, 128.0);
+    d.q(KEYS, [0.0, 27.0, 132.0, 18.0], [506.0, 28.0, 128.0, 17.0], WHITE, 128.0);
+    d.anchor = Anchor::Centre;
+}
+
+/// `src` drawn over `dst` with its `c`-px corners unstretched.
+fn nine(d: &mut Draw, tex: Tex, [u, v, w, h]: [f32; 4], c: f32, [x, y, dw, dh]: [f32; 4]) {
+    let cols = [(u, c, x, c), (u + c, w - 2.0 * c, x + c, dw - 2.0 * c), (u + w - c, c, x + dw - c, c)];
+    let rows = [(v, c, y, c), (v + c, h - 2.0 * c, y + c, dh - 2.0 * c), (v + h - c, c, y + dh - c, c)];
+    for (su, sw, dx, ww) in cols {
+        for (sv, sh, dy, hh) in rows {
+            d.q(tex, [su, sv, sw, sh], [dx, dy, ww, hh], WHITE, 128.0);
+        }
+    }
+}
+
+/// The grid's BEG / INT / EXP groups as the original frames them: an outlined box round each, a coloured bar down
+/// its left with the letters (`CharacterSelect2_00`; boxes and colours off a PCSX2 shot).
+fn groups(d: &mut Draw) {
+    const GROUPS: [(f32, f32, [f32; 3], [f32; 4]); 3] = [
+        (92.0, 72.0, [40.0, 100.0, 50.0], [470.0, 401.0, 13.0, 38.0]),
+        (171.0, 146.0, [40.0, 80.0, 128.0], [494.0, 401.0, 13.0, 38.0]),
+        (324.0, 74.0, [120.0, 45.0, 45.0], [470.0, 440.0, 13.0, 39.0]),
+    ];
+    for (y, h, rgb, letters) in GROUPS {
+        nine(d, CS0, [154.0, 274.0, 60.0, 60.0], 12.0, [166.0, y, 308.0, h]);
+        // the bar: the tall pill filled in the group's colour under its outline, the round ends kept
+        for (u, tint) in [(392.0, rgb), (424.0, WHITE)] {
+            d.q(CS0, [u, 400.0, 28.0, 14.0], [167.0, y + 1.0, 28.0, 14.0], tint, 128.0);
+            d.q(CS0, [u, 414.0, 28.0, 48.0], [167.0, y + 15.0, 28.0, h - 30.0], tint, 128.0);
+            d.q(CS0, [u, 462.0, 28.0, 14.0], [167.0, y + h - 15.0, 28.0, 14.0], tint, 128.0);
+        }
+        d.q(CS0, letters, [174.5, y + (h - letters[3]) / 2.0, letters[2], letters[3]], WHITE, 128.0);
+    }
+}
+
+/// A computer's "Tennis Lv N" pill (`Confirmation_04`: rank `r`'s label, 9 to a column, on its pill in the card's
+/// colour).
+fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
+    d.q(RANKS, [0.0, 224.0, 112.0, 24.0], [x, y, 110.0, 22.0], rgb, 128.0);
+    d.q(RANKS, [112.0, 224.0, 112.0, 24.0], [x, y, 110.0, 22.0], rgb.map(|c| c * 0.45), 128.0);
+    d.q(RANKS, [96.0 * (r / 9) as f32, 24.0 * (r % 9) as f32, 96.0, 24.0], [x + 7.0, y - 1.0, 96.0, 24.0], WHITE, 128.0);
 }
 
 /// The custom page: the roster's names, the page holding `at`, a hand per player picking on it.
@@ -2097,5 +2184,21 @@ mod tests {
         let mut d = vec![2, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0];
         d.extend(b"\x07\x7fA\0\x07\x7f\xe9\0");
         assert_eq!(messages(&d), ["A", "é"]);
+    }
+
+    /// The COM cards' rank pill and the hand tag, against the original's doubles select in PCSX2 (2026-10-12, slot
+    /// 2): JJ in costume 1 and 2 "Tennis Lv 4", Cody in costume 1 "Tennis Lv 5"; Carol and Will left-handed.
+    #[test]
+    fn com_ranks_and_hands() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("disc missing, skipped");
+        };
+        let pc = iso.read("PCDATA/PCDATA.XB").unwrap();
+        let pc = Archive::parse(&pc).unwrap();
+        let csv = |name: &str| pc.read(pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(name)).unwrap()).unwrap();
+        let ranks: Vec<u8> = hst_sim::ai::AiParams::table(&csv("aiparam.csv")).iter().map(|r| r.rank).collect();
+        assert_eq!([(5, 1), (5, 0), (1, 0)].map(|(c, k)| com_rank(&ranks, c, k, true)), [1, 1, 0]);
+        let hands = hands(&csv("tparam.csv"));
+        assert_eq!((0..14).filter(|&c| hands[c] < 0.0).collect::<Vec<_>>(), [6, 11]);
     }
 }
