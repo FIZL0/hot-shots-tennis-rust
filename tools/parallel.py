@@ -271,6 +271,8 @@ def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
     with MERGE:
+        while master_busy():  # the master is merging in main: queue behind it
+            time.sleep(10)
         if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
             return 'main has uncommitted changes'
         pre = git('rev-parse', 'HEAD').stdout.strip()
@@ -333,14 +335,38 @@ def report(msg):
     open(OUTBOX, 'a').write(msg + '\n')
 
 
+LOCK = os.path.join(NOTES, 'master.lock')  # "<ID> <master.md size> <time>" while the master handles a report
+
+
+def master_busy():
+    """True while the master is on a report: until it appends `<ID>: …` to master.md and main has no merge going.
+    Stale after 90 min (the master died or forgot): logged and freed so merges don't stall forever."""
+    try:
+        tid, size, since = open(LOCK).read().split()
+    except (FileNotFoundError, ValueError):
+        return os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))  # a merge in main we didn't start (restart)
+    md = os.path.join(NOTES, 'master.md')
+    new = open(md).read()[int(size):] if os.path.exists(md) else ''
+    done = re.search(rf'^{re.escape(tid)}:', new, re.M) and not os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD'))
+    if not done and time.time() - float(since) < 90 * 60:
+        return True
+    if not done:
+        log(f'{tid}: the master has held main for 90 min without a master.md line; freeing it')
+    try:
+        os.remove(LOCK)
+    except FileNotFoundError:
+        pass  # the merge thread and the main loop both saw it done
+    return False
+
+
 def queued():
     return open(OUTBOX).read().splitlines() if os.path.exists(OUTBOX) else []
 
 
 def flush():
     """Once the master is idle: /clear it, then type its instructions and the next queued line."""
-    if not (q := queued()):
-        return
+    if not (q := queued()) or master_busy() or MERGE.locked():
+        return  # one merge into main at a time: the master's report, or the runner's own merge
     master()
     m = panes().get('master', ['master'])[0]  # master gone: send-keys fails quietly, as it always did
     screen = sp.run(['tmux', 'capture-pane', '-p', '-t', m], capture_output=True, text=True).stdout
@@ -349,6 +375,9 @@ def flush():
     if not (enter(m, '/clear') and enter(m, ' '.join(MASTER.format(slots=SLOTS).split('\n')) + ' ' + q[0])):
         return  # not taken: the line stays queued for the next look
     open(OUTBOX, 'w').write(''.join(l + '\n' for l in q[1:]))
+    if m := re.match(r'REPORT (\S+)', q[0]):
+        md = os.path.join(NOTES, 'master.md')
+        open(LOCK, 'w').write(f'{m.group(1)} {os.path.getsize(md) if os.path.exists(md) else 0} {time.time()}')
 
 
 def enter(pane_id, text):
