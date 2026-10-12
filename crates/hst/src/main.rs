@@ -531,7 +531,14 @@ fn load(
             let Some(parts) = library.get(&e.stem) else { continue };
             let stem = &e.stem;
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
-            let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
+            // the world matrix the game draws it with: yaw, plus the code's tilt and extra turn (`world::place`)
+            let (m, post) = hst_sim::world::place(p.category, p.pos, p.yaw, p.code);
+            let t = if post {
+                Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw))
+            } else {
+                Transform::from_matrix(Mat4::from_cols_array_2d(&m))
+            }
+            .with_scale(Vec3::splat(s));
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let e = spawn(&mut commands, parts, t);
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
