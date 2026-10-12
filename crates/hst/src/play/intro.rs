@@ -5,7 +5,10 @@
 //! nothing after the flyover). Over the flyover the court's title plate (`plate`): name, surface and ball ratings
 //! top left, "✕ Skip" bottom right, the score panel, balloons and markers hidden till the intro ends. Its last
 //! `BANNER` ticks show the "Start the Match!" banner over the match camera (the INPANE model with the "N Sets N
-//! Games" pill and "Set 1"). Off in online matches (both peers would have to skip together),
+//! Games" pill and "Set 1"). Its sounds
+//! (`sounds`): the court's BGM (with `--music`) from the intro's start, running on into the match; the gallery's
+//! cheer from its first tick; the system bank's "Start the Match" sound once the cut to the match camera has faded
+//! in. Off in online matches (both peers would have to skip together),
 //! for `--shot` (unless `HST_INTRO=1`), with `HST_INTRO=0` and without a window.
 
 use std::time::Duration;
@@ -13,11 +16,13 @@ use std::time::Duration;
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
 use hst_sim::cutaway::{self, Shot};
-use hst_sim::rng::Rngs;
+use hst_sim::rng::{Mt, Rngs};
+use hst_sim::sound::{self, Gallery, Reaction};
 
 use super::popups::{CALL_DISTANCE, CALL_FOV_DEG, CALL_LAYER};
 use super::widescreen::{self, Anchor};
 use super::{Game, SHOWN_ASPECT};
+use crate::audio::{GalleryBank, MusicBanks, Sound, SoundBank};
 use crate::{Args, Orbit};
 
 #[derive(Resource)]
@@ -29,6 +34,13 @@ struct Intro {
     at: u32,
     acc: f32,
     banner: Banner,
+    /// The tick the plate gives way to the banner (the flyover's end + 2, or the ✕), and the ticks whose sounds
+    /// have played (`None`: not even the start's).
+    banner_tick: u32,
+    heard: Option<u32>,
+    /// The gallery's cheer, on its own copy of the court generator so the match's stays as the setup left it.
+    gallery: Gallery,
+    rng: Mt,
 }
 
 /// The banner's model, sheets (`inpane_start00`–`02`), its UI root and the match's sets and games to win.
@@ -61,6 +73,14 @@ impl Intro {
 
 /// The intro's ticks left after ✕ skips the flyover (the game's measured gap on courts 4 and 5).
 const SKIPPED: u32 = 92;
+
+/// The "Start the Match" sound's wait after the banner (the 16-frame fade-in of the cut to the match camera, its
+/// counter starting 2 higher, then the sound on the first tick it's done; courts 8 and 4).
+const BANNER_SOUND: u32 = 17;
+
+/// The system sound bank (slot 9), for the banner's sound (program 0 key 8).
+#[derive(Resource)]
+struct SystemBank(Option<std::sync::Arc<SoundBank>>);
 
 /// The title plate's sheets (`CourtPreview_00`, the court's name, `info`) and the court's plate row.
 #[derive(Resource)]
@@ -107,7 +127,7 @@ struct BannerSlot(usize);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, start.after(super::setup))
-        .add_systems(Update, draw_plate)
+        .add_systems(Update, (draw_plate, sounds))
         .add_systems(PostUpdate, hide_hud.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(RunFixedMainLoop, hold.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(PostUpdate, show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate))
@@ -144,6 +164,9 @@ fn start(
     let shots = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").camera_shots();
     let frames = cutaway::intro_frames(&dat);
     let ticks = (Rngs::intro_ticks(n as u32) as u32).max(frames);
+    let rng = g.rng.court.clone();
+    let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(std::sync::Arc::new);
+    commands.insert_resource(SystemBank(bank));
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     // game space (y down) → Bevy, as the call models
@@ -171,7 +194,7 @@ fn start(
         })
         .id();
     let banner = Banner { effect, shown, root, ui, sheets, sets: g.rules.sets, games: g.rules.games };
-    commands.insert_resource(Intro { shot: Shot::intro(&shots, &dat), frames, ticks, at: 0, acc: 0.0, banner });
+    commands.insert_resource(Intro { shot: Shot::intro(&shots, &dat), frames, ticks, at: 0, acc: 0.0, banner, banner_tick: frames + 2, heard: None, gallery: Gallery::default(), rng });
     let row = hst_data::exe::court_plates(&iso.read("SCUS_976.10").expect("main program")).expect("supported disc")[n];
     let art = ["/courtpreview_00.tm2".to_string(), format!("/courtpreview_name{n:02}.tm2"), "/2d/info.tm2".into()].map(|name| {
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name));
@@ -202,6 +225,7 @@ fn hold(w: &mut World) {
     if skip && !paused && intro.showing() {
         intro.frames = intro.at;
         intro.ticks = intro.at + SKIPPED;
+        intro.banner_tick = intro.at;
     }
     if !paused {
         intro.acc += dt;
@@ -231,6 +255,39 @@ fn hold(w: &mut World) {
         }
     } else {
         fixed.set_timestep(Duration::from_secs(1 << 20));
+    }
+}
+
+/// The intro's sounds, each tick's once (the original's, recorded on courts 8, 4 and 5): the BGM starts with the
+/// intro (the match's ticks leave it running), the gallery cheers from tick 1 as after a point (program 10 from
+/// stand to stand, but not in the rain), and the banner's sound plays `BANNER_SOUND` ticks after the banner.
+fn sounds(intro: Option<ResMut<Intro>>, g: Option<Res<Game>>, sound: Option<Res<Sound>>, music: Option<Res<MusicBanks>>, gallery: Option<Res<GalleryBank>>, system: Option<Res<SystemBank>>) {
+    let (Some(mut intro), Some(g), Some(sound)) = (intro, g, sound) else { return };
+    let intro = &mut *intro;
+    if intro.heard.is_none() {
+        if let Some((bank, mid)) = music.as_ref().and_then(|m| m.bgm.as_ref()) {
+            sound.music(bank, mid, 55);
+        }
+        intro.heard = Some(0);
+    }
+    let cheers = gallery.and_then(|b| b.0.clone());
+    while intro.heard.is_some_and(|t| t < intro.at) {
+        let t = intro.heard.unwrap() + 1;
+        intro.heard = Some(t);
+        let roll = &mut || intro.rng.next();
+        if t == 1 {
+            intro.gallery.point(Reaction { cheer: true, event: None, chain: false }, roll);
+        }
+        if !matches!(crate::weather::now(), 2 | 3) {
+            for (p, angle) in intro.gallery.step(g.stage, g.players.len() as u32, false, roll) {
+                if let Some(b) = &cheers {
+                    sound.play_toward(b, p, angle);
+                }
+            }
+        }
+        if let (true, Some(Some(b))) = (t == intro.banner_tick + BANNER_SOUND, system.as_ref().map(|s| &s.0)) {
+            sound.play_centre(b, sound::Play { slot: 9, program: 0, key: 8, volume: 0x80, speed: 1.0 });
+        }
     }
 }
 

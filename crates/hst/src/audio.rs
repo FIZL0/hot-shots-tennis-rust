@@ -262,6 +262,11 @@ impl Sound {
         m.music = Some(Music { bank: bank.clone(), seq, channels: [[0, 100, 0x40, 127]; 16], volume, id });
     }
 
+    /// The BGM playing is one of `bank`'s (the court intro starts the match's BGM before the match ticks do).
+    pub fn music_of(&self, bank: &Arc<SoundBank>) -> bool {
+        self.0.lock().unwrap().music.as_ref().is_some_and(|m| Arc::ptr_eq(&m.bank, bank))
+    }
+
     /// Stops the BGM: its sequence and its sounding notes.
     pub fn stop_music(&self) {
         let mut m = self.0.lock().unwrap();
@@ -533,7 +538,10 @@ mod tests {
             assert!(SoundBank::music(&mut iso, "Court", &format!("bgmg_{n:02}")).is_some(), "bgmg_{n:02}");
         }
         let (bank, mid) = SoundBank::music(&mut iso, "Court", "bgmg_01").unwrap();
-        sound.music(&Arc::new(bank), &mid, 55);
+        let bank = Arc::new(bank);
+        sound.music(&bank, &mid, 55);
+        // the court intro's BGM is the match's: the match doesn't start it again
+        assert!(sound.music_of(&bank) && !sound.music_of(&Arc::new(SoundBank::music(&mut iso, "Court", "bgmg_02").unwrap().0)));
         let peak = |out: &[f32]| out.iter().fold(0f32, |a, x| a.max(x.abs()));
         let mut out = Vec::new();
         for _ in 0..600 {
