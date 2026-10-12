@@ -54,6 +54,7 @@ mod instant_replay;
 mod doubles_ai;
 mod markers;
 mod mod_match;
+pub mod net_hide;
 mod match_stats;
 mod menu;
 pub mod netplay;
@@ -549,6 +550,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(controls::plugin);
     app.add_plugins(cutaway::plugin);
     app.add_plugins(ball_shadow::plugin);
+    app.add_plugins(net_hide::plugin);
     app.add_plugins(foot_fx::plugin);
     app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);

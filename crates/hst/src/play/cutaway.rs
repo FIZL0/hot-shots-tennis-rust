@@ -26,8 +26,8 @@ pub(super) struct Director {
     held: bool,
 }
 
-#[cfg(test)]
 impl Director {
+    /// A cut-away shot is on screen.
     pub(super) fn showing(&self) -> bool {
         self.shot.is_some()
     }
