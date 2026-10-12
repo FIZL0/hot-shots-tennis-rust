@@ -407,6 +407,7 @@ fn load(
             bg: Default::default(),
             skies: Default::default(),
             holes: Default::default(),
+            decals: Default::default(),
             acc: Vec::new(),
             clo: Vec::new(),
             last: None,
@@ -461,9 +462,6 @@ fn load(
             }
         }
         look.sky = sky;
-        if envir.is_some() {
-            commands.insert_resource(look);
-        }
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
@@ -473,6 +471,7 @@ fn load(
                 continue; // creatures/gallery are animated NPCs, dmy are markers
             }
             let Some(parts) = library.get(&e.stem) else { continue };
+            let stem = &e.stem;
             let s = if p.scale > 0.0 { p.scale } else { 1.0 };
             let t = Transform::from_translation(Vec3::from(p.pos)).with_rotation(Quat::from_rotation_y(p.yaw)).with_scale(Vec3::splat(s));
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
@@ -482,6 +481,31 @@ fn load(
                 let axes = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| (t.rotation * a * t.scale).to_array());
                 shade_casters.push(hst_sim::shade::Caster { axes, pos: p.pos, tris: shape.tris, cut: shape.cut });
             }
+            // ponytail: the net's shadow is too thin for the sun's shadow map, so its triangles are flattened along
+            // the sun onto the ground (game y 0) and drawn black at the shadow's strength through the texture's
+            // alpha (`weather::apply`); not the game's shadow-texture pass (P17v7, dropped)
+            if let Some(sun) = sun.filter(|_| stem.starts_with("znet")) {
+                let mut done = std::collections::HashSet::new();
+                let decal: Vec<_> = parts.iter().filter(|(m, _)| done.insert(m.id())).filter_map(|(m, g)| {
+                    let mut mesh = meshes.get(m)?.clone();
+                    let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) else { return None };
+                    for v in pos {
+                        let w = t.transform_point(Vec3::from(*v));
+                        *v = (w - sun.dir * (w.y / sun.dir.y) - Vec3::Y * 0.01).to_array();
+                    }
+                    let mut g = gs_materials.get(g)?.clone();
+                    g.key = gs::GsKey { modulate: true, test: gs::Test::Never, blend: Some(hst_data::mtl::Blend::Normal), fog: false, cull: false, ..g.key };
+                    (g.uniform.color, g.uniform.highlight, g.uniform.shadow) = (Vec4::ZERO, 0.0, 0.0);
+                    let g = gs_materials.add(g);
+                    look.decals.insert(g.id());
+                    Some((meshes.add(mesh), g))
+                }).collect();
+                spawn(&mut commands, &decal, Transform::default());
+            }
+        }
+        look.sky = sky;
+        if envir.is_some() {
+            commands.insert_resource(look);
         }
         if let (Some((frame, hole)), Some(sun)) = (shade_frame, sun) {
             commands.insert_resource(shade::build(frame, sun.dir, &shade_casters, &model_tris.remove(&hole).unwrap_or_default(), hst_sim::court::world(&mut iso, n)));
