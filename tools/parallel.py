@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 94% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d] [f] [m]  # e.g. 5 p; m = a build dir per slot; f = keep starting past 94% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -40,9 +40,10 @@ _args = sys.argv[1:]
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
 MODE = next((a for a in _args if a in ('p', 'd')), 'd')
 FORCE = 'f' in _args
-if any(a not in ('p', 'd', 'f') and not a.isdigit() for a in _args) or SLOTS < 1:
-    raise SystemExit('usage: tools/parallel.sh [N] [p|d] [f]   (N sessions, p = priority order, d = different files, '
-                     'f = ignore the 94% weekly usage cap)')
+MULTI = 'm' in _args
+if any(a not in ('p', 'd', 'f', 'm') and not a.isdigit() for a in _args) or SLOTS < 1:
+    raise SystemExit('usage: tools/parallel.sh [N] [p|d] [f] [m]   (N sessions, p = priority order, d = different files, '
+                     'f = ignore the 94% weekly usage cap, m = a build dir per slot)')
 WEEKLY_MAX = 94  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
@@ -198,7 +199,8 @@ def start(n, task):
              f"don't gather it again.\n\n{brief}"
     cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1'])
+    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1']
+                    + ([] if MULTI else [f'CARGO_TARGET_DIR={ROOT}/target']))
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since
 

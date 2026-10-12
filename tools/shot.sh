@@ -9,7 +9,7 @@ set -e
 cd "$(dirname "$0")/.."
 out=$(realpath -m "$1"); shift
 iso=$(realpath -s "${HST_ISO:-Hot Shots Tennis (USA).iso}")
-bin=$(realpath "${HST_BIN:-target/release/hst}")
+bin=$(realpath "${HST_BIN:-${CARGO_TARGET_DIR:-target}/release/hst}")
 args=$([ $# = 0 ] || printf ' %q' "$@")
 rm -f "$out"
 hyprctl dispatch "hl.dsp.exec_cmd([[cd $(printf %q "$PWD") && $bin $(printf %q "$iso")$args --shot $(printf %q "$out")]], { float = true, size = '1280 720', no_initial_focus = true })" >/dev/null

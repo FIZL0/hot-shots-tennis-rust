@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")/.."
 iso=$(realpath -s "${HST_ISO:-Hot Shots Tennis (USA).iso}")
-bin=$(realpath "${HST_BIN:-target/release/hst}")
+bin=$(realpath "${HST_BIN:-${CARGO_TARGET_DIR:-target}/release/hst}")
 cpu=(-p "AllowedCPUs=${HST_CPUS:-0-1}" -p "CPUQuota=${HST_QUOTA:-120%}")
 if [ "${HST_SLOW_IO:-0}" = 1 ]; then
     io=(-p "IOReadBandwidthMax=$PWD ${HST_READ:-10M}" -p "IOWriteBandwidthMax=$PWD ${HST_WRITE:-5M}"
