@@ -113,6 +113,7 @@ pub(crate) fn model(
                 cull_mode: None,
                 // ponytail: @sub (Cd − Cs·As) has no Bevy mode; drawn as Blend
                 alpha_mode: if m.blend() == Blend::Add { AlphaMode::Add } else { AlphaMode::Blend },
+                depth_bias: AFTER_SCENE,
                 ..default()
             })
         })
@@ -205,8 +206,14 @@ pub(crate) fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMat
     let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
     let img = Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba.clone(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
     let image = crate::textures::add_tim2(images, img, &pic);
-    Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, ..default() }))
+    Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, depth_bias: AFTER_SCENE, ..default() }))
 }
+
+/// The game draws its effects after the court's and the ball tornado's blended draws (GS dump: the tornado, then the
+/// ball's ribbon, the hit sparks, the swing trail, a bounce's puff and mark): blended draws sort by their mesh's
+/// centre, and these meshes sit at the court's origin or the ball, so this puts them after any of those.
+/// The landing markers go after these still (`1e3 +`).
+pub(crate) const AFTER_SCENE: f32 = 500.0;
 
 /// Write a frame's quads into a dynamic mesh. Nothing to draw still writes one invisible degenerate triangle: Bevy's
 /// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
