@@ -57,6 +57,9 @@ web 8765`; GitHub Pages: `.github/workflows/pages.yml`). The first visit asks fo
 browser's storage (OPFS); later visits run from it, menus and all. Flags go in the URL (`?play&singles&stage=1` =
 `--play --singles --stage 1`); `?forget` drops the pack. Sound starts on the first click/key. Online: relay only (no
 DHT/mDNS), host or join by code (`?code=<code>` or Ctrl+V on the page, then Join by Code); plays with desktop peers.
+LAN between browsers (M2k, `net/rtc.rs`): relay Off → Host gives a WebRTC offer QR (`?code=rtco…`), the guest's answer
+QR (`?code=rtca…`) goes back to the host's tab (a tab opened with it hands it over by BroadcastChannel, or paste).
+Two-browser check: `tools/web_lan.mjs` (host, guest and answer pages in one headless Chromium, RTC stats, hashes).
 Headless check: `tools/web_check.mjs` (`WEB_INPUT` key/click script, `PROFILE`, `CHROME_FLAGS="--enable-features=Vulkan
 --use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device).
 

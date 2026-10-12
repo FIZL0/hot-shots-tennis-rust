@@ -3592,6 +3592,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bincode",
+ "data-encoding",
  "ggrs",
  "gltf",
  "hst-data",
@@ -3608,6 +3609,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "web-time",
 ]

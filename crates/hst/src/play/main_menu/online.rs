@@ -230,6 +230,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 1 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
                 2 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
                 3 => "Copy a host's code, then choose this to join their lobby.".into(),
+                4 if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
                 4 => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
                 _ => "Back to the main menu.".into(),
             };
@@ -376,7 +377,12 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::Net(c) => match net {
             Some(n) => n.send(c),
             None => {
-                let n = Net::start(menu.net.cfg.clone().unwrap_or_else(|| Online::load(iso)));
+                let mut cfg = menu.net.cfg.clone().unwrap_or_else(|| Online::load(iso));
+                // a browser's LAN code (M2k) needs no relay: none is dialled (none would be reachable with no internet)
+                if matches!(&c, Cmd::Join(code, _) if crate::net::rtc::is_offer(code)) {
+                    cfg.relay = Relay::Off;
+                }
+                let n = Net::start(cfg);
                 n.send(c);
                 commands.insert_resource(n);
             }

@@ -160,6 +160,10 @@ fn save(w: &mut World, cell: ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option
     let hash = (frame % every == 0).then(|| {
         let text = snapshot::state_text(w);
         let h = snapshot::fnv(&text);
+        // progress in the log, as lockstep's (a rolled-back frame logs again, corrected)
+        if frame % (every * 60) == 0 {
+            info!("rollback tick {frame}: hash {h:016x}");
+        }
         if let Some(mut rb) = w.get_resource_mut::<Rollback>().filter(|rb| rb.sync.is_some()) {
             match rb.texts.get(&frame) {
                 Some(first) if *first != text => {

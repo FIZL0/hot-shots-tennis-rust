@@ -127,9 +127,13 @@ pub fn run(pack: js_sys::Uint8Array) {
 /// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).
 static PASTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Page: text pasted (Ctrl+V / the paste menu).
+/// Page: text pasted (Ctrl+V / the paste menu), or a LAN answer handed over by another tab (`index.html`): an answer
+/// goes to the hosting lobby (`net/rtc.rs`), anything else to Join by Code.
 #[wasm_bindgen]
 pub fn paste(text: String) {
+    if crate::net::rtc::deliver(&text) {
+        return;
+    }
     *PASTED.lock().unwrap() = Some(text);
 }
 
