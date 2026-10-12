@@ -18,6 +18,10 @@
 //!
 //! The walkers stand at their home facing the court centre (each serve placement turns them there) and turn to the
 //! middle of the winners' half when they react ([`npc::walker_facing`]).
+//!
+//! The trigger creatures hear the match as the original sends it ([`npc::Trigger::hear`]): 0xc entering the change of
+//! ends (all reset), 0xe at each serve set-up (`next_point`; after a change of ends only the passing ball resets, and
+//! rolls). Each is drawn while active, on and its +0x274 is not 0; the passing ball fades by it.
 
 use std::sync::Arc;
 
@@ -48,8 +52,11 @@ pub(super) struct Npcs {
     decided: bool,
     /// The players' and ball's positions the creatures startle at, and the types already startled this point.
     near: npc::Near,
-    /// Changing ends last tick (court 4's passing ball rolls when it starts).
+    /// Changing ends last tick, and in the serve phase last tick (entering it is the serve set-up, message 0xe).
     ends: bool,
+    serving: bool,
+    /// The passing ball's materials with their own alpha and blending, faded by its +0x274 (`npc::Trigger::speed`).
+    fade: Vec<(Handle<StandardMaterial>, f32, AlphaMode)>,
     /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
     uncull: Vec<Entity>,
     /// The gallery's cheer marks (where a walker started cheering); stepped after the walkers.
@@ -65,9 +72,7 @@ pub(super) struct Npcs {
     started: bool,
     /// The match was decided: whether the favoured team won, until the next serve.
     over: Option<bool>,
-    /// The decided point ended a game or set (its new point's resets follow the game's end message); the
-    /// scoreboard's pause was over last tick.
-    game_end: bool,
+    /// The scoreboard's pause was over last tick.
     reacted: bool,
     /// Court 5's own creatures (`npc::Crowd`), each with its parts' materials and, per material, its `.UVA` track's
     /// offset at each atlas frame.
@@ -118,7 +123,7 @@ fn setup(
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
     let mut crowd = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, game_end: false, reacted: false, crowd: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -248,6 +253,7 @@ fn step(
     audio: Option<Res<crate::audio::Sound>>,
     bank: Option<Res<crate::audio::CourtBank>>,
     (ticks, mut once): (Res<super::heard::Heard>, ResMut<super::heard::Played>),
+    (mats, mut materials): (Query<&MeshMaterial3d<StandardMaterial>>, ResMut<Assets<StandardMaterial>>),
 ) {
     let Some(mut npcs) = npcs else {
         // no court figures: the gallery and the emitters still step
@@ -312,6 +318,7 @@ fn step(
     if decided && g.score.match_over {
         npcs.over = Some(sound::favoured(&g.humans)[g.post_winner.clamp(0, 1) as usize]);
     }
+    let first = !npcs.started;
     // the match's first serve (a new point straight after its start): the idle loops restart one walker per tick
     // (with more than one player), the marks go
     if serve && !npcs.started {
@@ -339,7 +346,6 @@ fn step(
             face(&mut turn, *e, *home, side);
         }
         npcs.decided = true;
-        npcs.game_end = npcs.near.game;
         for (_, t, row) in &mut npcs.triggers {
             heard.extend(t.message(row, 6, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
@@ -373,25 +379,26 @@ fn step(
             w.new_point(true);
         }
         home_walkers(&mut npcs.walkers, &g.players);
-        // ponytail: the game's end message (and its resets) is sent here with the new point's, not when the game's
-        // end state starts
-        let game_end = std::mem::take(&mut npcs.game_end);
-        for (_, t, row) in &mut npcs.triggers {
-            if game_end {
-                heard.extend(t.message(row, 8, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
-            }
-            heard.extend(t.reset_near(row, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
-        }
     }
-    // the change of ends (the match's state 1): its reset of the passing ball (type 15) is the one that rolls
-    if ends && !npcs.ends {
-        (npcs.near.ends, npcs.near.players) = (true, players);
-        npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
-        npcs.cheers.clear();
-        for (_, t, row) in npcs.triggers.iter_mut().filter(|(_, t, _)| t.ty == 15) {
-            t.reset_near(row, &mut npcs.near, &mut roll);
+    // the serve set-up's message (0xe, every new point and the match's first serve): in the match's state 0 (its
+    // start) or 1 (after a change of ends) only the passing ball resets, and only in state 1 its reset rolls; else every
+    // creature but type 37
+    if serve && !npcs.serving {
+        let phase = if first { 0 } else if npcs.ends { 1 } else { 4 };
+        (npcs.near.ends, npcs.near.players) = (phase == 1, players);
+        for (_, t, row) in &mut npcs.triggers {
+            heard.extend(t.hear(row, 0xe, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
         npcs.near.ends = false;
+    }
+    npcs.serving = serve;
+    // entering the change of ends (message 0xc): every creature hears the game's end (8) and resets
+    if ends && !npcs.ends {
+        npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
+        npcs.cheers.clear();
+        for (_, t, row) in &mut npcs.triggers {
+            heard.extend(t.hear(row, 0xc, false, 4, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+        }
     }
     npcs.ends = ends;
     if let Some((e, a)) = &mut npcs.umpire {
@@ -473,10 +480,23 @@ fn step(
             let scale = tf.scale;
             *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
         }
-        // the landing-spot creature and the flyover: shown while on
-        if matches!(t.ty, 2 | 6) {
-            if let Ok(mut v) = shown.get_mut(*e) {
-                *v = if t.active && t.on { Visibility::Inherited } else { Visibility::Hidden };
+        // drawn while active and on with its +0x274 (`speed`) not 0; its draw's countdown (`stage`) is in its tick
+        // ponytail: the draw's own off switch (+0x282, cleared by a new match's messages) is never set here: not found
+        if let Ok(mut v) = shown.get_mut(*e) {
+            v.set_if_neq(if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden });
+        }
+        // the passing ball's +0x274 is also its model's alpha (it fades over its last 10 frames)
+        if t.ty == 15 {
+            if npcs.fade.is_empty() {
+                npcs.fade = children.iter_descendants(*e).filter_map(|d| mats.get(d).ok()).filter_map(|m| materials.get(&m.0).map(|a| (m.0.clone(), a.base_color.alpha(), a.alpha_mode))).collect();
+            }
+            let a = t.speed.clamp(0.0, 1.0);
+            for (h, alpha, mode) in &npcs.fade {
+                let (alpha, mode) = if a < 1.0 { (alpha * a, AlphaMode::Blend) } else { (*alpha, *mode) };
+                if materials.get(h).is_some_and(|m| m.base_color.alpha() != alpha || m.alpha_mode != mode) {
+                    let mut m = materials.get_mut(h).unwrap();
+                    (m.alpha_mode, m.base_color) = (mode, m.base_color.with_alpha(alpha));
+                }
             }
         }
         // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
@@ -496,15 +516,8 @@ fn step(
             }
             m.clock.sampled = t.frame;
         }
-        // the passing ball: drawn while on with its fade (+0x274) above 0, from where its route starts
-        // ponytail: the fade's alpha over its last 10 frames is not drawn; the other types' `on` is not used to hide them
         if t.ty == 6 {
             flyover = Some((t.on, t.volume, t.pos3()));
-        }
-        if t.ty == 15 {
-            if let Ok(mut v) = shown.get_mut(*e) {
-                *v = if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden };
-            }
         }
     }
     let (Some(audio), Some(Some(bank))) = (audio, bank.map(|b| b.0.clone())) else { return };

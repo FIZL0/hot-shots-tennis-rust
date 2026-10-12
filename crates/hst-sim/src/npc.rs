@@ -1492,6 +1492,23 @@ impl Trigger {
         self.callback(row, msg, near, roll)
     }
 
+    /// A match message as the creature's handler takes it (`msg` the game's own number; `phase` the match's state
+    /// then, as [`Trigger::serve_setup`]): 0xc, entering the change of ends, is message 8 then a reset of every type;
+    /// 0xe the serve set-up; 0x1a the same reset without the keeping. Others are only remembered. The sounds started.
+    pub fn hear(&mut self, row: &TriggerRow, msg: u32, replaying: bool, phase: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        self.msg = msg;
+        match msg {
+            0xc => {
+                let mut sounds = self.callback(row, 8, near, roll);
+                sounds.extend(self.reset_near(row, near, roll));
+                sounds
+            }
+            0xe => self.serve_setup(row, replaying, phase, near, roll),
+            0x1a if self.ty != 37 && (phase > 1 || self.ty == 15) => self.reset_near(row, near, roll),
+            _ => Vec::new(),
+        }
+    }
+
     /// The serve set-up's message (also sent when a replay starts): out of a replay it keeps `done`, the matrix and the
     /// path's place, at a replay's start it puts them back; then it resets, except type 37 and, while the match's
     /// phase (`phase`, read when the message comes: 0 the match's start, 1 a change of ends) is 0 or 1, all but

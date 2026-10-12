@@ -800,18 +800,20 @@ fn passing_ball_matches_the_game() {
         while rng != end && out.len() < 2000 {
             out.push(rng.next());
         }
-        // a message before the tick: 0xc (a game's end), 0xe (a point's end, the change of ends) and 0x1a reset it;
-        // only the change of ends' reset rolls
+        // a message before the tick: 0xc (entering the change of ends), 0xe (the serve set-up: a point's end, the
+        // change of ends' state 1) and 0x1a reset it; only the reset in state 1 rolls
         let reset = after.msg != before.msg && matches!(after.msg, 0xc | 0xe | 0x1a);
         let near = |s: &[u8]| npc::Near { ends: s[4] == 1, players: 4, ..Default::default() };
         let found = (0..=out.len()).find_map(|j| {
             let (mut t, mut it, mut heard) = (before.clone(), out[j..].iter(), Vec::new());
             let mut roll = || *it.next().unwrap_or(&0);
-            t.msg = after.msg;
-            if reset {
-                t.reset_near(&row, &mut near(b), &mut roll);
+            // the creature's handler: 0xc message 8 and a reset, 0xe/0x1a a reset gated by the match's state
+            if after.msg != before.msg {
+                heard.extend(t.hear(&row, after.msg, false, b[4], &mut near(b), &mut roll));
             }
             heard.extend(t.step_near(&row, &mut near(b), &mut roll));
+            // (what the serve set-up keeps aside is checked by `serve_setup_keeps_and_restores_like_the_game`)
+            (t.kept, t.kept_done) = (after.kept, after.kept_done);
             (t == after).then_some((t, heard))
         });
         let Some((t, heard)) = found else {
