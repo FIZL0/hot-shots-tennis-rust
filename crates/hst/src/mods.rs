@@ -13,7 +13,6 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use hst_data::{iso::Iso, mtl, xb::Archive};
 use hst_sim::pose::{Clip, Skeleton};
-use hst_sim::ps2;
 
 use crate::character::{self, CharacterData, Joint, Motions, Store};
 
@@ -734,8 +733,8 @@ fn eye_materials(dir: &Path) -> Vec<String> {
 
 /// A mod's own motions (§6 `motions`): each animation, named by its motion (`re_gu`, `sh_f_t`: the disc name
 /// without `_pc%02d`), keys the skeleton's joints by name with their local rotation and translation in game space.
-/// Its keys are spread linearly over the donor clip's frames, so it draws in the donor's time (`drawn`); gameplay
-/// keeps reading the donor's clip.
+/// Its key times are seconds at 60 Hz (the source's own speed); it may run past the donor clip (drawn on its own
+/// clock, `Motion::drawn`) but not stop short of it. Gameplay keeps reading the donor's clip.
 fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -> Result<HashMap<usize, Clip>, String> {
     use hst_data::ani::{Anim, MOTIONS, Track};
     use gltf::animation::util::ReadOutputs;
@@ -746,13 +745,11 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
         let name = a.name().unwrap_or("");
         let id = MOTIONS.iter().position(|m| m.replace("_pc%02d", "") == name).ok_or_else(|| ctx(format!("animation `{name}` is not a motion name")))?;
         let d = donor.get(&id).ok_or_else(|| ctx(format!("`{name}`: the donor has no clip {id:#x} to time it by")))?;
-        let end = ps2::mul(d.length, d.ticks_per_frame).round();
         let mut keys: Vec<(&gltf::animation::Channel, Vec<f32>)> = Vec::new();
         let channels: Vec<_> = a.channels().collect();
         for c in &channels {
             keys.push((c, c.reader(|_| Some(&blob[..])).read_inputs().ok_or_else(|| ctx(format!("`{name}`: a channel has no times")))?.collect()));
         }
-        let span = keys.iter().flat_map(|k| k.1.iter().copied()).fold(0.0f32, f32::max);
         let mut tracks: Vec<Track> = Vec::new();
         for (c, times) in keys {
             let joint = c.target().node().name().unwrap_or("").replace(' ', "");
@@ -761,7 +758,7 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
             if !skeleton.names.contains(&joint) {
                 continue;
             }
-            let tick = |t: f32| if span > 0.0 { (t / span * end).round() as i32 } else { 0 };
+            let tick = |t: f32| (t * 60.0).round() as i32 * d.ticks_per_frame as i32;
             let values: Vec<[f32; 4]> = match c.reader(|_| Some(&blob[..])).read_outputs() {
                 // a rotation key is the conjugate of the local rotation (`ani`)
                 Some(ReadOutputs::Rotations(r)) => r.into_f32().map(|[x, y, z, w]| [-x, -y, -z, w]).collect(),
@@ -785,8 +782,8 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
             }
         }
         let clip = Clip::new(skeleton, &Anim { ticks_per_frame: d.ticks_per_frame as i32, tracks });
-        if clip.length != d.length {
-            return Err(ctx(format!("`{name}` spans {} frames, the donor's {}", clip.length, d.length)));
+        if clip.length < d.length {
+            return Err(ctx(format!("`{name}` spans {} frames, short of the donor's {}", clip.length, d.length)));
         }
         out.insert(id, clip);
     }
@@ -1007,17 +1004,25 @@ mod tests {
         assert!(whipped.iter().all(|f| f[head] == data.joints[head].rest.rotation), "the hair turned the head");
     }
 
-    /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's, on the donor's clip
-    /// lengths, while everything gameplay reads (the donor's clips) is what it is without them.
+    /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's at the source's own
+    /// length (M1q: no longer squeezed into the donor's), on their own clock past the donor clip's end, while
+    /// everything gameplay reads (the donor's clips, as on the disc) is what it is without them.
     #[test]
     fn own_motions_are_visual_only() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/getagrip_pc00_emi");
-        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/getagrip_pc00_emi, skipped") };
+        // Fore!'s Phoebe: reactions up to 3x the donor's length
+        for name in ["getagrip_pc00_emi", "fore_pc00_phoebe"] {
+            own_motions_of(&mut iso, name);
+        }
+    }
+
+    fn own_motions_of(iso: &mut Iso, name: &str) {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods").join(name);
+        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/{name}, skipped") };
         assert_eq!(m.motions.as_deref(), Some("motions.glb"));
         let mut s = Stores(default(), default(), default(), default());
-        let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
-        let plain = load(&mut iso, &Mod { motions: None, ..m.clone() }, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let c = load(iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let plain = load(iso, &Mod { motions: None, ..m.clone() }, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
         assert!(plain.visual.is_empty());
         let mut ids: Vec<usize> = c.visual.keys().copied().collect();
         ids.sort();
@@ -1031,9 +1036,32 @@ mod tests {
             }
         }
         assert_eq!((c.pelvis.clone(), c.paths.len()), (plain.pelvis.clone(), plain.paths.len()));
+        // donor motions on a mod: the disc donor's clip lengths and timing
+        let disc = character::disc_motions(iso, m.donor, &c.skeleton, |_| None).unwrap();
+        for (id, clip) in &c.motions {
+            assert_eq!((clip.length, clip.ticks_per_frame), (disc.motions[id].length, disc.motions[id].ticks_per_frame), "{id:#x}");
+        }
+        // each own clip lasts as long as its glTF (seconds at 60 Hz), at least the donor's
+        let (doc, _) = open(&dir.join("motions.glb")).unwrap();
+        for a in doc.animations() {
+            let id = hst_data::ani::MOTIONS.iter().position(|n| n.replace("_pc%02d", "") == a.name().unwrap()).unwrap();
+            let secs = a.channels().filter_map(|c| c.sampler().input().max()).filter_map(|m| m.as_array()?.first()?.as_f64()).fold(0.0, f64::max);
+            assert_eq!(c.visual[&id].length, (secs * 60.0).round() as f32, "{id:#x}");
+        }
+        let longer = c.visual.iter().find(|(id, v)| v.length > c.motions[id].length).map(|(&id, _)| id);
+        assert_eq!(longer.is_some(), name.starts_with("fore"), "Fore!'s reactions outlast the donor's, Emi's don't");
+        if let Some(longer) = longer {
+            let mut mo = character::Motion::default();
+            mo.set(longer, 1.0, false, None, 0);
+            for _ in 0..1000 {
+                mo.clock.tick(c.motions[&longer].length);
+                mo.drawn.tick(c.drawn(longer).unwrap().length);
+            }
+            assert_eq!((mo.clock.sampled, mo.drawn.sampled), (c.motions[&longer].length, c.visual[&longer].length), "each clock holds its own clip's end");
+        }
         for id in ids {
             let (v, d) = (&c.visual[&id], &c.motions[&id]);
-            assert_eq!(v.length, d.length);
+            assert!(v.length >= d.length);
             assert!(std::ptr::eq(c.drawn(id).unwrap(), v));
             let at = |clip: &Clip, t: f32| -> Vec<Vec3> {
                 model(&c.skeleton, &clip.locals(&c.skeleton, t)).iter().map(|m| Vec3::new(m[3][0], m[3][1], m[3][2])).collect()
