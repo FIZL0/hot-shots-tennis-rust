@@ -160,3 +160,32 @@ were already in place (B40b1 loads any costume through `load_disc`); no code cha
 - Costume lighting compared by eye only (no light values read for the Costumes tab beyond B40b's).
 - No 3D umpire previews: the original has none (see above). If the remaster wants them anyway as a deliberate
   change, that needs the user's call and its own task.
+
+# M1i — eyes for modded characters (2026-10-12)
+
+## Built
+- `character.rs`: `Face::uv_unbound` keeps the `.UVA` tracks whose node the skeleton lacks (by name; a disc
+  character still never plays them). `EYES` (a sentinel node) and `disc_nodes(iso, n)` (the body model's node names).
+- `mods.rs`: mods now fill `part_nodes`: per primitive, the joints its vertices are weighted to (the glTF analogue
+  of a disc packet's palette), so a costume that keeps the donor's eye node as a joint (a rerigged HST model:
+  test_pc00 keeps `s_me`) binds the donor's eye track by name exactly like the disc. New optional `mod.json`
+  `"eyes": ["<material>", …]` (checked in `read`; a name missing from a costume warns): those primitives also hold
+  `EYES`, and the donor's unbound eye tracks that name a node of the donor's own model are rebound to `EYES`. A
+  track naming no node of the donor's model (pc07) stays dropped, as on the disc.
+- `inspect.rs`: the offset maths moved out of the `uv_offsets` system into `part_uv(data, face, t)` (unchanged).
+- HST-MODS `standard/HST-CHARACTER-STANDARD.md` §4c *Eyes* + the `eyes` key in §6 (HST-MODS 11546cd).
+- Test `mods::tests::mod_eyes_follow_the_donors_uva`: on the inspect pose, test_pc00's moved parts carry exactly
+  the disc pc00's offsets (bits 0xbca3d70a/0x3ca3d70a, as the original's VIF packet); Fore!'s Phoebe (no donor eye
+  node) moves nothing without `eyes`, moves only its `eye` material's parts with donor 6's offset with
+  `"eyes": ["eye"]`, and nothing with donor 7.
+
+## Not verified / not 1:1
+- In-match motions: the faces carry every motion's UVA for mods as for disc characters, but nothing draws UVA in
+  a match for any character yet (only the inspect previews) → new task B40b5.
+- No screenshot of a mod's eyes: the offset is proven equal to the disc's by the test; whether a foreign mod's eye
+  texture looks right under the donor's offsets depends on its texture layout (the standard tells authors to lay
+  it out for them). No packaged mod sets `eyes` yet (the HST-MODS packagers weren't changed).
+- Palette `part_nodes` for mods use weight > 0 joints of each primitive, not the PS2 packet palette (mods have none).
+- `tools/check.sh` at wrap-up: 138 pass, 1 unrelated failure: `play::mod_match::tests::get_a_grip_stats_reach_the_match`
+  asserts Emi's `ai_row` ≠ `donor`, but `context/mods/getagrip_pc00_emi/mod.json` was repackaged today (10:20,
+  M1l sizing) with donor 0 = ai_row 0. Local data vs a stale assertion, not touched here (M2i's test).

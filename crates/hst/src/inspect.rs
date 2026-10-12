@@ -294,17 +294,7 @@ fn uv_offsets(
 ) {
     for (root, rig, m, uv) in &rigs {
         let d = &rig.data;
-        let mut offset = vec![Vec2::ZERO; d.parts.len()];
-        if let Some(face) = d.faces.get(&m.face) {
-            let t = hst_sim::ps2::mul(uv.0.sampled, 80.0);
-            for (node, ticks, values) in &face.uv {
-                // ponytail: the key cursor restarts from 0 each sample, as the face's (≤1 ulp after a wrap)
-                let [x, y, ..] = hst_sim::face::sample(ticks, values, t, &mut 0, true);
-                for (k, (_, swap)) in d.part_nodes.iter().enumerate().filter(|(_, (n, _))| n.contains(node)) {
-                    offset[k] = if *swap { Vec2::new(y, x) } else { Vec2::new(x, y) };
-                }
-            }
-        }
+        let offset = part_uv(d, m.face, uv.0.sampled);
         for (mesh, mat) in parts.iter_many(children.iter_descendants(root)) {
             let o = d.parts.iter().position(|p| p.0.id() == mesh.0.id()).map_or(Vec2::ZERO, |k| offset[k]);
             if gs.get(&mat.0).is_some_and(|g| g.uniform.uv_offset != o) {
@@ -312,6 +302,22 @@ fn uv_offsets(
             }
         }
     }
+}
+
+/// Per part of `d`, its texture offset from face `face`'s `.UVA` at UV time `sampled` (see [`uv_offsets`]).
+pub fn part_uv(d: &CharacterData, face: usize, sampled: f32) -> Vec<Vec2> {
+    let mut offset = vec![Vec2::ZERO; d.parts.len()];
+    if let Some(face) = d.faces.get(&face) {
+        let t = hst_sim::ps2::mul(sampled, 80.0);
+        for (node, ticks, values) in &face.uv {
+            // ponytail: the key cursor restarts from 0 each sample, as the face's (≤1 ulp after a wrap)
+            let [x, y, ..] = hst_sim::face::sample(ticks, values, t, &mut 0, true);
+            for (k, (_, swap)) in d.part_nodes.iter().enumerate().filter(|(_, (n, _))| n.contains(node)) {
+                offset[k] = if *swap { Vec2::new(y, x) } else { Vec2::new(x, y) };
+            }
+        }
+    }
+    offset
 }
 
 /// Disc character `n`'s hand (+1 right, −1 left) from TParam.csv's 利き腕 column (右 = right), as `play.rs` reads it.
