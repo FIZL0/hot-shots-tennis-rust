@@ -366,6 +366,14 @@ impl<'a> Game<'a> {
             idle: (h(0x54), f(0x58)),
             sound: i32::from_le_bytes(self.at(0x41_c6e4 + 0x18 * ty as u32, 4).try_into().unwrap()),
             rearm: r[0x6c] != 0,
+            // the ball-hit obstacles' speed blocks (half-extents, then the km/h)
+            hit_kmh: match ty {
+                14 => self.f32s(0x41_cc00, 1)[0],
+                21 => self.f32s(0x41_cc20, 1)[0],
+                38 => self.f32s(0x41_cc40, 1)[0],
+                43 => self.f32s(0x41_cc60, 1)[0],
+                _ => 0.0,
+            },
         }
     }
 
@@ -525,6 +533,9 @@ pub struct TriggerRow {
     pub sound: i32,
     /// A reset brings it back after it has played its one go (else the reset leaves it inactive).
     pub rearm: bool,
+    /// Ball-hit obstacles: the ball speed (km/h) its animation and sound need (14, 21, 43), or the one that picks
+    /// type 38's other animation.
+    pub hit_kmh: f32,
 }
 
 /// Scoreboard timing after a point (frames unless noted).

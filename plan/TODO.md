@@ -190,7 +190,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 - [ ] **P14c3e** A struck toss and message 0x14's other listeners (in P14c3d) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c3f** Startled creatures' model weight, replay save, +0x280 (in P14c3d) → `hst-sim/src/npc.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
-- [ ] **P14c4** Ball-hit obstacles (box overlap, speed threshold, message 0x14) → `hst-sim/src/npc.rs` | t: npc.rs
+- [ ] **P14c4a** The ball's spin-rotated box and kept last move for the ball-hit obstacles (in P14c4) → `hst-sim/src/ball.rs` · `play/npcs.rs` | t: npc.rs | j: 2026-10-07-p14-npc
+- [ ] **P14c4b** Record type 21's ball hits on court 6 (in P14c4) → `tools/record_npc.py` · `hst-sim/tests/npc.rs` | t: npc.rs | j: 2026-10-07-p14-npc
 - [ ] **P14c5** Match-event creatures (game/set won, deciding set, per-point rolls) → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14d** Court 5 creatures → `hst-sim/src/npc.rs` | t: npc.rs
 - [ ] **P14e** Walking spectators move (dodge, collision, ground, facing) → `hst-sim/src/npc.rs` | t: npc.rs

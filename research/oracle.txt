@@ -8,3 +8,7 @@ ai_run_frames 35bc50
 instant_replay 325cd0
 # Scoreboard point award (a0 = scoreboard), stubbed in the instant replay test (hst_sim::score::Score::point)
 score_award 38b820
+# Ball-hit obstacle box test (a0 other's matrix, a1 obstacle's matrix, a2 type): hst_sim::npc::boxes_overlap
+obstacle_box 3f8380
+# Ball speed in km/h (a0 ball, its last move at +0x140): hst_sim::npc::ball_kmh
+ball_kmh 375cb0

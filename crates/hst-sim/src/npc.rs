@@ -500,6 +500,10 @@ pub struct Trigger {
     /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others (it scales the
     /// model's sub-meshes when drawn).
     pub weight: f32,
+    /// Type 38's animation restarted on its other clip (a ball faster than its row's `hit_kmh`); kept through resets.
+    pub alt: bool,
+    /// Type 38's two clips' lengths (its model's motions 0 and 1): a hit sets `len` to the one it plays.
+    pub clip_lens: [f32; 2],
 }
 
 /// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
@@ -515,11 +519,16 @@ pub struct Near {
     pub deciding: bool,
     /// The gallery's manager paused (set by type 44's reset).
     pub paused: bool,
+    /// The players' model matrices then the ball's (the ball-hit obstacles test the boxes; 38 and 43 the ball's
+    /// position, its row 3), and the ball's speed in km/h ([`ball_kmh`] of its last move): both as the tick began
+    /// (the obstacles run before the ball and players move).
+    pub boxes: Vec<M4>,
+    pub kmh: f32,
 }
 
 impl Default for Near {
     fn default() -> Near {
-        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false, paused: false }
+        Near { pos: Vec::new(), flags: [false; 64], ends: false, players: 0, deciding: false, paused: false, boxes: Vec::new(), kmh: 0.0 }
     }
 }
 
@@ -579,6 +588,52 @@ fn unit3(d: [f32; 4]) -> [f32; 4] {
     let [x, y, z, _] = d;
     let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
     d.map(|c| ps2::mul(c, q))
+}
+
+/// The ball's speed in km/h from its last move (its position change over the last tick; the length summed y, x, z).
+pub fn ball_kmh([x, y, z]: [f32; 3]) -> f32 {
+    ps2::div(ps2::mul(3600.0, ps2::mul(60.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)))), 1000.0)
+}
+
+/// The box half-extents of obstacle types 14 and 21, and of any other type (38's), set by the game's code.
+pub fn obstacle_extents(ty: u8) -> [f32; 3] {
+    match ty {
+        14 => [1.0, 2.5, 0.1],
+        21 => [1.0, 0.9, 0.025],
+        _ => [0.18, 0.8, 0.18],
+    }
+}
+
+/// Whether box `a` (half-extents 0.2 along its matrix rows: a player or the ball) overlaps obstacle box `b`
+/// (half-extents `e`): the separating-axis test over both boxes' axes and their nine cross products.
+pub fn boxes_overlap(a: &M4, b: &M4, e: [f32; 3]) -> bool {
+    let dot = |u: [f32; 4], l: [f32; 4]| ps2::madd(ps2::madd(ps2::mul(u[1], l[1]), u[0], l[0]), u[2], l[2]);
+    let cross = |u: [f32; 4], v: [f32; 4]| {
+        let c = |i: usize, j: usize| ps2::msub(ps2::mul(u[i], v[j]), u[j], v[i]);
+        [c(1, 2), c(2, 0), c(0, 1), 0.0]
+    };
+    let t = minus(b[3], a[3]);
+    let mut axes = (0..3).flat_map(|i| [a[i], b[i]]).chain((0..9).map(|k| cross(a[k / 3], b[k % 3])));
+    let radius = |m: &M4, e: [f32; 3], l: [f32; 4]| ps2::add(ps2::mul(e[2], dot(m[2], l)).abs(), ps2::add(ps2::mul(e[0], dot(m[0], l)).abs(), ps2::mul(e[1], dot(m[1], l)).abs()));
+    axes.all(|l| dot(l, t).abs() <= ps2::add(radius(a, [0.2; 3], l), radius(b, e, l)))
+}
+
+/// Whether the ball's box (±0.2 about `ball`) overlaps the box ±`e` about `at`.
+fn ball_in(ball: [f32; 4], at: [f32; 4], e: [f32; 3]) -> bool {
+    (0..3).all(|c| ps2::sub(ball[c], 0.2) < ps2::add(at[c], e[c]) && !(ps2::add(ball[c], 0.2) <= ps2::sub(at[c], e[c])))
+}
+
+/// The sound a trigger creature's key plays: the ball-hit obstacles' on program 2 (43's on 7) at the game's sound
+/// effect level (0.9 · 128) scaled by 1.2 (1.35 for 38); the others' on program 7 at 0x40.
+pub fn trigger_sound(ty: u8, key: i32) -> sound::Play {
+    let level = |k: f32| ps2::mul(115.0, k) as i32;
+    let (program, volume) = match ty {
+        14 | 21 => (2, level(1.2)),
+        38 => (2, level(1.35)),
+        43 => (7, level(1.2)),
+        _ => (7, 0x40),
+    };
+    sound::Play { slot: 0, program, key: key as u8, volume, speed: 1.0 }
 }
 
 impl Trigger {
@@ -643,7 +698,7 @@ impl Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
-            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, ..Trigger::default()
+            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -969,6 +1024,53 @@ impl Trigger {
                 (self.on, self.moving, self.world, self.animating) = (true, false, self.home, false);
                 (self.pitch, self.yaw) = heading(self.home[2]);
             }
+            // ball-hit obstacles: a player's box (14, 21) starts the animation and sound; the ball's does at its
+            // speed, and tells the match (message 0x14); once until the reset
+            (14 | 21, 2) => {
+                self.struck = false;
+                if self.startled {
+                    return sounds;
+                }
+                let e = obstacle_extents(self.ty);
+                let Some(i) = near.boxes.iter().position(|a| boxes_overlap(a, &self.world, e)) else { return sounds };
+                let ball = i + 1 == near.boxes.len();
+                if !ball || row.hit_kmh <= near.kmh {
+                    self.restart_anim();
+                    (self.startled, self.animating) = (true, true);
+                    sounds.push(if ty == 14 { 0xb } else { 0xa });
+                }
+                (self.startled, self.struck) = (true, ball);
+            }
+            // turns to face a ball of 20 km/h or more (its other animation above the row's speed)
+            (38 | 43, 2) => {
+                self.struck = false;
+                let Some(&[.., ball]) = near.boxes.last() else { return sounds };
+                let e = if ty == 38 { [0.18, 0.8, 0.18] } else { [0.15, 1.3, 0.15] };
+                if self.startled || !ball_in(ball, pos, e) {
+                    return sounds;
+                }
+                if ty == 43 && row.hit_kmh <= near.kmh {
+                    self.restart_anim();
+                    self.animating = true;
+                    sounds.push(0x23);
+                } else if ty == 38 && 20.0 <= near.kmh {
+                    self.restart_anim();
+                    self.alt = row.hit_kmh <= near.kmh;
+                    self.len = self.clip_lens[self.alt as usize];
+                    (self.startled, self.animating) = (true, true);
+                    self.yaw = wrap(heading(unit3(minus(ball, pos))).1);
+                    self.world = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(self.pitch)), &world::rot_y(self.yaw));
+                    self.world[3] = pos;
+                    sounds.push(0xc);
+                }
+                (self.startled, self.struck) = (true, true);
+            }
+            (14 | 21 | 38 | 43, 0 | 4) => {
+                // (the frame back to 0 on the clip it last played)
+                (self.on, self.moving, self.world, self.startled, self.animating) = (true, false, self.home, false, false);
+                (self.pitch, self.yaw) = heading(self.home[2]);
+                self.set_frame(0.0, row);
+            }
             // scrubs forward while someone is within 1.0, to the end; then back to 0 the next time
             (48, 2) => {
                 let (mut s, mut f) = self.scrub;
@@ -1158,6 +1260,8 @@ impl Default for Trigger {
             routes: [[[0.0; 4]; 2]; 3],
             done: false,
             weight: 0.0,
+            alt: false,
+            clip_lens: [0.0; 2],
         }
     }
 }

@@ -148,6 +148,7 @@ fn setup(
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
                 let routes = game.ball_routes();
                 let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, len, routes, ..default() };
+                tr.clip_lens = [0, 1].map(|k| data.motions.get(&k).map_or(0.0, |c| c.length));
                 if t == 44 {
                     tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
                 }
@@ -232,7 +233,22 @@ fn step(
         }
     }
     let at = |p: [f32; 3]| [p[0], p[1], p[2], 1.0];
+    let last = npcs.near.pos.last().map_or(g.flight.ball.pos, |b| [b[0], b[1], b[2]]);
     npcs.near.pos = g.players.iter().map(|p| at(p.pos)).chain([at(g.flight.ball.pos)]).collect();
+    // the ball-hit obstacles' boxes: the players' model matrices (up, facing; the side row's sign doesn't matter to
+    // the test) and the ball's
+    // ponytail: the ball's matrix carries its drawn spin in the original; the port has none (tracked in PLAN)
+    let player = |p: &super::Player| {
+        let d = p.body.face.dir;
+        [[-d[2], 0.0, d[0], 0.0], [0.0, 1.0, 0.0, 0.0], d, at(p.pos)]
+    };
+    let ball = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], at(g.flight.ball.pos)];
+    // its speed from its last move (since the last tick)
+    // ponytail: the original keeps the last move while the ball stands still between steps; here it is 0 then
+    // (the original's obstacles run before the ball and players move: what they see then is this, after this tick's
+    // moves, and their message 0x14's step off them comes before the ball's next own step either way)
+    npcs.near.kmh = npc::ball_kmh([0, 1, 2].map(|c| hst_sim::ps2::sub(g.flight.ball.pos[c], last[c])));
+    npcs.near.boxes = g.players.iter().map(player).chain([ball]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
     let ends = matches!(g.phase, Phase::ChangeEnds(_));
     let played = g.score.sets[0] + g.score.sets[1];
@@ -359,7 +375,7 @@ fn step(
         // not found); of message 0x14's other listeners the landing markers don't hear it
         for s in t.step_near(row, &mut npcs.near, &mut roll) {
             let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
-            g.sounds.push((sound::Play { slot: 0, program: 7, key: s as u8, volume: 0x40, speed: 1.0 }, at));
+            g.sounds.push((npc::trigger_sound(t.ty, s), at));
         }
         // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
         // ponytail: a struck toss doesn't match (the original stops it dead; tracked in PLAN)
@@ -369,6 +385,11 @@ fn step(
             g.doubles_ai.hear(&g.players, 0x14);
         }
         if let Ok((_, mut m)) = q.get_mut(*e) {
+            // type 38 plays its second clip after a fast ball
+            if t.ty == 38 && m.id != t.alt as usize {
+                let looping = m.clock.looping;
+                m.set(t.alt as usize, 0.0, looping, None, 0);
+            }
             m.clock.sampled = t.frame;
         }
         // the passing ball: drawn while on with its fade (+0x274) above 0, from where its route starts

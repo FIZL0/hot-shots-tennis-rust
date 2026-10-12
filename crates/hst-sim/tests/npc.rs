@@ -743,3 +743,124 @@ fn passing_ball_matches_the_game() {
     eprintln!("{ticks} ticks, {resets} resets, {sounds} bounce sounds");
     assert!(rolled && sounds == 4, "the ball did not play through");
 }
+
+/// The ball-hit obstacles (14 on court 4, 38 on court 9, 43 on court 10) against `context/fixtures/hit_cNN.bin`
+/// (`tools/record_npc.py … prox` with `HST_BALL=1 HST_MATS=1` and pokes onto the ball and players; not in git, skipped
+/// when absent): every tick of each obstacle from the recorded state before must give the game's state after bit for
+/// bit — the latch, animation and clip, type 38's turn to the ball — and a struck one must be the tick's message 0x14.
+/// What they see (players' and ball's boxes, the ball's last move) is the state before the tick (the creatures run
+/// before the ball and players: taking any of the three from the state after fails).
+#[test]
+fn ball_hit_obstacles_match_the_game() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let Ok(mut iso) = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("disc missing, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let (mut files, mut hits, mut anims, mut torn) = (0, 0, 0, 0);
+    for name in ["hit_c04", "hit_c09", "hit_c10", "hit_c10b"] {
+        let Ok(d) = std::fs::read(format!("{root}/context/fixtures/{name}.bin")) else {
+            eprintln!("{name}.bin missing, skipped");
+            continue;
+        };
+        files += 1;
+        let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let f = |b: &[u8], o: usize| f32::from_bits(u(b, o));
+        let n = u(&d, 0) as usize;
+        let (mt, wo) = (4 + 0x180, |k: usize| 4 + 0x180 + 0x9d0 + 0x280 + 0x20 + 8 + k * 0x300);
+        let (x, ball) = (wo(n), wo(n) + 0x90 + 8 * n);
+        let samples: Vec<&[u8]> = d[4 + 4 * n..].chunks_exact(ball + 0x290 + 0x100).collect();
+        let m = |s: &[u8], o: usize| -> [[f32; 4]; 4] { std::array::from_fn(|r| std::array::from_fn(|c| f(s, o + 16 * r + 4 * c))) };
+        let near = |s: &[u8]| {
+            let players = u(s, 4 + 0x24) as usize;
+            npc::Near {
+                pos: (1..=players).chain([0]).map(|i| std::array::from_fn(|c| f(s, x + 0x10 * i + 4 * c))).collect(),
+                boxes: (0..players).map(|i| m(s, ball + 0x290 + 0x40 * i)).chain([m(s, ball + 0xb0)]).collect(),
+                kmh: npc::ball_kmh(std::array::from_fn(|c| f(s, ball + 0x140 + 4 * c))),
+                ..Default::default()
+            }
+        };
+        // type 38's clip lengths, as each clip played in the recording (from its model on the disc in the app)
+        let clip_lens = |k: usize| -> [f32; 2] {
+            std::array::from_fn(|c| samples.iter().find(|s| u(s, wo(k) + 0x290 + 0x20) == c as u32).map_or(0.0, |s| f(s, wo(k) + 0x2d0 + 0x2c)))
+        };
+        let kinds: Vec<(usize, u8)> =
+            (0..n).map(|k| (k, samples[0][wo(k) + 0x50])).filter(|&(_, ty)| matches!(ty, 14 | 21 | 38 | 43)).collect();
+        let mut skip = vec![false; n];
+        for i in 1..samples.len() {
+            let (a, b) = (samples[i - 1], samples[i]);
+            if u(b, 0) != u(a, 0) + 1 {
+                continue;
+            }
+            let mut tick14 = false;
+            for &(k, ty) in &kinds {
+                if std::mem::take(&mut skip[k]) {
+                    continue;
+                }
+                let o = wo(k);
+                let row = game.trigger(ty);
+                let v = |s: &[u8], a: usize| -> [f32; 4] { std::array::from_fn(|c| f(s, o + a + 4 * c)) };
+                let state = |s: &[u8]| npc::Trigger {
+                    startled: s[o + 0x278] != 0,
+                    alt: ty == 38 && u(s, o + 0x290 + 0x20) == 1,
+                    clip_lens: if ty == 38 { clip_lens(k) } else { [0.0; 2] },
+                    ..trigger_at(s, o, &row, v(s, 0x160), v(s, 0x150), 0)
+                };
+                let (mut before, after) = (state(a), state(b));
+                if !before.moving && before.world[3] != after.world[3] {
+                    before.world[3] = after.world[3]; // poked before the tick
+                }
+                let new14 = after.msg == 0x14 && before.msg != 0x14;
+                if new14 {
+                    before.msg = 0x14;
+                }
+                let mut rng = Mt::of(&a[mt..]);
+                let (end, mut out) = (Mt::of(&b[mt..]), Vec::new());
+                while rng != end && out.len() < 2000 {
+                    out.push(rng.next());
+                }
+                if before.msg != after.msg {
+                    // a reset message: the obstacle's reset (msg 4)
+                    if matches!(after.msg, 0xc | 0xe | 0x1a) {
+                        let mut t = before.clone();
+                        t.reset_near(&row, &mut near(a), &mut || out[0]);
+                        // what the obstacle's reset owns (the route fields, which a path-less one never reads, are the
+                        // generic reset's)
+                        let own = |t: &npc::Trigger| (t.on, t.moving, t.world, t.startled, t.animating, t.alt, t.frame);
+                        assert_eq!(own(&t), own(&after), "{name} vsync {} creature {k} type {ty}: reset", u(b, 0));
+                    }
+                    continue;
+                }
+                let found = (0..=out.len()).find_map(|j| {
+                    let (mut t, mut it) = (before.clone(), out[j..].iter());
+                    let heard = t.step_near(&row, &mut npc::Near { pos: near(b).pos, ..near(a) }, &mut || *it.next().unwrap_or(&0));
+                    let want = npc::Trigger { struck: t.struck, path: t.path.clone(), anchor: t.anchor, ..after.clone() };
+                    (t == want).then_some((t, heard))
+                });
+                let Some((t, heard)) = found else {
+                    let mut t = before.clone();
+                    t.step_near(&row, &mut npc::Near { pos: near(b).pos, ..near(a) }, &mut || out.first().copied().unwrap_or(0));
+                    // a torn real-time sample: an animating one read a tick late (it shows the next sample's state)
+                    let next = samples.get(i + 1).map(|c| state(c));
+                    if t.startled && before.startled && next.as_ref().is_some_and(|c| c.frame == after.frame && t.frame < after.frame) {
+                        (torn, skip[k]) = (torn + 1, true); // and the tick from it
+                        continue;
+                    }
+                    panic!("{name} vsync {} creature {k} type {ty} (kmh {}):\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0), near(a).kmh)
+                };
+                assert!(!t.struck || after.msg == 0x14, "{name} vsync {} creature {k}: struck without message 0x14", u(b, 0));
+                tick14 |= t.struck;
+                hits += (t.startled && !before.startled) as usize;
+                anims += (t.startled && !before.startled && t.animating) as usize;
+                // its sound with its animation (14/21 by a player too; the sound handle isn't kept to check)
+                assert_eq!(!heard.is_empty(), t.animating && !before.animating, "{name} vsync {}: sound {heard:?}", u(b, 0));
+            }
+            let new14 = kinds.iter().any(|&(k, _)| u(b, wo(k) + 0xc0) == 0x14 && u(a, wo(k) + 0xc0) != 0x14);
+            // (a second 0x14 onto creatures still holding the first changes nothing to see)
+            assert!(tick14 || !new14, "{name} vsync {}: message 0x14 with nothing struck", u(b, 0));
+        }
+    }
+    eprintln!("{files} files: {hits} hits, {anims} with the animation ({torn} torn samples skipped)");
+    assert!(torn <= 2, "{torn} torn samples");
+}
