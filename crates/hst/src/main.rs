@@ -1,3 +1,5 @@
+//! `hst` alone imports the disc on first start and runs from that pack after (see disc.rs); `hst <iso> …` runs
+//! straight from an ISO (or a pack).
 //! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png] [--fullscreen]`
 //! Loads every model in the given disc archives and shows them with an orbit camera
 //! (drag: orbit, wheel: zoom). `--shot` saves one frame (after `--shot-at` seconds) and exits, for unattended checks;
@@ -17,6 +19,7 @@
 mod audio;
 mod character;
 mod court_anim;
+mod disc;
 mod effects;
 mod graphics;
 mod gs;
@@ -176,7 +179,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
 }
 
 fn main() {
-    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(std::env::args().skip(1));
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    disc::resolve(&mut argv);
+    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster } = parse(argv.into_iter());
     if upscale {
         textures::init(&args.iso);
     }
