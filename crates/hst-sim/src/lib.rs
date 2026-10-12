@@ -15,6 +15,8 @@ pub mod serve;
 pub mod camera;
 pub mod vu0;
 pub mod libm;
+/// Platform-independent `sinf`, `tanf`, `atanf`… for ports that don't use the game's own (`libm`): never std's.
+pub use musl;
 pub mod replay;
 pub mod world;
 pub mod mesh;

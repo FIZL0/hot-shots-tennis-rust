@@ -440,7 +440,7 @@ impl Flight {
         let normal_speed = sqrt(sq(vn));
         let mut old_spin = self.ball.spin;
         // rolling: settled on the court after two contacts (|n.y| ≥ sin 45°, not a special surface)
-        let rolling = self.contacts >= 2 && normal_speed <= k::ROLL_SPEED && !(n[1].abs() < std::f32::consts::FRAC_PI_4.sin()) && !special;
+        let rolling = self.contacts >= 2 && normal_speed <= k::ROLL_SPEED && !(n[1].abs() < musl::sinf(std::f32::consts::FRAC_PI_4)) && !special;
         if !rolling {
             if !ghost && !f.counted {
                 f.counted = true;

@@ -2978,6 +2978,7 @@ name = "hst-sim"
 version = "0.1.0"
 dependencies = [
  "hst-data",
+ "libm",
 ]
 
 [[package]]

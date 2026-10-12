@@ -6,7 +6,8 @@
 //! 3. slides sideways and widens so the court (±5 m) and every player (±1.7 m) fit across;
 //! then eases the shown view 10 % toward that target and finally widens upward if the ball would leave the top
 //! 2 % of the picture. Game space (Y down); the camera's rows are right, down, forward.
-//! Float math is plain f32 here, not the PS2 sequence: the camera never feeds back into play.
+//! Float math is plain f32 here (transcendentals from `musl`, the same on every platform), not the PS2 sequence:
+//! the camera never feeds back into play.
 
 /// The field of view is the horizontal half-angle of the 4:3 picture; the vertical is scaled by this.
 pub const ASPECT: f32 = 0.7;
@@ -46,11 +47,11 @@ impl View {
         [dot(self.rot[0], d), dot(self.rot[1], d), dot(self.rot[2], d)]
     }
     fn vertical(&self) -> f32 {
-        (self.fov.tan() * ASPECT).atan()
+        musl::atanf(musl::tanf(self.fov) * ASPECT)
     }
     /// Pitch the view about its right axis by `a` (positive tilts the forward axis down).
     fn tilt(&mut self, a: f32) {
-        let (s, c) = a.sin_cos();
+        let (s, c) = musl::sincosf(a);
         let (d, f) = (self.rot[1], self.rot[2]);
         self.rot[1] = add(scale(d, c), scale(f, -s));
         self.rot[2] = add(scale(f, c), scale(d, s));
@@ -78,13 +79,13 @@ pub struct Scene<'a> {
 pub fn base() -> View {
     let pitch = PITCH_DEG.to_radians();
     let fov = (FOV_DEG * 0.5).to_radians(); // the table holds the full angle
-    let vertical = (fov.tan() * ASPECT).atan();
-    let lift = (FRAMING * vertical.tan()).atan();
-    let forward = [0.0, pitch.sin(), pitch.cos()];
+    let vertical = musl::atanf(musl::tanf(fov) * ASPECT);
+    let lift = musl::atanf(FRAMING * musl::tanf(vertical));
+    let forward = [0.0, musl::sinf(pitch), musl::cosf(pitch)];
     let orbit = pitch - lift;
     View {
-        rot: [[1.0, 0.0, 0.0], [0.0, pitch.cos(), -pitch.sin()], forward],
-        eye: [0.0, -DISTANCE * orbit.sin(), -DISTANCE * orbit.cos()],
+        rot: [[1.0, 0.0, 0.0], [0.0, musl::cosf(pitch), -musl::sinf(pitch)], forward],
+        eye: [0.0, -DISTANCE * musl::sinf(orbit), -DISTANCE * musl::cosf(orbit)],
         fov,
     }
 }
@@ -128,9 +129,9 @@ impl Camera {
         let deepest = near_team(v, s).map(|p| (p, v.local(p))).min_by(|a, b| a.1[2].total_cmp(&b.1[2]));
         let Some((p, _)) = deepest else { return };
         let vertical = v.vertical();
-        let pitch = v.rot[2][1].asin();
+        let pitch = musl::asinf(v.rot[2][1]);
         // horizontal distance at which the frame's bottom edge meets the ground
-        let reach = -v.eye[1] / (vertical + pitch).tan();
+        let reach = -v.eye[1] / musl::tanf(vertical + pitch);
         let ahead = norm([v.rot[2][0], 0.0, v.rot[2][2]]);
         let along = dot(sub(p, v.eye), ahead);
         let want = if along < reach { along - reach } else { 0.0 };
@@ -165,12 +166,12 @@ fn fit_bottom(v: &mut View, s: &Scene) {
             lowest = b;
         }
     }
-    let angle = (lowest[1] / lowest[2]).atan();
+    let angle = musl::atanf(lowest[1] / lowest[2]);
     let vertical = v.vertical();
     let mid = (vertical + angle) * 0.5;
     if mid < vertical {
         v.tilt(mid - vertical);
-        v.fov = (mid.tan() / ASPECT).atan();
+        v.fov = musl::atanf(musl::tanf(mid) / ASPECT);
     }
 }
 
@@ -190,18 +191,18 @@ fn fit_sides(v: &mut View, s: &Scene) {
     let (mut left, mut right) = (0.0f32, 0.0f32);
     for &p in &pts {
         let c = v.local(p);
-        let a = (c[0] / c[2]).atan();
+        let a = musl::atanf(c[0] / c[2]);
         if v.fov < -a {
-            left = left.min(-(c[2] * (-a - v.fov).tan()));
+            left = left.min(-(c[2] * musl::tanf(-a - v.fov)));
         }
         if v.fov < a {
-            right = right.max(c[2] * (a - v.fov).tan());
+            right = right.max(c[2] * musl::tanf(a - v.fov));
         }
     }
     v.eye = add(v.eye, scale(v.rot[0], left + right));
     let widest = pts.iter().map(|&p| {
         let c = v.local(p);
-        (c[0] / c[2]).atan().abs()
+        musl::atanf(c[0] / c[2]).abs()
     });
     let widest = widest.fold(0.0f32, f32::max);
     if v.fov < widest {
@@ -215,12 +216,12 @@ fn fit_ball_top(v: &mut View, ball: V3) {
     let vertical = v.vertical();
     let c = v.local(ball);
     let depth = c[2].abs();
-    let top = TOP_MARGIN * depth * vertical.tan();
+    let top = TOP_MARGIN * depth * musl::tanf(vertical);
     let over = -c[1] - top;
     if over > 0.0 {
-        let edge = (top / depth).atan();
-        let delta = ((over * 0.5 + top) / depth).atan() - edge;
-        v.fov = ((vertical + delta).tan() / ASPECT).atan();
+        let edge = musl::atanf(top / depth);
+        let delta = musl::atanf((over * 0.5 + top) / depth) - edge;
+        v.fov = musl::atanf(musl::tanf(vertical + delta) / ASPECT);
         v.tilt(-delta);
     }
 }
