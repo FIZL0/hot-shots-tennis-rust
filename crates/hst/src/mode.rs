@@ -47,6 +47,8 @@ pub struct Next(pub Option<Mode>);
 struct Running {
     s: Schedules,
     back: Option<Box<Mode>>,
+    /// Its way back taken: the switch to it is pending.
+    leaving: bool,
 }
 
 /// What the app had before the first mode: kept through every switch.
@@ -165,7 +167,7 @@ fn switch(world: &mut World) {
             x.run(world);
         }
     }
-    world.insert_resource(Running { s, back: next.back });
+    world.insert_resource(Running { s, back: next.back, leaving: false });
 }
 
 /// Before the loading screen: ask for the running mode's last frame and wait for it (10 frames at most: no window,
@@ -273,15 +275,18 @@ fn teardown(world: &mut World) {
 
 /// The running mode's `AppExit` → its way back, while the primary window is open (closing it still quits).
 fn back(world: &mut World) {
-    if world.get_resource::<Running>().is_none_or(|r| r.back.is_none()) || world.resource::<Messages<AppExit>>().is_empty() {
+    if world.get_resource::<Running>().is_none_or(|r| r.back.is_none() && !r.leaving) || world.resource::<Messages<AppExit>>().is_empty() {
         return;
     }
     if world.query_filtered::<(), With<PrimaryWindow>>().iter(world).next().is_none() {
         return;
     }
     world.resource_mut::<Messages<AppExit>>().clear();
-    let to = world.resource_mut::<Running>().back.take();
-    world.resource_mut::<Next>().0 = to.map(|b| *b);
+    // the mode runs on for a few frames while it leaves (`leave`) and may ask again (the pause menu's quit does every
+    // frame once its fade is done): that's the same way back, not a quit
+    let Some(to) = world.resource_mut::<Running>().back.take() else { return };
+    world.resource_mut::<Next>().0 = Some(*to);
+    world.resource_mut::<Running>().leaving = true;
 }
 
 #[cfg(test)]
@@ -292,26 +297,41 @@ mod tests {
     struct Count(u32);
     #[derive(Component)]
     struct Thing;
+    /// The test's quit: mode 2 asks for its way back every frame while this is in (as the pause menu does).
+    #[derive(Resource)]
+    struct Quit;
 
     fn mode(tag: u32) -> Mode {
         Mode::new(move |app| {
             app.init_resource::<Count>()
                 .add_systems(Startup, move |mut c: Commands| _ = c.spawn(Thing))
-                .add_systems(Update, move |mut n: ResMut<Count>, mut ticks: Local<u32>, mut exit: MessageWriter<AppExit>| {
-                    *ticks += 1;
+                .add_systems(Update, move |mut n: ResMut<Count>, quit: Option<Res<Quit>>, mut exit: MessageWriter<AppExit>| {
                     n.0 = n.0.max(tag * 100) + 1;
-                    if tag == 2 && *ticks == 3 {
+                    if tag == 2 && quit.is_some() {
                         exit.write(AppExit::Success);
                     }
                 });
         })
     }
 
-    /// Frames until the switch (the loading screen's, if it isn't up yet), the switch's included.
+    /// Frames until the switch (the loading screen's and the old mode's last frame, if they aren't done yet), the
+    /// switch's included; nothing quits meanwhile.
     fn loading(app: &mut App) {
         while app.world().resource::<Next>().0.is_some() {
             app.update();
+            assert!(app.should_exit().is_none(), "a mode asking again while it leaves still goes back");
         }
+    }
+
+    /// Frames until the loading screen is down.
+    fn settle(app: &mut App) {
+        while app.world_mut().query::<&Loading>().iter(app.world()).next().is_some() {
+            app.update();
+        }
+    }
+
+    fn count(app: &App) -> u32 {
+        app.world().resource::<Count>().0
     }
 
     /// Menu → match → (the match's quit) → menu: each start builds fresh (`Local`s, resources, Startup), the old
@@ -323,23 +343,21 @@ mod tests {
         let kept = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<Next>().0 = Some(mode(1));
         loading(&mut app);
-        app.update();
-        assert_eq!(app.world().resource::<Count>().0, 102);
+        settle(&mut app);
+        assert!((101..200).contains(&count(&app)));
         app.world_mut().resource_mut::<Next>().0 = Some(mode(2).back(mode(1)));
         loading(&mut app);
-        assert_eq!(app.world().resource::<Count>().0, 201, "fresh resource and Local");
+        assert!((201..300).contains(&count(&app)), "fresh resource");
         assert_eq!(app.world_mut().query::<&Thing>().iter(app.world()).count(), 1, "the menu's Thing went");
-        app.update();
+        settle(&mut app);
+        app.insert_resource(Quit);
         app.update();
         assert!(app.should_exit().is_none(), "the match's quit goes back");
         loading(&mut app);
-        assert_eq!(app.world().resource::<Count>().0, 101, "back in a fresh menu");
+        assert!((101..200).contains(&count(&app)), "back in a fresh menu");
         assert_eq!(app.world_mut().query::<&Thing>().iter(app.world()).count(), 1);
         assert!(app.world().get_entity(kept).is_ok());
-        for _ in 0..5 {
-            app.update();
-        }
-        assert_eq!(app.world_mut().query::<&Loading>().iter(app.world()).count(), 0, "the loading screen went");
+        settle(&mut app);
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         assert!(app.world_mut().query::<&Window>().iter(app.world()).next().is_some());
         app.world_mut().write_message(AppExit::Success);
