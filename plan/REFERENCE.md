@@ -139,6 +139,7 @@ Gamepads whose device node is read-only (udev rules that strip write to stop rum
 - P14f: trigger creatures walk their disc paths (category-14 markers sharing the linked one's sub byte, file order; node radius at 0x30), matching the path manager in RAM on courts 1, 2, 4, 10; rows without `exact` aim at a random point on the node's circle (x/z bit-exact against the reset targets in RAM); the app draws every creature where its tick puts it (court 1's chickens run off when startled).
 - B74 court backdrops: sky/clo/acc/bg follow the camera eye + envir lift, rotated by the envir yaw − hole yaw (row 0); matches RAM on courts 1, 2, 4, 10 and a court-10 screenshot overlay (`HST_EYE` fixed-view shots).
 - B80 court model draw: MODULATE materials blend (ABE), `@add` drops fog, the hole model drawn faded (MODULATE, A ≥ 0x80 test, vertex alpha) and first in material order, MODULATE alpha on GS integers; load rules match RAM on all 11 courts (8,821 batches), grass vs screenshots on courts 3 and 9.
+- P3f5 lens flare: the sun's 24 rays (rand() brightness/angle jitter in `Rngs::flare`), its ghost sprites (`flare3.bmp`) and the whiteout drawn on the match camera; matches a poked-sun PCSX2 shot by eye (no occlusion fade).
 
 ## Known gaps / caveats
 

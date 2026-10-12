@@ -887,3 +887,24 @@ fn seed_after_skip() {
     assert_eq!((s.shared, s.rand), (outs[3], r));
     assert_eq!(hst_sim::rng::Seed::after(0).shared, outs[0]);
 }
+
+/// The lens flare's rays as `setup_rand` makes them: a brightness under 1 and an angle within its 15° step's
+/// jitter (−42..42 4096ths of a turn) round (i + 1)·15°; each tick keeps the brightness in 0.25..1 and steps it by
+/// at most 5 hundredths.
+#[test]
+fn flare_rays() {
+    let mut g = Rngs::new(Rand::default(), Mt::new(1));
+    g.setup_rand(0);
+    let f = g.flare.clone();
+    for i in 0..24 {
+        assert!((0.0..1.0).contains(&f.bright[i]));
+        let n = f.angle[i] as f64 * 2048.0 / std::f64::consts::PI - ((i + 1) * 4096 / 24) as f64;
+        assert!((-42.5..42.5).contains(&n), "ray {i}: {n}");
+    }
+    g.flare_tick();
+    for i in 0..24 {
+        let b = g.flare.bright[i];
+        assert!((0.25..=1.0).contains(&b));
+        assert!(b == 0.25 || b == 1.0 || (b - f.bright[i]).abs() <= 0.051);
+    }
+}
