@@ -51,6 +51,8 @@ pub struct CourtLook {
     pub skies: HashSet<AssetId<GsMaterial>>,
     /// The hole's ground (the shadow receiver).
     pub holes: HashSet<AssetId<GsMaterial>>,
+    /// Flattened shadow decals (the net's, `main`): drawn black, alpha = how much the shadow darkens.
+    pub decals: HashSet<AssetId<GsMaterial>>,
     /// `_acc` and `_clo` models.
     pub acc: Vec<Entity>,
     pub clo: Vec<Entity>,
@@ -99,6 +101,9 @@ pub(crate) fn apply(
         }
         if look.holes.contains(&id) {
             m.uniform.shadow = darken;
+        }
+        if look.decals.contains(&id) {
+            m.uniform.color.w = darken;
         }
     }
     if let Some([r, g, b]) = look.sky.and_then(|c| gs::court_clear(&look.envir, c, &l)) {
