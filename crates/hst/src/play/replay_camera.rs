@@ -82,6 +82,11 @@ impl ReplayCamera {
         self.picks.serve = 0;
     }
 
+    /// A close-up shot (modes 0x56..0x59) is on: replayed footfalls sound (`sound::step`).
+    pub(super) fn close_up(&self) -> bool {
+        self.on && self.shot.as_ref().is_some_and(|s| (0x56..=0x59).contains(&s.number))
+    }
+
     fn start(&mut self, n: u8, listed: bool) {
         info!("replay camera {n:#x}");
         self.shot = Some(Shot::new(&self.shots, n, false));

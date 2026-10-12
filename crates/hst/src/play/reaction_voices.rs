@@ -50,7 +50,7 @@ fn step(mut g: ResMut<Game>, mut frames: ResMut<Frames>) {
 }
 
 /// `v`'s world → camera matrix as `vu0::transform` takes it (column k is camera axis k).
-fn matrix(v: &hst_sim::camera::View) -> [[f32; 4]; 4] {
+pub(super) fn matrix(v: &hst_sim::camera::View) -> [[f32; 4]; 4] {
     let mut m = [[0.0; 4]; 4];
     for k in 0..3 {
         for j in 0..3 {
