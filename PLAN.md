@@ -71,7 +71,7 @@ README *Character mods* — links the mods repo (../HST-MODS: standard, tutorial
 - match: `score.rs` score/rotation/ends · `judge.rs` line calls, verdicts (Rally) · `flow.rs` post-point timeline,
   serve placement
 - camera: `camera.rs` match camera mode 0 · `cutaway.rs` post-point cut-aways
-- `replay.rs` fixture reader · `bin/replay.rs` replay CLI
+- `replay.rs` fixture reader · `bin/replay.rs` replay CLI · `bin/state_hash.rs` per-tick hash, same on x86_64/aarch64/wasm32 (`tests/platforms.rs`); transcendentals only via `libm` (game's) or `musl`, never std
 - tests: `ball_path flights live world` (ball) · `shot_tables swing serve` · `player motion` · `score replay` ·
   `camera cutaway`
 

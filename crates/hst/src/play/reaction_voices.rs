@@ -26,7 +26,7 @@ fn step(mut g: ResMut<Game>, mut frames: Local<u32>) {
     let [x, y, z] = v.rot[2];
     let look = [x, y, z, 0.0];
     let view = matrix(&v);
-    let focal = 240.0 / v.fov.tan();
+    let focal = 240.0 / hst_sim::musl::tanf(v.fov);
     let n = g.players.len() as u32;
     for i in 0..g.players.len() {
         let p = &g.players[i];

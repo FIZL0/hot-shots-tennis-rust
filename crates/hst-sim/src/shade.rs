@@ -35,7 +35,7 @@ impl Frame {
         let (cx, cz) = (centre(0), centre(2));
         let zext = ps2::sub(m(hi[2], s), m(lo[2], s));
         let xext = ps2::sub(m(hi[0], s), m(lo[0], s));
-        let tan = (f32::from_bits(0x3eb2_b8c2) as f64).tan(); // 20°: half the field of view
+        let tan = musl::tan(f32::from_bits(0x3eb2_b8c2) as f64); // 20°: half the field of view
         // the camera height (game y, negative is up) that frames the longer side
         let h = if ps2::div(zext, xext) > 1.333_333_4 {
             ps2::chop(m(-zext, 0.5) as f64 / tan)

@@ -465,7 +465,7 @@ pub fn table_sin(x: f32) -> f32 {
                 79 | 93 | 110 | 145 | 209 | 214 | 226 | 248 => 1.0,
                 _ => 0.0,
             };
-            ((((i as f64 * std::f64::consts::PI / 512.0).sin() * 1e6).round() + off) / 1e6) as f32
+            (((musl::sin(i as f64 * std::f64::consts::PI / 512.0) * 1e6).round() + off) / 1e6) as f32
         })
     });
     let (sign, mut x) = if x < 0.0 { (-1.0, -x) } else { (1.0, x) };

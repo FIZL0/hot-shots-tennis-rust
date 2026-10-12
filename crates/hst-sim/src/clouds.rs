@@ -29,7 +29,7 @@ pub fn spawn(count: usize, models: usize, y: [f32; 2], mut rand: impl FnMut() ->
 
 /// One 60 Hz tick: drift towards `degrees` at `speed`, wrapping x and z into ±R.
 pub fn tick(clouds: &mut [Cloud], degrees: f32, speed: f32) {
-    let (s, c) = degrees.to_radians().sin_cos();
+    let (s, c) = musl::sincosf(degrees.to_radians());
     let step = speed / 600.0 * 40.0;
     let wrap = |v: f32| if v > R { v - 2.0 * R } else if v < -R { v + 2.0 * R } else { v };
     for k in clouds {

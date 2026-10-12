@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 hst-data = { path = "../hst-data" }
 
+# musl's libm in pure Rust: the same transcendental results on every target (std's come from each platform's libm)
+musl = { package = "libm", version = "0.2.16" }
