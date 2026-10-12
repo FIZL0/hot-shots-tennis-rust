@@ -30,7 +30,12 @@ pub fn resolve(argv: &mut Vec<String>) {
     }
     let iso = if import && argv.first().is_some_and(|a| !a.starts_with("--")) { Some(argv.remove(0)) } else { None };
     if !import && argv.first().is_some_and(|a| !a.starts_with("--")) {
-        return;
+        // B94: a path that won't open (a launcher's placeholder) used to panic in the startup systems with the window
+        // already up; fall back to the pack / picker instead
+        if Iso::open(&argv[0]).is_ok() {
+            return;
+        }
+        eprintln!("Couldn't open the disc image {}: using the imported disc", argv.remove(0));
     }
     let pack = pack_path();
     if import || !pack.exists() {
