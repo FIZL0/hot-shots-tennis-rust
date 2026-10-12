@@ -20,6 +20,12 @@
   button { font: inherit; }
   /* Join by Code on a touch screen: a tap anywhere but the controls opens the keyboard (typed_code) */
   #codekeys { position: fixed; inset: 0; z-index: 5; opacity: 0; font-size: 16px; border: 0; padding: 0; caret-color: transparent; }
+  #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .6em; padding: 16px; text-align: center; pointer-events: none; }
+  #boot[hidden] { display: none; }
+  #boot.err { pointer-events: auto; background: #000; }
+  #boot.err #step { color: #f88; white-space: pre-wrap; max-width: 40em; overflow-wrap: anywhere; }
+  #boot a { color: #8cf; }
 </style>
 </head>
 <body>
@@ -30,6 +36,9 @@
   <input id="iso" type="file" accept=".iso">
   <p id="status"></p>
 </div>
+<!-- what the page is doing until the game draws (web.rs `shown`), or why it stopped -->
+<div id="boot"><div id="step">Loading…</div><div id="help" hidden>
+  <a href="">Reload</a> · <a id="gl" href="?webgl2">Try WebGL2</a> · <a href="?forget">Pick the ISO again</a></div></div>
 <script>
 // A LAN answer's link (M2k, `net/rtc.rs`), opened by the host scanning a guest's screen: hand it to the game's tab
 // and stop here (the game isn't loaded twice).
@@ -39,6 +48,29 @@ if (answer) {
   document.body.textContent = 'Sent to the game in your other tab: switch back to it. You can close this one.';
 }
 </script>
+<script>
+// Boot status and errors on the page instead of a silent black screen. A Rust panic logs its message with
+// console.error (Bevy's panic hook) before the wasm traps: the last such line is what the error shows.
+const boot = document.getElementById('boot'), step = document.getElementById('step');
+const say = t => { if (!boot.classList.contains('err')) step.textContent = t; };
+let lastError = '';
+const error = console.error;
+console.error = (...a) => { lastError = a.map(String).join(' '); error.apply(console, a); };
+function fail(e) {
+  if (boot.classList.contains('err')) return;
+  const msg = String(e?.message ?? e ?? 'unknown error');
+  // winit hands the event loop to the browser by throwing: not an error
+  if (msg.includes('Using exceptions for control flow')) return;
+  boot.hidden = false;
+  boot.classList.add('err');
+  document.getElementById('help').hidden = false;
+  step.textContent = `The game stopped: ${/panicked/.test(lastError) ? lastError : msg}`;
+}
+addEventListener('error', e => fail(e.error ?? e.message));
+addEventListener('unhandledrejection', e => fail(e.reason));
+// web.rs: the game's first frames are on screen
+window.hstShown = () => { if (!boot.classList.contains('err')) boot.hidden = true; };
+</script>
 <script type="module" src="touch.js"></script>
 <script type="module">
 if (answer) await new Promise(() => {});
@@ -47,9 +79,12 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
 // (`?webgl2` forces it).
+say('Checking graphics…');
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await navigator.gpu?.requestAdapter().catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
-const { default: init, run, paste, typed_code } = await import(webgpu ? './pkg-webgpu/hst.js' : './pkg/hst.js');
+if (!webgpu) document.getElementById('gl').hidden = true;
+const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
+const { default: init, run, paste, typed_code } = await import(pkg + 'hst.js');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
 const q = new URLSearchParams(location.search);
@@ -59,8 +94,23 @@ if (q.has('forget')) {
   location.search = q.toString();
 }
 
+// the game's wasm, with how much of it has arrived
+async function wasm() {
+  const r = await fetch(pkg + 'hst_bg.wasm');
+  if (!r.ok) throw new Error(`${pkg}hst_bg.wasm: HTTP ${r.status}`);
+  let got = 0;
+  const count = new TransformStream({ transform(c, out) {
+    got += c.byteLength;
+    say(`Downloading the game… ${(got / 1e6).toFixed(0)} MB`);
+    out.enqueue(c);
+  } });
+  return new Response(r.body.pipeThrough(count), { headers: { 'Content-Type': 'application/wasm' } });
+}
+
 async function start() {
   const pack = await dir.getFileHandle('disc.pack');
+  boot.hidden = false;
+  say('Reading the disc pack…');
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
   document.getElementById('disc').hidden = true;
   // first visit on a phone or tablet: the Low graphics preset (graphics.rs; changeable in Settings → Graphics).
@@ -69,7 +119,8 @@ async function start() {
     if (matchMedia('(pointer: coarse)').matches && localStorage.getItem('./settings.txt') === null)
       localStorage.setItem('./settings.txt', 'frame_limit = 60\nvsync = off\nrender_scale = 67\nshadows = low\noriginal = off\n');
   } catch {}
-  await init();
+  await init({ module_or_path: wasm() });
+  say('Starting…');
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
@@ -91,6 +142,7 @@ try {
   await start();
 } catch (e) {
   if (e.name !== 'NotFoundError') throw e;
+  boot.hidden = true;
   document.getElementById('disc').hidden = false;
   document.getElementById('iso').onchange = ev => {
     const file = ev.target.files[0];
