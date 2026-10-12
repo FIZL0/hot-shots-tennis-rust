@@ -36,6 +36,8 @@ struct VertexOutput {
     @location(5) color: vec4<f32>,
     // its specular term (the vertex alpha HIGHLIGHT2 adds)
     @location(8) spec: f32,
+    // the fog coefficient F VU1 writes to the vertex (0..255); the GS interpolates it linearly on screen
+    @location(9) @interpolate(linear) fog: f32,
 }
 
 #ifdef MORPH_TARGETS
@@ -110,6 +112,13 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let diffuse2 = lit * max(-dot(n, gs.light2_dir.xyz), 0.0);
     c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
 #endif
+    // VU1: F from the vertex's view depth (clip w), at most F near, then at least F far (MINI, MAX), FTOI to an
+    // integer; both ends go towards 255 as the eye rises past 30 m (game y = −Bevy y)
+    let vz = view_bindings::view.view_from_world;
+    let w = -dot(vec4(vz[0].z, vz[1].z, vz[2].z, vz[3].z), out.world_position);
+    let lift = clamp((view_bindings::view.world_position.y - 30.0) * 0.02, 0.0, 0.7);
+    let ends = gs.fog.xy + lift * (255.0 - gs.fog.xy);
+    out.fog = floor(max(min(ends.x + (w - gs.fog.z) * (ends.y - ends.x) / (gs.fog.w - gs.fog.z), ends.x), ends.y));
     // FTOI0 to the GS's 8 bits
     out.color = floor(min(c * 128.0, vec4(255.0)) + 1e-3) / 128.0;
     return out;
@@ -180,13 +189,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
 #ifdef GS_FOG
-    // VU1: F from the view depth (clip w), at most F near, then at least F far (VU1's MINI, MAX); both go towards 255 as the eye rises past 30 m
-    // (game y = −Bevy y). GS: (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values.
-    let v = view_bindings::view.view_from_world;
-    let depth = -dot(vec4(v[0].z, v[1].z, v[2].z, v[3].z), in.world_position);
-    let lift = clamp((view_bindings::view.world_position.y - 30.0) * 0.02, 0.0, 0.7);
-    let ends = gs.fog.xy + lift * (255.0 - gs.fog.xy);
-    let fog = floor(max(min(ends.x + (depth - gs.fog.z) * (ends.y - ends.x) / (gs.fog.w - gs.fog.z), ends.x), ends.y));
+    // GS: the interpolated F truncated to 8 bits, (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values
+    let fog = floor(in.fog);
     rgb = (floor(fog * floor(rgb * 255.0) / 256.0) + floor((255.0 - fog) * floor(gs.fog_color.rgb * 255.0 + 0.5) / 256.0)) / 255.0;
 #endif
     // shadow: (0 − Cd)·A + Cd on the frame buffer, the same as darkening every layer drawn there
