@@ -14,7 +14,8 @@
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
 
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ImageRenderTarget, RenderTarget};
+use bevy::camera::{CameraProjection, ImageRenderTarget, RenderTarget};
+use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureFormat};
 use bevy::shader::ShaderRef;
@@ -25,7 +26,8 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(UiMaterialPlugin::<Composite>::default())
         .add_systems(Startup, setup)
         .add_systems(Update, encode_pbr_output)
-        .add_systems(PostUpdate, (retarget, clear, follow_window).chain().before(bevy::camera::CameraUpdateSystems));
+        .add_systems(PostUpdate, (retarget, clear, follow_window).chain().before(bevy::camera::CameraUpdateSystems))
+        .add_systems(PostUpdate, pixel_aspect.after(bevy::camera::CameraUpdateSystems));
 }
 
 #[derive(Resource)]
@@ -118,7 +120,9 @@ fn encode_pbr_output(mut events: MessageReader<AssetEvent<Shader>>, mut shaders:
 }
 
 /// Both images at the window's physical size and scale factor, as the window target was; the scene's times the
-/// render scale setting (the composite upscales it).
+/// render scale setting (the composite upscales it). The original mode (`Graphics::original`) draws the scene at 448
+/// lines and 640 columns per 4:3 width (the PS2's non-square pixels, `pixel_aspect`) and the HUD at 448 lines, both
+/// scaled up unfiltered.
 fn follow_window(
     t: Res<Targets>,
     g: Res<crate::graphics::Graphics>,
@@ -129,13 +133,25 @@ fn follow_window(
     mut stale: Local<u8>,
 ) {
     let Ok(w) = window.single() else { return };
-    let k = g.scale as f32 / 100.0;
-    let at = |k: f32| Extent3d { width: ((w.physical_width() as f32 * k) as u32).max(1), height: ((w.physical_height() as f32 * k) as u32).max(1), depth_or_array_layers: 1 };
-    for (h, size) in [(&t.scene, at(k)), (&t.hud, at(1.0))] {
+    let (pw, ph) = (w.physical_width() as f32, w.physical_height() as f32);
+    let size = |x: f32, y: f32| Extent3d { width: (x.round() as u32).max(1), height: (y.round() as u32).max(1), depth_or_array_layers: 1 };
+    let ((scene, ks), (hud, kh)) = if g.original {
+        let k = 448.0 / ph.max(1.0);
+        ((size(480.0 * pw / ph.max(1.0), 448.0), k), (size(pw * k, 448.0), k))
+    } else {
+        let k = g.scale as f32 / 100.0;
+        ((size((pw * k).floor(), (ph * k).floor()), k), (size(pw, ph), 1.0))
+    };
+    let sampler = if g.original { ImageSampler::nearest() } else { ImageSampler::Default };
+    for (h, size) in [(&t.scene, scene), (&t.hud, hud)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
             *stale = 2;
         }
+    }
+    if images.get(&t.scene).is_some_and(|i| i.sampler != sampler) {
+        images.get_mut(&t.scene).unwrap().sampler = sampler;
+        *stale = 2;
     }
     // the material's bind group holds the old texture views until it is prepared again, which can happen before the
     // resized images are: again the frame after
@@ -145,8 +161,8 @@ fn follow_window(
     }
     for mut target in &mut targets {
         let Some(scale) = (match &*target {
-            RenderTarget::Image(i) if i.handle == t.scene => Some(w.scale_factor() * k),
-            RenderTarget::Image(i) if i.handle == t.hud => Some(w.scale_factor()),
+            RenderTarget::Image(i) if i.handle == t.scene => Some(w.scale_factor() * ks),
+            RenderTarget::Image(i) if i.handle == t.hud => Some(w.scale_factor() * kh),
             _ => None,
         }) else {
             continue;
@@ -156,6 +172,25 @@ fn follow_window(
         {
             let handle = i.handle.clone();
             *target = RenderTarget::Image(ImageRenderTarget { handle, scale_factor: scale });
+        }
+    }
+}
+
+/// In the original mode the scene image's pixels aren't square (640 per 4:3 width): project for the window's aspect,
+/// not the image's. Bevy recomputes `clip_from_view` from the image's aspect whenever the projection changes, so this
+/// runs after it every frame. The frustum stays the image's, a little wider than the view: it only culls less.
+fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<PrimaryWindow>>, mut q: Query<(&mut Camera, &Projection), With<Scene>>) {
+    let Ok(w) = window.single() else { return };
+    if !g.original {
+        return;
+    }
+    let aspect = w.width() / w.height().max(1.0);
+    for (mut cam, proj) in &mut q {
+        if let Projection::Perspective(p) = proj {
+            let clip = PerspectiveProjection { aspect_ratio: aspect, ..p.clone() }.get_clip_from_view();
+            if cam.computed.clip_from_view != clip {
+                cam.computed.clip_from_view = clip;
+            }
         }
     }
 }

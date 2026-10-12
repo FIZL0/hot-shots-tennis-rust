@@ -150,6 +150,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 roster = Some(inspect::Roster(disc, mods));
             }
             "--vsync" => gfx.vsync = true,
+            "--original" => gfx.original = true,
             "--fps" | "--scale" | "--shadows" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--fullscreen" => {} // read in `main`
             "--music" => music = true,
@@ -178,6 +179,11 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
+    }
+    // the original's picture: 4:3 with the disc's own textures
+    if gfx.original {
+        play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed);
+        upscale = false;
     }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
     Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster }

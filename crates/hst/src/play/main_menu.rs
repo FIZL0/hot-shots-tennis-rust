@@ -100,7 +100,7 @@ const SETTING_LABELS: [&str; 3] = ["Widescreen", "Upscaled Textures", "Music"];
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
-const GRAPHICS_LABELS: [&str; 5] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync"];
+const GRAPHICS_LABELS: [&str; 6] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode"];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -148,7 +148,8 @@ impl Settings {
             1 => g.scale = cycle(&SCALES, g.scale, d),
             2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
             3 => g.fps = cycle(&FPS, g.fps, d),
-            _ => g.vsync = !g.vsync,
+            4 => g.vsync = !g.vsync,
+            _ => g.original = !g.original,
         }
     }
 
@@ -161,7 +162,8 @@ impl Settings {
             2 => ["Off", "Low", "High"][g.shadows as usize].into(),
             3 if g.fps == 0 => "Uncapped".into(),
             3 => format!("{} fps", g.fps),
-            _ => if g.vsync { "On" } else { "Off" }.into(),
+            4 => if g.vsync { "On" } else { "Off" }.into(),
+            _ => if g.original { "On" } else { "Off" }.into(),
         }
     }
 
@@ -1090,6 +1092,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, 
                 2 => "Off, or the shadow map's detail (Low: smaller and fewer cascades).",
                 3 => "The most frames drawn a second (the game itself always runs at 60 Hz).",
                 4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
+                5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
                 _ => "Back to the settings.",
             });
         }
@@ -1619,6 +1622,8 @@ mod tests {
         assert_eq!(s.1, d);
         s.graphics_step(1, -1);
         assert_eq!((s.1.scale, s.graphics_value(0).as_str()), (85, "Custom"));
+        s.graphics_step(5, 1);
+        assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
     }
 
     #[test]

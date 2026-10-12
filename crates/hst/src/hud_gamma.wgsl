@@ -15,10 +15,10 @@ fn dec(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(in.position.xy);
-    // the scene is drawn at the render scale setting: filtered up to the window (at 100 % this hits texel centres)
-    let b = textureSampleLevel(scene, scene_sampler, in.position.xy / vec2<f32>(textureDimensions(hud)), 0.0).rgb;
-    let h = textureLoad(hud, p, 0);
+    // the scene is drawn at the render scale setting: filtered up to the window (at 100 % this hits texel centres);
+    // the HUD at the window's size, or at 448 lines in the original mode (nearest)
+    let b = textureSampleLevel(scene, scene_sampler, in.uv, 0.0).rgb;
+    let h = textureLoad(hud, vec2<i32>(in.uv * vec2<f32>(textureDimensions(hud))), 0);
     let c = select(vec3(0.0), h.rgb / h.a, h.a > 0.0);
     return vec4(dec(enc(c) * h.a + b * (1.0 - h.a)), 1.0);
 }
