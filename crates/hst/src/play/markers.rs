@@ -26,7 +26,7 @@ pub(super) const LAST: f32 = 1e4;
 
 /// One player's marker quad (its own material: tint and cell).
 #[derive(Component)]
-struct Marker(usize, Handle<StandardMaterial>);
+pub(super) struct Marker(usize, Handle<StandardMaterial>);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
