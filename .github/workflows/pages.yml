@@ -1,6 +1,6 @@
 # The browser build (`tools/web.sh`) on GitHub Pages: the page and the wasm only, no game data (players pick their ISO).
-# Each run also replaces the rolling "Latest alpha" pre-release (tag `alpha`) with Linux + Windows builds of the same
-# commit, as tools/build.sh makes them; numbered Alpha N releases stay manual (tools/release.sh).
+# Each run also replaces the rolling "Latest alpha" release (tag `alpha`, marked latest) with Linux + Windows builds of
+# the same commit, as tools/build.sh makes them.
 name: pages
 on:
   push:
@@ -95,6 +95,6 @@ jobs:
           gh release delete alpha --cleanup-tag -y || true
           printf '%s\n\n%s\n\n%s\n' "**Rolling alpha: rebuilt on every change to main (${GITHUB_SHA::7}). Expect bugs.**" \
             "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
-            "Browser version: https://fizl0.github.io/hot-shots-tennis-rust/ · numbered alphas: the other releases." > notes.md
-          gh release create alpha --prerelease --latest=false --target "$GITHUB_SHA" --title "Latest alpha (${GITHUB_SHA::7})" \
+            "Browser version: https://fizl0.github.io/hot-shots-tennis-rust/" > notes.md
+          gh release create alpha --latest --target "$GITHUB_SHA" --title "Latest alpha (${GITHUB_SHA::7})" \
             --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip

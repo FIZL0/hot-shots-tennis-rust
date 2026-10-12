@@ -21,7 +21,9 @@ context/, mods/ (+ the old replacements/ link) and the ISO are symlinked in. Eac
 N of the user's config in ../<repo>-slots/pcsx2/sN with its own PINE slot, save states and virtual pad; see
 tools/pcsx2-hst.sh); the runner closes it when the slot's session ends.
 
-Merging is the master's job: one long-lived session in window "master" (main checkout) that every finished task
+Merging: the runner merges each finished task/<ID> itself, joining both sides of conflicts in plan/ and journal markdown
+and skipping the tests when the merged code is what the agent already tested; only code conflicts and failing tests go
+to the master, one long-lived session in window "master" (main checkout) that every finished task
 reports to; it merges task/<ID> into main, fixes conflicts, runs the tests and keeps context/notes/master.md for you.
 Reports queue in context/notes/master.outbox; each waits until the master is idle, then goes in after a /clear with
 the master's instructions, so the session lives on across runs without its context growing. Nothing ends the master:
@@ -254,7 +256,9 @@ report in this main checkout:
 2. `git merge --no-edit task/<ID>` (no commits on it: just note that). Resolve every conflict keeping both sides' \
 intent (read both sides' commits and journal; tasks run in parallel, so plan/TODO.md + DONE.md moves and new struct fields from both \
 belong; a branch that still ticks/blocks in PLAN.md's old task list: redo that as `tools/ctx.py tick|block <ID>`). \
-Then `tools/ctx.py archive` (moves any [x] the merge brought into plan/TODO.md to plan/DONE.md), tools/check.sh; fix what the merge broke, never the task's own work; commit.
+Then `tools/ctx.py archive` (moves any [x] the merge brought into plan/TODO.md to plan/DONE.md), tools/check.sh in the foreground (about 2 min; the agent \
+already passed it on its branch, so skip it when `git diff --name-only task/<ID> HEAD` lists only .md files; never wait on \
+other check.sh processes, the slots run their own); fix what the merge broke, never the task's own work; commit.
 3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, leave the branch and say why.
 4. Append one line to context/notes/master.md: <ID>: merged / conflicts fixed (what) / left (why), the task's state \
 (ticked, part, blocked) and anything the human must do.
@@ -270,6 +274,45 @@ MERGE = threading.Lock()  # one merge into main at a time
 SUSPECT = re.compile(r'BLOCKED:.*(pcsx2|capture|unattended|screenshot|not launched|recording)', re.I)
 
 
+PLAIN = re.compile(r'(plan|research/journal)/.*\.md')  # text files whose conflicts the runner joins itself
+ITEM = re.compile(r'- \[(.)\] \*\*([^\s*]+)')  # a top-level task line, as tools/ctx.py
+
+
+def union(files, tid):
+    """Resolve conflicts in plan/journal markdown by keeping both sides (git merge-file --union). Then a task line
+    that came out twice keeps the branch's copy for its own task and main's for the rest, and TODO.md loses lines
+    whose task DONE.md already has as done (a branch that ticked it, or main that archived it)."""
+    for f in sorted(files, key=lambda f: f != 'plan/DONE.md'):  # DONE.md first: TODO.md reads it
+        sides = []
+        for stage in (2, 1, 3):  # ours, base, theirs
+            t = os.path.join(NOTES, f'union.{stage}')
+            open(t, 'w').write(git('show', f':{stage}:{f}').stdout)  # no base (both added it): empty
+            sides.append(t)
+        out = git('merge-file', '-p', '--union', *sides)
+        if out.returncode < 0:
+            return False
+        text = out.stdout
+        if f in ('plan/TODO.md', 'plan/DONE.md'):
+            done = {m.group(2).rstrip('.') for l in open(os.path.join(ROOT, 'plan/DONE.md'))
+                    if (m := ITEM.match(l)) and m.group(1) == 'x'} if f == 'plan/TODO.md' else set()
+            out_l, seen, mine = [], {}, git('show', f'task/{tid}:{f}').stdout.splitlines()
+            for l in text.split('\n'):
+                if m := ITEM.match(l):
+                    k = m.group(2).rstrip('.')
+                    if k in done:
+                        continue
+                    if k in seen:
+                        if (k == tid) == (l in mine):
+                            out_l[seen[k]] = l
+                        continue
+                    seen[k] = len(out_l)
+                out_l.append(l)
+            text = '\n'.join(out_l)
+        open(os.path.join(ROOT, f), 'w').write(text)
+        git('add', f)
+    return True
+
+
 def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
@@ -278,18 +321,30 @@ def merge(tid):
     with MERGE:
         while master_busy():  # the master is merging in main: queue behind it
             time.sleep(10)
-        if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
-            return 'main has uncommitted changes'
-        pre = git('rev-parse', 'HEAD').stdout.strip()
-        if git('merge', '--no-edit', f'task/{tid}').returncode:
-            files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-            git('merge', '--abort')
-            return f'conflicts in {", ".join(files)}'
-        sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
-        if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
-            git('commit', '-qam', f'{tid}: archive ticked tasks into plan/DONE.md')
+        # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
+        stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
+            and not git('stash', 'push', '-q', '-m', f'runner {tid}').returncode
+        try:
+            pre = git('rev-parse', 'HEAD').stdout.strip()
+            if git('merge', '--no-edit', f'task/{tid}').returncode:
+                files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+                if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid):
+                    git('merge', '--abort')
+                    return f'conflicts in {", ".join(files)}'
+                git('commit', '-q', '--no-edit')
+                log(f'{tid}: the runner joined both sides of {", ".join(files)}')
+            sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
+            if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+                git('commit', '-qam', f'{tid}: archive ticked tasks into plan/DONE.md')
+        finally:
+            if stashed and git('stash', 'pop', '-q').returncode:
+                git('reset', '-q', '--hard')  # only the half-applied pop goes; the stash itself stays
+                log(f'{tid}: main\'s uncommitted changes clash with the merge: they are kept in git stash "runner {tid}"')
         merged = git('rev-parse', 'HEAD').stdout.strip()
-        chk = sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
+        # the agent's done.sh passed the tests on its branch: rerun them only if main's code differs from the branch's
+        tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split())
+        chk = sp.CompletedProcess([], 0, '', '') if tested else \
+            sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
         if chk.returncode:
             later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
             git('reset', '-q', '--keep', pre)
