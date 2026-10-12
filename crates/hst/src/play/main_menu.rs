@@ -96,16 +96,17 @@ const FONT: [&str; 15] = [
 
 /// The enhancements, each on or off (all on by default), and the graphics settings, saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 3], Graphics);
-const SETTING_NAMES: [&str; 3] = ["widescreen", "upscaled_textures", "music"];
-const SETTING_LABELS: [&str; 3] = ["Widescreen", "Upscaled Textures", "Music"];
+pub struct Settings([bool; 4], Graphics);
+/// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match).
+const SETTING_NAMES: [&str; 4] = ["widescreen", "upscaled_textures", "menu_music", "music"];
+const SETTING_LABELS: [&str; 4] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music"];
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
 const GRAPHICS_LABELS: [&str; 7] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing"];
 
-/// Widescreen and upscaled textures on, music off (user 2026-10-12).
-const SETTING_DEFAULTS: [bool; 3] = [true, true, false];
+/// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
+const SETTING_DEFAULTS: [bool; 4] = [true, true, true, false];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -180,7 +181,7 @@ impl Settings {
 
     /// The match's flags for these settings.
     fn flags(&self) -> Vec<String> {
-        let [wide, upscale, music] = self.0;
+        let [wide, upscale, _, music] = self.0;
         let on = [(!wide, "--4x3"), (!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
         on.chain(self.1.flags()).collect()
     }
@@ -1200,9 +1201,10 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
                 1 => "Use the upscaled textures in mods/texture-replacements.".into(),
-                2 => "Play music in the menus and on each court.".into(),
-                3 => "Resolution, shadows, frame limit and vsync.".into(),
-                4 => "Change the keys and buttons (controls.txt).".into(),
+                2 => "Play music in the menus.".into(),
+                3 => "Play each court's music during a match.".into(),
+                4 => "Resolution, shadows, frame limit and vsync.".into(),
+                5 => "Change the keys and buttons (controls.txt).".into(),
                 _ => text.msg(190).to_string(),
             });
         }
@@ -1712,7 +1714,7 @@ fn load_bgm(mut commands: Commands, args: Res<Args>) {
 /// The overlay switches track only when the screen's track changes: the new one from its start at volume 55, no fade.
 fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>, mut on: Local<Option<usize>>) {
     let (Some(tracks), Some(sound)) = (tracks, sound) else { return };
-    let want = menu.screen.bgm().filter(|_| menu.settings.0[2]); // the Music switch covers the menus too
+    let want = menu.screen.bgm().filter(|_| menu.settings.0[2]); // Menu Music; Match Music is the match's `--music`
     if want == *on {
         return;
     }
@@ -1780,13 +1782,20 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, true, false], Graphics::LOW);
+        let s = Settings([true, true, false, false], Graphics::LOW);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false], d));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false], d));
+        // a fresh file: menu music on, court music off; an old file's `music` is the match's
+        assert_eq!(Settings::parse(""), Settings([true, true, true, false], d));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false], d));
+        assert!(!Settings::default().flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, true, false], d).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, true, false, true], d).flags().contains(&"--music".to_string()));
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, false, true], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
         // the preset row steps through the presets; changing any other row makes it Custom
         let mut s = Settings::default();
         s.graphics_step(0, 1);
