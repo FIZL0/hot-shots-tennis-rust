@@ -283,7 +283,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
 }
 
 /// Finished loads into the world: characters' assets, and PNGs.
-fn receive(mut loader: ResMut<Loader>, mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, ResMut<Assets<Image>>, ResMut<Assets<SkinnedMeshInverseBindposes>>)) {
+fn receive(mut loader: ResMut<Loader>, mut menu: Option<ResMut<Menu>>, mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, ResMut<Assets<Image>>, ResMut<Assets<SkinnedMeshInverseBindposes>>)) {
     let (meshes, materials, images, binds) = &mut assets;
     let loader = &mut *loader;
     #[cfg(target_arch = "wasm32")]
@@ -300,12 +300,26 @@ fn receive(mut loader: ResMut<Loader>, mut assets: (ResMut<Assets<Mesh>>, ResMut
             }
             Err(e) => {
                 warn!("select preview of {:?} costume {}: {e}", key.0, key.1);
+                if let (Who::Mod(i), Some(menu)) = (key.0, menu.as_deref_mut()) {
+                    broke(menu, i, key.1);
+                }
                 None
             }
         };
         loader.models.insert(key, loaded);
         loader.model_order.retain(|k| *k != key);
         loader.model_order.push_back(key);
+    }
+}
+
+/// M1n: costume `k` of mod `i` failed to load: the select passes it, and a player still picking on it moves to its
+/// next costume that hasn't failed.
+fn broke(menu: &mut Menu, i: usize, k: usize) {
+    menu.broken.insert((i, k));
+    let n = menu.mods.get(i).map_or(0, |m| m.costumes.len());
+    let next = (1..n).map(|d| (k + d) % n).find(|c| !menu.broken.contains(&(i, *c)));
+    for pl in menu.players.iter_mut().filter(|pl| pl.modded && pl.pick == i && pl.costume == k && !pl.ready) {
+        pl.costume = next.unwrap_or(k);
     }
 }
 

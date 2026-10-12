@@ -80,12 +80,17 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     if j["standard"].as_u64() != Some(1) {
         return Err(err(format!("`standard` is {}, this game reads standard 1", j["standard"])));
     }
-    let costumes: Vec<String> = j["costumes"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let mut costumes: Vec<String> = j["costumes"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    // M1n: a listed costume with no .glb is left out (the select never offers an empty one), not the whole mod
+    costumes.retain(|c| {
+        let ok = dir.join(c).is_file();
+        if !ok {
+            warn!("{}: costume `{c}` not found, left out", at.display());
+        }
+        ok
+    });
     if costumes.is_empty() {
-        return Err(err("`costumes` must list at least one .glb".into()));
-    }
-    if let Some(c) = costumes.iter().find(|c| !dir.join(c).is_file()) {
-        return Err(err(format!("costume `{c}` not found")));
+        return Err(err("`costumes` must list at least one .glb that exists".into()));
     }
     let donor = num(&j["donor"], "donor", 13)?;
     let hand = match j["hand"].as_str() {
@@ -1172,6 +1177,8 @@ mod tests {
         let ok = r#"{"standard":1,"id":"x","name":"X","costumes":["model/c00.glb"],"donor":3,"hand":"right","params":{"base":3,"override":{"Strk POW":5}},"ai_row":3,"face":"morph","voice":"voice/"}"#;
         let m = try_(ok).unwrap();
         assert_eq!((m.donor, m.hand, m.overrides.clone()), (3, 1.0, vec![("Strk POW".to_string(), "5".to_string())]));
+        // M1n: a listed costume with no file is left out, the rest kept
+        assert_eq!(try_(&ok.replace("[\"model/c00.glb\"]", "[\"model/c00.glb\",\"model/c01.glb\"]")).unwrap().costumes, ["model/c00.glb"]);
         assert_eq!((m.source.as_str(), try_(&ok.replace("\"id\"", "\"source\":\"Hot Shots Tennis: Get a Grip (PSP) pc03\",\"id\"")).unwrap().source.as_str()), ("", "Hot Shots Tennis: Get a Grip"));
         for (bad, field) in [("\"standard\":1", "\"standard\":2"), ("\"donor\":3", "\"donor\":14"), ("\"right\"", "\"ambi\""), ("Strk POW", "Strk PWR"), ("\"morph\"", "\"texture\""), ("model/c00.glb", "model/c01.glb")].map(|(a, b)| (ok.replace(a, b), b)) {
             let e = try_(&bad).err().unwrap_or_default();
@@ -1209,22 +1216,38 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Every mod under `$HST_MODS` (e.g. the mods repo's `out/mods`) loads costume 0; prints the failures.
+    /// Every costume of every mod under `$HST_MODS` (e.g. the mods repo's `out/mods`) loads and has a body to draw
+    /// (M1n: no costume in the select's list draws nothing); prints the failures.
     #[test]
     #[ignore]
     fn loads_every_mod() {
         let (Ok(mut iso), Ok(root)) = (Iso::open(ISO), std::env::var("HST_MODS")) else { return eprintln!("no ISO or HST_MODS, skipped") };
         let mut dirs: Vec<_> = std::fs::read_dir(root).unwrap().flatten().map(|e| e.path()).filter(|d| d.join("mod.json").is_file()).collect();
         dirs.sort();
-        let mut bad = 0;
+        let (mut bad, mut n) = (0, 0);
         for d in &dirs {
-            let mut s = Stores(default(), default(), default(), default());
-            if let Err(e) = read(d).and_then(|m| load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3)) {
-                bad += 1;
-                eprintln!("FAIL {e}");
+            let m = match read(d) {
+                Ok(m) => m,
+                Err(e) => {
+                    bad += 1;
+                    eprintln!("FAIL {e}");
+                    continue;
+                }
+            };
+            for k in 0..m.costumes.len() {
+                n += 1;
+                let mut s = Stores(default(), default(), default(), default());
+                let r = load(&mut iso, &m, k, &mut s.0, &mut s.1, &mut s.2, &mut s.3).and_then(|c| {
+                    let verts: usize = c.parts.iter().filter_map(|p| s.0.get(&p.0)).map(Mesh::count_vertices).sum();
+                    (verts > 0).then_some(()).ok_or_else(|| format!("{} costume {k}: nothing to draw ({} parts)", m.id, c.parts.len()))
+                });
+                if let Err(e) = r {
+                    bad += 1;
+                    eprintln!("FAIL {e}");
+                }
             }
         }
-        eprintln!("{} of {} mods load", dirs.len() - bad, dirs.len());
+        eprintln!("{} of {n} costumes of {} mods load", n - bad, dirs.len());
         assert_eq!(bad, 0);
     }
 }

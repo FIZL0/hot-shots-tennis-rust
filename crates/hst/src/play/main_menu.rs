@@ -273,6 +273,9 @@ struct Menu {
     /// The custom roster, and whether the select shows it.
     mods: Vec<crate::mods::Mod>,
     custom: bool,
+    /// M1n: (custom roster entry, costume) whose model failed to load in the select: L1 / R1 pass it, it can't be
+    /// readied on.
+    broken: std::collections::HashSet<(usize, usize)>,
     /// The Online screens' state; `net.go` is set while the local screens pick this machine's players for Online.
     net: online::View,
     /// The confirmation screen's flame, from P1's pick.
@@ -295,6 +298,7 @@ impl Default for Menu {
             rebinding: None,
             mods: Vec::new(),
             custom: false,
+            broken: default(),
             net: online::View::default(),
             flame: flame::Flame::default(),
         }
@@ -335,7 +339,8 @@ impl Menu {
     /// Whether player `p`'s character and costume are locked in by someone else.
     fn blocked(&self, p: usize) -> bool {
         let me = self.players[p];
-        (0..self.players()).any(|q| q != p && self.players[q].ready && self.who(q) == self.who(p) && self.players[q].costume == me.costume)
+        matches!(self.who(p), Who::Mod(i) if self.broken.contains(&(i, me.costume)))
+            || (0..self.players()).any(|q| q != p && self.players[q].ready && self.who(q) == self.who(p) && self.players[q].costume == me.costume)
     }
 
     /// Player `p` picking again, on the page shown.
@@ -502,6 +507,8 @@ impl Menu {
                     }
                 }
                 let costumes = self.costumes(self.who(p));
+                let broken = |c: usize| matches!(self.who(p), Who::Mod(i) if self.broken.contains(&(i, c)));
+                let broken: Vec<bool> = (0..costumes).map(broken).collect();
                 let n_mods = self.mods.len();
                 let me = &mut self.players[p];
                 if k.card {
@@ -526,7 +533,13 @@ impl Menu {
                         }
                     }
                     if k.prev || k.next {
-                        me.costume = (me.costume + if k.next { 1 } else { costumes - 1 }) % costumes;
+                        // M1n: past a costume that failed to load
+                        for _ in 0..costumes {
+                            me.costume = (me.costume + if k.next { 1 } else { costumes - 1 }) % costumes;
+                            if !broken[me.costume] {
+                                break;
+                            }
+                        }
                         out.push(Sound(0));
                     }
                 }
@@ -1844,6 +1857,20 @@ mod tests {
         m.seats[0] = Some(Dev::Keys);
         assert_eq!(m.step(Dev::Keys, press(|p| &mut p.page)), [Effect::Sound(1)]);
         assert!(!m.custom);
+        // M1n: a costume whose model failed to load is passed by L1 / R1 and can't be readied on
+        let mut m = Menu { mods: vec![fake("c", 3, 3)], ..default() };
+        for _ in 0..3 {
+            m.step(Dev::Keys, ok);
+        }
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        m.broken.insert((0, 1));
+        m.step(Dev::Keys, press(|p| &mut p.next));
+        assert_eq!(m.players[0].costume, 2);
+        m.step(Dev::Keys, press(|p| &mut p.next));
+        m.step(Dev::Keys, press(|p| &mut p.next));
+        assert_eq!(m.players[0].costume, 2, "0 → 2 → 0 → 2");
+        m.players[0].costume = 1;
+        assert!(m.blocked(0));
     }
 
     #[test]
