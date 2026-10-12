@@ -3,13 +3,14 @@
 //! player's R2 / L2 / △ (keyboard: 1, 2 and the attributes key) play the inspect screen's win, loss and back.
 //!
 //! B86: a card shows a PNG of the preview (character × costume) while its player scrolls, and the live model only once
-//! the hover has held [`SETTLE`] seconds (the live one is what R2/L2/△ act on). The PNGs are drawn here, once, by an
+//! the hover has held [`SETTLE`] seconds (B99: or at once when there is no PNG yet; the PNG is read on the frame its
+//! key is hovered, and stays over the live model its first [`COVER`] frames) (the live one is what R2/L2/△ act on). The PNGs are drawn here, once, by an
 //! off-screen preview (the baker: [`BAKE`] pixels, the cards' crop and lighting) and read back into a local cache
 //! beside settings.txt (`cache/previews/<disc boot file>-r<RENDER>/`): disc characters' images are made from the
 //! user's disc, so they are never shipped, and are all baked in the background from the first launch on (the hovered
 //! uncached one first); a later launch only reads them. A mod may ship its own as `previews/<costume>.png` (the mods
-//! repo's standard); else its costumes bake on hover like the disc's. `HST_BAKE=all` also bakes every mod's
-//! costumes and quits when done (the mods repo's packaging). Bump [`RENDER`] when the preview's drawing changes.
+//! repo's standard); else its costumes bake in the background after the disc's (a hovered one first). `HST_BAKE=all`
+//! quits once every mod's costumes are baked (the mods repo's packaging). Bump [`RENDER`] when the preview's drawing changes.
 //!
 //! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms), the newest ask
 //! first; at most [`KEEP_MODELS`] stay loaded and [`KEEP_PNGS`] PNGs (M1m's budget), least recently used dropped, so
@@ -69,17 +70,27 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Last, despawn);
     if let Some(secs) = std::env::var("HST_STRESS").ok().and_then(|s| s.parse::<f32>().ok()) {
         app.add_systems(Update, stress(secs).before(super::step));
+        if let Ok(dir) = std::env::var("HST_SHOTS") {
+            app.add_systems(Last, shots(dir));
+        }
     }
 }
 
 type Key = (Who, usize);
 
-/// What a card shows: its key, the live model's camera (else a PNG) and its UI node.
+/// What a card shows: its key, the live model's camera (else a PNG) and its UI node; a live one's PNG it replaced, kept
+/// on top for its last frames (B99).
 struct Shown {
     key: Key,
     cam: Option<Entity>,
     node: Entity,
+    cover: Option<(Entity, u32)>,
 }
+
+/// Frames a PNG stays over the live model that replaced it, while that model's first frames draw (its textures and
+/// pipelines can land a few frames late: a blank or part-drawn card otherwise).
+// ponytail: a fixed count; a check of the live target's first full draw if a slow GPU still shows a gap
+const COVER: u32 = 10;
 
 /// A worker's load: the character, its hand and its assets, to move into the world's (`Err("")`: the ask was dropped
 /// as stale).
@@ -94,9 +105,7 @@ struct Loader {
     /// Loaded characters (`None`: failed), least recently used first.
     models: HashMap<Key, Option<(Arc<CharacterData>, f32)>>,
     model_order: VecDeque<Key>,
-    png_ask: Sender<(Key, PathBuf)>,
-    png_done: Mutex<Receiver<(Key, Option<Image>)>>,
-    /// PNGs by key: `None` while reading or where there is none.
+    /// PNGs by key (`None`: the file didn't decode).
     pngs: HashMap<Key, Option<Handle<Image>>>,
     png_order: VecDeque<Key>,
     /// The cache folder, and per mod its folder name and newest file time (its PNGs' stamp).
@@ -121,23 +130,28 @@ impl Loader {
         self.models.get(&key)
     }
 
-    /// The PNG of `key` if it is read, asking for it if not; marked as just used.
-    fn png(&mut self, key: Key, menu: &Menu) -> Option<Handle<Image>> {
+    /// The PNG of `key`, read now if it isn't kept (B99: a ~3 ms decode on the hovering frame, so a card never waits
+    /// blank for a worker; None: not baked yet); marked as just used.
+    fn png(&mut self, key: Key, menu: &Menu, images: &mut Assets<Image>) -> Option<Handle<Image>> {
         if let Some(i) = self.png_order.iter().position(|k| *k == key) {
             self.png_order.remove(i);
             self.png_order.push_back(key);
             return self.pngs.get(&key).cloned().flatten();
         }
-        self.pngs.insert(key, None);
+        let path = self.path(key, menu).filter(|p| p.is_file())?;
+        let image = std::fs::read(&path).ok().and_then(|b| {
+            Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD)
+                .map_err(|e| warn!("{}: {e}", path.display()))
+                .ok()
+        });
+        let handle = image.map(|i| images.add(i));
+        self.pngs.insert(key, handle.clone());
         self.png_order.push_back(key);
-        if let Some(path) = self.path(key, menu).filter(|p| p.is_file()) {
-            let _ = self.png_ask.send((key, path));
-        }
         while self.png_order.len() > KEEP_PNGS {
             let old = self.png_order.pop_front().unwrap();
             self.pngs.remove(&old);
         }
-        None
+        handle
     }
 
     /// Where `key`'s PNG is (a mod's own `previews/<costume>.png` if it ships one), or None for a mod index gone.
@@ -155,12 +169,6 @@ impl Loader {
                 Some(self.dir.join(format!("m-{stamp}-{k}.png")))
             }
         }
-    }
-
-    /// Forget `key`'s PNG (a fresh bake), so it is read again.
-    fn forget_png(&mut self, key: Key) {
-        self.pngs.remove(&key);
-        self.png_order.retain(|k| *k != key);
     }
 
     /// Drop the least recently used characters over the budget, except `keep`'s.
@@ -232,27 +240,6 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
             }
         }
     });
-    let (png_ask, png_asks) = std::sync::mpsc::channel::<(Key, PathBuf)>();
-    let (png_send, png_done) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        while let Ok(first) = png_asks.recv() {
-            // newest first, as the models
-            let mut queue = vec![first];
-            while let Some((key, path)) = {
-                queue.extend(png_asks.try_iter());
-                queue.pop()
-            } {
-                let image = std::fs::read(&path).ok().and_then(|b| {
-                    Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD)
-                        .map_err(|e| warn!("{}: {e}", path.display()))
-                        .ok()
-                });
-                if png_send.send((key, image)).is_err() {
-                    return;
-                }
-            }
-        }
-    });
     let mut iso = Iso::open(&args.iso).ok();
     let boot = iso.as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
     let root = super::Settings::path(&args.iso).with_file_name("cache").join("previews");
@@ -273,8 +260,6 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
         asked: HashSet::new(),
         models: HashMap::new(),
         model_order: VecDeque::new(),
-        png_ask,
-        png_done: Mutex::new(png_done),
         pngs: HashMap::new(),
         png_order: VecDeque::new(),
         dir,
@@ -305,13 +290,11 @@ fn receive(mut loader: ResMut<Loader>, mut assets: (ResMut<Assets<Mesh>>, ResMut
         loader.model_order.retain(|k| *k != key);
         loader.model_order.push_back(key);
     }
-    for (key, image) in loader.png_done.get_mut().unwrap().try_iter() {
-        // a PNG read after its entry was dropped is not kept
-        if let (Some(slot), Some(image)) = (loader.pngs.get_mut(&key), image) {
-            *slot = Some(images.add(image));
-        }
-    }
 }
+
+/// Card-frames whose card showed another key or nothing though its PNG was read ([0]), the hovered one ([1]), or
+/// nothing with no PNG baked yet ([2]); logged when `HST_STRESS` quits.
+static CHECK: [std::sync::atomic::AtomicU32; 3] = [const { std::sync::atomic::AtomicU32::new(0) }; 3];
 
 /// Which way the cards draw (`HST_PREVIEW`).
 fn mode() -> &'static str {
@@ -364,15 +347,15 @@ fn sync(
             since[p] = key.map(|k| (k, now));
             pending.0[p] = None;
         }
-        // a press loads the live model straight away
-        let settled = (since[p].is_some_and(|(_, t)| now - t >= SETTLE) || pending.0[p].is_some()) && mode() != "png";
+        let png = match key {
+            Some(k) if mode() != "live" => loader.png(k, &menu, &mut images),
+            _ => None,
+        };
+        // a press, or a key not baked yet (nothing to show until the live model), loads the live model straight away
+        let settled = (since[p].is_some_and(|(_, t)| now - t >= SETTLE) || pending.0[p].is_some() || png.is_none()) && mode() != "png";
         let modded = |w: Who| match w {
             Who::Mod(i) => menu.mods.get(i),
             Who::Disc(_) => None,
-        };
-        let png = match key {
-            Some(k) if mode() != "live" => loader.png(k, &menu),
-            _ => None,
         };
         if let Some(k) = key
             && settled
@@ -383,15 +366,31 @@ fn sync(
         // a new key: its live model, else its PNG, else nothing yet; a PNG gives way to the live model once loaded
         let same = slot.as_ref().is_some_and(|s| Some(s.key) == key);
         let upgrade = live.is_some() && slot.as_ref().is_some_and(|s| s.cam.is_none());
+        let place = |node: &mut Node, [x, y, w, h]: [f32; 4], anchor| {
+            let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), anchor);
+            node.left = Val::Percent(left);
+            node.top = Val::Percent(y / 4.48);
+            node.width = Val::Percent(width);
+            node.height = Val::Percent(h / 4.48);
+        };
         if !same || upgrade {
+            // the PNG a live model replaces stays on top of it a few frames
+            let mut cover = None;
             if let Some(s) = slot.take() {
                 if let Some(cam) = s.cam {
                     gone.0.extend(preview_entities(cam, &cams, &parents));
                 }
-                gone.0.push(s.node);
+                if same && s.cam.is_none() {
+                    cover = Some((s.node, COVER));
+                } else {
+                    gone.0.push(s.node);
+                }
             }
-            if let (Some((w, costume)), Some((_, q))) = (key, want) {
-                let node = Node { position_type: PositionType::Absolute, ..default() };
+            if let (Some((w, costume)), Some((i, q))) = (key, want) {
+                // placed as it spawns (else it draws one frame at the image's own size, top left)
+                let mut node = Node { position_type: PositionType::Absolute, ..default() };
+                place(&mut node, q.dst, q.anchor);
+                let node = (node, ZIndex(i as i32));
                 if let Some((data, hand)) = live {
                     // a mod poses with its donor's timing and yaws
                     let c = match w {
@@ -403,24 +402,43 @@ fn sync(
                     commands.entity(cam).insert(Card(p));
                     let node = commands.spawn((Shot, node, MaterialNode(ui.add(PreviewMaterial { image })))).id();
                     commands.entity(root).add_child(node);
-                    *slot = Some(Shown { key: (w, costume), cam: Some(cam), node });
+                    if let Some((c, _)) = cover {
+                        let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+                        commands.entity(c).insert((full, ZIndex(0)));
+                        commands.entity(node).add_child(c);
+                    }
+                    *slot = Some(Shown { key: (w, costume), cam: Some(cam), node, cover });
                 } else if let Some(png) = png {
                     let node = commands.spawn((Shot, node, ImageNode::new(png))).id();
                     commands.entity(root).add_child(node);
-                    *slot = Some(Shown { key: (w, costume), cam: None, node });
+                    *slot = Some(Shown { key: (w, costume), cam: None, node, cover: None });
                 }
+            } else if let Some((c, _)) = cover {
+                gone.0.push(c);
+            }
+        }
+        if let Some(Shown { cover: cover @ Some(_), .. }) = slot.as_mut() {
+            let (c, n) = cover.as_mut().unwrap();
+            *n -= 1;
+            if *n == 0 {
+                gone.0.push(*c);
+                *cover = None;
             }
         }
         if let (Some(s), Some((i, q))) = (slot.as_ref(), want)
             && let Ok((mut node, mut z)) = nodes.get_mut(s.node)
         {
-            let [x, y, w, h] = q.dst;
-            let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), q.anchor);
-            node.left = Val::Percent(left);
-            node.top = Val::Percent(y / 4.48);
-            node.width = Val::Percent(width);
-            node.height = Val::Percent(h / 4.48);
+            place(&mut node, q.dst, q.anchor);
             z.0 = i as i32;
+        }
+    }
+    // the stress run's check: is a card on screen showing its hovered key (else blank or another character; a key not
+    // baked yet counted apart)
+    for (p, s) in shown.iter().enumerate() {
+        if quads.iter().any(|q| q.tex == Tex::Preview(p)) {
+            let key = (menu.who(p), menu.players[p].costume);
+            let i = if s.as_ref().is_some_and(|s| s.key == key) { 1 } else if loader.pngs.get(&key).is_some_and(Option::is_some) { 0 } else { 2 };
+            CHECK[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
     let keep: Vec<Key> = shown.iter().flatten().map(|s| s.key).chain(since.iter().flatten().map(|s| s.0)).chain(baker.job.as_ref().map(|j| j.key)).collect();
@@ -428,7 +446,7 @@ fn sync(
 }
 
 /// The off-screen preview drawing uncached PNGs one at a time: hovered ones first (newest first), then every disc
-/// character's costumes (and with `HST_BAKE=all` every mod's).
+/// character's costumes, then every mod's (`HST_BAKE=all` quits when done).
 #[derive(Resource, Default)]
 struct Baker {
     queue: Vec<Key>,
@@ -451,11 +469,10 @@ struct Job {
 }
 
 fn start_baker(mut commands: Commands, menu: Res<Menu>) {
+    // every mod's costumes after the disc's (B99: an unbaked one is blank until its live model loads)
     let mut queue = Vec::new();
-    if std::env::var("HST_BAKE").is_ok_and(|v| v == "all") {
-        for (i, m) in menu.mods.iter().enumerate().rev() {
-            queue.extend((0..m.costumes.len()).rev().map(|k| (Who::Mod(i), k)));
-        }
+    for (i, m) in menu.mods.iter().enumerate().rev() {
+        queue.extend((0..m.costumes.len()).rev().map(|k| (Who::Mod(i), k)));
     }
     // costume 0 of every character first (popped last-in first)
     for k in (0..super::COSTUMES).rev() {
@@ -501,7 +518,6 @@ fn bake(
             gone.0.extend(preview_entities(job.cam, &cams, &parents));
             if save(&data, &job.path) {
                 info!("baked {}", job.path.display());
-                loader.forget_png(key);
             } else {
                 baker.failed.insert(key);
             }
@@ -731,6 +747,8 @@ fn stress(secs: f32) -> impl FnMut(ResMut<Menu>, Res<Time>, MessageWriter<AppExi
     let mut hold = 0.0;
     move |mut menu, time, mut exit, mut seed| {
         if time.elapsed_secs() > secs {
+            let [bad, good, unbaked] = CHECK.each_ref().map(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+            info!("stress: {bad} card-frames not showing the hovered key, {good} showing it, {unbaked} waiting for a bake");
             exit.write(AppExit::Success);
             return;
         }
@@ -774,6 +792,18 @@ fn stress(secs: f32) -> impl FnMut(ResMut<Menu>, Res<Time>, MessageWriter<AppExi
             }
             let n = if pl.modded { m.mods[pl.pick].costumes.len() } else { super::COSTUMES };
             pl.costume = rnd(n);
+        }
+    }
+}
+
+/// `HST_SHOTS=<dir>` (with `HST_STRESS`): every frame's window as `<dir>/NNNN.png`, frames 60–299 (after the stress
+/// run's first second).
+fn shots(dir: String) -> impl FnMut(Commands, Local<u32>) {
+    move |mut commands, mut n| {
+        *n += 1;
+        if (60..300).contains(&*n) {
+            let path = format!("{dir}/{:04}.png", *n);
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
         }
     }
 }

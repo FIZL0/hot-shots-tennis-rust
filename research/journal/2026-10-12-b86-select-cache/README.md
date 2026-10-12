@@ -8,3 +8,6 @@ Files: `crates/hst/src/play/main_menu/previews.rs` (rewritten), `noise.rs` (`try
 `standard/HST-CHARACTER-STANDARD.md` §1 `previews/`, `tools/rerig/previews.py`, README step 4.
 
 Iterations: `1-B86-FINAL.md`.
+
+B99 (cached pictures not loading properly on the cards): `2-B99-FINAL.md`. Files: `previews.rs`, `mods.rs`
+(`own_motions` skips a joint the costume lacks), `tools/select_stress.sh` (`HST_SHOTS`); ../HST-MODS standard §6.
