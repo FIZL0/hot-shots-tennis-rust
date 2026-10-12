@@ -198,11 +198,14 @@ fn struck(g: &mut Game, i: usize, last: [f32; 3]) {
     (p.body.face.dir, p.body.target) = (dir, dir);
     p.facing = super::yaw(dir);
     p.vel = Vec2::ZERO;
+    // the hit state drops a press still running toward the ball
+    (p.pending, p.approach) = (None, None);
     super::set_motion(p, 0x2b, 1.0, false, None);
     g.whooshes.push((0, i, hst_sim::sound::hit_cry(i)));
 }
 
-/// The hit player stands in its motion from the hit to the point's reaction (in a match; the game's mode 3).
+/// The hit player stands in its motion from the hit to the point's reaction (in a match; the game's mode 3), and
+/// can't swing: the game's player update ignores the button in that state.
 pub(super) fn standing(g: &Game, i: usize) -> bool {
     g.body_hit == Some(i as i32) && g.players.len() >= 2 && std::env::var("HST_BODY_HIT").is_err()
 }
