@@ -169,6 +169,27 @@ fn goodcpus_live_ball_matches_the_game() {
     assert!(r.exact > 2000 && r.touches.get(&2).is_some_and(|&n| n >= 5), "{:?}", r.touches);
 }
 
+/// B39: `1p3goodcpus2` (`context/fixtures/1p3goodcpus2.bin`, four `tools/play_p2m2.py` segments stitched; a doubles
+/// match on court 4 with one human): every flying frame bit-exact, including the five lobs (kind 3) and the six balls that
+/// run on into the back fences (material 14) behind either baseline.
+#[test]
+fn goodcpus2_lobs_and_fence_hits_match_the_game() {
+    use hst_sim::replay::frames_live;
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(data), Some((world, materials))) = (std::fs::read(format!("{root}/context/fixtures/1p3goodcpus2.bin")), disc(4)) else {
+        return eprintln!("1p3goodcpus2.bin or disc missing, skipped");
+    };
+    let frames = frames_live(&data);
+    assert_eq!(frames[0].global(0x422f90), 4, "court");
+    let s: Vec<(i32, &[u8])> = frames.iter().map(|f| (f.vsync() as i32, f.live_ball())).collect();
+    let r = replay(&s, &[], 4, &world, &materials);
+    // lob frames in play: the live ball's shot kind (+0x5c) 3, state (+0xa4) 0 or 1
+    let lobs = s.iter().filter(|(_, b)| i(b, 0x5c) == 3 && b[0xa4] <= 1).count();
+    eprintln!("{} frames bit-exact, {lobs} lob frames; contact frames by material: {:?}", r.exact, r.touches);
+    assert!(r.failures.is_empty(), "{} frames diverged:\n{}", r.failures.len(), r.failures[..r.failures.len().min(20)].join("\n"));
+    assert!(r.exact > 2000 && lobs > 100 && r.touches.get(&14).is_some_and(|&n| n >= 6), "{:?}", r.touches);
+}
+
 #[test]
 fn every_court_builds_its_world() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
