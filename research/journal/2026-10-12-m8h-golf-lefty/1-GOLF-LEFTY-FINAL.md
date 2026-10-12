@@ -16,3 +16,10 @@ brings the source's look back: text reads right (Jasmine's visor, Phoebe's "HSG 
 
 Not verified / not 1:1: a full match `--shot` of a mirrored mod mid-forehand (inspect pose only); opentee/opentee2 not
 looked at in-game (same code path). Standard §6 `hand` and the HST-MODS README note the rule.
+
+## Fix: faces missing on the mirrored mods (same day)
+The pre-mirror flipped the triangle winding as well as reflecting. The game already culls a mirrored rig's front
+faces (gs.rs `GsKey.mirror`), so the one-sided parts (Phoebe's face, skin) were culled. mirror.py now keeps the source
+winding. Checked with `--inspect` shots of fore_pc00_phoebe and oob_pc00_jasmine: face and skin draw, text reads
+the right way, racket in the gloved hand. The select card now shows a mod's hand badge like a disc character's (the
+source game line moved under it).

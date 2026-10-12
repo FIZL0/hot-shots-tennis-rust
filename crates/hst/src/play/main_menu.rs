@@ -1429,15 +1429,15 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                         Who::Disc(c) => c,
                     };
                     rank_pill(d, com_rank(&text.ranks, c, costume, m.doubles), COLOURS[p], x + 17.0, y + 114.0);
-                } else if modded.is_none() {
+                } else {
                     let src = if m.hand(text, p) < 0.0 { [60.0, 184.0, 76.0, 22.0] } else { [60.0, 160.0, 76.0, 22.0] };
                     d.q(CS0, src, [x + 70.0, y + 5.0, 66.0, 19.0], if pl.swap { [128.0, 110.0, 30.0] } else { WHITE }, 128.0);
                 }
                 match modded {
                     Some(i) => {
                         d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0);
-                        // M1m: the game it comes from, along the card's top beside the player tag
-                        d.fitted(&m.mods[i].source, x + 88.0, y + 8.0, 12.0, 98.0);
+                        // M1m: the game it comes from, under the hand badge beside the player tag
+                        d.fitted(&m.mods[i].source, x + 92.0, y + 27.0, 11.0, 88.0);
                     }
                     None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
                 }
