@@ -24,6 +24,10 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
   court/umpire select, settings, loading and result screens are ours to design. The original is a reference for
   them, not a spec; no bit-/frame-exact proof needed. Where a task in `plan/TODO.md` says a menu must look or behave
   "like the original" / "1:1", treat that as a starting point, not a requirement.
+- **In-match presentation only has to feel right** (user 2026-10-12): instant replays (when they trigger and how
+  they play), cameras, cutaways, crowd/umpire animation, commentary and SFX cues match the original by eye. No oracle
+  or PINE proof; just check it doesn't touch the sim RNG or match timing. Oracle runs stay at ≥10k inputs; no
+  mutation testing unless a test looks too weak.
 - **Additions are layered on top** (character/texture mods, other games'
   characters, widescreen, upscaled textures): with them off or unused, a match must still play
   exactly like the original (the replay tests stay bit-exact). A mod character uses the same physics and AI code

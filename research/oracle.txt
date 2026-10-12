@@ -4,3 +4,7 @@ atanf 115970
 powf 1121f0
 # AI run estimate (a0 player, a1 spot x,y,z): hst_sim::ai::Runner::frames_to
 ai_run_frames 35bc50
+# Instant replay decision (a0 = match object; the point message): hst_sim::instant::decide
+instant_replay 325cd0
+# Scoreboard point award (a0 = scoreboard), stubbed in the instant replay test (hst_sim::score::Score::point)
+score_award 38b820
