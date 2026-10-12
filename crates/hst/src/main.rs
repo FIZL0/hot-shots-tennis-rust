@@ -420,12 +420,18 @@ fn load(
             let players = if !args.play { 1 } else if args.singles { 2 } else { 4 };
             // the game seeds its MT19937 with a `rand()` output when it sets the match up; `HST_WEATHER_SEED` gives it
             // directly (slot 5's was 0x28c7c4a1)
-            // the menus' `rand()` calls before the match are the character select's flame (`rng::MenuFlame`), drawing
-            // every frame it's up; the app has no such menu yet, so a clock-picked count stands in for them
+            // the menus' `rand()` calls before the match are the confirmation screen's flame (`rng::MenuFlame`), drawing
+            // every frame it's up from P1's pick (`main_menu::flame`); a match started without the menus takes a
+            // clock-picked count of draws instead
             // online, the host's seed (`handshake::MatchSeed`, or `hst net`'s room seed) is taken as is
             let seed = seed.map(|s| s.0).unwrap_or_else(|| {
                 std::env::var("HST_WEATHER_SEED").ok().and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).or_else(play::netplay::seed).map_or_else(
-                    || hst_sim::rng::Seed::after(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536)),
+                    || {
+                        play::main_menu::flame::rand().map_or_else(
+                            || hst_sim::rng::Seed::after(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.subsec_micros() % 65536)),
+                            |mut rand| hst_sim::rng::Seed { shared: rand.next(), rand },
+                        )
+                    },
                     hst_sim::rng::Seed::shared,
                 )
             });

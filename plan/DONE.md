@@ -338,6 +338,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P3f3** Clouds' `rand()` draws (P3f gap): the setup's cloud count in rain weathers 3/5 comes from an exe constant (0x3fbf40), not read; a weather change may respawn clouds (unverified); the app's cloud layout draws its own rng (`0x2545_f491 ^ n`), not these 5 draws each → `main.rs` | t: rng.rs
 - [x] **P3f4** Four players of one character's voice banks (P3f gap): `rng::voice_bank`'s four-of-one cases are ported from the code, not recorded. Record one and add it to `setup_draws_like_the_game` → `rng.rs` | t: rng.rs
 - [x] **P17b** Court fog (FGE): far court and props haze toward the court's fog colour as in the original (compare court 10, slot 5, against PCSX2) → `gs.rs` gs.wgsl · `main.rs` load | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering/4-FOG-FINAL.md
+- [x] **P3f1a** Menu flame drawing (P3f1 gap): `rng::MenuFlame` steps only the draws; the effect's motion (speed along the heading, decays), spin, alpha ramp and f_s.tm2/Blue.tm2 sprites, and where on the select it sits, aren't ported. When B40's character select exists, run `MenuFlame` per frame from P1's pick (as the original) instead of main.rs's clock count, and draw it → `main.rs` · `play/main_menu.rs` | t: rng.rs | j: 2026-10-08-p3f1-menu-flame
 
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)

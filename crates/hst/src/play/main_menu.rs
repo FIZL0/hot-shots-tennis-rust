@@ -36,6 +36,7 @@ use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
 
+pub(crate) mod flame;
 mod online;
 mod previews;
 
@@ -271,6 +272,8 @@ struct Menu {
     custom: bool,
     /// The Online screens' state; `net.go` is set while the local screens pick this machine's players for Online.
     net: online::View,
+    /// The confirmation screen's flame, from P1's pick.
+    flame: flame::Flame,
 }
 
 impl Default for Menu {
@@ -290,6 +293,7 @@ impl Default for Menu {
             mods: Vec::new(),
             custom: false,
             net: online::View::default(),
+            flame: flame::Flame::default(),
         }
     }
 }
@@ -733,6 +737,8 @@ struct Quad {
     tile: bool,
     /// Where it goes on a wide window.
     anchor: Anchor,
+    /// Turned clockwise about its centre (radians).
+    angle: f32,
 }
 
 /// The disc's text and tables the screens show.
@@ -820,7 +826,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     art.push(panel::image(&mut images, &inpane.read(hand).expect("INPANE bytes")));
     // Z1: read every sheet first so their replacements decode on all cores at once
     let mut sheets: Vec<Vec<u8>> =
-        SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03")]).map(|(xb, name)| read(&mut iso, xb, &format!("/{name}.tm2"))).collect();
+        SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")]).map(|(xb, name)| read(&mut iso, xb, &format!("/{name}.tm2"))).collect();
     for u in 0..5 {
         sheets.push(read(&mut iso, "MENU/MENU60.XB0", &format!("/item_umpire{u:02}.tm2")));
     }
@@ -934,12 +940,12 @@ const DIMMED: [f32; 3] = [80.0; 3];
 
 impl Draw<'_> {
     fn q(&mut self, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: f32) {
-        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor });
+        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0 });
     }
 
     /// The screen's wall (tiled) and title bar.
     fn frame(&mut self, title: usize, wall: usize) {
-        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span });
+        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0 });
         self.anchor = Anchor::Span;
         self.q(Tex::Sheet(title), [0.0, 0.0, 512.0, 64.0], [0.0, 0.0, 512.0, 64.0], WHITE, 128.0);
         self.q(Tex::Sheet(title), [480.0, 0.0, 32.0, 64.0], [512.0, 0.0, 128.0, 64.0], WHITE, 128.0);
@@ -1327,6 +1333,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             d.centred("COM", x + 56.0, 236.0, 18.0, [60.0, 120.0, 30.0]);
         }
     }
+    flame::draw(d, m);
     d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [288.0, 110.0, 64.0, 48.0], WHITE, 128.0);
     // the umpire's face at the top right
     d.anchor = Anchor::Sides;
@@ -1506,7 +1513,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
     mut ticker: ResMut<Ticker>,
-    mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
+    mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform)>,
     qr: Option<Res<online::QrImage>>,
 ) {
     let Some(art) = art else { return };
@@ -1522,7 +1529,7 @@ fn draw(
     }
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
     let share = super::widescreen::window_share(&window);
-    for (Slot(i), mut img, mut node, mut vis) in &mut q {
+    for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
             continue;
@@ -1532,7 +1539,7 @@ fn draw(
             Tex::Font => art.0[1].clone(),
             Tex::Hand => art.0[2].clone(),
             Tex::Sheet(k) => art.0[3 + k].clone(),
-            Tex::Shots(k) => art.0[3 + SHEETS.len() + 1 + 5 + k].clone(),
+            Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
             Tex::Qr => match &qr {
                 Some(qr) => qr.0.clone(),
@@ -1562,6 +1569,7 @@ fn draw(
         node.top = Val::Percent(top);
         node.width = Val::Percent(width);
         node.height = Val::Percent(height);
+        turn.rotation = Rot2::radians(quad.angle);
         *vis = Visibility::Inherited;
     }
 }
@@ -1609,7 +1617,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, (setup, load_bgm))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
-        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), draw, ticker_text).chain(), bgm));
+        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm));
     app.add_systems(Update, online::poll.before(draw));
     previews::plugin(app);
 }

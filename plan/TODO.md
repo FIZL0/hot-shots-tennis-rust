@@ -144,7 +144,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Confirmations
 
-- [ ] **P3f1a** Menu flame drawing (P3f1 gap): `rng::MenuFlame` steps only the draws; the effect's motion (speed along the heading, decays), spin, alpha ramp and f_s.tm2/Blue.tm2 sprites, and where on the select it sits, aren't ported. When B40's character select exists, run `MenuFlame` per frame from P1's pick (as the original) instead of main.rs's clock count, and draw it → `main.rs` · `play/main_menu.rs` | t: rng.rs | j: 2026-10-08-p3f1-menu-flame
 - [ ] **P3f5** Lens flare drawing (P3f gap): the flare's 24 rays (brightness/angle jitter from `rand()`) are drawn by the game; the app only steps their draws → `play.rs` | t: rng.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [~] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs BLOCKED: no recorded let serve (round1's 4 cord serves were net faults); turned serves/effects done | j: 2026-10-08-p6-serve-details

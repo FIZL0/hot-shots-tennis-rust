@@ -200,22 +200,66 @@ impl Rngs {
     }
 }
 
-/// The character select's flame (24 particles of `menu/2d/f_s.tm2`, made at P1's pick), as far as its `rand()`
-/// calls go: it draws on every frame it's up, so the calls before the match seed follow how long the select is shown.
+/// The menus' flame (24 particles of `menu/2d/f_s.tm2`, behind the confirmation screen's VS, made at P1's pick): it
+/// draws `rand()` on every frame it's up, so the calls before the match seed follow how long the menus are shown.
 /// A particle lives 18 + `% 24` frames at an integer heading in degrees (0 = right, 270 = up) that steers toward
-/// 270, by a random step in 226..315.
-// ponytail: only what the draws read (alive, life, heading); its motion, spin and alpha wait for a select (P3f1a)
+/// 270, by a random step in 226..315; it moves along the heading (faster the nearer it is to straight up), spins
+/// (a slowing random turn), grows to full size, then shrinks and fades over its last 14 frames.
+// ponytail: motion in plain f32 (the menu only has to look right); the draws, which the match seed hangs on, are exact
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuFlame {
     alive: [bool; 24],
     life: [u32; 24],
     heading: [i32; 24],
+    /// Offset from the effect's origin and the step a frame, in 640×448 pixels (y down).
+    pos: [[f32; 2]; 24],
+    vel: [[f32; 2]; 24],
+    /// The sprite's turn (radians) and its turn a frame (degrees).
+    angle: [f32; 24],
+    spin: [f32; 24],
+    /// Size as a share of 64 px.
+    scale: [f32; 24],
+    /// What each particle drew this frame (before its step).
+    shown: [Option<FlameSprite>; 24],
 }
+
+/// One particle as drawn: centre offset (px), side (px), turn (radians, clockwise), alpha (0..128), and whether it
+/// takes the sheet's smoke half (particles 20..23) instead of the fire half.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlameSprite {
+    pub at: [f32; 2],
+    pub size: f32,
+    pub angle: f32,
+    pub alpha: f32,
+    pub smoke: bool,
+}
+
+/// The effect's tuning (the menu overlay's block): starting speed, top-speed bonus, base speed, x squash, growth a
+/// frame, full size, spin and shrink decays, then life (18 + `% 24`) and the fade (last 14 frames).
+const SPEED0: f32 = 1.04;
+const BOOST: f64 = 1.3;
+const BASE: f32 = 1.04;
+const SQUASH: f32 = 0.65;
+const GROW: f32 = 0.13;
+const FULL: f32 = 1.56;
+const DECAY: f32 = 0.96;
+const FADE: u32 = 14;
+const DEG: f32 = 0.017_453_292;
 
 impl MenuFlame {
     /// The screen's setup: each particle starts alive when `% 3 != 0`, else when a second draw's `& 7 == 0`.
     pub fn new(r: &mut Rand) -> MenuFlame {
-        let mut f = MenuFlame { alive: [false; 24], life: [0; 24], heading: [0; 24] };
+        let mut f = MenuFlame {
+            alive: [false; 24],
+            life: [0; 24],
+            heading: [0; 24],
+            pos: [[0.0; 2]; 24],
+            vel: [[0.0; 2]; 24],
+            angle: [0.0; 24],
+            spin: [0.0; 24],
+            scale: [0.0; 24],
+            shown: [None; 24],
+        };
         for i in 0..24 {
             if Self::draw(r) % 3 != 0 || Self::draw(r) & 7 == 0 {
                 f.spawn(r, i);
@@ -228,31 +272,52 @@ impl MenuFlame {
         (r.next() >> 8) as i32
     }
 
-    /// A heading (`% 360`), a life and a spin (`% 7 − 3`, not kept).
+    /// Degrees to radians in -π..π.
+    fn rad(deg: i32) -> f32 {
+        let d = deg.rem_euclid(360);
+        (if d > 180 { d - 360 } else { d }) as f32 * DEG
+    }
+
+    /// A heading (`% 360`), a life and a spin (`% 7 − 3`); off from the origin along the heading, small.
     fn spawn(&mut self, r: &mut Rand, i: usize) {
         self.alive[i] = true;
         self.heading[i] = Self::draw(r) % 360;
+        let a = Self::rad(self.heading[i]);
+        self.pos[i] = [0.0; 2];
+        self.vel[i] = [SPEED0 * crate::libm::cosf(a), SPEED0 * crate::libm::sinf(a)];
         self.life[i] = 18 + (Self::draw(r) % 24) as u32;
-        Self::draw(r);
+        self.scale[i] = 0.1;
+        self.angle[i] = a;
+        self.spin[i] = (Self::draw(r) % 7 - 3) as f32;
     }
 
     /// One frame: with fewer than 13 particles out a dead one respawns when `& 7 == 0`; with 13 or more, when
-    /// `% 3 != 0` or else a second draw's `& 7 == 0`. Each live one (a new one too) then loses a frame of life and,
-    /// still alive, steers.
+    /// `% 3 != 0` or else a second draw's `& 7 == 0`. Each live one (a new one too) is drawn, then loses a frame of
+    /// life and, still alive, turns, moves, grows or shrinks and steers.
     pub fn frame(&mut self, r: &mut Rand) {
         let dead = self.alive.iter().filter(|&&a| !a).count();
         for i in 0..24 {
             if !self.alive[i] && ((dead >= 13 && Self::draw(r) % 3 != 0) || Self::draw(r) & 7 == 0) {
                 self.spawn(r, i);
             }
+            self.shown[i] = None;
             if !self.alive[i] {
                 continue;
             }
+            let alpha = if self.life[i] < FADE { (self.life[i] * 128 / FADE) as f32 } else { 128.0 };
+            self.shown[i] = Some(FlameSprite { at: self.pos[i], size: 64.0 * self.scale[i], angle: self.angle[i], alpha, smoke: i >= 20 });
             self.life[i] -= 1;
             if self.life[i] == 0 {
                 self.alive[i] = false;
                 continue;
             }
+            self.angle[i] += self.spin[i] * DEG;
+            self.spin[i] *= DECAY;
+            if self.angle[i].abs() > std::f32::consts::PI {
+                self.angle[i] -= std::f32::consts::TAU * self.angle[i].signum();
+            }
+            self.pos[i] = [self.pos[i][0] + self.vel[i][0], self.pos[i][1] + self.vel[i][1]];
+            self.scale[i] = if self.life[i] < FADE { self.scale[i] * DECAY } else { (self.scale[i] + GROW).min(FULL) };
             let a = self.heading[i];
             // a random step: a sixth of the way to 270 (truncated), scaled by 100..299 %, at least 1
             let jitter = |r: &mut Rand, sixth: i32| (sixth * (Self::draw(r) % 200 + 100) / 100).max(1);
@@ -267,7 +332,23 @@ impl MenuFlame {
                 _ => 0,
             };
             self.heading[i] = self.heading[i].rem_euclid(360);
+            // faster the nearer the heading is to vertical: off it by d degrees (0..90), BASE + BOOST·(1 − d/180)
+            let h = self.heading[i];
+            let d = match h {
+                0..=89 => h + 90,
+                90..=179 => 180 - h,
+                180..=269 => 270 - h,
+                _ => h - 270,
+            };
+            let speed = BASE + (BOOST * (1.0 - d as f64 / 180.0)) as f32;
+            let a = Self::rad(h);
+            self.vel[i] = [SQUASH * speed * crate::libm::cosf(a), speed * crate::libm::sinf(a)];
         }
+    }
+
+    /// The particles drawn on the last frame, in drawing order.
+    pub fn sprites(&self) -> impl Iterator<Item = FlameSprite> + '_ {
+        self.shown.iter().flatten().copied()
     }
 }
 
