@@ -308,6 +308,8 @@ pub enum Msg {
     /// In the match (`play/netplay.rs`): seats' pads for one tick (`Pad` as `[buttons lo, hi, rx, ry, lx, ly]`), a
     /// peer's state hash before a tick, a pause opened or closed, a peer ending the match (why).
     Pads { tick: u32, seats: Vec<(u8, [u8; 6])> },
+    /// The court intro's ticks before the match (B42e), as `Pads` (a seat's ✕ skips it for everyone).
+    Intro { tick: u32, seats: Vec<(u8, [u8; 6])> },
     Hash { tick: u32, hash: u64 },
     Pause(bool),
     Bye(String),
@@ -320,7 +322,7 @@ pub enum Msg {
 impl Msg {
     /// A match message (relayed to every peer).
     fn in_match(&self) -> bool {
-        matches!(self, Msg::Pads { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_))
+        matches!(self, Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_))
     }
 }
 

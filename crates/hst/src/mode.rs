@@ -119,6 +119,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
         .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
+        // before the fixed ticks (the court intro holds them: `play/intro.rs`)
+        .add_systems(RunFixedMainLoop, (|w: &mut World| run(w, RunFixedMainLoop)).in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(FixedPreUpdate, |w: &mut World| run(w, FixedPreUpdate))
         .add_systems(FixedUpdate, |w: &mut World| {
             if w.get_resource::<Gate>().map(|g| g.0).is_none_or(|gate| gate(w)) {

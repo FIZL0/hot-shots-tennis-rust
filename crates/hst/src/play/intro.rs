@@ -8,8 +8,10 @@
 //! Games" pill and "Set 1"). Its sounds
 //! (`sounds`): the court's BGM (with `--music`) from the intro's start, running on into the match; the gallery's
 //! cheer from its first tick; the system bank's "Start the Match" sound once the cut to the match camera has faded
-//! in. Off in online matches (both peers would have to skip together),
-//! for `--shot` (unless `HST_INTRO=1`), with `HST_INTRO=0` and without a window.
+//! in. Online (B42e) its ticks run in lockstep on every machine (`netplay::intro_tick`, with the match's delay) and
+//! a ✕ on any machine skips it on the same tick everywhere, so the match starts together; there `HST_INTRO` and
+//! `--shot` don't count (every peer must run it). Off for `--shot` (unless `HST_INTRO=1`), with `HST_INTRO=0` and
+//! without a window.
 
 use std::time::Duration;
 
@@ -38,6 +40,8 @@ struct Intro {
     /// have played (`None`: not even the start's).
     banner_tick: u32,
     heard: Option<u32>,
+    /// Online: this machine's ✕, held till an intro tick takes it.
+    press: bool,
     /// The gallery's cheer, on its own copy of the court generator so the match's stays as the setup left it.
     gallery: Gallery,
     rng: Mt,
@@ -68,6 +72,12 @@ impl Intro {
     }
     fn showing(&self) -> bool {
         self.at < self.banner_start()
+    }
+    /// ✕: the flyover ends here, the intro `SKIPPED` ticks on.
+    fn skip(&mut self) {
+        self.frames = self.at;
+        self.ticks = self.at + SKIPPED;
+        self.banner_tick = self.at;
     }
 }
 
@@ -140,18 +150,19 @@ fn start(
     args: Res<Args>,
     g: Option<Res<Game>>,
     window: Query<&Window>,
-    net: Option<Res<super::netplay::Netplay>>,
+    net: Option<ResMut<super::netplay::Netplay>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let on = match std::env::var("HST_INTRO").as_deref() {
+        _ if net.is_some() => true,
         Ok("0") => false,
         Ok("1") => true,
         _ => args.shot.is_none(),
     };
-    let Some(g) = g.filter(|_| on && net.is_none() && !window.is_empty()) else { return };
+    let Some(g) = g.filter(|_| on && !window.is_empty()) else { return };
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let n = g.stage as usize;
     let dat = iso.read(&format!("COURT/{n:02}/CMN.XB")).ok().and_then(|d| {
@@ -160,6 +171,9 @@ fn start(
         arc.read(e).ok()
     });
     let Some(dat) = dat else { return };
+    if let Some(mut net) = net {
+        net.start_intro();
+    }
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let shots = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").camera_shots();
     let frames = cutaway::intro_frames(&dat);
@@ -194,7 +208,7 @@ fn start(
         })
         .id();
     let banner = Banner { effect, shown, root, ui, sheets, sets: g.rules.sets, games: g.rules.games };
-    commands.insert_resource(Intro { shot: Shot::intro(&shots, &dat), frames, ticks, at: 0, acc: 0.0, banner, banner_tick: frames + 2, heard: None, gallery: Gallery::default(), rng });
+    commands.insert_resource(Intro { shot: Shot::intro(&shots, &dat), frames, ticks, at: 0, acc: 0.0, banner, banner_tick: frames + 2, heard: None, press: false, gallery: Gallery::default(), rng });
     let row = hst_data::exe::court_plates(&iso.read("SCUS_976.10").expect("main program")).expect("supported disc")[n];
     let art = ["/courtpreview_00.tm2".to_string(), format!("/courtpreview_name{n:02}.tm2"), "/2d/info.tm2".into()].map(|name| {
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name));
@@ -221,15 +235,27 @@ fn hold(w: &mut World) {
     let mut q = w.query::<&Gamepad>();
     skip |= q.iter(w).filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(GamepadButton::South));
     let dt = w.resource::<Time<Real>>().delta_secs();
-    let mut intro = w.resource_mut::<Intro>();
-    if skip && !paused && intro.showing() {
-        intro.frames = intro.at;
-        intro.ticks = intro.at + SKIPPED;
-        intro.banner_tick = intro.at;
+    let online = w.contains_resource::<super::netplay::Netplay>();
+    let mut intro = w.remove_resource::<Intro>().unwrap();
+    if !online && skip && !paused && intro.showing() {
+        intro.skip();
     }
+    intro.press |= online && skip && !paused;
     if !paused {
         intro.acc += dt;
         while intro.acc >= 1.0 / 60.0 && intro.at < intro.ticks {
+            if online {
+                // the tick runs once every seat's ✕ (or not) for it is in, the same on every machine
+                let Some(skip) = super::netplay::intro_tick(w, intro.press) else {
+                    intro.acc = intro.acc.min(1.0 / 60.0);
+                    break;
+                };
+                intro.press = false;
+                if skip && intro.showing() {
+                    info!("court intro skipped at its tick {}", intro.at);
+                    intro.skip();
+                }
+            }
             intro.acc -= 1.0 / 60.0;
             intro.at += 1;
             if intro.at <= intro.frames {
@@ -243,12 +269,17 @@ fn hold(w: &mut World) {
             }
         }
     }
+    w.insert_resource(intro);
+    let intro = w.resource::<Intro>();
     let done = intro.at >= intro.ticks;
     let mut fixed = w.resource_mut::<Time<Fixed>>();
     if done {
         fixed.set_timestep_hz(60.0);
         let over = fixed.overstep();
         fixed.discard_overstep(over);
+        if let Some(mut np) = w.get_resource_mut::<super::netplay::Netplay>() {
+            np.intro = None;
+        }
         if let Some(intro) = w.remove_resource::<Intro>() {
             w.entity_mut(intro.banner.root).despawn();
             w.entity_mut(intro.banner.ui).despawn();

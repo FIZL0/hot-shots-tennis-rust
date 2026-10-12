@@ -195,6 +195,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B42b** "Start the Match!" banner after the intro flyover (B42): the banner, "N Sets N Games" pill and "Set 1" over the match camera for the intro's last ticks, the original's textures/animation, any aspect ratio → `plan/B42.md` · `play/intro.rs` · `play/popups.rs`
 - [x] **B42c** Court intro music and sounds (B42): what the original streams during phase 0 (the streamed sound phase 0 waits for) and the intro's jingle/BGM start, vs our BGM start at setup → `plan/B42.md` · `play/intro.rs` · `play.rs` setup
 - [x] **B42d** Court intro in doubles and other modes (B42): the doubles player presentation phase 0 waits for (presentation flags), record intros on courts 1, 5, 11 (orbit segments / 3 shots) and a doubles match, compare side by side; check the intro length per mode → `plan/B42.md` · `play/intro.rs` · `research/b42_intro_camera.py`
+- [x] **B42e** Court intro in online matches (B42): off for now (a skip must reach both peers); play it in lockstep, skip when either peer presses ✕ → `play/intro.rs` · `play/netplay.rs`
 
 
 ### Shots
