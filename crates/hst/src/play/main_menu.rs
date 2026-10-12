@@ -1017,7 +1017,7 @@ fn bar_font(bmp: &[u8]) -> Image {
 fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, tick: u32) -> (Vec<Quad>, String) {
     let mut d = Draw { out: Vec::new(), text, tick, said: String::new(), anchor: Anchor::Centre };
     match m.screen {
-        Screen::Main | Screen::Playing => {
+        Screen::Main => {
             d.frame(0, 5);
             let labels: Vec<String> = MAIN.iter().map(|s| s.to_string()).collect();
             d.rows(&labels, m.sel, 200.0, 120.0, 240.0, hand_x);
@@ -1100,7 +1100,8 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32, 
             d.info(&format!("{} Others: X or Enter joins, Left/Right changes seat, O leaves.", text.msg(193)));
         }
         Screen::Chars => chars(&mut d, m, text),
-        Screen::Confirm => confirm(&mut d, m, text, hand_x),
+        // the match starts from the confirm screen, which stays up under the switch's zoom-out
+        Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, hand_x),
     }
     (d.out, d.said)
 }

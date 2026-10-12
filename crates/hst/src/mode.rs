@@ -4,7 +4,9 @@
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
 //! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
-//! time paused, until the next mode's render pipelines are built; the BGM stops with the old mode.
+//! time paused, until the next mode's render pipelines are built; the BGM stops with the old mode. Leaving a running
+//! mode, its last frame zooms up about the screen centre while it fades out over the loading screen first, as the
+//! original's menu → match handoff looks (similar, not frame-matched: user 2026-10-11).
 
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::message::Messages;
@@ -65,6 +67,22 @@ struct Loading {
     idle: u32,
 }
 
+/// The running mode's last frame asked for (a screenshot), `waited` frames ago.
+#[derive(Component)]
+struct Leaving {
+    waited: u32,
+}
+
+/// That frame over the loading screen, `t` seconds into its zoom and fade.
+#[derive(Component)]
+struct Snapshot {
+    t: f32,
+}
+
+/// The zoom and fade's length (the original's ~30 frames) and the zoom it ends at.
+const FADE: f32 = 0.5;
+const ZOOM: f32 = 1.5;
+
 /// Render pipelines still compiling (the render world's count, a frame or two behind).
 #[derive(Resource, Clone, Default)]
 struct Compiling(Arc<AtomicUsize>);
@@ -81,6 +99,7 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Next>()
         .insert_resource(compiling)
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
+        .add_systems(Update, zoom)
         .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
         .add_systems(FixedPreUpdate, |w: &mut World| run(w, FixedPreUpdate))
         .add_systems(FixedUpdate, |w: &mut World| run(w, FixedUpdate))
@@ -106,13 +125,17 @@ fn switch(world: &mut World) {
         return;
     }
     // the loading screen goes up and is presented (pipelined rendering: frames later) before the build blocks
+    if leave(world) {
+        return;
+    }
+    let fading = world.query::<&Snapshot>().iter(world).next().is_some();
     let mut q = world.query::<&mut Loading>();
     match q.iter_mut(world).next() {
         None => {
             show_loading(world);
             return;
         }
-        Some(mut l) if l.up < 3 => {
+        Some(mut l) if l.up < 3 || fading => {
             l.up += 1;
             return;
         }
@@ -145,14 +168,60 @@ fn switch(world: &mut World) {
     world.insert_resource(Running { s, back: next.back });
 }
 
+/// Before the loading screen: ask for the running mode's last frame and wait for it (10 frames at most: no window,
+/// no renderer). True while waiting.
+fn leave(world: &mut World) -> bool {
+    if world.query::<&Loading>().iter(world).next().is_some() || world.query::<&Snapshot>().iter(world).next().is_some() {
+        for e in world.query_filtered::<Entity, With<Leaving>>().iter(world).collect::<Vec<_>>() {
+            world.despawn(e);
+        }
+        return false;
+    }
+    let can = world.contains_resource::<Running>() && world.query_filtered::<(), With<PrimaryWindow>>().iter(world).next().is_some();
+    let mut q = world.query::<&mut Leaving>();
+    match q.iter_mut(world).next() {
+        Some(mut l) if l.waited < 10 => {
+            l.waited += 1;
+            true
+        }
+        Some(_) => false,
+        None if can => {
+            use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+            world.spawn(Leaving { waited: 0 });
+            world.spawn(Screenshot::primary_window()).observe(|ev: On<ScreenshotCaptured>, images: Option<ResMut<Assets<Image>>>, mut c: Commands| {
+                let Some(mut images) = images else { return };
+                // the capture comes back CPU-only: upload it to draw it
+                let mut image = ev.image.clone();
+                image.asset_usage = bevy::asset::RenderAssetUsages::default();
+                let node = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+                c.spawn((Snapshot { t: 0.0 }, node, ImageNode::new(images.add(image)), UiTransform::default(), GlobalZIndex(i32::MAX)));
+            });
+            true
+        }
+        None => false,
+    }
+}
+
+/// The last frame zooms up about the centre and fades out (real time: game time is paused under the loading screen).
+fn zoom(time: Res<Time<Real>>, mut q: Query<(Entity, &mut Snapshot, &mut UiTransform, &mut ImageNode)>, mut c: Commands) {
+    for (e, mut s, mut t, mut image) in &mut q {
+        s.t += time.delta_secs();
+        let k = (s.t / FADE).min(1.0);
+        t.scale = Vec2::splat(1.0 + (ZOOM - 1.0) * k);
+        image.color = Color::WHITE.with_alpha(1.0 - k);
+        if k >= 1.0 {
+            c.entity(e).despawn();
+        }
+    }
+}
+
 fn show_loading(world: &mut World) {
     if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
         t.pause();
     }
-    let node = Node { width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() };
-    world.spawn((Loading::default(), node, BackgroundColor(Color::BLACK), GlobalZIndex(i32::MAX))).with_children(|p| {
-        p.spawn((Text::new("Loading..."), TextFont { font_size: bevy::text::FontSize::Vh(5.0), ..default() }, TextColor(Color::WHITE)));
-    });
+    // a plain black cover while the new mode loads (the old "Loading..." text was a placeholder: user 2026-10-11)
+    let node = Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    world.spawn((Loading::default(), node, BackgroundColor(Color::BLACK), GlobalZIndex(i32::MAX - 1)));
 }
 
 /// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling
