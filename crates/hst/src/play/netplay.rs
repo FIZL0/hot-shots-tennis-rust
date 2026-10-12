@@ -10,7 +10,8 @@
 //! seat's, every tick, the same on every machine) with the line-up beside the disc as `desync-*.json` (each machine
 //! its own copy; the ignored test `replays_a_desync` runs one again). The pause screen opens and closes on every machine; the post-point
 //! press is a pad press, so it travels with the pads. A peer dropping ends the match for everyone with a message,
-//! then it goes back to the menu (no bot takes the seat).
+//! then it goes back to the menu (no bot takes the seat). The court intro before the match runs its ticks on a lockstep
+//! of its own (`Msg::Intro`, `intro_tick`), so a ✕ on any machine skips it on the same tick everywhere.
 
 use super::tick_input::{self, IDLE, Replay};
 use super::{Game, Pads, menu, snapshot};
@@ -161,6 +162,9 @@ pub struct Netplay {
     ended: f32,
     /// `HST_NET_MASH=seed`: this machine's seats press random buttons (unattended tests).
     pub(super) mash: Option<u64>,
+    /// The court intro's own lockstep while it runs (`intro.rs` sets it; B42e): each tick's pad says whether that
+    /// seat pressed ✕.
+    pub(super) intro: Option<Lockstep>,
 }
 
 impl Netplay {
@@ -179,7 +183,13 @@ impl Netplay {
             stalled: 0.0,
             ended: 0.0,
             mash,
+            intro: None,
         }
+    }
+
+    /// The court intro's lockstep starts: the match's seats and delay.
+    pub(super) fn start_intro(&mut self) {
+        self.intro = Some(Lockstep::new(self.lock.seats, self.lock.mine.clone(), self.lock.delay));
     }
 
     /// Ends the match (the first reason stays), telling the peers if `tell`.
@@ -233,6 +243,11 @@ pub fn take(w: &mut World, e: Event) {
     let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
     match e {
         Event::Match(Msg::Pads { tick, seats }) => np.lock.heard(tick, &seats),
+        Event::Match(Msg::Intro { tick, seats }) => {
+            if let Some(l) = &mut np.intro {
+                l.heard(tick, &seats);
+            }
+        }
         Event::Match(Msg::Hash { tick, hash }) => {
             if let Some(bad) = np.lock.their_hash(tick, hash) {
                 desync(w, bad);
@@ -314,6 +329,23 @@ pub fn gate(w: &mut World) -> bool {
     true
 }
 
+/// The court intro's next tick in lockstep (B42e), this machine's seats pressing ✕ if `skip`: `None` while a seat's
+/// pad for it isn't in, else whether any seat pressed ✕ on it (the same tick on every machine).
+pub(super) fn intro_tick(w: &mut World, skip: bool) -> Option<bool> {
+    pump(w);
+    let mut np = w.resource_mut::<Netplay>();
+    let np = &mut *np;
+    let l = np.intro.as_mut().filter(|l| l.missing().is_empty())?;
+    let local = vec![Pad { buttons: skip as u16, ..IDLE }; l.mine.len()];
+    let (now, msg) = l.advance(&local);
+    let Msg::Pads { tick, seats } = msg else { unreachable!() };
+    np.out.push(Msg::Intro { tick, seats });
+    np.stalled = 0.0;
+    let skip = now.iter().any(|p| p.buttons != 0);
+    pump(w);
+    Some(skip)
+}
+
 /// Hands a tick's synced pads (`last`: the tick before's) to the match: as a one-tick `Replay`, or while an instant
 /// replay plays its own queue, as the presses its ✕/○ skip reads (every seat's, the same on every machine; this
 /// machine's unsent latches are dropped), as rollback's `handle` does.
@@ -378,7 +410,7 @@ fn watch(w: &mut World) {
     let text = match &np.end {
         Some(why) => why.clone(),
         None if np.stalled > STALL && !result => {
-            let who: Vec<String> = remote.unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
+            let who: Vec<String> = np.intro.as_ref().map(Lockstep::missing).or(remote).unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
             format!("Waiting for {}...", who.join(", "))
         }
         None => String::new(),
@@ -522,6 +554,46 @@ mod tests {
         let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
         assert_eq!((flag("--chars"), flag("--outfits")), ("5,7,6,8".into(), "2,1,0,2".into()));
         assert_eq!((flag("--pads"), flag("--court"), flag("--sets"), flag("--games")), ("99,k,0,99".into(), "3".into(), "2".into(), "3".into()));
+    }
+
+    /// The court intro online (B42e): the guest's ✕ on its intro tick 10 skips on both machines at tick 10 + delay,
+    /// over a link 3 ticks long; a machine waits for the other's ticks.
+    #[test]
+    fn intro_skip_reaches_both() {
+        use crate::net::{Pick, Seat};
+        let s = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
+        let room = Room { seats: vec![s("host"), s("g")], delay: 4, ..Default::default() };
+        let mut w = ["host", "g"].map(|me| {
+            let mut w = World::new();
+            let mut np = Netplay::new(room.clone(), me.into());
+            np.start_intro();
+            w.insert_resource(np);
+            w
+        });
+        let mut wire: Vec<(usize, u32, Msg)> = Vec::new();
+        let mut skipped = [None; 2];
+        let mut ticks = [0u32; 2];
+        for round in 0..40u32 {
+            for (to, at, m) in std::mem::take(&mut wire) {
+                if at <= round {
+                    take(&mut w[to], Event::Match(m));
+                } else {
+                    wire.push((to, at, m));
+                }
+            }
+            for i in 0..2 {
+                if let Some(skip) = intro_tick(&mut w[i], i == 1 && ticks[i] == 10) {
+                    if skip && skipped[i].is_none() {
+                        skipped[i] = Some(ticks[i]);
+                    }
+                    ticks[i] += 1;
+                }
+                let out = std::mem::take(&mut w[i].resource_mut::<Netplay>().out);
+                wire.extend(out.into_iter().map(|m| (1 - i, round + 3, m)));
+            }
+        }
+        assert_eq!(skipped, [Some(14), Some(14)]);
+        assert!(ticks[0] > 30 && ticks[0].abs_diff(ticks[1]) <= 4, "{ticks:?}");
     }
 
     /// The match on two headless apps (`snapshot.rs`'s harness, doubles): what each gate sends reaches the other

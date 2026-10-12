@@ -194,6 +194,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P3f6** HIGH PRIORITY (user 2026-10-11) Intro length from its source (P3f2 gap): `Rngs::intro_ticks` is a recorded per-court table; port what sets it (the intro phase 0x324810 waits on the timer at *(*(gm+0x84)+0x138)+0x3c, the streamed sound 0x167310 and the doubles presentation 0x43b1d8+0xd94/0xd95) and record court 3 in doubles and court 10 in singles (research/p3f2_intro_log.py) → `rng.rs` · `play.rs` | t: rng.rs
 - [x] **B42b** "Start the Match!" banner after the intro flyover (B42): the banner, "N Sets N Games" pill and "Set 1" over the match camera for the intro's last ticks, the original's textures/animation, any aspect ratio → `plan/B42.md` · `play/intro.rs` · `play/popups.rs`
 - [x] **B42c** Court intro music and sounds (B42): what the original streams during phase 0 (the streamed sound phase 0 waits for) and the intro's jingle/BGM start, vs our BGM start at setup → `plan/B42.md` · `play/intro.rs` · `play.rs` setup
+- [x] **B42e** Court intro in online matches (B42): off for now (a skip must reach both peers); play it in lockstep, skip when either peer presses ✕ → `play/intro.rs` · `play/netplay.rs`
 
 
 ### Shots
