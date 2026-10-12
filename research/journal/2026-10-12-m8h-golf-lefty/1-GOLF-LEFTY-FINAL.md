@@ -1,0 +1,18 @@
+# Golf mods: glove hand = racket hand (FINAL)
+
+The game draws a left-hander mirrored (whole rig, x scale −1: `shade.rs`, `gs.rs` mirror), so `hand: left` alone puts
+the racket in the drawn left hand but moves the glove to the drawn right. ../HST-MODS `tools/rerig/mirror.py` therefore
+pre-mirrors a gloved golf mod's costumes (positions/normals/morphs reflected, L/R joint weights swapped, winding
+flipped; twin-less joints get a `_mirror` copy) and `package.py` sets `hand: left` + `hand_why`. The game's mirror
+brings the source's look back: text reads right (Jasmine's visor, Phoebe's "HSG FORE!"), glove and racket in the left.
+
+- Glove test: mean texture colour of the two hands' vertices differs (> 25 |ΔRGB|). 62 of 72 golf mods are gloved →
+  left. Right-handed (no differing hand, left to confirm): fore pc02 emma, pc03 sam, pc07 regis, pc11 z, pc22 ratchet,
+  pc23 jak; oob pc15 alex; opentee pc05 cj; opentee2 pc13 malachy, pc14 frauada.
+- Fix on the way: a twin-less spring joint kept its `spring` after its vertices moved to the copy (Jasmine 27 springs
+  vs 18; `mods::tests::oob_hair_swings_and_settles`); the original now drops it. mods tests pass.
+- Checked: `--inspect` shots of oob pc00 Jasmine and fore pc00 Phoebe beside Carol (context/m8h/): racket in the gloved
+  left hand, no inside-out faces seen.
+
+Not verified / not 1:1: a full match `--shot` of a mirrored mod mid-forehand (inspect pose only); opentee/opentee2 not
+looked at in-game (same code path). Standard §6 `hand` and the HST-MODS README note the rule.

@@ -863,12 +863,37 @@ struct Text {
     hands: [f32; 14],
     /// AIParam.csv's rank (0 "Tennis Lv 5" … 16 "Tennis Superstar") by row: a computer player's label.
     ranks: Vec<u8>,
-    /// The custom roster's play style and △ numbers (`MOD_STATS`), from each one's TParam.csv row.
-    mods: Vec<(usize, [String; 5])>,
+    /// The custom roster's play style and △ grades (`mod_grades`).
+    mods: Vec<(usize, [u8; 5])>,
 }
 
-/// The custom card's △ numbers: TParam.csv column and label.
-const MOD_STATS: [(usize, &str); 5] = [(12, "Serve"), (13, "Stroke"), (14, "Volley"), (40, "Speed"), (41, "Stamina")];
+/// The TParam.csv column each △ grade follows (Serve, Stroke, Volley, Footwork = speed); Impact has none.
+const GRADE_COLS: [Option<usize>; 5] = [Some(12), Some(13), Some(14), None, Some(40)];
+
+/// A mod's △ grades, so its card is the disc characters' card: its base character's, except where its row changes a
+/// `GRADE_COLS` cell: there the mean grade of the disc characters nearest in that column.
+/// ponytail: the disc's grades are hand-set (not a function of TParam), so nearest-neighbour is a stand-in.
+fn mod_grades(row: &[String], base: usize, csv: &[u8], grades: &[[u8; 5]; 14]) -> [u8; 5] {
+    let mut disc: [Vec<f32>; 14] = Default::default();
+    for line in String::from_utf8_lossy(csv).lines() {
+        let cells: Vec<&str> = line.split(',').map(str::trim).collect();
+        if let Some(c) = cells[0].parse::<usize>().ok().filter(|&c| c < 14) {
+            disc[c] = cells.iter().map(|v| v.parse().unwrap_or(f32::NAN)).collect();
+        }
+    }
+    let cell = |r: &[f32], c: usize| r.get(c).copied().unwrap_or(f32::NAN);
+    std::array::from_fn(|k| {
+        let Some(col) = GRADE_COLS[k] else { return grades[base][k] };
+        let Some(v) = row.get(col).and_then(|v| v.parse::<f32>().ok()) else { return grades[base][k] };
+        if v == cell(&disc[base], col) {
+            return grades[base][k];
+        }
+        let d = |c: usize| (cell(&disc[c], col) - v).abs();
+        let best = (0..14).map(d).filter(|d| !d.is_nan()).fold(f32::INFINITY, f32::min);
+        let near: Vec<u32> = (0..14).filter(|&c| d(c) == best).map(|c| grades[c][k] as u32).collect();
+        if near.is_empty() { grades[base][k] } else { ((near.iter().sum::<u32>() * 2 + near.len() as u32) / (2 * near.len() as u32)) as u8 }
+    })
+}
 
 /// A mod's play style: its base row's, or its `タイプ` override's.
 fn mod_style(m: &crate::mods::Mod, base: &[usize; 14]) -> usize {
@@ -1005,7 +1030,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let roster: Vec<_> = crate::mods::list(&mods_dir)
         .into_iter()
         .filter_map(|m| match crate::mods::tparam(&mut iso, &m) {
-            Ok(row) => Some(((mod_style(&m, &style), MOD_STATS.map(|(c, _)| row.get(c).cloned().unwrap_or_default())), m)),
+            Ok(row) => Some(((mod_style(&m, &style), mod_grades(&row, m.base, &csv, &grades)), m)),
             Err(e) => {
                 warn!("{}: {e}", m.dir.display());
                 None
@@ -1387,19 +1412,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // a card nobody is picking on yet is dark
         d.q(CARD, [u, v, 140.0, 164.0], [x, y, 144.0, 168.0], if picking || pl.ready { WHITE } else { [55.0; 3] }, 128.0);
         if picking || pl.ready {
-            if pl.card && modded.is_none() {
-                attribute_card(d, p, text.style[c], &text.grades[c], x, y);
+            if pl.card {
+                let (style, grades) = modded.map_or((text.style[c], text.grades[c]), |i| text.mods[i]);
+                attribute_card(d, p, style, &grades, x, y);
             } else {
                 d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
-                if pl.card && let Some(i) = modded {
-                    d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
-                    for (k, ((_, label), v)) in MOD_STATS.iter().zip(&text.mods[i].1).enumerate() {
-                        let yy = y + 40.0 + 18.0 * k as f32;
-                        d.text(label, x + 10.0, yy, 16.0, WHITE);
-                        let w = d.width(v, 16.0);
-                        d.text(v, x + 130.0 - w, yy, 16.0, WHITE);
-                    }
-                }
                 let style = modded.map_or(text.style[c], |i| text.mods[i].0);
                 let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
                 // a computer's label sits higher, over its rank pill
@@ -1896,6 +1913,18 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
+    #[test]
+    fn mod_grades_follow_nearest() {
+        let csv = b"#,x\n0,a,,,,,,,,,,,4,4,3\n1,b,,,,,,,,,,,7,7,8\n2,c,,,,,,,,,,,9,9,9\n3,d,,,,,,,,,,,9,9,9\n";
+        let mut g = [[0u8; 5]; 14];
+        (g[0], g[1], g[2], g[3]) = ([1, 1, 1, 5, 2], [2, 2, 3, 3, 3], [4, 4, 4, 1, 4], [3, 3, 3, 1, 3]);
+        let row = |s: &str| s.split(',').map(String::from).collect::<Vec<_>>();
+        assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,4,4,3"), 0, csv, &g), g[0]);
+        // serve 7 → character 1's grade; stroke 9 → mean of 4 and 3 rounds to 4; volley 3 is the base's; Impact, Footwork base
+        assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,7,9,3"), 0, csv, &g), [2, 4, 1, 5, 2]);
+    }
 
     #[test]
     fn ticker_as_measured() {
