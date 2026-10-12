@@ -5,6 +5,9 @@
 //! hst-gltf info <file.mdl>                    node tree of a model
 //! hst-gltf hst  <HST xb root> <out dir>       HST pc00 costume 0 + racket + its PCANI motions (reference rig)
 //! hst-gltf retarget <mdl> <mtl> <out.glb> <ani2…>  Biped motions (e.g. HST's) onto a model, names matched sans spaces
+//! hst-gltf umpires <HST xb root> <out dir>   the five chair umpires u00..u04 (court 1's HOLE01.XB; every court
+//!                                             carries the same files) with their idle/turn motions, for HST-MODS
+//!                                             `tools/rerig/hst_umpires.py` (umpires as playable mods, M1g)
 //! ```
 //! A .glb holds the model's node tree as joints (game space: Y down, feet at the origin, under a `game_space`
 //! node that turns it Y up), one skinned mesh with a primitive per MTL material (KHR_materials_unlit, PNG
@@ -589,6 +592,22 @@ fn hst(root: &Path, out: &Path) -> R<()> {
     Ok(())
 }
 
+/// The chair umpires `uNN.glb` (`hst_data::layout::umpire_files`): model, materials and their `_h/_r/_l` clips.
+fn umpires(root: &Path, out: &Path) -> R<()> {
+    for u in 0..5u8 {
+        let (stem, anis) = hst_data::layout::umpire_files(u);
+        let files = walk(&root.join("COURTSET/01/HOLE01.XB"));
+        let find = |name: &str| files.iter().find(|p| p.to_string_lossy().replace('\\', "/").to_ascii_lowercase().ends_with(name)).cloned();
+        let mdl = find(&format!("{stem}.mdl")).ok_or(format!("{stem}.mdl not under {}", root.display()))?;
+        let (model, mats) = load_model(&mdl, &sibling(&mdl, "mtl").ok_or("no umpire MTL")?)?;
+        let mut list = Vec::new();
+        let anis: Vec<PathBuf> = anis.iter().filter_map(|a| find(a)).collect();
+        motions(&anis, "ani", &mut list, &mut Vec::new());
+        write(&out.join(format!("u{u:02}.glb")), &export(&model, &mats, &deformers(&mdl), &list, &[]))?;
+    }
+    Ok(())
+}
+
 /// HST (or any Biped) motions onto a model whose node names differ only by spaces (`Bip01LThigh` ↔ `Bip01 L Thigh`).
 fn retarget(mdl_path: &Path, mtl_path: &Path, out: &Path, anis: &[String]) -> R<()> {
     let (model, mats) = load_model(mdl_path, mtl_path)?;
@@ -609,8 +628,9 @@ fn main() {
     let r = match a.get(1).map(String::as_str) {
         Some("info") if a.len() == 3 => info(Path::new(&a[2])),
         Some("hst") if a.len() == 4 => hst(Path::new(&a[2]), Path::new(&a[3])),
+        Some("umpires") if a.len() == 4 => umpires(Path::new(&a[2]), Path::new(&a[3])),
         Some("retarget") if a.len() >= 6 => retarget(Path::new(&a[2]), Path::new(&a[3]), Path::new(&a[4]), &a[5..]),
-        _ => Err("usage: hst-gltf info <mdl> | hst <xb root> <out dir> | retarget <mdl> <mtl> <out.glb> <ani2…>".into()),
+        _ => Err("usage: hst-gltf info <mdl> | hst <xb root> <out dir> | retarget <mdl> <mtl> <out.glb> <ani2…> | umpires <xb root> <out dir>".into()),
     };
     if let Err(e) = r {
         eprintln!("{e}");
