@@ -675,8 +675,10 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
         let mut tracks: Vec<Track> = Vec::new();
         for (c, times) in keys {
             let joint = c.target().node().name().unwrap_or("").replace(' ', "");
+            // one motions file serves every costume, and costumes' extra joints differ: a joint this one lacks is skipped
+            // (B99: costumes 4+ of many Fore! mods failed to load over it)
             if !skeleton.names.contains(&joint) {
-                return Err(ctx(format!("`{name}` keys `{joint}`, not a skeleton joint")));
+                continue;
             }
             let tick = |t: f32| if span > 0.0 { (t / span * end).round() as i32 } else { 0 };
             let values: Vec<[f32; 4]> = match c.reader(|_| Some(&blob[..])).read_outputs() {
@@ -868,6 +870,20 @@ mod tests {
             }
         }
         assert!(shown > 0, "the donor's faces never show an expression");
+    }
+
+    /// A motions file keying a joint only some costumes have still loads the others (B99: Phoebe's costumes 4–7 lack
+    /// `Body`, which her motions key).
+    #[test]
+    fn motions_skip_joints_a_costume_lacks() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/fore_pc00_phoebe");
+        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/fore_pc00_phoebe, skipped") };
+        let mut s = Stores(default(), default(), default(), default());
+        for k in 0..m.costumes.len() {
+            let c = load(&mut iso, &m, k, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap_or_else(|e| panic!("costume {k}: {e}"));
+            assert!(!c.visual.is_empty(), "costume {k} lost its own motions");
+        }
     }
 
     /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's, on the donor's clip
