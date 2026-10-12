@@ -603,7 +603,32 @@ pub fn load_marks(
     let mut smash = model(&arc, "taguchi/other/smash_p", commands, parent, meshes, materials, images, bindposes)?;
     // held on its last frame, as the game: the blob fades out over 120 frames, past the 105-frame morph
     smash.0.hold = true;
+    for (s, (_, view)) in [("taguchi/other/chakudan_p", &red), ("taguchi/other/smash_p", &smash)] {
+        layer(&arc, s, view, materials)?;
+    }
     Ok(LandingMarks { red, smash, red_at: None, smash_at: None })
+}
+
+/// Blended draws carry no depth, so Bevy orders them by mesh centre, and a marker's flat layers all share one centre
+/// (an unstable tie: the rings and the blob swapped from frame to frame) and lose to the huge court-line mesh whenever
+/// its centre is nearer (the lines then cut through the marker). Draw them after the court and bottom layer first, as
+/// the PS2's Z resolves the layers stacked a millimetre apart, the marker always over the lines (court 10).
+fn layer(arc: &Archive, s: &str, view: &Shown, materials: &mut Assets<StandardMaterial>) -> Result<(), String> {
+    let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&format!("{s}.mdl"))).ok_or(format!("{s}.mdl missing"))?;
+    let model = mdl::parse(&arc.read(e).map_err(|e| e.to_string())?).map_err(|e| e.0)?;
+    let y = |packets: &Vec<mdl::Packet>| {
+        let v: Vec<f32> = packets.iter().flat_map(|p| p.vertices.iter().map(|v| v.pos[1])).collect();
+        v.iter().sum::<f32>() / v.len().max(1) as f32
+    };
+    let mut order: Vec<usize> = (0..model.materials.len().min(view.materials.len())).collect();
+    order.sort_by(|&a, &b| y(&model.materials[a]).total_cmp(&y(&model.materials[b])));
+    for (rank, &i) in order.iter().enumerate() {
+        if let Some(mut m) = materials.get_mut(&view.materials[i]) {
+            // past any court mesh's centre (tens of metres), short of the head markers' LAST
+            m.depth_bias = 1e3 + rank as f32;
+        }
+    }
+    Ok(())
 }
 
 impl LandingMarks {
