@@ -463,7 +463,9 @@ impl Material for GsMaterial {
         if matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never) {
             defs.push("GS_NO_Z".into());
         }
-        let keep_alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::One, operation: BlendOperation::Add };
+        // only the previews read the target's alpha (inspect.wgsl): a blended draw over their −1 clear leaves 2a − 1,
+        // so a part drawn only blended (a mod's BLEND cloth, M1k) still shows; over an opaque draw it stays ≥ 0
+        let keep_alpha = BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::OneMinusSrcAlpha, operation: BlendOperation::Add };
         let color = |dst_factor, operation| BlendComponent { src_factor: BlendFactor::SrcAlpha, dst_factor, operation };
         let blend = k.blend.map(|b| BlendState {
             color: match b {

@@ -10,7 +10,7 @@
 //! `--sound <archive> <bank.hd> <program> <key>` plays one sound of a bank (see audio.rs); a BGM archive
 //! (`--sound SND/BGM/BGMM_05.XB data/sound/BGM/Menu/bgmm_05.hd`) plays its music. `--music` turns on the court's
 //! BGM in a `--play` match (off by default).
-//! `--inspect all|N[:C],…|MODDIR,…` shows characters (costume C) and mods posed as the original's inspect screen, side
+//! `--inspect all|N[:C],…|MODDIR[:C],…` shows characters (costume C) and mods posed as the original's inspect screen, side
 //! by side (default: the disc roster; see inspect.rs).
 //! Textures come from `mods/texture-replacements/` (key-named files over a PCSX2 pack's) over the disc (beside the
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
