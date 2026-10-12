@@ -5,6 +5,8 @@ in Europe and **Minna no Tennis** (みんなのテニス) in Japan, in Rust with
 The goal is the same game: the same ball physics, rules, timing and AI, ported from the original and checked
 frame by frame against the real game, with better rendering on top.
 
+**Play in your browser: <https://fizl0.github.io/hot-shots-tennis-rust/>** (you pick your own ISO; nothing is uploaded).
+
 Work in progress. `PLAN.md` holds the rules, `plan/TODO.md` the open tasks, `plan/DONE.md` the finished ones; `plan/REFERENCE.md` lists what works.
 
 ## You must provide the game disc
