@@ -3,7 +3,7 @@
 // (serve web/ on :8765 first: python3 -m http.server -d web 8765; WEB_PORT/CDP_PORT pick other ports). ISO `-`: OUT's
 // profile already has the pack, only visit 2 runs. WEB_INPUT="15:click,20:Enter,21:ArrowDown" presses at those seconds of
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
-// PROFILE=dir another chromium profile. SHOT_EVERY=s screenshots more often. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -39,7 +39,8 @@ async function visit(n, pick) {
   await send('Page.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `
-    self.__ctx = []; self.__peak = 0;
+    self.__ctx = []; self.__peak = 0; self.__frames = [];
+    { let last; const f = t => { if (last !== undefined) __frames.push([Math.round(performance.now()), +(t - last).toFixed(1)]); last = t; requestAnimationFrame(f); }; requestAnimationFrame(f); }
     self.AudioContext = new Proxy(self.AudioContext, { construct: (t, a) => { const c = new t(...a); __ctx.push(c); return c; } });
     const copy = AudioBuffer.prototype.copyToChannel;
     AudioBuffer.prototype.copyToChannel = function (d, ...r) { for (const x of d) __peak = Math.max(__peak, Math.abs(x)); return copy.call(this, d, ...r); };
@@ -76,6 +77,7 @@ async function visit(n, pick) {
       log.push(`[${n}] ${t}s audio: ${await audio()}`);
     }
   }
+  writeFileSync(resolve(out, `frames${n}.json`), await evaluate('JSON.stringify(__frames)') ?? '[]');
   log.push(`[${n}] canvas: ${await evaluate("JSON.stringify([...document.querySelectorAll('canvas')].map(c => [c.width, c.height]))")}`);
   log.push(`[${n}] opfs: ${await evaluate("navigator.storage.getDirectory().then(async d => { const r = []; for await (const [k, h] of d) r.push(k + ' ' + (await h.getFile()).size); return r.join(', '); })")}`);
   ws.close();
