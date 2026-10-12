@@ -175,7 +175,7 @@ def brief(root, tid):
             continue
         files = sorted(f for f in os.listdir(d) if f.endswith('.md'))
         out += ['', f'## Journal research/journal/{j}/: {" · ".join(files)}']
-        if files:
+        if files and j in own_j:  # journals the line only points at (j: …) are listed, not pasted
             body = open(os.path.join(d, files[-1]), encoding='utf-8').read()
             cut = len(body) > JOURNAL_MAX
             out += [f'### {files[-1]}' + (f' (first {JOURNAL_MAX} chars)' if cut else ''), body[:JOURNAL_MAX].rstrip()]
