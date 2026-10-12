@@ -39,7 +39,8 @@ if [ -n "$N" ]; then
     echo "$speed" >"${PID%.pid}.speed"
 fi
 [ -z "$N" ] && { echo $$ >"$PID"; exec pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso"; }  # exec keeps the pid
-# a copy's pad goes with it, however PCSX2 ends (stop, kill, crash)
-pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso" & echo $! >"$PID"
-wait $! || true
-nopad
+# a copy's pad goes with it, however PCSX2 ends (stop, kill, crash). Detached, so the launch returns at once
+# (an agent ran it under tools/pcsx2.sh, which held the copy's lock until PCSX2 closed: B92, 2026-10-11)
+setsid pcsx2-qt "$@" -- "$T/../Hot Shots Tennis (USA).iso" >/dev/null 2>&1 </dev/null & echo $! >"$PID"
+setsid bash -c 'while kill -0 '$!' 2>/dev/null; do sleep 2; done; fuser -k -TERM "$1" >/dev/null 2>&1' _ "$PAD" \
+    >/dev/null 2>&1 </dev/null &
