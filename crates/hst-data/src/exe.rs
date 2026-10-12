@@ -415,6 +415,12 @@ impl<'a> Game<'a> {
         std::array::from_fn(|r| std::array::from_fn(|p| std::array::from_fn(|c| v[8 * r + 4 * p + c])))
     }
 
+    /// Court 4's passing ball: where its four bounce sounds play, by route (0–3).
+    pub fn ball_sounds(&self) -> [[[f32; 4]; 4]; 4] {
+        let v = self.f32s(0x41_ccd0, 64);
+        std::array::from_fn(|r| std::array::from_fn(|p| std::array::from_fn(|c| v[16 * r + 4 * p + c])))
+    }
+
     /// The deciding-set crowd voices (trigger type 44), in the order the creatures are made (later ones are
     /// silent): (pan in degrees, ticks between calls).
     pub fn deciding_voices(&self) -> [(i32, i32); 4] {

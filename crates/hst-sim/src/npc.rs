@@ -971,6 +971,8 @@ pub struct Trigger {
     pub playing: bool,
     pub route: u32,
     pub routes: [[[f32; 4]; 2]; 3],
+    /// Where its four bounce sounds play, by route (`exe::Game::ball_sounds`).
+    pub bounces: [[[f32; 4]; 4]; 4],
     /// Had its go (type 15 played, a startled type startled): a reset leaves it off until a new match unless its
     /// row rearms it.
     pub done: bool,
@@ -1134,13 +1136,14 @@ fn ball_in(ball: [f32; 4], at: [f32; 4], e: [f32; 3]) -> bool {
 }
 
 /// The sound a trigger creature's key plays: the ball-hit obstacles' on program 2 (43's on 7) at the game's sound
-/// effect level (0.9 · 128) scaled by 1.2 (1.35 for 38); the others' on program 7 at 0x40.
+/// effect level (0.9 · 128) scaled by 1.2 (1.35 for 38); 15's and 43's on 7 at that ×1.2; the others' on program 7
+/// at 0x40.
 pub fn trigger_sound(ty: u8, key: i32) -> sound::Play {
     let level = |k: f32| ps2::mul(115.0, k) as i32;
     let (program, volume) = match ty {
         14 | 21 => (2, level(1.2)),
         38 => (2, level(1.35)),
-        43 => (7, level(1.2)),
+        15 | 43 => (7, level(1.2)),
         _ => (7, 0x40),
     };
     sound::Play { slot: 0, program, key: key as u8, volume, speed: 1.0 }
@@ -1149,6 +1152,17 @@ pub fn trigger_sound(ty: u8, key: i32) -> sound::Play {
 impl Trigger {
     fn pos(&self) -> [f32; 4] {
         self.world[3]
+    }
+
+    /// Where a sound it made this tick plays: type 15's bounce at its route's point for the frame, else where it stands.
+    pub fn sound_at(&self) -> [f32; 3] {
+        match [86.0, 147.0, 200.0, 240.0].iter().position(|&f| f == self.frame) {
+            Some(k) if self.ty == 15 => {
+                let p = self.bounces[self.route as usize & 3][k];
+                [p[0], p[1], p[2]]
+            }
+            _ => self.pos3(),
+        }
     }
 
     /// Where it stands.
@@ -1213,7 +1227,7 @@ impl Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, radii: o.radii, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
-            playing: o.playing, route: o.route, routes: o.routes, done: o.done, kept_done: o.kept_done, kept: o.kept, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, armed: o.armed, ..Trigger::default()
+            playing: o.playing, route: o.route, routes: o.routes, bounces: o.bounces, done: o.done, kept_done: o.kept_done, kept: o.kept, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, armed: o.armed, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -1933,6 +1947,7 @@ impl Default for Trigger {
             playing: false,
             route: 0,
             routes: [[[0.0; 4]; 2]; 3],
+            bounces: [[[0.0; 4]; 4]; 4],
             done: false,
             kept_done: false,
             kept: ([[0.0; 4]; 4], 0, 0, 0, 0),

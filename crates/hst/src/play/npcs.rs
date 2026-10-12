@@ -166,7 +166,7 @@ fn setup(
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
                 let routes = game.ball_routes();
                 let (path, radii, start) = (c.path.clone(), c.radii.clone(), c.start);
-                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, path, radii, start, len, routes, ..default() };
+                let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, path, radii, start, len, routes, bounces: game.ball_sounds(), ..default() };
                 tr.clip_lens = [0, 1].map(|k| data.motions.get(&k).map_or(0.0, |c| c.length));
                 if t == 44 {
                     tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
@@ -465,8 +465,7 @@ fn step(
                 heard.push((s, t.ty, t.pos3()));
                 continue;
             }
-            let at = [t.world[3][0], t.world[3][1], t.world[3][2]];
-            g.sounds.push((npc::trigger_sound(t.ty, s), at));
+            g.sounds.push((npc::trigger_sound(t.ty, s), t.sound_at()));
         }
         // every creature stands where its tick put it (a startled one runs along its path)
         if let Ok(mut tf) = turn.get_mut(*e) {

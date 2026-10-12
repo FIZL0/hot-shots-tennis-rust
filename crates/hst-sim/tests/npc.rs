@@ -823,6 +823,13 @@ fn passing_ball_matches_the_game() {
             panic!("vsync {} (reset {reset}):\n from {before:?}\n want {after:?}\n  got {t:?}", u(b, 0))
         };
         rolled |= t.playing && !before.playing;
+        // each bounce plays at its route's next sound point, ×1.2 the effect level
+        if !heard.is_empty() {
+            let p = game.ball_sounds()[t.route as usize][sounds];
+            assert_eq!(npc::Trigger { bounces: game.ball_sounds(), ..t.clone() }.sound_at(), [p[0], p[1], p[2]]);
+            assert_eq!(npc::trigger_sound(15, heard[0]).volume, 138);
+            eprintln!("bounce {sounds} at frame {} plays at {p:?}", t.frame);
+        }
         (ticks, resets, sounds) = (ticks + 1, resets + reset as usize, sounds + heard.len());
     }
     eprintln!("{ticks} ticks, {resets} resets, {sounds} bounce sounds");
