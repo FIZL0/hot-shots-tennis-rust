@@ -120,7 +120,7 @@ pub struct CharacterData {
     /// A mod's texture face (standard §4b), if it swaps whole-face textures instead of morphing.
     pub texture_face: Option<TextureFace>,
     /// A mod's own clips (standard §6 `motions`), by motion number, drawn in place of `motions`' but never read by
-    /// gameplay: each is retimed onto the donor clip's length, so timing, events and the sim stay the donor's.
+    /// gameplay: each plays at its own length on `Motion::drawn`, so timing, events and the sim stay the donor's.
     pub visual: HashMap<usize, Clip>,
 }
 
@@ -259,12 +259,16 @@ pub struct Motion {
     pub mix: Option<(f32, bool)>,
     /// Bumped by every [`Motion::set`], a restart of the same motion included (the costume deformers restart).
     pub sets: u32,
+    /// The clock of the clip drawn (`CharacterData::drawn`) and its sampled time one tick earlier: the gameplay
+    /// clock's twin, wrapping by the drawn clip's length (a mod's own clip may outlast the donor's).
+    pub drawn: Clock,
+    pub drawn_prev: f32,
 }
 
 impl Default for Motion {
     fn default() -> Self {
         let clock = Clock::start(1.0, true, None);
-        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, uv_clock: clock, fade: Fade::default(), mix: None, sets: 0 }
+        Motion { id: 0, clock, prev: 0.0, serial: 0, arm: None, face: 0, face_clock: clock, uv_clock: clock, fade: Fade::default(), mix: None, sets: 0, drawn: clock, drawn_prev: 0.0 }
     }
 }
 
@@ -284,7 +288,8 @@ impl Motion {
         let mut fade = self.fade;
         fade.start(frames, id as i32, hold.is_some(), self.id as i32, true, &self.clock);
         let face_clock = Clock::start(speed, looping, None);
-        *self = Motion { id, clock: Clock::start(speed, looping, hold), prev: 0.0, serial, arm: self.arm, face, face_clock, uv_clock: face_clock, fade, mix: None, sets: self.sets.wrapping_add(1) };
+        let clock = Clock::start(speed, looping, hold);
+        *self = Motion { id, clock, prev: 0.0, serial, arm: self.arm, face, face_clock, uv_clock: face_clock, fade, mix: None, sets: self.sets.wrapping_add(1), drawn: clock, drawn_prev: 0.0 };
     }
 
     /// Switch to motion `id` from its start (keeps going if it already plays).
@@ -753,8 +758,8 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
             }
         }
         let Some(new) = rig.data.drawn(motion.id) else { continue };
-        // between the last two ticks' sampled times (across a loop's wrap)
-        let (a, b) = (motion.prev, motion.clock.sampled);
+        // between the last two ticks' sampled times (across a loop's wrap); a mod's own clip on its own clock
+        let (a, b) = if rig.data.visual.contains_key(&motion.id) { (motion.drawn_prev, motion.drawn.sampled) } else { (motion.prev, motion.clock.sampled) };
         let b = if b < a && motion.clock.looping { b + new.length } else { b };
         let t = new.wrap(a + (b - a) * time.overstep_fraction(), motion.clock.looping);
         // the base pose, and the pose mixed over its first 23 tracks (the player's blend count) by the fade
@@ -848,6 +853,10 @@ pub fn tick(mut q: Query<(&Rig, &mut Motion)>) {
         m.uv_clock.speed = m.face_clock.speed;
         let uv = rig.data.faces.get(&m.face).map_or(0.0, |f| f.uv_length);
         m.uv_clock.tick(uv);
+        m.drawn_prev = m.drawn.sampled;
+        (m.drawn.speed, m.drawn.looping) = (m.clock.speed, m.clock.looping);
+        let drawn = rig.data.drawn(m.id).map_or(0.0, |c| c.length);
+        m.drawn.tick(drawn);
     }
 }
 
