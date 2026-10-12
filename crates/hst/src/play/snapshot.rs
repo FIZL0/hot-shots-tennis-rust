@@ -69,11 +69,20 @@ impl Write for Fnv {
 /// The match's 64-bit state hash this tick: `Game` without its constants, the players' motions, the tick's pads.
 /// ponytail: Debug text through FNV (~0.1 ms a tick); a hand-written field walk if netplay ever measures it.
 pub fn state_hash(w: &mut World) -> u64 {
+    fnv(&state_text(w))
+}
+
+pub fn fnv(text: &str) -> u64 {
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    let _ = h.write_str(text);
+    h.0
+}
+
+/// What `state_hash` hashes (a desync's report keeps it, to diff the machines').
+pub fn state_text(w: &mut World) -> String {
     let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, *m)).collect();
     figures.sort_by_key(|f| f.0);
-    let _ = write!(h, "{:?}{:?}{:?}", w.get_resource::<Game>(), figures, w.get_resource::<TickPads>());
-    h.0
+    format!("{:?}{:?}{:?}", w.get_resource::<Game>(), figures, w.get_resource::<TickPads>())
 }
 
 /// Everything a match tick reads and writes, copied.

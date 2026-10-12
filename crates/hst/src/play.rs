@@ -54,6 +54,7 @@ mod markers;
 mod mod_match;
 mod match_stats;
 mod menu;
+pub mod netplay;
 mod npcs;
 mod panel;
 mod popups;
@@ -545,6 +546,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(markers::plugin);
     app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);
+    app.add_plugins(netplay::plugin);
     app.add_plugins(npcs::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);

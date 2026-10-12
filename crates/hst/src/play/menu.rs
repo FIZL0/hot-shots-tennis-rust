@@ -324,6 +324,28 @@ struct Slot(usize);
 struct Root;
 const POOL: usize = 160;
 
+/// The pause screen is open (online play sends it to the peers).
+pub(super) fn paused(w: &World) -> bool {
+    w.get_resource::<Menu>().is_some_and(|m| m.open)
+}
+
+/// A peer opened or closed the pause screen: here too (not while this one is quitting).
+pub(super) fn set_paused(w: &mut World, open: bool) {
+    let Some(mut m) = w.get_resource_mut::<Menu>() else { return };
+    if m.open == open || m.quitting.is_some() {
+        return;
+    }
+    *m = if open { Menu::opened() } else { Menu::default() };
+    let mut fixed = w.resource_mut::<Time<Fixed>>();
+    if open {
+        fixed.set_timestep(Duration::from_secs(1 << 20));
+    } else {
+        fixed.set_timestep_hz(60.0);
+        let over = fixed.overstep();
+        fixed.discard_overstep(over);
+    }
+}
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<Menu>()
         .add_systems(PostStartup, setup.after(super::setup))

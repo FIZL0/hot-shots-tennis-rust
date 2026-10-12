@@ -83,6 +83,13 @@ fn local(mut pads: ResMut<Pads>, mut tick: ResMut<TickPads>) {
     tick.push(now);
 }
 
+/// A local slot's pad for this tick, its latched presses spent (as `local`).
+pub(super) fn take(s: &mut SlotPad) -> Pad {
+    let p = encode(s);
+    (s.shot, s.serve) = (None, false);
+    p
+}
+
 fn replayed(mut r: ResMut<Replay>, mut tick: ResMut<TickPads>) {
     tick.push(r.0.pop_front().unwrap_or([IDLE; 4]));
 }
