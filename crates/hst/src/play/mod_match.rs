@@ -82,7 +82,7 @@ mod tests {
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
         app.insert_resource(MatchMod(vec![None, Some(m.clone())]));
-        app.init_resource::<super::super::Pads>();
+        app.init_resource::<super::super::Pads>().init_resource::<super::super::tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         app.add_systems(Startup, super::super::setup);
         use super::super::*;

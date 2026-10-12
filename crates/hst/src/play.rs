@@ -58,6 +58,7 @@ mod panel;
 mod popups;
 mod reaction_voices;
 mod surprise;
+mod tick_input;
 mod timing;
 mod tornado;
 mod weather;
@@ -474,13 +475,22 @@ struct SlotPad {
 
 /// Controller slots 1P..4P (without `--pads` the keyboard and the first gamepad drive 1P). See `slot_of` for which
 /// player each drives.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Pads {
     slots: [SlotPad; 4],
     /// Gamepads connected.
     connected: usize,
-    /// With `--pads`: which seats (1P..4P) are human, fixed for the match (`controls::load`).
+    /// Which seats (1P..4P) are human, fixed for the match: with `--pads` at startup (`controls::load`), else at the
+    /// match's first tick (`tick_input`).
     seats: Option<[bool; 4]>,
+    /// `HST_AUTOPLAY`: every player a bot.
+    autoplay: bool,
+}
+
+impl Default for Pads {
+    fn default() -> Self {
+        Pads { slots: default(), connected: 0, seats: None, autoplay: std::env::var_os("HST_AUTOPLAY").is_some() }
+    }
 }
 
 impl Pads {
@@ -488,7 +498,7 @@ impl Pads {
     /// 1P→0, 2P→2 (1P's partner, teams are {1,3} vs {2,4}), 3P→1, 4P→3. Without seats slot 1 is always human and
     /// slot s > 1 while s+1 gamepads are connected.
     fn slot_of(&self, i: usize, n: usize) -> Option<usize> {
-        if std::env::var_os("HST_AUTOPLAY").is_some() {
+        if self.autoplay {
             return None;
         }
         let s = if n == 4 { [0, 2, 1, 3][i] } else { i };
@@ -538,6 +548,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(popups::plugin);
     app.add_plugins(reaction_voices::plugin);
     app.add_plugins(surprise::plugin);
+    app.add_plugins(tick_input::plugin);
     app.add_plugins(tornado::plugin);
     app.add_plugins(weather::plugin);
     app.add_plugins(widescreen::plugin);
@@ -2830,8 +2841,8 @@ fn whiff_frame(g: &mut Game, i: usize, stick: bool) {
     p.whiff = (!w.over(stick, p.played)).then_some(w);
 }
 
-/// Every player's turn this frame: humans from their controller slot, the rest from the stand-in AI.
-fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
+/// Every player's turn this frame: humans from their seat's pad this tick (`tick_input`), the rest from the stand-in AI.
+fn control(mut g: ResMut<Game>, pads: Res<Pads>, tick: Res<tick_input::TickPads>) {
     let g = &mut *g;
     g.humans = (0..g.players.len())
         .map(|i| pads.slot_of(i, g.players.len()).is_some())
@@ -2839,8 +2850,8 @@ fn control(mut g: ResMut<Game>, mut pads: ResMut<Pads>) {
     for i in 0..g.players.len() {
         match pads.slot_of(i, g.players.len()) {
             Some(s) => {
-                let pad = &mut pads.slots[s];
-                let (shot, serve_press) = (pad.shot.take(), std::mem::take(&mut pad.serve));
+                let pad = &tick.slot(s);
+                let (shot, serve_press) = (pad.shot, pad.serve);
                 post_press(g, shot.is_some() || serve_press);
                 doubles_ai::human(g, i);
                 human(g, i, pad, shot, serve_press);
