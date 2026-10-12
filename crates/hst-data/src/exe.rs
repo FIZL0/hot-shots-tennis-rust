@@ -483,6 +483,13 @@ pub fn bank_volumes(elf: &[u8]) -> Result<Vec<u32>, Error> {
     Ok(u32s(0x1c_e970, 24).into_iter().map(|c| volume[c as usize]).collect())
 }
 
+/// The court intro's title plate rows per court number (0..13): surface (0 grass, 1 clay, 2 hard) and the two ball
+/// ratings (bright balls out of 4). From `SCUS_976.10` of the supported disc.
+pub fn court_plates(elf: &[u8]) -> Result<Vec<[u8; 3]>, Error> {
+    check_boot(elf)?;
+    Ok(boot_at(elf, 0x1b_b790, 3 * 14).chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+}
+
 fn check_boot(elf: &[u8]) -> Result<(), Error> {
     if elf.len() != 864_720 || elf.get(..4) != Some(b"\x7fELF") || elf.get(0x3c..0x40) != Some(&0x10_0000u32.to_le_bytes()) {
         return Err(Error("SCUS_976.10 does not match the supported US 1.00 program".into()));
