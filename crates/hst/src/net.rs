@@ -19,35 +19,28 @@
 //! players' picks); the host answers [`Msg::Room`] (seated) or [`Msg::Refused`], sends `Room` again on every
 //! change and [`Msg::Start`] once every seat is taken. Messages are JSON, a u32 length before each.
 //!
-//! The app talks to this through [`Net`]: commands in, [`Event`]s out; the network runs on its own tokio thread.
+//! The app talks to this through [`Net`]: commands in, [`Event`]s out; the network runs on its own tokio thread (in the browser: a task on the page's event loop, relays only).
 //! `hst net host|find|quick|join …` drives the same thing from a terminal (two machines, no menus).
 
 // the browser build keeps the lobby types (menus) without the transport
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 
 use std::sync::mpsc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use n0_future::time::{Duration, SystemTime};
 
-#[cfg(not(target_arch = "wasm32"))]
 use iroh::address_lookup::AddrFilter;
-#[cfg(not(target_arch = "wasm32"))]
 use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
-#[cfg(not(target_arch = "wasm32"))]
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, Signature};
 #[cfg(not(target_arch = "wasm32"))]
 use iroh_mainline_address_lookup::DhtAddressLookup;
-#[cfg(not(target_arch = "wasm32"))]
 use iroh::endpoint_info::UserData;
 #[cfg(not(target_arch = "wasm32"))]
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
-#[cfg(not(target_arch = "wasm32"))]
 use iroh_tickets::endpoint::EndpointTicket;
-#[cfg(not(target_arch = "wasm32"))]
 use n0_future::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
 use n0_mainline::{Dht, Id, MutableItem, SigningKey};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc as amp;
 
 pub const ALPN: &[u8] = b"hst/lobby/1";
@@ -216,7 +209,6 @@ pub struct Listing {
 }
 
 impl Listing {
-    #[cfg(not(target_arch = "wasm32"))]
     fn of(id: EndpointId, room: &Room) -> Listing {
         let seats = room.seats.len();
         Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now() }
@@ -234,9 +226,8 @@ pub fn quick_pick(list: &[Listing], doubles: bool, need: usize) -> Vec<Listing> 
     fit
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -263,14 +254,12 @@ fn unseal(n: u16, value: &[u8]) -> Option<Listing> {
     Some(l)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// A listing as mDNS user data (≤ 245 bytes: the ID is the record's own, the time the finder's clock).
 fn lan_data(l: &Listing) -> Option<UserData> {
     let json = serde_json::to_string(&Listing { id: String::new(), time: 0, ..l.clone() }).ok()?;
     format!("{LAN_TAG}{json}").parse().ok()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// The listing in endpoint `id`'s mDNS user data, if it's hosting.
 fn lan_listing(id: EndpointId, data: Option<&UserData>) -> Option<Listing> {
     let l: Listing = serde_json::from_str(data?.as_ref().strip_prefix(LAN_TAG)?).ok()?;
@@ -312,17 +301,15 @@ pub fn delay_for(rtt: Duration) -> u32 {
 }
 
 /// Messages out through one stream, each after [`LAG_MS`], in order.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
-struct Link(amp::UnboundedSender<(tokio::time::Instant, Msg)>);
+struct Link(amp::UnboundedSender<(n0_future::time::Instant, Msg)>);
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Link {
     fn new(mut tx: SendStream) -> Link {
-        let (s, mut r) = amp::unbounded_channel::<(tokio::time::Instant, Msg)>();
-        tokio::spawn(async move {
+        let (s, mut r) = amp::unbounded_channel::<(n0_future::time::Instant, Msg)>();
+        n0_future::task::spawn(async move {
             while let Some((due, m)) = r.recv().await {
-                tokio::time::sleep_until(due).await;
+                n0_future::time::sleep_until(due).await;
                 if send(&mut tx, &m).await.is_err() {
                     break;
                 }
@@ -333,18 +320,16 @@ impl Link {
 
     fn send(&self, m: &Msg) {
         let lag = Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed));
-        let _ = self.0.send((tokio::time::Instant::now() + lag, m.clone()));
+        let _ = self.0.send((n0_future::time::Instant::now() + lag, m.clone()));
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn send(s: &mut SendStream, m: &Msg) -> Result<(), String> {
     let b = serde_json::to_vec(m).unwrap();
     s.write_all(&(b.len() as u32).to_le_bytes()).await.map_err(|e| e.to_string())?;
     s.write_all(&b).await.map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn recv(r: &mut RecvStream) -> Result<Msg, String> {
     let mut n = [0; 4];
     r.read_exact(&mut n).await.map_err(|e| e.to_string())?;
@@ -396,14 +381,12 @@ pub enum Event {
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(bevy::prelude::Resource)]
 pub struct Net {
     cmd: amp::UnboundedSender<Cmd>,
     events: std::sync::Mutex<mpsc::Receiver<Event>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Net {
     pub fn start(cfg: Online) -> Net {
         if let Some(ms) = std::env::var("HST_NET_LAG").ok().and_then(|v| v.parse().ok()) {
@@ -411,6 +394,7 @@ impl Net {
         }
         let (cmd, cmd_rx) = amp::unbounded_channel();
         let (ev, events) = mpsc::channel();
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("net".into())
             .spawn(move || {
@@ -418,6 +402,9 @@ impl Net {
                 rt.block_on(run(cfg, cmd_rx, ev));
             })
             .unwrap();
+        // the browser: a task on the page's event loop
+        #[cfg(target_arch = "wasm32")]
+        n0_future::task::spawn(run(cfg, cmd_rx, ev));
         Net { cmd, events: events.into() }
     }
 
@@ -432,7 +419,6 @@ impl Net {
 
 // ---------------------------------------------------------------- the network thread
 
-#[cfg(not(target_arch = "wasm32"))]
 struct Ctx {
     ep: Endpoint,
     dht: Dht,
@@ -441,7 +427,6 @@ struct Ctx {
     ev: mpsc::Sender<Event>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 type Lan = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<EndpointId, Listing>>>;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -449,7 +434,7 @@ type Lan = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<EndpointId
 fn watch_lan(mdns: MdnsAddressLookup) -> Lan {
     let lan = Lan::default();
     let l = lan.clone();
-    tokio::spawn(async move {
+    n0_future::task::spawn(async move {
         let mut events = mdns.subscribe().await;
         while let Some(e) = events.next().await {
             let mut l = l.lock().unwrap();
@@ -466,13 +451,11 @@ fn watch_lan(mdns: MdnsAddressLookup) -> Lan {
     lan
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// The open lobbies on the LAN.
 fn lan_list(lan: &Lan) -> Vec<Listing> {
     lan.lock().unwrap().values().filter(|l| l.open() > 0).cloned().collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Ctx {
     fn say(&self, e: Event) {
         let _ = self.ev.send(e);
@@ -499,12 +482,50 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), St
     ep.address_lookup().map_err(|e| e.to_string())?.add(mdns.clone());
     if *relay != Relay::Off {
         // a home relay before the ticket, so the code works from anywhere (bounded: a dead relay still leaves LAN)
-        let _ = tokio::time::timeout(Duration::from_secs(10), ep.online()).await;
+        let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     Ok((ep, mdns))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// The browser has no UDP: no DHT and no mDNS, only the relays. A code (ticket) carries the host's relay, so joining by
+// code works; the lobby list doesn't (Find shows none, Quickplay hosts).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct Dht;
+
+#[cfg(target_arch = "wasm32")]
+impl Dht {
+    fn client() -> Result<Dht, String> {
+        Ok(Dht)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn watch_lan(_: ()) -> Lan {
+    Lan::default()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn find_all(_: &Ctx) -> Vec<Listing> {
+    vec![]
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn announce(_: &Ctx, _: u16, _: &Room) {}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
+    let mode = match relay {
+        Relay::N0 => RelayMode::Default,
+        Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
+        Relay::Off => return Err("The browser can only play online through a relay (Settings: relay).".into()),
+    };
+    let ep = Endpoint::builder(presets::Minimal).secret_key(SecretKey::generate()).alpns(vec![ALPN.to_vec()]).relay_mode(mode).bind().await.map_err(|e| e.to_string())?;
+    // the code needs the home relay in it: nothing else reaches a browser
+    let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
+    Ok((ep, ()))
+}
+
 async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sender<Event>) {
     let _ = ev.send(Event::Status("Connecting...".into()));
     let (ep, mdns) = match endpoint(&cfg.relay).await {
@@ -530,7 +551,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             Cmd::Find => {
                 cx.say(Event::Status("Looking for lobbies...".into()));
                 // the LAN's first (all there is with no internet), then the DHT's added
-                tokio::time::sleep(LAN_WAIT).await;
+                n0_future::time::sleep(LAN_WAIT).await;
                 cx.say(Event::Found(lan_list(&cx.lan)));
                 let list = find_all(&cx).await;
                 cx.say(Event::Found(list));
@@ -539,7 +560,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                 cx.say(Event::Status("Looking for a lobby...".into()));
                 let mine: Vec<Pick> = room.seats.iter().flatten().map(|s| s.pick).collect();
                 let mut joined = false;
-                tokio::time::sleep(LAN_WAIT).await;
+                n0_future::time::sleep(LAN_WAIT).await;
                 for l in quick_pick(&find_all(&cx).await, room.doubles, mine.len()) {
                     if join(&cx, &l.id, mine.clone(), &mut cmds).await {
                         joined = true;
@@ -574,7 +595,7 @@ pub async fn find(dht: &Dht) -> Vec<Listing> {
     let mut ports = std::collections::BTreeSet::new();
     if let Ok(mut s) = dht.get_peers(Id::from_bytes(TOPIC).unwrap()).await {
         // the query ends by itself once the closest nodes answered; a cap in case it doesn't
-        let _ = tokio::time::timeout(Duration::from_secs(30), async {
+        let _ = n0_future::time::timeout(Duration::from_secs(30), async {
             while let Some(batch) = s.next().await {
                 ports.extend(batch.iter().map(|a| a.port()));
             }
@@ -607,7 +628,6 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// A joiner's side, inside the host task.
 enum Guest {
     In { peer: String, picks: Vec<Pick>, build: String, tx: SendStream, conn: Connection },
@@ -615,13 +635,11 @@ enum Guest {
     Gone(String),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// The host's clock for the round-trip probes, in µs.
-fn micros(t0: tokio::time::Instant) -> u64 {
+fn micros(t0: n0_future::time::Instant) -> u64 {
     t0.elapsed().as_micros() as u64
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) {
     let code = EndpointTicket::new(cx.ep.addr()).to_string();
     cx.say(Event::Code(code));
@@ -629,13 +647,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let n = lobby_number(cx.ep.id());
     let (gtx, mut guests) = amp::unbounded_channel::<Guest>();
     let mut joined: Vec<(String, Link, Connection)> = Vec::new();
-    let mut tick = tokio::time::interval(REPUBLISH);
+    let mut tick = n0_future::time::interval(REPUBLISH);
     let mut dirty = true;
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
-    let t0 = tokio::time::Instant::now();
+    let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
-    let mut starting: Option<(Vec<String>, tokio::time::Instant)> = None;
-    let mut ping = tokio::time::interval(Duration::from_secs(1));
+    let mut starting: Option<(Vec<String>, n0_future::time::Instant)> = None;
+    let mut ping = n0_future::time::interval(Duration::from_secs(1));
     loop {
         if dirty {
             dirty = false;
@@ -643,15 +661,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             let l = room.clone();
             cx.ep.set_user_data_for_address_lookup(lan_data(&Listing::of(cx.ep.id(), &l)));
             let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone() };
-            tokio::spawn(async move { announce(&cx2, n, &l).await });
+            n0_future::task::spawn(async move { announce(&cx2, n, &l).await });
         }
         if let Some((waiting, until)) = &starting
-            && (waiting.is_empty() || tokio::time::Instant::now() >= *until)
+            && (waiting.is_empty() || n0_future::time::Instant::now() >= *until)
         {
             // ponytail: no probe answer in time counts as 250 ms; a slower peer just stalls the match more
             let worst = joined.iter().map(|(p, ..)| rtt.get(p).copied().unwrap_or(Duration::from_millis(250))).max().unwrap_or_default();
             room.delay = delay_for(worst);
-            room.seed = (SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as u32) | 1;
+            room.seed = (SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as u32) | 1;
             broadcast(&joined, &Msg::Start(room.clone()));
             cx.say(Event::Status(format!("Round trip {} ms, input delay {} ticks.", worst.as_millis(), room.delay)));
             cx.say(Event::Start(room.clone(), "host".into()));
@@ -661,7 +679,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         tokio::select! {
             Some(inc) = cx.ep.accept() => {
                 let gtx = gtx.clone();
-                tokio::spawn(async move {
+                n0_future::task::spawn(async move {
                     let Ok(conn) = async { inc.accept()?.await.map_err(Into::into) }.await.map_err(|e: Box<dyn std::error::Error + Send + Sync>| e) else { return };
                     let peer = conn.remote_id().to_string();
                     let Ok((tx, mut rx)) = conn.accept_bi().await else { return };
@@ -688,7 +706,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         let _ = send(&mut tx, &Msg::Refused(why)).await;
                         let _ = tx.finish();
                         // let the refusal arrive before the connection goes
-                        tokio::spawn(async move { tokio::time::sleep(Duration::from_secs(2)).await; drop(conn) });
+                        n0_future::task::spawn(async move { n0_future::time::sleep(Duration::from_secs(2)).await; drop(conn) });
                         continue;
                     }
                     cx.say(Event::Status(format!("{} joined.", short(&peer))));
@@ -701,7 +719,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     if room.open() == 0 {
                         // a fresh round trip from everyone before the input delay is picked (3 s at most)
                         broadcast(&joined, &Msg::Ping(micros(t0)));
-                        starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), tokio::time::Instant::now() + Duration::from_secs(3)));
+                        starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), n0_future::time::Instant::now() + Duration::from_secs(3)));
                     }
                 }
                 Guest::Said(peer, Msg::Pong(sent)) => {
@@ -735,7 +753,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
 /// a guest dropping ends the match for everyone.
 async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) {
@@ -761,7 +778,7 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: am
                 Some(Cmd::Send(m)) => broadcast(&joined, &m),
                 Some(Cmd::Leave) | None => {
                     // the goodbyes go out with the lag, then the connections close
-                    tokio::time::sleep(Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200)).await;
+                    n0_future::time::sleep(Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200)).await;
                     for (_, _, conn) in &joined {
                         conn.close(0u32.into(), b"host left");
                     }
@@ -773,14 +790,12 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Connection)>, mut guests: am
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn broadcast(to: &[(String, Link, Connection)], m: &Msg) {
     for (_, l, _) in to {
         l.send(m);
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn wait_leave(cmds: &mut amp::UnboundedReceiver<Cmd>) {
     while let Some(c) = cmds.recv().await {
         if matches!(c, Cmd::Leave) {
@@ -789,7 +804,6 @@ async fn wait_leave(cmds: &mut amp::UnboundedReceiver<Cmd>) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// This host's lobby number, from its (random) endpoint ID.
 fn lobby_number(id: EndpointId) -> u16 {
     // ponytail: 16 bits, two hosts on one number overwrite each other's listing (birthday odds, ~1 % at 36 hosts at
@@ -797,12 +811,10 @@ fn lobby_number(id: EndpointId) -> u16 {
     u16::from_le_bytes([id.as_bytes()[0], id.as_bytes()[1]]).max(1)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn short(id: &str) -> &str {
     &id[..id.len().min(8)]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
 async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
     let code = code.trim();
@@ -817,7 +829,7 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
         },
     };
     cx.say(Event::Status(format!("Joining {}...", short(&addr.id.to_string()))));
-    let conn = match tokio::time::timeout(Duration::from_secs(30), cx.ep.connect(addr, ALPN)).await {
+    let conn = match n0_future::time::timeout(Duration::from_secs(30), cx.ep.connect(addr, ALPN)).await {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => {
             cx.say(Event::Failed(format!("Couldn't reach the host: {e}")));
@@ -839,7 +851,7 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
     let link = Link::new(tx);
     // its own task: `recv` isn't cancel-safe, so it can't sit in the `select!` (a command mid-read lost bytes)
     let (got, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    n0_future::task::spawn(async move {
         loop {
             let m = recv(&mut rx).await;
             let end = m.is_err();
@@ -881,7 +893,7 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
             c = cmds.recv() => match c {
                 Some(Cmd::Send(m)) => link.send(&m),
                 Some(Cmd::Leave) | None => {
-                    tokio::time::sleep(Duration::from_millis(if playing { LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200 } else { 0 })).await;
+                    n0_future::time::sleep(Duration::from_millis(if playing { LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200 } else { 0 })).await;
                     conn.close(0u32.into(), b"left");
                     return true;
                 }
@@ -951,33 +963,9 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
     }
 }
 
-/// The browser build has no network yet (M3: iroh over its relays; the DHT needs UDP): every command fails.
-#[cfg(target_arch = "wasm32")]
-#[derive(bevy::prelude::Resource)]
-pub struct Net;
-
-#[cfg(target_arch = "wasm32")]
-impl Net {
-    pub fn start(_: Online) -> Net {
-        Net
-    }
-
-    pub fn send(&self, _: Cmd) {}
-
-    pub fn poll(&self) -> Vec<Event> {
-        vec![Event::Failed("Online play isn't in the browser build yet.".into())]
-    }
-}
-
 /// `code` is a join code: a host's ticket or a bare endpoint ID.
 pub fn is_code(code: &str) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    return code.parse::<EndpointTicket>().is_ok() || code.parse::<EndpointId>().is_ok();
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = code;
-        false
-    }
+    code.parse::<EndpointTicket>().is_ok() || code.parse::<EndpointId>().is_ok()
 }
 
 #[cfg(test)]

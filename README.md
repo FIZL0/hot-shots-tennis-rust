@@ -55,6 +55,15 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 | Camera (original / free) | C | Select |
 | Turn free camera | Arrow keys | Right stick |
 
+### In the browser
+
+`tools/web.sh` builds the browser version into `web/` (a WebGPU build, and a WebGL2 one for browsers without WebGPU;
+the page picks). It needs the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` at `Cargo.lock`'s wasm-bindgen
+version and `wasm-opt` (binaryen). Serve `web/` over HTTPS, or `python3 -m http.server -d web` on localhost. The page
+asks for your ISO once and keeps the imported disc in the browser's private storage (OPFS); `?forget` drops it. Sound
+starts on the first click or key. The repo's GitHub Pages workflow (`.github/workflows/pages.yml`) publishes the same
+page; no game data is hosted.
+
 ## Texture replacements
 
 Upscaled or edited textures are read at runtime from `mods/texture-replacements/` beside the ISO, which is not part
@@ -106,7 +115,9 @@ of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo'
 
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
 Lobbies are found over the public BitTorrent DHT. Players connect peer to peer with [iroh](https://iroh.computer), and
-a relay steps in when a direct path can't be made. The browser build has no online play yet.
+a relay steps in when a direct path can't be made. In the browser everything goes through the relay: join by code
+(paste the code on the page with Ctrl+V, or open the page with `?code=<code>`) or host; Find and LAN play aren't there
+(no UDP in a browser), and Quick play hosts. Browser and desktop players can play together.
 
 LAN play needs no internet: put everyone on one network (a router, or one player's hotspot with mobile data off) and
 set the relay to Off. Find lists the lobbies on that network first (mDNS), and a host's code holds its LAN address,

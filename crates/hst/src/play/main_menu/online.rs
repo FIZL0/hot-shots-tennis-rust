@@ -172,7 +172,12 @@ impl Menu {
             self.net.go = Some(Go::Code);
             self.go(Screen::Mode, out);
         } else {
-            self.net.status = "Copy a lobby code first (the host's code, or a lobby ID), then choose Join by Code.".into();
+            self.net.status = if cfg!(target_arch = "wasm32") {
+                "Paste a lobby code on the page first (Ctrl+V, or open the page with ?code=<code>), then choose Join by Code."
+            } else {
+                "Copy a lobby code first (the host's code, or a lobby ID), then choose Join by Code."
+            }
+            .into();
             out.push(Effect::Sound(1));
         }
     }
@@ -380,6 +385,9 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::Paste => {
             // ponytail: desktop clipboards answer at once; the browser's is async and would need polling
             let text = clipboard.fetch_text().poll_result().and_then(Result::ok);
+            // the browser: what was pasted on the page, or the URL's `?code=`
+            #[cfg(target_arch = "wasm32")]
+            let text = text.or_else(crate::web::pasted);
             menu.pasted(text, &mut out);
         }
         Fx::Copy => {

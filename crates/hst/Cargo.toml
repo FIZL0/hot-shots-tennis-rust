@@ -15,6 +15,12 @@ web-time = "1"
 serde = { version = "1", features = ["derive"] }
 # join codes as QR (`play/main_menu/online.rs`)
 qrcode = { version = "0.14", default-features = false }
+# netplay transport (`net.rs`): iroh QUIC (relay-only in the browser), tickets for codes/QR; tasks and timers through
+# n0-future (tokio natively, the browser's event loop on wasm)
+iroh = "1.3"
+iroh-tickets = "1"
+n0-future = "0.3"
+tokio = { version = "1", features = ["macros", "sync"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -22,11 +28,12 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "UrlSearchParams", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# netplay transport and lobbies (`net.rs`): iroh QUIC, addresses and lobby list on the mainline DHT and LAN mDNS, tickets for codes/QR
-iroh = "1.3"
+# lobbies: addresses and lobby list on the mainline DHT and LAN mDNS (UDP: not in the browser)
 iroh-mainline-address-lookup = "0.6"
 n0-mainline = "0.7"
-iroh-tickets = "1"
 iroh-mdns-address-lookup = "0.6"
-n0-future = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[features]
+# the browser build on WebGPU (`tools/web.sh` builds it beside the default WebGL2 one; the page picks)
+webgpu = ["bevy/webgpu"]

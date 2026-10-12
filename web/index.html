@@ -18,10 +18,26 @@
   <input id="iso" type="file" accept=".iso">
   <p id="status"></p>
 </div>
+<script>
+// Audio unlocked on the first tap or key: browsers start every AudioContext suspended until a user gesture.
+(() => {
+  const all = [];
+  const events = ['pointerdown', 'pointerup', 'touchend', 'keydown', 'mousedown', 'click'];
+  self.AudioContext = new Proxy(self.AudioContext, { construct: (t, a) => { const c = new t(...a); all.push(c); return c; } });
+  const resume = () => {
+    all.forEach(c => c.state === 'suspended' && c.resume());
+    if (all.length && all.every(c => c.state === 'running')) events.forEach(e => removeEventListener(e, resume, true));
+  };
+  events.forEach(e => addEventListener(e, resume, true));
+})();
+</script>
 <script type="module">
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
-// `?forget` drops the imported pack (pick the ISO again).
-import init, { run } from './pkg/hst.js';
+// `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
+// (`?webgl2` forces it).
+const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await navigator.gpu?.requestAdapter().catch(() => null);
+console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
+const { default: init, run, paste } = await import(webgpu ? './pkg-webgpu/hst.js' : './pkg/hst.js');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
 const q = new URLSearchParams(location.search);
@@ -36,6 +52,8 @@ async function start() {
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
   document.getElementById('disc').hidden = true;
   await init();
+  // Join by Code takes the last text pasted on the page
+  addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   try {
     run(bytes);
   } catch (e) {

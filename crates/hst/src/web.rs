@@ -1,7 +1,8 @@
 //! The browser build (`web/`, built by `tools/web.sh`). The page imports the user's ISO once: a worker calls
 //! `import_disc` with the picked `File` (read by extent with `File.slice`, never whole) and an OPFS file to write the
 //! pack into (`Iso::write_pack_to`). Every later visit reads that pack and calls `run`, which mounts it in memory
-//! (`hst_data::iso::mount`) where every `Iso::open` finds it. Flags come from the URL: `?play&stage=1` = `--play --stage 1`.
+//! (`hst_data::iso::mount`) where every `Iso::open` finds it. Flags come from the URL: `?play&stage=1` = `--play --stage 1`;
+//! `?code=<lobby code>` is what Join by Code takes, as is the last text pasted on the page (`paste`).
 
 use hst_data::iso::Iso;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -108,9 +109,30 @@ pub fn run(pack: js_sys::Uint8Array) {
     if let Ok(q) = web_sys::window().unwrap().location().search() {
         for kv in q.trim_start_matches('?').split('&').filter(|s| !s.is_empty()) {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            // the page's own (`index.html`)
+            if k == "webgl2" {
+                continue;
+            }
+            if k == "code" {
+                paste(js_sys::decode_uri_component(v).map(String::from).unwrap_or_default());
+                continue;
+            }
             argv.push(format!("--{k}"));
             argv.extend(js_sys::decode_uri_component(&v.replace('+', " ")).map(String::from).unwrap_or_default().split_whitespace().map(String::from));
         }
     }
     crate::start(argv);
+}
+
+/// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).
+static PASTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Page: text pasted (Ctrl+V / the paste menu).
+#[wasm_bindgen]
+pub fn paste(text: String) {
+    *PASTED.lock().unwrap() = Some(text);
+}
+
+pub fn pasted() -> Option<String> {
+    PASTED.lock().unwrap().clone()
 }

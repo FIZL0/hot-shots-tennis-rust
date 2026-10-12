@@ -37,7 +37,12 @@ struct VertexOutput {
     // its specular term (the vertex alpha HIGHLIGHT2 adds)
     @location(8) spec: f32,
     // the fog coefficient F VU1 writes to the vertex (0..255); the GS interpolates it linearly on screen
+#ifdef NO_ARRAY_TEXTURES_SUPPORT
+    // WebGL2 (GLSL ES 3.0) has no noperspective: interpolated perspective-correct there (looks the same)
+    @location(9) fog: f32,
+#else
     @location(9) @interpolate(linear) fog: f32,
+#endif
 }
 
 #ifdef MORPH_TARGETS

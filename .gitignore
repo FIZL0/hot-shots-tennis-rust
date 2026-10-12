@@ -22,3 +22,4 @@ tools/upscale_mods.sh
 research/tools/wasmtime-*/
 /target-wasm/
 /web/pkg/
+/web/pkg-webgpu/
