@@ -12,7 +12,8 @@ into a finished session cancels that, so /exit it yourself or the runner never m
 
 Picking: open `- [ ] **ID**` lines in plan/TODO.md, in order, skipping split parents, `(after X)` while X is open,
 Stretch, parents with open subtasks (P14 while P14c2 is open), and anything tried already tonight. Mode p (priority):
-each free slot takes the next such task, exactly in order, files may overlap. Mode d (different): two running tasks
+each free slot takes the next such task, exactly in order, files may overlap. In every mode, siblings
+(same letters+number: M16a/M16b, P11k/P11l) never run at once. Mode d (different): two running tasks
 never share a file named on their lines, except SHARED (play.rs: nearly every task names it); the first open "Next"
 task always leads and the rest of "Next" waits for it; the same for any section headed "in this order" (one task
 at a time each). `dir/*.rs` on a line counts as every file in that dir. Worktrees: ../<repo>-slots/s1..sN, kept between tasks so their target/ stays warm (first build is slow);
@@ -146,9 +147,16 @@ def tasks():
     return out
 
 
+def family(tid):
+    """M16a, M16b, M16 -> M16; P11k4 -> P11: siblings share it and never run side by side, in any mode."""
+    return re.match(r'[A-Za-z]*\d*', tid).group()
+
+
 def pick(running, tried):
     busy, seen = list(running.values()), set()
     for tid, section, files in tasks():
+        if any(family(tid) == family(b[0]) for b in busy):
+            continue
         if MODE == 'p':
             if tid not in tried and all(tid != b[0] for b in busy):
                 return tid, section, files
@@ -214,7 +222,9 @@ def start(n, task):
     tid = task[0]
     d = slot(n)
     git('reset', '-q', '--hard', cwd=d), git('clean', '-fdq', cwd=d)
-    git('checkout', '-q', '-B', f'task/{tid}', 'main', cwd=d)
+    co = git('checkout', '-q', '-B', f'task/{tid}', 'main', cwd=d)
+    if co.returncode:  # e.g. another slot still holds task/<ID>: never start an agent on the wrong branch
+        raise SystemExit(f'slot {n}: checkout task/{tid} failed: {co.stderr.strip()}')
     sid = str(uuid.uuid4())
     out = open(os.path.join(NOTES, f'slot{n}.log'), 'a')
     since = out.tell()
@@ -413,6 +423,9 @@ def main():
         master()  # reports a previous run left; otherwise the master starts only when a merge needs it
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
+    for n in free_at:
+        if n not in procs and os.path.isdir(slot(n)):
+            git('checkout', '-q', '--detach', cwd=slot(n))  # idle slots let go of old task/<ID>s, or start() can't take them
     while True:
         for n in free_at:
             if n in procs and not alive(procs[n][0]):
