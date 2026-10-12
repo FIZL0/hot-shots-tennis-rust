@@ -497,6 +497,10 @@ pub struct Trigger {
     /// Had its go (type 15 played, a startled type startled): a reset leaves it off until a new match unless its
     /// row rearms it.
     pub done: bool,
+    /// `done` as the last serve set-up found it, with the matrix and the path's node, previous node, leg ticks left
+    /// and pause left: a replay's start puts them back ([`Trigger::serve_setup`]); resets keep them.
+    pub kept_done: bool,
+    pub kept: (M4, i16, i16, i16, i16),
     /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others (it scales the
     /// model's sub-meshes when drawn).
     pub weight: f32,
@@ -732,7 +736,7 @@ impl Trigger {
             ty: o.ty, anchor: o.anchor, path: o.path, start: o.start, node: o.start, prev: o.start, home: o.home, world: o.home, msg: o.msg,
             frame: o.frame, next: o.next, len: o.len, timer: o.timer, sweep: o.sweep, pan: o.pan, down: o.down,
             counter: o.counter, gap: o.gap, voice: o.voice, scrub: o.scrub,
-            playing: o.playing, route: o.route, routes: o.routes, done: o.done, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, armed: o.armed, ..Trigger::default()
+            playing: o.playing, route: o.route, routes: o.routes, done: o.done, kept_done: o.kept_done, kept: o.kept, weight: o.weight, alt: o.alt, clip_lens: o.clip_lens, armed: o.armed, ..Trigger::default()
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
@@ -997,6 +1001,20 @@ impl Trigger {
     /// 8 a game's end (just before its reset); the sounds started.
     pub fn message(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         self.callback(row, msg, near, roll)
+    }
+
+    /// The serve set-up's message (also sent when a replay starts): out of a replay it keeps `done`, the matrix and the
+    /// path's place, at a replay's start it puts them back; then it resets, except type 37 and, while the match's
+    /// phase (`phase`, read when the message comes: 0 the match's start, 1 a change of ends) is 0 or 1, all but
+    /// type 15. The restored matrix and place only last when no reset follows.
+    pub fn serve_setup(&mut self, row: &TriggerRow, replaying: bool, phase: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
+        self.msg = 0xe;
+        if replaying {
+            (self.done, (self.world, self.node, self.prev, self.left, self.wait)) = (self.kept_done, self.kept);
+        } else {
+            (self.kept_done, self.kept) = (self.done, (self.world, self.node, self.prev, self.left, self.wait));
+        }
+        if self.ty != 37 && (phase > 1 || self.ty == 15) { self.reset_near(row, near, roll) } else { Vec::new() }
     }
 
     /// Type 2's matrix: at the landing spot, turned (about Y) to face the camera's eye.
@@ -1426,6 +1444,8 @@ impl Default for Trigger {
             route: 0,
             routes: [[[0.0; 4]; 2]; 3],
             done: false,
+            kept_done: false,
+            kept: ([[0.0; 4]; 4], 0, 0, 0, 0),
             weight: 0.0,
             alt: false,
             clip_lens: [0.0; 2],

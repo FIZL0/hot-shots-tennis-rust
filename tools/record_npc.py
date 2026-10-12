@@ -14,7 +14,10 @@ HST_PAD="press cross 100;sleep 500;..." sends those tools/vpad.py commands right
 HST_POKE="<sample>:<k>:<b|0..3>:<dx>:<dz>;..." moves creature k (header order) to the ball's or player i's position
 plus (dx, 0, dz) after that sample, so a frozen creature finds someone close.
 HST_BALL=1 (with `prox`) appends the ball's whole object *(gm+0x88) (0x290) to each sample, and HST_MATS=1 after it the
-four players' model matrices *(gm+0xa8+4i)+0x3d40 (0x40 each). A poke at `B` is one ball move (+0x140) ahead of the ball."""
+four players' model matrices *(gm+0xa8+4i)+0x3d40 (0x40 each). A poke at `B` is one ball move (+0x140) ahead of the ball.
+HST_GM=1 appends the match object *(0x422f80) (0x360: +0x54 phase, +0x344 replaying, +0x346 point over) last.
+HST_BYTE="<sample>:<k>:<offset>:<value>;..." sets a byte of creature k after that sample.
+HST_REPLAY=<sample> forces an instant replay of the first point over from that sample on (as tools/record_foot.py)."""
 import os, subprocess, struct, sys, time, zipfile
 from pine import Pine
 
@@ -56,7 +59,15 @@ def regions():
             r.append((p.read32(gm + 0x88), 0x290))
         if os.environ.get("HST_MATS"):
             r += [(p.read32(gm + 0xa8 + 4 * i) + 0x3d40, 0x40) for i in range(4)]
+    if os.environ.get("HST_GM"):
+        r.append((gm, 0x360))
     return r
+
+def poke8(a, b):
+    w = a & ~3
+    p.write32(w, p.read32(w) & ~(0xff << 8 * (a & 3)) | b << 8 * (a & 3))
+bytes_at = [tuple(int(x, 0) for x in q.split(":")) for q in os.environ.get("HST_BYTE", "").split(";") if q]
+replay_from = int(os.environ.get("HST_REPLAY", -1))
 
 # HST_POKE="<sample>:<creature k>:<b|player i>:<dx>:<dz>;...": move a creature next to the ball or a player
 pokes = [(int(a), int(k), w, float(x), float(z)) for a, k, w, x, z in
@@ -78,6 +89,17 @@ while n < want:
     out.write(struct.pack("<I", v) + a)
     out.flush()
     n += 1
+    for at, k, off, b in bytes_at:
+        if at == n:
+            poke8(walkers[k] + off, b)
+    if 0 <= replay_from <= n:  # the point over and no replay yet: ask for one (once)
+        gm = p.read32(GM_PTR)
+        if p.read8(gm + 0x346) and not p.read8(gm + 0x344):
+            poke8(gm + 0x32e, 1)
+            p.write32(gm + 0x350, 1)
+            poke8(gm + 0x35c, 1)
+            print("replay forced after sample", n, flush=True)
+            replay_from = -1
     for at, k, who, dx, dz in pokes:
         if at == n:  # the creature's world position to `who`'s plus (dx, 0, dz); it stays put while it stands
             gm = p.read32(GM_PTR)
