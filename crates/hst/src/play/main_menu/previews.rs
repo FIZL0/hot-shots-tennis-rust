@@ -12,7 +12,8 @@
 //! repo's standard); else its costumes bake in the background after the disc's (a hovered one first). `HST_BAKE=all`
 //! quits once every mod's costumes are baked (the mods repo's packaging). Bump [`RENDER`] when the preview's drawing changes.
 //!
-//! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms), the newest ask
+//! Characters load on a worker thread (each one decodes its texture replacements and motions, ~130 ms; a disc
+//! character only the preview's motions, B102: ~8 ms, ~10 ms in the browser, where a load runs inside a frame), the newest ask
 //! first; at most [`KEEP_MODELS`] stay loaded and [`KEEP_PNGS`] PNGs (M1m's budget), least recently used dropped, so
 //! scrolling a big mods folder can't run the GPU out of memory.
 //!
@@ -239,7 +240,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
         let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
         let r = match (who, md) {
             (Who::Mod(_), Some(md)) => crate::mods::load(iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
-            (Who::Disc(c), _) => character::load_disc(iso, c, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, inspect::disc_hand(iso, c))),
+            (Who::Disc(c), _) => character::load_disc_with(iso, c, costume, &mut m, &mut t, &mut i, &mut b, Some(&inspect::MOTIONS)).map(|d| (d, inspect::disc_hand(iso, c))),
             (Who::Mod(_), None) => Err("no mod".into()),
         };
         let r = r.map(|(d, hand)| (d, hand, m, t, i, b)).map_err(|e| if e.is_empty() { "failed".into() } else { e });
@@ -851,6 +852,26 @@ fn shots(dir: String) -> impl FnMut(Commands, Local<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A card's load (B102) has the preview's three motions, the same as a full load's, for every disc character.
+    #[test]
+    fn preview_loads_only_its_motions() {
+        let iso = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"));
+        let Ok(mut disc) = Iso::open(iso) else { return eprintln!("no ISO, skipped") };
+        let (mut m, mut t, mut i, mut b) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default(), Assets::<SkinnedMeshInverseBindposes>::default());
+        for (c, ..) in GRID {
+            let part = character::load_disc_with(&mut disc, c, 0, &mut m, &mut t, &mut i, &mut b, Some(&inspect::MOTIONS)).unwrap();
+            let full = character::load_disc(&mut disc, c, 0, &mut m, &mut t, &mut i, &mut b).unwrap();
+            let mut ids: Vec<usize> = part.motions.keys().copied().collect();
+            ids.sort();
+            assert_eq!(ids, [0x2e, 0x2f, character::POSE], "character {c}");
+            for id in ids {
+                assert_eq!(part.motions[&id].length, full.motions[&id].length, "character {c} motion {id:#x}");
+                assert_eq!(part.motions[&id].locals(&part.skeleton, 3.0), full.motions[&id].locals(&full.skeleton, 3.0), "character {c} motion {id:#x}");
+            }
+            assert_eq!(part.faces.keys().collect::<HashSet<_>>(), full.faces.keys().filter(|k| inspect::MOTIONS.contains(k)).collect(), "character {c} faces");
+        }
+    }
 
     /// R2 / L2 / △ on a disc character and a mod start the matching voice (B86a).
     #[test]

@@ -169,6 +169,9 @@ fn uv_held(t: f32, data: &CharacterData) -> UvClock {
 }
 
 /// Do `act` on preview `p`'s character `data`.
+/// The motions a preview plays: the pose, the win and the loss reaction (B102: a preview loads only these).
+pub const MOTIONS: [usize; 3] = [POSE, 0x2e, 0x2f];
+
 pub fn apply(p: &mut Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform, &mut UvClock)>, data: &CharacterData) {
     let Ok((mut m, mut t, mut uv)) = rigs.get_mut(p.rig) else { return };
     let pose = character::pose_frame(p.n, data.motions.get(&POSE).map_or(0.0, |c| c.length));

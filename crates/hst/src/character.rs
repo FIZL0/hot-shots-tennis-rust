@@ -437,6 +437,21 @@ pub fn load_disc(
     images: &mut impl Store<Image>,
     bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
 ) -> Result<CharacterData, String> {
+    load_disc_with(iso, n, costume, meshes, materials, images, bindposes, None)
+}
+
+/// [`load_disc`] with only the motions `only` (B102: the select's previews play three; the rest are ~90 % of a load).
+#[allow(clippy::too_many_arguments)]
+pub fn load_disc_with(
+    iso: &mut Iso,
+    n: usize,
+    costume: usize,
+    meshes: &mut impl Store<Mesh>,
+    materials: &mut impl Store<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
+    only: Option<&[usize]>,
+) -> Result<CharacterData, String> {
     let data = iso.read(&format!("PC/PC{n:02}C{costume:02}.XB")).map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
     let find = |suffix: &str| arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix)).and_then(|e| arc.read(e).ok());
@@ -483,7 +498,7 @@ pub fn load_disc(
 
     let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
     // the game binds a face track to the target of the same name; others are dropped
-    let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name))?;
+    let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions_with(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name), only)?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
 }
@@ -526,6 +541,12 @@ pub fn pose_frame(n: usize, length: f32) -> f32 {
 /// Character `n`'s motions (`PCANI/PCnnANI.XB`), the shared team reactions (`PCDATA/PCCG0.XB`) and its inspect
 /// pose ([`POSE`]), bound to `skeleton`; `target` binds a `.MOR` track name to a morph target.
 pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>) -> Result<Motions, String> {
+    disc_motions_with(iso, n, skeleton, target, None)
+}
+
+/// [`disc_motions`], only the motions `only` (and their faces) if given.
+pub fn disc_motions_with(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>, only: Option<&[usize]>) -> Result<Motions, String> {
+    let want = |id: usize| only.is_none_or(|o| o.contains(&id));
     // motions by the game's numbers
     let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
     let aarc = Archive::parse(&anims).map_err(|e| e.0)?;
@@ -535,7 +556,7 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
     let mut paths = HashMap::new();
     let mut faces = HashMap::new();
     let mut stance_ball = None;
-    for id in 0..ani::MOTIONS.len() {
+    for id in (0..ani::MOTIONS.len()).filter(|&id| want(id)) {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         let file = |ext: &str| aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.{ext}"))).and_then(|e| aarc.read(e).ok());
         faces.extend(face(file("mor"), file("uva"), skeleton, &target).map(|f| (id, f)));
@@ -562,7 +583,9 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
         }
     }
     // doubles team reactions (motions 0x30..0x34): one skeletal clip each, shared by every character
-    if let Ok(cg) = iso.read("PCDATA/PCCG0.XB") {
+    if (0x30..0x35).any(want)
+        && let Ok(cg) = iso.read("PCDATA/PCCG0.XB")
+    {
         let carc = Archive::parse(&cg).map_err(|e| e.0)?;
         for (k, stem) in ["co01_f", "co02_f", "co03", "co04", "co05"].iter().enumerate() {
             let name = format!("mtgrl/re_pc00_{stem}.ani2");
@@ -576,7 +599,9 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
         }
     }
     // the menu's inspect pose (hierarchical: the scene's own nodes bind to nothing and drop out)
-    if let Ok(d) = iso.read(&format!("MENU/PC/PC{n:02}.XB")) {
+    if want(POSE)
+        && let Ok(d) = iso.read(&format!("MENU/PC/PC{n:02}.XB"))
+    {
         let marc = Archive::parse(&d).map_err(|e| e.0)?;
         let file = |ext: &str| marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("pc{n:02}_pose.{ext}"))).and_then(|e| marc.read(e).ok());
         if let Some(a) = file("ani").and_then(|d| ani::parse(&d).ok()) {
