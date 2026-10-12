@@ -23,7 +23,7 @@
   #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: .6em; padding: 16px; text-align: center; pointer-events: none; }
   #boot[hidden] { display: none; }
-  #boot.err { pointer-events: auto; background: #000; }
+  #boot.err, #boot.slow { pointer-events: auto; background: #000; }
   #boot.err #step { color: #f88; white-space: pre-wrap; max-width: 40em; overflow-wrap: anywhere; }
   #boot a { color: #8cf; }
 </style>
@@ -52,7 +52,23 @@ if (answer) {
 // Boot status and errors on the page instead of a silent black screen. A Rust panic logs its message with
 // console.error (Bevy's panic hook) before the wasm traps: the last such line is what the error shows.
 const boot = document.getElementById('boot'), step = document.getElementById('step');
-const say = t => { if (!boot.classList.contains('err')) step.textContent = t; };
+// A step that makes no progress for 30 s (B109: a first visit on iPhone sat on its loading screen for good) says so
+// and offers the Reload / WebGL2 / ISO links; the next step takes them away again.
+let stuck;
+const say = t => {
+  if (boot.classList.contains('err')) return;
+  step.textContent = t;
+  boot.classList.remove('slow');
+  document.getElementById('help').hidden = true;
+  clearTimeout(stuck);
+  stuck = setTimeout(() => {
+    if (boot.hidden || boot.classList.contains('err')) return;
+    console.warn(`hst: no progress for 30 s at "${t}"`);
+    step.textContent = `${t} No progress for 30 s: the browser may have stalled here. Reload usually gets past it.`;
+    boot.classList.add('slow');
+    document.getElementById('help').hidden = false;
+  }, 30000);
+};
 let lastError = '';
 const error = console.error;
 console.error = (...a) => { lastError = a.map(String).join(' '); error.apply(console, a); };
@@ -66,10 +82,24 @@ function fail(e) {
   document.getElementById('help').hidden = false;
   step.textContent = `The game stopped: ${/panicked/.test(lastError) ? lastError : msg}`;
 }
+// Bevy logs its errors with console.log (`%cERROR%c file:line%c message`, css args after) and quits on a render
+// error (a lost GPU device…) without a panic: the page would sit on "Starting…" for good. The first error is the cause.
+let renderError = '', shown = false;
+const log = console.log;
+console.log = (...a) => {
+  log.apply(console, a);
+  if (typeof a[0] !== 'string' || !a[0].startsWith('%cERROR')) return;
+  const m = a[0].replace(/%c/g, '').replace(/^ERROR \S+ /, '');
+  renderError ||= m;
+  if (!m.includes('Quitting the application')) return;
+  // WebGPU that fails before the first frame (B109): the WebGL2 build instead
+  if (!shown && window.hstWebGL2?.()) return;
+  fail(renderError);
+};
 addEventListener('error', e => fail(e.error ?? e.message));
 addEventListener('unhandledrejection', e => fail(e.reason));
 // web.rs: the game's first frames are on screen
-window.hstShown = () => { if (!boot.classList.contains('err')) boot.hidden = true; };
+window.hstShown = () => { shown = true; clearTimeout(stuck); if (!boot.classList.contains('err')) boot.hidden = true; };
 </script>
 <script type="module" src="touch.js"></script>
 <script type="module">
@@ -80,11 +110,23 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
 // (`?webgl2` forces it).
 say('Checking graphics…');
-const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await navigator.gpu?.requestAdapter().catch(() => null);
+// an adapter request that never answers counts as none (WebGL2) after 5 s
+const adapter = navigator.gpu && Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]);
+const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
 if (!webgpu) document.getElementById('gl').hidden = true;
+window.hstWebGL2 = () => {
+  if (!webgpu) return false;
+  console.warn('hst: WebGPU stopped before the first frame, reloading with WebGL2');
+  const q = new URLSearchParams(location.search);
+  q.set('webgl2', '');
+  location.search = q.toString();
+  return true;
+};
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
+say('Loading the game…');
 const { default: init, run, paste, typed_code } = await import(pkg + 'hst.js');
+say('Opening this browser\'s storage…');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
 const q = new URLSearchParams(location.search);
@@ -103,7 +145,7 @@ async function wasm() {
     got += c.byteLength;
     say(`Downloading the game… ${(got / 1e6).toFixed(0)} MB`);
     out.enqueue(c);
-  } });
+  }, flush() { say('Compiling the game…'); } });
   return new Response(r.body.pipeThrough(count), { headers: { 'Content-Type': 'application/wasm' } });
 }
 
@@ -142,6 +184,7 @@ try {
   await start();
 } catch (e) {
   if (e.name !== 'NotFoundError') throw e;
+  clearTimeout(stuck);
   boot.hidden = true;
   document.getElementById('disc').hidden = false;
   document.getElementById('iso').onchange = ev => {
