@@ -13,7 +13,7 @@
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, mods = the custom page, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: a list of names, 2 columns of [`LIST_ROWS`] a
@@ -698,7 +698,7 @@ enum Tex {
     Qr,
 }
 
-const SHEETS: [(&str, &str); 14] = [
+const SHEETS: [(&str, &str); 15] = [
     ("MENU/MENU10A.XB0", "title_mainmenu"),
     ("MENU/MENU70.XB0", "title_option"),
     ("MENU/MENU05.XB0", "title_playerselect"),
@@ -713,13 +713,16 @@ const SHEETS: [(&str, &str); 14] = [
     ("MENU/MENU12B.XB0", "characterselect2_01"),
     ("MENU/MENU12B.XB0", "characterselect2_02"),
     ("MENU/MENU12B.XB0", "characterselect2_03"),
+    ("MENU/MENU12B.XB0", "characterselect2_04"),
 ];
 const OPTION: Tex = Tex::Sheet(9);
 const CS0: Tex = Tex::Sheet(10);
 const FACES: Tex = Tex::Sheet(11);
 const NAMES: Tex = Tex::Sheet(12);
 const CARD: Tex = Tex::Sheet(13);
-const CONFIRM: Tex = Tex::Sheet(14);
+/// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
+const ATTRS: Tex = Tex::Sheet(14);
+const CONFIRM: Tex = Tex::Sheet(15);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -879,7 +882,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "mods" => Screen::Chars,
+        "chars" | "mods" | "attrs" => Screen::Chars,
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
@@ -893,6 +896,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.doubles = true;
         menu.players[0].cursor = 6;
         menu.custom = screen == "mods" && !menu.mods.is_empty();
+        menu.players[0].card = screen == "attrs";
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
         if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
             online::sample(&mut menu);
@@ -1152,6 +1156,19 @@ fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
     (Tex::Shots(sheet), [(cell % 4) as f32 * 128.0, (cell / 4 % 2) as f32 * 168.0, 128.0, 168.0])
 }
 
+/// The △ card as the original draws it over panel `p`: the title box in the player's colour with the play style,
+/// the five stat labels and each grade's letter (A at grade 5, F at 0).
+fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], x: f32, y: f32) {
+    const TINT: [[f32; 3]; 4] = [[100.0, 39.0, 39.0], [82.0, 63.0, 27.0], [23.0, 69.0, 79.0], [67.0, 72.0, 25.0]];
+    d.q(ATTRS, [0.0, 0.0, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], TINT[p], 128.0);
+    d.q(ATTRS, [0.0, 40.0, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], WHITE, 128.0);
+    d.q(ATTRS, [0.0, 80.0 + 40.0 * style as f32, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], WHITE, 128.0);
+    d.q(ATTRS, [0.0, 248.0, 112.0, 120.0], [x + 14.0, y + 40.0, 112.0, 120.0], WHITE, 128.0);
+    for (k, &g) in grades.iter().enumerate() {
+        d.q(ATTRS, [232.0, 24.0 * (5 - g.min(5)) as f32, 24.0, 24.0], [x + 102.0, y + 40.0 + 24.0 * k as f32, 24.0, 24.0], WHITE, 128.0);
+    }
+}
+
 fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     let n = m.players();
@@ -1186,29 +1203,26 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // a card nobody is picking on yet is dark
         d.q(CARD, [u, v, 140.0, 164.0], [x, y, 144.0, 168.0], if picking || pl.ready { WHITE } else { [55.0; 3] }, 128.0);
         if picking || pl.ready {
-            d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
-            if pl.card && let Some(i) = modded {
-                d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
-                for (k, ((_, label), v)) in MOD_STATS.iter().zip(&text.mods[i].1).enumerate() {
-                    let yy = y + 40.0 + 18.0 * k as f32;
-                    d.text(label, x + 10.0, yy, 16.0, WHITE);
-                    let w = d.width(v, 16.0);
-                    d.text(v, x + 130.0 - w, yy, 16.0, WHITE);
+            if pl.card && modded.is_none() {
+                attribute_card(d, p, text.style[c], &text.grades[c], x, y);
+            } else {
+                d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
+                if pl.card && let Some(i) = modded {
+                    d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
+                    for (k, ((_, label), v)) in MOD_STATS.iter().zip(&text.mods[i].1).enumerate() {
+                        let yy = y + 40.0 + 18.0 * k as f32;
+                        d.text(label, x + 10.0, yy, 16.0, WHITE);
+                        let w = d.width(v, 16.0);
+                        d.text(v, x + 130.0 - w, yy, 16.0, WHITE);
+                    }
                 }
-            } else if pl.card {
-                d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 36.0, 132.0, 96.0], [0.0; 3], 90.0);
-                for (k, g) in text.grades[c].iter().enumerate() {
-                    let yy = y + 40.0 + 18.0 * k as f32;
-                    d.q(CS0, [280.0, 16.0 * k as f32 + 2.0, 112.0, 18.0], [x + 8.0, yy, 100.0, 16.0], WHITE, 128.0);
-                    d.q(NAMES, [0.0, 24.0 * (5 - *g as usize).min(5) as f32, 22.0, 24.0], [x + 112.0, yy - 2.0, 18.0, 20.0], WHITE, 128.0);
+                let style = modded.map_or(text.style[c], |i| text.mods[i].0);
+                let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
+                d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, y + 118.0, style[2] * 0.9, 22.0], WHITE, 128.0);
+                match modded {
+                    Some(i) => d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0),
+                    None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
                 }
-            }
-            let style = modded.map_or(text.style[c], |i| text.mods[i].0);
-            let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
-            d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, y + 118.0, style[2] * 0.9, 22.0], WHITE, 128.0);
-            match modded {
-                Some(i) => d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0),
-                None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
             }
             if pl.ready {
                 d.q(CS0, [2.0, 208.0, 108.0, 24.0], [x + 18.0, y + 96.0, 108.0, 24.0], WHITE, 128.0);
@@ -1222,8 +1236,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
                 d.anchor = Anchor::Sides;
             }
-            d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
-            d.text(&format!("{}", pl.costume + 1), x + 6.0, y + 26.0, 18.0, WHITE);
+            // the card's title box takes the top: no player/costume tag over it
+            if !(pl.card && modded.is_none()) {
+                d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
+                d.text(&format!("{}", pl.costume + 1), x + 6.0, y + 26.0, 18.0, WHITE);
+            }
         } else {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
         }
