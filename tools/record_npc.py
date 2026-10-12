@@ -13,7 +13,8 @@ flags *(0x43b820)+0x424 (0x40), then per creature the 8 bytes at *(+0xb8) (type 
 HST_PAD="press cross 100;sleep 500;..." sends those tools/vpad.py commands right after the load (a human P1).
 HST_POKE="<sample>:<k>:<b|0..3>:<dx>:<dz>;..." moves creature k (header order) to the ball's or player i's position
 plus (dx, 0, dz) after that sample, so a frozen creature finds someone close.
-HST_BALL=1 (with `prox`) appends the ball's whole object *(gm+0x88) (0x290) to each sample."""
+HST_BALL=1 (with `prox`) appends the ball's whole object *(gm+0x88) (0x290) to each sample, and HST_MATS=1 after it the
+four players' model matrices *(gm+0xa8+4i)+0x3d40 (0x40 each). A poke at `B` is one ball move (+0x140) ahead of the ball."""
 import os, subprocess, struct, sys, time, zipfile
 from pine import Pine
 
@@ -53,6 +54,8 @@ def regions():
         r += [(p.read32(w + 0xb8) if 0x100000 <= p.read32(w + 0xb8) < 0x2000000 else 0x100000, 8) for w in walkers]
         if os.environ.get("HST_BALL"):
             r.append((p.read32(gm + 0x88), 0x290))
+        if os.environ.get("HST_MATS"):
+            r += [(p.read32(gm + 0xa8 + 4 * i) + 0x3d40, 0x40) for i in range(4)]
     return r
 
 # HST_POKE="<sample>:<creature k>:<b|player i>:<dx>:<dz>;...": move a creature next to the ball or a player
@@ -78,8 +81,11 @@ while n < want:
     for at, k, who, dx, dz in pokes:
         if at == n:  # the creature's world position to `who`'s plus (dx, 0, dz); it stays put while it stands
             gm = p.read32(GM_PTR)
-            src = p.read32(gm + 0x88) + 0xe0 if who == "b" else p.read32(gm + 0xa8 + 4 * int(who)) + 0x3d70
+            src = p.read32(gm + 0x88) + 0xe0 if who in "bB" else p.read32(gm + 0xa8 + 4 * int(who)) + 0x3d70
             x, y, z = struct.unpack("<3f", struct.pack("<3I", *(p.read32(src + 4 * c) for c in range(3))))
+            if who == "B":
+                mx, my, mz = struct.unpack("<3f", struct.pack("<3I", *(p.read32(src + 0x60 + 4 * c) for c in range(3))))
+                x, y, z = x + mx, y + my, z + mz
             for c, val in enumerate((x + dx, y, z + dz)):
                 p.write32(walkers[k] + 0x1e0 + 4 * c, struct.unpack("<I", struct.pack("<f", val))[0])
     if n % 1200 == 0: print(n, flush=True)

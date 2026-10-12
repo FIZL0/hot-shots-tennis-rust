@@ -4,3 +4,7 @@ atanf 115970
 powf 1121f0
 # AI run estimate (a0 player, a1 spot x,y,z): hst_sim::ai::Runner::frames_to
 ai_run_frames 35bc50
+# Ball-hit obstacle box test (a0 other's matrix, a1 obstacle's matrix, a2 type): hst_sim::npc::boxes_overlap
+obstacle_box 3f8380
+# Ball speed in km/h (a0 ball, its last move at +0x140): hst_sim::npc::ball_kmh
+ball_kmh 375cb0
