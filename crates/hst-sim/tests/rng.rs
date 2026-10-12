@@ -694,7 +694,7 @@ fn setup_rand_like_the_game() {
         let mut r = find(Rand::default(), seed, 1 << 20).expect("the seed's state from boot");
         let mt = Mt::new(r.next());
         let mut g = Rngs::new(r, mt);
-        let fx = g.setup_rand(20);
+        let (fx, _) = g.setup_rand(20);
         let mut at = find(r, effects, 1000).expect("the effects seed's state");
         assert_eq!(fx, at.next(), "the effects seed");
         assert_eq!(g.rand, at, "rand() after the effects seed");
@@ -773,4 +773,68 @@ fn intro_ticks_like_the_game() {
         assert_eq!(low(&g.rand), point, "court {court}, {players} players");
     }
     assert_eq!(d.len(), 20 * 16);
+}
+
+/// Clouds remade at a weather change, against `context/p3f3/run2.bin` (research/p3f3_cloud_log.py: slot 5's
+/// schedule rewritten to rain 3, rain 5, 1, then 0, a point each) and its `.clouds` (the court's cloud list right after
+/// each change). From each new point's shared reseed (the state found from `rng_s05.bin`'s first sample by its
+/// low word), `Rngs::new_point_clouds` with `weather::clouds_remade`'s count must land where the
+/// court's and the sound manager's reseeds draw, and `clouds::spawn` of its draws must give the list's y and model
+/// bit for bit, in its order, and x, z within the few ticks' drift since.
+#[test]
+fn clouds_remade_like_the_game() {
+    use hst_sim::{clouds, weather};
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (Ok(d), Ok(c), Ok(rng)) = (
+        std::fs::read(format!("{root}/context/p3f3/run2.bin")),
+        std::fs::read(format!("{root}/context/p3f3/run2.bin.clouds")),
+        std::fs::read(format!("{root}/context/p3b/rng_s05.bin")),
+    ) else {
+        return eprintln!("p3f3/run2.bin(.clouds) or rng_s05.bin missing, skipped");
+    };
+    let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    // records: vsync, caller, s0, gm+0x54, rand()'s low word before the call, match frame
+    let rec: Vec<[u32; 6]> = d.chunks_exact(24).map(|c| std::array::from_fn(|k| u(c, 4 * k))).collect();
+    let low = |r: &Rand| r.0 as u32;
+    let points: Vec<usize> = (0..rec.len()).filter(|&k| rec[k][1] == 0x324ca0).collect();
+    let mut r = Rand(u64::from_le_bytes(rng[4..12].try_into().unwrap()));
+    (0..1 << 24).find(|_| low(&r) == rec[points[0]][4] || { r.next(); false }).expect("the first point's state");
+    // the cloud lists: vsync, models (count, pointers), clouds (count, 0x1e0 each)
+    let mut lists = vec![];
+    let mut o = 0;
+    while o < c.len() {
+        let m = u(&c, o + 4) as usize;
+        let models: Vec<u32> = (0..m).map(|k| u(&c, o + 8 + 4 * k)).collect();
+        let n = u(&c, o + 8 + 4 * m) as usize;
+        o += 12 + 4 * m;
+        lists.push((models, c[o..o + n * 0x1e0].to_vec()));
+        o += n * 0x1e0;
+    }
+    let mut g = Rngs::new(r, Mt::new(1));
+    let mut old = 0;
+    let rain = (200, [50.0, -2.0, -5.0]);
+    for (k, (&p, w)) in points.iter().zip([3u8, 5, 1, 0]).enumerate() {
+        let (models, list) = &lists[k];
+        let (rr, y0, y1, n) = weather::cloud_layout(w, rain);
+        assert_eq!(rr, 50.0);
+        let n = if weather::clouds_remade(old, w) { n.unwrap_or(9) } else { 0 };
+        old = w;
+        while low(&g.rand) != rec[p][4] {
+            g.rand.next();
+        }
+        let draws = g.new_point_clouds(n);
+        assert_eq!(draws.len(), rec[p + 1..].iter().position(|x| x[1] == 0x39b59c).unwrap(), "weather {w}: cloud draws");
+        assert_eq!(low(&g.rand), rec[p + 2 + draws.len()][4], "weather {w}: the sound reseed");
+        if n == 0 {
+            continue;
+        }
+        let ours = clouds::spawn(&draws, models.len(), [y0 * 40.0, y1 * 40.0]);
+        assert_eq!(ours.len() * 0x1e0, list.len());
+        for (i, (a, b)) in ours.iter().zip(list.chunks_exact(0x1e0)).enumerate() {
+            assert_eq!(a.pos[1].to_bits(), f(b, 0x154).to_bits(), "weather {w}, cloud {i}: y");
+            assert_eq!(models[a.model], u(b, 0x1b4), "weather {w}, cloud {i}: model");
+            assert!((a.pos[0] - f(b, 0x150)).abs() < 5.0 && (a.pos[2] - f(b, 0x158)).abs() < 5.0, "weather {w}, cloud {i}: x, z");
+        }
+    }
 }

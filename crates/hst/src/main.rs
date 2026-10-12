@@ -279,8 +279,7 @@ fn court_layout(iso: &mut Iso, n: usize) -> Option<(Vec<layout::Entry>, Vec<layo
 #[derive(Component)]
 pub struct GameSpace;
 
-/// How many clouds court `n`'s setup places (`layout::cloud_count`; singles' environment row 1, doubles' 0).
-// ponytail: the rain weathers' count (an exe constant) isn't read: the clear and cloudy rule only
+/// How many clouds court `n` makes outside heavy rain (`layout::cloud_count`; singles' environment row 1, doubles' 0).
 fn cloud_count(iso: &mut Iso, n: u32, envir: Option<&[u8]>, singles: bool) -> usize {
     let hole = iso.read(&format!("COURT/{n:02}/GRD01.XB")).ok().and_then(|d| {
         let arc = Archive::parse(&d).ok()?;
@@ -385,11 +384,16 @@ fn load(
             let schedule = hst_sim::weather::schedule(&odds, &wind, args.games, args.sets, players, || mt.next());
             // the match goes on drawing from the same generators (with a given seed, `rand()` is taken as at boot)
             let mut rngs = hst_sim::rng::Rngs::new(r, mt);
-            // the setup's own `rand()` calls: the lens flare, the sound manager, the clouds and the effects seed
-            let effects = rngs.setup_rand(cloud_count(&mut iso, n, envir.as_deref(), args.singles));
+            // the setup's own `rand()` calls: the lens flare, the sound manager, the clouds and the effects seed. The
+            // clouds are made only with in-season cloud models; at the setup in singles only
+            let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
+            let first = fixed.unwrap_or(schedule[0].weather);
+            let models = court_layout(&mut iso, n as usize).is_some_and(|(l, _)| l.iter().any(|e| e.dir == "cloud" && layout::in_season(&e.stem, season)));
+            let sky = Sky { weathers: schedule.map(|g| g.weather), fixed, made: first, count: cloud_count(&mut iso, n, envir.as_deref(), args.singles), rain: exe.rain_clouds().0, draws: None };
+            let (effects, draws) = rngs.setup_rand(if models && args.singles { sky.made_count(first) } else { 0 });
             play::set_effects_seed(effects);
             commands.insert_resource(play::MatchRng(rngs));
-            let fixed = std::env::var("HST_WEATHER").ok().and_then(|w| w.parse().ok());
+            *SKY.lock().unwrap() = models.then_some(Sky { draws: Some((first, draws)), ..sky });
             let w = weather::Weather { schedule, game: 0, fixed };
             let today = w.today();
             commands.insert_resource(w);
@@ -484,19 +488,11 @@ fn load(
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {
-            let read = |iso: &mut Iso, xb: &str, suffix: &str| {
-                let data = iso.read(&format!("{dir}/{xb}")).ok()?;
-                let arc = Archive::parse(&data).ok()?;
-                arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix))?).ok()
-            };
-            let envir = read(&mut iso, "CMN.XB", &format!("envir_c{n:02}.dat"));
-            let hole = read(&mut iso, "GRD01.XB", &format!("envir_c{n:02}_h01.dat"));
-            let count = envir.zip(hole).and_then(|(e, h)| layout::cloud_count(&e, &h, 1)).unwrap_or(20);
             let models: Vec<_> = list.iter().filter(|e| e.dir == "cloud" && layout::in_season(&e.stem, season)).filter_map(|e| library.get(&e.stem)).collect();
             if !models.is_empty() {
                 let models = models.into_iter().cloned().collect();
-                // the layout is made when the weather settles (`clouds`)
-                commands.insert_resource(Clouds { list: Vec::new(), degrees: today.degrees, speed: today.speed, ticks: 0.0, count, models, root, layout: None, rng: 0x2545_f491u32 ^ n });
+                // laid out from the setup's draws (`clouds`)
+                commands.insert_resource(Clouds { list: Vec::new(), degrees: today.degrees, speed: today.speed, ticks: 0.0, models, root, rain: exe.rain_clouds().1 });
             }
         }
         // the background figures are `play::npcs`'s
@@ -764,13 +760,46 @@ struct Clouds {
     speed: f32,
     /// 60 Hz ticks owed.
     ticks: f32,
-    /// The court's cloud count, its cloud models and where they hang.
-    count: usize,
+    /// The court's cloud models and where they hang.
     models: Vec<Vec<(Handle<Mesh>, Handle<gs::GsMaterial>)>>,
     root: Entity,
-    /// The layout drawn (`hst_sim::weather::cloud_layout`), and the layout's random source.
-    layout: Option<(f32, f32, f32, Option<usize>)>,
-    rng: u32,
+    /// The heavy-rain layout (`exe::Game::rain_clouds`).
+    rain: [f32; 3],
+}
+
+/// The match's cloud spawner between the setup and the points: the schedule's weathers (`HST_WEATHER` fixes one),
+/// the weather the clouds were last made for, the court's count and the heavy-rain one, and the last layout's
+/// weather and `rand()` draws until `clouds` lays them out. None when the court has no in-season cloud models.
+pub struct Sky {
+    weathers: [u8; hst_sim::weather::GAMES],
+    fixed: Option<u8>,
+    made: u8,
+    count: usize,
+    rain: usize,
+    draws: Option<(u8, Vec<u32>)>,
+}
+
+impl Sky {
+    fn made_count(&self, weather: u8) -> usize {
+        if matches!(weather, 3 | 5) { self.rain } else { self.count }
+    }
+}
+
+static SKY: std::sync::Mutex<Option<Sky>> = std::sync::Mutex::new(None);
+
+/// A new point on game `game` of the schedule (`Rngs::new_point`): a weather change remakes the clouds
+/// (`weather::clouds_remade`), their draws between the shared and the court generator's seeds, in doubles too.
+pub fn point_clouds(rng: &mut hst_sim::rng::Rngs, game: usize) {
+    let mut sky = SKY.lock().unwrap();
+    let Some(s) = sky.as_mut().filter(|s| {
+        let w = s.fixed.unwrap_or(s.weathers[game % hst_sim::weather::GAMES]);
+        hst_sim::weather::clouds_remade(s.made, w)
+    }) else {
+        return rng.new_point();
+    };
+    let w = s.fixed.unwrap_or(s.weathers[game % hst_sim::weather::GAMES]);
+    s.made = w;
+    s.draws = Some((w, rng.new_point_clouds(s.made_count(w))));
 }
 
 #[derive(Component)]
@@ -778,7 +807,8 @@ struct Clouds {
 struct CloudView(usize, Vec<Vec4>);
 
 /// Drifts the clouds at 60 Hz on the game's wind; each stands at its place relative to the camera, fades out near
-/// the edge and darkens in rain. Heavy rain remakes them low and many.
+/// the edge and darkens in rain. Laid out from the setup's and each weather change's draws (`point_clouds`): heavy
+/// rain makes them low and many.
 fn clouds(
     mut commands: Commands,
     time: Res<Time>,
@@ -792,22 +822,13 @@ fn clouds(
     let (Some(sky), Ok(camera)) = (sky.as_mut(), camera.single()) else { return };
     let today = weather.map(|w| w.today()).unwrap_or_default();
     (sky.degrees, sky.speed) = (today.degrees, today.speed);
-    let layout = hst_sim::weather::cloud_layout(today.weather);
-    if sky.layout != Some(layout) {
-        sky.layout = Some(layout);
+    let made = SKY.lock().unwrap().as_mut().and_then(|s| s.draws.take());
+    if let Some((w, draws)) = made {
         for (e, ..) in &views {
             commands.entity(e).despawn();
         }
-        let (_, y0, y1, count) = layout;
-        let mut rng = sky.rng;
-        let mut r = || {
-            rng ^= rng << 13;
-            rng ^= rng >> 17;
-            rng ^= rng << 5;
-            (rng >> 8) as f32 / (1 << 24) as f32
-        };
-        sky.list = hst_sim::clouds::spawn(count.unwrap_or(sky.count), sky.models.len(), [y0 * 40.0, y1 * 40.0], &mut r);
-        sky.rng = rng;
+        let (_, y0, y1, _) = hst_sim::weather::cloud_layout(w, (0, sky.rain));
+        sky.list = hst_sim::clouds::spawn(&draws, sky.models.len(), [y0 * 40.0, y1 * 40.0]);
         for (i, k) in sky.list.iter().enumerate() {
             let rot = Quat::from_rotation_x(std::f32::consts::PI) * Quat::from_rotation_y(k.yaw);
             let bases = sky.models[k.model].iter().map(|(_, m)| materials.get(m).map_or(Vec4::ONE, |m| m.uniform.color)).collect();

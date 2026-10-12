@@ -3859,7 +3859,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.message.clear();
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
-    g.rng.new_point();
+    crate::point_clouds(&mut g.rng, g.score.games_played as usize);
     placement_draws(g, !fresh);
     // a point's end leaves for the next point (or match): the sound manager reseeds as on a change of ends
     if fresh {

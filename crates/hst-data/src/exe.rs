@@ -289,6 +289,13 @@ impl<'a> Game<'a> {
         (i32::from_le_bytes(row[..4].try_into().unwrap()), i32::from_le_bytes(row[4..].try_into().unwrap()))
     }
 
+    /// The heavy-rain weathers' (3, 5) cloud layout: how many clouds, and the square's half-width and lowest and highest
+    /// y in cloud units (the other weathers' are code: the court's count, 50, −5, −10).
+    pub fn rain_clouds(&self) -> (usize, [f32; 3]) {
+        let n = i32::from_le_bytes(self.at(0x3f_bf40, 4).try_into().unwrap());
+        (n.max(0) as usize, self.f32s(0x3f_bf44, 3).try_into().unwrap())
+    }
+
     /// Court `court`'s (1..11) weather odds: cloudy chance, its min and max length, rain chance, its min and max
     /// length, (unused), no cloudy border, heavy rain.
     pub fn weather_odds(&self, court: u32) -> [i32; 9] {

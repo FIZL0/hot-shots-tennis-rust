@@ -52,6 +52,7 @@ fn court10_wind_and_clouds() {
     assert_eq!(game.weather_odds(10), [5, 2, 3, 0, 1, 3, 0, 1, 0]);
     assert_eq!(game.weather_odds(11), [20, 2, 3, 30, 2, 4, 0, 0, 1]);
     assert_eq!(game.wind(7), (vec![0.0], 0.0));
+    assert_eq!(game.rain_clouds(), (200, [50.0, -2.0, -5.0]));
     assert_eq!(game.weather_looks()[3], [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
     let mut find = |xb: &str, suffix: &str| {
         let data = iso.read(xb).unwrap();

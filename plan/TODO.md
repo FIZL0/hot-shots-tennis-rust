@@ -161,7 +161,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Confirmations
 
 - [ ] **P3f1a** Menu flame drawing (P3f1 gap): `rng::MenuFlame` steps only the draws; the effect's motion (speed along the heading, decays), spin, alpha ramp and f_s.tm2/Blue.tm2 sprites, and where on the select it sits, aren't ported. When B40's character select exists, run `MenuFlame` per frame from P1's pick (as the original) instead of main.rs's clock count, and draw it → `main.rs` · `play/main_menu.rs` | t: rng.rs | j: 2026-10-08-p3f1-menu-flame
-- [ ] **P3f3** Clouds' `rand()` draws (P3f gap): the setup's cloud count in rain weathers 3/5 comes from an exe constant (0x3fbf40), not read; a weather change may respawn clouds (unverified); the app's cloud layout draws its own rng (`0x2545_f491 ^ n`), not these 5 draws each → `main.rs` | t: rng.rs
 - [ ] **P3f4** Four players of one character's voice banks (P3f gap): `rng::voice_bank`'s four-of-one cases are ported from the code, not recorded. Record one and add it to `setup_draws_like_the_game` → `rng.rs` | t: rng.rs
 - [ ] **P3f5** Lens flare drawing (P3f gap): the flare's 24 rays (brightness/angle jitter from `rand()`) are drawn by the game; the app only steps their draws → `play.rs` | t: rng.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
