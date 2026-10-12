@@ -1,4 +1,6 @@
 # The browser build (`tools/web.sh`) on GitHub Pages: the page and the wasm only, no game data (players pick their ISO).
+# Each run also replaces the rolling "Latest alpha" pre-release (tag `alpha`) with Linux + Windows builds of the same
+# commit, as tools/build.sh makes them; numbered Alpha N releases stay manual (tools/release.sh).
 name: pages
 on:
   push:
@@ -40,3 +42,59 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+  linux:
+    runs-on: ubuntu-latest
+    # Steam Runtime sniper (glibc 2.31) like tools/build.sh, so it runs on every SteamOS / Steam Deck
+    container: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
+          ~/.cargo/bin/cargo build --release -p hst
+          mkdir -p dist/linux
+          strip -o dist/linux/hst target/release/hst
+          cp crates/hst/icon/hst.png dist/linux/hst.png
+          printf '[Desktop Entry]\nType=Application\nName=Hot Shots Tennis\nExec=hst\nIcon=hst\nStartupWMClass=hst\nCategories=Game;\n' > dist/linux/hst.desktop
+          tar -czf hst-linux-x86_64.tar.gz -C dist/linux .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: hst-linux-x86_64.tar.gz
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          sudo apt-get update -q && sudo apt-get install -yq gcc-mingw-w64-x86-64
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --release -p hst --target x86_64-pc-windows-gnu
+          x86_64-w64-mingw32-strip -o hst.exe target/x86_64-pc-windows-gnu/release/hst.exe
+          zip -q hst-windows-x86_64.zip hst.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: hst-windows-x86_64.zip
+  alpha:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # recreated each time so the tag moves to this commit; the download links stay the same
+          gh release delete alpha --cleanup-tag -y || true
+          printf '%s\n\n%s\n\n%s\n' "**Rolling alpha: rebuilt on every change to main (${GITHUB_SHA::7}). Expect bugs.**" \
+            "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
+            "Browser version: https://fizl0.github.io/hot-shots-tennis-rust/ · numbered alphas: the other releases." > notes.md
+          gh release create alpha --prerelease --latest=false --target "$GITHUB_SHA" --title "Latest alpha (${GITHUB_SHA::7})" \
+            --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip
