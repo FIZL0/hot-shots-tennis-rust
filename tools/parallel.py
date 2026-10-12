@@ -247,7 +247,8 @@ questions. Up to {slots} agents work on plan/TODO.md tasks in worktrees ../<repo
 runner clears your context and sends you these instructions with one message at a time: `REPORT <ID> slot <n>: \
 <session, its commits>` as each one ends. Earlier reports' outcomes are at the end of context/notes/master.md. Handle the \
 report in this main checkout:
-1. If main has uncommitted changes that aren't yours (the user edits PLAN.md or plan/TODO.md), `git stash` them and pop them back after.
+1. If main has uncommitted changes that aren't yours (the user edits PLAN.md or plan/TODO.md), `git stash push -m "master <ID>"` them and \
+`git stash pop` that entry back when you're done, whatever happened (merged, aborted, left); never leave a stash behind.
 2. `git merge --no-edit task/<ID>` (no commits on it: just note that). Resolve every conflict keeping both sides' \
 intent (read both sides' commits and journal; tasks run in parallel, so plan/TODO.md + DONE.md moves and new struct fields from both \
 belong; a branch that still ticks/blocks in PLAN.md's old task list: redo that as `tools/ctx.py tick|block <ID>`). \
