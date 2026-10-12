@@ -218,6 +218,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B47** NPCs sometimes clap with no sound (bug, (user 2026-10-08)): spectators play the clap animation but the clap sound is sometimes missing. Find when the original plays it and match → `play/npcs.rs` · `hst-sim/src/npc.rs` · `play/audio`
 - [x] **B81** Delete the upscales of `"upscale": false` mods (user 2026-10-09): the HSG Fore! players are already high-res, so their mod.json has `"upscale": false` (HST-MODS `package.py`, done) and `upscale_mods.py` skips them; once the running upscale finishes (don't touch it while `pgrep -f upscale_mods` runs), remove those mods' `textures/upscaled/` folders (`fore_*` in HST-MODS `out/mods`) → mods/*/textures/upscaled
 - [x] **B50** Match point sound and HUD (user 2026-10-08): add the original's match point sound effects and HUD elements (and check set point too), when and how the original shows/plays them → `play/popups.rs` · `play/panel.rs` · `play/audio` · `hst-sim/src/flow.rs`
+- [x] **B40e2** Menu screens' slide-in/out (in B40e) → `play/main_menu.rs` | t: main_menu.rs | j: 2026-10-08-b40-menus
 
 
 ### Shots

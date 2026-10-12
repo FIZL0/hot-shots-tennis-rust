@@ -39,6 +39,7 @@ pub use super::widescreen::WIDE;
 pub(crate) mod flame;
 mod online;
 mod previews;
+mod slide;
 
 /// Characters on the select screen.
 const CHARS: usize = 14;
@@ -1564,6 +1565,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
     mut ticker: ResMut<Ticker>,
+    mut slide: ResMut<slide::Slide>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform)>,
     qr: Option<Res<online::QrImage>>,
 ) {
@@ -1578,6 +1580,7 @@ fn draw(
     if said != ticker.0 {
         *ticker = Ticker(said, 0.0);
     }
+    let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
     let share = super::widescreen::window_share(&window);
     for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
@@ -1668,6 +1671,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, (setup, load_bgm))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
+        .init_resource::<slide::Slide>()
         .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm));
     app.add_systems(Update, (online::poll.before(draw), online::typing.before(step)));
     previews::plugin(app);
