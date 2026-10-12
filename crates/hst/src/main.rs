@@ -689,6 +689,8 @@ fn gs_models_anim(
                 let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi])) else { continue };
                 // the court's hole model (`hole/<court>_h01_s….mdl`) is the one drawn faded
                 let mut draws = gs::GsMaterial::for_court_batch(mat, k.0, texture.clone(), stem.contains("_h01_"));
+                // ponytail: 1 km per material outweighs any view-depth gap on a court
+                if stem.contains("_h01_") { draws.iter_mut().for_each(|g| g.order = -1.0e6 + mi as f32 * 1.0e3); }
                 draws.iter_mut().for_each(|g| (g.uniform.lod_k, g.uniform.unlit) = (model.lod_k.get(mi).copied().unwrap_or(0.0), (k.3 != 0) as u8 as f32));
                 parts.push((mesh, draws, (mi, first)));
             }

@@ -311,6 +311,9 @@ pub struct GsMaterial {
     #[sampler(2)]
     pub texture: Option<Handle<Image>>,
     pub key: GsKey,
+    /// Added to the view depth the blended draws are sorted by (farthest first): the court hole's parts go first, in
+    /// its material order, as the game draws them.
+    pub order: f32,
 }
 
 impl From<&GsMaterial> for GsKey {
@@ -345,6 +348,7 @@ impl GsMaterial {
                 uniform,
                 texture: texture.clone().filter(|_| textured),
                 key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0, cull: !m.two_sided, mirror: false },
+                order: 0.0,
             })
             .collect()
     }
@@ -385,6 +389,10 @@ impl Material for GsMaterial {
 
     fn prepass_fragment_shader() -> ShaderRef {
         "embedded://hst/gs_prepass.wgsl".into()
+    }
+
+    fn depth_bias(&self) -> f32 {
+        self.order
     }
 
     fn alpha_mode(&self) -> AlphaMode {
