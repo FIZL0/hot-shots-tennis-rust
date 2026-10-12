@@ -838,3 +838,24 @@ fn change_ends_tune_matches_the_game() {
         assert!(if k < tune { game.contains(&a) } else { ends.contains(&a) }, "frame {k}: sample {a}");
     }
 }
+
+/// The match-end ceremony's gallery: the won side's ovation (program 3 from three stands) 0x8c ticks in, a cheer
+/// (7 key 0) 60 later, another (7 key 1) 60 after that; the lost side's groan (4) at once and a sigh (8) 120 later.
+#[test]
+fn gallery_match_end() {
+    let mut rng = hst_sim::rng::Mt::new(5);
+    let mut roll = || rng.next();
+    for (event, due) in [(3u8, vec![(0x8c, 3, 0), (0x8c + 60, 7, 0), (0x8c + 120, 7, 1)]), (4, vec![(1, 4, 0), (121, 8, 0)])] {
+        let mut g = sound::Gallery::default();
+        g.point(sound::Reaction { cheer: false, event: Some(event), chain: true }, &mut roll);
+        let mut got: Vec<(i32, u8, u8)> = Vec::new();
+        for t in 1..400 {
+            for (p, _) in g.step(8, 4, false, &mut roll) {
+                if p.program != 10 && !got.iter().any(|&(at, ..)| at == t) {
+                    got.push((t, p.program, p.key));
+                }
+            }
+        }
+        assert_eq!(got, due, "event {event}");
+    }
+}
