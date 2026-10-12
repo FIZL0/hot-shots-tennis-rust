@@ -103,6 +103,7 @@ pub fn for_match(w: &Wire, looks: Option<&Path>) -> Mod {
         dir: PathBuf::new(),
         id: w.id.clone(),
         name: w.name.clone(),
+        source: String::new(),
         costumes: Vec::new(),
         donor: 0,
         hand: 1.0,

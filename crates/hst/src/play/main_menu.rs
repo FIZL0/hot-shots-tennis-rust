@@ -1248,7 +1248,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
                 d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, y + 118.0, style[2] * 0.9, 22.0], WHITE, 128.0);
                 match modded {
-                    Some(i) => d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0),
+                    Some(i) => {
+                        d.fitted(&m.mods[i].name, x + 72.0, y + 142.0, 20.0, 128.0);
+                        // M1m: the game it comes from, along the card's top beside the player tag
+                        d.fitted(&m.mods[i].source, x + 88.0, y + 8.0, 12.0, 98.0);
+                    }
                     None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
                 }
             }
@@ -1281,7 +1285,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         Who::Mod(i) => {
             let md = &m.mods[i];
             let s = if md.costumes.len() == 1 { "" } else { "s" };
-            d.info(&format!("{}: custom character, {} costume{s}. Tab / Square: the disc characters.", md.name, md.costumes.len()));
+            let from = if md.source.is_empty() { String::new() } else { format!(" from {}", md.source) };
+            d.info(&format!("{}: custom character{from}, {} costume{s}. Tab / Square: the disc characters.", md.name, md.costumes.len()));
         }
         Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Square: custom characters)", text.msg(308 + c))),
         Who::Disc(c) => d.info(text.msg(308 + c)),
@@ -1786,6 +1791,7 @@ mod tests {
             dir: format!("mods/{id}").into(),
             id: id.into(),
             name: id.into(),
+            source: String::new(),
             costumes: (0..costumes).map(|c| format!("model/c{c:02}.glb")).collect(),
             donor,
             hand: 1.0,

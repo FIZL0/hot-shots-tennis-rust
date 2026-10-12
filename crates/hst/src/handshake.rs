@@ -151,6 +151,7 @@ mod tests {
             dir: "x".into(),
             id: "x".into(),
             name: "X".into(),
+            source: String::new(),
             costumes: vec!["model/c00.glb".into()],
             donor: 3,
             hand: 1.0,

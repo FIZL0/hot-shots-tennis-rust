@@ -28,6 +28,8 @@ pub struct Mod {
     pub dir: PathBuf,
     pub id: String,
     pub name: String,
+    /// The game it comes from (`source` up to its platform, e.g. "Hot Shots Tennis: Get a Grip"); empty when unset.
+    pub source: String,
     /// Costume `.glb` paths, relative to `dir`.
     pub costumes: Vec<String>,
     /// The disc character (0..13) whose motions, faces, arm table, shot records and AI rows it uses.
@@ -123,6 +125,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         dir: dir.to_path_buf(),
         id: text("id")?,
         name: text("name")?,
+        source: game(j["source"].as_str().unwrap_or("")),
         costumes,
         donor,
         hand,
@@ -133,6 +136,11 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         no_face: j["face"] == "none",
         voice: j["voice"].as_str().unwrap_or("voice/").to_string(),
     })
+}
+
+/// A `source` up to its platform tag: "Hot Shots Golf Fore! (PS2) pc03" → "Hot Shots Golf Fore!".
+fn game(source: &str) -> String {
+    source.split(" (").next().unwrap_or("").trim().to_string()
 }
 
 /// Every mod under `root` (the select's custom roster, sorted by folder); a broken one is left out with its
@@ -1136,6 +1144,7 @@ mod tests {
         let ok = r#"{"standard":1,"id":"x","name":"X","costumes":["model/c00.glb"],"donor":3,"hand":"right","params":{"base":3,"override":{"Strk POW":5}},"ai_row":3,"face":"morph","voice":"voice/"}"#;
         let m = try_(ok).unwrap();
         assert_eq!((m.donor, m.hand, m.overrides.clone()), (3, 1.0, vec![("Strk POW".to_string(), "5".to_string())]));
+        assert_eq!((m.source.as_str(), try_(&ok.replace("\"id\"", "\"source\":\"Hot Shots Tennis: Get a Grip (PSP) pc03\",\"id\"")).unwrap().source.as_str()), ("", "Hot Shots Tennis: Get a Grip"));
         for (bad, field) in [("\"standard\":1", "\"standard\":2"), ("\"donor\":3", "\"donor\":14"), ("\"right\"", "\"ambi\""), ("Strk POW", "Strk PWR"), ("\"morph\"", "\"texture\""), ("model/c00.glb", "model/c01.glb")].map(|(a, b)| (ok.replace(a, b), b)) {
             let e = try_(&bad).err().unwrap_or_default();
             assert!(!e.is_empty(), "accepted {field}");
@@ -1156,6 +1165,7 @@ mod tests {
             .map(|d| if d.join("mod.json").is_file() { 1 } else { std::fs::read_dir(&d).into_iter().flatten().flatten().filter(|e| e.path().join("mod.json").is_file()).count() })
             .sum::<usize>();
         assert_eq!(all.len(), n);
+        assert!(all.iter().all(|m| !m.source.is_empty() && !m.source.contains('(')), "a mod without its source game");
         for game in ["fore_", "getagrip_", "opentee_", "oob_"] {
             assert!(all.iter().any(|m| m.id.starts_with(game)), "no {game} mod");
         }
