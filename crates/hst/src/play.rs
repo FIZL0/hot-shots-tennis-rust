@@ -53,6 +53,7 @@ mod heard;
 mod intro;
 mod instant_replay;
 mod doubles_ai;
+mod flare;
 mod markers;
 mod mod_match;
 pub mod net_hide;
@@ -561,6 +562,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(npcs::plugin);
     app.add_plugins(panel::plugin);
     app.add_plugins(popups::plugin);
+    app.add_plugins(flare::plugin);
     app.add_plugins(reaction_voices::plugin);
     app.add_plugins(surprise::plugin);
     app.add_plugins(tick_input::plugin);

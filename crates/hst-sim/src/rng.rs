@@ -111,12 +111,23 @@ pub struct Rngs {
     pub ai: Mt,
     pub court: Mt,
     pub sound: Mt,
+    /// The sun's lens flare's rays, made by `setup_rand` and stepped by `flare_tick`.
+    pub flare: Flare,
+}
+
+/// The lens flare's 24 rays: each one's brightness (0.25..1 once stepped) and angle on screen (radians, x right,
+/// y down: ray `i` points near (i + 1)·15°).
+// ponytail: plain f32, the flare only has to look right; its draws are exact
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Flare {
+    pub bright: [f32; 24],
+    pub angle: [f32; 24],
 }
 
 impl Rngs {
     /// After the shared generator's setup draws (the weather schedule), with `rand()` where the seed left it.
     pub fn new(rand: Rand, shared: Mt) -> Rngs {
-        Rngs { rand, shared, ai: Mt::new(1), court: Mt::new(1), sound: Mt::new(1) }
+        Rngs { rand, shared, ai: Mt::new(1), court: Mt::new(1), sound: Mt::new(1), flare: Flare::default() }
     }
 
     /// An AI object is made: the AI generator restarts from a shared draw.
@@ -156,8 +167,12 @@ impl Rngs {
     /// singles, none in doubles), and the effects seed is drawn. Returns the effects seed (the effects' LCG restarts
     /// from it at every new point) and the clouds' draws.
     pub fn setup_rand(&mut self, clouds: usize) -> (u32, Vec<u32>) {
-        for _ in 0..48 {
-            self.rand.next();
+        // each ray: a brightness of `% 100` hundredths, then its angle: the 4096ths of a turn up to it (4096 / 24 = 170
+        // each) jittered by `% 85 − 42`
+        for i in 0..24 {
+            self.flare.bright[i] = (self.rand.next() % 100) as f32 / 100.0;
+            let n = (i as i32 + 1) * 4096 / 24 + (self.rand.next() % 85) as i32 - 42;
+            self.flare.angle[i] = (std::f64::consts::PI * n as f64 / 2048.0) as f32;
         }
         self.change_ends();
         let draws = self.clouds(clouds);
@@ -204,10 +219,10 @@ impl Rngs {
     }
 
     /// One tick of the sun's lens flare while the weather shows it (clear or cloudy): each of its 24 rays' brightness
-    /// steps by a `rand() % 11 − 5` hundredth.
+    /// steps by a `rand() % 11 − 5` hundredth, kept in 0.25..=1.
     pub fn flare_tick(&mut self) {
-        for _ in 0..24 {
-            self.rand.next();
+        for b in &mut self.flare.bright {
+            *b = (*b + ((self.rand.next() % 11) as f32 - 5.0) / 100.0).clamp(0.25, 1.0);
         }
     }
 

@@ -130,7 +130,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Confirmations
 
-- [ ] **P3f5** Lens flare drawing (P3f gap): the flare's 24 rays (brightness/angle jitter from `rand()`) are drawn by the game; the app only steps their draws → `play.rs` | t: rng.rs
 - [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
 - [~] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs BLOCKED: no recorded let serve (round1's 4 cord serves were net faults); turned serves/effects done | j: 2026-10-08-p6-serve-details
 - [ ] N3c7 the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
