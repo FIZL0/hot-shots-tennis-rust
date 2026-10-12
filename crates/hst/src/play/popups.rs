@@ -484,6 +484,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, (setup_banners, setup_speed).after(setup))
         .add_systems(Update, (draw, draw_calls, draw_banners, draw_speed))
         .add_systems(FixedUpdate, (tick_calls, tick_banners, tick_result, tick_speed).after(super::simulate))
+        .add_systems(FixedUpdate, point_jingle.after(super::simulate))
         .init_resource::<ResultBanner>();
 }
 
@@ -991,7 +992,8 @@ mod tests {
 // under it when the deciding shot's first bounce mark touches or crosses a line. It flashes in white over 5 ticks,
 // holds 45, fades over 5 (alpha 128·t/15 both ways, so it starts its fade at 42). Each new point that is a set or
 // match point for a team, after one that wasn't, brings up "Set Point" / "Match Point" for 60 ticks, shrinking to
-// 0.8 over its last 10, then growing to 1.5 as it fades over 10 more.
+// 0.8 over its last 10, then growing to 1.5 as it fades over 10 more, with the system bank's jingle (slot 9 program
+// 0 key 13 at 0x40; a match point plays it at 1.1 speed).
 
 use hst_sim::judge::{Call, Rally};
 use hst_sim::ps2::{add, div, mul, sub};
@@ -1018,6 +1020,8 @@ pub(super) struct Finish {
     branches: [u8; 2],
     /// The last serve was off a strong toss.
     pub strong: bool,
+    /// The Set / Match Point jingle due, at its play speed.
+    pub jingle: Option<f32>,
 }
 
 /// A character's stroke and volley power from its TParam.csv row (the parser skips the empty Special POW cell).
@@ -1099,7 +1103,6 @@ impl Finish {
 
     /// A new point is set up: marks record afresh; a set or match point for either team after a point that wasn't
     /// one starts its banner.
-    // ponytail: the jingle (slot 9) isn't loaded
     pub fn new_point(&mut self, score: &Score, rules: &Rules) {
         self.mark = [[0.0; 2]; 2];
         self.marking = true;
@@ -1109,6 +1112,7 @@ impl Finish {
             Some(r) => {
                 if std::mem::take(&mut self.armed) {
                     self.point = Some((r > 1, 1, 60));
+                    self.jingle = Some(if r == 1 { 1.0 } else { 1.1 });
                 }
             }
         }
@@ -1184,7 +1188,7 @@ fn set_point(s: &Score, r: &Rules, t: usize) -> Option<i32> {
     if !s.tiebreak && s.games[t] < r.games - lead {
         return Some(0);
     }
-    // ponytail: the game's match point 3 (only the other team on a controller) differs only in the jingle's pitch
+    // ponytail: the game's match point 3 (only the other team on a controller) draws and sounds as 2
     Some(if s.sets[t] < r.sets - 1 { 1 } else { 2 })
 }
 
@@ -1263,6 +1267,8 @@ fn setup_banners(mut commands: Commands, args: Res<Args>, mut images: ResMut<Ass
         panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))
     });
     commands.insert_resource(BannerArt(art));
+    let bank = crate::audio::SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd");
+    commands.insert_resource(PointBank(bank.map(std::sync::Arc::new)));
     commands
         .spawn((super::widescreen::screen_43(), GlobalZIndex(1)))
         .with_children(|p| {
@@ -1274,6 +1280,25 @@ fn setup_banners(mut commands: Commands, args: Res<Args>, mut images: ResMut<Ass
 
 fn tick_banners(mut g: ResMut<Game>) {
     g.finish.tick();
+}
+
+/// The system sound bank (slot 9): the Set / Match Point jingle.
+#[derive(Resource)]
+struct PointBank(Option<std::sync::Arc<crate::audio::SoundBank>>);
+
+/// The Set / Match Point jingle, once per tick heard (`heard`).
+fn point_jingle(
+    mut g: ResMut<Game>,
+    bank: Option<Res<PointBank>>,
+    sound: Option<Res<crate::audio::Sound>>,
+    heard: Res<super::heard::Heard>,
+    mut played: ResMut<super::heard::Played>,
+) {
+    let Some(speed) = g.finish.jingle.take() else { return };
+    let (Some(PointBank(Some(b))), Some(sound)) = (bank.as_deref(), sound) else { return };
+    if played.first(heard.tick, ("point jingle", speed.to_bits())) {
+        sound.play_centre(b, hst_sim::sound::Play { slot: 9, program: 0, key: 13, volume: 0x40, speed });
+    }
 }
 
 fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&BannerSlot, &mut ImageNode, &mut Node, &mut Visibility)>) {
@@ -1410,9 +1435,15 @@ mod banner_tests {
         f.new_point(&Score::new(), &r);
         f.new_point(&s, &r);
         assert_eq!(f.point, Some((true, 1, 60)));
+        // the jingle: a match point at 1.1 speed, a set point at 1.0
+        assert_eq!(f.jingle.take(), Some(1.1));
         f.point = None;
         f.new_point(&s, &r);
-        assert_eq!(f.point, None);
+        assert_eq!((f.point, f.jingle), (None, None));
+        (s.games, s.sets) = ([5, 4], [0, 0]);
+        f.new_point(&Score::new(), &r);
+        f.new_point(&s, &r);
+        assert_eq!((f.point, f.jingle), (Some((false, 1, 60)), Some(1.0)));
     }
 
     #[test]
