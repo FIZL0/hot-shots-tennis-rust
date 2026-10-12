@@ -67,6 +67,12 @@ const LIST_ROWS: usize = 12;
 const LIST: [f32; 3] = [176.0, 324.0, 96.0];
 /// The original's courts on the confirm screen (names `message0` 276 + 2k, descriptions 581 + 2k).
 const COURTS: usize = 11;
+/// Each court's surface on the confirm screen (0 grass, 1 clay, 2 hard; `hst_sim::ball::COURTS` bounces the same).
+const SURFACE: [usize; COURTS] = [1, 1, 1, 2, 0, 0, 2, 0, 1, 0, 2];
+/// The confirm screen's ball meters per surface: bounce height and ball speed, out of 4.
+const METERS: [(usize, usize); 3] = [(2, 4), (3, 2), (4, 3)];
+/// The umpires; the value after the last court or umpire is a random pick (`Menu::venue`).
+const UMPIRES: usize = 5;
 /// Sets on the confirm screen (sets played; to win: (n + 1) / 2).
 const SETS: [i32; 3] = [1, 3, 5];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
@@ -272,6 +278,8 @@ struct Menu {
     sets: usize,
     games: i32,
     umpire: u8,
+    /// The dice for a random court or umpire, thrown at Start (`venue`).
+    roll: u64,
     /// The action waiting for a new key or button (controls screen).
     rebinding: Option<usize>,
     /// The custom roster, and whether the select shows it.
@@ -299,6 +307,7 @@ impl Default for Menu {
             sets: 0,
             games: 4,
             umpire: 4,
+            roll: 0,
             rebinding: None,
             mods: Vec::new(),
             custom: false,
@@ -605,15 +614,19 @@ impl Menu {
                 if d != 0 {
                     let wrap = |v: usize, n: usize| (v as i32 + d).rem_euclid(n as i32) as usize;
                     match self.sel {
-                        1 => self.court = wrap(self.court, COURTS),
+                        1 => self.court = wrap(self.court, COURTS + 1),
                         2 => self.sets = wrap(self.sets, SETS.len()),
                         3 => self.games = wrap(self.games as usize - 1, 6) as i32 + 1,
-                        4 => self.umpire = wrap(self.umpire as usize, 5) as u8,
+                        4 => self.umpire = wrap(self.umpire as usize, UMPIRES + 1) as u8,
                         _ => {}
                     }
                     if self.sel > 0 {
                         out.push(Sound(0));
                     }
+                }
+                if k.ok && self.sel == 0 {
+                    // ponytail: std's per-call hasher keys as the dice (not the match's RNG, which this never touches)
+                    self.roll = std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0u8);
                 }
                 if k.ok && self.sel == 0 && self.online() {
                     self.online_host(&mut out);
@@ -640,9 +653,17 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
+    /// The court and umpire the match gets: a random choice resolved by `roll`.
+    fn venue(&self) -> (usize, u8) {
+        let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court };
+        let umpire = if self.umpire as usize == UMPIRES { (self.roll / COURTS as u64 % UMPIRES as u64) as u8 } else { self.umpire };
+        (court, umpire)
+    }
+
     /// The match's flags (`pads`: each device's index among the sorted gamepads).
     fn args(&self, pads: &[Entity]) -> Vec<String> {
-        let court = self.court + 1;
+        let (court, umpire) = self.venue();
+        let court = court + 1;
         // menu player → match player
         let order: &[usize] = if self.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
         let mut chars = vec![0; order.len()];
@@ -675,7 +696,7 @@ impl Menu {
             "--outfits".into(),
             join(&outfits),
             "--umpire".into(),
-            self.umpire.to_string(),
+            umpire.to_string(),
             "--sets".into(),
             ((SETS[self.sets] + 1) / 2).to_string(),
             "--games".into(),
@@ -770,6 +791,13 @@ const CARD: Tex = Tex::Sheet(13);
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
 const ATTRS: Tex = Tex::Sheet(14);
 const CONFIRM: Tex = Tex::Sheet(15);
+/// `Confirmation_00`/`01`/`02`/`04`, after the portrait sheets: round umpire faces and balls; court names, surfaces and
+/// meter icons; court tiles (the "?" one); the Tennis Lv titles and their pill.
+const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
+const C00: Tex = Tex::Sheet(EXTRA);
+const C01: Tex = Tex::Sheet(EXTRA + 1);
+const C02: Tex = Tex::Sheet(EXTRA + 2);
+const C04: Tex = Tex::Sheet(EXTRA + 3);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -794,6 +822,8 @@ struct Text {
     grades: [[u8; 5]; 14],
     /// Play style (0 all-round, 1 baseline, 2 net, 3 big server) by character.
     style: [usize; 14],
+    /// AIParam.csv's rank (Tennis Lv title) per row.
+    rank: Vec<u8>,
     /// The custom roster's play style and △ numbers (`MOD_STATS`), from each one's TParam.csv row.
     mods: Vec<(usize, [String; 5])>,
 }
@@ -882,6 +912,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     for name in shots {
         sheets.push(read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2")));
     }
+    for n in ["00", "01", "02", "04"] {
+        sheets.push(read(&mut iso, "MENU/MENU03.XB0", &format!("/confirmation_{n}.tm2")));
+    }
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
     art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
     // the font's ink span per glyph, from its alpha
@@ -904,6 +937,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let csv = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok()).unwrap_or_default();
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     let style = styles(&csv);
+    let ai = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("aiparam.csv")).and_then(|e| pc.read(e).ok()).unwrap_or_default();
+    let rank = hst_sim::ai::AiParams::table(&ai).iter().map(|a| a.rank).collect();
     // the custom roster: a mod whose row can't be read is left out like a broken one
     let mods_dir = Settings::path(&args.iso).with_file_name("mods");
     let roster: Vec<_> = crate::mods::list(&mods_dir)
@@ -918,7 +953,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         .collect();
     info!("{} custom characters in {}", roster.len(), mods_dir.display());
     let (mod_text, mods) = roster.into_iter().unzip();
-    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, mods: mod_text }));
+    commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, rank, mods: mod_text }));
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
@@ -1389,23 +1424,55 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
                 d.q(sheet, src, [x, 64.0, 112.0, 147.0], WHITE, 128.0);
             }
         }
-        d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]);
+        // play style over the card's foot (`Confirmation_03`'s titles)
+        let (style, ai) = match m.pick(p) {
+            (Who::Mod(i), costume) => (text.mods[i].0, (m.mods[i].ai_row, costume)),
+            (Who::Disc(c), costume) => (text.style[c], (c, costume)),
+        };
+        d.q(CONFIRM, [412.0, 168.0 + 24.0 * style as f32, 90.0, 24.0], [x + 11.0, 186.0, 90.0, 24.0], WHITE, 128.0);
         if m.seats[p].is_none() {
-            d.centred("COM", x + 56.0, 236.0, 18.0, [60.0, 120.0, 30.0]);
+            d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
+            d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
+            // the computer's Tennis Lv: its AIParam row's rank (`Confirmation_04`'s titles, nine to a column)
+            let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(ai.0 as u8, ai.1 as u8) as u32, ai.0 as u8, m.doubles).row;
+            let r = text.rank.get(row).copied().unwrap_or(0) as f32;
+            d.q(C04, [0.0, 224.0, 110.0, 24.0], [x + 1.0, 238.0, 110.0, 20.0], COLOURS[p], 128.0);
+            d.q(C04, [96.0 * (r / 9.0).floor(), 24.0 * (r % 9.0), 96.0, 24.0], [x + 10.0, 237.0, 92.0, 22.0], WHITE, 128.0);
+        } else {
+            d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]);
         }
     }
     flame::draw(d, m);
     d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [288.0, 110.0, 64.0, 48.0], WHITE, 128.0);
-    // the umpire's face at the top right
+    // "Umpire", the umpire's round face (the "?" tile for a random one) and name at the top right
     d.anchor = Anchor::Sides;
-    d.q(CONFIRM, [10.0 + 88.0 * m.umpire as f32, 394.0, 76.0, 60.0], [540.0, 2.0, 76.0, 60.0], WHITE, 128.0);
-    let umpire = text.msg(669 + 2 * m.umpire as usize).to_string();
-    let w = d.width(&umpire, 22.0);
-    d.text(&umpire, 532.0 - w, 20.0, 22.0, WHITE);
+    let u = m.umpire as usize;
+    d.q(CONFIRM, [286.0, 194.0, 78.0, 28.0], [404.0, 12.0, 78.0, 28.0], WHITE, 128.0);
+    let (face, name) = match u {
+        UMPIRES => ([96.0, 360.0, 92.0, 68.0], "Random".to_string()),
+        _ => ([63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0], text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
+    };
+    d.q(if u == UMPIRES { C02 } else { C00 }, face, [486.0, 4.0, 46.0, 44.0], WHITE, 128.0);
+    d.text(&name, 538.0, 16.0, 22.0, WHITE);
     d.anchor = Anchor::Centre;
-    // court name
-    let court = format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court));
-    d.text(&court, 30.0, 258.0, 24.0, [128.0, 110.0, 40.0]);
+    // court name, its surface and the surface's ball meters (bounce, speed); none for a random court
+    let gold = [128.0, 110.0, 40.0];
+    if m.court == COURTS {
+        d.text("Random Court", 30.0, 258.0, 24.0, gold);
+    } else {
+        let court = format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court));
+        d.text(&court, 30.0, 258.0, 24.0, gold);
+        let s = SURFACE[m.court];
+        let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
+        d.q(C01, [68.0, 286.0 + 24.0 * s as f32, 124.0, 24.0], [400.0, 256.0, 124.0, 24.0], tint, 128.0);
+        for (g, (icon, n)) in [([2.0, 490.0, 45.0, 22.0], METERS[s].0), ([49.0, 492.0, 46.0, 17.0], METERS[s].1)].into_iter().enumerate() {
+            let x = 344.0 + 140.0 * g as f32;
+            d.q(C01, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
+            for b in 0..4 {
+                d.q(C00, [72.0, if b < n { 192.0 } else { 216.0 }, 24.0, 24.0], [x + 40.0 + 22.0 * b as f32, 292.0, 22.0, 22.0], WHITE, 128.0);
+            }
+        }
+    }
     // the rows: Start, Court, Sets, Games, Umpire
     let rows: [(&str, String); CONFIRM_ROWS] = [
         ("", String::new()),
@@ -1432,6 +1499,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [hx - 50.0 + hand_x, hy + 2.0, 64.0, 32.0], WHITE, 128.0);
     let info = match m.sel {
         0 => text.msg(323).to_string(),
+        1 if m.court == COURTS => "A court picked at random when the match starts.".to_string(),
         1 => format!("{} {}", text.msg(581 + 2 * m.court), text.msg(582 + 2 * m.court)),
         2 => text.msg(324).to_string(),
         3 => text.msg(325).to_string(),
@@ -1794,6 +1862,32 @@ mod tests {
         assert_eq!(flag("--pads"), "k,1,-,-");
         assert_eq!((flag("--umpire"), flag("--sets"), flag("--games")), ("4".into(), "1".into(), "4".into()));
         assert!(!a.contains(&"--singles".to_string()));
+    }
+
+    #[test]
+    fn random_court_and_umpire() {
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        let left = press(|p| &mut p.left);
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        m.step(Dev::Keys, left); // court 0 → Random, after the last court
+        assert_eq!(m.court, COURTS);
+        for _ in 0..3 {
+            m.step(Dev::Keys, press(|p| &mut p.down));
+        }
+        m.step(Dev::Keys, press(|p| &mut p.right)); // umpire 4 → Random
+        assert_eq!(m.umpire as usize, UMPIRES);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            (m.screen, m.sel) = (Screen::Confirm, 0);
+            m.step(Dev::Keys, press(|p| &mut p.ok));
+            let a = m.args(&[]);
+            let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].parse::<usize>().unwrap();
+            assert!((1..=COURTS).contains(&flag("--court")) && flag("--umpire") < UMPIRES);
+            seen.insert((flag("--court"), flag("--umpire")));
+        }
+        assert!(seen.len() > 20, "the dice should vary: {seen:?}");
+        // the pick stays Random for the next match
+        assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
     }
 
     #[test]
