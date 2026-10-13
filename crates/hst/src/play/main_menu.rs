@@ -316,7 +316,7 @@ impl Default for Menu {
             doubles: false,
             seats: [None; 4],
             players: [Player::default(); 4],
-            court: 0,
+            court: COURTS, // Random
             sets: 0,
             games: 4,
             umpire: 4,
@@ -2177,7 +2177,7 @@ mod tests {
 
     #[test]
     fn random_court_and_umpire() {
-        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, ..default() };
         let left = press(|p| &mut p.left);
         m.step(Dev::Keys, press(|p| &mut p.down));
         m.step(Dev::Keys, left); // court 0 → Random, after the last court
