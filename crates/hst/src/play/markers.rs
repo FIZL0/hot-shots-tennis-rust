@@ -34,7 +34,7 @@ pub fn plugin(app: &mut App) {
 }
 
 /// Whether the markers show: from the serve's set-up until the toss, with more than one player.
-fn shown(g: &Game) -> bool {
+pub(super) fn shown(g: &Game) -> bool {
     // not under the result screen, which replaces the match HUD
     g.players.len() > 1 && g.phase == Phase::Serve && g.serving.toss.is_none() && g.match_stats.result.is_none()
 }
