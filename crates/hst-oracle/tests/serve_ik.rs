@@ -70,11 +70,19 @@ fn check_table(ee: &Ee, pl: u32, a: &ServeArm, i: usize, ctx: &str) {
 
 #[test]
 fn serve_ik() {
-    let Ok(mut iso) = Iso::open(root().join("Hot Shots Tennis (USA).iso")) else { return eprintln!("skip: no ISO") };
+    let iso_path = root().join("Hot Shots Tennis (USA).iso");
+    if !iso_path.is_file() {
+        return eprintln!("skip: no ISO");
+    }
     let (over, under) = (addr("overhead_arm_solve"), addr("underhand_arm_solve"));
-    let (mut seed, mut n, mut bad, mut moved, mut jumps) = (0x9e37_79b9_7f4a_7c15u64, 0, vec![], 0, 0);
-    for s in ["s03", "s04", "s05", "s08", "s09"] {
-        let Some(mut ee) = Ee::from_ram(&format!("{s}.bin")) else { return eprintln!("skip: no context/iso or {s}.bin") };
+    // one thread per RAM image, each with its own seed: one after another they took ~90 s
+    let state = |(si, s): (usize, &str)| {
+        let mut iso = Iso::open(&iso_path).unwrap();
+        let (mut seed, mut n, mut bad, mut moved, mut jumps) = (0x9e37_79b9_7f4a_7c15u64 ^ si as u64, 0, vec![], 0, 0);
+        let Some(mut ee) = Ee::from_ram(&format!("{s}.bin")) else {
+            eprintln!("skip: no context/iso or {s}.bin");
+            return None;
+        };
         let gm = ee.read(0x422f80, 4) as u32;
         let pls: Vec<u32> = (0..4).map(|p| ee.read(gm + 0xa8 + 4 * p, 4) as u32).collect();
         let tabs: Vec<_> = pls.iter().map(|&pl| tables(&mut iso, &ee, pl)).collect();
@@ -128,6 +136,17 @@ fn serve_ik() {
             }
             n += 1;
         }
+        Some((n, bad, moved, jumps))
+    };
+    let runs: Vec<_> = std::thread::scope(|sc| {
+        let hs: Vec<_> = ["s03", "s04", "s05", "s08", "s09"].into_iter().enumerate().map(|a| sc.spawn(move || state(a))).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let Some(runs) = runs.into_iter().collect::<Option<Vec<_>>>() else { return };
+    let (mut n, mut bad, mut moved, mut jumps) = (0, vec![], 0, 0);
+    for (n1, b1, m1, j1) in runs {
+        (n, moved, jumps) = (n + n1, moved + m1, jumps + j1);
+        bad.extend(b1);
     }
     eprintln!("{n} solves, {moved} with a step, {jumps} with a jump, {} differ", bad.len());
     assert!(n >= 10_000 && moved > n / 10 && jumps > n / 10);
