@@ -79,8 +79,12 @@ timed out once under load (other slots were building) and passes when run alone;
 - **The pause "Settings" label** on the in-match pause pill is built at 1× from word.tm2 pixels by
   `pause::label`, so it is upscaled rather than vector.
 - **The bottom ticker** still uses the port's monospace font (not part of the disc sheets).
-- **A faint speck under the Doubles pill and under "Clay Court"** is GPU half-texel sampling of the neighbouring white
-  box on the sheet. It is there with the disc sheets too; it is not from this change.
+- **Outline residue (fixed after review):** the disc outline's faint outer pixel lies 1 px past the measured ink box.
+  Left behind, it showed as dashes above "S" and below "g" on Singles/Doubles and as a dark halo on the pause and
+  dialog buttons, so the new outline looked cut off. Labels with an outline are now erased with a 1 px margin
+  (`rebuild`); see `context/b136/k_mode2.png` and `k_pause2.png`. Tiny unoutlined tags keep the tight box.
+- **Faint marks under the Doubles pill's bottom border:** linear sampling at the pill rect's edge bleeds into the 1P
+  tags right below it on characterselect2_00. That was already there with the disc's sheets.
 - **Pre-existing overlap:** the "Tab / Square: 92 custom characters…" hint overlaps the character grid. That is not B136.
 - **Umpire select:** the port has no separate umpire select. The umpire is a row on the confirm screen, which is
   covered above.

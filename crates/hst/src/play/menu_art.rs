@@ -368,9 +368,12 @@ fn unpremultiply(p: Pixmap) -> Vec<u8> {
 fn rebuild(w: usize, h: usize, rgba8: &[u8], labels: &[Label], font: &[u8], shadow: bool) -> Pixmap {
     let mut rgba: Vec<[f32; 4]> = rgba8.chunks(4).map(|c| [c[0], c[1], c[2], c[3]].map(|v| v as f32 / 255.0)).collect();
     let styles: Vec<Style> = labels.iter().map(|l| Style::sample(&rgba, w, h, l)).collect();
-    for &(x, y, lw, lh, t) in labels {
-        // a title's old shadow stands 2 px down and right of its words
-        let pad = if shadow { 3 } else { 0 };
+    for (&(x, y, lw, lh, t), s) in labels.iter().zip(&styles) {
+        // an outline's faint outer pixel lies just past the ink box (left behind, it reads as a cut-off outline round
+        // the new one); a title's old shadow stands 2 px down and right of its words
+        let m = (s.width > 0.0) as u16;
+        let (x, y) = (x.saturating_sub(m), y.saturating_sub(m));
+        let pad = 2 * m + if shadow { 3 } else { 0 };
         erase(&mut rgba, w, h, &(x, y, (lw + pad).min(w as u16 - x), (lh + pad).min(h as u16 - y), t));
     }
     let mut out = upscale(&rgba, w, h);
