@@ -130,6 +130,8 @@ struct Mix {
     music: Option<Music>,
     ids: u64,
     tags: Tags,
+    /// B77: the plays the match re-levels every frame (`update`, `turn`: the flight whistle and rush, the flyover).
+    followed: Vec<u64>,
 }
 
 /// The match's sounds (B111): every play started while a match runs and isn't paused (SFX, voices, crowd, weather;
@@ -142,6 +144,12 @@ struct Tags {
 }
 
 impl Mix {
+    fn follow(&mut self, id: u64) {
+        if !self.followed.contains(&id) {
+            self.followed.push(id);
+        }
+    }
+
     /// The play call's part of the level for `p` at `pos`.
     fn level(&self, p: sound::Play, pos: [f32; 3]) -> Level {
         let (angle, dist) = sound::place(pos);
@@ -316,6 +324,7 @@ impl Sound {
         let seq = m.level(p, pos).seq;
         let scale = sound::speed_word(p.speed);
         let m = &mut *m;
+        m.follow(id);
         for q in m.playing.iter_mut().filter(|q| q.id == id) {
             (q.level.seq, q.scale) = (seq, scale);
         }
@@ -353,7 +362,7 @@ impl Sound {
     /// A mixer with no tables and no output, for tests that only follow plays.
     #[cfg(test)]
     pub fn bare() -> Self {
-        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() })))
+        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new() })))
     }
 
     /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
@@ -380,7 +389,7 @@ impl Sound {
     pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
         let solo = {
             let m = self.0.lock().unwrap();
-            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new() }
         };
         let solo = Self(Arc::new(Mutex::new(solo)));
         let id = solo.play_centre(bank, p);
@@ -404,6 +413,17 @@ impl Sound {
     #[cfg(test)]
     pub fn plays(&self) -> u64 {
         self.0.lock().unwrap().ids
+    }
+
+    /// B77: the match paused. As the original's per-frame update does while paused, every play the match re-levels
+    /// each frame is held at play speed 0 (pitch 0: it stops where it is, silent); the match's next `update` after
+    /// it resumes picks it up again. Every other voice (one-shots, the crowd, the BGM) plays on, as there.
+    pub fn hold_followed(&self) {
+        let mut m = self.0.lock().unwrap();
+        let Mix { voices, playing, followed, .. } = &mut *m;
+        followed.retain(|id| voices.iter().any(|v| v.2 == *id) || playing.iter().any(|q| q.id == *id));
+        playing.iter_mut().filter(|q| followed.contains(&q.id)).for_each(|q| q.scale = 0);
+        voices.iter_mut().filter(|v| followed.contains(&v.2)).for_each(|v| v.0.pitch = 0);
     }
 
     /// The play `id` still has key-ons to come or voices sounding.
@@ -431,6 +451,7 @@ impl Sound {
         let mut m = self.0.lock().unwrap();
         let m = &mut *m;
         let seq = sound::stereo(volume, angle, &m.stereo).map(|x| x as u32);
+        m.follow(id);
         m.playing.iter_mut().filter(|q| q.id == id).for_each(|q| q.level.seq = seq);
         for (v, .., level) in m.voices.iter_mut().filter(|v| v.2 == id) {
             level.seq = seq;
@@ -567,7 +588,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new() }
 }
 
 #[cfg(test)]
@@ -766,7 +787,36 @@ mod tests {
         assert!(sound.playing(before) && sound.playing(in_match));
     }
 
+    /// B77: paused mid-flight, the lob's whistle (re-levelled every frame) stops where it is, silent, until the match's
+    /// next update after the pause; its voice isn't released.
+    #[test]
+    fn pause_holds_the_whistle() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        let bank = court_bank(&mut iso, 10).0.unwrap();
+        let at = [1.0, 2.0, 5.0];
+        let id = sound.play_at(&bank, sound::FLIGHT, at);
+        // the largest step between neighbouring samples of one side
+        let render = |frames: usize| {
+            let mut out = Vec::new();
+            for _ in 0..frames {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            out.windows(3).map(|w| (w[2] - w[0]).abs()).fold(0f32, f32::max)
+        };
+        render(2);
+        sound.update(id, sound::FLIGHT, at);
+        assert!(render(20) > 0.01, "the whistle sounds");
+        sound.hold_followed();
+        let held = render(240);
+        assert!(held < 1e-4 && sound.playing(id), "held: steps of {held}");
+        sound.update(id, sound::FLIGHT, at);
+        assert!(render(20) > 0.01, "the whistle goes on");
+    }
+
     fn mix_clone(m: &Mix) -> Mix {
-        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new() }
     }
 }
