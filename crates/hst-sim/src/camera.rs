@@ -247,28 +247,35 @@ pub fn swing_weight(left: u32) -> f32 {
 }
 
 /// The change-ends move: the view the phase started from swung toward this tick's `to` by `w`, both taken
-/// apart as an orbit about `pivot` (heading and pitch of the look, the eye's angles from the pivot in the
-/// look's own heading, its distance, the field of view) and the parts blended linearly, so a swap of ends
-/// swings round the court rather than sliding through it.
+/// apart as an orbit about `pivot` (heading and pitch of the look, the pivot's angles as seen from the eye in the
+/// look's own heading, its distance, the field of view) and the parts blended linearly, so the move swings round
+/// the pivot rather than sliding through it (fits both recorded glides of the original to 0.1 m).
 pub fn swing(from: &View, to: &View, w: f32, pivot: V3) -> View {
     let parts = |v: &View| {
         let f = v.rot[2];
         let h = musl::atan2f(f[0], f[2]);
         let (s, c) = musl::sincosf(-h);
-        let o = sub(v.eye, pivot);
+        let o = sub(pivot, v.eye);
         let o = [c * o[0] + s * o[2], o[1], -s * o[0] + c * o[2]];
         let d = dot(o, o).sqrt();
         [h, musl::asinf(f[1]), musl::atan2f(o[0], o[2]), musl::asinf(o[1] / d), d, v.fov]
     };
     let (a, b) = (parts(from), parts(to));
-    let [h, p, ye, pe, d, fov]: [f32; 6] = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * w);
+    // the game takes the look's heading as a difference from the end view's, the shortest way round (of d,
+    // d ± 2π the smallest), and the pivot's angles as seen from the eye (ahead of it, near 0, never across ±π),
+    // so the eye doesn't swing the long way round the court (out through the indoor court's walls)
+    let short = |d: f32| [d, d + std::f32::consts::TAU, d - std::f32::consts::TAU].into_iter().fold(d, |m, x| if x.abs() < m.abs() { x } else { m });
+    let [h, p, ye, pe, d, fov]: [f32; 6] = std::array::from_fn(|i| {
+        let d = if i == 0 { short(b[i] - a[i]) } else { b[i] - a[i] };
+        a[i] + d * w
+    });
     let dir = |yaw: f32, pitch: f32| {
         let ((sy, cy), (sp, cp)) = (musl::sincosf(yaw), musl::sincosf(pitch));
         [cp * sy, sp, cp * cy]
     };
     let f = dir(h, p);
     let r = norm(cross([0.0, 1.0, 0.0], f));
-    View { rot: [r, cross(f, r), f], eye: add(pivot, scale(dir(h + ye, pe), d)), fov }
+    View { rot: [r, cross(f, r), f], eye: sub(pivot, scale(dir(h + ye, pe), d)), fov }
 }
 
 fn add(a: V3, b: V3) -> V3 {

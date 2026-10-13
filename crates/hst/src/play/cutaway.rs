@@ -13,7 +13,7 @@ use crate::character::{CharacterData, Motion};
 
 #[derive(Resource, Clone)]
 pub(super) struct Director {
-    shots: Vec<CameraShot>,
+    pub(super) shots: Vec<CameraShot>,
     lists: [Vec<u8>; 3],
     /// Each list's own counter.
     counters: [usize; 3],
