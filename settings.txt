@@ -1,8 +1,10 @@
 widescreen = on
 upscaled_textures = on
+menu_music = on
 music = off
 frame_limit = uncapped
 vsync = off
 render_scale = 100
 shadows = high
+anti_aliasing = 4x
 original = off
