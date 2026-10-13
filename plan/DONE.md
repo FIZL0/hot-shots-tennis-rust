@@ -303,6 +303,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B13** Bounce particles before the serve (bug, user 2026-10-07): ball bounce effects play while the serve isn't done yet (toss/bounce before the serve), which the original never shows. Gate them as the original does → `effects.rs` bounce effects · `play.rs` serve phase
 - [x] **B14** Left-handed serve toss thrown the wrong way (bug, user 2026-10-07): a left-handed server throws the ball to the wrong side on the toss. Mirror the toss for lefties as the original (`motion.rs` already swaps the serve motion for lefties; check the ball's toss offset follows) → `hst-sim/src/serve.rs` · `motion.rs` serve_toss · `play.rs` serve
 - [x] **B59** Dash right after a whiff (bug, user 2026-10-08): after swinging and missing, the player can dash off almost immediately; check against the original how long a whiff locks movement and dash (whiff motion length, the frame dash/run input is accepted again, any recovery slowdown), human and CPU, and match it frame-exact against a PINE recording of a whiff followed by a held dash → `motion.rs` · `play.rs` whiff/press · `play/controls.rs`
+- [x] **B62** Music on when it shouldn't be (bug, user 2026-10-08): matches started from the main menu play music. Likely cause: `main_menu.rs` `Settings::default()` is all on, so `music` defaults on and passes `--music`; check what the user expects (default off? or the setting is ignored) and the original's music behaviour → `play/main_menu.rs` Settings
 
 
 ### Shots
