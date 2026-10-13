@@ -61,7 +61,7 @@ code as guesses. Don't touch PCSX2 while `pgrep -f record_p2m2` runs.
 
 Open tasks: `plan/TODO.md` (index: `tools/ctx.py`, next: `tools/ctx.py next`). Finished ones are archived in
 `plan/DONE.md` (`tools/ctx.py <ID>` finds either). Never edit their checkboxes by hand: `tools/ctx.py tick <ID>` /
-`tools/ctx.py block <ID> <why + what unblocks>`.
+`tools/ctx.py block <ID> <why + what unblocks>` / `tools/ctx.py unblock <ID> [note]`.
 
 ## Code map
 

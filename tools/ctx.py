@@ -8,6 +8,7 @@
     tools/ctx.py -f FILE <name>  same, on another markdown file
     tools/ctx.py tick <ID>       mark done: [x] here and in plan/<ID>.md, move the line to plan/DONE.md
     tools/ctx.py block <ID> WHY  mark [~] with "BLOCKED: WHY" appended
+    tools/ctx.py unblock <ID> [NOTE]  reopen: [ ], drop "BLOCKED: …", append NOTE (what unblocked it)
     tools/ctx.py archive         move every [x] line left in TODO.md to DONE.md (after merges, hand edits)
     tools/ctx.py brief <ID>      everything a task starts from: its line, plan/<ID>.md, its journal (newest file in
                                  full), where its files are and their last commits; the runners paste it in the prompt
@@ -150,6 +151,15 @@ def block(todo, tid, why):
     _write(todo, ls)
 
 
+def unblock(todo, tid, note=''):
+    ls = list(lines(todo))
+    i = _find(ls, tid)
+    _mark(ls, i, ' ')
+    end = i + len(_item_block(ls, i)) - 1
+    ls[end] = ls[end].split(' BLOCKED: ')[0] + (f' — {note}' if note else '')
+    _write(todo, ls)
+
+
 JOURNAL_MAX = 12000  # chars of the newest journal file put in a brief; the rest is a Read away
 
 
@@ -208,6 +218,9 @@ if __name__ == '__main__':
     if args[:1] == ['block'] and len(args) > 2:
         block(todo, args[1], ' '.join(args[2:]))
         sys.exit(print(f'blocked {args[1]}'))
+    if args[:1] == ['unblock'] and len(args) > 1:
+        unblock(todo, args[1], ' '.join(args[2:]))
+        sys.exit(print(f'unblocked {args[1]}'))
     if args[:1] == ['brief'] and len(args) == 2:
         sys.exit(print('\n'.join(brief(root, args[1]))))
     if args == ['archive']:

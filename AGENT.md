@@ -25,7 +25,7 @@ dumps, save states, recordings) and lists the tool pitfalls.
 open), finished ones in `plan/DONE.md`. "continue" means: `tools/ctx.py next`, read `tools/ctx.py brief <ID>` (line, plan file,
 journal, files), port + verify, `tools/done.sh <ID> "<msg>"` (tests, tick into DONE.md, commit). Don't grep the repo for where things live — the code map says. Background (game
 control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · `next` · `N1e` (plan/N1e.md, else
-its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any markdown) · `tick <ID>` · `block <ID> <why>`.
+its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any markdown) · `tick <ID>` · `block <ID> <why>` · `unblock <ID> [note]`.
 
 ## Cheap context
 - Decompile: `research/fn.sh <addr>` (one function), `research/xref.py <addr>` (callers/callees),
