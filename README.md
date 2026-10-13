@@ -114,6 +114,23 @@ games' characters and package them as mods are in the mods repo:
 <https://github.com/FIZL0/hot-shots-tennis-rust-mods> (`standard/`, `tools/`). The game checks models against its copy
 of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo's `standard/hst_skeleton.json`.
 
+### Mod store
+
+Main menu → Mods manages mods from inside the game, on desktop and in the browser build. The store is the Hugging
+Face repo [`FIZL0/opentennis-mods`](https://huggingface.co/FIZL0/opentennis-mods).
+
+- **Add mod** installs a mod `.zip` from your computer (the system file picker).
+- **Browse mods** lists the store's mods, each with its picture, stats card, author, handedness, costumes and size,
+  tagged *Verified* (merged), *Not reviewed* (an open upload), *Installed* or *Update*. Press one to install it: the
+  download streams to disk with a progress line, is checked against its sha256 and the same mod checks as a local
+  install, then appears in the character select. The listing is cached for an hour; *Refresh* fetches it again.
+- **Upload my mod** sends one of your installed mods to the store as a pull request. Sign in once with your own
+  Hugging Face *Write* token: *Sign in* opens the token page, copy the token, press *Sign in* again (the game reads
+  it from the clipboard; in the browser, paste it into the page with Ctrl+V first). The token is kept in
+  `hf-token.txt` beside the ISO (browser: local storage); press *Sign in* twice to sign out. Then press a mod twice
+  to upload it: the game packs it, adds its preview and stats, and reports the pull request's URL. Other players see
+  it in Browse straight away as *Not reviewed* until it is merged.
+
 ## Online play
 
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
