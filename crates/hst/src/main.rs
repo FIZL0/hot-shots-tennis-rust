@@ -204,6 +204,10 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
         play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed);
         upscale = false;
     }
+    // unattended runner slots (HST_BG=1) debug against the disc's own textures, never the upscaled pack
+    if std::env::var_os("HST_BG").is_some() {
+        upscale = false;
+    }
     // per parse, so a match after an `--original` one gets the remastered menu sheets back
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
