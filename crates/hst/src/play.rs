@@ -1857,13 +1857,18 @@ fn strike(
     let side = hst_sim::shot::side_axis(at, sent);
     g.shot.side = [side[0], side[1], side[2]];
     g.shots += 1;
-    g.rally.on_hit(
-        g.shots,
-        who as i32,
-        g.score.server,
-        g.score.receiver,
-        g.flight.contacts,
-    );
+    // B69: a lock that comes due after the point's call (a fault's receiver, before the reaction's 0x19 cancels it)
+    // still hits, but the point stays over: the original's hit check runs only in the rally phase
+    let live = g.phase != Phase::Post;
+    if live {
+        g.rally.on_hit(
+            g.shots,
+            who as i32,
+            g.score.server,
+            g.score.receiver,
+            g.flight.contacts,
+        );
+    }
     let hit = sound::Hit {
         power_gap,
         branch,
@@ -1950,8 +1955,10 @@ fn strike(
     g.since_hit = 0;
     g.hit_flight = g.flight;
     g.path_base = 0;
-    g.phase = Phase::Rally;
-    g.umpire.rally();
+    if live {
+        g.phase = Phase::Rally;
+        g.umpire.rally();
+    }
     doubles_ai::heard(g, 0x15);
     cancel_locks(g, Some(who));
 }
@@ -3981,6 +3988,8 @@ fn simulate(mut g: ResMut<Game>) {
 /// ponytail: the app's random numbers stand in for the game's
 fn react(g: &mut Game, event: Event) {
     doubles_ai::heard(g, 0x19);
+    // the players' handler: 0x19 cancels every lock (B128)
+    cancel_locks(g, None);
     let n = g.players.len() as i32;
     let winner = g.post_winner;
     let mut taken = Vec::new();
