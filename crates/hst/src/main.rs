@@ -44,7 +44,7 @@ mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-/// settings.txt and controls.txt: files beside the disc, or in the browser its localStorage.
+/// settings.txt, controls.txt and online.txt: files beside the disc, or in the browser its localStorage.
 mod store {
     #[cfg(not(target_arch = "wasm32"))]
     pub use std::fs::{read_to_string, write};

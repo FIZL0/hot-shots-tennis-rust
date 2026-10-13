@@ -97,7 +97,7 @@ impl Online {
     }
 
     pub fn load(iso: &str) -> Online {
-        Online::parse(&std::fs::read_to_string(Online::path(iso)).unwrap_or_default())
+        Online::parse(&crate::store::read_to_string(Online::path(iso)).unwrap_or_default())
     }
 
     pub fn parse(text: &str) -> Online {

@@ -926,7 +926,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::SaveCfg => {
             if let Some(cfg) = &menu.net.cfg {
                 let path = Online::path(iso);
-                if let Err(e) = std::fs::write(&path, cfg.text()) {
+                if let Err(e) = crate::store::write(&path, cfg.text()) {
                     warn!("{}: {e}", path.display());
                 }
             }
