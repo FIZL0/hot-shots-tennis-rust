@@ -138,10 +138,12 @@ pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, g
     }
     let mode = swing::table_mode(class, t.character, grade, kind, blend, &t.down2);
     let variant = if kind == 3 { swing::lob_variant(&s.stats, grade) } else { swing::mode_variant(mode) };
-    let (base, bounds) = if class == 1 { (0, Bounds::stroke(kind, at[2])) } else { (1, Bounds::volley(kind, at[2])) };
+    // the bounds are taken from the hit moved back by the scatter, as the lookup's
+    let sc = hst_sim::serve::scatter_along(sx, sz, at, target);
+    let hz = ps2::sub(at[2], sc[2]);
+    let (base, bounds) = if class == 1 { (0, Bounds::stroke(kind, hz)) } else { (1, Bounds::volley(kind, hz)) };
     let picked = variant.and_then(|v| s.variants.iter().find(|x| x.0 == (class as usize, kind as usize, v)));
     let table = picked.map_or(&g.rally_tables[src][base][kind as usize], |x| &x.1);
-    let sc = hst_sim::serve::scatter_along(sx, sz, at, target);
-    let l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], ps2::sub(at[2], sc[2])], target);
+    let l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], hz], target);
     Timed { target: [ps2::add(target[0], sc[0]), target[1], ps2::add(target[2], sc[2])], lookup: l, record: picked.map(|x| x.2) }
 }

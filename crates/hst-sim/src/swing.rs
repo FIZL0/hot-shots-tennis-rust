@@ -528,6 +528,12 @@ pub fn timing_launch(s: &crate::player::ReachStats, branch: u8, kind: i32, grade
     (sx, sz, blend)
 }
 
+/// A ground stroke (`branch` 1) the original launches as a volley (class 2): topspin or slice (`kind` < 2), not
+/// framed, locked inside the service line (`from_z`, the hitter's z at the lock) on a ball `height` 0.6 m up or more.
+pub fn high_volley(branch: u8, kind: i32, framed: bool, from_z: f32, height: f32) -> bool {
+    branch == 1 && !framed && kind < 2 && from_z.abs() < 6.4 && height >= 0.6
+}
+
 /// The high-ball ground stroke's (class-2 launch) blend: how much the volley power leaves the high-power stat.
 pub fn high_blend(s: &crate::player::ReachStats) -> f32 {
     let (base, top) = (s.power[2], (s.power[2] + s.stroke_high_pow).min(16));
