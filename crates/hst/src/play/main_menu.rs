@@ -124,7 +124,9 @@ const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
 /// description bar (y 404).
 const GRAPHICS_TOP: f32 = 46.0;
 const GRAPHICS_PITCH: f32 = 39.5;
-const GRAPHICS_LABELS: [&str; 8] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing", "Display"];
+const GRAPHICS_ALL: [&str; 8] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing", "Display"];
+/// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display row.
+const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(7).0 } else { &GRAPHICS_ALL };
 
 /// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
 const SETTING_DEFAULTS: [bool; 4] = [true, true, true, false];
@@ -1541,7 +1543,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
                 5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
                 6 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
-                7 => "Borderless fullscreen on the current monitor, or a window.",
+                7 if GRAPHICS_LABELS.len() > 7 => "Borderless fullscreen on the current monitor, or a window.",
                 _ => "Back to the settings.",
             });
         }
