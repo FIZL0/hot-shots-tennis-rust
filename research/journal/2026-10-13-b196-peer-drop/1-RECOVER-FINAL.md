@@ -10,4 +10,7 @@ Native, `drop.sh` (three processes on one machine, doubles: host with 2 seats, g
 - Found and fixed: the rejoiner's 20 s handshake drop (see README).
 
 The lobby return (added after these runs, with the 20/15/10 s waits) is covered by the in-process tests only.
+A harness-only desync after the bot takeover (old seats back from the instant replay's copy) was found and fixed,
+see README.
+
 Unit/harness tests: `tools/check.sh -p hst` green.

@@ -1227,6 +1227,8 @@ mod tests {
             assert!(base > kill as usize - 30 && base <= kill as usize + rollback::WINDOW, "restarted at {base}");
             for a in &apps[..2] {
                 assert_eq!(a.world().resource::<Pads>().seats, Some([true, true, false, true]));
+                // B196: no desync after the restart (the instant replay's old copy brought the old seats back)
+                assert_eq!(a.world().resource::<Netplay>().resync.done, 0, "resynced after the restart");
                 assert_eq!(a.world().resource::<Netplay>().room.seats[2].as_ref().unwrap().peer, crate::net::CPU);
             }
         }

@@ -46,6 +46,11 @@ the others. Code: `crates/hst/src/play/recover.rs` (new), `net.rs` (relay: rejoi
   - `a_silent_peer_rejoins_and_a_silent_host_ends_it`: g killed, a new app joins with g's seat, all three restart
     on the same tick and hash the same 1300 ticks later; then the host is killed and both guests end with "The host
     stopped answering".
+- **Desync found and fixed**: in the harness the bot takeover went out of sync ~30 ticks after the restart (B154b's
+  resync hid it; the dumps had seat 3's AI a tick apart). The instant replay keeps a `Snapshot` from the point's serve
+  set-up, made before the restart, and restoring it brought back the old `Pads::seats` (all human) for a tick, at a
+  different point of each machine's rollback batch. `snapshot::restore` now keeps the current seats (only a restart
+  changes them). The bot test asserts no resync happened after the restart (fails without the fix).
 - Native, three processes (`drop.sh`, doubles, host 2 seats + guests a, b; all mashing; relay off, one machine):
   see `1-RECOVER-FINAL.md`. Bug found there: a rejoiner never set `seated` and was dropped by the 20 s
   handshake timer; fixed (Start seats it). The hash log now prints absolute ticks (it restarted at 0 per session).
