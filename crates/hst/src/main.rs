@@ -712,7 +712,7 @@ fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) 
         let mut parts = Vec::new();
         {
             for (mi, packets) in model.materials.iter().enumerate() {
-                let Some(mesh) = mesh(packets.iter()) else { continue };
+                let Some(mesh) = mesh(packets.iter(), &model) else { continue };
                 let mat = mats.materials.get(mi);
                 let texture = mat.and_then(|m| m.texture).map(|t| tex[t].clone());
                 if let (Some(m), Some(t), Some(h)) = (mat, mat.and_then(|m| m.texture), &texture) {
@@ -777,13 +777,28 @@ fn sky_top(model: &mdl::Model, mats: &mtl::Mtl) -> [f32; 3] {
 }
 
 /// One triangle-list mesh of these packets; vertex colours stay in PS2 units (0x80 = 1.0).
-fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>) -> Option<Mesh> {
+/// B211: packets are stored in their nodes' spaces and drawn at the model's bind pose: a packet bound to one node by
+/// its bind matrix, a weighted one skinned as [`mdl::Model::skinned`] (Queen's ball machine's launcher wheels and
+/// balls sat under the grass at the origin; court 6's horses were torn apart).
+fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>, model: &mdl::Model) -> Option<Mesh> {
     let (mut pos, mut nrm, mut uv, mut col, mut idx) = (vec![], vec![], vec![], vec![], vec![]);
     for pk in packets {
         let base = pos.len() as u32;
+        if pk.palette.len() > 1 {
+            let (verts, tris, _) = model.skin_packet(pk);
+            for v in &verts {
+                pos.push(v.pos);
+                nrm.push((Vec3::from(v.normals[0]) + Vec3::from(v.normals[1])).to_array());
+                uv.push(v.uv);
+                col.push(v.color.map(|c| c as f32 / 128.0));
+            }
+            idx.extend(tris.iter().flatten().map(|i| i + base));
+            continue;
+        }
+        let m = pk.palette.first().and_then(|&n| model.node_bind.get(n)).map_or(Mat4::IDENTITY, Mat4::from_cols_array_2d);
         for v in &pk.vertices {
-            pos.push(v.pos);
-            nrm.push(v.normal);
+            pos.push(m.transform_point3(Vec3::from(v.pos)).to_array());
+            nrm.push(m.transform_vector3(Vec3::from(v.normal)).to_array());
             uv.push(v.uv);
             col.push(v.color.map(|c| c as f32 / 128.0)); // PS2 modulate: 0x80 = 1.0
         }
@@ -859,7 +874,7 @@ fn gs_models_anim(
             keys.sort();
             keys.dedup_by_key(|k| k.0);
             for (k, first) in keys {
-                let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi])) else { continue };
+                let Some(mesh) = mesh((0..packets.len()).filter(|&pi| key(pi) == k).map(|pi| &packets[pi]), &model) else { continue };
                 // the court's hole model (`hole/<court>_h01_s….mdl`) is the one drawn faded
                 let mut draws = gs::GsMaterial::for_court_batch(mat, k.0, texture.clone(), stem.contains("_h01_"));
                 // ponytail: 1 km per material outweighs any view-depth gap on a court
