@@ -16,8 +16,10 @@
 //! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), mods = the custom page, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
-//! second page of the select, switched for everyone by Tab / □: a list of names, 2 columns of [`LIST_ROWS`] a
-//! page (↑↓ one, ←→ a column). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
+//! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', [`ICON_COLS`]
+//! × [`ICON_ROWS`] a page in one framed group, each a face icon (`inspect::face_icon`, cut from the mod's baked
+//! costume-0 preview, blank until that's baked) with its name under it, the players' hands and tags on it as on the
+//! disc grid (←→ one, ↑↓ a row). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
 //! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
 //! (`--slot-mod N DIR`, `--chars` the donor), and a costume readied on is closed to the others as on the disc.
 
@@ -35,6 +37,7 @@ use crate::graphics::Graphics;
 use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
+pub(crate) use previews::mod_face;
 
 mod cursor;
 pub(crate) mod flame;
@@ -64,10 +67,13 @@ const GRID: [(usize, f32, f32); CHARS] = [
     (10, 368.0, 360.0),
     (11, 435.0, 360.0),
 ];
-/// Rows a column of the custom list; two columns a page.
-const LIST_ROWS: usize = 12;
-/// The custom list's columns (x) and first row (y), one row 22 px.
-const LIST: [f32; 3] = [176.0, 324.0, 96.0];
+/// The custom grid's columns and rows a page.
+const ICON_COLS: usize = 4;
+const ICON_ROWS: usize = 4;
+/// The custom grid's face centres: the disc grid's columns, rows [`ICON_PITCH`] apart from y [`ICON_TOP`].
+const ICON_X: [f32; ICON_COLS] = [232.0, 300.0, 368.0, 435.0];
+const ICON_TOP: f32 = 118.0;
+const ICON_PITCH: f32 = 72.0;
 /// The original's courts on the confirm screen (names `message0` 276 + 2k, descriptions 581 + 2k).
 const COURTS: usize = 11;
 /// Each court's surface on the confirm screen (0 grass, 1 clay, 2 hard; `hst_sim::ball::COURTS` bounces the same).
@@ -580,7 +586,7 @@ impl Menu {
                 if !me.ready {
                     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
                     if (dx != 0.0 || dy != 0.0) && me.modded {
-                        let to = (me.pick as i32 + dy as i32 + dx as i32 * LIST_ROWS as i32).clamp(0, n_mods as i32 - 1) as usize;
+                        let to = (me.pick as i32 + dx as i32 + dy as i32 * ICON_COLS as i32).clamp(0, n_mods as i32 - 1) as usize;
                         if to != me.pick {
                             me.pick = to;
                             me.costume = 0;
@@ -798,6 +804,21 @@ enum Tex {
     Preview(usize),
     /// The lobby code's QR (`online::QrImage`).
     Qr,
+    /// Mod `i`'s face icon on the custom page ([`Icons`]).
+    Icon(usize),
+}
+
+/// B133: the custom page's face icons by mod, as `previews.rs` reads them.
+#[derive(Resource, Default)]
+struct Icons(std::collections::HashMap<usize, Handle<Image>>);
+
+/// The mods on the custom page the lead player's pick is on.
+fn custom_page(m: &Menu) -> std::ops::Range<usize> {
+    let n = m.players();
+    let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
+    let per = ICON_COLS * ICON_ROWS;
+    let page = m.players[lead].pick / per;
+    page * per..(page * per + per).min(m.mods.len())
 }
 
 const SHEETS: [(&str, &str); 15] = [
@@ -1396,7 +1417,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {
-        custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready), m.players[lead].pick);
+        custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready && m.players[p].modded));
     } else {
         groups(d);
         // the faces, darkened where every costume of it is ... (all open in the remaster)
@@ -1545,25 +1566,26 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
     d.q(RANKS, [96.0 * (r / 9) as f32, 24.0 * (r % 9) as f32, 96.0, 24.0], [x + 7.0, y - 1.0, 96.0, 24.0], WHITE, 128.0);
 }
 
-/// The custom page: the roster's names, the page holding `at`, a hand per player picking on it.
-fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, at: usize) {
-    let per = 2 * LIST_ROWS;
-    let page = at / per;
-    let cell = |i: usize| {
-        let k = i % per;
-        (LIST[k / LIST_ROWS], LIST[2] + 22.0 * (k % LIST_ROWS) as f32)
-    };
-    for i in page * per..(page * per + per).min(m.mods.len()) {
+/// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
+/// tag of each player picking on this page on theirs.
+fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
+    let per = ICON_COLS * ICON_ROWS;
+    let page = custom_page(m);
+    let cell = |i: usize| (ICON_X[i % ICON_COLS], ICON_TOP + ICON_PITCH * (i % per / ICON_COLS) as f32);
+    nine(d, CS0, [154.0, 274.0, 60.0, 60.0], 12.0, [200.0, 86.0, 266.0, 298.0]);
+    for i in page.clone() {
         let (x, y) = cell(i);
-        d.q(Tex::Solid, [0.0; 4], [x, y, 140.0, 20.0], [40.0, 40.0, 50.0], 100.0);
-        d.fitted(&m.mods[i].name, x + 70.0, y + 2.0, 16.0, 132.0);
+        d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
+        d.q(Tex::Icon(i), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], WHITE, 128.0);
+        d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
     }
-    for p in players.filter(|&p| m.players[p].modded && m.players[p].pick / per == page) {
-        let (x, y) = cell(m.players[p].pick);
-        d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [x - 34.0 + 6.0 * (p % 2) as f32, y - 2.0 + 4.0 * (p / 2) as f32, 40.0, 20.0], COLOURS[p], 128.0);
+    for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
+        let (fx, fy) = cell(m.players[p].pick);
+        d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
+        d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
     }
     let pages = m.mods.len().div_ceil(per);
-    d.centred(&format!("Custom characters  {}/{pages}", page + 1), 320.0, LIST[2] + 22.0 * LIST_ROWS as f32 + 8.0, 18.0, WHITE);
+    d.centred(&format!("Custom characters  {}/{pages}", page.start / per + 1), 320.0, 386.0, 14.0, WHITE);
 }
 
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
@@ -1812,6 +1834,7 @@ fn draw(
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform)>,
     qr: Option<Res<online::QrImage>>,
     cursor: Option<Res<cursor::Cursor>>,
+    icons: Res<Icons>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -1843,6 +1866,13 @@ fn draw(
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
+            Tex::Icon(i) => match icons.0.get(&i) {
+                Some(h) => h.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Qr => match &qr {
                 Some(qr) => qr.0.clone(),
                 None => {
@@ -1852,7 +1882,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && !matches!(quad.tex, Tex::Icon(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
@@ -1919,6 +1949,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, (setup, load_bgm, cursor::setup))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
+        .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
         .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
     app.add_systems(Update, (online::poll.before(draw), online::typing.before(step)));

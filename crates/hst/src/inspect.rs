@@ -412,6 +412,56 @@ fn lay_out(window: Query<&Window, With<PrimaryWindow>>, mut cams: Query<(&Camera
     }
 }
 
+/// B133: a character's face icon, cut from its select preview's PNG (`play/main_menu/previews.rs`, the cards' 3D
+/// render baked once per character × costume × mod version): the body's column (the opaque pixels' median x in the
+/// drawing's upper half, so a racket held out or up doesn't pull it), the head's top (the first row with a few opaque
+/// pixels within 20 px of it), the head's centre (the median x of the [`ICON_CROP`]-px square's middle half below
+/// that), that square scaled to `inner`×`inner` in the top left of a 64×64 image and cut round: 64 for the select's
+/// grid (its disc faces fill their 64×64 cell), 40 for the match panel (INPANE's `face_CC_OO.tm2` is a 40-px round
+/// head in the top left of 64×64, transparent elsewhere). Framing measured side by side with the disc faces of
+/// pc00/05/11/13 and checked on every baked disc and mod preview (`context/b133/v2.png`). None if `png` doesn't
+/// decode or drew nothing.
+pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    let opaque = |x: u32, y: u32| img.get_pixel(x, y)[3] > 0;
+    let s = ICON_CROP.min(w).min(h);
+    let median = |rows: std::ops::Range<u32>, cols: std::ops::Range<u32>| {
+        let mut xs: Vec<u32> = rows.flat_map(|y| cols.clone().filter(move |&x| opaque(x, y))).collect();
+        xs.sort_unstable();
+        xs.get(xs.len() / 2).copied()
+    };
+    let rows: Vec<u32> = (0..h).filter(|&y| (0..w).any(|x| opaque(x, y))).collect();
+    let (&y0, &y1) = (rows.first()?, rows.last()?);
+    let body = median(y0..(y0 + y1) / 2 + 1, 0..w)?;
+    let near = body.saturating_sub(20)..(body + 20).min(w);
+    let top = (y0..h).find(|&y| near.clone().filter(|&x| opaque(x, y)).count() >= 3)?;
+    let left = body.saturating_sub(s / 2);
+    let cx = median((top + s / 4).min(h)..(top + s * 3 / 4).min(h), left..(left + s).min(w)).unwrap_or(body);
+    let x0 = cx.saturating_sub(s / 2).min(w - s);
+    let y0 = top.saturating_sub(2).min(h - s);
+    let inner = inner.clamp(1, 64);
+    let head = image::imageops::resize(&image::imageops::crop_imm(&img, x0, y0, s, s).to_image(), inner, inner, image::imageops::FilterType::Triangle);
+    let mut face = image::RgbaImage::new(64, 64);
+    image::imageops::replace(&mut face, &head, 0, 0);
+    let r = inner as f32 / 2.0;
+    for (x, y, p) in face.enumerate_pixels_mut() {
+        let d = ((x as f32 + 0.5 - r).powi(2) + (y as f32 + 0.5 - r).powi(2)).sqrt();
+        p[3] = (p[3] as f32 * (r - d).clamp(0.0, 1.0)) as u8;
+    }
+    use bevy::render::render_resource::{Extent3d, TextureDimension};
+    Some(Image::new(
+        Extent3d { width: 64, height: 64, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        face.into_raw(),
+        TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    ))
+}
+
+/// The face icon's square in a baked preview's pixels (384×480: the head and hair of the tallest and shortest).
+const ICON_CROP: u32 = 100;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,5 +493,31 @@ mod tests {
             let c = pelvis_centre(&sk, &m.motions[&id], t, PI, 1.0).unwrap();
             assert!((c.x - x).abs() < 1e-5 && (c.y - z).abs() < 1e-5, "motion {id:#x} frame {t}: {c} vs ({x}, {z})");
         }
+    }
+
+    /// The icon centres on the head: a 20-px "head" at x 200..220 under a 2-px "racket" further left.
+    #[test]
+    fn face_icon_finds_the_head() {
+        let mut img = image::RgbaImage::new(384, 480);
+        for y in 100..400 {
+            for x in 200..220 {
+                img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        for y in 120..130 {
+            img.put_pixel(100, y, image::Rgba([0, 255, 0, 255]));
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let face = face_icon(&png, 64).unwrap();
+        let data = face.data.unwrap();
+        let px = |x: usize, y: usize| data[(y * 64 + x) * 4..][..4].to_vec();
+        assert_eq!(px(32, 32)[0], 255, "the head in the middle");
+        assert_eq!(px(0, 0)[3], 0, "cut round");
+        assert!(face_icon(&[1, 2, 3], 64).is_none());
+        // the panel's: a 40-px head in the top left, nothing past it
+        let data = face_icon(&png, 40).unwrap().data.unwrap();
+        assert_eq!(data[(20 * 64 + 20) * 4], 255);
+        assert_eq!(data[(50 * 64 + 50) * 4 + 3], 0);
     }
 }

@@ -71,7 +71,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Startup, start_loader)
         .add_systems(PostStartup, (hover_all, start_baker))
         .add_systems(FixedUpdate, character::tick)
-        .add_systems(Update, ((receive, sync, bake, buttons).chain().after(super::draw), character::animate))
+        .add_systems(Update, ((receive, sync, bake, buttons).chain().after(super::draw), character::animate, icons))
         .add_systems(Last, despawn);
     if let Some(secs) = std::env::var("HST_STRESS").ok().and_then(|s| s.parse::<f32>().ok()) {
         app.add_systems(Update, stress(secs).before(super::step));
@@ -165,13 +165,8 @@ impl Loader {
             Who::Disc(c) => Some(self.dir.join(format!("d{c:02}-{k}.png"))),
             Who::Mod(i) => {
                 let m = menu.mods.get(i)?;
-                // a mod may ship its own: `previews/<costume's glb stem>.png`
-                let own = m.costumes.get(k).and_then(|c| Path::new(c).file_stem()).map(|s| m.dir.join("previews").join(s).with_extension("png"));
-                if let Some(own) = own.filter(|p| p.is_file()) {
-                    return Some(own);
-                }
                 let stamp = self.stamps.entry(i).or_insert_with(|| stamp(m));
-                Some(self.dir.join(format!("m-{stamp}-{k}.png")))
+                Some(mod_png(&self.dir, m, k, stamp))
             }
         }
     }
@@ -191,6 +186,61 @@ impl Loader {
         }
     }
 }
+
+/// Where mod `m`'s costume `k` preview is in cache folder `dir` (`stamp`: [`stamp`]'s), or its own
+/// `previews/<costume's glb stem>.png` if it ships one.
+fn mod_png(dir: &Path, m: &Mod, k: usize, stamp: &str) -> PathBuf {
+    let own = m.costumes.get(k).and_then(|c| Path::new(c).file_stem()).map(|s| m.dir.join("previews").join(s).with_extension("png"));
+    own.filter(|p| p.is_file()).unwrap_or_else(|| dir.join(format!("m-{stamp}-{k}.png")))
+}
+
+/// The cache folder's name: the disc's boot file and [`RENDER`].
+fn cache_name(iso: &str) -> String {
+    let boot = Iso::open(iso).ok().as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
+    format!("{boot}-r{RENDER}")
+}
+
+/// The cache folder (natively beside settings.txt; in the browser the OPFS names' prefix, B120).
+fn cache_dir(iso: &str, name: &str) -> PathBuf {
+    #[cfg(target_arch = "wasm32")]
+    return PathBuf::from(name);
+    #[cfg(not(target_arch = "wasm32"))]
+    super::Settings::path(iso).with_file_name("cache").join("previews").join(name)
+}
+
+/// B133: mod `m`'s costume `k` face icon (`inspect::face_icon`) for the match panel, from its select preview; None
+/// until that's baked (the panel shows the donor's disc face).
+pub(crate) fn mod_face(iso: &str, m: &Mod, k: usize) -> Option<Image> {
+    let path = mod_png(&cache_dir(iso, &cache_name(iso)), m, k, &stamp(m));
+    inspect::face_icon(&read(&path)?, 40)
+}
+
+/// B133: the custom page's icons (each mod's costume 0, as the disc grid shows each character's first face), read
+/// from the previews as they're baked; [`ICON_READS`] new ones a frame so a page turn doesn't stall.
+fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<usize>>) {
+    if menu.screen != Screen::Chars || !menu.custom {
+        return;
+    }
+    let mut reads = 0;
+    for i in super::custom_page(&menu) {
+        if reads == ICON_READS || icons.0.contains_key(&i) || failed.contains(&i) {
+            continue;
+        }
+        let Some(path) = loader.path((Who::Mod(i), 0), &menu).filter(|p| cached(p)) else { continue };
+        reads += 1;
+        match read(&path).and_then(|b| inspect::face_icon(&b, 64)) {
+            Some(img) => {
+                icons.0.insert(i, images.add(img));
+            }
+            None => {
+                failed.insert(i);
+            }
+        }
+    }
+}
+
+/// Icons read a frame (each ~4 ms: a PNG decode and a crop).
+const ICON_READS: usize = 2;
 
 /// A mod's PNG name stem: its folder's name and its newest file's time, so an edited mod is baked again.
 fn stamp(m: &Mod) -> String {
@@ -259,9 +309,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
     if let Ok(mut iso) = Iso::open(&path) {
         WORK.with(|w| *w.borrow_mut() = Some(Box::new(move || work(&mut iso, false))));
     }
-    let mut iso = Iso::open(&args.iso).ok();
-    let boot = iso.as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
-    let name = format!("{boot}-r{RENDER}");
+    let name = cache_name(&args.iso);
     #[cfg(not(target_arch = "wasm32"))]
     let dir = {
         let root = super::Settings::path(&args.iso).with_file_name("cache").join("previews");
@@ -271,7 +319,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
-        let dir = root.join(name);
+        let dir = cache_dir(&args.iso, &name);
         if let Err(e) = std::fs::create_dir_all(&dir) {
             warn!("{}: {e}", dir.display());
         }
@@ -281,7 +329,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
     #[cfg(target_arch = "wasm32")]
     let dir = {
         crate::web::cards_keep(&format!("{name}~"));
-        PathBuf::from(name)
+        cache_dir(&args.iso, &name)
     };
     commands.insert_resource(Loader {
         ask,
@@ -532,10 +580,13 @@ fn start_baker(mut commands: Commands, menu: Res<Menu>) {
     // every mod's costumes after the disc's (B99: an unbaked one is blank until its live model loads)
     let mut queue = Vec::new();
     for (i, m) in menu.mods.iter().enumerate().rev() {
-        queue.extend((0..m.costumes.len()).rev().map(|k| (Who::Mod(i), k)));
+        queue.extend((1..m.costumes.len()).rev().map(|k| (Who::Mod(i), k)));
     }
-    // costume 0 of every character first (popped last-in first)
+    // costume 0 of every character first (popped last-in first), then each mod's (B133: the custom page's icons)
     for k in (0..super::COSTUMES).rev() {
+        if k == 0 {
+            queue.extend((0..menu.mods.len()).rev().map(|i| (Who::Mod(i), 0)));
+        }
         queue.extend(GRID.iter().rev().map(|&(c, ..)| (Who::Disc(c), k)));
     }
     commands.insert_resource(Baker { queue, ..default() });
