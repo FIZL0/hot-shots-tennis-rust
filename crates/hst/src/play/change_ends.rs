@@ -1,10 +1,11 @@
 //! The change-ends camera move (B49): the players are already at their new ends on the phase's first tick; the
-//! picture glides from the view shown when the phase starts (the post-point cut-away) to the match camera's
-//! view of the new set-up over the phase (`hst_sim::camera::swing`), as the original's camera does on its
-//! change-ends message, instead of cutting.
+//! picture cuts to the first view of scripted shot 2 (behind the player at the match camera's new end) and glides
+//! from it round that player to the match camera's view of the new set-up over the phase
+//! (`hst_sim::camera::swing`), as the original's camera does on its change-ends message (B174).
 
 use bevy::prelude::*;
 use hst_sim::camera::{Scene, View, swing, swing_weight};
+use hst_sim::cutaway::{IDENTITY, Shot};
 use hst_sim::flow::CHANGE_ENDS;
 
 use super::{Game, Phase};
@@ -22,7 +23,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(FixedUpdate, step.after(super::replay_camera::step).before(super::start_effects));
 }
 
-fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>) {
+fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>, d: Option<Res<super::cutaway::Director>>) {
     let Phase::ChangeEnds(n) = g.phase else {
         s.run = None;
         s.last = Some(g.cam.view);
@@ -33,11 +34,23 @@ fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>) {
         let mut cam = g.cam;
         let players: Vec<[f32; 3]> = g.players.iter().map(|p| p.pos).collect();
         cam.step(&Scene { players: &players, ball: g.flight.ball.pos });
-        let from = s.last.unwrap_or(cam.view);
-        // ponytail: pivots on the server's spot; the game's reference frame for it (0x76) wasn't read at the
-        // phase's start, only later (where it sat near the server)
-        let server = g.players[g.score.server as usize].pos;
-        s.run = Some((from, cam.view, [server[0], 0.0, server[2]]));
+        // the pivot: the game's court spot 0x76, the player at the match camera's end, on the ground facing the net
+        // (both recorded glides fit it to 0.1 m: slot 5 and the Grand Palais with the camera on the human's side).
+        // ponytail: the first player at that end; which of two (doubles) the spot follows wasn't recorded
+        let near = g.players.iter().find(|p| p.pos[2] * cam.view.eye[2] > 0.0).unwrap_or(&g.players[g.score.server as usize]).pos;
+        let pivot = [near[0], 0.0, near[2]];
+        // the start: not the cut-away on screen but the first view of scripted shot 2, which orbits that spot from
+        // behind it (frame 0x77 is the same spot at the other end), so the move stays behind the new end's baseline
+        // instead of swinging round the court (out through the indoor court's walls)
+        let b = if pivot[2] > 0.0 { -1.0 } else { 1.0 };
+        let spot = |b: f32, p: [f32; 3]| [[b, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, b, 0.0], [p[0], 0.0, p[2], 1.0]];
+        let (here, there) = (spot(b, pivot), spot(-b, [-pivot[0], 0.0, -pivot[2]]));
+        let from = d.map_or(s.last.unwrap_or(cam.view), |d| {
+            let mut shot = Shot::new(&d.shots, 2, false);
+            shot.build(&|i| match i { 0x76 => here, 0x77 => there, _ => IDENTITY });
+            shot.view()
+        });
+        s.run = Some((from, cam.view, pivot));
         g.prev_view = from;
         // the placement's cut doesn't reach the picture: the move is shown instead
         g.cam_cut = false;
@@ -58,10 +71,22 @@ mod tests {
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
     /// A bot singles match plays to its first change of ends: the players stand at their new ends from the
-    /// phase's first tick, the picture starts from the cut-away shown before it and glides (no cut) to the
-    /// match camera, which it reaches on the phase's last tick (skipped without the ISO).
+    /// phase's first tick, the picture glides (no cut after its first tick) to the match camera, which it reaches
+    /// on the phase's last tick, staying behind the new end's baseline (skipped without the ISO).
     #[test]
     fn change_of_ends_glides() {
+        glide(None, None);
+    }
+
+    /// B174: the same on the indoor Grand Palais with the camera following player 0 (the human's view), whose
+    /// move ends on the other side of the court from where the post-point cut-away left it: it still starts
+    /// behind the new end (the original's shot 2) instead of swinging round the court through the hall's walls.
+    #[test]
+    fn change_of_ends_glides_on_the_players_side() {
+        glide(Some(7), Some(0));
+    }
+
+    fn glide(stage: Option<u32>, owner: Option<usize>) {
         if !std::path::Path::new(ISO).is_file() {
             return eprintln!("no ISO, skipped");
         }
@@ -70,12 +95,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
         app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         app.add_plugins((cutaway::plugin, super::plugin));
         app.add_systems(Startup, setup);
-        app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.add_systems(FixedUpdate, (remember, control, move |mut g: ResMut<Game>| g.cam_owner = owner.or(g.cam_owner), simulate, motions, character::tick, played_out, held_ball).chain());
         app.update();
         let (mut views, mut to, mut after) = (Vec::new(), None, None);
         for frame in 0..60 * 600 {
@@ -100,6 +125,12 @@ mod tests {
         assert_eq!(views.len() as u32, hst_sim::flow::CHANGE_ENDS + 1, "a whole change-ends phase");
         let to = to.expect("the move ran to its end view");
         let eye = |v: &hst_sim::camera::View| Vec3::from(v.eye);
+        // the eye stays behind the new end's baseline, between the side walls (the original's both recorded
+        // glides: |x| under 6.2 m, |z| over 19 m)
+        for v in &views[1..] {
+            let e = eye(&v.2);
+            assert!(e.z * to.eye[2] > 0.0 && e.z.abs() > 11.885 && e.x.abs() < 8.0, "tick {}: eye {e} off the new end", v.0);
+        }
         // each tick moves on from the last (no cut), and the last shows the match camera
         for w in views.windows(2) {
             assert_eq!(w[1].1, w[0].2, "tick {} starts where {} ended", w[1].0, w[0].0);
