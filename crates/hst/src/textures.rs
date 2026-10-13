@@ -22,6 +22,14 @@ struct State {
 // ponytail: global, so the loaders that only hold `Assets<Image>` can use it without new system params
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+/// The menus' own rebuilt sheets (`play/menu_art.rs`): their size / the disc's, whatever the replacement setting.
+static OURS: Mutex<Option<HashMap<AssetId<Image>, Vec2>>> = Mutex::new(None);
+
+/// `id` is a sheet drawn `scale`× the disc's size: the UI's pixel rects on it are scaled to match.
+pub fn ours(id: AssetId<Image>, scale: Vec2) {
+    OURS.lock().unwrap().get_or_insert_default().insert(id, scale);
+}
+
 pub fn init(iso: &str) {
     let root = Path::new(iso)
         .parent()
@@ -254,7 +262,10 @@ struct Scaled {
 /// The HUD picks sheet pieces in disc pixels: scale `ImageNode::rect` to the replacement's size.
 fn ui_rects(mut commands: Commands, mut q: Query<(Entity, &mut ImageNode, Option<&mut Scaled>)>) {
     let s = STATE.lock().unwrap();
-    let Some(s) = s.as_ref() else { return };
+    let ours = OURS.lock().unwrap();
+    if s.is_none() && ours.is_none() {
+        return;
+    }
     for (e, mut img, scaled) in &mut q {
         let Some(rect) = img.rect else { continue };
         // a rect we wrote is still the scaled disc rect (scale may have changed since: hot reload)
@@ -262,7 +273,8 @@ fn ui_rects(mut commands: Commands, mut q: Query<(Entity, &mut ImageNode, Option
             Some(sc) if sc.out == rect => sc.disc,
             _ => rect,
         };
-        let k = s.scale.get(&img.image.id()).copied().unwrap_or(Vec2::ONE);
+        let id = img.image.id();
+        let k = ours.as_ref().and_then(|o| o.get(&id)).or_else(|| s.as_ref().and_then(|s| s.scale.get(&id))).copied().unwrap_or(Vec2::ONE);
         let out = Rect {
             min: disc.min * k,
             max: disc.max * k,

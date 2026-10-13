@@ -3590,6 +3590,7 @@ dependencies = [
 name = "hst"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "bevy",
  "bincode",
  "data-encoding",
@@ -3610,6 +3611,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tiny-skia",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",

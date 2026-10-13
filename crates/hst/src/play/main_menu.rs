@@ -82,7 +82,7 @@ const SETS: [i32; 3] = [1, 3, 5];
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
 const CARDS: [[f32; 2]; 4] = [[4.0, 4.0], [4.0, 180.0], [156.0, 4.0], [156.0, 180.0]];
 /// `word.tm2`'s glyphs, 12 to a 32-px row from y 32.
-const FONT: [&str; 15] = [
+pub(super) const FONT: [&str; 15] = [
     "aàáâãäåæbcçd",
     "ðeèéêëfghiìí",
     "îïjklmnñoòóô",
@@ -994,32 +994,40 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     ))];
     let font = read(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
-    art.push(panel::image(&mut images, &font));
+    art.push(super::menu_art::image(&mut images, &font, "word"));
     let inpane = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let inpane = Archive::parse(&inpane).expect("xb archive");
     let hand = inpane.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("hsm_yubi.tm2")).expect("hsm_yubi");
     art.push(panel::image(&mut images, &inpane.read(hand).expect("INPANE bytes")));
     // Z1: read every sheet first so their replacements decode on all cores at once
-    let mut sheets: Vec<Vec<u8>> =
-        SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")]).map(|(xb, name)| read(&mut iso, xb, &format!("/{name}.tm2"))).collect();
+    let mut sheets: Vec<(String, Vec<u8>)> = SHEETS
+        .iter()
+        .chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")])
+        .map(|(xb, name)| (name.to_string(), read(&mut iso, xb, &format!("/{name}.tm2"))))
+        .collect();
     for u in 0..5 {
-        sheets.push(read(&mut iso, "MENU/MENU60.XB0", &format!("/item_umpire{u:02}.tm2")));
+        let name = format!("item_umpire{u:02}");
+        sheets.push((name.clone(), read(&mut iso, "MENU/MENU60.XB0", &format!("/{name}.tm2"))));
     }
     let shots = ["cs2_shots_nomal_a", "cs2_shots_nomal_b", "cs2_shots_cos_a", "cs2_shots_cos_b"]
         .into_iter()
         .map(String::from)
         .chain((0..CHARS).map(|c| format!("cs2_shots_{c:02}")));
     for name in shots {
-        sheets.push(read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2")));
+        sheets.push((name.clone(), read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2"))));
     }
-    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/info.tm2"));
-    sheets.push(read(&mut iso, "MENU/MENU12B.XB0", "/confirmation_04.tm2"));
-    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/keyassign_characterselect2.tm2"));
-    for n in ["00", "01", "02"] {
-        sheets.push(read(&mut iso, "MENU/MENU03.XB0", &format!("/confirmation_{n}.tm2")));
+    for (xb, name) in [
+        ("MENU/MENU12A.XB0", "info"),
+        ("MENU/MENU12B.XB0", "confirmation_04"),
+        ("MENU/MENU12A.XB0", "keyassign_characterselect2"),
+        ("MENU/MENU03.XB0", "confirmation_00"),
+        ("MENU/MENU03.XB0", "confirmation_01"),
+        ("MENU/MENU03.XB0", "confirmation_02"),
+    ] {
+        sheets.push((name.into(), read(&mut iso, xb, &format!("/{name}.tm2"))));
     }
-    let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
-    art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
+    let _pre = crate::textures::prefetch_tim2(sheets.iter().map(|s| s.1.as_slice()));
+    art.extend(sheets.iter().map(|(name, d)| super::menu_art::image(&mut images, d, name)));
     let glyphs = glyphs(&font);
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));

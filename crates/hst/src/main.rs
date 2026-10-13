@@ -199,6 +199,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     if gfx.original {
         play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed);
         upscale = false;
+        play::menu_art::OFF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
     Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands }

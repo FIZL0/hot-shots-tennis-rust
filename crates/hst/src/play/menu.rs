@@ -383,7 +383,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
                 .iter()
                 .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
                 .unwrap_or_else(|| panic!("{name} in INPANE"));
-            panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))
+            super::menu_art::image(&mut images, &arc.read(e).expect("INPANE bytes"), name)
         })
         .collect::<Vec<_>>();
     art.push(super::main_menu::pause::label(&mut iso, &mut images, "Settings"));

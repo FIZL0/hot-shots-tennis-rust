@@ -101,10 +101,10 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     ));
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
-    let mut art = vec![solid, super::panel::image(&mut images, &font), super::panel::image(&mut images, &hand)];
+    let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word"), super::panel::image(&mut images, &hand)];
     // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets, the rest left empty
     for (xb, name) in &super::SHEETS[..10] {
-        art.push(if name.ends_with("option") || *name == "option_00" { super::panel::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2"))) } else { Handle::default() });
+        art.push(if name.ends_with("option") || *name == "option_00" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
     }
     let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };

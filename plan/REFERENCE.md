@@ -86,6 +86,8 @@ Character select previews: cached PNGs in `cache/previews/<boot file>-r<N>/` bes
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
 
+Menu art (B136): the menus' disc sheets are rebuilt at 4× with their labels set as vector text (`play/menu_art.rs`); `--original` keeps the disc's sheets, `HST_MENU_ART=DIR` dumps the rebuilt PNGs.
+
 ## Done (ported and verified against the original)
 
 - B24a: court 4's passing ball (trigger type 15): rolled once a match at a change of ends, route, animation, bounce sounds and fade bit-exact against a recording (route 0); drawn in play (journal 2026-10-08-b24-court-events).

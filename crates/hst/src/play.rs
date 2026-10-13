@@ -65,6 +65,7 @@ pub mod netplay;
 mod rollback;
 mod npcs;
 mod panel;
+pub(crate) mod menu_art;
 mod popups;
 mod reaction_voices;
 mod replay_camera;
