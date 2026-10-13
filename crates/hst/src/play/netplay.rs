@@ -632,7 +632,7 @@ mod tests {
             app.insert_resource(Pads { seats: Some(human), autoplay: false, ..default() });
             app.init_resource::<tick_input::TickPads>();
             app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-            app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
+            app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin, change_ends::plugin));
             app.add_systems(PostStartup, setup);
             app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
             if REPLAYS.get() {
@@ -919,14 +919,40 @@ mod tests {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
+            // into the first point's rally (the serve is around tick 200), mashing
+            synctest(|t, _| t >= 420);
+        }
+
+        /// B154: re-runs through the first change of ends stay the same (its camera glide kept state outside the
+        /// snapshot, so a rollback mid-glide came out differently and the match stopped on the Change Sides screen).
+        #[test]
+        fn synctest_through_a_change_of_ends() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            REPLAYS.set(false);
+            let mut seen = false;
+            synctest(|t, g| {
+                assert!(t < 30_000, "no change of ends in {t} ticks");
+                let now = matches!(g.phase, Phase::ChangeEnds(_));
+                let done = seen && !now;
+                seen |= now;
+                done
+            });
+        }
+
+        /// ggrs' synctest on the doubles room, all seats on one machine and mashed, until `stop(tick, game)`.
+        fn synctest(mut stop: impl FnMut(u32, &Game) -> bool) {
             let mut room = room(0);
             room.seats.iter_mut().for_each(|s| s.as_mut().unwrap().peer = "host".into());
             let mut a = app(&room, "host");
             a.insert_resource(Rollback::new(&room, "host", step as fn(&mut _)).unwrap());
             let mut sess = ggrs::SessionBuilder::<rollback::Cfg>::new().with_num_players(4).unwrap().with_check_distance(7).with_input_delay(rollback::DELAY).start_synctest_session().unwrap();
-            // into the first point's rally (the serve is around tick 200), mashing
-            for t in 0..420u32 {
+            for t in 0.. {
                 let w = a.world_mut();
+                if stop(t, w.resource::<Game>()) {
+                    break;
+                }
                 let mut np = w.resource_mut::<Netplay>();
                 np.lock.tick = t;
                 for s in 0..4 {

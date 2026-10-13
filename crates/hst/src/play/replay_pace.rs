@@ -17,8 +17,8 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(FixedUpdate, (log.after(super::simulate), hush.before(super::play_sounds), pace.after(super::instant_replay::run)));
 }
 
-#[derive(Resource, Default)]
-struct Pace {
+#[derive(Resource, Default, Clone)]
+pub(super) struct Pace {
     /// The point's shots: the tick each left the racket.
     shots: Vec<i32>,
     /// The last point's.

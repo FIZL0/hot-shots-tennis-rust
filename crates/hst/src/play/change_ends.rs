@@ -9,8 +9,8 @@ use hst_sim::flow::CHANGE_ENDS;
 
 use super::{Game, Phase};
 
-#[derive(Resource, Default)]
-struct Swing {
+#[derive(Resource, Default, Clone)]
+pub(super) struct Swing {
     /// The view shown at the end of the last tick.
     last: Option<View>,
     /// The move's start and end views and its pivot.

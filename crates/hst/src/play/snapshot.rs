@@ -115,6 +115,10 @@ fn modules(w: &World) -> Vec<Box<dyn Fn(&mut World) + Send + Sync>> {
     keep::<super::bodyhit::Hits>(w, &mut out);
     keep::<super::npcs::Npcs>(w, &mut out);
     keep::<super::popups::Calls>(w, &mut out);
+    // the change-ends glide writes the camera (in the hash) from its last view: a rollback mid-glide desynced (B154)
+    keep::<super::change_ends::Swing>(w, &mut out);
+    keep::<super::replay_pace::Pace>(w, &mut out);
+    keep::<super::bodyhit::Posed>(w, &mut out);
     // the effects: the hit sparks draw the sound generator while they live
     keep::<crate::effects::Impacts>(w, &mut out);
     keep::<crate::effects::HitSparks>(w, &mut out);

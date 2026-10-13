@@ -137,7 +137,7 @@ fn place_ball(mut g: ResMut<Game>) {
 }
 
 /// Per player (by figure) the clip bound to its nodes and the nodes as the motion player last posed them.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(super) struct Posed(Vec<Option<(usize, Nodes)>>);
 
 impl Posed {
