@@ -1272,7 +1272,9 @@ mod tests {
         // Phoebe's rig has no eye node of donor 6's: only `eyes` binds the track, on that material's parts
         let dir = std::env::temp_dir().join(format!("hst_m1i_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let glb = Path::new(MODS).join("fore_pc00_phoebe/model/pc00_phoebe_c00.glb").canonicalize().unwrap();
+        // costumes must sit inside the mod folder (M16): copy Phoebe's in
+        std::fs::copy(Path::new(MODS).join("fore_pc00_phoebe/model/pc00_phoebe_c00.glb"), dir.join("c00.glb")).unwrap();
+        let glb = "c00.glb";
         let disc6 = character::load_disc(&mut iso, 6, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
         let want6: Vec<_> = pose_eyes(&disc6, 6).into_iter().filter(|o| *o != [0, 0]).collect();
         assert!(!want6.is_empty());
