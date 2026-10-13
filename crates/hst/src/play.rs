@@ -272,6 +272,8 @@ struct Contact {
     swing: swing::Swing,
     grade: u8,
     offset: i32,
+    /// The ball was touched since the lock (the net, another player's hit): at contact the swing misses.
+    cancelled: bool,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -1928,6 +1930,7 @@ fn strike(
     g.phase = Phase::Rally;
     g.umpire.rally();
     doubles_ai::heard(g, 0x15);
+    cancel_locks(g, Some(who));
 }
 
 /// The server's turn while the serve is set up, as the original: before the toss the server stands or walks
@@ -2338,6 +2341,7 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
         swing: s,
         grade: g.reaches[i].grades[s.frame],
         offset: s.frame as i32 - SWEET_FRAME,
+        cancelled: false,
     })
 }
 
@@ -2628,7 +2632,9 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
         if p.ik.is_none() {
             p.prev = p.pos;
         }
-        if c.frames == 0 {
+        if c.frames == 0 && c.cancelled {
+            miss_contact(g, i, &c);
+        } else if c.frames == 0 {
             let (stick, end) = (aim(g), g.players[i].end);
             let branch = branch_code(c.swing.branch);
             let kind =
@@ -2878,6 +2884,31 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
     set_motion(p, anim, 1.0, false, None);
     p.vel = Vec2::ZERO;
     p.facing = base_yaw(p.end);
+}
+
+/// Every locked swing but `but`'s is cancelled: the ball touched the net (or a hit) after it locked.
+fn cancel_locks(g: &mut Game, but: Option<usize>) {
+    for (_, p) in g.players.iter_mut().enumerate().filter(|(j, _)| Some(*j) != but) {
+        if let Some(c) = p.contact.as_mut() {
+            c.cancelled = true;
+        }
+    }
+}
+
+/// A cancelled swing's contact frame: no strike, the swing turns into its miss motion with a shout, as a whiff
+/// at its pose frame (the re-press lock and recovery run on from there).
+fn miss_contact(g: &mut Game, i: usize, c: &Contact) {
+    let anim = c.swing.anim as i32;
+    let p = &mut g.players[i];
+    (p.contact, p.swing, p.ik) = (None, None, None);
+    if let Some(m) = motion::whiff(anim) {
+        set_motion(p, m, 1.0, false, None);
+    }
+    p.missed = true;
+    p.whiff = Some(motion::Whiff { tick: motion::WHIFF_POSE, ..motion::Whiff::new(anim, true, false) });
+    let r = g.rng.shared.r15();
+    let shout = g.voices[i].shout(i, sound::WHIFF_SHOUT, g.players.len() as u32, r);
+    g.whooshes.push((0, i, shout));
 }
 
 /// One frame of a whiff, before this frame's press: at the contact pose the swing turns into its miss motion
@@ -3745,6 +3776,9 @@ fn simulate(mut g: ResMut<Game>) {
     g.flight.in_play = g.shots > 0;
     let (before, touched) = (g.flight.bounces, g.flight.special_contacts);
     g.flight.step_world(&shot, surface, &g.world.0, &g.world.1);
+    if g.flight.special_contacts != touched {
+        cancel_locks(g, None);
+    }
     if touched == 0 && g.flight.special_contacts > 0 {
         g.path_base = g.hit_flight.predicted_contacts(&shot, surface, g.since_hit);
         doubles_ai::heard(g, 0x16);
