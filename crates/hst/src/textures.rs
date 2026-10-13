@@ -48,9 +48,11 @@ pub fn init(iso: &str) {
     });
 }
 
-/// Replacements on or off (the menu's "upscaled textures" setting, per match); on keeps what an earlier `init` read.
+/// Replacements on or off (the menu's "upscaled textures" setting, per match; always off in the browser); on keeps
+/// what an earlier `init` read.
 pub fn set(iso: &str, on: bool) {
-    if !on {
+    // B227: never in the browser (a phone's tab runs out of memory on 4K textures; mods there have no upscaled set)
+    if !on || cfg!(target_arch = "wasm32") {
         *STATE.lock().unwrap() = None;
     } else if STATE.lock().unwrap().is_none() {
         init(iso);

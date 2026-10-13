@@ -239,10 +239,8 @@ async function start() {
     try { m = await import_mod(f); } catch (e) { mod_status(`Couldn't add ${f.name}: ${e}`); return; }
     await window.hstModSave(m.id, m.name);
   };
-  // a mod store download (web.rs zip): streamed into OPFS mod-download.zip (emptied), then read back from it a part
-  // at a time
-  window.hstZip = async read => { const h = await dir.getFileHandle('mod-download.zip', { create: !read }); return read ? h.getFile() : h.createWritable(); };
-  window.hstZipDrop = () => dir.removeEntry('mod-download.zip').catch(() => {});
+  // B227: the store reads a download's parts straight from it (modstore.rs ranged); B204's whole zip is gone
+  dir.removeEntry('mod-download.zip').catch(() => {});
   // an installed mod (a picked zip, or one the mod store downloaded, M17) from the game into OPFS mods/<id>/
   window.hstModSave = async (id, name) => {
     mod_status(`Saving ${name}...`);

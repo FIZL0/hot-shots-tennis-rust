@@ -303,17 +303,6 @@ pub fn js_err(e: JsValue) -> String {
     js_sys::JSON::stringify(&e).ok().and_then(|s| s.as_string()).unwrap_or_else(|| format!("{e:?}"))
 }
 
-/// `o.method(...args)`, awaited when it gives a promise.
-pub async fn call(o: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, String> {
-    // B223: a page older than the game (an install right after a deploy, the page still cached) lacks the game's hooks
-    let f: js_sys::Function = js_sys::Reflect::get(o, &method.into())
-        .map_err(js_err)?
-        .dyn_into()
-        .map_err(|_| format!("the page has no {method} (an older copy of it: reload the page)"))?;
-    let r = f.apply(o, &args.iter().collect()).map_err(js_err)?;
-    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&r)).await.map_err(js_err)
-}
-
 /// `n` bytes of `b` from `at`.
 pub async fn read_blob(b: web_sys::Blob, at: u64, n: usize) -> Result<Vec<u8>, String> {
     let part = b.slice_with_f64_and_f64(at as f64, (at + n as u64) as f64).map_err(js_err)?;
@@ -323,17 +312,6 @@ pub async fn read_blob(b: web_sys::Blob, at: u64, n: usize) -> Result<Vec<u8>, S
         return Err("the zip is cut short".into());
     }
     Ok(u.to_vec())
-}
-
-/// A mod store download's zip (B204): the page's OPFS `mod-download.zip`, a writable (emptied) or the file to read.
-pub async fn zip(read: bool) -> Result<JsValue, String> {
-    call(&web_sys::window().unwrap().into(), "hstZip", &[read.into()]).await
-}
-
-pub fn zip_drop() {
-    if let Some(f) = page_fn("hstZipDrop") {
-        let _ = f.call0(&JsValue::NULL);
-    }
 }
 
 /// Lets the browser draw a frame (a long job split up between them).

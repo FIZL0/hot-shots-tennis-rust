@@ -180,6 +180,8 @@ pub struct Settings([bool; 4], Graphics);
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match).
 const SETTING_NAMES: [&str; 4] = ["widescreen", "upscaled_textures", "menu_music", "music"];
 const SETTING_LABELS: [&str; 4] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music"];
+/// The switch the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`); none elsewhere.
+const NO_UPSCALE: usize = if cfg!(target_arch = "wasm32") { 1 } else { usize::MAX };
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
@@ -576,7 +578,7 @@ impl Menu {
             Screen::Settings => {
                 rows(CONTROLS_ROW + 2, &mut self.sel, &mut out);
                 let s = self.sel;
-                if s < SETTING_NAMES.len() && (k.ok || k.left || k.right) {
+                if s < SETTING_NAMES.len() && s != NO_UPSCALE && (k.ok || k.left || k.right) {
                     self.settings.0[s] = !self.settings.0[s];
                     out.extend([Sound(0), SaveSettings]);
                 } else if k.ok && s == GRAPHICS_ROW {
@@ -1613,10 +1615,12 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
             d.rows(&labels, m.sel, 120.0, 90.0, 300.0, hand_x);
             for (i, on) in m.settings.0.iter().enumerate() {
+                let on = &(*on && i != NO_UPSCALE);
                 d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + 44.0 * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
+                1 if NO_UPSCALE == 1 => "Upscaled textures aren't available in the browser.".into(),
                 1 => "Use the upscaled textures in mods/texture-replacements.".into(),
                 2 => "Play music in the menus.".into(),
                 3 => "Play each court's music during a match.".into(),

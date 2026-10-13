@@ -123,7 +123,7 @@ pub fn unpack(zip: &[u8]) -> Result<Files, String> {
 #[cfg(test)]
 fn unpack_capped(zip: &[u8], max_file: usize, max_total: usize) -> Result<Files, String> {
     let mut out = Vec::new();
-    now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |n, b| Ok(out.push((n.to_string(), b))), max_file, max_total))?;
+    now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |_| true, |n, b| Ok(out.push((n.to_string(), b))), max_file, max_total))?;
     Ok(out)
 }
 
@@ -149,10 +149,12 @@ struct Entry {
 
 /// [`unpack`] one entry at a time (B204: a big mod is never whole in memory): `read(at, n)` gives `n` bytes of the
 /// `len`-byte zip from `at` (always in range), and each file goes to `put(path in the mod, bytes)` as it's inflated.
-/// The directory is checked whole before any file is read. The mod's file names, in the zip's order.
+/// The directory is checked whole before any file is read; a file `keep` refuses is never read (B227: the browser's
+/// left-out upscaled set, not even downloaded). The kept files' names, in the zip's order.
 pub async fn unpack_with<F: Future<Output = Result<Vec<u8>, String>>>(
     len: u64,
     mut read: impl FnMut(u64, usize) -> F,
+    keep: impl Fn(&str) -> bool,
     mut put: impl FnMut(&str, Vec<u8>) -> Result<(), String>,
     max_file: usize,
     max_total: usize,
@@ -229,6 +231,7 @@ pub async fn unpack_with<F: Future<Output = Result<Vec<u8>, String>>>(
         }
         top
     };
+    files.retain(|f| keep(&f.name[top.len()..]));
     let mut total = 0;
     for f in &files {
         let name = &f.name;
@@ -333,7 +336,7 @@ pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, 
 }
 
 /// Whether a mod's file `n` (inside its folder) is kept by the browser build (B227): a mod's `textures/upscaled/`
-/// set (≈ 90% of the store mods' bytes, 512 of Anya's 525 MB) is left out of memory and OPFS, so a few installed
+/// set (≈ 90% of the store mods' bytes, 512 of Anya's 525 MB) isn't downloaded or kept in memory and OPFS, so a few installed
 /// mods can't outgrow a phone's tab; the browser draws the mod's own textures, as an online peer does
 /// (`mods_online.rs`).
 // ponytail: no upscaled mod textures in the browser; reading the picked costume's set from OPFS before a match
@@ -365,15 +368,11 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
         let put = |n: &str, b: Vec<u8>| {
             let p = stage.join(n);
             if !disk {
-                if kept_in_memory(n) {
-                    add(&p, b.into());
-                }
-                return Ok(());
+                return Ok(add(&p, b.into()));
             }
             std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
         };
-        let mut names = unpack_with(len, zip, put, MAX_FILE, MAX_TOTAL).await?;
-        names.retain(|n| disk || kept_in_memory(n));
+        let names = unpack_with(len, zip, |n| disk || kept_in_memory(n), put, MAX_FILE, MAX_TOTAL).await?;
         let j: serde_json::Value = serde_json::from_slice(&read(&stage.join("mod.json")).map_err(|e| e.to_string())?).map_err(|e| format!("mod.json: not JSON: {e}"))?;
         let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
         if let Some(w) = want.filter(|w| *w != id) {

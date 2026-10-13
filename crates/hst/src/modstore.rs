@@ -277,6 +277,7 @@ pub fn preview(e: &Entry) {
 }
 
 /// A download of `size` bytes with sha256 `hash` is the zip `meta` describes.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn matches(size: u64, hash: &str, meta: &Meta) -> Result<(), String> {
     if size != meta.size {
         return Err(format!("the download is {size} bytes, the store says {}", meta.size));
@@ -309,16 +310,22 @@ pub fn stamp(dir: &Path) -> Option<Stamp> {
 
 /// Downloads, checks and installs `e` into `root` ([`Event::Installed`]), saying how far it's got
 /// ([`Event::Progress`]). The zip streams to a file (B204: never whole in memory) and is hashed as it arrives; only
-/// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards.
+/// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards. The
+/// browser reads the parts it keeps straight from the store instead ([`ranged`]).
 pub fn install(e: &Entry, root: &Path) {
     let (e, root) = (e.clone(), root.to_path_buf());
     spawn(async move {
         let got = async {
-            let mut zip = Zip::create(&root).await?;
-            let (size, hash) = download(&e, &mut zip).await?;
-            matches(size, &hash, &e.meta)?;
-            send(Event::Progress(format!("Checking {}...", e.meta.name)));
-            let m = zip.install(&root, &e.meta.id).await?;
+            #[cfg(not(target_arch = "wasm32"))]
+            let m = {
+                let mut zip = Zip::create(&root).await?;
+                let (size, hash) = download(&e, &mut zip).await?;
+                matches(size, &hash, &e.meta)?;
+                send(Event::Progress(format!("Checking {}...", e.meta.name)));
+                zip.install(&root, &e.meta.id).await?
+            };
+            #[cfg(target_arch = "wasm32")]
+            let m = ranged(&e, &root).await?;
             let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified };
             modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
             keep(&m)
@@ -328,6 +335,7 @@ pub fn install(e: &Entry, root: &Path) {
 }
 
 /// `e`'s `mod.zip` from the store into `zip`: its size and sha256.
+#[cfg(not(target_arch = "wasm32"))]
 async fn download(e: &Entry, zip: &mut Zip) -> Result<(u64, String), String> {
     use n0_future::StreamExt;
     let cap = e.meta.size.min(MAX_ZIP);
@@ -376,34 +384,55 @@ impl Drop for Zip {
     }
 }
 
-/// A download's zip until it's installed: OPFS `mod-download.zip` (the page's), removed when dropped.
-#[cfg(target_arch = "wasm32")]
-struct Zip(wasm_bindgen::JsValue);
-
-#[cfg(target_arch = "wasm32")]
-impl Zip {
-    async fn create(_: &Path) -> Result<Self, String> {
-        crate::web::zip(false).await.map(Zip).map_err(|e| format!("can't make the download's file: {e}"))
+/// B227: the browser installs `e`'s `mod.zip` from the store a part at a time (HTTP range requests), reading only
+/// the files it keeps (`modfs::kept_in_memory`: never the upscaled set, ≈ 90% of a store mod), so nothing of it is
+/// stored whole. Its sha256 needs all of it, so here its size is checked against the store's, and each file's CRC-32
+/// as it's unpacked (`modfs::unpack_with`); the connection is HTTPS to the store either way.
+#[cfg(any(test, target_arch = "wasm32"))]
+async fn ranged(e: &Entry, root: &Path) -> Result<Mod, String> {
+    send(Event::Progress(format!("Downloading {}...", e.meta.name)));
+    let r = range(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), 0, 1).await?;
+    // the zip's size from "bytes 0-0/<size>"; the rest is asked of the URL the store redirected to (its CDN)
+    let len: u64 = r.headers().get("content-range").and_then(|v| v.to_str().ok()?.rsplit_once('/')?.1.parse().ok()).ok_or("the store didn't say the zip's size")?;
+    if len != e.meta.size {
+        return Err(format!("the download is {len} bytes, the store says {}", e.meta.size));
     }
-    async fn write(&mut self, b: &[u8]) -> Result<(), String> {
-        crate::web::call(&self.0, "write", &[js_sys::Uint8Array::from(b).into()]).await.map(drop).map_err(|e| format!("can't write the download: {e}"))
+    if len > MAX_ZIP {
+        return Err("too big".into());
     }
-    async fn install(&self, root: &Path, id: &str) -> Result<Mod, String> {
-        crate::web::call(&self.0, "close", &[]).await.map_err(|e| format!("can't finish the download's file: {e}"))?;
-        let f: web_sys::Blob = wasm_bindgen::JsCast::unchecked_into(crate::web::zip(true).await.map_err(|e| format!("can't open the download: {e}"))?);
-        let read = |at, n| {
-            let f = f.clone();
-            async move { crate::web::read_blob(f, at, n).await.map_err(|e| format!("can't read the download: {e}")) }
-        };
-        modfs::install_with(f.size() as u64, read, root, Some(id), false).await
-    }
+    let (url, got) = (r.url().to_string(), std::cell::Cell::new(0u64));
+    let read = |at: u64, n: usize| {
+        let (url, got, name) = (url.clone(), &got, &e.meta.name);
+        async move {
+            if n == 0 {
+                return Ok(Vec::new());
+            }
+            let b = range(&url, at, n).await?.bytes().await.map_err(|e| format!("download cut short: {e}"))?;
+            if b.len() != n {
+                return Err("download cut short".into());
+            }
+            let mb = got.get() >> 20;
+            got.set(got.get() + n as u64);
+            if got.get() >> 20 != mb {
+                send(Event::Progress(format!("Downloading {name}... {} MB", got.get() >> 20)));
+            }
+            Ok(b.to_vec())
+        }
+    };
+    modfs::install_with(len, read, root, Some(&e.meta.id), false).await
 }
 
-#[cfg(target_arch = "wasm32")]
-impl Drop for Zip {
-    fn drop(&mut self) {
-        crate::web::zip_drop();
+/// Bytes `at..at + n` of `url` (the store's file, or where it redirected).
+#[cfg(any(test, target_arch = "wasm32"))]
+async fn range(url: &str, at: u64, n: usize) -> Result<reqwest::Response, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let r = reqwest::Client::new().get(url).header("Range", format!("bytes={at}-{}", at + n as u64 - 1)).send().await.map_err(|e| format!("can't reach the store: {e}"))?;
+    let r = r.error_for_status().map_err(|e| format!("the store said {}", e.status().map_or("no".into(), |s| s.to_string())))?;
+    if r.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err("the store sent the whole zip, not the part asked for".into());
     }
+    Ok(r)
 }
 
 /// Desktop Add mod: the system's file picker for a mod `.zip`, installed like a download (`modfs::install_file`'s
@@ -672,6 +701,26 @@ pub fn open(what: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// B227: the browser's install of the store's Anya (PR 2, 513 MB) by range requests: fetches only her kept files
+    /// (no `textures/upscaled/`), in memory. Network: `tools/check.sh -p hst ranged_install -- --ignored` after
+    /// touching `ranged`.
+    #[test]
+    #[ignore]
+    fn ranged_install_leaves_the_upscaled_set_on_the_store() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let meta: Meta = rt.block_on(async { serde_json::from_slice(&get(&file_url("refs/pr/2", "mods/oob_pc12_anya/meta.json"), MAX_META).await.unwrap()).unwrap() });
+        let e = Entry { meta, rev: "refs/pr/2".into(), verified: false };
+        let root = Path::new("t_ranged/mods");
+        let m = rt.block_on(ranged(&e, root)).unwrap();
+        let files = modfs::files_under(&m.dir);
+        let mb = files.iter().map(|f| f.1.len()).sum::<usize>() >> 20;
+        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(p) = e { Some(p) } else { None }).last().unwrap();
+        eprintln!("{} files, {mb} MB kept of a {} MB zip; last progress: {fetched}", files.len(), e.meta.size >> 20);
+        assert!(files.iter().all(|f| !f.0.contains("/textures/upscaled/")) && files.iter().any(|f| f.0.ends_with(".glb")));
+        assert!(mb < 64);
+        modfs::remove(Path::new("t_ranged"));
+    }
+
     use super::*;
 
     fn meta(id: &str, zip: &[u8]) -> Meta {
