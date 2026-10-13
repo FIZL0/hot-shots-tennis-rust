@@ -86,6 +86,10 @@ pub enum Event {
     Signed(Result<String, String>),
     /// An install under way: what to show (how much has arrived, or that it's being checked).
     Progress(String),
+    /// M19: the signed-in player's own uploads ([`mine`]).
+    Mine(Result<Vec<Entry>, String>),
+    /// M19: mod `id`'s removal ([`remove`]): what to tell the player.
+    Removed(String, Result<String, String>),
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -267,6 +271,53 @@ pub fn list(fresh: bool) {
         let all = merge(std::iter::once(main).chain(pr).collect());
         let _ = crate::store::write(CACHE, serde_json::to_string(&Cached { at: now(), entries: all.clone() }).unwrap());
         send(Event::Listing(Ok(all)));
+    });
+}
+
+/// M19: `name`'s own uploads ([`Event::Mine`]): the mods on their open PRs, and those on `main` whose meta.json
+/// author is them (an upload writes the account's name there), newest PR first, then `main`. Never cached.
+pub fn mine(name: String) {
+    spawn(async move {
+        let (main, prs) = n0_future::future::zip(entries("main".into(), None), pulls()).await;
+        if main.is_empty() && prs.is_empty() && get(&format!("{HF}/api/datasets/{REPO}"), 1 << 20).await.is_err() {
+            return send(Event::Mine(Err("Can't reach the mod store.".into())));
+        }
+        let prs = prs.into_iter().filter(|p| p.1.eq_ignore_ascii_case(&name));
+        let pr = n0_future::join_all(prs.map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
+        let main: Vec<Entry> = main.into_iter().filter(|e| e.meta.author.eq_ignore_ascii_case(&name)).collect();
+        send(Event::Mine(Ok(pr.into_iter().flatten().chain(std::iter::once(main).flatten()).collect())));
+    });
+}
+
+/// `refs/pr/<n>`'s `n`.
+fn pr_of(rev: &str) -> Option<u32> {
+    rev.strip_prefix("refs/pr/")?.parse().ok()
+}
+
+/// M19: takes the player's own upload `e` off the store ([`Event::Removed`]): an open PR is closed (it leaves Browse
+/// at once); a mod on `main` gets a PR deleting `mods/<id>/` (a non-member can't commit to `main`), so it leaves
+/// when a maintainer merges that.
+// ponytail: closing a PR takes every mod on it; the game's uploads are one mod per PR
+pub fn remove(e: &Entry, token: String) {
+    let (id, name, rev) = (e.meta.id.clone(), e.meta.name.clone(), e.rev.clone());
+    spawn(async move {
+        let got = async {
+            let said = match pr_of(&rev) {
+                Some(n) => {
+                    let body = serde_json::json!({ "status": "closed", "comment": format!("Taken down by its uploader from the game ({id}).") });
+                    call(client().post(format!("{HF}/api/datasets/{REPO}/discussions/{n}/status")).bearer_auth(&token).header("Content-Type", "application/json").body(body.to_string())).await?;
+                    format!("{name} is off the store: its pull request #{n} is closed.")
+                }
+                None => {
+                    let pr = commit(&token, &format!("Remove mod {name} ({id})"), Vec::new(), &[format!("mods/{id}")]).await?;
+                    format!("Asked to delete {name}: it leaves the store when a maintainer merges {pr}")
+                }
+            };
+            let _ = crate::store::write(CACHE, "");
+            Ok(said)
+        };
+        let got = got.await;
+        send(Event::Removed(id, got));
     });
 }
 
@@ -594,13 +645,17 @@ pub fn publish(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, 
     let m = m.clone();
     spawn(async move {
         let got = async {
-            let p = package(&m, stats)?;
+            let mut p = package(&m, stats)?;
+            // M19: the uploader's account, so My public mods finds it once merged (Browse shows a PR's author anyway)
+            if let Some((name, _)) = account() {
+                p.meta.author = plain_text(&name, 40);
+            }
             let dir = format!("mods/{}", m.id);
             let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
             if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
                 files.push((format!("{dir}/preview.png"), png));
             }
-            let pr = commit(&token, &format!("Add mod {} ({})", m.name, m.id), files).await?;
+            let pr = commit(&token, &format!("Add mod {} ({})", m.name, m.id), files, &[]).await?;
             // the next Browse reads the store again, this upload included
             let _ = crate::store::write(CACHE, "");
             Ok(format!("{} is up ({} MB): it's in everyone's Browse mods now. {pr}", m.name, p.meta.size.div_ceil(1 << 20)))
@@ -629,15 +684,15 @@ async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
 }
 
 /// The Hub's commit API (as `huggingface_hub`'s `create_commit`): asks which files go through LFS, uploads those,
-/// then commits all of them to a new pull request. Returns the PR's URL.
-async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Result<String, String> {
+/// then commits all of them, and the deletion of the folders `gone`, to a new pull request. Returns the PR's URL.
+async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>, gone: &[String]) -> Result<String, String> {
     use data_encoding::BASE64;
     use serde_json::json;
     let c = client();
     let api = format!("{HF}/api/datasets/{REPO}");
     let ask = json!({ "files": files.iter().map(|(path, b)| json!({ "path": path, "size": b.len(), "sample": BASE64.encode(&b[..b.len().min(512)]) })).collect::<Vec<_>>() });
     // `create_pr`: an account with read access only may still open a PR (403 without it)
-    let modes = call(c.post(format!("{api}/preupload/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await?;
+    let modes = if files.is_empty() { json!({}) } else { call(c.post(format!("{api}/preupload/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await? };
     let lfs = |path: &str| modes["files"].as_array().into_iter().flatten().any(|f| f["path"] == path && f["uploadMode"] == "lfs");
     let mut lines = vec![json!({ "key": "header", "value": { "summary": summary, "description": "Uploaded from the game." } })];
     for (path, b) in &files {
@@ -649,6 +704,7 @@ async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Re
             json!({ "key": "file", "value": { "path": path, "content": BASE64.encode(b), "encoding": "base64" } })
         });
     }
+    lines.extend(gone.iter().map(|path| json!({ "key": "deletedFolder", "value": { "path": path } })));
     let body = lines.iter().map(|l| l.to_string() + "\n").collect::<String>();
     let r = call(c.post(format!("{api}/commit/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/x-ndjson").body(body)).await?;
     Ok(r["pullRequestUrl"].as_str().or(r["commitUrl"].as_str()).unwrap_or_default().to_string())
@@ -888,6 +944,22 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    /// M19 against the real store (`HST_LIVE_MINE=<account>`): that account's uploads, read only.
+    #[test]
+    fn live_mine() {
+        let Ok(name) = std::env::var("HST_LIVE_MINE") else { return eprintln!("HST_LIVE_MINE unset (skipped)") };
+        mine(name.clone());
+        for _ in 0..600 {
+            if let Some(Event::Mine(r)) = take().into_iter().next() {
+                let r = r.unwrap();
+                eprintln!("{name}: {:?}", r.iter().map(|e| (&e.meta.id, &e.rev, &e.meta.author)).collect::<Vec<_>>());
+                return assert!(r.iter().all(|e| e.meta.author.eq_ignore_ascii_case(&name)));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("no answer in 60 s");
     }
 
     fn walk_len(d: &Path) -> usize {

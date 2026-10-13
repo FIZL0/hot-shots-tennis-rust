@@ -4,7 +4,8 @@
 //! Browse mods lists the mod store (`modstore.rs`: Verified = merged on the store's `main`, Installed / Update by the
 //! zip's sha256); ✕ downloads, checks and installs one. Upload my mod signs in with a Hugging Face write token (the
 //! token page opens, the player copies one, the next press pastes it) and then, after the rule and a second press,
-//! commits an installed mod to the store as a pull request (`modstore::publish`). Every page is a list on the left and
+//! commits an installed mod to the store as a pull request (`modstore::publish`). Its My public mods (M19) lists the
+//! signed-in player's own uploads (`modstore::mine`); ✕ twice takes one down (`modstore::remove`). Every page is a list on the left and
 //! the hovered mod on the right, as the select's cards: its picture, △ card and details. The select's roster is
 //! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
@@ -55,6 +56,8 @@ pub(super) enum Page {
     Installed,
     Browse,
     Upload,
+    /// M19: the signed-in player's uploads.
+    Mine,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -64,6 +67,8 @@ pub(super) struct View {
     list: Vec<Mod>,
     /// The store's listing (None: not read yet), and each entry's sha256 if it's installed.
     store: Option<Vec<Entry>>,
+    /// M19: the player's own uploads (None: not read yet).
+    mine: Option<Vec<Entry>>,
     have: HashMap<String, Option<String>>,
     /// The listing or an install is under way.
     busy: bool,
@@ -101,16 +106,16 @@ impl View {
     }
 
     fn entries(&self) -> &[Entry] {
-        self.store.as_deref().unwrap_or_default()
+        if self.page == Page::Mine { &self.mine } else { &self.store }.as_deref().unwrap_or_default()
     }
 
     /// Installed: Add mod, Browse mods, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
-    /// Back. Upload: the account, the mods, Back.
+    /// Back. Upload: the account, My public mods, the mods, Back. Mine: the player's uploads, Refresh, Back.
     fn rows(&self) -> usize {
         match self.page {
             Page::Installed => TOP + self.list.len() + 2,
-            Page::Browse => self.entries().len() + 2,
-            Page::Upload => self.list.len() + 2,
+            Page::Browse | Page::Mine => self.entries().len() + 2,
+            Page::Upload => self.list.len() + 3,
         }
     }
 
@@ -118,8 +123,8 @@ impl View {
     fn local(&self, sel: usize) -> Option<&Mod> {
         match self.page {
             Page::Installed => self.list.get(sel.checked_sub(TOP)?),
-            Page::Upload => self.list.get(sel.checked_sub(1)?),
-            Page::Browse => None,
+            Page::Upload => self.list.get(sel.checked_sub(2)?),
+            Page::Browse | Page::Mine => None,
         }
     }
 
@@ -134,7 +139,7 @@ impl View {
 
     /// The browse entry under the cursor.
     fn hovered(&self, sel: usize) -> Option<&Entry> {
-        (self.page == Page::Browse).then(|| self.entries().get(sel)).flatten()
+        matches!(self.page, Page::Browse | Page::Mine).then(|| self.entries().get(sel)).flatten()
     }
 }
 
@@ -166,10 +171,22 @@ impl Menu {
         if p == Page::Upload {
             self.add.account = modstore::account().map(|a| a.0);
         }
+        if p == Page::Mine && self.add.mine.is_none() && !self.add.busy {
+            self.read_mine();
+        }
         if p == Page::Browse && self.add.store.is_none() && !self.add.busy {
             self.add.busy = true;
             self.add.status = "Reading the mod store...".into();
             modstore::list(false);
+        }
+    }
+
+    /// M19: reads the player's uploads again.
+    fn read_mine(&mut self) {
+        if let Some(name) = self.add.account.clone() {
+            self.add.busy = true;
+            self.add.status = "Reading your uploads from the store...".into();
+            modstore::mine(name);
         }
     }
 
@@ -185,7 +202,7 @@ impl Menu {
         if k.up || k.down {
             self.sel = if k.down { (self.sel + 1) % n } else { (self.sel + n - 1) % n };
             self.add.armed = None;
-            if self.add.page != Page::Upload && !self.add.busy {
+            if !matches!(self.add.page, Page::Upload | Page::Mine) && !self.add.busy {
                 self.add.status.clear();
             }
             out.push(Sound(0));
@@ -229,8 +246,11 @@ impl Menu {
                 } else if k.ok && self.add.account.is_none() {
                     self.add.status = "Sign in first: the top row.".into();
                     out.push(Sound(1));
+                } else if k.ok && s == 1 {
+                    self.mods_page(Page::Mine, 0);
+                    out.push(Sound(2));
                 } else if k.ok && self.add.armed == Some(s) {
-                    let m = self.add.list[s - 1].clone();
+                    let m = self.add.list[s - 2].clone();
                     self.add.armed = None;
                     match modstore::account() {
                         Some((_, token)) => {
@@ -247,10 +267,11 @@ impl Menu {
                     }
                 } else if k.ok {
                     self.add.armed = Some(s);
-                    self.add.status = format!("{RULE} Press again to upload {}.", self.add.list[s - 1].name);
+                    self.add.status = format!("{RULE} Press again to upload {}.", self.add.list[s - 2].name);
                     out.push(Sound(0));
                 }
             }
+            Page::Mine => self.mine_step(k, s, n, out),
         }
         let n = self.add.rows();
         self.sel = self.sel.min(n - 1);
@@ -268,6 +289,7 @@ impl Menu {
             (Some(_), true) => {
                 modstore::sign_out();
                 v.account = None;
+                v.mine = None;
                 "Signed out: the token is forgotten.".into()
             }
             (None, false) => {
@@ -284,6 +306,44 @@ impl Menu {
             }
         };
         out.push(Effect::Sound(2));
+    }
+
+    /// M19: My public mods: ✕ twice on one of the player's uploads takes it down.
+    fn mine_step(&mut self, k: Press, s: usize, n: usize, out: &mut Vec<Effect>) {
+        use Effect::Sound;
+        if k.back || (k.ok && s == n - 1) {
+            self.mods_page(Page::Upload, 1);
+            out.push(Sound(1));
+        } else if k.ok && self.add.busy {
+            self.add.status = "Wait for the store to finish first.".into();
+        } else if k.ok && s == n - 2 {
+            self.read_mine();
+            out.push(Sound(2));
+        } else if k.ok && self.add.armed == Some(s) {
+            let e = self.add.entries()[s].clone();
+            self.add.armed = None;
+            match modstore::account() {
+                Some((_, token)) => {
+                    self.add.busy = true;
+                    self.add.status = format!("Taking {} off the store...", e.meta.name);
+                    modstore::remove(&e, token);
+                    out.push(Sound(2));
+                }
+                None => {
+                    self.add.account = None;
+                    self.add.status = "Signed out: sign in again on the Upload page.".into();
+                }
+            }
+        } else if k.ok {
+            let e = self.add.entries()[s].clone();
+            self.add.armed = Some(s);
+            self.add.status = if e.verified {
+                format!("Press again to ask for {} to be deleted from the store (a maintainer merges it).", e.meta.name)
+            } else {
+                format!("Press again to take {} off the store (closes its pull request).", e.meta.name)
+            };
+            out.push(Sound(0));
+        }
     }
 
     fn installed_step(&mut self, k: Press, s: usize, n: usize, out: &mut Vec<Effect>) {
@@ -446,7 +506,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 r if r == TOP + v.list.len() => "Reload".into(),
                 _ => "Back".into(),
             },
-            Page::Browse => match v.entries().get(r) {
+            Page::Browse | Page::Mine => match v.entries().get(r) {
                 Some(e) => short(&e.meta.name, 14),
                 None if r == v.entries().len() => "Refresh".into(),
                 None => "Back".into(),
@@ -454,7 +514,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             Page::Upload => match r {
                 0 if v.account.is_some() => "Signed in".into(),
                 0 => "Sign in".into(),
-                r => v.list.get(r - 1).map_or("Back".into(), |m| short(&m.name, 14)),
+                1 => "My public mods".into(),
+                r => v.list.get(r - 2).map_or("Back".into(), |m| short(&m.name, 14)),
             },
         }
     };
@@ -468,7 +529,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             *r += v.top;
         }
     }
-    if v.page == Page::Browse {
+    if matches!(v.page, Page::Browse | Page::Mine) {
         for r in v.top..end {
             let Some(e) = v.entries().get(r) else { continue };
             let y = Y + PITCH * (r - v.top) as f32;
@@ -523,7 +584,15 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             Page::Upload => match (m.sel, &v.account) {
                 (0, Some(name)) => format!("Signed in to Hugging Face as {name}."),
                 (0, None) => "Sign in to Hugging Face with a token, once: the game then uploads by itself.".into(),
+                (1, _) => "The mods you've put on the store: take one down.".into(),
                 _ => RULE.into(),
+            },
+            Page::Mine => match v.entries().get(m.sel) {
+                Some(e) if e.verified => format!("{} is on the store (merged): press twice to ask for it to be deleted.", e.meta.name),
+                Some(e) => format!("{} is live from your pull request: press twice to take it down.", e.meta.name),
+                None if m.sel == v.entries().len() => "Read your uploads from the store again.".into(),
+                None if v.mine.as_ref().is_some_and(|s| s.is_empty()) => "None of your mods are on the store.".into(),
+                None => "Back to Upload my mod.".into(),
             },
         }
     };
@@ -573,11 +642,11 @@ fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(St
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown) / `uploadmods` (Upload, one mod armed) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
+/// shown) / `mymods` (My public mods, the same made-up entries, one armed) / `uploadmods` (Upload, one mod armed) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
     v.refresh();
-    if screen == "browsemods" {
+    if screen == "browsemods" || screen == "mymods" {
         v.page = Page::Browse;
         v.store = Some(
             v.list.iter().take(9).enumerate().map(|(i, md)| {
@@ -600,15 +669,19 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         );
         v.have = v.list.iter().take(4).enumerate().map(|(i, md)| (md.id.clone(), (i != 2).then(|| format!("{:064}", 0)))).collect();
         m.sel = 1;
+        if screen == "mymods" {
+            (v.page, v.mine, v.account, v.armed) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(1));
+            v.status = format!("Press again to take {} off the store (closes its pull request).", v.mine.as_ref().and_then(|l| l.get(1)).map_or("", |e| &e.meta.name));
+        }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
         m.sel = 3;
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
         v.account = Some("FIZL0".into());
-        v.armed = Some(1);
+        v.armed = Some(2);
         v.status = format!("{RULE} Press again to upload {}.", v.list.first().map_or("", |x| &x.name));
-        m.sel = 1;
+        m.sel = 2;
     }
 }
 
@@ -714,9 +787,33 @@ fn page(
                 };
             }
             Event::Progress(s) => v.status = s,
+            Event::Mine(r) => {
+                v.busy = false;
+                match r {
+                    Ok(list) => {
+                        v.status = format!("{} of your mods on the store.", list.len());
+                        v.mine = Some(list);
+                    }
+                    Err(e) => {
+                        v.status = e;
+                        v.mine.get_or_insert_default();
+                    }
+                }
+            }
+            Event::Removed(id, r) => {
+                v.busy = false;
+                v.armed = None;
+                if r.is_ok() {
+                    // ponytail: a merged mod stays listed on the store until its delete PR is merged; this hides it till the next read
+                    v.mine.get_or_insert_default().retain(|e| e.meta.id != id);
+                    v.store = None;
+                }
+                v.status = r.unwrap_or_else(|e| format!("Not removed: {e}"));
+            }
             Event::Uploaded(r) => {
                 v.busy = false;
                 v.store = None;
+                v.mine = None;
                 v.status = r.unwrap_or_else(|e| format!("Not uploaded: {e}"));
             }
             Event::Signed(r) => {
@@ -724,6 +821,7 @@ fn page(
                 v.status = match r {
                     Ok(name) => {
                         let s = format!("Signed in as {name}: pick a mod to upload.");
+                        v.mine = None;
                         v.account = Some(name);
                         s
                     }
@@ -904,15 +1002,40 @@ mod tests {
         assert_eq!(m.add.status, RULE);
         // the account row first, then the mods; uploading needs an account
         m.add.account = None;
-        m.sel = 1;
+        m.sel = 2;
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.starts_with("Sign in first") && m.add.armed.is_none());
         m.add.account = Some("me".into());
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("upload A.") && !m.add.busy);
         assert_eq!(m.add.local(m.sel).map(|x| x.id.as_str()), Some("a"));
-        m.sel = 2;
+        m.sel = 3;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Installed, 2));
+    }
+
+    /// M19: My public mods needs an account; its entries arm on the first press (a PR's closes, a merged one's asks
+    /// for a delete), Back returns to its Upload row.
+    #[test]
+    fn my_public_mods() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let mut out = Vec::new();
+        m.mods_page(Page::Upload, 1);
+        m.add.account = None;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.starts_with("Sign in first") && m.add.page == Page::Upload);
+        let e = |id: &str, rev: &str| Entry { meta: Meta { id: id.into(), name: id.into(), ..Default::default() }, rev: rev.into(), verified: rev == "main" };
+        m.add.mine = Some(vec![e("a", "refs/pr/4"), e("b", "main")]);
+        m.add.account = Some("me".into());
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.page, m.sel, m.add.rows(), m.add.busy), (Page::Mine, 0, 4, false));
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.armed == Some(0) && m.add.status.contains("closes its pull request"));
+        m.mods_step(Press { down: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.armed == Some(1) && m.add.status.contains("maintainer"));
+        assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.add.page, m.sel), (Page::Upload, 1));
     }
 }
