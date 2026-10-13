@@ -229,6 +229,13 @@ fn hold(w: &mut World) {
     if !w.contains_resource::<Intro>() {
         return;
     }
+    // the match reads no pad through the intro (B125): a ✕ that skips it, or any press while it runs, must not stay
+    // latched for the first tick, where it would toss the serve (the pause screen spends its presses the same way)
+    if let Some(mut pads) = w.get_resource_mut::<super::Pads>() {
+        for s in &mut pads.slots {
+            (s.shot, s.serve) = (None, false);
+        }
+    }
     let paused = super::menu::paused(w);
     let keys = w.resource::<ButtonInput<KeyCode>>();
     let mut skip = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]);

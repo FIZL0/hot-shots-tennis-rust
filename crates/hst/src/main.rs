@@ -1051,11 +1051,11 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
 }
 
 /// `HST_KEYS="2:Enter 9:Escape 10:ArrowDown 11:Enter 15:shot=a.png"`: at each real-time second a key is pressed for one
-/// frame (Enter, Escape, Arrow*) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
+/// frame (Enter, Space, Escape, Arrow*) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
 fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>) {
     let script = std::env::var("HST_KEYS").unwrap_or_default();
     let steps: Vec<_> = script.split_whitespace().filter_map(|s| s.split_once(':')).collect();
-    for k in [KeyCode::Enter, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight] {
+    for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight] {
         if keys.pressed(k) && !keys.just_pressed(k) {
             keys.release(k);
         }
@@ -1068,6 +1068,7 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
     info!("HST_KEYS: {what}");
     let key = match what {
         "Enter" => KeyCode::Enter,
+        "Space" => KeyCode::Space,
         "Escape" => KeyCode::Escape,
         "ArrowUp" => KeyCode::ArrowUp,
         "ArrowDown" => KeyCode::ArrowDown,
