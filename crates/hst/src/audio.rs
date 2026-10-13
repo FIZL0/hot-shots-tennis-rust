@@ -129,6 +129,16 @@ struct Mix {
     playing: Vec<Playing>,
     music: Option<Music>,
     ids: u64,
+    tags: Tags,
+}
+
+/// The match's sounds (B111): every play started while a match runs and isn't paused (SFX, voices, crowd, weather;
+/// not the BGM, which the mode switch stops, nor the pause screen's own sounds). `held` freezes them in place.
+#[derive(Default)]
+struct Tags {
+    on: bool,
+    held: bool,
+    ids: std::collections::HashSet<u64>,
 }
 
 impl Mix {
@@ -143,6 +153,9 @@ impl Mix {
     fn render(&mut self, out: &mut Vec<f32>) {
         let mut playing = std::mem::take(&mut self.playing);
         for p in &mut playing {
+            if self.tags.held && self.tags.ids.contains(&p.id) {
+                continue;
+            }
             while let Some(&e) = p.events.get(p.next).filter(|e| e.frame == p.frame) {
                 self.key_on(p, e);
                 p.next += 1;
@@ -159,7 +172,8 @@ impl Mix {
         }
         for _ in 0..FRAME {
             let mut s = [0; 2];
-            for (v, b, ..) in &mut self.voices {
+            let tags = &self.tags;
+            for (v, b, ..) in self.voices.iter_mut().filter(|v| !(tags.held && tags.ids.contains(&v.2))) {
                 let [l, r] = v.tick(&b.bd);
                 s = [s[0] + l, s[1] + r];
             }
@@ -167,6 +181,17 @@ impl Mix {
             out.extend(s.map(|x| x.clamp(-0x8000, 0x7fff) as f32 / 32768.0));
         }
         self.voices.retain(|v| v.0.phase != 0);
+        let (voices, playing) = (&self.voices, &self.playing);
+        self.tags.ids.retain(|&id| playing.iter().any(|q| q.id == id) || voices.iter().any(|v| v.2 == id));
+    }
+
+    /// A new play id, tagged as the match's while one runs unpaused.
+    fn id(&mut self) -> u64 {
+        self.ids += 1;
+        if self.tags.on && !self.tags.held {
+            self.tags.ids.insert(self.ids);
+        }
+        self.ids
     }
 
     /// One MIDI message of the BGM, as the sound driver takes it.
@@ -234,8 +259,7 @@ impl Sound {
         // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)
         if let Some((w, rate)) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) {
             let mut m = self.0.lock().unwrap();
-            m.ids += 1;
-            let id = m.ids;
+            let id = m.id();
             let mut level = Level { velocity: 127, ..level };
             level.tone(127, VOICE_TONE, &m.gain);
             let voice = Voice::key_on_pcm(w.clone(), VOICE_TONE.adsr(), wav_pitch(*rate, scale), level.volume(&m.pan));
@@ -244,8 +268,7 @@ impl Sound {
         }
         let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return 0 };
         let mut m = self.0.lock().unwrap();
-        m.ids += 1;
-        let id = m.ids;
+        let id = m.id();
         m.playing.push(Playing { id, bank: bank.clone(), events, next: 0, frame: 0, level, scale });
         id
     }
@@ -303,6 +326,46 @@ impl Sound {
         }
     }
 
+    /// A match starts: from here its plays are tagged as match sounds.
+    pub fn begin_match(&self) {
+        self.0.lock().unwrap().tags.on = true;
+    }
+
+    /// The pause screen opened (`true`) or closed: the match's sounds freeze where they are, or go on. Sounds
+    /// started while held (the pause screen's) aren't the match's.
+    pub fn hold(&self, held: bool) {
+        self.0.lock().unwrap().tags.held = held;
+    }
+
+    /// The match is left (any exit: quit, match end, disconnect): all its sounds cut, nothing tagged from here.
+    pub fn end_match(&self) {
+        let mut m = self.0.lock().unwrap();
+        let ids = std::mem::take(&mut m.tags).ids;
+        m.playing.retain(|q| !ids.contains(&q.id));
+        m.voices.retain(|v| !ids.contains(&v.2));
+    }
+
+    /// Match sounds still playing or held.
+    pub fn match_sounds(&self) -> usize {
+        self.0.lock().unwrap().tags.ids.len()
+    }
+
+    /// A mixer with no tables and no output, for tests that only follow plays.
+    #[cfg(test)]
+    pub fn bare() -> Self {
+        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() })))
+    }
+
+    /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
+    #[cfg(test)]
+    pub fn endless(&self) -> u64 {
+        let mut m = self.0.lock().unwrap();
+        let id = m.id();
+        let bank = Arc::new(SoundBank { hd: Vec::new(), bd: Vec::new(), wav: Default::default() });
+        m.playing.push(Playing { id, bank, events: vec![KeyOn { frame: u32::MAX, channel: 0, note: 0, velocity: 0, set: 0 }], next: 0, frame: 0, level: default(), scale: 0x1000 });
+        id
+    }
+
     /// A non-positional play (the umpire's voice): centred, sequence volume `p.volume`.
     /// ponytail: the library's non-positional level is taken as the positional one straight ahead with no falloff
     pub fn play_centre(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u64 {
@@ -317,7 +380,7 @@ impl Sound {
     pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
         let solo = {
             let m = self.0.lock().unwrap();
-            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
         };
         let solo = Self(Arc::new(Mutex::new(solo)));
         let id = solo.play_centre(bank, p);
@@ -504,7 +567,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
 }
 
 #[cfg(test)]
@@ -683,7 +746,27 @@ mod tests {
         }
     }
 
+    /// B111: a held match sound stands still (no key-ons, no samples) and goes on where it was when released;
+    /// sounds from before the match aren't held.
+    #[test]
+    fn holds_match_sounds() {
+        let sound = Sound::bare();
+        let before = sound.endless();
+        sound.begin_match();
+        let in_match = sound.endless();
+        let frames = || sound.0.lock().unwrap().playing.iter().map(|p| p.frame).collect::<Vec<_>>();
+        let render = || sound.0.lock().unwrap().render(&mut Vec::new());
+        render();
+        sound.hold(true);
+        render();
+        assert_eq!(frames(), [2, 1]);
+        sound.hold(false);
+        render();
+        assert_eq!(frames(), [3, 2]);
+        assert!(sound.playing(before) && sound.playing(in_match));
+    }
+
     fn mix_clone(m: &Mix) -> Mix {
-        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0 }
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default() }
     }
 }

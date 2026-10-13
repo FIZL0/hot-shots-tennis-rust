@@ -366,6 +366,9 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
         return;
     }
     *m = if open { Menu::opened() } else { Menu::default() };
+    if let Some(s) = w.get_resource::<Sound>() {
+        s.hold(open);
+    }
     let mut fixed = w.resource_mut::<Time<Fixed>>();
     if open {
         fixed.set_timestep(Duration::from_secs(1 << 20));
@@ -378,6 +381,8 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Menu>()
+        // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
+        .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(Update, (step, draw).chain().before(super::main_menu::pause::Systems));
     super::main_menu::pause::plugin(app);
@@ -457,6 +462,9 @@ fn step(
         if (start || timed) && g.match_stats.result.is_none() {
             *auto = true;
             *menu = Menu::opened();
+            if let Some(s) = &sound {
+                s.hold(true);
+            }
             play(2);
             if timed && std::env::var_os("HST_PAUSE_SETTINGS").is_some() {
                 settings.open();
@@ -503,6 +511,9 @@ fn step(
         exit.write(AppExit::Success);
     }
     if !menu.open {
+        if let Some(s) = &sound {
+            s.hold(false);
+        }
         fixed.set_timestep_hz(60.0);
         let over = fixed.overstep();
         fixed.discard_overstep(over);

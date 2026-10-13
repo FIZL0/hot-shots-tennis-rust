@@ -351,6 +351,7 @@ fn teardown(world: &mut World) {
     world.remove_resource::<Running>();
     if let Some(s) = world.get_resource::<crate::audio::Sound>() {
         s.stop_music();
+        s.end_match();
     }
     let base = world.remove_resource::<Base>().expect("base");
     let doomed: Vec<Entity> = world
@@ -465,5 +466,35 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert!(app.should_exit().is_some(), "the menu's quit quits");
+    }
+
+    /// B111: leaving a match (here its quit while paused) cuts every sound it started, the paused ones included;
+    /// the menu's sounds and the pause screen's own aren't the match's, and the next mode's aren't tagged.
+    #[test]
+    fn match_sounds_end_with_the_match() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::window::WindowPlugin { primary_window: Some(Window::default()), exit_condition: bevy::window::ExitCondition::DontExit, ..default() }, plugin));
+        let sound = crate::audio::Sound::bare();
+        app.insert_resource(sound.clone());
+        let menu = sound.endless();
+        app.world_mut().resource_mut::<Next>().0 = Some(mode(1));
+        loading(&mut app);
+        settle(&mut app);
+        let s = sound.clone();
+        app.world_mut().resource_mut::<Next>().0 = Some(mode(2).and(move |_| s.begin_match()).back(mode(1)));
+        loading(&mut app);
+        settle(&mut app);
+        let (rain, lob) = (sound.endless(), sound.endless());
+        sound.hold(true);
+        let blip = sound.endless();
+        assert_eq!(sound.match_sounds(), 2);
+        app.insert_resource(Quit);
+        app.update();
+        loading(&mut app);
+        assert_eq!(sound.match_sounds(), 0);
+        assert!(!sound.playing(rain) && !sound.playing(lob));
+        assert!(sound.playing(menu) && sound.playing(blip));
+        sound.endless();
+        assert_eq!(sound.match_sounds(), 0, "the menu's sounds aren't tagged");
     }
 }
