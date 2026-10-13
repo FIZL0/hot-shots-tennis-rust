@@ -1,0 +1,286 @@
+//! The main menu's Settings screens over a paused match (B126, remaster-only by request): the pause menu's "Settings"
+//! opens them as the main menu draws them (same rows, art, input and `settings.txt`), Back on the Settings screen
+//! returns to the pause menu. Changes go live where the match can take them: the graphics, widescreen, match music and
+//! controls; upscaled textures and menu music take effect from the next match / the menu. The match stays paused
+//! underneath (its fixed clock held by `menu.rs`), so the sim and its RNG never see any of it.
+//!
+//! Mouse and touch (here and on the pause dialog): a click or tap on a row chooses it, the right button is Back.
+
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use hst_data::{iso::Iso, xb::Archive};
+use std::sync::Arc;
+
+use super::super::widescreen;
+use super::{Art, GRAPHICS_LABELS, Menu, POOL, Press, Screen, Settings, Slot, Text, TickerClip, Ticker, controls, slide};
+use crate::Args;
+use crate::audio::{MusicBanks, Sound, SoundBank};
+
+/// The pause menu's Settings screens are up; `fresh` the frame they opened (its press is spent).
+#[derive(Resource, Default)]
+pub(in crate::play) struct PauseSettings {
+    pub open: bool,
+    fresh: bool,
+}
+
+impl PauseSettings {
+    pub(in crate::play) fn open(&mut self) {
+        *self = PauseSettings { open: true, fresh: true };
+    }
+}
+
+/// A click or tap this frame, as a keyboard press (`super::step`).
+#[derive(Resource, Default)]
+pub(super) struct Click(pub Option<Press>);
+
+#[derive(Component)]
+pub(in crate::play) struct Root;
+
+/// This overlay's systems, after the pause menu's step (`menu.rs`).
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(in crate::play) struct Systems;
+
+/// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
+/// `wall_option` and `option_00`.
+const POOL_HERE: usize = 240;
+
+/// One sheet out of a disc archive.
+fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
+    let data = iso.read(xb).expect("menu archive on disc");
+    let arc = Archive::parse(&data).expect("xb archive");
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name)).unwrap_or_else(|| panic!("{name} in {xb}"));
+    arc.read(e).expect("archive bytes")
+}
+
+/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings").
+pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image> {
+    let font = sheet(iso, "MENU/MENU04.XB0", "/word.tm2");
+    let glyphs = super::glyphs(&font);
+    let pic = hst_data::tim2::decode_alpha8(&font).expect("TIM2").remove(0);
+    let (w, h) = (256usize, 32usize);
+    // the glyphs' coverage, then white over a 2-px dark outline as the dialog's own rows are drawn
+    let mut ink = vec![0f32; w * h];
+    let width: f32 = s.chars().map(|c| glyphs.get(&c).map_or(10.0, |g| g.2 + 2.0)).sum::<f32>() - 2.0;
+    let mut x = ((w as f32 - width) / 2.0).max(0.0) as usize;
+    for c in s.chars() {
+        let Some(&(u, v, gw)) = glyphs.get(&c) else {
+            x += 10;
+            continue;
+        };
+        for dy in 0..h {
+            for dx in 0..gw as usize {
+                if x + dx < w {
+                    ink[dy * w + x + dx] = pic.rgba[((v as usize + dy) * pic.width as usize + u as usize + dx) * 4 + 3] as f32 / 255.0;
+                }
+            }
+        }
+        x += gw as usize + 2;
+    }
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h as i32 {
+        for x in 0..w as i32 {
+            let near = (-2..=2i32).flat_map(|dy| (-2..=2i32).map(move |dx| (dx, dy))).filter(|(dx, dy)| dx * dx + dy * dy <= 5);
+            let edge = near.filter_map(|(dx, dy)| (x + dx >= 0 && y + dy >= 0 && x + dx < w as i32 && y + dy < h as i32).then(|| ink[((y + dy) * w as i32 + x + dx) as usize])).fold(0f32, f32::max);
+            let a = ink[(y * w as i32 + x) as usize];
+            let c = (30.0 + 225.0 * a) as u8;
+            rgba[(y as usize * w + x as usize) * 4..][..4].copy_from_slice(&[c, c, c, (edge.max(a) * 255.0) as u8]);
+        }
+    }
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))
+}
+
+fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let solid = images.add(Image::new_fill(
+        bevy::render::render_resource::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        &[255; 4],
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    ));
+    let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
+    let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
+    let mut art = vec![solid, super::panel::image(&mut images, &font), super::panel::image(&mut images, &hand)];
+    // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets, the rest left empty
+    for (xb, name) in &super::SHEETS[..10] {
+        art.push(if name.ends_with("option") || *name == "option_00" { super::panel::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2"))) } else { Handle::default() });
+    }
+    let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
+    let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+    let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
+    commands.insert_resource(Art(art, bank, text));
+    commands.insert_resource(Menu { screen: Screen::Settings, ..default() });
+    let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    // over the pause screen (`GlobalZIndex(10)`)
+    commands.spawn((full, GlobalZIndex(11), Visibility::Hidden, Root)).with_children(|p| {
+        for i in 0..POOL_HERE.min(POOL) {
+            p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+        }
+        let clip = Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() };
+        p.spawn((TickerClip, clip, ZIndex(POOL_HERE as i32), Visibility::Hidden)).with_child((
+            bevy::ui::widget::Text::new(""),
+            TextColor(Color::srgb_u8(223, 223, 223)),
+            TextLayout::no_wrap(),
+            Node { position_type: PositionType::Absolute, ..default() },
+        ));
+    });
+}
+
+/// Opening: the Settings screen, first row, with what `settings.txt` holds now.
+fn opened(ps: Res<PauseSettings>, args: Res<Args>, mut menu: ResMut<Menu>, mut slide: ResMut<slide::Slide>, mut root: Query<&mut Visibility, With<Root>>) {
+    if ps.fresh {
+        let settings = crate::store::read_to_string(Settings::path(&args.iso)).map_or(menu.settings, |t| Settings::parse(&t));
+        let screen = match std::env::var("HST_PAUSE_SETTINGS").as_deref() {
+            Ok("graphics") => Screen::Graphics,
+            Ok("controls") => Screen::Controls,
+            _ => Screen::Settings,
+        };
+        *menu = Menu { screen, settings, ..default() };
+        *slide = slide::Slide::default();
+    }
+    for mut v in &mut root {
+        v.set_if_neq(if ps.open { Visibility::Inherited } else { Visibility::Hidden });
+    }
+}
+
+/// The 640×448 point under a window position, on the centred 4:3 screen the rows are drawn on.
+fn screen_point(win: &Window, p: Vec2) -> Vec2 {
+    let share = widescreen::share(win.width() / win.height().max(1.0));
+    let x = (p.x / win.width().max(1.0) * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
+    Vec2::new(x, p.y / win.height().max(1.0) * 448.0)
+}
+
+/// This frame's left click or first tap, and whether the right button was clicked.
+pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>>, mouse: &ButtonInput<MouseButton>, touches: &Touches) -> (Option<Vec2>, bool) {
+    let Ok(win) = window.single() else { return (None, false) };
+    let at = touches.iter_just_pressed().next().map(|t| t.position()).or_else(|| mouse.just_pressed(MouseButton::Left).then(|| win.cursor_position()).flatten());
+    (at.map(|p| screen_point(win, p)), mouse.just_pressed(MouseButton::Right))
+}
+
+/// The row of the Settings screens under `p` (640×448), as `super::layout` draws them.
+fn row_at(m: &Menu, p: Vec2) -> Option<usize> {
+    let (x0, x1, y0, pitch, h, n) = match m.screen {
+        Screen::Settings => (60.0, 500.0, 90.0, 44.0, 38.0, super::CONTROLS_ROW + 2),
+        Screen::Graphics => (60.0, 560.0, 66.0, 42.0, 38.0, GRAPHICS_LABELS.len() + 1),
+        Screen::Controls => (56.0, 620.0, 72.0, 28.0, 28.0, controls::action_names().count() + 1),
+        _ => return None,
+    };
+    let k = ((p.y - y0) / pitch).floor();
+    (p.x >= x0 && p.x < x1 && k >= 0.0 && (k as usize) < n && p.y - y0 - k * pitch < h).then_some(k as usize)
+}
+
+/// A click or tap on a row chooses it (as ✕ would), the right button goes back.
+fn pointer(
+    ps: Res<PauseSettings>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
+    mut menu: ResMut<Menu>,
+    mut click: ResMut<Click>,
+) {
+    if !ps.open || ps.fresh || menu.rebinding.is_some() {
+        return;
+    }
+    let (at, back) = pointer_press(&window, &mouse, &touches);
+    if let Some(row) = at.and_then(|p| row_at(&menu, p)) {
+        menu.sel = row;
+        click.0 = Some(Press { ok: true, ..default() });
+    } else if back {
+        click.0 = Some(Press { back: true, ..default() });
+    }
+}
+
+/// Back on the Settings screen leaves for the main menu's first screen: here, the pause menu. And the settings the
+/// match can take live: widescreen and the court's music (the graphics and controls `super::step` sets already).
+fn after(
+    mut ps: ResMut<PauseSettings>,
+    menu: Res<Menu>,
+    mut args: ResMut<Args>,
+    game: Option<Res<super::super::Game>>,
+    sound: Option<Res<Sound>>,
+    music: Option<ResMut<MusicBanks>>,
+) {
+    if !ps.open {
+        return;
+    }
+    ps.fresh = false;
+    let [wide, _, _, match_music] = menu.settings.0;
+    widescreen::WIDE.store(wide, std::sync::atomic::Ordering::Relaxed);
+    if match_music != args.music
+        && let (Some(game), Some(sound), Some(mut music)) = (game, sound, music)
+    {
+        args.music = match_music;
+        if match_music {
+            // `play.rs setup`'s pick: the court's track, else the default one
+            let stage = game.stage as usize;
+            let name = if (1..=11).contains(&stage) { format!("bgmg_{stage:02}") } else { "bgmg_14".into() };
+            music.bgm = Iso::open(&args.iso).ok().and_then(|mut iso| SoundBank::music(&mut iso, "Court", &name)).map(|(b, m)| (Arc::new(b), m));
+            if let Some((bank, mid)) = &music.bgm {
+                sound.music(bank, mid, 55);
+            }
+        } else {
+            music.bgm = None;
+            sound.stop_music();
+        }
+    }
+    if menu.screen == Screen::Main {
+        ps.open = false;
+    }
+}
+
+pub(in crate::play) fn plugin(app: &mut App) {
+    let open = |ps: Res<PauseSettings>| ps.open;
+    let live = |ps: Res<PauseSettings>| ps.open && !ps.fresh;
+    app.init_resource::<PauseSettings>()
+        .init_resource::<Click>()
+        .init_resource::<Ticker>()
+        .init_resource::<slide::Slide>()
+        .add_systems(PostStartup, setup)
+        .add_systems(
+            Update,
+            (opened, pointer, super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
+                .chain()
+                .in_set(Systems),
+        );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Clicks land on the rows `layout` draws: Settings' pills 44 px apart from y 90, Graphics' 42 from 66.
+    #[test]
+    fn rows_under_clicks() {
+        let m = Menu { screen: Screen::Settings, ..default() };
+        assert_eq!(row_at(&m, Vec2::new(270.0, 100.0)), Some(0));
+        assert_eq!(row_at(&m, Vec2::new(460.0, 90.0 + 44.0 * 3.0 + 20.0)), Some(3)); // the switch beside Match Music
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 + 40.0)), None); // between pills
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 6.0 + 10.0)), Some(6)); // Back
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 7.0 + 10.0)), None);
+        let g = Menu { screen: Screen::Graphics, ..default() };
+        assert_eq!(row_at(&g, Vec2::new(500.0, 66.0 + 42.0 * 7.0 + 5.0)), Some(7));
+    }
+
+    /// The window → 640×448 mapping undoes the centred 4:3 placement at any aspect.
+    #[test]
+    fn window_to_screen() {
+        let mut win = Window::default();
+        win.resolution.set(1920.0, 1080.0);
+        // 16:9: the 4:3 screen is the middle 1440 px
+        assert_eq!(screen_point(&win, Vec2::new(240.0, 540.0)), Vec2::new(0.0, 224.0));
+        assert_eq!(screen_point(&win, Vec2::new(1680.0, 1080.0)), Vec2::new(640.0, 448.0));
+        win.resolution.set(800.0, 600.0);
+        assert_eq!(screen_point(&win, Vec2::new(400.0, 300.0)), Vec2::new(320.0, 224.0));
+    }
+
+    /// A row changes and saves; Back on the Settings screen goes to `Screen::Main`, which `after` takes as closing.
+    #[test]
+    fn back_returns_to_pause() {
+        let mut m = Menu { screen: Screen::Settings, ..default() };
+        let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        assert!(!m.settings.0[0] && fx.contains(&super::super::Effect::SaveSettings));
+        m.step(super::super::Dev::Keys, Press { back: true, ..default() });
+        assert_eq!(m.screen, Screen::Main);
+    }
+}

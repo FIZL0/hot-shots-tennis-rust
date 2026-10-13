@@ -39,6 +39,7 @@ pub use super::widescreen::WIDE;
 mod cursor;
 pub(crate) mod flame;
 mod online;
+pub(super) mod pause;
 mod previews;
 mod slide;
 
@@ -960,6 +961,22 @@ fn com_rank(ranks: &[u8], character: usize, costume: usize, doubles: bool) -> us
     ranks.get(row).map_or(0, |&r| r as usize)
 }
 
+/// `word.tm2`'s ink span per glyph (cell x + first inked column, cell y, width), from its alpha.
+fn glyphs(font: &[u8]) -> std::collections::HashMap<char, (f32, f32, f32)> {
+    let pic = hst_data::tim2::decode_alpha8(font).expect("TIM2").remove(0);
+    let mut glyphs = std::collections::HashMap::new();
+    for (row, chars) in FONT.iter().enumerate() {
+        for (col, ch) in chars.chars().enumerate() {
+            let (x0, y0) = (col * 32, 32 + row * 32);
+            let ink: Vec<usize> = (0..32).filter(|x| (0..32).any(|y| pic.rgba[((y0 + y) * pic.width as usize + x0 + x) * 4 + 3] > 0x20)).collect();
+            if let (Some(&a), Some(&b)) = (ink.first(), ink.last()) {
+                glyphs.entry(ch).or_insert(((x0 + a) as f32, y0 as f32, (b - a + 1) as f32));
+            }
+        }
+    }
+    glyphs
+}
+
 fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let mut archives = std::collections::HashMap::new();
@@ -1003,18 +1020,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
     art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
-    // the font's ink span per glyph, from its alpha
-    let pic = hst_data::tim2::decode_alpha8(&font).expect("TIM2").remove(0);
-    let mut glyphs = std::collections::HashMap::new();
-    for (row, chars) in FONT.iter().enumerate() {
-        for (col, ch) in chars.chars().enumerate() {
-            let (x0, y0) = (col * 32, 32 + row * 32);
-            let ink: Vec<usize> = (0..32).filter(|x| (0..32).any(|y| pic.rgba[((y0 + y) * pic.width as usize + x0 + x) * 4 + 3] > 0x20)).collect();
-            if let (Some(&a), Some(&b)) = (ink.first(), ink.last()) {
-                glyphs.entry(ch).or_insert(((x0 + a) as f32, y0 as f32, (b - a + 1) as f32));
-            }
-        }
-    }
+    let glyphs = glyphs(&font);
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
     let grades = hst_data::exe::Menu::new(&cnf, &bin).expect("supported disc").grades();
@@ -1044,7 +1050,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
     let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
-    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: crate::store::read_to_string(Settings::path(&args.iso)).map_or_else(|_| first(), |t| Settings::parse(&t)), mods, ..default() });
+    let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| Settings::parse(&t));
+    let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
+    // back from a match: its pause menu may have changed them (B126)
+    if let Ok(s) = saved {
+        menu.settings = s;
+    }
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
@@ -1677,7 +1688,7 @@ fn step(
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
-    (net, mut clipboard): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>),
+    (net, mut clipboard, mut click): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pause::Click>>),
 ) {
     let play = |key: u8| {
         if let (Some(s), Some(Art(_, Some(b), _))) = (&sound, art.as_deref()) {
@@ -1727,6 +1738,10 @@ fn step(
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
                 k.hand = bind.key_just_pressed(&keys, Action::Camera);
+                // a click or tap (`pause::pointer`) comes in as the keyboard's
+                if let Some(c) = click.as_mut().and_then(|c| c.0.take()) {
+                    (k.ok, k.back) = (k.ok || c.ok, k.back || c.back);
+                }
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
