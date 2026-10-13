@@ -374,7 +374,7 @@ fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial
 
 /// A skinned model's parts, one mesh per material (joints = the model's nodes), with its morph targets; `true`
 /// where a part carries them.
-pub fn skinned_parts(model: &mdl::Model, handles: &[Handle<StandardMaterial>], meshes: &mut impl Store<Mesh>) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>, bool)> {
+pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut impl Store<Mesh>) -> Vec<(Handle<Mesh>, Handle<M>, bool)> {
     #[allow(clippy::type_complexity)]
     let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[[f32; 3]; 2]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
     let targets = model.morph_names.len();

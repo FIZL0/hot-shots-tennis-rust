@@ -18,15 +18,15 @@ const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
 /// The entities drawing one effect model.
 #[derive(Clone)]
-pub(crate) struct Shown {
+pub(crate) struct Shown<M: Asset = StandardMaterial> {
     pub(crate) root: Entity,
     joints: Vec<Entity>,
-    pub(crate) materials: Vec<Handle<StandardMaterial>>,
+    pub(crate) materials: Vec<Handle<M>>,
 }
 
 #[derive(Resource, Clone)]
 pub struct Impacts {
-    models: Vec<(Effect, Shown)>,
+    models: Vec<(Effect, Shown<Fx>)>,
     /// The impact playing (the game has one).
     playing: Option<usize>,
 }
@@ -59,7 +59,7 @@ pub fn load(
     commands: &mut Commands,
     parent: Entity,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<Fx>,
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
 ) -> Result<Impacts, String> {
@@ -74,16 +74,16 @@ pub fn load(
 
 /// Effect model `s` (archive path without extension): its player and its hidden entities under `parent`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn model(
+pub(crate) fn model<M: EffectMaterial>(
     arc: &Archive,
     s: &str,
     commands: &mut Commands,
     parent: Entity,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<M>,
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
-) -> Result<(Effect, Shown), String> {
+) -> Result<(Effect, Shown<M>), String> {
     let get = |name: &str| arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(name)).and_then(|e| arc.read(e).ok());
     let file = |ext: &str| get(&format!("{s}.{ext}")).ok_or(format!("{s}.{ext} missing"));
     let model = mdl::parse(&file("mdl")?).map_err(|e| e.0)?;
@@ -100,12 +100,12 @@ pub(crate) fn model(
         &mtl.materials,
     );
     let tex: Vec<Handle<Image>> = mtl.textures.iter().map(|t| crate::textures::add_mtl(images, crate::character::texture_image(t), t)).collect();
-    let mats: Vec<Handle<StandardMaterial>> = mtl
+    let mats: Vec<Handle<M>> = mtl
         .materials
         .iter()
         .map(|m| {
             let [r, g, b, a] = m.color;
-            materials.add(StandardMaterial {
+            materials.add(M::new(StandardMaterial {
                 base_color: Color::linear_rgba(r, g, b, a),
                 base_color_texture: m.texture.map(|t| tex[t].clone()),
                 unlit: true,
@@ -115,7 +115,7 @@ pub(crate) fn model(
                 alpha_mode: if m.blend() == Blend::Add { AlphaMode::Add } else { AlphaMode::Blend },
                 depth_bias: AFTER_SCENE,
                 ..default()
-            })
+            }))
         })
         .collect();
     let parts = crate::character::skinned_parts(&model, &mats, meshes);
@@ -140,7 +140,7 @@ pub(crate) fn model(
 }
 
 /// Show `effect` on `view` this frame (posed, morphed, faded) when live, else hide it.
-pub(crate) fn pose<F: bevy::ecs::query::QueryFilter>(effect: &Effect, view: &Shown, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<StandardMaterial>) {
+pub(crate) fn pose<F: bevy::ecs::query::QueryFilter, M: EffectMaterial>(effect: &Effect, view: &Shown<M>, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<M>) {
     let live = effect.live;
     if let Ok((mut v, mut w)) = q.get_mut(view.root) {
         *v = if live { Visibility::Visible } else { Visibility::Hidden };
@@ -158,7 +158,7 @@ pub(crate) fn pose<F: bevy::ecs::query::QueryFilter>(effect: &Effect, view: &Sho
     }
     for (h, a) in view.materials.iter().zip(&effect.alphas) {
         if let Some(mut mat) = materials.get_mut(h) {
-            mat.base_color.set_alpha(*a);
+            mat.std().base_color.set_alpha(*a);
         }
     }
 }
@@ -175,7 +175,7 @@ pub fn tick(mut fx: ResMut<Impacts>) {
 }
 
 /// Pose, morph, fade and show the playing impact; hide the others.
-pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<Fx>>) {
     for (k, (effect, view)) in fx.models.iter().enumerate() {
         if fx.playing == Some(k) {
             pose(effect, view, &mut q, &mut joints, &mut materials);
@@ -191,11 +191,11 @@ pub struct HitSparks {
     mesh: Handle<Mesh>,
     view: Entity,
     /// `*tubu00` for top … drop, then smash.
-    looks: [Handle<StandardMaterial>; 6],
+    looks: [Handle<Fx>; 6],
 }
 
 /// `yumoto/<name>.tm2` (or `<dir>/<name>.tm2`) from the effect archive as an unlit, alpha-blended, two-sided material.
-pub(crate) fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Handle<StandardMaterial>, String> {
+pub(crate) fn look<M: EffectMaterial>(iso: &mut Iso, name: &str, materials: &mut Assets<M>, images: &mut Assets<Image>) -> Result<Handle<M>, String> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     // ponytail: re-reads the archive per texture; a handful at load
@@ -206,7 +206,7 @@ pub(crate) fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMat
     let pic = hst_data::tim2::decode(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.remove(0);
     let img = Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba.clone(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
     let image = crate::textures::add_tim2(images, img, &pic);
-    Ok(materials.add(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, depth_bias: AFTER_SCENE, ..default() }))
+    Ok(materials.add(M::new(StandardMaterial { base_color_texture: Some(image), unlit: true, cull_mode: None, alpha_mode: AlphaMode::Blend, depth_bias: AFTER_SCENE, ..default() })))
 }
 
 /// The game draws its effects after the court's and the ball tornado's blended draws (GS dump: the tornado, then the
@@ -214,6 +214,55 @@ pub(crate) fn look(iso: &mut Iso, name: &str, materials: &mut Assets<StandardMat
 /// centre, and these meshes sit at the court's origin or the ball, so this puts them after any of those.
 /// The landing markers go after these still (`1e3 +`).
 pub(crate) const AFTER_SCENE: f32 = 500.0;
+
+/// The in-match effects' material: a `StandardMaterial` whose `depth_bias` only orders the blended draws. Bevy also
+/// writes it into the pipeline as a hardware depth bias in units the GPU picks: nothing at court depths on desktop
+/// Vulkan/D3D (float depth: 2^(exponent − 23)), but a fixed step on some phone GPUs (Metal, GLES drivers), where
+/// 500–1e3 units pull the bounce marks, puffs and landing markers metres toward the camera, through the players and
+/// the net (B137).
+pub type Fx = bevy::pbr::ExtendedMaterial<StandardMaterial, SortOnly>;
+
+/// Drops the hardware depth bias, keeps the sort offset (`Fx`).
+#[derive(Asset, bevy::render::render_resource::AsBindGroup, Reflect, Clone, Default)]
+pub struct SortOnly {}
+
+impl bevy::pbr::MaterialExtension for SortOnly {
+    fn specialize(
+        _: &bevy::pbr::MaterialExtensionPipeline,
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        _: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _: bevy::pbr::MaterialExtensionKey<Self>,
+    ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.bias.constant = 0;
+        }
+        Ok(())
+    }
+}
+
+/// A material `model`/`look` can build: the menus' and NPCs' plain `StandardMaterial` or the match's `Fx`.
+pub(crate) trait EffectMaterial: Material {
+    fn new(m: StandardMaterial) -> Self;
+    fn std(&mut self) -> &mut StandardMaterial;
+}
+
+impl EffectMaterial for StandardMaterial {
+    fn new(m: StandardMaterial) -> Self {
+        m
+    }
+    fn std(&mut self) -> &mut StandardMaterial {
+        self
+    }
+}
+
+impl EffectMaterial for Fx {
+    fn new(base: StandardMaterial) -> Self {
+        Fx { base, extension: SortOnly {} }
+    }
+    fn std(&mut self) -> &mut StandardMaterial {
+        &mut self.base
+    }
+}
 
 /// Write a frame's quads into a dynamic mesh. Nothing to draw still writes one invisible degenerate triangle: Bevy's
 /// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
@@ -227,7 +276,7 @@ pub(crate) fn fill(mesh: &mut Mesh, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]
     mesh.insert_indices(bevy::mesh::Indices::U32(index));
 }
 
-pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
+pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<HitSparks, String> {
     let mut looks = Vec::new();
     for k in IMPACTS {
         looks.push(look(iso, &format!("{k}tubu00"), materials, images)?);
@@ -295,7 +344,7 @@ pub struct Trails {
     mesh: Handle<Mesh>,
 }
 
-pub fn load_trails(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<Trails, String> {
+pub fn load_trails(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<Trails, String> {
     let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(look(iso, "zanzou", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
     commands.entity(parent).add_child(view);
@@ -357,10 +406,10 @@ pub struct BallFlight {
     vel: Vec3,
     /// The glow textures for top … drop: the game's list has `impactef_slice` (the ✕) first and `impactef_top`
     /// (the ○) second, so topspin shows the ✕ and slice the ○, the buttons pressed.
-    looks: [Handle<StandardMaterial>; 5],
+    looks: [Handle<Fx>; 5],
 }
 
-pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Result<BallFlight, String> {
+pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<BallFlight, String> {
     let ribbon = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
     let mut looks = Vec::new();
@@ -400,7 +449,7 @@ impl BallFlight {
 /// a disc across the flight at the ball, spinning a quarter turn and fading over its last 15 frames.
 // ponytail: the game's tilt of a disc flying along the court, its texture flip by facing and its halved ribbon
 // length under one of its mode counts are left out
-pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<Fx>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<Fx>>) {
     let Ok((cam, proj)) = cam.single() else { return };
     let fov = if let Projection::Perspective(p) = proj { p.fov } else { 0.8 };
     // world → game space: (x, −y, −z)
@@ -410,7 +459,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
         let turn = GLOW_TURN * fx.glow.life as f32 / GLOW_FRAMES as f32;
         *t = Transform::from_translation(fx.pos).looking_to(fx.vel.try_normalize().unwrap_or(Vec3::Z), Vec3::Y) * Transform::from_rotation(Quat::from_rotation_z(turn));
         if let Some(mut m) = materials.get_mut(&look.0) {
-            m.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
+            m.base.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
         }
     }
     let Some(mut mesh) = meshes.get_mut(&fx.ribbon) else { return };
@@ -455,8 +504,8 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
 #[derive(Resource, Clone)]
 pub struct BallBounce {
     bounce: Bounce,
-    ring: Shown,
-    crater: Shown,
+    ring: Shown<Fx>,
+    crater: Shown<Fx>,
     /// This flight's contacts so far (the first two bounces).
     contacts: Vec<Contact>,
     marks: Handle<Mesh>,
@@ -474,7 +523,7 @@ pub fn load_bounce(
     commands: &mut Commands,
     parent: Entity,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<Fx>,
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
 ) -> Result<BallBounce, String> {
@@ -536,7 +585,7 @@ pub fn draw_bounce(
     mut q: Query<(&mut Visibility, &mut MorphWeights)>,
     mut joints: Query<&mut Transform, Without<crate::Orbit>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<Fx>>,
 ) {
     let b = &fx.bounce;
     pose(&b.ring, &fx.ring, &mut q, &mut joints, &mut materials);
@@ -587,8 +636,8 @@ pub fn draw_bounce(
 /// play, then held) at the smash point; each placed on the court at (x, z) or hidden.
 #[derive(Resource, Clone)]
 pub struct LandingMarks {
-    red: (Effect, Shown),
-    smash: (Effect, Shown),
+    red: (Effect, Shown<Fx>),
+    smash: (Effect, Shown<Fx>),
     pub red_at: Option<[f32; 2]>,
     pub smash_at: Option<[f32; 2]>,
 }
@@ -599,7 +648,7 @@ pub fn load_marks(
     commands: &mut Commands,
     parent: Entity,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<Fx>,
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
 ) -> Result<LandingMarks, String> {
@@ -622,7 +671,7 @@ pub fn load_marks(
 /// (an unstable tie: the rings and the blob swapped from frame to frame) and lose to the huge court-line mesh whenever
 /// its centre is nearer (the lines then cut through the marker). Draw them after the court and bottom layer first, as
 /// the PS2's Z resolves the layers stacked a millimetre apart, the marker always over the lines (court 10).
-fn layer(arc: &Archive, s: &str, view: &Shown, materials: &mut Assets<StandardMaterial>) -> Result<(), String> {
+fn layer(arc: &Archive, s: &str, view: &Shown<Fx>, materials: &mut Assets<Fx>) -> Result<(), String> {
     let e = arc.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&format!("{s}.mdl"))).ok_or(format!("{s}.mdl missing"))?;
     let model = mdl::parse(&arc.read(e).map_err(|e| e.to_string())?).map_err(|e| e.0)?;
     let y = |packets: &Vec<mdl::Packet>| {
@@ -634,7 +683,7 @@ fn layer(arc: &Archive, s: &str, view: &Shown, materials: &mut Assets<StandardMa
     for (rank, &i) in order.iter().enumerate() {
         if let Some(mut m) = materials.get_mut(&view.materials[i]) {
             // past any court mesh's centre (tens of metres), short of the head markers' LAST
-            m.depth_bias = 1e3 + rank as f32;
+            m.base.depth_bias = 1e3 + rank as f32;
         }
     }
     Ok(())
@@ -654,7 +703,7 @@ impl LandingMarks {
     }
 }
 
-pub fn draw_marks(fx: Res<LandingMarks>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<StandardMaterial>>) {
+pub fn draw_marks(fx: Res<LandingMarks>, mut q: Query<(&mut Visibility, &mut MorphWeights)>, mut joints: Query<&mut Transform>, mut materials: ResMut<Assets<Fx>>) {
     for ((effect, view), at) in [(&fx.red, fx.red_at), (&fx.smash, fx.smash_at.filter(|_| fx.smash.0.live))] {
         match at {
             Some([x, z]) => {
