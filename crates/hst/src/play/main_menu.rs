@@ -798,6 +798,8 @@ enum Tex {
     Preview(usize),
     /// The lobby code's QR (`online::QrImage`).
     Qr,
+    /// Our button pill's layers (`menu_art::pill_layers`).
+    Pill,
 }
 
 const SHEETS: [(&str, &str); 15] = [
@@ -1053,6 +1055,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         .collect();
     info!("{} custom characters in {}", roster.len(), mods_dir.display());
     let (mod_text, mods) = roster.into_iter().unzip();
+    art.push(super::menu_art::pill_layers(&mut images));
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
 
     let fresh = kept.is_none();
@@ -1172,11 +1175,19 @@ impl Draw<'_> {
         self.centred(s, cx, y + size * (1.0 - k) / 2.0, size * k, WHITE);
     }
 
-    /// A pill (`Option_00`'s white one, three-sliced) tinted.
+    /// A pill filled `rgb` in the mode pills' style: dark rim, white ring.
     fn pill(&mut self, x: f32, y: f32, w: f32, rgb: [f32; 3]) {
-        self.q(OPTION, [66.0, 2.0, 19.0, 38.0], [x, y, 19.0, 38.0], rgb, 128.0);
-        self.q(OPTION, [85.0, 2.0, 24.0, 38.0], [x + 19.0, y, w - 38.0, 38.0], rgb, 128.0);
-        self.q(OPTION, [109.0, 2.0, 19.0, 38.0], [x + w - 19.0, y, 19.0, 38.0], rgb, 128.0);
+        self.pill3(x, y, w, [[30.0; 3], WHITE, rgb]);
+    }
+
+    /// A pill (our own, `menu_art::pill_layers`, three-sliced) with its rim, ring and fill each in its own colour.
+    fn pill3(&mut self, x: f32, y: f32, w: f32, cols: [[f32; 3]; 3]) {
+        for (i, rgb) in cols.into_iter().enumerate() {
+            let [l, m, r] = super::menu_art::pill_slices(i);
+            self.q(Tex::Pill, l, [x, y, 19.0, 38.0], rgb, 128.0);
+            self.q(Tex::Pill, m, [x + 19.0, y, w - 38.0, 38.0], rgb, 128.0);
+            self.q(Tex::Pill, r, [x + w - 19.0, y, 19.0, 38.0], rgb, 128.0);
+        }
     }
 
     /// A column of rows, the chosen one bright with the hand beside it.
@@ -1850,6 +1861,7 @@ fn draw(
                 None => art.0[2].clone(),
             },
             Tex::Sheet(k) => art.0[3 + k].clone(),
+            Tex::Pill => art.0.last().expect("pill").clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
             Tex::Qr => match &qr {

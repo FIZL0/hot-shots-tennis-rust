@@ -94,6 +94,12 @@ timed out once under load (other slots were building) and passes when run alone;
   - **Pause "sets"/"games":** the "games" box in `PAUSED` was 82–106, straddling the "sets" cell (64–88) and its own
     (88–112), so the new word was cut in half and spilled into "sets". Boxes re-measured from the sheet's ink:
     sets 67–86, games 92–111. `k_pause5_crop.png`.
+  - **Our own button pill:** `Draw::pill` (main menu, Settings, Graphics, Controls, online rows) used Option_00's
+    plain white blob, tinted. It now draws `menu_art::pill_layers`, a sheet we make ourselves (three white
+    stadiums: whole, inset 2 px, inset 4 px), as three tinted layers, so rim, ring and fill each take their own colour
+    (`Draw::pill3`; `pill` = dark rim, white ring, the old tint as fill). 9 quads a pill, so the pause overlay's quad
+    pool went 240 → 480. `k_pill_main_half.png`, `k_pill_settings_half.png`, `k_pill_graphics_half.png`. The rest of
+    the menu art is B141.
 - **Pre-existing overlap:** the "Tab / Square: 92 custom characters…" hint overlaps the character grid. That is not B136.
 - **Umpire select:** the port has no separate umpire select. The umpire is a row on the confirm screen, which is
   covered above.

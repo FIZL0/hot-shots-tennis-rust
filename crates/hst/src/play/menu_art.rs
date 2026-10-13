@@ -421,23 +421,50 @@ fn pill(out: &mut Pixmap, x: u16, y: u16, w: u16, h: u16, cols: [Vec<u8>; 3]) {
     }
     for (i, col) in cols.iter().enumerate() {
         let d = 2.0 * k * i as f32;
-        let r = (y1 - y0) / 2.0 - d;
-        let mut pb = PathBuilder::new();
-        let (l, rr, t, b) = (x0 + d, x1 - d, y0 + d, y1 - d);
-        pb.move_to(l + r, t);
-        pb.line_to(rr - r, t);
-        // quarter circles as cubics
-        let c = r * 0.5523;
-        pb.cubic_to(rr - r + c, t, rr, t + r - c, rr, t + r);
-        pb.cubic_to(rr, b - r + c, rr - r + c, b, rr - r, b);
-        pb.line_to(l + r, b);
-        pb.cubic_to(l + r - c, b, l, b - r + c, l, b - r);
-        pb.cubic_to(l, t + r - c, l + r - c, t, l + r, t);
-        pb.close();
         let mut paint = Paint { anti_alias: true, ..Paint::default() };
         paint.set_color_rgba8(col[0], col[1], col[2], 255);
-        out.fill_path(&pb.finish().expect("pill"), &paint, FillRule::Winding, Transform::identity(), None);
+        out.fill_path(&stadium(x0 + d, y0 + d, x1 - d, y1 - d), &paint, FillRule::Winding, Transform::identity(), None);
     }
+}
+
+/// A box with half-round ends.
+fn stadium(l: f32, t: f32, rr: f32, b: f32) -> tiny_skia::Path {
+    let r = (b - t) / 2.0;
+    // quarter circles as cubics
+    let c = r * 0.5523;
+    let mut pb = PathBuilder::new();
+    pb.move_to(l + r, t);
+    pb.line_to(rr - r, t);
+    pb.cubic_to(rr - r + c, t, rr, t + r - c, rr, t + r);
+    pb.cubic_to(rr, b - r + c, rr - r + c, b, rr - r, b);
+    pb.line_to(l + r, b);
+    pb.cubic_to(l + r - c, b, l, b - r + c, l, b - r);
+    pb.cubic_to(l, t + r - c, l + r - c, t, l + r, t);
+    pb.close();
+    pb.finish().expect("stadium")
+}
+
+/// Our own button pill, nothing from the disc: three white stadiums 64×40 apart (the whole pill 1..63 × 1..39, then
+/// inset 2 and 4 px), `K`× sharp, for a button's rim, ring and fill each tinted its own colour.
+pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
+    let k = K as f32;
+    let mut out = Pixmap::new(64 * K as u32, 40 * 3 * K as u32).expect("pill size");
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    paint.set_color_rgba8(255, 255, 255, 255);
+    for i in 0..3 {
+        let (d, y) = (2.0 * i as f32, 40.0 * i as f32);
+        out.fill_path(&stadium((1.0 + d) * k, (y + 1.0 + d) * k, (63.0 - d) * k, (y + 39.0 - d) * k), &paint, FillRule::Winding, Transform::identity(), None);
+    }
+    let (w, h) = (out.width(), out.height());
+    let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+    crate::textures::ours(handle.id(), Vec2::splat(k));
+    handle
+}
+
+/// [`pill_layers`]' slices on the sheet (disc px): layer `i`'s left end, middle and right end, 38 tall.
+pub(crate) fn pill_slices(i: usize) -> [[f32; 4]; 3] {
+    let y = 40.0 * i as f32 + 1.0;
+    [[1.0, y, 19.0, 38.0], [20.0, y, 24.0, 38.0], [44.0, y, 19.0, 38.0]]
 }
 
 /// A label's colours, from its disc pixels: the bright fill per row, the dark outline and its width.

@@ -41,8 +41,8 @@ pub(in crate::play) struct Root;
 pub(in crate::play) struct Systems;
 
 /// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
-/// `wall_option` and `option_00`.
-const POOL_HERE: usize = 240;
+/// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered).
+const POOL_HERE: usize = 480;
 
 /// One sheet out of a disc archive.
 fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
