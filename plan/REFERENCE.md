@@ -86,7 +86,7 @@ Character select previews: cached PNGs in `cache/previews/<boot file>-r<N>/` bes
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
 
-Menu art (B136): the menus' disc sheets are rebuilt at 4× with their labels set as vector text (`play/menu_art.rs`); `--original` keeps the disc's sheets, `HST_MENU_ART=DIR` dumps the rebuilt PNGs.
+Menu art (B136): the menus' disc sheets are rebuilt at 4× with their labels set as vector text (`play/menu_art.rs`); `--original` keeps the disc's sheets, `HST_MENU_ART=DIR` dumps the rebuilt PNGs. B141: title bars, buttons, mode bars, character cards/tags/rank pills, group boxes, confirm labels and the pause dialog are our own vector pills and boxes (`menu_art::pill_layers`, `pill_quads`/`box_quads`) with our words and colours (`main_menu.rs` `TITLES`, `MODE_FILL`, `CARD_FILL`, …), with or without `--original`.
 
 ## Done (ported and verified against the original)
 

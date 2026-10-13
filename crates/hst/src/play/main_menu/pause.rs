@@ -110,6 +110,8 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     for (xb, name) in &super::SHEETS[..10] {
         art.push(if name.ends_with("option") || *name == "option_00" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
     }
+    // `Tex::Pill` is the last sheet, as in the main menu
+    art.push(super::super::menu_art::pill_layers(&mut images));
     let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);

@@ -2,9 +2,9 @@
 //! the panel. Start opens it (system sound 2) and freezes the match: the court dimmed (`i_pause_result_15` at alpha
 //! 64), the top bar (`inpane_pause03`) with "Paused" and the rules ("1 sets 4 games", `inpane_pause02`), the score
 //! board at the bottom (the result board's frame, plates and each set's games, with the points from
-//! `inpane_pause00`, tiebreak `01`), and the dialog (`i_dialog_00`/`01`): "Resume the Match" / "Return to the Menu"
-//! on pills, the chosen one bright, the hand (`hsm_yubi`) beside it swinging out 16 px and back. Between them the
-//! remaster's "Settings" (B126, ours: the dialog's sheet has no such row, so `word.tm2` writes it) opens the main
+//! `inpane_pause00`, tiebreak `01`), and the dialog (the original's `i_dialog_00`/`01`, drawn with our own box, pills
+//! and words since B141): "Resume the Match" / "Return to the Menu" on pills, the chosen one bright, the hand
+//! (`hsm_yubi`) beside it swinging out 16 px and back. Between them the remaster's "Settings" (B126, ours: the dialog's sheet has no such row, so `word.tm2` writes it) opens the main
 //! menu's Settings screens over the paused match (`main_menu/pause.rs`); a click or tap on a pill chooses it.
 //!
 //! Input waits 5 ticks after it opens. Up/down move with wrap-around (repeat after 32 ticks held, then every 8;
@@ -56,11 +56,19 @@ const BAR: Tex = Tex::Own(4);
 const BOARD: Tex = Tex::Own(5);
 const GAMES_PAST: Tex = Tex::Own(6);
 const GAMES_NOW: Tex = Tex::Own(7);
-const FRAME: Tex = Tex::Own(8);
-const ROWS: Tex = Tex::Own(9);
 const HAND: Tex = Tex::Own(10);
 /// "Settings" in `word.tm2` on a row of its own (`pause::label`).
 const LABEL: Tex = Tex::Own(11);
+/// B141: "Resume the Match" and "Return to the Menu" set the same way, in place of `i_dialog_01`'s rows.
+const RESUME: Tex = Tex::Own(12);
+const RETURN: Tex = Tex::Own(13);
+/// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills.
+const PILL: Tex = Tex::Own(14);
+/// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
+const INK: [f32; 3] = [15.0; 3];
+const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
+const CHOSEN: [f32; 3] = [123.0, 105.0, 79.0];
+const UNCHOSEN: [f32; 3] = [94.0, 83.0, 70.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -71,7 +79,7 @@ struct Quad {
     alpha: f32,
 }
 
-/// The dialog's text rows in `i_dialog_01`: "Resume the Match", (ours) "Settings", "Return to the Menu".
+/// The dialog's rows as `i_dialog_01` numbers them: "Resume the Match", (ours) "Settings", "Return to the Menu".
 const OPTIONS: [i32; 3] = [6, SETTINGS, 1];
 /// Not a row of `i_dialog_01`: [`LABEL`].
 const SETTINGS: i32 = -1;
@@ -289,37 +297,37 @@ fn layout(v: &View) -> Vec<Quad> {
         q(tex, [POINT_U[k] << 6, POINT_V[k] * 48, 64, 48], r([184, 390][t], if short { 352 } else { 320 }, 64, 48), WHITE, alpha);
     }
 
-    // the dialog: frame, a pill per option (bright when chosen) under a white sheen, the text, the hand
+    // the dialog (B141, ours in the dialog's place and colours): a rounded box, a pill per option (bright when
+    // chosen), the text, the hand
     let nopt = OPTIONS.len() as i32;
     let lift = if v.sets_to_win == 3 { -72 } else { -32 };
     let top = lift - (nopt - 1) * 16 + 0xb8;
-    let mut y = top;
-    let mut row = |vv: i32, h: i32, y: i32| {
-        q(FRAME, [0, vv, 16, h], r(160, y, 16, h), WHITE, 128);
-        q(FRAME, [16, vv, 8, h], r(176, y, 288, h), WHITE, 128);
-        q(FRAME, [24, vv, 16, h], r(464, y, 16, h), WHITE, 128);
-    };
-    row(0, 16, y);
-    y += 16;
-    for k in 0..nopt * 5 {
-        row(16, 8, y + 8 * k);
-    }
-    y += 8 * (nopt * 5 - 1);
-    row(24, 16, y + 8);
-    let y0 = pill_y(v.sets_to_win, 0);
-    for (k, _) in OPTIONS.iter().enumerate() {
-        let tint = if k == v.sel { [123.0, 105.0, 79.0] } else { [94.0, 83.0, 70.0] };
-        let y = y0 + 40 * k as i32;
-        for (vv, rgb) in [(48, tint), (88, WHITE)] {
-            q(FRAME, [0, vv, 16, 32], r(176, y, 16, 32), rgb, 128);
-            q(FRAME, [16, vv, 8, 32], r(192, y, 256, 32), rgb, 128);
-            q(FRAME, [24, vv, 16, 32], r(448, y, 16, 32), rgb, 128);
+    let frame = r(160, top, 320, 16 + 8 * (nopt * 5 - 1) + 8 + 16);
+    for (i, rgb) in [INK, WHITE, PANEL].into_iter().enumerate() {
+        for (src, dst) in super::menu_art::box_quads(i, frame, 16.0) {
+            out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
         }
     }
+    let y0 = pill_y(v.sets_to_win, 0);
+    for (k, _) in OPTIONS.iter().enumerate() {
+        let fill = if k == v.sel { CHOSEN } else { UNCHOSEN };
+        for (i, rgb) in [INK, WHITE, fill].into_iter().enumerate() {
+            for (src, dst) in super::menu_art::pill_quads(i, r(176, y0 + 40 * k as i32, 288, 32)) {
+                out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
+            }
+        }
+    }
+    let mut q = |tex, src: [i32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| {
+        out.push(Quad { tex, src: src.map(|c| c as f32), dst, rgb, alpha: alpha as f32 })
+    };
     for (k, &text) in OPTIONS.iter().enumerate() {
-        let (rgb, alpha) = if k == v.sel { (WHITE, 128) } else { ([94.0, 83.0, 70.0], 64) };
-        let (tex, row) = if text == SETTINGS { (LABEL, 0) } else { (ROWS, text * 32) };
-        q(tex, [0, row, 256, 32], r(192, y0 + 40 * k as i32, 256, 32), rgb, alpha);
+        let (rgb, alpha) = if k == v.sel { (WHITE, 128) } else { (UNCHOSEN, 64) };
+        let tex = match text {
+            SETTINGS => LABEL,
+            6 => RESUME,
+            _ => RETURN,
+        };
+        q(tex, [0, 0, 256, 32], r(192, y0 + 40 * k as i32, 256, 32), rgb, alpha);
     }
     let hy = (y0 + v.sel as i32 * 40 + 8) as f32;
     out.push(Quad { tex: HAND, src: [0.0, 0.0, 64.0, 32.0], dst: [v.hand_x + 128.0, hy, 64.0, 32.0], rgb: WHITE, alpha: 128.0 });
@@ -340,7 +348,7 @@ struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>);
 struct Slot(usize);
 #[derive(Component)]
 struct Root;
-const POOL: usize = 160;
+const POOL: usize = 200;
 
 /// The pause screen is open (online play sends it to the peers).
 pub(super) fn paused(w: &World) -> bool {
@@ -386,7 +394,10 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             super::menu_art::image(&mut images, &arc.read(e).expect("INPANE bytes"), name)
         })
         .collect::<Vec<_>>();
-    art.push(super::main_menu::pause::label(&mut iso, &mut images, "Settings"));
+    for s in ["Settings", "Resume the Match", "Return to the Menu"] {
+        art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
+    }
+    art.push(super::menu_art::pill_layers(&mut images));
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank));
     commands
@@ -607,10 +618,10 @@ mod tests {
         assert!(at(GAMES_NOW, 272.0, 360.0).is_some() && at(GAMES_NOW, 308.0, 360.0).is_some());
         assert!(at(Tex::Face(2), 102.0, 382.0).is_some() && at(Tex::Face(1), 498.0, 330.0).is_some());
         // three options: frame from y 120 to 272, pills at 140, 180 ("Settings", ours) and 220, the hand beside the first
-        assert!(at(FRAME, 160.0, 120.0).is_some() && at(FRAME, 160.0, 256.0).is_some());
-        let rows: Vec<_> = qs.iter().filter(|q| q.tex == ROWS).collect();
-        assert_eq!((rows[0].src[1], rows[0].dst[1], rows[0].alpha), (192.0, 140.0, 128.0));
-        assert_eq!((rows[1].src[1], rows[1].dst[1], rows[1].alpha), (32.0, 220.0, 64.0));
+        assert!(at(PILL, 160.0, 120.0).is_some() && at(PILL, 160.0, 256.0).is_some());
+        assert!(at(PILL, 176.0, 140.0).is_some() && at(PILL, 176.0, 220.0).is_some());
+        assert_eq!(at(RESUME, 192.0, 140.0).unwrap().alpha, 128.0);
+        assert_eq!(at(RETURN, 192.0, 220.0).unwrap().alpha, 64.0);
         assert_eq!(at(LABEL, 192.0, 180.0).unwrap().src, [0.0, 0.0, 256.0, 32.0]);
         assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 148.0, 64.0, 32.0]);
         assert_eq!((pill_y(1, 1), pill_y(3, 0)), (180, 100));

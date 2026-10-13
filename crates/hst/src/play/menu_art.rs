@@ -444,16 +444,29 @@ fn stadium(l: f32, t: f32, rr: f32, b: f32) -> tiny_skia::Path {
     pb.finish().expect("stadium")
 }
 
-/// Our own button pill, nothing from the disc: three white stadiums 64×40 apart (the whole pill 1..63 × 1..39, then
-/// inset 2 and 4 px), `K`× sharp, for a button's rim, ring and fill each tinted its own colour.
+/// Our own button pill and box, nothing from the disc: three white stadiums 64×40 apart (the whole pill 1..63 × 1..39,
+/// then inset 2 and 4 px), then three rounded boxes 64×64 apart from y [`BOX_Y`] (radius 15: the rim's band, the ring's
+/// band 2 px in, the fill 4 px in, each band alone so a fill can be see-through), `K`× sharp, for a button's or a
+/// panel's rim, ring and fill each tinted its own colour.
 pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
     let k = K as f32;
-    let mut out = Pixmap::new(64 * K as u32, 40 * 3 * K as u32).expect("pill size");
+    let mut out = Pixmap::new(64 * K, (BOX_Y as u32 + 64 * 3) * K).expect("pill size");
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     paint.set_color_rgba8(255, 255, 255, 255);
     for i in 0..3 {
         let (d, y) = (2.0 * i as f32, 40.0 * i as f32);
         out.fill_path(&stadium((1.0 + d) * k, (y + 1.0 + d) * k, (63.0 - d) * k, (y + 39.0 - d) * k), &paint, FillRule::Winding, Transform::identity(), None);
+    }
+    for i in 0..3 {
+        let y = BOX_Y + 64.0 * i as f32;
+        let rect = |d: f32| rounded((1.0 + d) * k, (y + 1.0 + d) * k, (63.0 - d) * k, (y + 63.0 - d) * k, (15.0 - d).max(1.0) * k);
+        let mut pb = PathBuilder::new();
+        pb.push_path(&rect(2.0 * i as f32));
+        if i < 2 {
+            // the band's hole reaches half a pixel under the next band in, so no seam shows between them
+            pb.push_path(&rect(2.0 * i as f32 + 2.5));
+        }
+        out.fill_path(&pb.finish().expect("box"), &paint, FillRule::EvenOdd, Transform::identity(), None);
     }
     let (w, h) = (out.width(), out.height());
     let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
@@ -461,10 +474,49 @@ pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
     handle
 }
 
+/// Where [`pill_layers`]' boxes start on the sheet (disc px).
+const BOX_Y: f32 = 120.0;
+
+/// A box with rounded corners of radius `r`.
+fn rounded(l: f32, t: f32, rr: f32, b: f32, r: f32) -> tiny_skia::Path {
+    let c = r * 0.5523;
+    let mut pb = PathBuilder::new();
+    pb.move_to(l + r, t);
+    pb.line_to(rr - r, t);
+    pb.cubic_to(rr - r + c, t, rr, t + r - c, rr, t + r);
+    pb.line_to(rr, b - r);
+    pb.cubic_to(rr, b - r + c, rr - r + c, b, rr - r, b);
+    pb.line_to(l + r, b);
+    pb.cubic_to(l + r - c, b, l, b - r + c, l, b - r);
+    pb.line_to(l, t + r);
+    pb.cubic_to(l, t + r - c, l + r - c, t, l + r, t);
+    pb.close();
+    pb.finish().expect("rounded box")
+}
+
 /// [`pill_layers`]' slices on the sheet (disc px): layer `i`'s left end, middle and right end, 38 tall.
 pub(crate) fn pill_slices(i: usize) -> [[f32; 4]; 3] {
     let y = 40.0 * i as f32 + 1.0;
     [[1.0, y, 19.0, 38.0], [20.0, y, 24.0, 38.0], [44.0, y, 19.0, 38.0]]
+}
+
+/// Pill layer `i` over `[x, y, w, h]`: (source, destination) for its left end, middle and right end, the ends `h / 2`
+/// wide so they stay round at any height.
+pub(crate) fn pill_quads(i: usize, [x, y, w, h]: [f32; 4]) -> [([f32; 4], [f32; 4]); 3] {
+    let [l, m, r] = pill_slices(i);
+    let e = (h / 2.0).min(w / 2.0);
+    [(l, [x, y, e, h]), (m, [x + e, y, w - 2.0 * e, h]), (r, [x + w - e, y, e, h])]
+}
+
+/// Box layer `i` over `[x, y, w, h]` with `c`-px corners: (source, destination) for each of its nine slices.
+pub(crate) fn box_quads(i: usize, [x, y, w, h]: [f32; 4], c: f32) -> [([f32; 4], [f32; 4]); 9] {
+    let (u, v, s) = (1.0, BOX_Y + 64.0 * i as f32 + 1.0, 16.0);
+    let cols = [(u, s, x, c), (u + s, 62.0 - 2.0 * s, x + c, w - 2.0 * c), (u + 62.0 - s, s, x + w - c, c)];
+    let rows = [(v, s, y, c), (v + s, 62.0 - 2.0 * s, y + c, h - 2.0 * c), (v + 62.0 - s, s, y + h - c, c)];
+    std::array::from_fn(|k| {
+        let ((su, sw, dx, dw), (sv, sh, dy, dh)) = (cols[k % 3], rows[k / 3]);
+        ([su, sv, sw, sh], [dx, dy, dw, dh])
+    })
 }
 
 /// A label's colours, from its disc pixels: the bright fill per row, the dark outline and its width.
@@ -689,6 +741,18 @@ fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Our pill and box slices tile their box exactly, the pill's ends round (h / 2 wide), the box's corners `c`.
+    #[test]
+    fn pill_and_box_tile() {
+        let q = pill_quads(2, [10.0, 20.0, 100.0, 30.0]);
+        assert_eq!(q.map(|(_, d)| d), [[10.0, 20.0, 15.0, 30.0], [25.0, 20.0, 70.0, 30.0], [95.0, 20.0, 15.0, 30.0]]);
+        let b = box_quads(1, [0.0, 0.0, 200.0, 100.0], 12.0);
+        let area: f32 = b.iter().map(|(_, d)| d[2] * d[3]).sum();
+        assert_eq!(area, 200.0 * 100.0);
+        assert_eq!(b[8].1, [188.0, 88.0, 12.0, 12.0]);
+        assert!(b.iter().all(|(s, _)| s[1] >= BOX_Y + 64.0 && s[1] + s[3] <= BOX_Y + 128.0));
+    }
 
     /// A white word with a black ring on a transparent sheet comes back white-on-black, in its box, `K`× bigger.
     #[test]

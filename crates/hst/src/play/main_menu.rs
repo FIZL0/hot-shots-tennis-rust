@@ -86,7 +86,6 @@ const UMPIRES: usize = 5;
 const SETS: [i32; 3] = [1, 3, 5];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
-const CARDS: [[f32; 2]; 4] = [[4.0, 4.0], [4.0, 180.0], [156.0, 4.0], [156.0, 180.0]];
 /// `word.tm2`'s glyphs, 12 to a 32-px row from y 32.
 pub(super) const FONT: [&str; 15] = [
     "aàáâãäåæbcçd",
@@ -840,11 +839,9 @@ const SHEETS: [(&str, &str); 15] = [
     ("MENU/MENU12B.XB0", "characterselect2_03"),
     ("MENU/MENU12B.XB0", "characterselect2_04"),
 ];
-const OPTION: Tex = Tex::Sheet(9);
 const CS0: Tex = Tex::Sheet(10);
 const FACES: Tex = Tex::Sheet(11);
 const NAMES: Tex = Tex::Sheet(12);
-const CARD: Tex = Tex::Sheet(13);
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
 const ATTRS: Tex = Tex::Sheet(14);
 const CONFIRM: Tex = Tex::Sheet(15);
@@ -853,12 +850,9 @@ const CONFIRM: Tex = Tex::Sheet(15);
 /// balls; court names, surfaces and meter icons; court tiles (the "?" one).
 const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
 const INFO: Tex = Tex::Sheet(EXTRA);
-const RANKS: Tex = Tex::Sheet(EXTRA + 1);
-const KEYS: Tex = Tex::Sheet(EXTRA + 2);
 const C00: Tex = Tex::Sheet(EXTRA + 3);
 const C01: Tex = Tex::Sheet(EXTRA + 4);
 const C02: Tex = Tex::Sheet(EXTRA + 5);
-const C04: Tex = RANKS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -1150,7 +1144,45 @@ struct Draw<'a> {
 }
 
 const WHITE: [f32; 3] = [128.0; 3];
-const DIMMED: [f32; 3] = [80.0; 3];
+/// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
+const TITLES: [(&str, [f32; 3]); 5] = [
+    ("Main Menu", [102.0, 85.0, 25.0]),
+    ("Options", [110.0, 65.0, 75.0]),
+    ("Game Selection", [75.0, 52.0, 85.0]),
+    ("Character Selection", [102.0, 70.0, 40.0]),
+    ("Confirm Settings", [55.0, 80.0, 42.0]),
+];
+/// Rims and outlines.
+const INK: [f32; 3] = [15.0; 3];
+/// Gold words: play styles, names, "Ready to go!".
+const GOLD: [f32; 3] = [128.0, 112.0, 30.0];
+/// The Singles and Doubles bars' fills.
+const MODE_FILL: [[f32; 3]; 2] = [[110.0, 55.0, 80.0], [30.0, 92.0, 110.0]];
+/// The player cards' fills (1P pink, 2P orange, 3P blue, 4P green), darker than [`COLOURS`]' words.
+const CARD_FILL: [[f32; 3]; 4] = [[104.0, 52.0, 72.0], [104.0, 66.0, 26.0], [22.0, 46.0, 66.0], [38.0, 52.0, 18.0]];
+const STYLE_NAMES: [&str; 4] = ["All-round Player", "Baseline Player", "Net Player", "Big Server"];
+/// By character, as the disc's name sheet.
+const CHAR_NAMES: [&str; CHARS] = ["Ashley", "Cody", "Jun", "Kaito", "Momoko", "JJ", "Carol", "Big Chief", "Miranda", "Kent", "Lola", "Will", "Gloria", "Suzuki"];
+/// By rank, as `Confirmation_04`'s titles (nine to a column).
+const RANK_NAMES: [&str; 17] = [
+    "Tennis Lv 5",
+    "Tennis Lv 4",
+    "Tennis Lv 3",
+    "Tennis Lv 2",
+    "Tennis Lv 1",
+    "Tennis Hopeful",
+    "Tennis Tier II",
+    "Tennis Tier III",
+    "Tennis Tier IV",
+    "Tennis Tier V",
+    "Tennis Master",
+    "Tennis Elite",
+    "Tennis Guru",
+    "Tennis Legend",
+    "Tennis Hero",
+    "Tennis King",
+    "Tennis Superstar",
+];
 
 impl Draw<'_> {
     fn q(&mut self, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: f32) {
@@ -1161,8 +1193,19 @@ impl Draw<'_> {
     fn frame(&mut self, title: usize, wall: usize) {
         self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0 });
         self.anchor = Anchor::Span;
-        self.q(Tex::Sheet(title), [0.0, 0.0, 512.0, 64.0], [0.0, 0.0, 512.0, 64.0], WHITE, 128.0);
-        self.q(Tex::Sheet(title), [480.0, 0.0, 32.0, 64.0], [512.0, 0.0, 128.0, 64.0], WHITE, 128.0);
+        // B141, ours: the screen's colour along the top over a white and a dark rule, and a tab hanging from it with
+        // the title in our font, its soft shadow down and right
+        let (words, band) = TITLES[title];
+        self.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 14.0], band, 128.0);
+        self.q(Tex::Solid, [0.0; 4], [0.0, 14.0, 640.0, 2.5], WHITE, 128.0);
+        self.q(Tex::Solid, [0.0; 4], [0.0, 16.5, 640.0, 1.5], [15.0; 3], 128.0);
+        let size = 30.0;
+        let w = self.width(words, size);
+        self.box3([-30.0, -30.0, w + 110.0, 70.0], 16.0, [Some([15.0; 3]), Some(WHITE), Some(band)], 128.0);
+        let start = self.out.len();
+        self.text(words, 42.0, 7.0, size, [0.0; 3]);
+        self.out[start..].iter_mut().for_each(|q| q.alpha = 40.0);
+        self.text(words, 40.0, 5.0, size, WHITE);
         self.anchor = Anchor::Centre;
     }
 
@@ -1203,11 +1246,40 @@ impl Draw<'_> {
 
     /// A pill (our own, `menu_art::pill_layers`, three-sliced) with its rim, ring and fill each in its own colour.
     fn pill3(&mut self, x: f32, y: f32, w: f32, cols: [[f32; 3]; 3]) {
+        self.pill_at([x, y, w, 38.0], cols, 128.0);
+    }
+
+    /// [`Self::pill3`] over any box (B141), at `alpha`.
+    fn pill_at(&mut self, dst: [f32; 4], cols: [[f32; 3]; 3], alpha: f32) {
         for (i, rgb) in cols.into_iter().enumerate() {
-            let [l, m, r] = super::menu_art::pill_slices(i);
-            self.q(Tex::Pill, l, [x, y, 19.0, 38.0], rgb, 128.0);
-            self.q(Tex::Pill, m, [x + 19.0, y, w - 38.0, 38.0], rgb, 128.0);
-            self.q(Tex::Pill, r, [x + w - 19.0, y, 19.0, 38.0], rgb, 128.0);
+            for (src, dst) in super::menu_art::pill_quads(i, dst) {
+                self.q(Tex::Pill, src, dst, rgb, alpha);
+            }
+        }
+    }
+
+    /// Our rounded box (B141, `menu_art::pill_layers`' boxes, nine-sliced, `c`-px corners): rim, ring and fill each
+    /// its own colour, or left out (`None`: a see-through fill, no ring).
+    fn box3(&mut self, dst: [f32; 4], c: f32, cols: [Option<[f32; 3]>; 3], alpha: f32) {
+        for (i, rgb) in cols.into_iter().enumerate() {
+            let Some(rgb) = rgb else { continue };
+            for (src, dst) in super::menu_art::box_quads(i, dst, c) {
+                self.q(Tex::Pill, src, dst, rgb, alpha);
+            }
+        }
+    }
+
+    /// `s` centred on `cx` at `size`, squeezed to fit `max` px, tinted `rgb` (B141's labels in our font).
+    fn label(&mut self, s: &str, cx: f32, y: f32, size: f32, max: f32, rgb: [f32; 3]) {
+        let k = (max / self.width(s, size).max(1.0)).min(1.0);
+        let w = self.width(s, size) * k;
+        // squeezed across only: the words keep their height
+        let start = self.out.len();
+        self.text(s, cx - w / 2.0, y, size, rgb);
+        let x0 = cx - w / 2.0;
+        for q in &mut self.out[start..] {
+            q.dst[0] = x0 + (q.dst[0] - x0) * k;
+            q.dst[2] *= k;
         }
     }
 
@@ -1326,8 +1398,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
             d.rows(&labels, m.sel, 120.0, 90.0, 300.0, hand_x);
             for (i, on) in m.settings.0.iter().enumerate() {
-                let src = if *on { [429.0, 5.0, 39.0, 23.0] } else { [423.0, 37.0, 51.0, 23.0] };
-                d.q(OPTION, src, [440.0, 90.0 + 44.0 * i as f32 + 8.0, src[2], src[3]], WHITE, 128.0);
+                d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + 44.0 * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
@@ -1378,9 +1449,9 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         Screen::Mode => {
             d.frame(2, 5);
             // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
-            for (i, src) in [[0.0, 0.0, 256.0, 32.0], [0.0, 32.0, 256.0, 31.75]].into_iter().enumerate() {
+            for (i, words) in ["Singles", "Doubles"].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
-                d.q(CS0, src, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
+                mode_bar(&mut d, i, on, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], words);
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
@@ -1389,7 +1460,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.frame(2, 5);
             for p in 0..m.players() {
                 let y = 90.0 + 70.0 * p as f32;
-                d.q(CARD, [CARDS[p][0], CARDS[p][1], 140.0, 40.0], [120.0, y, 400.0, 56.0], WHITE, 128.0);
+                d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
                 d.text(&dev_name(m.seats[p], pads), 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else { [60.0, 110.0, 40.0] });
             }
@@ -1416,6 +1487,19 @@ fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
     (Tex::Shots(sheet), [(cell % 4) as f32 * 128.0, (cell / 4 % 2) as f32 * 168.0, 128.0, 168.0])
 }
 
+/// A Singles / Doubles bar (B141, ours): pill `i`'s colour, dimmed and see-through when not chosen, its word in our
+/// font as tall as the bar allows.
+fn mode_bar(d: &mut Draw, i: usize, on: bool, [x, y, w, h]: [f32; 4], words: &str) {
+    let fill = if on { MODE_FILL[i] } else { MODE_FILL[i].map(|c| c * 0.7) };
+    d.pill_at([x, y, w, h], [INK, if on { WHITE } else { [90.0; 3] }, fill], if on { 128.0 } else { 90.0 });
+    let size = h * 0.8;
+    let start = d.out.len();
+    d.label(words, x + w / 2.0, y + h * 0.09, size, w - h, if on { WHITE } else { [100.0; 3] });
+    if !on {
+        d.out[start..].iter_mut().for_each(|q| q.alpha = 90.0);
+    }
+}
+
 /// The △ card as the original draws it over panel `p`: the title box in the player's colour with the play style,
 /// the five stat labels and each grade's letter (A at grade 5, F at 0).
 fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], x: f32, y: f32) {
@@ -1433,7 +1517,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     hints(d);
     let n = m.players();
-    d.q(CS0, if m.doubles { [0.0, 32.0, 256.0, 31.75] } else { [0.0, 0.0, 256.0, 32.0] }, [192.0, 54.0, 256.0, 32.0], WHITE, 128.0);
+    mode_bar(d, m.doubles as usize, true, [192.0, 54.0, 256.0, 32.0], if m.doubles { "Doubles" } else { "Singles" });
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {
@@ -1453,7 +1537,6 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         let pl = m.players[p];
         let c = pl.char();
         let [x, y] = panels[p];
-        let [u, v] = CARDS[p];
         let human = m.seats[p].is_some();
         let picking = picking(p);
         d.anchor = Anchor::Sides;
@@ -1462,7 +1545,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             Who::Disc(_) => None,
         };
         // a card nobody is picking on yet is dark
-        d.q(CARD, [u, v, 140.0, 164.0], [x, y, 144.0, 168.0], if picking || pl.ready { WHITE } else { [55.0; 3] }, 128.0);
+        let fill = if picking || pl.ready { CARD_FILL[p] } else { CARD_FILL[p].map(|c| c * 0.45) };
+        d.box3([x, y, 144.0, 168.0], 12.0, [Some(INK), Some(if picking || pl.ready { WHITE } else { [60.0; 3] }), Some(fill)], 128.0);
         if picking || pl.ready {
             if pl.card {
                 let (style, grades) = modded.map_or((text.style[c], text.grades[c]), |i| text.mods[i]);
@@ -1470,10 +1554,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             } else {
                 d.q(Tex::Preview(p), [0.0; 4], [x + 8.0, y + 4.0, 128.0, 160.0], WHITE, 128.0);
                 let style = modded.map_or(text.style[c], |i| text.mods[i].0);
-                let style = [[320.0, 112.0, 144.0, 24.0], [324.0, 136.0, 136.0, 24.0], [346.0, 160.0, 94.0, 24.0], [346.0, 184.0, 94.0, 24.0]][style];
                 // a computer's label sits higher, over its rank pill
                 let sy = if human { y + 118.0 } else { y + 94.0 };
-                d.q(CS0, style, [x + 72.0 - style[2] / 2.0 * 0.9, sy, style[2] * 0.9, 22.0], WHITE, 128.0);
+                d.label(STYLE_NAMES[style], x + 72.0, sy + 2.0, 18.0, 132.0, GOLD);
                 if !human {
                     let (who, costume) = m.pick(p);
                     let c = match who {
@@ -1482,8 +1565,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                     };
                     rank_pill(d, com_rank(&text.ranks, c, costume, m.doubles), COLOURS[p], x + 17.0, y + 114.0);
                 } else {
-                    let src = if m.hand(text, p) < 0.0 { [60.0, 184.0, 76.0, 22.0] } else { [60.0, 160.0, 76.0, 22.0] };
-                    d.q(CS0, src, [x + 70.0, y + 5.0, 66.0, 19.0], if pl.swap { [128.0, 110.0, 30.0] } else { WHITE }, 128.0);
+                    let words = if m.hand(text, p) < 0.0 { "Left hander" } else { "Right hander" };
+                    d.pill_at([x + 70.0, y + 5.0, 66.0, 19.0], [INK, WHITE, if pl.swap { [128.0, 100.0, 20.0] } else { [90.0, 72.0, 48.0] }], 128.0);
+                    d.label(words, x + 103.0, y + 8.0, 13.0, 56.0, WHITE);
                 }
                 match modded {
                     Some(i) => {
@@ -1491,13 +1575,13 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                         // M1m: the game it comes from, under the hand badge beside the player tag
                         d.fitted(&m.mods[i].source, x + 92.0, y + 27.0, 11.0, 88.0);
                     }
-                    None => d.q(NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x + 20.0, y + 140.0, 105.0, 24.0], WHITE, 128.0),
+                    None => d.label(CHAR_NAMES[c], x + 72.0, y + 142.0, 20.0, 128.0, GOLD),
                 }
             }
             if pl.ready {
-                d.q(CS0, [2.0, 208.0, 108.0, 24.0], [x + 18.0, y + 96.0, 108.0, 24.0], WHITE, 128.0);
+                d.label("Ready to go!", x + 72.0, y + 97.0, 20.0, 128.0, GOLD);
             } else if m.blocked(p) {
-                d.q(CS0, [2.0, 232.0, 110.0, 24.0], [x + 17.0, y + 96.0, 110.0, 24.0], WHITE, 128.0);
+                d.label("Not selectable", x + 72.0, y + 97.0, 18.0, 128.0, [80.0; 3]);
             }
             if !pl.ready && !pl.modded {
                 d.anchor = Anchor::Centre;
@@ -1540,50 +1624,34 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
 fn hints(d: &mut Draw) {
     d.anchor = Anchor::Sides;
     d.q(INFO, [228.0, 4.0, 24.0, 24.0], [314.0, 26.0, 22.0, 22.0], WHITE, 128.0);
-    d.q(KEYS, [0.0, 4.0, 104.0, 16.0], [338.0, 29.0, 98.0, 15.0], WHITE, 128.0);
+    d.label("Show Attributes", 387.0, 27.0, 19.0, 98.0, WHITE);
     d.q(INFO, [160.0, 9.0, 32.0, 19.0], [440.0, 27.0, 30.0, 18.0], WHITE, 128.0);
     d.q(INFO, [160.0, 73.0, 32.0, 19.0], [472.0, 27.0, 30.0, 18.0], WHITE, 128.0);
-    d.q(KEYS, [0.0, 27.0, 132.0, 18.0], [506.0, 28.0, 128.0, 17.0], WHITE, 128.0);
+    d.label("Select Costume", 570.0, 27.0, 19.0, 128.0, WHITE);
     d.anchor = Anchor::Centre;
 }
 
-/// `src` drawn over `dst` with its `c`-px corners unstretched.
-fn nine(d: &mut Draw, tex: Tex, [u, v, w, h]: [f32; 4], c: f32, [x, y, dw, dh]: [f32; 4]) {
-    let cols = [(u, c, x, c), (u + c, w - 2.0 * c, x + c, dw - 2.0 * c), (u + w - c, c, x + dw - c, c)];
-    let rows = [(v, c, y, c), (v + c, h - 2.0 * c, y + c, dh - 2.0 * c), (v + h - c, c, y + dh - c, c)];
-    for (su, sw, dx, ww) in cols {
-        for (sv, sh, dy, hh) in rows {
-            d.q(tex, [su, sv, sw, sh], [dx, dy, ww, hh], WHITE, 128.0);
-        }
-    }
-}
-
 /// The grid's BEG / INT / EXP groups as the original frames them: an outlined box round each, a coloured bar down
-/// its left with the letters (`CharacterSelect2_00`; boxes and colours off a PCSX2 shot).
+/// its left with the letters (boxes and colours off a PCSX2 shot; drawn with our box, B141).
 fn groups(d: &mut Draw) {
-    const GROUPS: [(f32, f32, [f32; 3], [f32; 4]); 3] = [
-        (92.0, 72.0, [40.0, 100.0, 50.0], [470.0, 401.0, 13.0, 38.0]),
-        (171.0, 146.0, [40.0, 80.0, 128.0], [494.0, 401.0, 13.0, 38.0]),
-        (324.0, 74.0, [120.0, 45.0, 45.0], [470.0, 440.0, 13.0, 39.0]),
-    ];
+    const GROUPS: [(f32, f32, [f32; 3], &str); 3] =
+        [(92.0, 72.0, [40.0, 100.0, 50.0], "BEG"), (171.0, 146.0, [40.0, 80.0, 128.0], "INT"), (324.0, 74.0, [120.0, 45.0, 45.0], "EXP")];
     for (y, h, rgb, letters) in GROUPS {
-        nine(d, CS0, [154.0, 274.0, 60.0, 60.0], 12.0, [166.0, y, 308.0, h]);
-        // the bar: the tall pill filled in the group's colour under its outline, the round ends kept
-        for (u, tint) in [(392.0, rgb), (424.0, WHITE)] {
-            d.q(CS0, [u, 400.0, 28.0, 14.0], [167.0, y + 1.0, 28.0, 14.0], tint, 128.0);
-            d.q(CS0, [u, 414.0, 28.0, 48.0], [167.0, y + 15.0, 28.0, h - 30.0], tint, 128.0);
-            d.q(CS0, [u, 462.0, 28.0, 14.0], [167.0, y + h - 15.0, 28.0, 14.0], tint, 128.0);
+        d.box3([166.0, y, 308.0, h], 10.0, [Some(INK), Some(WHITE), None], 128.0);
+        // the bar down its left in the group's colour, round at both ends, the letters stacked on it
+        d.box3([167.0, y + 1.0, 28.0, h - 2.0], 14.0, [Some(INK), Some(WHITE), Some(rgb)], 128.0);
+        let n = letters.chars().count() as f32;
+        for (i, ch) in letters.chars().enumerate() {
+            d.centred(&ch.to_string(), 181.0, y + h / 2.0 + (i as f32 - n / 2.0) * 13.0, 14.0, WHITE);
         }
-        d.q(CS0, letters, [174.5, y + (h - letters[3]) / 2.0, letters[2], letters[3]], WHITE, 128.0);
     }
 }
 
 /// A computer's "Tennis Lv N" pill (`Confirmation_04`: rank `r`'s label, 9 to a column, on its pill in the card's
 /// colour).
 fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
-    d.q(RANKS, [0.0, 224.0, 112.0, 24.0], [x, y, 110.0, 22.0], rgb, 128.0);
-    d.q(RANKS, [112.0, 224.0, 112.0, 24.0], [x, y, 110.0, 22.0], rgb.map(|c| c * 0.45), 128.0);
-    d.q(RANKS, [96.0 * (r / 9) as f32, 24.0 * (r % 9) as f32, 96.0, 24.0], [x + 7.0, y - 1.0, 96.0, 24.0], WHITE, 128.0);
+    d.pill_at([x, y, 110.0, 22.0], [rgb.map(|c| c * 0.45), rgb, rgb], 128.0);
+    d.label(RANK_NAMES.get(r).copied().unwrap_or(""), x + 55.0, y + 2.0, 18.0, 96.0, WHITE);
 }
 
 /// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
@@ -1592,7 +1660,7 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
     let per = ICON_COLS * ICON_ROWS;
     let page = custom_page(m);
     let cell = |i: usize| (ICON_X[i % ICON_COLS], ICON_TOP + ICON_PITCH * (i % per / ICON_COLS) as f32);
-    nine(d, CS0, [154.0, 274.0, 60.0, 60.0], 12.0, [200.0, 86.0, 266.0, 298.0]);
+    d.box3([200.0, 86.0, 266.0, 298.0], 10.0, [Some(INK), Some(WHITE), None], 128.0);
     for i in page.clone() {
         let (x, y) = cell(i);
         d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
@@ -1631,15 +1699,13 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             (Who::Mod(i), costume) => (text.mods[i].0, (m.mods[i].ai_row, costume)),
             (Who::Disc(c), costume) => (text.style[c], (c, costume)),
         };
-        d.q(CONFIRM, [412.0, 168.0 + 24.0 * style as f32, 90.0, 24.0], [x + 11.0, 186.0, 90.0, 24.0], WHITE, 128.0);
+        d.label(["All-round", "Baseline", "Net Player", "Big Server"][style], x + 56.0, 188.0, 20.0, 96.0, GOLD);
         if m.seats[p].is_none() {
             d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
             d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
             // the computer's Tennis Lv: its AIParam row's rank (`Confirmation_04`'s titles, nine to a column)
             let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(ai.0 as u8, ai.1 as u8) as u32, ai.0 as u8, m.doubles).row;
-            let r = text.ranks.get(row).copied().unwrap_or(0) as f32;
-            d.q(C04, [0.0, 224.0, 110.0, 24.0], [x + 1.0, 238.0, 110.0, 20.0], COLOURS[p], 128.0);
-            d.q(C04, [96.0 * (r / 9.0).floor(), 24.0 * (r % 9.0), 96.0, 24.0], [x + 10.0, 237.0, 92.0, 22.0], WHITE, 128.0);
+            rank_pill(d, text.ranks.get(row).copied().unwrap_or(0) as usize, COLOURS[p], x + 1.0, 238.0);
         } else {
             d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]);
         }
@@ -1649,7 +1715,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     // "Umpire", the umpire's round face (the "?" tile for a random one) and name at the top right
     d.anchor = Anchor::Sides;
     let u = m.umpire as usize;
-    d.q(CONFIRM, [286.0, 194.0, 78.0, 28.0], [404.0, 12.0, 78.0, 28.0], WHITE, 128.0);
+    d.label("Umpire", 443.0, 12.0, 28.0, 78.0, WHITE);
     let (face, name) = match u {
         UMPIRES => ([96.0, 360.0, 92.0, 68.0], "Random".to_string()),
         _ => ([63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0], text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
@@ -1666,7 +1732,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
         d.text(&court, 30.0, 258.0, 24.0, gold);
         let s = SURFACE[m.court];
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
-        d.q(C01, [68.0, 286.0 + 24.0 * s as f32, 124.0, 24.0], [400.0, 256.0, 124.0, 24.0], tint, 128.0);
+        d.label(["Grass Court", "Clay Court", "Hard Court"][s], 462.0, 256.0, 24.0, 124.0, tint);
         for (g, (icon, n)) in [([2.0, 490.0, 45.0, 22.0], METERS[s].0), ([49.0, 492.0, 46.0, 17.0], METERS[s].1)].into_iter().enumerate() {
             let x = 344.0 + 140.0 * g as f32;
             d.q(C01, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
@@ -1689,7 +1755,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
         let on = i == m.sel;
         if i == 0 {
             d.pill(x, y, w, if on { [128.0, 40.0, 60.0] } else { [80.0, 40.0, 50.0] });
-            d.q(CONFIRM, [232.0, 166.0, 160.0, 28.0], [x + w / 2.0 - 80.0, y + 5.0, 160.0, 28.0], WHITE, 128.0);
+            d.label("Start the match!", x + w / 2.0, y + 6.0, 26.0, 160.0, GOLD);
             continue;
         }
         d.pill(x, y - 4.0, w, if on { [128.0, 110.0, 40.0] } else { [90.0; 3] });
