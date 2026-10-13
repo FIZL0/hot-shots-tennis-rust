@@ -33,14 +33,22 @@ struct Sheet {
     /// A screen's title bar: these words where the disc's title stands on its stripes (box found at run time), with a
     /// drop shadow.
     title: Option<&'static str>,
+    /// B141a: stylised words and digits of ours, each cell cleared and stamped in its [`Look`].
+    stamps: &'static [Stamp],
+    /// B141a: icons of ours drawn over the sheet (each clears its own cells).
+    icons: Option<fn(&mut Pixmap)>,
 }
 
 const fn sheet(name: &'static str, labels: &'static [Label<'static>]) -> Sheet {
-    Sheet { name, labels, title: None }
+    Sheet { name, labels, title: None, stamps: &[], icons: None }
 }
 
 const fn title(name: &'static str, words: &'static str) -> Sheet {
-    Sheet { name, labels: &[], title: Some(words) }
+    Sheet { name, labels: &[], title: Some(words), stamps: &[], icons: None }
+}
+
+const fn stamped(name: &'static str, labels: &'static [Label<'static>], stamps: &'static [Stamp]) -> Sheet {
+    Sheet { name, labels, title: None, stamps, icons: None }
 }
 
 /// Rounded bars drawn again as shapes (x, y, w, h on the disc sheet): a 2-px dark rim, a 2-px white ring and a flat
@@ -55,7 +63,7 @@ const SHEETS: &[Sheet] = &[
     sheet("characterselect2_04", ATTRS),
     sheet("keyassign_characterselect2", KEYS),
     sheet("confirmation_01", COURTS),
-    sheet("confirmation_03", CONFIRM),
+    stamped("confirmation_03", CONFIRM, &[((448, 268, 64, 41), "VS", VS)]),
     sheet("confirmation_04", RANKS),
     sheet("i_dialog_01", DIALOG),
     sheet("loading", &[(2, 152, 195, 32, "Now Loading...")]),
@@ -68,6 +76,85 @@ const SHEETS: &[Sheet] = &[
     title("title_playerselect", "Game Selection"),
     title("title_characterselect2", "Character Selection"),
     title("title_confirmation_01", "Confirm Settings (Fun Time Tennis)"),
+    stamped("result_gameset01", &[], &DIGITS_PAST),
+    stamped("result_gameset02", &[], &DIGITS_NOW),
+    stamped("result_gameset05", &[], BANNERS),
+    stamped("inpane_pause00", &[], POINTS),
+    stamped("inpane_pause01", &[], TIEBREAK),
+    Sheet { name: "info", labels: &[], title: None, stamps: &[], icons: Some(info_icons) },
+];
+
+
+/// B141a: our look for a stylised word or digit (nothing sampled from the disc): a fill fading from `top` to `bottom`,
+/// a dark `edge` outline `ew` disc px wide and a light `ring` `rw` px round that, slanted by `slant` (x per y).
+#[derive(Clone, Copy)]
+pub(crate) struct Look {
+    pub top: [u8; 3],
+    pub bottom: [u8; 3],
+    pub edge: [u8; 3],
+    pub ring: [u8; 3],
+    pub ew: f32,
+    pub rw: f32,
+    pub slant: f32,
+}
+
+const fn look(top: [u8; 3], bottom: [u8; 3], edge: [u8; 3], ew: f32, slant: f32) -> Look {
+    Look { top, bottom, edge, ring: [255; 3], ew, rw: ew * 0.75, slant }
+}
+
+/// A stamp: its cell on the disc sheet (x, y, w, h: the outer edge of its ring), its words and look.
+type Stamp = ((u16, u16, u16, u16), &'static str, Look);
+
+/// The score digits: a past set's games (green) and the set in play (orange), 32-px cells, "-" after the 9.
+const DIGITS_PAST: [Stamp; 11] = digits(look([200, 250, 160], [50, 150, 50], [20, 70, 20], 2.0, 0.0));
+const DIGITS_NOW: [Stamp; 11] = digits(look([255, 225, 160], [220, 100, 30], [95, 40, 10], 2.0, 0.0));
+
+const fn digits(l: Look) -> [Stamp; 11] {
+    const S: [&str; 11] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-"];
+    let mut out = [((0, 0, 0, 0), "", l); 11];
+    let mut d = 0;
+    while d < 11 {
+        out[d] = ((d as u16 * 32 + 2, 2, if d == 10 { 20 } else { 28 }, 28), S[d], l);
+        d += 1;
+    }
+    out
+}
+
+/// The result banners, one 80-px row each (`ceremony`'s rows).
+const BANNERS: &[Stamp] = &[
+    ((8, 12, 240, 54), "DOMINATION", look([255, 245, 140], [200, 150, 0], [80, 60, 0], 3.0, 0.0)),
+    ((8, 92, 240, 54), "ANNIHILATION", look([225, 232, 236], [80, 95, 108], [28, 34, 40], 3.0, 0.0)),
+    ((8, 172, 240, 54), "VICTORY", look([255, 210, 150], [225, 60, 30], [100, 20, 10], 3.0, 0.0)),
+    ((8, 252, 240, 54), "DEFEAT", look([235, 205, 255], [125, 75, 180], [50, 20, 80], 3.0, 0.0)),
+    ((8, 332, 240, 54), "NARROW WIN", look([255, 230, 195], [200, 125, 65], [90, 50, 20], 3.0, 0.0)),
+    ((8, 412, 240, 54), "NARROW LOSS", look([195, 232, 255], [35, 125, 200], [10, 45, 90], 3.0, 0.0)),
+];
+
+/// The confirm screen's "VS".
+const VS: Look = look([255, 225, 80], [230, 70, 20], [120, 30, 10], 2.5, 0.2);
+
+/// The pause board's points (64×48 cells as `menu::POINT_U`/`POINT_V` place them): gold, the tiebreak's red.
+const GOLD: Look = look([255, 240, 130], [230, 160, 20], [90, 50, 10], 2.5, 0.15);
+const RED: Look = look([255, 160, 160], [190, 35, 50], [80, 10, 20], 2.5, 0.15);
+const POINTS: &[Stamp] = &[
+    ((4, 4, 56, 40), "0", GOLD),
+    ((68, 4, 56, 40), "15", GOLD),
+    ((4, 52, 56, 40), "30", GOLD),
+    ((68, 52, 56, 40), "40", GOLD),
+    ((4, 100, 56, 40), "D", GOLD),
+    ((68, 100, 56, 40), "A", GOLD),
+];
+const TIEBREAK: &[Stamp] = &[
+    ((4, 4, 56, 40), "0", RED),
+    ((68, 4, 56, 40), "1", RED),
+    ((4, 52, 56, 40), "2", RED),
+    ((68, 52, 56, 40), "3", RED),
+    ((4, 100, 56, 40), "4", RED),
+    ((68, 100, 56, 40), "5", RED),
+    ((4, 148, 56, 40), "6", RED),
+    ((68, 148, 56, 40), "7", RED),
+    ((4, 196, 56, 40), "D", RED),
+    ((68, 196, 56, 40), "A", RED),
 ];
 
 /// The mode bars, card labels, play styles and the stat names of the select (CS0).
@@ -339,7 +426,8 @@ const OPTION_00: &[Label<'static>] = &[
 
 /// `data` (a TIM2 sheet called `name`) as an image: rebuilt if it's one of ours, else the disc's.
 pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
-    let name = name.trim_start_matches('/').trim_end_matches(".tm2").to_ascii_lowercase();
+    // match_stats names `info` by its folder ("/2d/info.tm2")
+    let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
     let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
     let Some(sheet) = sheet else { return super::panel::image(images, data) };
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
@@ -354,7 +442,20 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     let chars: Vec<(u16, u16, u16, u16, String)> = if name == "word" { glyph_boxes(&pic.rgba, w) } else { vec![] };
     labels.extend(chars.iter().map(|(x, y, lw, lh, c)| (*x, *y, *lw, *lh, c.as_str())));
     let pills = PILLS.iter().find(|p| p.0 == name).map_or(&[][..], |p| p.1);
-    let out = rebuild(w, h, &pic.rgba, pills, &labels, if name == "word" { BOLD } else { HEAVY }, shadow);
+    let mut out = rebuild(w, h, &pic.rgba, pills, &labels, if name == "word" { BOLD } else { HEAVY }, shadow);
+    if !sheet.stamps.is_empty() {
+        let font = ab_glyph::FontRef::try_from_slice(HEAVY).expect("menu font");
+        // a ring's outer pixels lie a little past its cell: clear round every cell before any is stamped
+        for &((x, y, w, h), ..) in sheet.stamps {
+            clear(&mut out, [x as f32 - 4.0, y as f32 - 4.0, w as f32 + 8.0, h as f32 + 8.0]);
+        }
+        for &((x, y, w, h), words, l) in sheet.stamps {
+            stamp(&mut out, &font, [x as f32, y as f32, w as f32, h as f32], words, &l);
+        }
+    }
+    if let Some(icons) = sheet.icons {
+        icons(&mut out);
+    }
     if let Ok(dir) = std::env::var("HST_MENU_ART") {
         let _ = image::save_buffer(format!("{dir}/{name}.png"), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
     }
@@ -450,7 +551,7 @@ fn stadium(l: f32, t: f32, rr: f32, b: f32) -> tiny_skia::Path {
 /// panel's rim, ring and fill each tinted its own colour.
 pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
     let k = K as f32;
-    let mut out = Pixmap::new(64 * K, (BOX_Y as u32 + 64 * 3) * K).expect("pill size");
+    let mut out = Pixmap::new(64 * K, (ICON_Y as u32 + 72) * K).expect("pill size");
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     paint.set_color_rgba8(255, 255, 255, 255);
     for i in 0..3 {
@@ -468,6 +569,7 @@ pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
         }
         out.fill_path(&pb.finish().expect("box"), &paint, FillRule::EvenOdd, Transform::identity(), None);
     }
+    meter_icons(&mut out);
     let (w, h) = (out.width(), out.height());
     let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
     crate::textures::ours(handle.id(), Vec2::splat(k));
@@ -476,6 +578,227 @@ pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
 
 /// Where [`pill_layers`]' boxes start on the sheet (disc px).
 const BOX_Y: f32 = 120.0;
+
+/// B141a: our icons on [`pill_layers`]' sheet below the boxes (disc px): the confirm screen's meter balls, lit and
+/// not, and its bounce and speed meters' icons.
+const ICON_Y: f32 = BOX_Y + 192.0;
+pub(crate) const BALL: [f32; 4] = [0.0, ICON_Y, 24.0, 24.0];
+pub(crate) const BALL_OFF: [f32; 4] = [24.0, ICON_Y, 24.0, 24.0];
+pub(crate) const BOUNCE: [f32; 4] = [0.0, ICON_Y + 24.0, 45.0, 22.0];
+pub(crate) const SPEED: [f32; 4] = [0.0, ICON_Y + 48.0, 46.0, 17.0];
+
+/// The meter icons at [`ICON_Y`].
+fn meter_icons(out: &mut Pixmap) {
+    let y = ICON_Y;
+    ball(out, 12.0, y + 12.0, 10.5, [215, 235, 60], [80, 95, 15]);
+    ball(out, 36.0, y + 12.0, 10.5, [72, 76, 52], [30, 32, 22]);
+    // bounce: the ball's dotted path down, up off the court and down again
+    let y = y + 24.0;
+    let mut pb = PathBuilder::new();
+    pb.move_to(2.0, y + 3.0);
+    pb.quad_to(12.0, y + 4.0, 17.0, y + 19.0);
+    pb.quad_to(22.0, y + 3.0, 31.0, y + 11.0);
+    let path = pb.finish().expect("bounce");
+    let dash = tiny_skia::StrokeDash::new(vec![2.5, 2.0], 0.0);
+    lines(out, &path, 1.6, dash);
+    ball(out, 37.5, y + 13.0, 6.5, [215, 235, 60], [80, 95, 15]);
+    // speed: three streaks behind the ball
+    let y = y + 24.0;
+    let mut pb = PathBuilder::new();
+    for (i, (x0, x1)) in [(12.0, 28.0), (2.0, 26.0), (12.0, 28.0)].into_iter().enumerate() {
+        pb.move_to(x0, y + 3.5 + 5.0 * i as f32);
+        pb.line_to(x1, y + 3.5 + 5.0 * i as f32);
+    }
+    lines(out, &pb.finish().expect("speed"), 1.8, None);
+    ball(out, 37.5, y + 8.5, 6.5, [215, 235, 60], [80, 95, 15]);
+}
+
+/// White strokes with a dark edge, disc px.
+fn lines(out: &mut Pixmap, path: &tiny_skia::Path, w: f32, dash: Option<tiny_skia::StrokeDash>) {
+    let t = Transform::from_scale(K as f32, K as f32);
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    for (col, w) in [([30, 30, 30], w + 1.6), ([245, 245, 245], w)] {
+        paint.set_color_rgba8(col[0], col[1], col[2], 255);
+        let stroke = Stroke { width: w, line_cap: LineCap::Round, dash: dash.clone(), ..Stroke::default() };
+        out.stroke_path(path, &paint, &stroke, t, None);
+    }
+}
+
+/// A tennis ball: `fill` with a darker rim and two pale seams, disc px.
+fn ball(out: &mut Pixmap, cx: f32, cy: f32, r: f32, fill: [u8; 3], rim: [u8; 3]) {
+    let t = Transform::from_scale(K as f32, K as f32);
+    fill_rgb(out, &PathBuilder::from_circle(cx, cy, r).expect("ball"), rim, t);
+    fill_rgb(out, &PathBuilder::from_circle(cx, cy, r - 1.2).expect("ball"), fill, t);
+    let mut pb = PathBuilder::new();
+    pb.move_to(cx - r * 0.85, cy - r * 0.45);
+    pb.quad_to(cx - r * 0.1, cy, cx - r * 0.85, cy + r * 0.45);
+    pb.move_to(cx + r * 0.85, cy - r * 0.45);
+    pb.quad_to(cx + r * 0.1, cy, cx + r * 0.85, cy + r * 0.45);
+    let seam = fill.map(|c| c.saturating_add(70));
+    stroke_rgb(out, &pb.finish().expect("seam"), seam, r * 0.13, t);
+}
+
+fn fill_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], t: Transform) {
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    paint.set_color_rgba8(c[0], c[1], c[2], 255);
+    out.fill_path(path, &paint, FillRule::Winding, t, None);
+}
+
+fn stroke_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], w: f32, t: Transform) {
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    paint.set_color_rgba8(c[0], c[1], c[2], 255);
+    out.stroke_path(path, &paint, &Stroke { width: w, line_join: LineJoin::Round, line_cap: LineCap::Round, ..Stroke::default() }, t, None);
+}
+
+/// Clear `[x, y, w, h]` (disc px, clipped to the sheet).
+fn clear(out: &mut Pixmap, [x, y, w, h]: [f32; 4]) {
+    let k = K as f32;
+    let (ow, oh) = (out.width() as f32, out.height() as f32);
+    let (x0, y0, x1, y1) = ((x * k).clamp(0.0, ow) as u32, (y * k).clamp(0.0, oh) as u32, ((x + w) * k).clamp(0.0, ow) as u32, ((y + h) * k).clamp(0.0, oh) as u32);
+    let stride = out.width();
+    for py in y0..y1 {
+        out.pixels_mut()[(py * stride + x0) as usize..(py * stride + x1) as usize].fill(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
+/// `words` in our font in `cell` (disc px, the ring's outer edge): its cap height fills the cell less the ring, the
+/// width squeezed only if it doesn't fit, centred; ring, outline, then the fill's fade over the cap height.
+fn stamp(out: &mut Pixmap, font: &ab_glyph::FontRef, [x, y, w, h]: [f32; 4], words: &str, l: &Look) {
+    let (Some(path), Some(caps)) = (text_path(font, words), text_path(font, "H")) else { return };
+    let k = K as f32;
+    let m = l.ew + l.rw;
+    let (bw, bh) = ((w - 2.0 * m) * k, (h - 2.0 * m) * k);
+    let cap = -caps.bounds().top();
+    // the slant leans the top right: room for it comes off the width
+    let sy = bh / cap;
+    let b = path.bounds();
+    let sx = sy.min((bw - l.slant * bh) / b.width());
+    let cx = (x + w / 2.0) * k;
+    // font y is 0 at the baseline, −cap at the caps' top; the slant leans about the cell's middle
+    let (top, uc) = ((y + m) * k, b.left() + b.width() / 2.0);
+    let t = Transform::from_row(sx, 0.0, -l.slant * sy, sy, cx - uc * sx - l.slant * bh / 2.0, top + bh);
+    let Some(path) = path.transform(t) else { return };
+    let rgb = |c: [u8; 3]| SkColor::from_rgba8(c[0], c[1], c[2], 255);
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    for (c, wd) in [(l.ring, 2.0 * m * k), (l.edge, 2.0 * l.ew * k)] {
+        if wd > 0.0 {
+            paint.set_color(rgb(c));
+            out.stroke_path(&path, &paint, &Stroke { width: wd, line_join: LineJoin::Round, line_cap: LineCap::Round, ..Stroke::default() }, Transform::identity(), None);
+        }
+    }
+    let bot = top + bh;
+    paint.shader = LinearGradient::new(Point::from_xy(0.0, top), Point::from_xy(0.0, bot), vec![GradientStop::new(0.0, rgb(l.top)), GradientStop::new(1.0, rgb(l.bottom))], SpreadMode::Pad, Transform::identity()).expect("gradient");
+    out.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+}
+
+/// `info.tm2`'s buttons drawn ours (its left half, the plain boxes and Yes/No, stays the disc's): L1/L2/R1/R2, the
+/// d-pad with each arm lit and plain, △ □ ○ ✕, the orange dot, START and SELECT plain and lit, the four arrows.
+fn info_icons(out: &mut Pixmap) {
+    clear(out, [144.0, 0.0, 112.0, 256.0]);
+    let t = Transform::from_scale(K as f32, K as f32);
+    let font = ab_glyph::FontRef::try_from_slice(HEAVY).expect("menu font");
+    const DARK: [u8; 3] = [24, 24, 28];
+    const BODY: [u8; 3] = [72, 74, 80];
+    const LIT: [u8; 3] = [250, 160, 30];
+    let white = look([255; 3], [215; 3], DARK, 0.0, 0.0);
+    let white = Look { rw: 0.0, ..white };
+    let label = Look { ew: 1.2, rw: 0.0, ..white };
+    for (k, s) in ["L1", "L2", "R1", "R2"].into_iter().enumerate() {
+        let y = 9.0 + 32.0 * k as f32;
+        fill_rgb(out, &rounded(160.0, y, 192.0, y + 19.0, 6.0), DARK, t);
+        fill_rgb(out, &rounded(161.5, y + 1.5, 190.5, y + 17.5, 4.5), BODY, t);
+        stamp(out, &font, [166.0, y + 4.0, 20.0, 11.0], s, &white);
+    }
+    // the d-pad: lit arm k (up, left, right, down) at (208, 16 + 32k); plain at (160, 144)
+    let pads = [(208.0, 16.0, Some(0)), (208.0, 48.0, Some(1)), (208.0, 80.0, Some(2)), (208.0, 112.0, Some(3)), (160.0, 144.0, None)];
+    for (cx, cy, lit) in pads {
+        let (a, l) = (4.0, 13.0);
+        let mut pb = PathBuilder::new();
+        for (px, py) in [(-a, -l), (a, -l), (a, -a), (l, -a), (l, a), (a, a), (a, l), (-a, l), (-a, a), (-l, a), (-l, -a), (-a, -a)] {
+            if pb.is_empty() {
+                pb.move_to(cx + px, cy + py);
+            } else {
+                pb.line_to(cx + px, cy + py);
+            }
+        }
+        pb.close();
+        let cross = pb.finish().expect("d-pad");
+        stroke_rgb(out, &cross, DARK, 2.4, t);
+        fill_rgb(out, &cross, BODY, t);
+        if let Some(arm) = lit {
+            let r = match arm {
+                0 => [cx - a, cy - l, cx + a, cy - a],
+                1 => [cx - l, cy - a, cx - a, cy + a],
+                2 => [cx + a, cy - a, cx + l, cy + a],
+                _ => [cx - a, cy + a, cx + a, cy + l],
+            };
+            let arm = rounded(r[0] + 0.6, r[1] + 0.6, r[2] - 0.6, r[3] - 0.6, 1.5);
+            fill_rgb(out, &arm, LIT, t);
+        }
+    }
+    // △ □ ○ ✕ in their PlayStation colours
+    let face = [[70, 205, 165], [235, 130, 185], [240, 95, 85], [110, 160, 240]];
+    for (k, col) in face.into_iter().enumerate() {
+        let (cx, cy) = (240.0, 16.0 + 32.0 * k as f32);
+        fill_rgb(out, &PathBuilder::from_circle(cx, cy, 12.0).expect("button"), DARK, t);
+        fill_rgb(out, &PathBuilder::from_circle(cx, cy, 10.6).expect("button"), [58, 60, 66], t);
+        let r = 5.5;
+        let mut pb = PathBuilder::new();
+        match k {
+            0 => {
+                pb.move_to(cx, cy - r);
+                pb.line_to(cx + r * 0.95, cy + r * 0.6);
+                pb.line_to(cx - r * 0.95, cy + r * 0.6);
+                pb.close();
+            }
+            1 => pb.push_rect(tiny_skia::Rect::from_xywh(cx - r * 0.8, cy - r * 0.8, r * 1.6, r * 1.6).expect("square")),
+            2 => pb.push_circle(cx, cy, r * 0.9),
+            _ => {
+                pb.move_to(cx - r * 0.8, cy - r * 0.8);
+                pb.line_to(cx + r * 0.8, cy + r * 0.8);
+                pb.move_to(cx + r * 0.8, cy - r * 0.8);
+                pb.line_to(cx - r * 0.8, cy + r * 0.8);
+            }
+        }
+        stroke_rgb(out, &pb.finish().expect("symbol"), col, 2.0, t);
+    }
+    fill_rgb(out, &PathBuilder::from_circle(160.0, 176.0, 13.5).expect("dot"), LIT, t);
+    // START (a play triangle) and SELECT (a flat key), the lit ones rimmed orange, their names under them
+    for (y, rim) in [(132.0, DARK), (162.0, LIT)] {
+        let mut pb = PathBuilder::new();
+        pb.move_to(188.0, y + 2.0);
+        pb.line_to(212.0, y + 10.0);
+        pb.line_to(188.0, y + 18.0);
+        pb.close();
+        let tri = pb.finish().expect("start");
+        stroke_rgb(out, &tri, rim, 3.0, t);
+        fill_rgb(out, &tri, BODY, t);
+        stamp(out, &font, [183.0, y + 18.0, 35.0, 10.0], "START", &label);
+    }
+    for (y, rim) in [(198.0, DARK), (228.0, LIT)] {
+        let key = rounded(186.0, y + 1.0, 214.0, y + 13.0, 3.0);
+        stroke_rgb(out, &key, rim, 2.4, t);
+        fill_rgb(out, &key, BODY, t);
+        stamp(out, &font, [180.0, y + 14.0, 41.0, 10.0], "SELECT", &label);
+    }
+    // the arrows: right, left, down, up
+    let arrows = [
+        [(229.0, 133.0), (229.0, 155.0), (249.0, 144.0)],
+        [(251.0, 165.0), (251.0, 187.0), (231.0, 176.0)],
+        [(229.0, 197.0), (251.0, 197.0), (240.0, 217.0)],
+        [(240.0, 231.0), (229.0, 251.0), (251.0, 251.0)],
+    ];
+    for tri in arrows {
+        let mut pb = PathBuilder::new();
+        pb.move_to(tri[0].0, tri[0].1);
+        pb.line_to(tri[1].0, tri[1].1);
+        pb.line_to(tri[2].0, tri[2].1);
+        pb.close();
+        let tri = pb.finish().expect("arrow");
+        stroke_rgb(out, &tri, [70, 72, 78], 2.4, t);
+        fill_rgb(out, &tri, [240, 240, 244], t);
+    }
+}
 
 /// A box with rounded corners of radius `r`.
 fn rounded(l: f32, t: f32, rr: f32, b: f32, r: f32) -> tiny_skia::Path {
@@ -774,5 +1097,38 @@ mod tests {
         assert!(minx >= 8 * K - 2 && maxx <= 56 * K + 2, "fits its box: {minx}..{maxx}");
         assert!(inked.iter().any(|&(x, y)| px(x, y).red() > 240), "white fill");
         assert!(inked.iter().any(|&(x, y)| px(x, y).red() < 20), "black ring");
+    }
+
+    /// B141a: a stamp inks only inside its cell; the digit cells don't overlap; the meter icons ink their rects.
+    #[test]
+    fn stamps_and_icons_ink_their_cells() {
+        let font = ab_glyph::FontRef::try_from_slice(HEAVY).unwrap();
+        let mut out = Pixmap::new(128 * K, 64 * K).unwrap();
+        stamp(&mut out, &font, [20.0, 10.0, 64.0, 41.0], "VS", &VS);
+        let ink = |out: &Pixmap, [x, y, w, h]: [f32; 4]| {
+            let k = K as f32;
+            (0..out.height()).flat_map(|py| (0..out.width()).map(move |px| (px, py))).filter(|&(px, py)| out.pixel(px, py).unwrap().alpha() > 0).all(|(px, py)| {
+                let (px, py) = (px as f32 / k, py as f32 / k);
+                px >= x - 0.5 && px <= x + w + 0.5 && py >= y - 0.5 && py <= y + h + 0.5
+            })
+        };
+        assert!(ink(&out, [20.0, 10.0, 64.0, 41.0]), "VS stays in its cell");
+        let cells: Vec<_> = DIGITS_NOW.iter().map(|s| s.0).collect();
+        for (i, a) in cells.iter().enumerate() {
+            for b in &cells[i + 1..] {
+                assert!(a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0, "{a:?} overlaps {b:?}");
+            }
+        }
+        let mut sheet = Pixmap::new(64 * K, (ICON_Y as u32 + 72) * K).unwrap();
+        meter_icons(&mut sheet);
+        if let Ok(dir) = std::env::var("HST_MENU_ART") {
+            image::save_buffer(format!("{dir}/pill_icons.png"), sheet.data(), sheet.width(), sheet.height(), image::ColorType::Rgba8).unwrap();
+        }
+        for r in [BALL, BALL_OFF, BOUNCE, SPEED] {
+            let k = K as f32;
+            let lit = (r[1] * k) as u32..((r[1] + r[3]) * k) as u32;
+            assert!(lit.flat_map(|y| ((r[0] * k) as u32..((r[0] + r[2]) * k) as u32).map(move |x| (x, y))).any(|(x, y)| sheet.pixel(x, y).unwrap().alpha() > 128), "{r:?} inked");
+        }
+        assert!(ink(&sheet, [0.0, ICON_Y, 48.0, 72.0]), "icons stay in their rows");
     }
 }

@@ -852,7 +852,6 @@ const CONFIRM: Tex = Tex::Sheet(15);
 const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
 const INFO: Tex = Tex::Sheet(EXTRA);
 const C00: Tex = Tex::Sheet(EXTRA + 3);
-const C01: Tex = Tex::Sheet(EXTRA + 4);
 const C02: Tex = Tex::Sheet(EXTRA + 5);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -932,7 +931,7 @@ impl Text {
 struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>, Text);
 #[derive(Component)]
 struct Slot(usize);
-const POOL: usize = 700;
+const POOL: usize = 1400;
 
 /// `message0.dat`'s strings: a count, offsets from the end of the offsets, each string `07 7f` then Latin-1 to a NUL.
 fn messages(d: &[u8]) -> Vec<String> {
@@ -1761,11 +1760,12 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
         let s = SURFACE[m.court];
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
         d.outlined(|d| d.label(["Grass Court", "Clay Court", "Hard Court"][s], 462.0, 256.0, 24.0, 124.0, tint));
-        for (g, (icon, n)) in [([2.0, 490.0, 45.0, 22.0], METERS[s].0), ([49.0, 492.0, 46.0, 17.0], METERS[s].1)].into_iter().enumerate() {
+        // B141a: the icons and balls are ours (`menu_art::pill_layers`)
+        for (g, (icon, n)) in [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)].into_iter().enumerate() {
             let x = 344.0 + 140.0 * g as f32;
-            d.q(C01, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
+            d.q(Tex::Pill, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
             for b in 0..4 {
-                d.q(C00, [72.0, if b < n { 192.0 } else { 216.0 }, 24.0, 24.0], [x + 40.0 + 22.0 * b as f32, 292.0, 22.0, 22.0], WHITE, 128.0);
+                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + 40.0 + 22.0 * b as f32, 292.0, 22.0, 22.0], WHITE, 128.0);
             }
         }
     }
