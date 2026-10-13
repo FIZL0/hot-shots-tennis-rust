@@ -257,7 +257,9 @@ pub(in crate::play) fn plugin(app: &mut App) {
             (opened, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
                 .chain()
                 .in_set(Systems),
-        );
+        )
+        // M14: the Settings screens' legend, as the main menu's
+        .add_systems(Update, super::legend::fill.run_if(open.and(resource_exists::<super::legend::Legend>)).after(Systems));
 }
 
 /// B221: the phone's on-screen pad hides while the pause or result screen is up, so taps reach the menu under it.

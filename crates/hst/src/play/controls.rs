@@ -203,6 +203,17 @@ pub fn action_names() -> impl Iterator<Item = &'static str> {
 
 impl Bindings {
     /// Action `i`'s bindings by name, keys first (`KeyJ`, `PadSouth`).
+    /// M14: action `a`'s first bound key as a keycap shows it ("J", "1", "Space", "Left"), if it has one.
+    pub fn key(&self, a: Action) -> Option<String> {
+        self.of(a).iter().find_map(|x| match x {
+            Input::Key(k) => {
+                let n = format!("{k:?}");
+                Some(["Key", "Digit", "Arrow", "Numpad"].iter().find_map(|p| n.strip_prefix(p)).unwrap_or(&n).to_string())
+            }
+            Input::Pad(_) => None,
+        })
+    }
+
     pub fn names(&self, i: usize) -> Vec<String> {
         let mut v: Vec<_> = self.0[i].iter().map(|x| (matches!(x, Input::Pad(_)), x.name())).collect();
         v.sort_by_key(|(pad, _)| *pad);

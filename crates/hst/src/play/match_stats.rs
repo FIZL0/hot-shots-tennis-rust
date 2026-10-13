@@ -448,9 +448,26 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(super::simulate))
         .add_systems(Update, (ceremony::begin, step, draw, draw_banner).chain())
+        .add_systems(Update, legend.after(step))
         .add_systems(Update, ceremony::pose.after(crate::character::animate).after(crate::character::uv_offsets).before(crate::character::texture_faces))
         .add_systems(PostUpdate, ceremony::hide.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(PostUpdate, ceremony::show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate));
+}
+
+/// M14: the result screen's legend: `step`'s ✕ (the next page until the stats page is seen, then Continue once it
+/// shows) and ←→ (the other page).
+fn legend(screen: Res<Screen>, dissolve: Res<dissolve::Dissolve>, last: Res<super::main_menu::legend::Last>, mut out: ResMut<super::main_menu::legend::Legend>) {
+    use super::main_menu::legend::{Act, item};
+    if !screen.open || screen.leaving.is_some() || dissolve.fading() {
+        return;
+    }
+    let mut v = vec![item(Act::LeftRight, "Page", &["A", "D"])];
+    if !screen.seen {
+        v.push(item(Act::Ok, "Next Page", &["Enter", "J"]));
+    } else if screen.timer >= 120 {
+        v.push(item(Act::Ok, "Continue", &["Enter", "J"]));
+    }
+    out.one(*last, v);
 }
 
 #[allow(clippy::too_many_arguments)]
