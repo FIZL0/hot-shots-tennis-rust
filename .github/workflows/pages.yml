@@ -95,6 +95,6 @@ jobs:
           gh release delete alpha --cleanup-tag -y || true
           printf '%s\n\n%s\n\n%s\n' "**Rolling alpha: rebuilt on every change to main (${GITHUB_SHA::7}). Expect bugs.**" \
             "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
-            "Browser version: https://fizl0.github.io/hot-shots-tennis-rust/" > notes.md
+            "Browser version: https://opentennis.dev/" > notes.md
           gh release create alpha --latest --target "$GITHUB_SHA" --title "Latest alpha (${GITHUB_SHA::7})" \
             --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip

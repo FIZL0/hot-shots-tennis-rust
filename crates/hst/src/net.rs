@@ -1414,7 +1414,7 @@ pub fn code_in(text: &str) -> Option<String> {
 pub const SYMBOLS: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 pub const SHORT: usize = 4;
 /// The browser build's page: a lobby link is this with `?code=<short code>`.
-pub const SITE: &str = "https://fizl0.github.io/hot-shots-tennis-rust/";
+pub const SITE: &str = "https://opentennis.dev/";
 /// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
 /// theirs there too.
 const PKARR: &str = "https://relay.pkarr.org";
@@ -1748,6 +1748,7 @@ mod tests {
         assert_eq!(code_in(" k7qx "), Some("K7QX".into()));
         assert_eq!(code_in(&link("K7QX")), Some("K7QX".into()));
         assert_eq!(code_in("https://fizl0.github.io/hot-shots-tennis-rust/?code=k7qx&x=1"), Some("K7QX".into()));
+        assert_eq!(code_in("https://opentennis.dev/?code=k7qx&x=1"), Some("K7QX".into()));
         assert_eq!(code_in("K0QX"), None, "0 isn't a symbol");
         assert_eq!(code_in("K7QXY"), None);
         let c = new_short();

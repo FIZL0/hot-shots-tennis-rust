@@ -59,7 +59,7 @@ browser's storage (OPFS); later visits run from it, menus and all. Flags go in t
 DHT/mDNS), host or join by code (`?code=<code>` or Ctrl+V on the page, then Join by Code); plays with desktop peers.
 Short codes (B104): a hosted lobby shows a 4-character code (lobby screen, QR = its link); Join by Code types it (pad:
 on-screen picker, keyboard: type, phone: OS keyboard) or takes a pasted code/link; "Copy Link" (OK on the lobby) gives
-`https://fizl0.github.io/hot-shots-tennis-rust/?code=<code>`, which opens straight into that lobby's character pick
+`https://opentennis.dev/?code=<code>`, which opens straight into that lobby's character pick
 (desktop: `HST_CODE=<code> hst`). CLI: `hst net host` prints `Short("…")`, `hst net join <short>`.
 LAN between browsers (M2k, `net/rtc.rs`): relay Off → Host gives a WebRTC offer QR (`?code=rtco…`), the guest's answer
 QR (`?code=rtca…`) goes back to the host's tab (a tab opened with it hands it over by BroadcastChannel, or paste).

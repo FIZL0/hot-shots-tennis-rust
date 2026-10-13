@@ -24,7 +24,7 @@ body=$(mktemp)
     echo
     echo "A Rust/Bevy remaster of Hot Shots Tennis (PS2). **No game data is included.** You need your own copy of *Hot Shots Tennis (USA)* (SCUS-97610) as an ISO."
     echo
-    echo "Or play in the browser: https://fizl0.github.io/hot-shots-tennis-rust/"
+    echo "Or play in the browser: https://opentennis.dev/"
     echo
     echo "### New in Alpha $n"
     if [ -n "$notes" ]; then cat "$notes"; else git log --format='- %s' "$last..HEAD" --no-merges; fi
