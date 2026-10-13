@@ -24,6 +24,9 @@
     gap: .6em; padding: 16px; text-align: center; pointer-events: none; }
   #boot[hidden] { display: none; }
   #boot.err, #boot.slow { pointer-events: auto; background: #000; }
+  /* a stop is over everything (the touch pad hides then, touch.js), its links big enough to tap */
+  #boot.err { z-index: 30; }
+  #boot.err #help a { display: inline-block; padding: .5em .9em; margin: .2em; border: 1px solid #8cf6; border-radius: .4em; }
   #boot.err #step { color: #f88; white-space: pre-wrap; max-width: 40em; overflow-wrap: anywhere; }
   #boot a { color: #8cf; }
   /* M16: the Mods screen's Add mod row (web.rs mod_picker): a tap on it is the file input's own */
@@ -106,6 +109,27 @@ console.log = (...a) => {
   }
   fail(renderError);
 };
+// B223: a shader module the browser can't make (seen once on iOS Safari with a mod installed: "createShaderModule:
+// unable to make shader module") is caught here: its label, the browser's messages and its WGSL go to the console for
+// a repeat, and the page starts again with the WebGL2 build (the same shaders as GLSL); already on it, the game stops
+// saying which shader it was.
+if (window.GPUDevice) {
+  const make = GPUDevice.prototype.createShaderModule, scopes = ['validation', 'internal', 'out-of-memory'];
+  GPUDevice.prototype.createShaderModule = function (d) {
+    for (const s of scopes) this.pushErrorScope(s);
+    const m = make.call(this, d);
+    Promise.all(scopes.map(() => this.popErrorScope())).then(async errs => {
+      const e = errs.find(Boolean);
+      if (!e) return;
+      const info = await m.getCompilationInfo?.().catch(() => null);
+      const lines = info?.messages.map(x => `${x.type} ${x.lineNum}:${x.linePos} ${x.message}`).join('\n') ?? '';
+      console.warn(`hst: shader module "${d.label ?? ''}" failed: ${e.message}\n${lines}\n${d.code}`);
+      if (window.hstWebGL2?.()) return;
+      fail(`shader "${d.label ?? '?'}" couldn't be made: ${e.message}`);
+    });
+    return m;
+  };
+}
 addEventListener('error', e => fail(e.error ?? e.message));
 addEventListener('unhandledrejection', e => fail(e.reason));
 // web.rs: the game's first frames are on screen

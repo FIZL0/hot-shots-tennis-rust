@@ -383,15 +383,19 @@ struct Zip(wasm_bindgen::JsValue);
 #[cfg(target_arch = "wasm32")]
 impl Zip {
     async fn create(_: &Path) -> Result<Self, String> {
-        crate::web::zip(false).await.map(Zip)
+        crate::web::zip(false).await.map(Zip).map_err(|e| format!("can't make the download's file: {e}"))
     }
     async fn write(&mut self, b: &[u8]) -> Result<(), String> {
-        crate::web::call(&self.0, "write", &[js_sys::Uint8Array::from(b).into()]).await.map(drop)
+        crate::web::call(&self.0, "write", &[js_sys::Uint8Array::from(b).into()]).await.map(drop).map_err(|e| format!("can't write the download: {e}"))
     }
     async fn install(&self, root: &Path, id: &str) -> Result<Mod, String> {
-        crate::web::call(&self.0, "close", &[]).await?;
-        let f: web_sys::Blob = wasm_bindgen::JsCast::unchecked_into(crate::web::zip(true).await?);
-        modfs::install_with(f.size() as u64, |at, n| crate::web::read_blob(f.clone(), at, n), root, Some(id), false).await
+        crate::web::call(&self.0, "close", &[]).await.map_err(|e| format!("can't finish the download's file: {e}"))?;
+        let f: web_sys::Blob = wasm_bindgen::JsCast::unchecked_into(crate::web::zip(true).await.map_err(|e| format!("can't open the download: {e}"))?);
+        let read = |at, n| {
+            let f = f.clone();
+            async move { crate::web::read_blob(f, at, n).await.map_err(|e| format!("can't read the download: {e}")) }
+        };
+        modfs::install_with(f.size() as u64, read, root, Some(id), false).await
     }
 }
 

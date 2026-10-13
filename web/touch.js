@@ -162,7 +162,8 @@ for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEv
 let touched = coarse.matches || new URLSearchParams(location.search).has('touch');
 addEventListener('pointerdown', e => { if (e.pointerType === 'touch') touched = true; }, { capture: true });
 const update = () => {
-  const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent;
+  // gone when the game stops (index.html `fail`): its Reload must take the taps
+  const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
   if (want !== shown) {
     shown = want;
     root.hidden = !want;

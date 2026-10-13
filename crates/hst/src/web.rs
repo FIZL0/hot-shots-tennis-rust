@@ -16,7 +16,7 @@ use web_sys::{File, FileReaderSync, FileSystemReadWriteOptions, FileSystemSyncAc
 const PACK: &str = "disc.pack";
 
 fn io_err(e: JsValue) -> io::Error {
-    io::Error::other(format!("{e:?}"))
+    io::Error::other(js_err(e))
 }
 
 /// The picked ISO, read synchronously (workers only) by `File.slice`.
@@ -289,13 +289,27 @@ pub fn mod_file(id: String, path: String) -> Option<js_sys::Uint8Array> {
     crate::modfs::read(&p).ok().map(|b| js_sys::Uint8Array::from(&b[..]))
 }
 
-fn js_err(e: JsValue) -> String {
-    e.as_string().unwrap_or_else(|| format!("{e:?}"))
+/// A JS error as words: an `Error`'s name and message, a string as is (B223: iOS showed "JsValue(undefined)").
+pub fn js_err(e: JsValue) -> String {
+    if let Some(s) = e.as_string() {
+        return s;
+    }
+    if let Some(e) = e.dyn_ref::<js_sys::Error>() {
+        return format!("{}: {}", String::from(e.name()), String::from(e.message()));
+    }
+    if e.is_undefined() || e.is_null() {
+        return "the browser gave no reason".into();
+    }
+    js_sys::JSON::stringify(&e).ok().and_then(|s| s.as_string()).unwrap_or_else(|| format!("{e:?}"))
 }
 
 /// `o.method(...args)`, awaited when it gives a promise.
 pub async fn call(o: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, String> {
-    let f: js_sys::Function = js_sys::Reflect::get(o, &method.into()).map_err(js_err)?.dyn_into().map_err(js_err)?;
+    // B223: a page older than the game (an install right after a deploy, the page still cached) lacks the game's hooks
+    let f: js_sys::Function = js_sys::Reflect::get(o, &method.into())
+        .map_err(js_err)?
+        .dyn_into()
+        .map_err(|_| format!("the page has no {method} (an older copy of it: reload the page)"))?;
     let r = f.apply(o, &args.iter().collect()).map_err(js_err)?;
     wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&r)).await.map_err(js_err)
 }
