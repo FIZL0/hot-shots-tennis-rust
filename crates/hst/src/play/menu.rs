@@ -14,7 +14,7 @@
 //! the same dialog, Yes / No on its pills (No chosen; up/down, ✕ chooses, ○ or Start is No, sound 1); No goes back
 //! to the pause menu, Yes fades out.
 //! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`), with `HST_PAUSE_SETTINGS=settings|graphics|controls`
-//! on that Settings screen.
+//! on that Settings screen, or with `HST_PAUSE_ASK=1` on the Leave the match? confirm.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -65,12 +65,15 @@ const LABEL: Tex = Tex::Own(11);
 /// B141: "Resume the Match" and "Return to the Menu" set the same way, in place of `i_dialog_01`'s rows.
 const RESUME: Tex = Tex::Own(12);
 const RETURN: Tex = Tex::Own(13);
-/// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills.
-const PILL: Tex = Tex::Own(14);
 /// B68: the confirm's rows, set as `RESUME`: "Leave the match?", "Yes", "No".
-const ASK: Tex = Tex::Own(15);
-const YES: Tex = Tex::Own(16);
-const NO: Tex = Tex::Own(17);
+const ASK: Tex = Tex::Own(14);
+const YES: Tex = Tex::Own(15);
+const NO: Tex = Tex::Own(16);
+/// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills; after
+/// [`LABELS`] in `setup` (B177: it was left at 14 when B68 added three labels, drawing the pills from "Leave the match?").
+const PILL: Tex = Tex::Own(17);
+/// The rows set in `setup` after `TEXTURES`, as [`LABEL`] to [`NO`].
+const LABELS: [&str; 6] = ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No"];
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
 const INK: [f32; 3] = [15.0; 3];
 pub(super) const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
@@ -467,7 +470,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             super::menu_art::image(&mut images, &arc.read(e).expect("INPANE bytes"), name)
         })
         .collect::<Vec<_>>();
-    for s in ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No"] {
+    for s in LABELS {
         art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
     }
     art.push(super::menu_art::pill_layers(&mut images));
@@ -536,6 +539,9 @@ fn step(
             play(2);
             if timed && std::env::var_os("HST_PAUSE_SETTINGS").is_some() {
                 settings.open();
+            }
+            if timed && std::env::var_os("HST_PAUSE_ASK").is_some() {
+                menu.ask = Some(1);
             }
             // ponytail: the fixed clock runs on but never reaches a step; the overstep is thrown away on closing
             fixed.set_timestep(Duration::from_secs(1 << 20));
@@ -720,6 +726,14 @@ mod tests {
     }
 
     /// Slot 3's pause (doubles, one set to 4 games, 0-0): the rules digits, both points, the games and the dialog.
+    /// B177: the textures' indices follow `setup`'s order: the disc sheets, the labels, the pill sheet.
+    #[test]
+    fn art_order() {
+        let n = TEXTURES.len();
+        assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, PILL], std::array::from_fn(|i| Tex::Own(n + i)));
+        assert_eq!(HAND, Tex::Own(n - 1));
+    }
+
     #[test]
     fn slot3_pause() {
         let qs = layout(&view());
