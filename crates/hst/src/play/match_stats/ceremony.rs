@@ -118,7 +118,9 @@ pub(super) fn plan(local: &[bool], chars: &[i32], winner: usize, swapped: bool, 
             let n_ = if c == 6 || c == 11 { "_n" } else { "" };
             let (xx, suffix) = HAND[c];
             let lr = if i < 2 { 'l' } else { 'r' };
-            let ab = if LOST_B[c] != (i >= 2) { 'b' } else { 'a' };
+            // players 2/3 take the other pair from their partner's (0/1)
+            let ab = if i < 2 { LOST_B[c] } else { !LOST_B[chars[i & 1].clamp(0, 13) as usize] };
+            let ab = if ab { 'b' } else { 'a' };
             [format!("win/win_{c:02}{n_}"), format!("hand/hand_{xx}{lr}{suffix}"), format!("lost/lost_{c:02}{ab}{n_}")]
         })
         .collect();
@@ -432,7 +434,9 @@ pub(super) fn pose(
         let Some((at, far)) = c.plan.marks.get(i) else { continue };
         tf.translation = Vec3::from(*at);
         tf.rotation = if *far { Quat::from_rotation_y(std::f32::consts::PI) } else { Quat::IDENTITY };
-        tf.scale = Vec3::new(g.players[i].hand, 1.0, 1.0);
+        // a left-hander is mirrored in x and turned π (the original's ceremony setup): a mirror in z, not the
+        // match's x mirror. Carol's and Will's `_n` motions are made for it; a swapped hand faces away, as there
+        tf.scale = Vec3::new(1.0, 1.0, g.players[i].hand);
         let (s, t) = c.slot[i];
         let Some(clip) = &c.clips[i][s] else { continue };
         for (j, joint) in rig.data.joints.iter().enumerate() {
@@ -496,7 +500,7 @@ mod tests {
     use super::*;
 
     /// The recorded doubles bot match (slot 5): team 0 won with a rating in the narrow band, the near end; the
-    /// hand slap clip, team 0 shown at −6.4, players 0/2 slapping hands and 1/3 in their lost motions.
+    /// hand slap clip, team 0 shown at −6.4, players 0/2 slapping hands and 1/3 in their lost motions (3 in the pair 1 didn't take).
     #[test]
     fn bots_doubles() {
         let p = plan(&[false; 4], &[1, 4, 5, 9], 0, false, 60.0);
@@ -505,7 +509,10 @@ mod tests {
         assert_eq!(p.start, vec![HANDS, LOST, HANDS, LOST]);
         assert_eq!(p.marks, vec![([0.75, 0.0, -6.4], false), ([-0.75, 0.0, 6.4], true), ([-0.75, 0.0, -6.4], false), ([0.75, 0.0, 6.4], true)]);
         assert_eq!(p.files[0], ["win/win_01", "hand/hand_00l_m", "lost/lost_01a"].map(String::from));
-        assert_eq!(p.files[2][1..], ["hand/hand_01r", "lost/lost_05a"].map(String::from));
+        assert_eq!(p.files[2][1..], ["hand/hand_01r", "lost/lost_05b"].map(String::from));
+        // players 2/3 take the pair their partner didn't: 1 (a) under 4 (b) → b, whatever 2's own table says
+        let p = plan(&[false; 4], &[0, 4, 1, 0], 0, false, 60.0);
+        assert_eq!([&p.files[1][2], &p.files[3][2], &p.files[2][2]], ["lost/lost_04b", "lost/lost_00a", "lost/lost_01b"]);
         // a 7 among the winners lowers the camera
         assert_eq!(plan(&[false; 4], &[7, 4, 5, 9], 0, false, 90.0).offset[1], -0.4);
     }
