@@ -110,7 +110,11 @@ impl Built {
         }
     }
 
-    fn mesh(self) -> Mesh {
+    /// Empty: one zero-area triangle, since Bevy's mesh allocator logs an error for a mesh with no vertices (B149).
+    fn mesh(mut self) -> Mesh {
+        if self.pos.is_empty() {
+            (self.pos, self.col, self.uv) = (vec![[0.0; 3]; 3], vec![[0.0; 4]; 3], vec![[0.0; 2]; 3]);
+        }
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.pos)
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.col)
