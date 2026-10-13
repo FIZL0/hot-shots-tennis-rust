@@ -1275,7 +1275,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
     }
-    if !fresh {
+    if !fresh && menu.screen != Screen::Lobby {
         (menu.screen, menu.sel) = (Screen::Main, 0);
     } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);

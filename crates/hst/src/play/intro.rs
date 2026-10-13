@@ -167,6 +167,8 @@ fn start(
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let on = match std::env::var("HST_INTRO").as_deref() {
+        // B196: a rejoiner comes into the match under way
+        _ if net.as_ref().is_some_and(|n| n.room.rejoin) => false,
         _ if net.is_some() => true,
         Ok("0") => false,
         Ok("1") => true,

@@ -181,7 +181,10 @@ pub fn restore(w: &mut World, s: &Snapshot) {
         w.insert_resource(g.clone());
     }
     if let Some(p) = &s.pads {
-        w.insert_resource(p.clone());
+        // B196: who's human stays as it is now (a restart changes it: an older copy, e.g. the instant replay's serve
+        // set-up, mustn't bring the old seats back)
+        let seats = w.get_resource::<Pads>().map_or(p.seats, |now| now.seats);
+        w.insert_resource(Pads { seats, ..p.clone() });
     }
     if let Some(t) = &s.tick {
         w.insert_resource(t.clone());

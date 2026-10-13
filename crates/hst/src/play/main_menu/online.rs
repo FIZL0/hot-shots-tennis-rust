@@ -1041,11 +1041,19 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         }
     }
     info!("starting the online match: {}", flags.join(" "));
-    let base = args.clone();
+    let (base, kept) = (args.clone(), menu.clone());
     commands.queue(move |w: &mut World| {
         let Some(net) = w.remove_resource::<Net>() else { return };
         let back = crate::mode::Mode::new(move |app| {
             app.insert_resource(base);
+            // B196: the match ended for a player who didn't come back: this lobby again, with whoever is still in
+            if let Some((net, room)) = crate::play::netplay::LOBBY.lock().unwrap().take() {
+                let mut m = kept;
+                (m.screen, m.sel) = (super::Screen::Lobby, 0);
+                (m.net.room, m.net.started, m.net.prepared, m.net.ready) = (Some(room), false, false, None);
+                m.net.status = "Back in the lobby.".into();
+                app.insert_resource(net).insert_resource(super::Kept(m));
+            }
             crate::menu_mode(app);
         });
         let iso = w.resource::<crate::Args>().iso.clone();
