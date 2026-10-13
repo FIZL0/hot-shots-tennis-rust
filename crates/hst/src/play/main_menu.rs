@@ -1537,9 +1537,22 @@ impl Draw<'_> {
     /// `rows` `pitch` px apart.
     #[allow(clippy::too_many_arguments)]
     fn rows_at(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32, pitch: f32) {
+        self.rows_locked(labels, sel, x, y, w, hand_x, pitch, |_| false);
+    }
+
+    /// `rows_at` with the rows `locked` says greyed out (B243): a faint dark pill and dim words, never the chosen
+    /// row's gold even under the hand, so a switch the build keeps off reads as one that can't be pressed.
+    #[allow(clippy::too_many_arguments)]
+    fn rows_locked(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32, pitch: f32, locked: impl Fn(usize) -> bool) {
         for (i, l) in labels.iter().enumerate() {
             let yy = y + pitch * i as f32;
             let on = i == sel;
+            if locked(i) {
+                self.pill_at([x, yy, w, 38.0], [[30.0; 3], [60.0; 3], [40.0, 40.0, 44.0]], 64.0);
+                self.centred(l, x + w / 2.0, yy + 7.0, 24.0, [50.0; 3]);
+                self.hit([x, yy, w, 38.0], pointer::Act::Row(i, pointer::OK));
+                continue;
+            }
             self.pill(x, yy, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
             self.centred(l, x + w / 2.0, yy + 7.0, 24.0, if on { WHITE } else { [100.0; 3] });
             self.hit([x, yy, w, 38.0], pointer::Act::Row(i, pointer::OK));
@@ -1651,7 +1664,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.frame(1, 6);
             let mut labels: Vec<String> = SETTING_LABELS.iter().map(|s| s.to_string()).collect();
             labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
-            d.rows_at(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, SETTINGS_PITCH);
+            d.rows_locked(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, SETTINGS_PITCH, |i| i < SETTING_NAMES.len() && locked(i));
             for (i, on) in m.settings.0.iter().enumerate() {
                 let on = &(*on && !locked(i));
                 d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + SETTINGS_PITCH * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
@@ -2467,6 +2480,19 @@ mod tests {
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,4,4,3"), 0, csv, &g), g[0]);
         // serve 7 → character 1's grade; stroke 9 → mean of 4 and 3 rounds to 4; volley 3 is the base's; Impact, Footwork base
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,7,9,3"), 0, csv, &g), [2, 4, 1, 5, 2]);
+    }
+
+    /// B243: a locked row under the hand stays a dim grey pill, never the chosen row's gold; it can still be tapped.
+    #[test]
+    fn locked_rows_greyed() {
+        let t = Text { msg: Vec::new(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+        let gold = |sel| {
+            let mut d = Draw { out: Vec::new(), text: &t, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
+            d.rows_locked(&["a".into(), "b".into()], sel, 0.0, 0.0, 100.0, 0.0, 40.0, |i| i == 1);
+            assert_eq!(d.hits.len(), 2);
+            d.out.iter().any(|q| q.rgb == [128.0, 110.0, 40.0])
+        };
+        assert!(gold(0) && !gold(1));
     }
 
     #[test]
