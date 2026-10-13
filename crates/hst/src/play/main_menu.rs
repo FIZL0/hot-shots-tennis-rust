@@ -2211,7 +2211,9 @@ fn draw(
     ticker.1 += time.delta_secs() * 60.0;
     let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
     if said != ticker.0 {
-        *ticker = Ticker(said, 0.0);
+        // a mod download's progress line changes every few frames: show it in place, not sliding in each time
+        let f = if said.starts_with("Downloading ") { 160.0 } else { 0.0 };
+        *ticker = Ticker(said, f);
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
