@@ -23,8 +23,7 @@
 ## Not verified / not 1:1
 - Visual side by side: the original cuts to the post-point cut-away right after a wall hit, so its screenshots show
   the cut-away, not the word; the word's texture, position and timing are checked from RAM instead.
-- B85's net recordings aren't in this worktree's context/, so their cases were skipped here (the change keeps the
-  net path's arithmetic for a placed point equal to the centre; check.sh on main will run them).
+- (B85's four net recordings, copied from slot s5's context/, also still match bit for bit with the new point.)
 - The rolling "kusa" word (from the ball's rolling flag, not a contact) isn't ported; no court-10 wall hit triggers
   it. Not opened as a task here; it belongs with grass courts.
 - Only court 10's cloth and wood were recorded; other courts' wall materials (metal, water, ...) use the same path
