@@ -1,10 +1,11 @@
 //! The court's background figures as the original draws them, from the court's `COURTSET/NN/HOLE01.XB`: the umpire
-//! (Lily, `u04`) on her chair, the walking spectators (`g-MM` models, `npcSS` animation sets) driven by
+//! (`uNN`, the menu's umpire number) on her chair, the walking spectators (`g-MM` models, `npcSS` animation sets) driven by
 //! [`npc::Walker`], and the trigger creatures with a model (`exe::Game::trigger_model`) driven by [`npc::Trigger`].
 //!
 //! The umpire faces the court centre. Her motion (0 idle, 1/2 turned toward the point's winner) restarts at frame
 //! 0 when it changes and steps one frame a tick while turned or once the match is over (idle stays on frame 0
-//! during play); a turn that reaches its end goes back to frame 16 and plays on from there.
+//! during play); a turn holds its last frame, the idle after the match loops back to frame 16 (14 for umpire 3).
+//! Her head follows `Umpire::head` ([`look`]).
 //!
 //! The points are seen from the game's state: a decided point is the umpire turning (`point_over` sets her
 //! motion only then), a new point the next serve after it. The walkers react and the gallery picks who cheers
@@ -36,7 +37,7 @@ use crate::{Args, GameSpace};
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
-        .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd));
+        .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)));
 }
 
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
@@ -266,7 +267,9 @@ fn step(
     (ticks, mut once): (Res<super::heard::Heard>, ResMut<super::heard::Played>),
     (mats, mut materials): (Query<&MeshMaterial3d<StandardMaterial>>, ResMut<Assets<StandardMaterial>>),
     globals: Query<&GlobalTransform>,
+    args: Res<Args>,
 ) {
+    let umpire_id = args.umpire;
     let Some(mut npcs) = npcs else {
         // no court figures: the gallery and the emitters still step
         let g = &mut *g;
@@ -422,11 +425,13 @@ fn step(
             if motion != 0 || over {
                 a.set(a.next, len);
                 a.next = hst_sim::ps2::add(a.next, 1.0);
-                if motion != 0 && len <= a.frame {
-                    a.set(16.0, len);
+                // the idle (playing on once the match is over) loops back to frame 16, 14 for umpire 3; a turn holds
+                // its last frame
+                if motion == 0 && len <= a.frame {
+                    a.set(if umpire_id == 3 { 14.0 } else { 16.0 }, len);
                 }
             }
-            // ponytail: her head's look-at (toward `Umpire::head`) and the texture animation are not drawn
+            // ponytail: her texture animation (TAF) is not drawn
             show(&mut m, motion as usize, a.frame, false);
         }
     }
@@ -721,5 +726,29 @@ impl super::snapshot::Wire for Npcs {
         self.triggers.iter_mut().zip(&l.triggers).for_each(|(t, l)| t.0 = l.0);
         self.crowd.iter_mut().zip(&l.crowd).for_each(|(c, l)| c.1 = l.1.clone());
         (self.fade, self.uncull, self.sprites) = (l.fade.clone(), l.uncull.clone(), l.sprites.clone());
+    }
+}
+
+/// The umpire's head turned toward `Umpire::head`, as the game's look-at does it: the target in the frame of
+/// `Bip01Head` at its rest local under its posed parent, 0.7 of its turn about the head's x axis (atan2(y, −z), within
+/// ±70°) and of its tilt about y (atan2(−x, √(y²+z²)), −25°..35°), applied before the rest local (the motion's own
+/// head keys are dropped). Checked against the game's stored head local by `research/b78_head.py`.
+fn look(g: Res<Game>, npcs: Option<Res<Npcs>>, rigs: Query<(&character::Rig, &Transform)>, mut joints: Query<&mut Transform, Without<character::Rig>>) {
+    let Some((e, _)) = npcs.as_ref().and_then(|n| n.umpire.as_ref()) else { return };
+    let Ok((rig, at)) = rigs.get(*e) else { return };
+    let Some(head) = rig.data.joint("Bip01Head") else { return };
+    let rest = rig.data.joints[head].rest;
+    let mut m = rest.to_matrix();
+    let mut j = rig.data.joints[head].parent;
+    while let Some(k) = j {
+        let Ok(tf) = joints.get(rig.joints[k]) else { return };
+        m = tf.to_matrix() * m;
+        j = rig.data.joints[k].parent;
+    }
+    let p = (at.to_matrix() * m).inverse().transform_point3(Vec3::from(g.umpire.head));
+    let yaw = (0.7 * p.y.atan2(-p.z)).clamp(-70f32.to_radians(), 70f32.to_radians());
+    let tilt = (0.7 * (-p.x).atan2(p.y.hypot(p.z))).clamp(-25f32.to_radians(), 35f32.to_radians());
+    if let Ok(mut tf) = joints.get_mut(rig.joints[head]) {
+        *tf = rest.with_rotation(rest.rotation * Quat::from_rotation_x(yaw) * Quat::from_rotation_y(tilt));
     }
 }
