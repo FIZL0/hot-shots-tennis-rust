@@ -498,3 +498,29 @@ fn rally_effects_like_the_game() {
         }
     }
 }
+
+/// B26: every match player's serve timing tables (strong toss +0x1644/+0x1554, weak +0x1774/+0x1684) as
+/// `serve::timing` builds them from the character's counts in RAM (rally +0x131c.., strong +0x1334.., weak
+/// +0x134c..), bit for bit, lengths included.
+#[test]
+fn serve_timing_tables_ram() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let mut seen = 0;
+    for s in ["context/ram/s03.bin", "context/ram/s04.bin", "context/ram/s05.bin", "context/fixtures/slot5_ee.bin", "context/fixtures/1p3goodcpus_ee.bin"] {
+        let Ok(ram) = std::fs::read(format!("{root}{s}")) else { eprintln!("{s} absent, skipped"); continue };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        for p in 0..4 {
+            let obj = u(u(0x422f80) + 0xa8 + 4 * p);
+            let counts = |o: usize| -> [i32; 3] { std::array::from_fn(|k| u(obj + o + 4 * k) as i32) };
+            let table = |g: usize, b: usize, n: usize| -> (Vec<u8>, Vec<i32>) {
+                let n = u(obj + n);
+                (ram[(obj + g) & 0x1ff_ffff..][..n].to_vec(), (0..n).map(|k| u(obj + b + 4 * k) as i32).collect())
+            };
+            let stroke = hst_sim::swing::timing(counts(0x131c), counts(0x1328));
+            assert_eq!(serve::timing(counts(0x1334), counts(0x1340), &stroke), table(0x1644, 0x1554, 0x1680), "{s} p{p} strong");
+            assert_eq!(serve::timing(counts(0x134c), counts(0x1358), &stroke), table(0x1774, 0x1684, 0x17b0), "{s} p{p} weak");
+            seen += 1;
+        }
+    }
+    assert!(seen == 0 || seen >= 8);
+}
