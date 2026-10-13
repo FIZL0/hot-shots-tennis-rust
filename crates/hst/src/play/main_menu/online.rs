@@ -734,7 +734,7 @@ pub(super) fn linked(m: &mut Menu) {
     *m = Menu { screen: Screen::Chars, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
 }
 
-/// Join by Code's keyboard: typed symbols and Backspace go into the code, not to the menu's key bindings (the
+/// Join by Code's keyboard: typed symbols, Backspace and Enter (finish) go into the code, not to the menu's key bindings (the
 /// browser's on-screen keyboard too, `web.rs`).
 pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCode>>, mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>, mut was: Local<bool>) {
     use bevy::input::keyboard::Key;
@@ -760,6 +760,8 @@ pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCod
                 menu.net.entry.pop();
                 keys.clear_just_pressed(e.key_code);
             }
+            // B159: Enter (either) finishes the entry: the cursor onto Save / Join, which the menu's OK then takes
+            Key::Enter => menu.sel = menu.keys().len() + 2,
             _ => {}
         }
     }
@@ -1012,5 +1014,25 @@ mod tests {
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::SaveCfg)), "{fx:?}");
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
+    }
+
+    /// B159: Enter on the keyboard finishes the entry, it doesn't type the hovered key.
+    #[test]
+    fn enter_finishes_entry() {
+        use bevy::input::{ButtonState, keyboard::{Key, KeyboardInput}};
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>().init_resource::<ButtonInput<KeyCode>>().add_systems(Update, typing);
+        let mut m = Menu { screen: Screen::Code, net: View { naming: true, entry: "SUNNY".into(), cfg: Some(Online::default()), ..default() }, ..default() };
+        m.sel = 0; // hovering "A"
+        app.insert_resource(m);
+        for code in [KeyCode::Enter, KeyCode::NumpadEnter] {
+            app.world_mut().resource_mut::<Menu>().sel = 0;
+            app.world_mut().write_message(KeyboardInput { key_code: code, logical_key: Key::Enter, state: ButtonState::Pressed, text: None, repeat: false, window: Entity::PLACEHOLDER });
+            app.update();
+            assert_eq!(app.world().resource::<Menu>().sel, NAME_KEYS.len() + 2, "{code:?}: on Save");
+        }
+        let mut m = app.world_mut().remove_resource::<Menu>().unwrap();
+        m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        assert_eq!((m.screen, m.net.cfg.unwrap().name.as_str()), (Screen::Online, "SUNNY"), "saved without the hovered A");
     }
 }
