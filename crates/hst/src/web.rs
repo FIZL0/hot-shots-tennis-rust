@@ -254,7 +254,7 @@ pub fn add_mod_file(path: String, bytes: js_sys::Uint8Array) {
 /// (nothing of it kept).
 #[wasm_bindgen]
 pub fn import_mod(zip: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
-    let m = crate::modfs::install(&zip.to_vec(), std::path::Path::new(crate::play::main_menu::MODS_ROOT)).map_err(|e| JsValue::from(e))?;
+    let m = crate::modfs::install(&zip.to_vec(), crate::play::main_menu::mods_root()).map_err(|e| JsValue::from(e))?;
     let o = js_sys::Object::new();
     js_sys::Reflect::set(&o, &"id".into(), &m.id.into())?;
     js_sys::Reflect::set(&o, &"name".into(), &m.name.into())?;
@@ -265,8 +265,8 @@ pub fn import_mod(zip: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
 /// folder without one, which the page drops at the next start).
 #[wasm_bindgen]
 pub fn mod_files(id: String) -> js_sys::Array {
-    let dir = std::path::Path::new(crate::play::main_menu::MODS_ROOT).join(&id);
-    let pre = format!("{}/{id}/", crate::play::main_menu::MODS_ROOT);
+    let dir = crate::play::main_menu::mods_root().join(&id);
+    let pre = format!("{}/{id}/", crate::play::main_menu::mods_root().display());
     let mut files = crate::modfs::files_under(&dir);
     files.sort_by_key(|f| f.0.ends_with("/mod.json") && f.0.matches('/').count() == 2);
     files.into_iter().map(|(p, b)| js_sys::Array::of2(&p.strip_prefix(&pre).unwrap_or(&p).into(), &js_sys::Uint8Array::from(&b[..]))).collect()
@@ -275,7 +275,7 @@ pub fn mod_files(id: String) -> js_sys::Array {
 /// Page: mod `id` out of the game again (its save to OPFS failed).
 #[wasm_bindgen]
 pub fn drop_mod(id: String) {
-    crate::modfs::remove(&std::path::Path::new(crate::play::main_menu::MODS_ROOT).join(id));
+    crate::modfs::remove(&crate::play::main_menu::mods_root().join(id));
 }
 
 /// Page: the Mods screen's description bar (an import checked, saved, or refused).

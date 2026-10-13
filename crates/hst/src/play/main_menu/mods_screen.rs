@@ -23,8 +23,18 @@ use super::{CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, Screen,
 use crate::modstore::{self, Entry, Event};
 use crate::mods::Mod;
 
-/// The mods folder: `mods/` beside the disc pack, as the select's roster reads it (`main_menu.rs setup`).
-pub(crate) const ROOT: &str = "mods";
+/// The mods folder: `mods/` beside the disc, as the select's roster reads it (`main_menu.rs setup` sets it; a
+/// relative `mods` broke when the game was started from elsewhere, e.g. a desktop shortcut).
+static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+pub(crate) fn set_root(dir: std::path::PathBuf) {
+    // `./mods` (a disc path with no folder, the browser's) stays `mods`, the OPFS paths' form
+    let _ = ROOT.set(dir.strip_prefix(".").map(Into::into).unwrap_or(dir));
+}
+
+pub(crate) fn root() -> &'static Path {
+    ROOT.get().map(|p| p.as_path()).unwrap_or(Path::new("mods"))
+}
 /// Rows drawn at once (the rest scroll), and where: the left half, Browse's tags beside them.
 const SHOWN: usize = 7;
 const X: f32 = 70.0;
@@ -75,7 +85,7 @@ pub(super) struct View {
 
 impl View {
     fn refresh(&mut self) {
-        self.list = crate::mods::list(Path::new(ROOT));
+        self.list = crate::mods::list(root());
         self.have = self.list.iter().map(|m| (m.id.clone(), modstore::stamp(&m.dir).map(|s| s.sha256))).collect();
         self.armed = None;
     }
@@ -188,7 +198,7 @@ impl Menu {
                     } else {
                         self.add.busy = true;
                         self.add.status = format!("Downloading {} ({})...", e.meta.name, mb(e.meta.size));
-                        modstore::install(&e, Path::new(ROOT));
+                        modstore::install(&e, root());
                         out.push(Sound(2));
                     }
                 }
@@ -274,7 +284,7 @@ impl Menu {
             // desktop: the system's file picker, once at a time
             #[cfg(not(target_arch = "wasm32"))]
             if !std::mem::replace(&mut self.add.busy, true) {
-                modstore::pick(Path::new(ROOT));
+                modstore::pick(root());
             }
             self.add.status = "Pick a mod .zip (a character from the mods repo).".into();
             out.push(Sound(2));
@@ -301,7 +311,7 @@ impl Menu {
                 crate::web::mod_drop(&id);
                 // a store download's own folder (`mods/<id>`); a pack's mods are left to their pack
                 #[cfg(not(target_arch = "wasm32"))]
-                if dir == Path::new(ROOT).join(&id) {
+                if dir == root().join(&id) {
                     let _ = std::fs::remove_dir_all(&dir);
                 }
                 self.add.refresh();
@@ -684,7 +694,7 @@ mod tests {
 
     fn a_mod(id: &str, name: &str) -> Mod {
         Mod {
-            dir: Path::new(ROOT).join(id),
+            dir: root().join(id),
             id: id.into(),
             name: name.into(),
             source: String::new(),
@@ -708,7 +718,7 @@ mod tests {
     #[test]
     fn removes_on_the_second_press() {
         let mut m = Menu::default();
-        crate::modfs::add(&Path::new(ROOT).join("t_screen/mod.json"), Vec::new().into());
+        crate::modfs::add(&root().join("t_screen/mod.json"), Vec::new().into());
         m.add.list = vec![a_mod("t_screen", "Screen"), a_mod("b", "B")];
         m.screen = Screen::Mods;
         m.sel = TOP;
@@ -716,9 +726,9 @@ mod tests {
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.armed, Some(0));
         assert!(m.add.status.contains("again"));
-        assert!(crate::modfs::is_file(&Path::new(ROOT).join("t_screen/mod.json")));
+        assert!(crate::modfs::is_file(&root().join("t_screen/mod.json")));
         m.mods_step(ok(), &mut out);
-        assert!(!crate::modfs::is_file(&Path::new(ROOT).join("t_screen/mod.json")));
+        assert!(!crate::modfs::is_file(&root().join("t_screen/mod.json")));
         assert!(m.add.status.starts_with("Removed Screen"));
         m.sel = 0;
         m.mods_step(Press { up: true, ..default() }, &mut out);

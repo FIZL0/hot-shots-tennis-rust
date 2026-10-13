@@ -46,7 +46,7 @@ pub(crate) mod flame;
 mod online;
 mod mods_screen;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
-pub(crate) use mods_screen::ROOT as MODS_ROOT;
+pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
 mod previews;
 mod slide;
@@ -1216,6 +1216,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let ranks = hst_sim::ai::AiParams::table(&ai).iter().map(|r| r.rank).collect();
     // the custom roster: a mod whose row can't be read is left out like a broken one
     let mods_dir = Settings::path(&args.iso).with_file_name("mods");
+    mods_screen::set_root(mods_dir.clone());
     let roster: Vec<_> = crate::mods::list(&mods_dir)
         .into_iter()
         .filter_map(|m| match crate::mods::tparam(&mut iso, &m) {
