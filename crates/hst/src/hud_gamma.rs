@@ -13,8 +13,8 @@
 //! While a match runs (`Persist`) the scene also keeps 25 % of the last frame shown, as the game's last draw does:
 //! a full-screen sprite of the other frame buffer at FIX 0x20 over the new frame (its fields shifted by half a line
 //! to line up, which a progressive frame needs not). Two images take turns as this frame's mix and last frame's.
-//! ponytail: the game draws a sun glare (a half-pixel blur of the frame, up to 71 %) instead of it while the camera
-//! looks within ~37° of the sun; not ported (B31e).
+//! Instead of it, while the camera looks within ~37° of the sun in clear or cloudy weather, the game blurs the frame
+//! by half a texel twice (`glare`), more the closer to the sun and the higher the camera looks.
 //!
 //! ponytail: UI pieces overlapping each other still blend in linear among themselves; only their sum goes over the
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
@@ -56,10 +56,12 @@ pub struct Persist;
 #[derive(AsBindGroup, Asset, TypePath, Clone)]
 struct Mix {
     #[texture(0)]
+    #[sampler(3)]
     scene: Handle<Image>,
     #[texture(1)]
     last: Handle<Image>,
-    /// x: how much of the last frame (vec4 for WebGL's 16-byte uniforms)
+    /// x: how much of the last frame; y: the sun glare's FIX (0 = none), zw: its texel in uv (vec4 for WebGL's
+    /// 16-byte uniforms)
     #[uniform(2)]
     weight: Vec4,
 }
@@ -241,7 +243,19 @@ fn follow_window(
 
 /// Each frame in a match: this parity's camera mixes the last frame into the scene, and the composite shows that.
 /// The game mixes 25 % per 60 Hz frame; at a higher frame rate more per frame, so the trail fades as fast.
-fn persist(on: Option<Res<Persist>>, time: Res<Time<Real>>, t: Res<Targets>, mut cams: Query<&mut Camera>, mut mixes: ResMut<Assets<Mix>>, mut materials: ResMut<Assets<Composite>>, mut parity: Local<usize>) {
+#[allow(clippy::too_many_arguments)]
+fn persist(
+    on: Option<Res<Persist>>,
+    time: Res<Time<Real>>,
+    t: Res<Targets>,
+    sun: Option<Res<crate::shadow::Sun>>,
+    view: Query<(&Projection, &Transform), With<crate::Orbit>>,
+    images: Res<Assets<Image>>,
+    mut cams: Query<&mut Camera>,
+    mut mixes: ResMut<Assets<Mix>>,
+    mut materials: ResMut<Assets<Composite>>,
+    mut parity: Local<usize>,
+) {
     *parity ^= 1;
     let i = *parity;
     for (k, &e) in t.cameras.iter().enumerate() {
@@ -253,7 +267,15 @@ fn persist(on: Option<Res<Persist>>, time: Res<Time<Real>>, t: Res<Targets>, mut
     }
     let shown = if on.is_some() {
         if let Some(mut m) = mixes.get_mut(&t.mixes[i]) {
-            m.weight.x = 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0));
+            let fix = match (sun, view.single()) {
+                (Some(sun), Ok((Projection::Perspective(p), tf))) if crate::weather::now() < 2 => glare(sun.light, p, tf.rotation),
+                _ => 0.0,
+            };
+            // the game's field texel: 640 columns per 4:3 width, 224 lines
+            let size = images.get(&t.scene).map_or(UVec2::ONE, |i| i.size()).as_vec2();
+            let texel = Vec2::new(size.y * 4.0 / 3.0 / 640.0 / size.x, 1.0 / 224.0);
+            let w = if fix > 0.0 { 0.0 } else { 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0)) };
+            m.weight = Vec4::new(w, fix, texel.x, texel.y);
         }
         &t.last[i]
     } else {
@@ -262,6 +284,26 @@ fn persist(on: Option<Res<Persist>>, time: Res<Time<Real>>, t: Res<Targets>, mut
     if materials.get(&t.composite).is_some_and(|c| c.scene != *shown) {
         materials.get_mut(&t.composite).unwrap().scene = shown.clone();
     }
+}
+
+/// The sun glare's blend weight (FIX / 128, 0 = off) for the match camera turned by `rot` (Bevy space) with
+/// projection `p` and the sun lighting along `light` (game space, y down, sun → ground): on while the view is within
+/// acos 0.8 of the sun, ((cos − 0.8)/0.2·0.5 + seen·0.2) · how far it looks up (clamped to 0..0.8)/0.8 · 128/0.7.
+/// ponytail: `seen` is the lens flare's read-back of how much of the sun shows (0..1); taken as 1 while the sun is in
+/// the picture, as `play/flare.rs` does, so a player in front of the sun doesn't weaken it.
+fn glare(light: Vec3, p: &PerspectiveProjection, rot: Quat) -> f32 {
+    let s = -light.normalize();
+    let sun = Vec3::new(s.x, -s.y, -s.z);
+    let fwd = rot * Vec3::NEG_Z;
+    let c = fwd.dot(sun);
+    if c <= 0.8 {
+        return 0.0;
+    }
+    let sv = rot.inverse() * sun;
+    let tan = (p.fov / 2.0).tan();
+    let seen = (sv.x / -sv.z).abs() <= tan * p.aspect_ratio && (sv.y / -sv.z).abs() <= tan;
+    let fix = ((c - 0.8) / 0.2 * 0.5 + if seen { 0.2 } else { 0.0 }) * (fwd.y.clamp(0.0, 0.8) / 0.8) * 128.0 / 0.7;
+    (fix as u8) as f32 / 128.0
 }
 
 /// In the original mode the scene image's pixels aren't square (640 per 4:3 width): project for the window's aspect,
@@ -280,5 +322,23 @@ fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<P
                 cam.computed.clip_from_view = clip;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glare_strength() {
+        let p = PerspectiveProjection { fov: 0.8, aspect_ratio: 4.0 / 3.0, ..default() };
+        // sun 40° up, straight ahead (game space: −z ahead of a camera looking along Bevy −z, y down)
+        let (e, look) = (40f32.to_radians(), |pitch: f32| Quat::from_rotation_x(pitch.to_radians()));
+        let light = -Vec3::new(0.0, -e.sin(), e.cos());
+        // looking straight at it: cos 1, sun in the picture, looking up sin 40° → ((0.5 + 0.2)·0.643/0.8·128/0.7) = 102
+        assert_eq!(glare(light, &p, look(40.0)), 102.0 / 128.0);
+        // looking level: 40° off (cos 0.766 < 0.8) → off; looking down → off
+        assert_eq!(glare(light, &p, look(0.0)), 0.0);
+        assert_eq!(glare(light, &p, look(-20.0)), 0.0);
     }
 }
