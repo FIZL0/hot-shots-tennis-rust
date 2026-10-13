@@ -448,6 +448,30 @@ mod tests {
         eprintln!("{approaches} approaches");
     }
 
+    /// B59: a whiff ends the run, so the first run frame after it counts the run from 0 (no dash carried over),
+    /// as the original (`context/b59`: run 30 → 0 after the whiff; every freed whiff in the recordings, human and
+    /// CPU, runs off from 0).
+    #[test]
+    fn run_restarts_after_a_whiff() {
+        let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
+            return eprintln!("no ISO or round1.bin, skipped");
+        };
+        let mut app = app();
+        let mut freed = 0;
+        for f in &hst_sim::replay::frames(&data) {
+            let before = app.world().resource::<Game>().players.clone();
+            run(&mut app, &[[tick_input::recorded(f.pad(0)), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]]);
+            for (b, p) in before.iter().zip(&app.world().resource::<Game>().players) {
+                if b.whiff.is_some() && p.whiff.is_none() && p.body.running {
+                    assert_eq!(p.body.run, 0, "a run after a whiff carried its count on");
+                    freed += 1;
+                }
+            }
+        }
+        assert!(freed > 0, "round1.bin ran off no whiff");
+        eprintln!("{freed} runs off a whiff");
+    }
+
     /// B173: the human's serve touches the net and drops on its own half: the computer receiver gives the ball up
     /// (no path for it, and the net-touch message holds it) and stands still until the next serve, as the original,
     /// instead of running on to the stand spot and locking a contact. The human's pads are a fixed random walk; its

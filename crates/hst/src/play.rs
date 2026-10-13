@@ -2960,6 +2960,8 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
     p.whiff = Some(motion::Whiff::new(anim, miss, quiet));
     set_motion(p, anim, 1.0, false, None);
     p.vel = Vec2::ZERO;
+    // the stroke state ends the run: freed, the run counter starts again from 0, no dash carried over (B59)
+    p.body.running = false;
     p.facing = base_yaw(p.end);
 }
 
