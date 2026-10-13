@@ -883,7 +883,7 @@ pub fn load(
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: names.len(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
 }
 
 /// `mod.json`'s `eyes` (§4c): the glTF materials the donor's `.UVA` eye track moves (`read` checked the list).
@@ -1096,7 +1096,7 @@ mod tests {
         let (_, c) = load_mod(&mut iso, &mut s, "getagrip_pc00_emi").unwrap();
         let f = c.texture_face.as_ref().expect("texture face");
         assert_eq!(f.channels.len(), 9);
-        assert_eq!(c.morph_targets, 9);
+        assert_eq!(c.morph_names.len(), 9);
         // joy_eye and joy_mouth (weights 5, 6: channels by name) share zero_face5.png: one image
         let joy: Vec<_> = f.channels.iter().filter(|(t, _)| [5, 6].contains(t)).map(|c| c.1.0.id()).collect();
         assert!(joy.len() == 2 && joy[0] == joy[1], "{joy:?}");
@@ -1107,7 +1107,7 @@ mod tests {
         let mut shown = 0;
         for face in c.faces.values() {
             for k in 0..(face.length as i32) {
-                let mut w = vec![0.0; c.morph_targets];
+                let mut w = vec![0.0; c.morph_names.len()];
                 let t = hst_sim::ps2::mul(k as f32, 80.0);
                 for (target, ticks, values) in &face.tracks {
                     w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];

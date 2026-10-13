@@ -101,8 +101,8 @@ pub struct CharacterData {
     pub pelvis: Vec<[f32; 2]>,
     /// The arm table (strokes 0x10–0x19 and volleys 0x1a/0x1b at frame 8) the contact solve reaches from.
     pub arm: Option<Arc<ArmTable>>,
-    /// Face morph targets of the skinned parts (`MorphWeights` on the rig root, one weight per target).
-    pub morph_targets: usize,
+    /// Face morph targets of the skinned parts by name (`MorphWeights` on the rig root, one weight per target).
+    pub morph_names: Vec<String>,
     /// Faces by motion number (`.MOR` and `.UVA`, `hst_sim::face`).
     pub faces: HashMap<usize, Face>,
     /// Per part (as `parts`): the nodes its packets' palettes hold (a `.UVA` track binds by node) and whether its
@@ -197,7 +197,7 @@ pub const EYES: usize = usize::MAX;
 
 /// A motion's face from its `.MOR` and `.UVA` files (`None` without either): MOR tracks bind by `target`, UVA
 /// tracks to the skeleton node of their name (the game's node binding; unmatched tracks never play).
-fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &impl Fn(&str) -> Option<usize>) -> Option<Face> {
+pub fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &impl Fn(&str) -> Option<usize>) -> Option<Face> {
     let (mor, uva) = (m.and_then(|d| mor::parse(&d, 1).ok()), u.and_then(|d| mor::parse(&d, 4).ok()));
     if mor.is_none() && uva.is_none() {
         return None;
@@ -220,6 +220,13 @@ fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &im
 }
 
 impl CharacterData {
+    /// The morph target a `.MOR` track binds: the same name (disc) or the name after its object prefix (a mod's
+    /// donor tracks, `face\x01joy_eye`).
+    pub fn morph_target(&self, track: &str) -> Option<usize> {
+        let short = track.rsplit('\x01').next();
+        self.morph_names.iter().position(|n| n == track).or_else(|| self.morph_names.iter().position(|n| Some(n.as_str()) == short))
+    }
+
     pub fn joint(&self, name: &str) -> Option<usize> {
         self.joints.iter().position(|j| j.name == name)
     }
@@ -493,7 +500,6 @@ pub fn load_disc_with(
         })
         .collect();
     let noise = find(&format!("{body}.noi")).and_then(|d| crate::noise::costume(&model, &d, &parts, meshes));
-    let targets = model.morph_names.len();
 
     let racket = disc_racket(&arc, n, meshes, materials, images, &mut gs)?;
 
@@ -501,7 +507,7 @@ pub fn load_disc_with(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions_with(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name), only)?;
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_targets: targets, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
 }
 
 /// The node names of disc character `n`'s body model (costume 0; every costume shares the skeleton).
@@ -730,7 +736,7 @@ pub fn load_npc(
         binds,
         pelvis: Vec::new(),
         arm: None,
-        morph_targets: model.morph_names.len(),
+        morph_names: model.morph_names.clone(),
         faces: HashMap::new(),
         part_nodes: Vec::new(),
         stance_ball: None,
@@ -744,7 +750,7 @@ pub fn load_npc(
 
 /// Spawn a character under `parent` (game space); returns its root (carry `Transform` and `Motion` on it).
 pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity) -> Entity {
-    let weights = bevy::mesh::morph::MorphWeights::new(vec![0.0; data.morph_targets], None).unwrap_or_default();
+    let weights = bevy::mesh::morph::MorphWeights::new(vec![0.0; data.morph_names.len()], None).unwrap_or_default();
     let root = commands.spawn((Transform::default(), Visibility::default(), Motion::default(), weights)).id();
     commands.entity(parent).add_child(root);
     let joints: Vec<Entity> = data.joints.iter().map(|j| commands.spawn((j.rest, Visibility::default())).id()).collect();

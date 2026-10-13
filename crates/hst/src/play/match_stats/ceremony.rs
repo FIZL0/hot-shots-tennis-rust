@@ -18,7 +18,7 @@ use hst_sim::sound::{self, Gallery, Reaction};
 
 use super::{Quad, Tex, WHITE};
 use crate::audio::{Sound, SoundBank};
-use crate::character::Rig;
+use crate::character::{Face, Rig};
 
 /// What the match's end leaves for the ceremony (`match_over`, before the next match resets the score and reseeds
 /// the sound generator): the ends as they stood, and the sound generator.
@@ -183,6 +183,10 @@ pub(super) struct Ceremony {
     cam: Vec<([f32; 4], [f32; 4], f32)>,
     /// Per player: its three motions (bound to its skeleton), the slot playing and the time in it.
     clips: Vec<[Option<Clip>; 3]>,
+    /// Per player: each motion's face (`.MOR` morphs, `.UVA` eyes), bound to its rig.
+    faces: Vec<[Option<Face>; 3]>,
+    /// Per player: each motion's free racket (`Racket02`, [`free_racket`]) and the joint it hangs from.
+    rackets: Vec<[Option<(Clip, Option<usize>)>; 3]>,
     slot: Vec<(usize, f32)>,
     gallery: Gallery,
     court_rng: Mt,
@@ -274,15 +278,20 @@ pub(super) fn begin(
     let length = (cam.len() as u32).saturating_sub(1);
     let raw: Vec<Vec<u8>> = ["AZUMA/PRIZE/ANI/WINANI.XB", "AZUMA/PRIZE/ANI/LOSTANI.XB"].iter().filter_map(|p| iso.read(p).ok()).collect();
     let archives: Vec<Archive> = raw.iter().filter_map(|d| Archive::parse(d).ok()).collect();
-    let motion = |name: &str| {
-        let tail = format!("pcani/{}.ani2", name.to_ascii_lowercase());
-        archives.iter().find_map(|a| {
-            let e = a.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&tail))?;
-            ani::parse(&a.read(e).ok()?).ok()
-        })
+    let file = |name: &str, ext: &str| {
+        let tail = format!("pcani/{}.{ext}", name.to_ascii_lowercase());
+        archives.iter().find_map(|a| a.read(a.entries.iter().find(|e| e.name.replace('\\', "/").to_ascii_lowercase().ends_with(&tail))?).ok())
     };
+    let motion = |name: &str| ani::parse(&file(name, "ani2")?).ok();
+    let rackets = (0..n).map(|i| std::array::from_fn(|s| motion(&plan.files[i][s]).and_then(|a| free_racket(&g.data[i], &a)))).collect();
     // ponytail: a mod character beyond the 14 plays stock character 13's files on its own skeleton
     let clips = (0..n).map(|i| std::array::from_fn(|s| motion(&plan.files[i][s]).map(|a| Clip::new(&g.data[i].skeleton, &a)))).collect();
+    let faces = (0..n)
+        .map(|i| {
+            let d = &g.data[i];
+            std::array::from_fn(|s| crate::character::face(file(&plan.files[i][s], "mor"), file(&plan.files[i][s], "uva"), &d.skeleton, &|t| d.morph_target(t)))
+        })
+        .collect();
     let slot = plan.start.iter().map(|&s| (s, 0.0)).collect();
     let c = g.chars[plan.shown].clamp(0, 13);
     let b = if g.stage == 7 { "B" } else { "" };
@@ -294,6 +303,8 @@ pub(super) fn begin(
         length,
         cam,
         clips,
+        faces,
+        rackets,
         slot,
         gallery: g.gallery.clone(),
         court_rng: g.rng.court.clone(),
@@ -454,6 +465,23 @@ fn vary_lost(plan: &mut Plan, chars: &[i32], winner: usize) {
     }
 }
 
+/// A ceremony motion's `Racket02`: when a motion has it the original carries the racket on that node instead of the
+/// hand's `Racket` joint (Carol's and Will's air guitar, every lost motion's dropped racket). The file is flat, so
+/// its parent is taken from where it sits in the depth-first order: after a hand's fingers, that hand; after the
+/// legs or the camera target, the model's root.
+/// ponytail: parent read from the track order (the files keep no hierarchy); the game's own binding wasn't traced
+fn free_racket(d: &crate::character::CharacterData, a: &ani::Anim) -> Option<(Clip, Option<usize>)> {
+    let k = a.tracks.iter().position(|t| t.name == "Racket02")?;
+    let before = &a.tracks[k.checked_sub(1)?].name;
+    let hand = ["Bip01LHand", "Bip01RHand"].into_iter().find(|h| before.starts_with(&h.replace("Hand", "Finger")));
+    let parent = hand.and_then(|h| d.joint(h));
+    // a rest offset as long as the track's own: its positions taken as they are
+    let mut rest = [[0.0; 4]; 4];
+    rest[3] = [a.tracks[k].length, 0.0, 0.0, 1.0];
+    let sk = hst_sim::pose::Skeleton { names: vec!["Racket02".into()], parent: vec![None], rest: vec![rest] };
+    Some((Clip::new(&sk, a), parent))
+}
+
 fn wrap(v: f32, half: f32) -> f32 {
     (v + half).rem_euclid(2.0 * half) - half
 }
@@ -475,12 +503,14 @@ pub(super) fn show(cer: Option<Res<Ceremony>>, mut camera: Query<(&mut Transform
 pub(super) fn pose(
     cer: Option<Res<Ceremony>>,
     g: Res<super::super::Game>,
-    mut figures: Query<(&super::super::Figure, &Rig, &mut Transform)>,
+    mut figures: Query<(Entity, &super::super::Figure, &Rig, &mut Transform, &mut bevy::mesh::morph::MorphWeights)>,
     mut joints: Query<&mut Transform, Without<super::super::Figure>>,
     kids: Query<&Children>,
+    parts: Query<(&Mesh3d, &MeshMaterial3d<crate::gs::GsMaterial>)>,
+    mut gs: ResMut<Assets<crate::gs::GsMaterial>>,
 ) {
     let Some(c) = cer else { return };
-    for (f, rig, mut tf) in &mut figures {
+    for (root, f, rig, mut tf, mut weights) in &mut figures {
         let i = f.0;
         let Some((at, far)) = c.plan.marks.get(i) else { continue };
         tf.translation = Vec3::from(*at);
@@ -499,6 +529,22 @@ pub(super) fn pose(
             }
         }
         let (s, t) = c.slot[i];
+        // the motion's own face on the body's clock (held on its last key past its end), over the match's
+        if let Some(face) = &c.faces[i][s] {
+            let w = weights.weights_mut();
+            w.fill(0.0);
+            let at = hst_sim::ps2::mul(t.min(face.length), 80.0);
+            for (target, ticks, values) in &face.tracks {
+                w[*target] = hst_sim::face::sample(ticks, values, at, &mut 0, false)[0];
+            }
+            let offset = crate::inspect::face_uv(&rig.data, face, t.min(face.uv_length));
+            for (mesh, mat) in parts.iter_many(kids.iter_descendants(root)) {
+                let o = rig.data.parts.iter().position(|p| p.0.id() == mesh.0.id()).map_or(Vec2::ZERO, |k| offset[k]);
+                if gs.get(&mat.0).is_some_and(|g| g.uniform.uv_offset != o) {
+                    gs.get_mut(&mat.0).unwrap().uniform.uv_offset = o;
+                }
+            }
+        }
         let Some(clip) = &c.clips[i][s] else { continue };
         for (j, joint) in rig.data.joints.iter().enumerate() {
             if let Ok(mut jt) = joints.get_mut(rig.joints[j]) {
@@ -513,6 +559,28 @@ pub(super) fn pose(
             }
             if let Some(p) = pos {
                 jt.translation = Vec3::from(p);
+            }
+        }
+        // the free racket: its node's model-space matrix, as the `Racket` joint's local under its own parent
+        if let (Some((free, parent)), Some(r)) = (&c.rackets[i][s], rig.data.joint("Racket")) {
+            let model = |j: Option<usize>| {
+                let mut m = Mat4::IDENTITY;
+                let mut j = j;
+                while let Some(k) = j {
+                    m = joints.get(rig.joints[k]).map_or(Mat4::IDENTITY, |t| t.to_matrix()) * m;
+                    j = rig.data.joints[k].parent;
+                }
+                m
+            };
+            let (rot, pos) = free.sample(0, t.min(free.length));
+            let local = Transform {
+                rotation: rot.map_or(Quat::IDENTITY, |[x, y, z, w]| Quat::from_xyzw(-x, -y, -z, w).normalize()),
+                translation: pos.map_or(Vec3::ZERO, Vec3::from),
+                ..default()
+            };
+            let at = model(rig.data.joints[r].parent).inverse() * model(*parent) * local.to_matrix();
+            if let Ok(mut jt) = joints.get_mut(rig.joints[r]) {
+                *jt = Transform::from_matrix(at);
             }
         }
     }

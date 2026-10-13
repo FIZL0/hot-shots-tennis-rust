@@ -358,15 +358,18 @@ fn uv_offsets(
 
 /// Per part of `d`, its texture offset from face `face`'s `.UVA` at UV time `sampled` (see [`uv_offsets`]).
 pub fn part_uv(d: &CharacterData, face: usize, sampled: f32) -> Vec<Vec2> {
+    d.faces.get(&face).map_or_else(|| vec![Vec2::ZERO; d.parts.len()], |f| face_uv(d, f, sampled))
+}
+
+/// [`part_uv`] of a face that isn't one of `d`'s own (the ceremony's).
+pub fn face_uv(d: &CharacterData, face: &character::Face, sampled: f32) -> Vec<Vec2> {
     let mut offset = vec![Vec2::ZERO; d.parts.len()];
-    if let Some(face) = d.faces.get(&face) {
-        let t = hst_sim::ps2::mul(sampled, 80.0);
-        for (node, ticks, values) in &face.uv {
-            // ponytail: the key cursor restarts from 0 each sample, as the face's (≤1 ulp after a wrap)
-            let [x, y, ..] = hst_sim::face::sample(ticks, values, t, &mut 0, true);
-            for (k, (_, swap)) in d.part_nodes.iter().enumerate().filter(|(_, (n, _))| n.contains(node)) {
-                offset[k] = if *swap { Vec2::new(y, x) } else { Vec2::new(x, y) };
-            }
+    let t = hst_sim::ps2::mul(sampled, 80.0);
+    for (node, ticks, values) in &face.uv {
+        // ponytail: the key cursor restarts from 0 each sample, as the face's (≤1 ulp after a wrap)
+        let [x, y, ..] = hst_sim::face::sample(ticks, values, t, &mut 0, true);
+        for (k, (_, swap)) in d.part_nodes.iter().enumerate().filter(|(_, (n, _))| n.contains(node)) {
+            offset[k] = if *swap { Vec2::new(y, x) } else { Vec2::new(x, y) };
         }
     }
     offset
