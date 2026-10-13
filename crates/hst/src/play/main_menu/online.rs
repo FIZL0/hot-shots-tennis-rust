@@ -421,10 +421,11 @@ impl Menu {
                         Some(2) => out.push(Sound(1)),
                         _ => self.code_back(out),
                     }
-                } else if k.back && self.net.entry.pop().is_some() {
-                    out.push(Sound(1));
                 } else if k.back {
+                    // B239: ○ (Esc) leaves the entry; □ deletes (Backspace too, `typing`)
                     self.code_back(out);
+                } else if k.page {
+                    out.push(Sound(if self.net.entry.pop().is_some() { 1 } else { 0 }));
                 }
             }
             Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
@@ -1293,11 +1294,10 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobby);
         m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], ..Default::default() }));
         assert_eq!((m.screen, m.doubles, m.players()), (Screen::Chars, false, 2));
-        // Back deletes, then leaves
+        // B239: □ deletes one character, ○ leaves at once
         let mut m = Menu { screen: Screen::Code, net: View { entry: "AB".into(), ..default() }, ..default() };
-        m.step(dev, Press { back: true, ..default() });
+        m.step(dev, Press { page: true, ..default() });
         assert_eq!((m.screen, m.net.entry.as_str()), (Screen::Code, "A"));
-        m.step(dev, Press { back: true, ..default() });
         m.step(dev, Press { back: true, ..default() });
         assert_eq!((m.screen, m.sel), (Screen::Online, 3));
         // a pasted link joins its code
