@@ -623,3 +623,43 @@ fn serve_calls_like_the_game() {
         eprintln!("context/p3d4 missing, skipped");
     }
 }
+
+/// B188: random rallies at every sets × games (1–6, the original's menu offers 2, 4, 6) and both modes reach the
+/// match's end with the bookkeeping in range, tiebreaks included (games 1 goes to one at 1-1).
+#[test]
+fn every_match_length_ends() {
+    let mut x = 0x2468_ace1u32;
+    for players in [2, 4] {
+        for sets in 1..=3 {
+            for games in 1..=6 {
+                for _ in 0..500 {
+                    let r = Rules { sets, games, players, ..SINGLES };
+                    let mut s = Score::new();
+                    let mut points = 0;
+                    while !s.match_over {
+                        x ^= x << 13;
+                        x ^= x >> 17;
+                        x ^= x << 5;
+                        let e = s.point(&r, (x & 1) as usize);
+                        s.note_tiebreak_start();
+                        s.change_ends();
+                        match e {
+                            Some(Event::Set) => {
+                                s.games_played = 0;
+                                s.new_set();
+                            }
+                            Some(Event::Game) => s.new_game(),
+                            _ => {}
+                        }
+                        s.next_point(&r);
+                        points += 1;
+                        assert!(points < 100_000, "sets {sets} games {games}: no end");
+                        assert!((0..r.players).contains(&s.server) && (0..r.players).contains(&s.receiver));
+                        assert!(s.set <= 2 * sets - 1 && s.sets.iter().all(|&n| n <= sets));
+                    }
+                    assert_eq!(s.sets.iter().max(), Some(&sets));
+                }
+            }
+        }
+    }
+}

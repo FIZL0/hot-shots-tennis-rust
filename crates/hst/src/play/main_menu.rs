@@ -149,6 +149,8 @@ const UMPIRES: usize = 5;
 const STRIP: [usize; COURTS] = [0, 3, 5, 1, 7, 8, 10, 9, 2, 6, 4];
 /// Sets on the confirm screen (sets played; to win: (n + 1) / 2).
 const SETS: [i32; 3] = [1, 3, 5];
+/// Games to win a set on the confirm screen: the original's 2, 4 or 6 (its option steps by 2; ours wraps round like Sets).
+const GAMES: [i32; 3] = [2, 4, 6];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
 /// `word.tm2`'s glyphs, 12 to a 32-px row from y 32.
@@ -802,7 +804,7 @@ impl Menu {
                     let wrap = |v: usize, n: usize| (v as i32 + d).rem_euclid(n as i32) as usize;
                     match self.sel {
                         2 => self.sets = wrap(self.sets, SETS.len()),
-                        3 => self.games = wrap(self.games as usize - 1, 6) as i32 + 1,
+                        3 => self.games = GAMES[wrap(GAMES.iter().position(|&n| n >= self.games).unwrap_or(1), GAMES.len())],
                         _ => {}
                     }
                     out.push(Sound(0));
