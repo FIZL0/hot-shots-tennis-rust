@@ -934,7 +934,7 @@ mod tests {
 
         /// `play_rollback`, the guest frozen for the rounds in `hitch` (a hiccup: nothing runs, sent or heard), and
         /// `each(round, apps)` after every round.
-        fn play_rollback_with(lag: u32, limit: u32, bad: bool, hitch: std::ops::Range<u32>, mut each: impl FnMut(u32, &[App; 2])) -> [App; 2] {
+        fn play_rollback_with(lag: u32, limit: u32, bad: bool, hitch: std::ops::Range<u32>, mut each: impl FnMut(u32, &mut [App; 2])) -> [App; 2] {
             let room = room(0);
             let mut apps = ["host", "g"].map(|me| {
                 let mut a = app(&room, me);
@@ -964,7 +964,7 @@ mod tests {
                         take(apps[1 - i].world_mut(), Event::Match(m));
                     }
                 }
-                each(round, &apps);
+                each(round, &mut apps);
                 let over = |a: &App| a.world().resource::<Game>().match_stats.result.is_some() || a.world().resource::<Netplay>().end.is_some();
                 if apps.iter().all(over) {
                     break;
@@ -1038,6 +1038,40 @@ mod tests {
             let [a, b] = apps.each_ref().map(frame);
             assert!(a.abs_diff(b) <= 2, "host at tick {a}, guest at {b}");
             assert!(apps[0].world().resource::<Rollback>().sess.frames_ahead() <= 1);
+        }
+
+        /// B228: the host's own emote (1P's flick, a local seat on the host) plays on both machines, in sync. The
+        /// host's mashed pads stop for the tick it flicks, so its latch goes out as a real device's would.
+        #[test]
+        fn the_hosts_emote_plays_on_both() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (mut flicked, mut seen, mut mash) = (None, [false; 2], None);
+            let apps = play_rollback_with(5, 900, false, 0..0, |round, apps| {
+                if let Some(m) = mash.take() {
+                    apps[0].world_mut().resource_mut::<Netplay>().mash = Some(m);
+                }
+                for (i, a) in apps.iter().enumerate() {
+                    seen[i] |= a.world().resource::<Game>().players[0].emote > 0;
+                }
+                let w = apps[0].world_mut();
+                let g = w.resource::<Game>();
+                // from 1P's first serve (the host serves first: before the toss) or a rally after it
+                let open = g.phase == Phase::Rally || g.phase == Phase::Serve && g.serving.toss.is_none();
+                if !seen[0] && round % 10 == 0 && open {
+                    flicked.get_or_insert(round);
+                    mash = w.resource_mut::<Netplay>().mash.take();
+                    w.resource_mut::<Pads>().slots[0].emote = Some(2);
+                }
+            });
+            assert!(flicked.is_some(), "no serve or rally to flick in");
+            assert_eq!(seen, [true, true], "the host's emote played (host, guest), flicked from round {flicked:?}");
+            let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
+            assert_eq!((a.end.clone(), b.end.clone()), (None, None));
+            let n = a.lock.log.len().min(b.lock.log.len()) - rollback::WINDOW;
+            assert_eq!(a.lock.log[..n], b.lock.log[..n]);
+            assert!(!a.desynced && !b.desynced);
         }
 
         /// A tick that runs differently on one machine: both see it at the next checksum, save their inputs, the
