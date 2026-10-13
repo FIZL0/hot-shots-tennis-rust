@@ -4217,7 +4217,8 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         m.arm = p.arm;
         // a whiffed serve's miss motion plays on through the fault's call
         let serving = (g.phase == Phase::Serve || g.serving.whiffed) && g.score.server == i as i32;
-        if serving {
+        // an emote before the toss (B231) plays its own motion, then the stance comes back
+        if serving && p.emote == 0 {
             let s = g.serving;
             let under = s.toss == Some(Toss::Under);
             match (s.toss, s.swing) {

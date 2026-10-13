@@ -149,6 +149,9 @@ mod match_tests {
         app.add_systems(Startup, setup);
         app.add_systems(FixedUpdate, (remember, super::super::tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball).chain());
         app.update();
+        for i in 0..2 {
+            app.world_mut().spawn((Figure(i), character::Motion::default()));
+        }
         app
     }
 
@@ -235,12 +238,20 @@ mod match_tests {
         let mut a = seated([true, false, false, false], pads);
         for t in 0..n {
             a.world_mut().run_schedule(FixedUpdate);
+            let drawn = a.world_mut().query::<(&Figure, &character::Motion)>().iter(a.world()).find(|(f, _)| f.0 == 0).unwrap().1.id;
             let g = a.world().resource::<Game>();
             let p = &g.players[0];
             if (at..at + len).contains(&t) {
                 assert_eq!((p.emote as usize, p.cmd.id, g.phase.clone()), (at + len - 1 - t, MOTIONS[2], Phase::Serve), "tick {t}");
                 let d = (0..3).map(|k| (g.flight.ball.pos[k] - p.pos[k]).powi(2)).sum::<f32>().sqrt();
                 assert!(d < 2.5 && g.flight.ball.vel == [0.0; 3], "the ball left the hand, tick {t}: {d} m");
+            }
+            // B231: the drawn body plays the emote, not the serve stance, then goes back to the stance
+            if (at..at + len - 1).contains(&t) {
+                assert_eq!(drawn, MOTIONS[2], "the body kept the stance, tick {t}");
+            }
+            if t == at + len + 2 {
+                assert!((0x20..=0x22).contains(&drawn), "no stance after the emote, tick {t}: {drawn:#x}");
             }
             // the press tosses (a second would swing)
             if g.serving.toss.is_some() {
