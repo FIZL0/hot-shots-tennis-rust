@@ -2448,7 +2448,7 @@ pub fn plugin(app: &mut App) {
     );
     previews::plugin(app);
     mods_screen::plugin(app);
-    // B221: no on-screen pad over the menus (they take taps); the match turns it back on
+    // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));
 }
