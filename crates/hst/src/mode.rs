@@ -63,6 +63,10 @@ impl Mode {
 #[derive(Resource, Default)]
 pub struct Next(pub Option<Mode>);
 
+/// In with an `AppExit`: a real quit (an unattended run's `--shot` or `HST_MASH` done), not the mode's way back.
+#[derive(Resource)]
+pub struct Quit;
+
 /// Whether the running mode's next fixed tick may run (online play waits for the peers' pads).
 #[derive(Resource)]
 pub struct Gate(pub fn(&mut World) -> bool);
@@ -377,7 +381,7 @@ fn teardown(world: &mut World) {
 
 /// The running mode's `AppExit` → its way back, while the primary window is open (closing it still quits).
 fn back(world: &mut World) {
-    if world.get_resource::<Running>().is_none_or(|r| r.back.is_none() && !r.leaving) || world.resource::<Messages<AppExit>>().is_empty() {
+    if world.get_resource::<Running>().is_none_or(|r| r.back.is_none() && !r.leaving) || world.resource::<Messages<AppExit>>().is_empty() || world.contains_resource::<Quit>() {
         return;
     }
     if world.query_filtered::<(), With<PrimaryWindow>>().iter(world).next().is_none() {
@@ -465,5 +469,19 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert!(app.should_exit().is_some(), "the menu's quit quits");
+    }
+
+    /// An unattended run's quit (`Quit` in with the `AppExit`: `--shot` done) quits even a mode with a way back.
+    #[test]
+    fn a_real_quit_quits_a_match() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::window::WindowPlugin { primary_window: Some(Window::default()), exit_condition: bevy::window::ExitCondition::DontExit, ..default() }, plugin));
+        app.world_mut().resource_mut::<Next>().0 = Some(mode(2).back(mode(1)));
+        loading(&mut app);
+        settle(&mut app);
+        app.insert_resource(super::Quit);
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        assert!(app.should_exit().is_some());
     }
 }

@@ -281,8 +281,18 @@ fn start(argv: Vec<String>) {
         };
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first)));
     } else if args.play {
-        add_match(&mut app, viewer_mod, mod_slot, slot_mods);
-        app.insert_resource(swap_hands);
+        // a mode too, so its quit (the pause menu's Return to the Menu, the result screen) lands in the main menu
+        let menu_args = Args { play: false, ..args.clone() };
+        let back = mode::Mode::new(move |app| {
+            app.insert_resource(menu_args);
+            menu_mode(app);
+        });
+        let a = args.clone();
+        let first = mode::Mode::new(move |app| {
+            app.insert_resource(a).insert_resource(swap_hands).add_systems(Startup, load);
+            add_match(app, viewer_mod, mod_slot, slot_mods);
+        });
+        app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);
     } else if args.viewer.is_some() {
@@ -290,7 +300,7 @@ fn start(argv: Vec<String>) {
     } else if args.ball {
         app.add_plugins(sandbox::plugin);
     }
-    if !menu {
+    if !menu && !args.play {
         app.add_systems(Startup, load);
     }
     app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds))
@@ -1099,11 +1109,12 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
 
 /// `HST_KEYS="2:Enter 9:Escape 10:ArrowDown 11:Enter 15:shot=a.png"`: at each real-time second a key is pressed for one
 /// frame (Enter, Space, Escape, Arrow*) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
-fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>) {
+fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>, mut pressed_at: Local<f32>) {
     let script = std::env::var("HST_KEYS").unwrap_or_default();
     let steps: Vec<_> = script.split_whitespace().filter_map(|s| s.split_once(':')).collect();
     for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight] {
-        if keys.pressed(k) && !keys.just_pressed(k) {
+        // held through at least one 60 Hz menu tick (a fast display's frame may fall between two)
+        if keys.pressed(k) && !keys.just_pressed(k) && time.elapsed_secs() - *pressed_at >= 1.0 / 30.0 {
             keys.release(k);
         }
     }
@@ -1129,6 +1140,7 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         }
     };
     keys.press(key);
+    *pressed_at = time.elapsed_secs();
 }
 
 fn auto_shot(mut commands: Commands, args: Res<Args>, time: Res<Time>, mut taken: Local<bool>, mut exit: MessageWriter<AppExit>) {
@@ -1139,6 +1151,7 @@ fn auto_shot(mut commands: Commands, args: Res<Args>, time: Res<Time>, mut taken
     }
     // the save is asynchronous: wait for the file
     if *taken && std::path::Path::new(path).exists() {
+        commands.insert_resource(mode::Quit);
         exit.write(AppExit::Success);
     }
 }
