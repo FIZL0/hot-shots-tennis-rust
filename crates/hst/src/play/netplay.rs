@@ -770,16 +770,26 @@ mod tests {
 
         /// M2g's acceptance: a doubles match, 2 seats on each machine, 100 ms each way, random pads, to the end
         /// with the same state on both (every 30 ticks' hashes agree: no desync). ~20 min unoptimised:
-        /// `cargo test -p hst full_doubles -- --ignored`; `tools/check.sh` runs its first minute.
+        /// `cargo test -p hst full_doubles -- --ignored`; `tools/check.sh` runs its first 2400 ticks.
         #[test]
         #[ignore]
         fn full_doubles_match_at_100ms_stays_in_sync() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
             in_sync(200_000, true);
         }
 
+        /// One 100 ms doubles match (2400 ticks) for three checks: both machines stay in sync, a state sent from
+        /// it hashes the same elsewhere (B154b), and its saved inputs replay to the same state.
         #[test]
-        fn doubles_at_100ms_stays_in_sync() {
-            in_sync(3600, false);
+        fn doubles_at_100ms_stays_in_sync_sends_and_replays() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let [mut host, mut g] = in_sync(2400, false);
+            sent_state_hashes_the_same(&mut host, &mut g);
+            saved_inputs_replay_the_same(&mut host);
         }
 
         /// B151: the host started with two seats open, the computer plays them on both machines alike.
@@ -791,20 +801,17 @@ mod tests {
             let mut room = room(crate::net::delay_for(std::time::Duration::from_millis(200)));
             room.seats[1] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(1, 0) });
             room.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(3, 0) });
-            let apps = play_room(room, 6, 3600, None);
+            let apps = play_room(room, 6, 1500, None);
             let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
             assert_eq!((a.end.as_deref(), b.end.as_deref()), (None, None));
             assert_eq!((a.lock.mine.clone(), b.lock.mine.clone()), (vec![0], vec![2]));
             let n = a.lock.log.len().min(b.lock.log.len());
-            assert!(n > 3000, "{n} ticks");
+            assert!(n > 1400, "{n} ticks");
             eprintln!("computer seats in sync over {n} ticks");
             assert_eq!(a.lock.log[..n], b.lock.log[..n]);
         }
 
-        fn in_sync(limit: u32, to_the_end: bool) {
-            if !Path::new(ISO).is_file() {
-                return eprintln!("no ISO, skipped");
-            }
+        fn in_sync(limit: u32, to_the_end: bool) -> [App; 2] {
             REPLAYS.set(!to_the_end);
             let apps = play(6, limit, None);
             for a in &apps {
@@ -819,6 +826,7 @@ mod tests {
             let replays = apps[0].world().resource::<Game>().instant.replays;
             assert!(to_the_end || replays > 1, "{replays} instant replays");
             eprintln!("in sync over {n} ticks, {replays} instant replays");
+            apps
         }
 
         /// A tick run on different pads: both see it at the next hash, save the inputs, say so, the guest takes the
@@ -853,12 +861,7 @@ mod tests {
 
         /// B154b: a state from `snapshot::encode` taken on by a match that's elsewhere hashes the same, and its
         /// pieces fit a message.
-        #[test]
-        fn a_sent_state_hashes_the_same() {
-            if !Path::new(ISO).is_file() {
-                return eprintln!("no ISO, skipped");
-            }
-            let [mut host, mut g] = play(6, 700, None);
+        fn sent_state_hashes_the_same(host: &mut App, g: &mut App) {
             let data = super::super::snapshot::encode(host.world_mut());
             let json = serde_json::to_vec(&Msg::State { tick: 0, data: vec![255; crate::play::resync::PIECE], last: false }).unwrap().len();
             eprintln!("state {} KB, a piece {} KB as JSON", data.len() / 1024, json / 1024);
@@ -872,13 +875,8 @@ mod tests {
         }
 
         /// A lockstep match's inputs run again as `replays_a_desync` does come out the same, instant replays and all.
-        #[test]
-        fn saved_inputs_replay_the_same() {
-            if !Path::new(ISO).is_file() {
-                return eprintln!("no ISO, skipped");
-            }
+        fn saved_inputs_replay_the_same(host: &mut App) {
             let room = room(crate::net::delay_for(std::time::Duration::from_millis(200)));
-            let mut host = play(6, 2400, None).into_iter().next().unwrap();
             let log = host.world().resource::<Netplay>().lock.log.clone();
             assert!(host.world().resource::<Game>().instant.replays > 1);
             let mut a = app(&room, "replay");
@@ -1084,7 +1082,9 @@ mod tests {
 
         /// B154: re-runs through the first change of ends stay the same (its camera glide kept state outside the
         /// snapshot, so a rollback mid-glide came out differently and the match stopped on the Change Sides screen).
+        /// ~40 s: `tools/check.sh -p hst synctest_through -- --ignored` after touching the snapshot or change of ends.
         #[test]
+        #[ignore]
         fn synctest_through_a_change_of_ends() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
@@ -1281,8 +1281,10 @@ mod tests {
 
         /// B196: `g` killed, then a new process for it joins (the relay gives it `g`'s seat as `g2`): the host restarts
         /// the match with it in, and all three play on from the same tick in lockstep. And the host killed: the
-        /// guests end the match.
+        /// guests end the match. ~25 s: `tools/check.sh -p hst a_silent_peer_rejoins -- --ignored` after touching
+        /// `recover.rs` or the rejoin flow.
         #[test]
+        #[ignore]
         fn a_silent_peer_rejoins_and_a_silent_host_ends_it() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");

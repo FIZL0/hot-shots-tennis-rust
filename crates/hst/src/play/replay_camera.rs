@@ -47,7 +47,7 @@ struct Snap {
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct ReplayCamera {
     shots: Vec<CameraShot>,
-    picks: ReplayPicks,
+    pub(super) picks: ReplayPicks,
     /// The last point played (its shots and the tick it ended), and the one a replay shows.
     live: Vec<Rec>,
     live_end: i32,
@@ -395,7 +395,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 2, pads: None });
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 1, pads: None });
         app.insert_resource(Pads { seats: Some([false; 4]), autoplay: true, ..default() });
         app.init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));

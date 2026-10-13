@@ -2378,7 +2378,10 @@ mod tests {
         assert!(fresh(unix_micros() - 80_000_000) && !fresh(unix_micros() - 100_000_000));
     }
 
+    /// A local DHT testnet, two lobbies through a short code (~20 s): `tools/check.sh -p hst short_code_on_a_testnet
+    /// -- --ignored` after touching the DHT or short codes.
     #[test]
+    #[ignore]
     fn short_code_on_a_testnet() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {

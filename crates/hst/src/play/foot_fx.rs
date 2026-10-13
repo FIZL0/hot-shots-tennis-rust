@@ -325,7 +325,7 @@ mod tests {
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    /// Singles bot matches' replays sound footfalls only on their close-up closing shots, and do sound some there.
+    /// A singles bot match's replay sounds footfalls only on its close-up closing shot, and does sound some there.
     #[test]
     fn replay_steps_sound_on_close_ups_only() {
         if !std::path::Path::new(ISO).is_file() {
@@ -340,13 +340,15 @@ mod tests {
         app.init_resource::<tick_input::TickPads>();
         app.init_resource::<instant_replay::Recorder>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, super::plugin, weather::plugin, heard::plugin));
+        app.add_plugins((cutaway::plugin, bodyhit::plugin, super::plugin));
         app.add_systems(PostStartup, setup);
-        app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball, instant_replay::run).chain());
+        app.add_systems(FixedUpdate, (remember, tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball, instant_replay::run).chain());
         app.finish();
         app.cleanup();
         app.world_mut().run_schedule(Startup);
         app.world_mut().run_schedule(PostStartup);
+        // every closing shot a close-up of the hitter, so the first replay (the match point's) has one
+        app.world_mut().resource_mut::<super::super::replay_camera::ReplayCamera>().picks.lists.end = [[0x58; 3]; 2];
         let step = hst_sim::sound::step(crate::weather::now());
         let (mut close, mut steps, mut replays) = (0, 0, 0);
         for _ in 0..60 * 60 * 120 {

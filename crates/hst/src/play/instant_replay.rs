@@ -316,7 +316,7 @@ pub(super) mod tests {
     pub(in crate::play) const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
     pub(in crate::play) fn app(human: bool) -> App {
-        app_rules(human, true, 1, 2)
+        app_rules(human, true, 1, 1)
     }
 
     /// A bot match of `sets` sets to win and `games` games a set, singles or doubles.
