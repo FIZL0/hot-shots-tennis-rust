@@ -87,7 +87,7 @@ pub struct Rollback {
 impl Rollback {
     /// `room`'s session for peer `me`: a ggrs player per taken seat, in seat order.
     pub fn new(room: &Room, me: &str, step: fn(&mut World)) -> Result<Self, GgrsError> {
-        let seats: Vec<usize> = (0..room.seats.len()).filter(|&s| room.seats[s].is_some()).collect();
+        let seats: Vec<usize> = (0..room.seats.len()).filter(|&s| room.seats[s].as_ref().is_some_and(crate::net::Seat::human)).collect();
         let mut b = SessionBuilder::<Cfg>::new()
             .with_num_players(seats.len())?
             .with_input_delay(DELAY)
