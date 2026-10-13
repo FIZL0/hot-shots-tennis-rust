@@ -552,6 +552,16 @@ pub fn face_square(img: &image::RgbaImage, head: Option<Vec2>) -> Option<URect> 
     Some(URect::new(x0, y0, x0 + s, y0 + s))
 }
 
+/// B219: `sq` grown `f`× about its centre, kept inside a `w`×`h` image (Ashley's wide, short head: [`HEAD_FIT`] on
+/// her hair-to-jaw height framed her tighter than the rest of the cast).
+pub fn grow_square(sq: URect, f: f32, w: u32, h: u32) -> URect {
+    let s = ((sq.width() as f32 * f) as u32).min(w.min(h));
+    let c = sq.center();
+    let x0 = c.x.saturating_sub(s / 2).min(w - s);
+    let y0 = c.y.saturating_sub(s / 2).min(h - s);
+    URect::new(x0, y0, x0 + s, y0 + s)
+}
+
 /// B176: a rig-framed face square's side over the head's height (hair top to the head bone).
 const HEAD_FIT: f32 = 1.6;
 
@@ -646,6 +656,14 @@ mod tests {
         assert!(sq.min.y < 60 && sq.min.y > 50, "top just above the hair: {sq:?}");
         assert!(sq.max.y > 120, "the jaw inside: {sq:?}");
         assert_eq!(sq.center().x, 192, "centred on the head's run, not the bone: {sq:?}");
+    }
+
+    /// B219: grown about the centre, pushed back inside the image at an edge.
+    #[test]
+    fn grow_square_stays_inside() {
+        let sq = grow_square(URect::new(100, 100, 200, 200), 1.25, 384, 480);
+        assert_eq!((sq.width(), sq.height(), sq.center()), (125, 125, UVec2::new(150, 150)));
+        assert_eq!(grow_square(URect::new(0, 0, 100, 100), 1.25, 384, 480).min, UVec2::ZERO);
     }
 
     /// The icon centres on the head: a 20-px "head" at x 200..220 under a 2-px "racket" further left.

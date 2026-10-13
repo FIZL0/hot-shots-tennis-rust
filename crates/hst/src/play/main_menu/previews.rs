@@ -53,7 +53,9 @@ use crate::Args;
 use crate::play::controls::Bindings;
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 7;
+const RENDER: u32 = 8;
+/// B219: Ashley's face square, grown about its centre to sit like the rest of the cast's.
+const ASHLEY_ZOOM: f32 = 1.25;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
 /// row, so the read-back has no row padding.
 const BAKE: UVec2 = UVec2::new(384, 480);
@@ -693,7 +695,8 @@ fn bake(
             let path = if job.face { face_path(&job.path) } else { job.path.clone() };
             // B176: framed on the rig's head bone
             let head = cams.get(job.cam).ok().and_then(|p| inspect::head_px(p, BAKE.as_vec2(), &rigs, &globals));
-            let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i, head));
+            let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i, head))
+                .map(|sq| if job.key.0 == Who::Disc(0) { inspect::grow_square(sq, ASHLEY_ZOOM, size.x, size.y) } else { sq });
             job.saving.push(IoTaskPool::get().spawn(async move { save(rgba, size, &path) }));
             // B160: the same drawing's head square again at [`FACE`]
             if let (Some(sq), Ok(p)) = (square, cams.get(job.cam)) {
