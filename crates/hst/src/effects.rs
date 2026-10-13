@@ -42,6 +42,11 @@ pub struct Hit {
 }
 
 impl Impacts {
+    /// An impact is playing (tests).
+    pub fn playing(&self) -> bool {
+        self.playing.is_some()
+    }
+
     pub fn start(&mut self, h: Hit, transforms: &mut Query<&mut Transform>) {
         let k = if h.smash { 5 } else { h.kind.clamp(0, 4) as usize };
         self.playing = Some(k);
@@ -290,6 +295,11 @@ pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshe
 }
 
 impl HitSparks {
+    /// A burst is playing (tests).
+    pub fn live(&self) -> bool {
+        self.sparks.live
+    }
+
     /// A reseed message: the whole table rolled from `rng` (the sound generator before the reseed); the burst stops.
     pub fn restart(&mut self, rng: &mut Mt) {
         self.sparks.restart(rng);
@@ -426,6 +436,11 @@ const GLOW_SIZE: f32 = 0.4;
 const GLOW_TURN: f32 = std::f32::consts::FRAC_PI_2;
 
 impl BallFlight {
+    /// The ribbon is drawn (tests).
+    pub fn live(&self) -> bool {
+        self.flight.live
+    }
+
     /// One game frame: a hit restarts the ribbon (and, bar a smash, the glow); a dead ball ends both.
     pub fn frame(&mut self, hit: Option<Hit>, dead: bool, pos: [f32; 3], vel: [f32; 3], commands: &mut Commands) {
         if let Some(h) = hit {
