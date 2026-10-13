@@ -79,7 +79,8 @@ pub struct GsKey {
     pub cull: bool,
     /// Drawn through a mirrored matrix (a left-hander's x scale −1): the winding flips, so the faces kept flip too.
     pub mirror: bool,
-    /// A court model: VU1 drops every triangle with a vertex outside its guard band (gs.wgsl, `GS_GUARD`).
+    /// A court model other than the hole model: VU1 drops every triangle with a vertex outside its guard band
+    /// (gs.wgsl, `GS_GUARD`).
     pub guard: bool,
 }
 
@@ -376,7 +377,9 @@ impl GsMaterial {
             prim &= !0x20;
         }
         let mut draws = Self::for_batch(m, prim, texture);
-        draws.iter_mut().for_each(|d| d.key.guard = true);
+        // the hole model is exempt: on the indoor court it holds the hall's ceiling, which the original draws from
+        // the low replay cameras looking up
+        draws.iter_mut().for_each(|d| d.key.guard = !hole);
         if hole {
             let mut lt = draws.swap_remove(0);
             lt.key.modulate = true;
@@ -579,9 +582,9 @@ mod tests {
         // @add loses fog; @sub keeps it
         assert!(!keys(&material("glow@add", 5, 1.0), 0x30, false)[0].fog);
         assert!(keys(&material("line@add@sub", 5, 1.0), 0x30, false)[0].fog);
-        // the hole: MODULATE, A ≥ 0x80 opaque with Z, below blended without
+        // the hole: MODULATE, A ≥ 0x80 opaque with Z, below blended without, no guard band (B170)
         let k = keys(&material("abb_zassou", 5, 1.0), 0x30, true);
-        let base = GsKey { textured: true, modulate: true, test: Test::Ge80, blend: None, fog: true, cull: true, mirror: false, guard: true };
+        let base = GsKey { textured: true, modulate: true, test: Test::Ge80, blend: None, fog: true, cull: true, mirror: false, guard: false };
         assert_eq!(k, [base, GsKey { test: Test::Lt80, blend: Some(mtl::Blend::Normal), ..base }]);
         assert_eq!(GsMaterial::for_court_batch(&material("abb_zassou", 5, 1.0), 0x30, tex.clone(), true)[1].uniform.highlight, 0.0);
         // a hole @add batch keeps its add in both draws
