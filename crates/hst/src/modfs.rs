@@ -414,6 +414,10 @@ pub(crate) mod tests {
         let Ok(dirs) = std::fs::read_dir(MODS) else { return eprintln!("no context/mods, skipped") };
         let root = Path::new("t_real/mods");
         for d in dirs.flatten() {
+            // context/mods/test_broken is a deliberately broken rig (`install`'s skeleton check rejects it)
+            if d.file_name() == "test_broken" {
+                continue;
+            }
             let Ok(want) = mods::read(&d.path()) else { continue };
             let files: Files = dir_files(&d.path()).into_iter().map(|(n, b)| (format!("{}/{n}", want.id), b)).collect();
             let got = install(&zip_of(&files), root).unwrap_or_else(|e| panic!("{}: {e}", want.id));
