@@ -267,4 +267,35 @@ mod tests {
         assert!(want[pads.len() - 1] - want[299] > 15, "too few sounds to tell");
         assert_eq!(state_hash(a.world_mut()), state_hash(b.world_mut()), "the re-runs ended somewhere else");
     }
+
+    /// B132: a press's approach runs exactly its planned frames, the search frame doesn't move (as the original,
+    /// `context/b132`: N runs, then the stroke state on a frame of its own), and a planned approach locks.
+    #[test]
+    fn approach_runs_its_frames_then_locks() {
+        let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
+            return eprintln!("no ISO or round1.bin, skipped");
+        };
+        let frames = hst_sim::replay::frames(&data);
+        let mut app = app();
+        let (mut planned, mut runs, mut approaches) = (None::<u32>, 0, 0);
+        for f in &frames {
+            let before = app.world().resource::<Game>().players[0];
+            run(&mut app, &[[f.pad(0), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]]);
+            let p = app.world().resource::<Game>().players[0];
+            let moved = p.pos != before.pos;
+            match (before.pending, p.pending) {
+                (None, Some(n)) if p.approach.is_some() => (planned, runs) = (Some(n + 1), moved as u32),
+                (Some(0), None) if planned.is_some() => {
+                    assert!(!moved, "the search frame moved the player");
+                    assert_eq!(Some(runs), planned, "the approach ran {runs} frames, planned {planned:?}");
+                    assert!(p.contact.is_some(), "an approach to a reached ball didn't lock");
+                    (planned, approaches) = (None, approaches + 1);
+                }
+                (Some(_), Some(_)) => runs += moved as u32,
+                _ => {}
+            }
+        }
+        assert!(approaches > 0, "round1.bin ran no approach");
+        eprintln!("{approaches} approaches");
+    }
 }

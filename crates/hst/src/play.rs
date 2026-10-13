@@ -2346,16 +2346,17 @@ fn find_contact(g: &Game, i: usize) -> Option<Contact> {
 }
 
 /// The auto-approach a press runs first (`swing::approach`): frames to run and the direction, None when nothing
-/// comes within reach in 20 frames of running or the mover blocks the run.
-/// ponytail: the app's one reach (character 0's) for everyone, as `find_contact`
+/// comes within reach in 20 frames of running or the mover blocks the run. The player's own reach and horizon, as
+/// the search after it (character 0's let a shorter reach run to a spot its search then missed, B132).
 fn approach(g: &Game, i: usize) -> Option<(usize, Vec2)> {
     let p = &g.players[i];
-    let path = predicted_path(g, g.reach.grades.len() + 20);
+    let r = &g.reaches[i];
+    let path = predicted_path(g, r.grades.len() + 20);
     let mate = (g.players.len() == 4).then(|| g.players[i ^ 2].pos);
     let (s, n) = (p.stats, g.players.len() as i32);
     let (mut run, mut stamina, mut tick) = (if p.body.running { p.body.run } else { 0 }, p.body.stamina, p.body.stamina_tick);
     let (end, y) = (p.end, p.pos[1]);
-    swing::approach(&g.reach, &path, p.pos, p.end, |at, d| {
+    swing::approach(r, &path, p.pos, p.end, |at, d| {
         let speed = loco::run_speed(&s, run, stamina, 100);
         let delta = [hst_sim::ps2::mul(d[0], speed), 0.0, hst_sim::ps2::mul(d[1], speed)];
         let to = loco::mover([at[0], y, at[1]], delta, end, mate, false);
@@ -2848,6 +2849,17 @@ fn press(g: &mut Game, i: usize, kind: i32) {
     }
 }
 
+/// Whether this is a press's search frame (its approach run over, or none): the original's stroke state starts and
+/// nobody runs, so the search sees the spot the approach planned for (B132: an extra run step overshot it). Holds
+/// the player for the frame.
+fn searching(p: &mut Player) -> bool {
+    let on = p.pending == Some(0);
+    if on {
+        p.prev = p.pos;
+    }
+    on
+}
+
 /// Whether presses are off: from the point's reactions until the next serve.
 fn input_off(g: &Game) -> bool {
     matches!(g.phase, Phase::ChangeEnds(_)) || g.post.as_ref().is_some_and(|p| p.reacted)
@@ -2983,8 +2995,9 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     }
     // screen-relative: stick right follows the camera's right, stick up its ground-forward; nothing moves the
     // player (or sets its motion) through the swing
+    let search = searching(&mut g.players[i]);
     let p = &g.players[i];
-    if p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
+    if !search && p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
         let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick, pad.dpad));
         locomote(g, i, dir);
     }
@@ -3180,7 +3193,7 @@ fn bot(g: &mut Game, i: usize) {
     follow_through(&mut g.players[i], true);
     whiff_frame(g, i, true);
     // the press's approach run (set on an earlier frame; the bot's own walk waits while it's pending)
-    if let Some(dir) = g.players[i].approach {
+    if let Some(dir) = g.players[i].approach.filter(|_| !searching(&mut g.players[i])) {
         locomote(g, i, dir);
     }
     let busy = g.players[i].contact.is_some()
