@@ -20,6 +20,7 @@ struct Gs {
     light2_color: vec4<f32>,
     glare: f32,
     unlit: f32,
+    screen_lod: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> gs: Gs;
@@ -173,7 +174,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // clamps it to the last level (MXL; textureNumLevels doesn't exist on WebGL2)
     let vz = view_bindings::view.view_from_world;
     let w = -dot(vec4(vz[0].z, vz[1].z, vz[2].z, vz[3].z), in.world_position);
-    let level = max(floor(log2(w) + gs.lod_k + 0.5), 0.0);
+    var level = max(floor(log2(w) + gs.lod_k + 0.5), 0.0);
+    // a cut-out the GS samples at level 0 only, given levels of our own (B161): trilinear by the texel's size on
+    // screen, one level up, so a 2-texel wire grid is averaged before it beats against the pixel grid (moiré); the
+    // original at 448 lines sees it ~1.5–2 levels coarser still
+    let texels = (in.uv + gs.uv_offset) * vec2<f32>(textureDimensions(gs_texture, 0));
+    let dx = dpdx(texels);
+    let dy = dpdy(texels);
+    if gs.screen_lod != 0.0 {
+        level = max(0.5 * log2(max(dot(dx, dx), dot(dy, dy))) + 1.0, 0.0);
+    }
     let t = textureSampleLevel(gs_texture, gs_sampler, in.uv + gs.uv_offset, level);
     rgb = t.rgb * rgb;
 #ifdef GS_MODULATE
