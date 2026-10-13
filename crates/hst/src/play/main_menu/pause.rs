@@ -183,9 +183,9 @@ fn screen_point(win: &Window, p: Vec2) -> Vec2 {
     if let Some(css) = crate::web::page_size() {
         size = css;
     }
-    let share = widescreen::share(size.x / size.y);
+    let (share, v) = (widescreen::share(size.x / size.y), widescreen::vshare(size.x / size.y));
     let x = (p.x / size.x * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
-    Vec2::new(x, p.y / size.y * 448.0)
+    Vec2::new(x, (p.y / size.y * 100.0 - 50.0 * (1.0 - v)) * 4.48 / v)
 }
 
 /// This frame's left click or first tap, and whether the right button was clicked.

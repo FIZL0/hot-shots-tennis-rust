@@ -688,8 +688,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
 /// The Add mod row's rectangle in % of the window (left, top, width, height), while it's on screen: where the page
 /// puts its file input.
 fn add_rect(m: &Menu, aspect: f32) -> Option<[f32; 4]> {
-    let share = widescreen::share(aspect);
-    (m.screen == Screen::Mods && m.add.page == Page::Installed && m.add.top == 0).then(|| [X * share / 6.4 + 50.0 * (1.0 - share), Y / 4.48, W * share / 6.4, H / 4.48])
+    let (share, v) = (widescreen::share(aspect), widescreen::vshare(aspect));
+    (m.screen == Screen::Mods && m.add.page == Page::Installed && m.add.top == 0).then(|| [X * share / 6.4 + 50.0 * (1.0 - share), Y * v / 4.48 + 50.0 * (1.0 - v), W * share / 6.4, H * v / 4.48])
 }
 
 /// The store's previews (by mod id; None: it has none, or it's on its way), and the hovered one's (`Tex::Shelf`).

@@ -1610,6 +1610,7 @@ fn draw_speed(
     let (Some(speed), Some(art)) = (speed, art) else { return };
     let quads = speed.quads();
     let share = super::widescreen::window_share(&window);
+    let aspect = super::widescreen::window_aspect(&window);
     for (SpeedSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&([u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i).filter(|q| q.2 > 0) else {
             *vis = Visibility::Hidden;
@@ -1621,9 +1622,10 @@ fn draw_speed(
         // every quad of a readout is on its side of the centre, so they all pin to the same edge
         let (left, width) = super::widescreen::pin(x, dw, share);
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        let (top, height) = super::widescreen::vplace(y, dh, aspect, super::widescreen::Anchor::Sides);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(dh / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }

@@ -679,6 +679,7 @@ fn draw(
         Vec::new()
     };
     let share = super::widescreen::window_share(&window);
+    let aspect = super::widescreen::window_aspect(&window);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             *vis = Visibility::Hidden;
@@ -707,10 +708,11 @@ fn draw(
         // widescreen: the dimmer and the top bar span the window, "Paused" and the rules keep to its left
         let anchor = if [DIM, BAR, TEXT].contains(&quad.tex) { Anchor::Span } else { Anchor::Centre };
         let (left, width) = super::widescreen::place(x, w, share, anchor);
+        let (top, height) = super::widescreen::vplace(y, h, aspect, anchor);
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(h / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }
