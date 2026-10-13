@@ -419,10 +419,10 @@ impl Default for Menu {
 
 /// Rows per screen.
 #[cfg(not(target_arch = "wasm32"))]
-const MAIN: [&str; 4] = ["Local", "Online", "Settings", "Quit"];
+const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods", "Quit"];
 /// A web page can't close itself (an `AppExit` there only freezes it), so the browser build has no Quit.
 #[cfg(target_arch = "wasm32")]
-const MAIN: [&str; 4] = ["Local", "Online", "Settings", "Mods"];
+const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods"];
 const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
@@ -565,7 +565,6 @@ impl Menu {
                             self.go(Screen::Online, &mut out);
                         }
                         2 => self.go(Screen::Settings, &mut out),
-                        #[cfg(target_arch = "wasm32")]
                         3 => self.mods_open(&mut out),
                         _ => out.push(Quit),
                     }
@@ -1583,8 +1582,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 0 => text.msg(188).to_string(),
                 1 => "Play over the internet (coming later).".into(),
                 2 => text.msg(190).to_string(),
-                #[cfg(target_arch = "wasm32")]
-                3 => "Add custom characters from mod .zip files, or remove them.".into(),
+                3 => "Add, remove, browse and share custom characters (mods).".into(),
                 _ => "Close the game.".into(),
             };
             d.info(&info);
