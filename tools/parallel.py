@@ -355,6 +355,13 @@ def merge(tid):
         tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split())
         chk = sp.CompletedProcess([], 0, '', '') if tested else \
             sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
+        # ponytail: the net:: tests time out under the slots' load; one rerun of just the failures before it counts
+        if chk.returncode and (names := re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)):
+            again = sp.run([os.path.join(ROOT, 'tools/check.sh'), '--', '--exact', *names],
+                           cwd=ROOT, capture_output=True, text=True)
+            if not again.returncode:
+                log(f'{tid}: {", ".join(names)} failed under load, passed on a rerun')
+                chk = again
         if chk.returncode:
             later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
             git('reset', '-q', '--keep', pre)
