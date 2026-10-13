@@ -18,8 +18,8 @@
 //! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
-//! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', [`ICON_COLS`]
-//! × [`ICON_ROWS`] a page in one framed group, each a face icon (`inspect::face_icon`, cut from the mod's baked
+//! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
+//! columns and rows a page as the window fits (B190, [`Grid`]) in one framed group, each a face icon (`inspect::face_icon`, cut from the mod's baked
 //! costume-0 preview, blank until that's baked) with its name under it, the players' hands and tags on it as on the
 //! disc grid (←→ one, ↑↓ a row). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
 //! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
@@ -69,13 +69,71 @@ const GRID: [(usize, f32, f32); CHARS] = [
     (10, 368.0, 360.0),
     (11, 435.0, 360.0),
 ];
-/// The custom grid's columns and rows a page.
-const ICON_COLS: usize = 4;
-const ICON_ROWS: usize = 4;
-/// The custom grid's face centres: the disc grid's columns, rows [`ICON_PITCH`] apart from y [`ICON_TOP`].
-const ICON_X: [f32; ICON_COLS] = [232.0, 300.0, 368.0, 435.0];
-const ICON_TOP: f32 = 118.0;
+/// The custom grid's cells: the disc grid's face columns [`ICON_STEP`] apart, rows [`ICON_PITCH`] apart from
+/// [`ICON_TOP`] below the frame's top at y [`ICON_BOX`].
+const ICON_STEP: f32 = 68.0;
+const ICON_TOP: f32 = 32.0;
 const ICON_PITCH: f32 = 72.0;
+const ICON_BOX: f32 = 86.0;
+
+/// B190: the custom grid's fit to the window: as many columns as fit between the player cards (pinned to the window's
+/// sides) and as many rows as the frame's height holds, the cells kept their 4:3 shape on a tall window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Grid {
+    cols: usize,
+    rows: usize,
+    /// The frame's left edge (centred 640 space).
+    x: f32,
+    /// How much taller than at 4:3 a 448-space unit is on screen (1 at 4:3 or wider): the cells are drawn squashed
+    /// by it, so they keep their shape and more rows fit.
+    tall: f32,
+}
+
+impl Default for Grid {
+    fn default() -> Self {
+        Grid::fit(4.0 / 3.0, true)
+    }
+}
+
+impl Grid {
+    /// The grid on a window `aspect` wide (`wide` = widescreen on, the cards at the window's edges).
+    fn fit(aspect: f32, wide: bool) -> Self {
+        let share = super::widescreen::share(aspect);
+        // how far the window reaches past each side of the 4:3 screen, in its 640 units
+        let extra = if wide { (640.0 / share - 640.0) / 2.0 } else { 0.0 };
+        // from 40 past the left cards (room for a hand left of the first face) to 13 short of the right ones
+        let (l, r) = (200.0 - extra, 467.0 + extra);
+        let cols = (((r - l + 5.0) / ICON_STEP) as usize).max(1);
+        let tall = (4.0 / 3.0 / aspect).max(1.0);
+        // the frame ends at 384, over the page count
+        let rows = ((((384.0 - ICON_BOX) * tall - 10.0) / ICON_PITCH) as usize).max(1);
+        let w = Self::width(cols);
+        Grid { cols, rows, x: l + (r - l - w) / 2.0, tall }
+    }
+
+    fn width(cols: usize) -> f32 {
+        ICON_STEP * cols as f32 - 5.0
+    }
+
+    fn per(&self) -> usize {
+        self.cols * self.rows
+    }
+
+    /// Mod `i`'s face centre, unsquashed (`custom_list` squashes the frame by `tall`).
+    fn cell(&self, i: usize) -> (f32, f32) {
+        let k = i % self.per();
+        (self.x + 32.0 + ICON_STEP * (k % self.cols) as f32, ICON_BOX + ICON_TOP + ICON_PITCH * (k / self.cols) as f32)
+    }
+}
+
+/// Keeps `Menu::grid` fitted to the window, live on resize.
+fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
+    let Ok(w) = window.single() else { return };
+    let g = Grid::fit(w.width() / w.height().max(1.0), super::widescreen::WIDE.load(std::sync::atomic::Ordering::Relaxed));
+    if menu.grid != g {
+        menu.grid = g;
+    }
+}
 /// The original's courts on the confirm screen (names `message0` 276 + 2k, descriptions 581 + 2k).
 const COURTS: usize = 11;
 /// Each court's surface on the confirm screen (0 grass, 1 clay, 2 hard; `hst_sim::ball::COURTS` bounces the same).
@@ -319,6 +377,8 @@ struct Menu {
     flame: flame::Flame,
     /// B64: the court or umpire picker is open (on row `sel`), with the value it opened on (○ puts it back).
     picking: Option<usize>,
+    /// B190: the custom grid's fit to the window.
+    grid: Grid,
 }
 
 impl Default for Menu {
@@ -342,6 +402,7 @@ impl Default for Menu {
             net: online::View::default(),
             flame: flame::Flame::default(),
             picking: None,
+            grid: Grid::default(),
         }
     }
 }
@@ -624,7 +685,7 @@ impl Menu {
                 if !me.ready {
                     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
                     if (dx != 0.0 || dy != 0.0) && me.modded {
-                        let d = dx as i32 + dy as i32 * ICON_COLS as i32;
+                        let d = dx as i32 + dy as i32 * self.grid.cols as i32;
                         let mut to = me.pick as i32;
                         // ponytail: past a full one the same way, staying put at the edge (the grid doesn't wrap either)
                         loop {
@@ -899,7 +960,7 @@ struct Icons(std::collections::HashMap<Who, Handle<Image>>);
 fn custom_page(m: &Menu) -> std::ops::Range<usize> {
     let n = m.players();
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
-    let per = ICON_COLS * ICON_ROWS;
+    let per = m.grid.per();
     let page = m.players[lead].pick / per;
     page * per..(page * per + per).min(m.mods.len())
 }
@@ -1777,22 +1838,28 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
 /// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
 /// tag of each player picking on this page on theirs.
 fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lead: usize) {
-    let per = ICON_COLS * ICON_ROWS;
+    let g = m.grid;
     let page = custom_page(m);
-    let cell = |i: usize| (ICON_X[i % ICON_COLS], ICON_TOP + ICON_PITCH * (i % per / ICON_COLS) as f32);
-    d.box3([200.0, 86.0, 266.0, 298.0], 10.0, [Some(INK), Some(WHITE), None], 128.0);
+    let start = d.out.len();
+    d.box3([g.x, ICON_BOX, Grid::width(g.cols), g.rows as f32 * ICON_PITCH + 10.0], 10.0, [Some(INK), Some(WHITE), None], 128.0);
     for i in page.clone() {
-        let (x, y) = cell(i);
+        let (x, y) = g.cell(i);
         d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
         let tint = if m.next_free(lead, Who::Mod(i), 0, false).is_none() { [50.0; 3] } else { WHITE };
         d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], tint, 128.0);
         d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
     }
     for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
-        let (fx, fy) = cell(m.players[p].pick);
+        let (fx, fy) = g.cell(m.players[p].pick);
         d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
         d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
     }
+    // a tall window stretches the 448 space: squash the frame back to its 4:3 shape (the extra rows fill it)
+    for q in &mut d.out[start..] {
+        q.dst[1] = ICON_BOX + (q.dst[1] - ICON_BOX) / g.tall;
+        q.dst[3] /= g.tall;
+    }
+    let per = g.per();
     let pages = m.mods.len().div_ceil(per);
     d.centred(&format!("Custom characters  {}/{pages}", page.start / per + 1), 320.0, 386.0, 14.0, WHITE);
 }
@@ -2216,7 +2283,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
     app.init_resource::<pause::Click>().add_systems(Update, (online::poll.before(draw), online::typing.before(step), online::pointer.before(step)));
     previews::plugin(app);
 }
@@ -2499,6 +2566,27 @@ mod tests {
         m.step(p1, ok); // no seat left
         assert_eq!(m.seats, [Some(p0), Some(Dev::Keys), None, None]);
         assert_eq!(m.args(&[]).iter().skip_while(|x| *x != "--pads").nth(1).unwrap(), "-,k");
+    }
+
+    /// B190: the custom grid at 4:3 is the disc grid's 4×4; wider windows add columns, tall ones rows, widescreen
+    /// off keeps 4:3's columns.
+    #[test]
+    fn custom_grid_fits_the_window() {
+        let g = Grid::fit(4.0 / 3.0, true);
+        assert_eq!((g.cols, g.rows, g.x, g.tall), (4, 4, 200.0, 1.0));
+        assert_eq!(g.cell(5), (300.0, 190.0));
+        let fit = |a: f32, wide| (Grid::fit(a, wide).cols, Grid::fit(a, wide).rows);
+        assert_eq!(fit(16.0 / 9.0, true), (7, 4));
+        assert_eq!(fit(21.0 / 9.0, true), (11, 4));
+        assert_eq!(fit(21.0 / 9.0, false), (4, 4));
+        assert_eq!(fit(9.0 / 16.0, true), (4, 9));
+        // the frame stays clear of the cards and over the page count
+        for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
+            let g = Grid::fit(a, true);
+            let extra = (640.0 / super::super::widescreen::share(a) - 640.0) / 2.0;
+            assert!(g.x >= 200.0 - extra - 1e-3 && g.x + Grid::width(g.cols) <= 467.0 + extra + 1e-3, "{a}");
+            assert!(ICON_BOX + (g.rows as f32 * ICON_PITCH + 10.0) / g.tall <= 384.0 + 1e-3, "{a}");
+        }
     }
 
     /// The custom page: Tab switches it, a mod's costumes wrap at its own count, a readied mod costume is closed to
