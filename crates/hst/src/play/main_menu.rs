@@ -13,7 +13,7 @@
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', [`ICON_COLS`]
@@ -932,7 +932,8 @@ impl Text {
 struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>, Text);
 #[derive(Component)]
 struct Slot(usize);
-const POOL: usize = 700;
+// four human cards on the select take ~760 (B156)
+const POOL: usize = 1000;
 
 /// `message0.dat`'s strings: a count, offsets from the end of the offsets, each string `07 7f` then Latin-1 to a NUL.
 fn messages(d: &[u8]) -> Vec<String> {
@@ -1091,7 +1092,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "mods" | "attrs" | "mods-attrs" | "coms" => Screen::Chars,
+        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" => Screen::Chars,
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
@@ -1111,6 +1112,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
         menu.players[0].card = screen.ends_with("attrs");
         menu.players[0].ready = screen == "coms";
+        if screen == "chars4" {
+            // four humans on one portrait: their hands' offsets keep them apart (B156)
+            menu.seats = [Some(Dev::Keys); 4];
+            menu.players.iter_mut().for_each(|p| p.cursor = 6);
+        }
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
         if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) {
             online::sample(&mut menu);
@@ -1612,7 +1618,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             if !pl.ready && !pl.modded {
                 d.anchor = Anchor::Centre;
                 let [fx, fy] = [GRID[pl.cursor].1, GRID[pl.cursor].2];
-                d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
+                d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
                 d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
                 d.anchor = Anchor::Sides;
             }
@@ -1695,7 +1701,7 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
     }
     for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
         let (fx, fy) = cell(m.players[p].pick);
-        d.q(Tex::Hand, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
+        d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
         d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
     }
     let pages = m.mods.len().div_ceil(per);
