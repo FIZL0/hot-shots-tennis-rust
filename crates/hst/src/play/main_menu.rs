@@ -84,6 +84,8 @@ const SURFACE: [usize; COURTS] = [1, 1, 1, 2, 0, 0, 2, 0, 1, 0, 2];
 const METERS: [(usize, usize); 3] = [(2, 4), (3, 2), (4, 3)];
 /// The umpires; the value after the last court or umpire is a random pick (`Menu::venue`).
 const UMPIRES: usize = 5;
+/// The court picker's strip order (the original's tiles 1–11 as courts k), then our Random.
+const STRIP: [usize; COURTS] = [0, 3, 5, 1, 7, 8, 10, 9, 2, 6, 4];
 /// Sets on the confirm screen (sets played; to win: (n + 1) / 2).
 const SETS: [i32; 3] = [1, 3, 5];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
@@ -307,6 +309,8 @@ struct Menu {
     net: online::View,
     /// The confirmation screen's flame, from P1's pick.
     flame: flame::Flame,
+    /// B64: the court or umpire picker is open (on row `sel`), with the value it opened on (○ puts it back).
+    picking: Option<usize>,
 }
 
 impl Default for Menu {
@@ -329,6 +333,7 @@ impl Default for Menu {
             broken: default(),
             net: online::View::default(),
             flame: flame::Flame::default(),
+            picking: None,
         }
     }
 }
@@ -684,21 +689,44 @@ impl Menu {
                     }
                 }
             }
+            Screen::Confirm if host == Some(dev) && self.picking.is_some() => {
+                // the original's pickers: ←→ hover (court strip wraps, umpire cards stop at the ends), ✕ keeps, ○ puts back
+                let d = k.right as i32 - k.left as i32;
+                if d != 0 && self.sel == 1 {
+                    let at = STRIP.iter().position(|&c| c == self.court).unwrap_or(COURTS) as i32;
+                    self.court = STRIP.get((at + d).rem_euclid(COURTS as i32 + 1) as usize).copied().unwrap_or(COURTS);
+                    out.push(Sound(0));
+                } else if d != 0 {
+                    let u = (self.umpire as i32 + d).clamp(0, UMPIRES as i32) as u8;
+                    if u != self.umpire {
+                        self.umpire = u;
+                        out.push(Sound(0));
+                    }
+                }
+                if k.ok {
+                    self.picking = None;
+                    out.push(Sound(2));
+                } else if k.back {
+                    let v = self.picking.take().unwrap_or_default();
+                    if self.sel == 1 { self.court = v } else { self.umpire = v as u8 }
+                    out.push(Sound(1));
+                }
+            }
             Screen::Confirm if host == Some(dev) => {
                 rows(CONFIRM_ROWS, &mut self.sel, &mut out);
-                let d = k.right as i32 - k.left as i32 + (k.ok && self.sel > 0) as i32;
+                if k.ok && matches!(self.sel, 1 | 4) {
+                    self.picking = Some(if self.sel == 1 { self.court } else { self.umpire as usize });
+                    out.push(Sound(2));
+                }
+                let d = if matches!(self.sel, 2 | 3) { k.right as i32 - k.left as i32 + k.ok as i32 } else { 0 };
                 if d != 0 {
                     let wrap = |v: usize, n: usize| (v as i32 + d).rem_euclid(n as i32) as usize;
                     match self.sel {
-                        1 => self.court = wrap(self.court, COURTS + 1),
                         2 => self.sets = wrap(self.sets, SETS.len()),
                         3 => self.games = wrap(self.games as usize - 1, 6) as i32 + 1,
-                        4 => self.umpire = wrap(self.umpire as usize, UMPIRES + 1) as u8,
                         _ => {}
                     }
-                    if self.sel > 0 {
-                        out.push(Sound(0));
-                    }
+                    out.push(Sound(0));
                 }
                 if k.ok && self.sel == 0 {
                     // ponytail: std's per-call hasher keys as the dice (not the match's RNG, which this never touches)
@@ -1138,7 +1166,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
         "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" => Screen::Chars,
-        "confirm" => Screen::Confirm,
+        "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
         "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
@@ -1157,6 +1185,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
         menu.players[0].card = screen.ends_with("attrs");
         menu.players[0].ready = screen == "coms";
+        // B64: the court / umpire picker open on Nakagawa River Courts / Lily, as the PCSX2 shots (`context/b64`)
+        if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
+            (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
+            menu.picking = Some(if sel == 1 { 8 } else { 2 });
+        }
         if screen == "chars4" {
             // four humans on one portrait: their hands' offsets keep them apart (B156)
             menu.seats = [Some(Dev::Keys); 4];
@@ -1823,6 +1856,9 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             }
         }
     }
+    if m.picking.is_some() {
+        return picker(d, m, text, hand_x);
+    }
     // the rows: Start, Court, Sets, Games, Umpire
     let rows: [(&str, String); CONFIRM_ROWS] = [
         ("", String::new()),
@@ -1849,13 +1885,59 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hx - 50.0 + hand_x, hy + 2.0, 64.0, 32.0], WHITE, 128.0);
     let info = match m.sel {
         0 => text.msg(323).to_string(),
-        1 if m.court == COURTS => "A court picked at random when the match starts.".to_string(),
-        1 => format!("{} {}", text.msg(581 + 2 * m.court), text.msg(582 + 2 * m.court)),
+        1 => text.msg(326).to_string(),
         2 => text.msg(324).to_string(),
         3 => text.msg(325).to_string(),
         _ => text.msg(328).to_string(),
     };
     d.info(&info);
+}
+
+/// B64: the original's court picker (a strip of `Confirmation_02` court tiles, the hovered one large and lit, its
+/// number from the sheet's digits, ◀ ▶ at the ends) or umpire picker (`Confirmation_03`'s five face cards, the hovered
+/// one large and raised), in place of the rows. Positions measured off PCSX2 shots (`context/b64`).
+fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
+    d.anchor = Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 326.0, 640.0, 78.0], [40.0, 90.0, 60.0], 90.0);
+    d.anchor = Anchor::Centre;
+    let (title, hand) = if m.sel == 1 {
+        d.q(CONFIRM, [2.0, 132.0, 124.0, 22.0], [30.0, 300.0, 124.0, 22.0], WHITE, 128.0);
+        // the strip: two tiles either side of the hovered one, wrapping (Random is the 12th, the "?" tile)
+        let at = STRIP.iter().position(|&c| c == m.court).unwrap_or(COURTS) as i32;
+        for off in [-2, -1, 1, 2, 0] {
+            let p = (at + off).rem_euclid(COURTS as i32 + 1) as usize;
+            // the sheet holds courts 0–6 down its left column, 7–10 down its right, the "?" tile at 11
+            let tile = STRIP.get(p).map_or(11, |&k| if k < 7 { 2 * k } else { 2 * (k - 7) + 1 });
+            let (k, lit) = (if off == 0 { 0.9 } else { 0.7 }, if off == 0 { WHITE } else { [70.0; 3] });
+            let (w, h) = (92.0 * k, 68.0 * k);
+            let (x, y) = (320.0 + 112.0 * off as f32 - w / 2.0, 366.0 - h / 2.0);
+            d.q(C02, [96.0 * (tile % 2) as f32, 72.0 * (tile / 2) as f32, 92.0, 68.0], [x, y, w, h], lit, 128.0);
+            if p < COURTS {
+                let n = (p + 1).to_string();
+                for (i, c) in n.bytes().enumerate() {
+                    let dg = (c - b'0') as f32;
+                    d.q(C02, [192.0, 56.0 + 20.0 * dg, 20.0, 20.0], [x + 6.0 + 14.0 * k * i as f32, y - 6.0, 20.0 * k, 20.0 * k], lit, 128.0);
+                }
+            }
+        }
+        d.q(C02, [192.0, 0.0, 28.0, 56.0], [27.0, 341.0, 25.0, 50.0], WHITE, 128.0);
+        d.q(C02, [228.0, 0.0, 24.0, 56.0], [589.0, 341.0, 22.0, 50.0], WHITE, 128.0);
+        (349, [226.0, 330.0])
+    } else {
+        d.q(CONFIRM, [2.0, 260.0, 140.0, 25.0], [30.0, 300.0, 140.0, 25.0], WHITE, 128.0);
+        let u = m.umpire as usize;
+        for c in 0..=UMPIRES {
+            let (k, lift) = if c == u { (1.0, 4.0) } else { (0.8, 0.0) };
+            let (w, h) = (80.0 * k, 64.0 * k);
+            let dst = [62.0 + 96.0 * c as f32 - w / 2.0, 369.0 - lift - h / 2.0, w, h];
+            // our Random: the court sheet's "?" tile after the five cards
+            let src = if c == UMPIRES { [96.0, 360.0, 92.0, 68.0] } else { [8.0 + 88.0 * c as f32, 392.0, 80.0, 64.0] };
+            d.q(if c == UMPIRES { C02 } else { CONFIRM }, src, dst, WHITE, 128.0);
+        }
+        (333, [62.0 + 96.0 * u as f32 - 92.0, 330.0])
+    };
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hand[0] + hand_x, hand[1], 64.0, 32.0], WHITE, 128.0);
+    d.info(text.msg(title));
 }
 
 // ---------------------------------------------------------------- systems
@@ -2310,14 +2392,18 @@ mod tests {
     #[test]
     fn random_court_and_umpire() {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, ..default() };
-        let left = press(|p| &mut p.left);
+        let (left, ok) = (press(|p| &mut p.left), press(|p| &mut p.ok));
         m.step(Dev::Keys, press(|p| &mut p.down));
-        m.step(Dev::Keys, left); // court 0 → Random, after the last court
+        m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, left); // court 0 (the strip's first tile) → Random, after the last tile
+        m.step(Dev::Keys, ok);
         assert_eq!(m.court, COURTS);
         for _ in 0..3 {
             m.step(Dev::Keys, press(|p| &mut p.down));
         }
+        m.step(Dev::Keys, ok);
         m.step(Dev::Keys, press(|p| &mut p.right)); // umpire 4 → Random
+        m.step(Dev::Keys, ok);
         assert_eq!(m.umpire as usize, UMPIRES);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..200 {
@@ -2331,6 +2417,32 @@ mod tests {
         assert!(seen.len() > 20, "the dice should vary: {seen:?}");
         // the pick stays Random for the next match
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
+    }
+
+    /// B64: ✕ on Select Court / Select Umpire opens the original's picker; ←→ walk its strip, ○ puts the value back.
+    #[test]
+    fn court_and_umpire_pickers() {
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, umpire: 0, ..default() };
+        let [down, left, right, ok, back] = [press(|p| &mut p.down), press(|p| &mut p.left), press(|p| &mut p.right), press(|p| &mut p.ok), press(|p| &mut p.back)];
+        m.step(Dev::Keys, down);
+        m.step(Dev::Keys, right); // a closed row ignores ←→
+        assert_eq!((m.court, m.sel), (0, 1));
+        m.step(Dev::Keys, ok);
+        let walk: Vec<usize> = (0..COURTS + 1).map(|_| (m.step(Dev::Keys, right), m.court).1).collect();
+        assert_eq!(walk, [3, 5, 1, 7, 8, 10, 9, 2, 6, 4, COURTS, 0]); // the original's tiles 2…11, Random, 1 again
+        m.step(Dev::Keys, right);
+        m.step(Dev::Keys, back);
+        assert_eq!((m.court, m.picking, m.screen), (0, None, Screen::Confirm));
+        for _ in 0..3 {
+            m.step(Dev::Keys, down);
+        }
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.step(Dev::Keys, left), []); // the umpire cards don't wrap
+        for _ in 0..9 {
+            m.step(Dev::Keys, right);
+        }
+        m.step(Dev::Keys, ok);
+        assert_eq!((m.umpire as usize, m.picking), (UMPIRES, None));
     }
 
     #[test]
