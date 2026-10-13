@@ -398,7 +398,15 @@ impl Drop for Zip {
 /// as it's unpacked (`modfs::unpack_with`); the connection is HTTPS to the store either way.
 async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
     send(Event::Progress(format!("Downloading {}...", e.meta.name)));
-    let r = range(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), 0, 1).await?;
+    let asked = file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id));
+    let mut r = ask(&asked, 0, 1).await?;
+    if r.status() != reqwest::StatusCode::PARTIAL_CONTENT && r.url().as_str() != asked {
+        // B242: a phone's fetch can drop the Range header when it follows the store's redirect; ask its CDN directly
+        let cdn = r.url().to_string();
+        drop(r); // stops the whole zip coming
+        r = ask(&cdn, 0, 1).await?;
+    }
+    let r = partial(r, "the size check")?;
     // the zip's size from "bytes 0-0/<size>"; the rest is asked of the URL the store redirected to (its CDN)
     let len: u64 = r.headers().get("content-range").and_then(|v| v.to_str().ok()?.rsplit_once('/')?.1.parse().ok()).ok_or("the store didn't say the zip's size")?;
     if len != e.meta.size {
@@ -414,7 +422,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
             if n == 0 {
                 return Ok(Vec::new());
             }
-            let b = range(&url, at, n).await?.bytes().await.map_err(|e| format!("download cut short: {e}"))?;
+            let b = partial(ask(&url, at, n).await?, &format!("the part at {at}"))?.bytes().await.map_err(|e| format!("download cut short: {e}"))?;
             if b.len() != n {
                 return Err("download cut short".into());
             }
@@ -428,14 +436,22 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
     modfs::install_with(len, read, root, Some(&e.meta.id), disk, false).await
 }
 
-/// Bytes `at..at + n` of `url` (the store's file, or where it redirected).
-async fn range(url: &str, at: u64, n: usize) -> Result<reqwest::Response, String> {
+/// Bytes `at..at + n` of `url` (the store's file, or where it redirected), asked for; `partial` checks they came.
+async fn ask(url: &str, at: u64, n: usize) -> Result<reqwest::Response, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let r = reqwest::Client::new().get(url).header("Range", format!("bytes={at}-{}", at + n as u64 - 1)).send().await.map_err(|e| format!("can't reach the store: {e}"))?;
-    let r = r.error_for_status().map_err(|e| format!("the store said {}", e.status().map_or("no".into(), |s| s.to_string())))?;
+    let q = reqwest::Client::new().get(url).header("Range", format!("bytes={at}-{}", at + n as u64 - 1));
+    // B242: never the browser's HTTP cache, which may answer a range with a whole zip it kept
+    #[cfg(target_arch = "wasm32")]
+    let q = q.fetch_cache_no_store();
+    let r = q.send().await.map_err(|e| format!("can't reach the store: {e}"))?;
+    r.error_for_status().map_err(|e| format!("the store said {}", e.status().map_or("no".into(), |s| s.to_string())))
+}
+
+/// `r` if it's the part asked for (206), else which request (`what`) got what from where, so a report names it.
+fn partial(r: reqwest::Response, what: &str) -> Result<reqwest::Response, String> {
     if r.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        return Err("the store sent the whole zip, not the part asked for".into());
+        return Err(format!("the store sent the whole zip, not the part asked for ({what}: {} from {})", r.status().as_u16(), r.url().host_str().unwrap_or("?")));
     }
     Ok(r)
 }
