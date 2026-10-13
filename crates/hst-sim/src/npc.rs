@@ -695,13 +695,22 @@ impl Cheers {
         Cheers { court5: court == 5, ..Cheers::default() }
     }
 
-    /// Walker `slot` at `pos` cheers (written at the count even when the count is full).
-    pub fn add(&mut self, pos: [f32; 3], slot: u32) {
-        self.slots[self.count] = Cheer { pos, base: pos, delay: slot as i32 * 3, n: 0 };
+    /// Walker `slot` at `pos` (its neck) cheers (written at the count even when the count is full); returns the mark
+    /// it took, which the walker keeps for [`Cheers::follow`].
+    pub fn add(&mut self, pos: [f32; 3], slot: u32) -> usize {
+        let mark = self.count;
+        self.slots[mark] = Cheer { pos, base: pos, delay: slot as i32 * 3, n: 0 };
         self.kind = 0;
         if self.count < 6 {
             self.count += 1;
         }
+        mark
+    }
+
+    /// A walker still cheering moves its mark's base to its neck each tick (the mark it took last, even after the
+    /// marks were zeroed and another walker took that slot); the mark itself only follows at its next jump.
+    pub fn follow(&mut self, mark: usize, pos: [f32; 3]) {
+        self.slots[mark].base = pos;
     }
 
     /// The match's start, a change of ends, a new point: every mark zeroed, the count 0. (A new point straight
