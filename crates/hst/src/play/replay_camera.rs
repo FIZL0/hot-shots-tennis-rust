@@ -23,6 +23,25 @@ struct Rec {
     kind: u8,
     /// Ticks from the hitter's swing to the hit.
     lead: i32,
+    /// The ball at the hit, and the hitter's [`At`] frames.
+    pos: [f32; 4],
+    at: At,
+}
+
+/// What the recorder keeps of its subject for the replay's frames: the facing (z) and the place in the subject's
+/// body frame of their Spine2 (on the ground), head frame, head bone, Spine2 and Pelvis.
+type At = [[[f32; 4]; 2]; 5];
+
+/// Taken at each shot's start: the last hitter and the one before, the subject of the coming record (the player
+/// who'll hit it; past the last shot the one who didn't hit last) and its frames, the next record's hitter, and the
+/// view from the coming hit's spot along the ball (frame 17).
+#[derive(Clone, Copy)]
+struct Snap {
+    roles: [usize; 2],
+    subject: usize,
+    at: Option<At>,
+    next: usize,
+    spot: M4,
 }
 
 #[derive(Resource, Clone)]
@@ -50,6 +69,15 @@ pub(super) struct ReplayCamera {
     listed: bool,
     closed: bool,
     shot: Option<Shot>,
+    /// The point's end record (its subject and frames), live and replayed.
+    live_tail: Option<(usize, At)>,
+    tail: Option<(usize, At)>,
+    /// The live point's last bounce (frame 11) and the bounces counted so far.
+    bounce: M4,
+    bounces: i32,
+    /// From the coming hit's spot along the ball (frame 14), and the pick's snapshot.
+    spot: M4,
+    snap: Option<Snap>,
 }
 
 impl ReplayCamera {
@@ -74,6 +102,12 @@ impl ReplayCamera {
             listed: false,
             closed: false,
             shot: None,
+            live_tail: None,
+            tail: None,
+            bounce: IDENTITY,
+            bounces: 0,
+            spot: IDENTITY,
+            snap: None,
         }
     }
 
@@ -91,13 +125,59 @@ impl ReplayCamera {
         info!("replay camera {n:#x}");
         self.shot = Some(Shot::new(&self.shots, n, false));
         self.listed = listed;
+        self.snap = None; // taken by `show`
+    }
+
+    /// The coming record's subject and frames (the game's rule for the end record: the one before the last
+    /// hitter, or the next player when they're the same).
+    fn coming(&self, i: usize) -> Option<(usize, Option<At>)> {
+        match self.recs.get(i) {
+            Some(r) => Some((r.hitter, Some(r.at))),
+            None => self.tail.map(|(s, at)| (s, Some(at))),
+        }
     }
 }
 
-/// Upright at the player's feet, facing the way they face.
+/// Upright on the ground under the player, facing the way they face.
 fn body(p: &Player) -> M4 {
     let [fx, _, fz, _] = p.body.face.dir;
-    [[fz, 0.0, -fx, 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0], [p.pos[0], p.pos[1], p.pos[2], 1.0]]
+    [[fz, 0.0, -fx, 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0], [p.pos[0], 0.0, p.pos[2], 1.0]]
+}
+
+/// Player `i`'s live frames as the game keeps them: body, head frame, head bone (turned like the head frame, without
+/// its lift), Spine2 and Pelvis (turned the same way). Without a posed skeleton all are the body.
+fn live(g: &Game, q: &Query<(&Figure, &Motion)>, i: usize) -> [M4; 5] {
+    let p = &g.players[i];
+    let b = body(p);
+    let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+    let bones = q.iter().find(|(f, _)| f.0 == i).and_then(|(_, m)| {
+        let bone = |n| super::cutaway::bone(p, &g.data[i], m.id, m.clock.sampled, pos, n);
+        Some((bone("Bip01Head")?, bone("Bip01Spine2")?, bone("Bip01Pelvis")?))
+    });
+    let Some((h, s, pv)) = bones else { return [b; 5] };
+    let head = cutaway::head_frame(&h, p.hand < 0.0);
+    let mut bone = head;
+    bone[3][1] += 0.2;
+    let turn = |m: M4| [m[1], m[0], m[2].map(|v| -v), m[3]];
+    [b, head, bone, turn(s), turn(pv)]
+}
+
+/// The recorder's [`At`] of player `i` now.
+fn at(g: &Game, q: &Query<(&Figure, &Motion)>, i: usize) -> At {
+    let [b, head, bone, spine, pelvis] = live(g, q, i);
+    let ground = [spine[3][0], 0.0, spine[3][2], 1.0];
+    let local = |w: [f32; 4]| {
+        let d = [w[0] - b[3][0], w[1] - b[3][1], w[2] - b[3][2]];
+        let c = |k: usize| d[0] * b[k][0] + d[1] * b[k][1] + d[2] * b[k][2];
+        [c(0), c(1), c(2), 1.0]
+    };
+    [(spine[2], ground), (head[2], head[3]), (bone[2], bone[3]), (spine[2], spine[3]), (pelvis[2], pelvis[3])]
+        .map(|(z, w)| [z, local(w)])
+}
+
+/// The recorded frames rebuilt on the subject's live body: upright along each recorded facing.
+fn rebuilt(at: &At, b: &M4) -> [M4; 5] {
+    at.map(|[z, l]| cutaway::facing(z, std::array::from_fn(|i| b[3][i] + l[0] * b[0][i] + l[1] * b[1][i] + l[2] * b[2][i])))
 }
 
 pub(super) fn step(mut g: ResMut<Game>, mut rc: ResMut<ReplayCamera>, args: Res<Args>, q: Query<(&Figure, &Motion)>) {
@@ -131,12 +211,34 @@ pub(super) fn step(mut g: ResMut<Game>, mut rc: ResMut<ReplayCamera>, args: Res<
             let lead = if g.shots == 1 { 0 } else { t - rc.swing_from[h] };
             // ponytail: a human's strong shots are kind 1 in the game (from a character stat and the ball's speed);
             // every shot is plain here, as every bot shot is
-            rc.live.push(Rec { tick: t, hitter: h, ty, kind: 0, lead });
+            let b = g.flight.ball.pos;
+            rc.live.push(Rec { tick: t, hitter: h, ty, kind: 0, lead, pos: [b[0], b[1], b[2], 1.0], at: at(&g, &q, h) });
+        }
+    }
+    if !g.instant.replaying {
+        // the point's last bounce, turned to face from the last hitter's side to the other
+        if g.flight.bounces < rc.bounces {
+            rc.bounces = 0;
+        }
+        if g.flight.bounces > rc.bounces {
+            rc.bounces = g.flight.bounces;
+            let (v, l) = (g.flight.ball.vel, g.flight.landing.0);
+            let m = cutaway::facing([v[0], 0.0, v[2], 0.0], [l[0], 0.0, l[2], 1.0]);
+            let [a, b] = rc.roles.map(|i| g.players[i].pos);
+            let away = m[2][0] * (b[0] - a[0]) + m[2][2] * (b[2] - a[2]) < 0.0;
+            rc.bounce = if away { [m[0].map(|v| -v), m[1], m[2].map(|v| -v), m[3]] } else { m };
         }
     }
     let post = g.phase == Phase::Post;
     if post && !rc.post && !g.instant.replaying {
         rc.live_end = t;
+        let n = g.players.len();
+        rc.live_tail = match rc.live.as_slice() {
+            [.., x, y] if x.hitter != y.hitter => Some(x.hitter),
+            [.., y] => Some((y.hitter + 1) % n),
+            [] => None,
+        }
+        .map(|s| (s, at(&g, &q, s)));
         // the point's winning shot (not an ace) is marked
         let won = |r: &Rec| r.hitter as i32 & 1 == g.post_winner & 1;
         if let [_, .., last] = rc.live.as_mut_slice()
@@ -162,7 +264,8 @@ pub(super) fn step(mut g: ResMut<Game>, mut rc: ResMut<ReplayCamera>, args: Res<
         rc.on = true;
         rc.replay += 1;
         // the last point played is the one replayed
-        (rc.recs, rc.end) = (rc.live.clone(), rc.live_end);
+        (rc.recs, rc.end, rc.tail) = (rc.live.clone(), rc.live_end, rc.live_tail);
+        rc.spot = rc.recs.first().map_or(IDENTITY, |r| cutaway::facing([0.0; 4], r.pos));
         (rc.next, rc.window, rc.closed) = (0, 0, false);
         if g.instant.decision.reset_cut {
             rc.reset_cut();
@@ -175,6 +278,10 @@ pub(super) fn step(mut g: ResMut<Game>, mut rc: ResMut<ReplayCamera>, args: Res<
         // the hit just replayed: the next recorded shot's pick is set from its kind and the hitter's swing
         if rc.next < rc.hits as usize {
             rc.next = rc.hits as usize;
+            if let Some(r) = rc.recs.get(rc.next) {
+                let v = g.flight.ball.vel;
+                rc.spot = cutaway::facing([v[0], v[1], v[2], 0.0], r.pos);
+            }
             rc.pick_at = match rc.recs.get(rc.next) {
                 Some(r) if r.kind != 0 => {
                     if r.lead != 0 && matches!(r.kind, 1 | 2 | 3 | 6) {
@@ -215,53 +322,55 @@ pub(super) fn step(mut g: ResMut<Game>, mut rc: ResMut<ReplayCamera>, args: Res<
     show(&mut g, rc, &q);
 }
 
-/// Steps the shot and shows it, the reference frames from the players (the last hitter and the one before) and the
-/// ball as they are now.
+/// Steps the shot and shows it, on the game's reference frames: the last hitter and the one before (live and as
+/// at the shot's start), the coming record's subject (its frames as recorded at the hit, carried on their live body)
+/// and the next hitter, the ball, the point's last bounce and court spots.
 fn show(g: &mut Game, rc: &mut ReplayCamera, q: &Query<(&Figure, &Motion)>) {
-    let Some(shot) = rc.shot.as_mut() else { return };
-    let bones = |i: usize| {
-        let p = &g.players[i];
-        let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
-        let (_, m) = q.iter().find(|(f, _)| f.0 == i)?;
-        let b = |n| super::cutaway::bone(p, &g.data[i], m.id, m.clock.sampled, pos, n);
-        Some((b("Bip01Head")?, b("Bip01Spine2")?))
+    if rc.shot.is_none() {
+        return;
+    }
+    let snap = rc.snap.unwrap_or_else(|| {
+        let (subject, at) = rc.coming(rc.next).unwrap_or((rc.roles[0], None));
+        let next = rc.recs.get(rc.next + 1).map_or(subject, |r| r.hitter);
+        Snap { roles: rc.roles, subject, at, next, spot: rc.spot }
+    });
+    rc.snap = Some(snap);
+    let [a, b] = rc.roles.map(|i| live(g, q, i));
+    let [sa, sb] = snap.roles.map(|i| live(g, q, i));
+    let (subject, next) = (live(g, q, snap.subject), live(g, q, snap.next));
+    let (cur, cur_at) = rc.coming(rc.next).unwrap_or((snap.subject, None));
+    let current = cur_at.map(|at| rebuilt(&at, &live(g, q, cur)[0]));
+    let recorded = snap.at.map(|at| rebuilt(&at, &subject[0]));
+    let v = g.flight.ball.vel;
+    let p = g.flight.ball.pos;
+    let ball = cutaway::facing([v[0], v[1], v[2], 0.0], [p[0], p[1], p[2], 1.0]);
+    let side = if a[0][3][2] < 0.0 { -6.4 } else { 6.4 };
+    let frame = |i: u8| -> M4 {
+        let row = |f: [M4; 5]| f[(i as usize - 19) / 16];
+        match i {
+            // the far court half's spot, turned round (frame 4 mirrored)
+            5 => [[-1.0, 0.0, 0.0, 0.0], IDENTITY[1], [0.0, 0.0, -1.0, 0.0], [0.0, 0.0, side, 1.0]],
+            // the net's top at the court centre
+            7 => [IDENTITY[0], IDENTITY[1], IDENTITY[2], [0.0, -0.91, 0.0, 1.0]],
+            8 | 9 | 10 | 12 => ball,
+            11 => rc.bounce,
+            14 => rc.spot,
+            17 => snap.spot,
+            19 | 35 | 51 | 67 | 83 => row(a),
+            20 | 36 | 52 | 68 | 84 => row(b),
+            21 | 37 | 53 | 69 | 85 => row(sa),
+            22 | 38 | 54 | 70 | 86 => row(sb),
+            23 | 39 | 55 | 71 | 87 => current.map_or(IDENTITY, |f| f[(i as usize - 23) / 16]),
+            24 | 40 | 56 | 72 | 88 => recorded.map_or(IDENTITY, |f| f[(i as usize - 24) / 16]),
+            25 | 41 | 57 | 73 | 89 => subject[(i as usize - 25) / 16],
+            26 | 42 | 58 | 74 | 90 => next[(i as usize - 26) / 16],
+            // the court centre: 1, 113, 114 and 120 (the original's replays leave them at identity) and the rest
+            _ => IDENTITY,
+        }
     };
-    let [a, b] = rc.roles;
-    let (ha, hb) = (bones(a), bones(b));
-    let head = |i: usize, h: &Option<(M4, M4)>| h.map_or(body(&g.players[i]), |h| h.0);
-    let head_frame = |i: usize, h: &Option<(M4, M4)>| cutaway::head_frame(&head(i, h), g.players[i].hand < 0.0);
-    let chest = |i: usize, h: &Option<(M4, M4)>| h.map_or(body(&g.players[i]), |h| cutaway::subject_frames(&h.0, &h.1)[3]);
-    let ball = g.flight.ball.pos;
-    let ball = [IDENTITY[0], IDENTITY[1], IDENTITY[2], [ball[0], ball[1], ball[2], 1.0]];
-    // ponytail: the game's frame table (role bodies 19–22, head frames 35–38, head bones 51–54, the recorded shot's
-    // frames, court spots) is read off its users by eye: frames it fills from the shot recorder stand in as the
-    // hitter's chest and the ball
-    let frames: Vec<(u8, M4)> = vec![
-        (17, body(&g.players[a])),
-        (19, body(&g.players[a])),
-        (21, body(&g.players[a])),
-        (57, body(&g.players[a])),
-        (113, body(&g.players[a])),
-        (20, body(&g.players[b])),
-        (22, body(&g.players[b])),
-        (114, body(&g.players[b])),
-        (35, head_frame(a, &ha)),
-        (37, head_frame(a, &ha)),
-        (36, head_frame(b, &hb)),
-        (38, head_frame(b, &hb)),
-        (51, head(a, &ha)),
-        (53, head(a, &ha)),
-        (52, head(b, &hb)),
-        (54, head(b, &hb)),
-        (56, chest(b, &hb)),
-        (88, chest(b, &hb)),
-        (11, ball),
-        (12, ball),
-        (112, ball),
-        (120, ball),
-    ];
+    let shot = rc.shot.as_mut().unwrap();
     let first = shot.fov == 0.0;
-    shot.step(|i| frames.iter().find(|f| f.0 == i).map_or(IDENTITY, |f| f.1));
+    shot.step(frame);
     g.cam.view = shot.view();
     if first {
         g.prev_view = g.cam.view; // a cut doesn't blend

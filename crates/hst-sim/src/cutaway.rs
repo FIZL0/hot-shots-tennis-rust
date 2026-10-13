@@ -773,6 +773,15 @@ pub fn subject_frames(head: &M4, spine: &M4) -> [M4; 4] {
     [at([p[0], 0.0, p[2], p[3]]), at([p[0], p[1] - 0.2, p[2], p[3]]), at(p), at(s)]
 }
 
+/// Facing along `dir` (normalized) at `pos`, rolled upright: x = up × z, y = z × x. The game builds the ball's
+/// frames and the shot recorder's per-hit frames this way.
+pub fn facing(dir: [f32; 4], pos: [f32; 4]) -> M4 {
+    let z = normalize([dir[0], dir[1], dir[2], 0.0]);
+    let x = normalize(cross([0.0, 1.0, 0.0, 0.0], z));
+    let m = [x, normalize(cross(z, x)), z, pos];
+    if m.iter().flatten().all(|v| v.is_finite()) { m } else { [IDENTITY[0], IDENTITY[1], IDENTITY[2], pos] }
+}
+
 /// The live head frame: the head bone turned to the face's axes (`left`: a left-hander's model is mirrored),
 /// 0.2 m above the head along it and 0.2 m higher still.
 pub fn head_frame(head: &M4, left: bool) -> M4 {
