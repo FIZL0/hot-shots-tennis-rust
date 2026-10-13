@@ -1,0 +1,71 @@
+# B221: touch and mouse in every menu
+
+## What changed
+- New `crates/hst/src/play/main_menu/pointer.rs` is the one pointer path for every menu screen.
+  - Each layout records a hit rect next to what it draws (`Draw::hit(rect, act)`), using the quad's own anchor, so hits follow the art at any aspect (`widescreen::place`).
+  - `Draw::popup(outside)` drops the hits under a popup and sets what a tap outside it does.
+  - The `pointer` system turns mouse, touch and wheel input into `Pending` acts.
+  - `step` plays those acts through `Menu::point` as the pointer's device: player 1's pad if it is connected, else the keyboard.
+  - Pad and keyboard input is unchanged.
+- The three earlier per-screen pointers are gone: `mods_screen::pointer`/`row_at`/`ask_at`, `online::pointer`/`item_at`, and `pause::pointer`/`Click`/`row_at`. They are now plain hits.
+- **Mouse:**
+  - Hovering a row or face moves the cursor there; the court/umpire strip is left alone so hovering doesn't scroll it.
+  - Left click chooses (as ✕). Right click is Back. The wheel steps up and down.
+- **Touch:**
+  - A tap selects and activates at once.
+  - A drag steps the cursor every 40 px of 448: the finger pulls the list, so a drag up moves the cursor down.
+  - A miss within 12 px of 640 still lands on the nearest rect (4 px with a mouse).
+- **Back areas:**
+  - The title tab (top left) on every screen.
+  - An outlined "<" drawn on Mode, Assign, Chars and Confirm.
+  - A tap outside the court/umpire picker, the mods popup (= Later) and the lobby's topics (= Cancel).
+- **Per screen:**
+  - Main, Online, Settings and Mode: rows.
+  - Graphics: "<" and ">" tap areas on each value.
+  - Controls: a row starts a rebind; any tap cancels a rebind in progress.
+  - Assign: tapping a card is ✕.
+  - Chars:
+    - grid faces and the custom page's faces (a tap moves there and readies)
+    - the cards (ready, or unready a ready one)
+    - the hand tag
+    - △ / L1 / R1 in the hint bar
+    - the page hint
+  - Confirm: rows, court tiles and arrows, and umpire cards. Tapping a tile once moves to it; tapping it again keeps it.
+  - Online: Lobbies, the lobby (seats, buttons, topics, vote), and Code / name entry keys and buttons.
+  - Mods: Installed, Browse and Upload rows, with scrolling taken into account.
+  - Pause Settings.
+- **Pause dialog (`play/menu.rs`):** hovering a pill moves the hand there. A right click, or a click or tap off the pills, is Back.
+- **Result screen (`play/match_stats.rs`):** a tap on the left or right quarter slides that way; a tap anywhere else is ✕ (next page, then Continue).
+- **Web:**
+  - `web::touch_menu(on)` calls the page's `hstTouchMenu`. `touch.js` hides the on-screen pad while a menu is up (main menu app, pause, result) and shows it in play. Its stick zone covered the left 45 % of the screen and would have eaten menu taps.
+  - `web::page_size()`: in the browser, touches and the mouse come in CSS px, but the window's logical size follows the canvas backing store. In Chrome's phone emulation (dpr 2) the backing store was 844×390 for an 844×390 CSS page, so Bevy said 422×195 and every tap landed at twice its position. Hit tests on wasm now measure against the page's CSS size, in both `pointer.rs` and `pause::screen_point`.
+- `tools/web_touch.mjs`:
+  - It now taps through the menus on the canvas (Local → Singles → 1P → a face → the COM's face → Start).
+  - It checks the pad is hidden in the menu and shown in the match, and tests the stick in the match.
+  - `HST_WEB_QUERY='?webgl2'` keeps it on the WebGL2 build.
+
+## Verified
+- Unit tests in `pointer.rs`:
+  - `taps_from_main_menu_to_match`: taps by 640×448 coordinates only. Main → Mode (also Doubles, then Back via the title tab) → Singles → 1P card → a face (P1 ready) → a face for the COM → Confirm. The court picker is opened, moved, closed by tapping outside (the court is restored), opened again and kept by a second tap. Start → `Effect::Launch`.
+  - `hover_then_click_and_arrows`: hover only moves the cursor; a click chooses. Graphics "<" and ">" change a value and change it back. A Controls row starts a rebind.
+  - `wide_window_hits`: at 16:9, the 2P card (Sides anchor) hits at the right edge, and the grid (Centre) hits at its 4:3 place.
+  - `taps_outside_popups`: a tap off the mods popup is Later.
+  - `touches_and_clicks_reach_pending`: the real system in an App with a window. A touch down hovers and a lift taps. A tap outside gives the outside act. A drag up steps down without tapping. A down and up within one frame still taps.
+- The earlier mods, lobby and pause tests were ported to the hits. `pause::open_change_back` drives `step` through `Pending`.
+- **Browser, phone-sized and touch-only** (headless Chromium, 844×390 landscape at dpr 2, WebGL2 build):
+  - `tools/web_touch.mjs`: the full route to a match, with the pad hidden in the menus and shown in the match, and the stick held/released correctly. Screens are in `context/b221/run3/`.
+  - A tour script (scratch) opened Settings → Graphics, went Back twice via the title tab, opened Mods, Back, Online, Back, and a drag up stepped the cursor down. All screenshots are as expected (`context/b221/run3/tour.png`).
+
+## Not verified / not 1:1
+- **A real phone:** only Chrome's phone emulation was driven. The CSS-px fix assumes the canvas fills the page (it does in `index.html`). Safari/iOS touch was not tried.
+- **Every row on the phone:**
+  - Seen in the browser: the route to a match, Settings, Graphics, Mods and Online.
+  - Covered by unit tests only, not tapped in the browser: Lobbies, the lobby, Code/name entry, Controls, the custom-character page, the umpire picker, the pause dialog and Settings over a match, and the result screen.
+  - Pause and result screens: the taps are wired to the same pointer helper as before (`pointer_press`), and no test drives them.
+- **Mouse in the browser:** a CDP mouse click after turning touch emulation off left `cursor_position()` as `None` in the game. Not chased: phones are touch, and the desktop build's mouse is covered by the system test. Desktop mouse was not clicked by hand.
+- **B202's child buttons don't exist yet** (its task is still open). Mods' Remove/Upload keep the press-twice flow, which works by tapping twice. Moving the pointer off an armed row disarms it. B202 must give its child buttons hits through `Draw::hit` and `Draw::popup`.
+- **No title screen:** the menu app starts on Main. Name entry is Online's Code screen with `naming`, and its keys are hits.
+- **Sliders:** Settings has no sliders, only on/off values and Graphics' option lists. These change by tapping their row (on/off) or the "<" / ">" areas, or by a sideways drag (left/right presses). There is no drag-to-value.
+- **Touch target size:** rows are 38 px of 448 tall (about 33 CSS px on an 844×390 phone), plus a 12-unit slop. Faces are 64; Graphics' "<" ">" areas are 100–115 wide. Not measured against a guideline.
+- **Wheel:** on the grids the wheel steps up and down only (no left/right).
+- The menus are our own design (PLAN), so nothing here is compared to the original.

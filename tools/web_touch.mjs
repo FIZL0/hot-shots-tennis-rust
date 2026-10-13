@@ -1,6 +1,6 @@
 // M9's browser check, on a profile that already imported the disc (tools/web_check.mjs OUT): a phone-sized landscape
-// viewport with touch, the main menu with the on-screen controls, taps on ✕ (must move the menu on), the manifest's
-// installability, then the same page again with the web server stopped (the service worker must start the game).
+// viewport with touch, the menus tapped through to a match (B221: no on-screen controls over the menus), the controls
+// and the stick in the match, taps on ✕ there, the manifest's installability, then the same page again with the web server stopped (the service worker must start the game).
 // Usage: node tools/web_touch.mjs OUT (serve web/ on :8765 first: python3 -m http.server -d web 8765 & echo $! > OUT/server.pid; this script
 // kills the server whose pid is in OUT/server.pid before the offline visit).
 import { spawn } from 'node:child_process';
@@ -11,6 +11,8 @@ const [out] = process.argv.slice(2);
 const log = [];
 // HST_WEB_PORT / HST_CDP_PORT: other ports (runs side by side)
 const WEB = process.env.HST_WEB_PORT ?? 8765, CDP = process.env.HST_CDP_PORT ?? 9333;
+// HST_WEB_QUERY: the page's query (`?webgl2` keeps to the WebGL2 build)
+const Q = process.env.HST_WEB_QUERY ?? '';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // every chromium we start dies with this script (a crash, timeout or kill would otherwise leave a hidden hst playing music)
 const kids = new Set();
@@ -61,18 +63,32 @@ async function tap(b, sel) {
 
 // online: menu, controls, taps, manifest
 let b = await open();
-await b.send('Page.navigate', { url: `http://localhost:${WEB}/` });
+await b.send('Page.navigate', { url: `http://localhost:${WEB}/${Q}` });
 await sleep(25000);
 await b.shot('1-menu');
 log.push(`pads: ${await b.evaluate("JSON.stringify([...navigator.getGamepads()].filter(Boolean).map(g => [g.id, g.index]))")}`);
-log.push(`controls shown: ${await b.evaluate("!document.getElementById('touch').hidden")}`);
+log.push(`controls shown in the menu (want false): ${await b.evaluate("!document.getElementById('touch').hidden")}`);
 log.push(`settings: ${JSON.stringify(await b.evaluate("localStorage.getItem('./settings.txt')"))}`);
 log.push(`canvas: ${await b.evaluate("JSON.stringify([...document.querySelectorAll('canvas')].map(c => [c.width, c.height]))")}`);
-for (let i = 0; i < 3; i++) {
-  await tap(b, '[data-b="cross"]');
-  await sleep(3000);
-  await b.shot(`2-cross${i + 1}`);
-}
+// B221: menus by touch alone, at the 640×448 point of the centred 4:3 screen (a landscape window: full height)
+const at = async (name, x, y) => {
+  const [w, h] = await b.evaluate('[innerWidth, innerHeight]');
+  const p = [{ x: w / 2 + (x - 320) / 640 * h * 4 / 3, y: y / 448 * h, id: 3 }];
+  await b.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: p });
+  await sleep(120);
+  await b.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await sleep(2500);
+  await b.shot(name);
+};
+await at('2-local', 320, 140);
+await at('2-singles', 320, 170);
+await at('2-assign', 320, 118);
+await at('2-char', 435, 128);
+await at('2-com', 232, 242);
+await at('2-start', 190, 305);
+await sleep(20000);
+await b.shot('5-match');
+log.push(`controls shown in the match: ${await b.evaluate("!document.getElementById('touch').hidden")}`);
 // the stick: drag down from the left half, then let go
 const drag = [{ x: 150, y: 250, id: 2 }];
 await b.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: drag });
@@ -83,15 +99,6 @@ await b.shot('3-stick');
 await sleep(500);
 await b.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 log.push(`stick released: ${await b.evaluate("JSON.stringify(navigator.getGamepads().find(g => g?.index === 16)?.axes)")}`);
-await sleep(1500);
-await b.shot('4-after-stick');
-// on through the menus into a match (✕ every 3 s), then a few swings
-for (let i = 0; i < 8; i++) {
-  await tap(b, '[data-b="cross"]');
-  await sleep(3000);
-}
-await sleep(20000);
-await b.shot('5-match');
 for (let i = 0; i < 4; i++) {
   await tap(b, '[data-b="cross"]');
   await sleep(2500);

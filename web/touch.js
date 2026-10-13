@@ -1,7 +1,12 @@
 // On-screen controls for phones and tablets, and the page's other mobile bits. The controls are a virtual pad in the
 // browser's standard layout added to `navigator.getGamepads()`, which the game polls like any controller (gilrs), so
 // menus and matches read them through the same bindings as a real pad (✕ = shot / OK, ○ = slice / back, △ = lob,
+<<<<<<< HEAD
 // □, L1/R1, Select = swap hand, Start = pause). They show on touch screens and hide while a real controller is connected.
+=======
+// □, L1/R1, Select = camera, Start = pause). They show on touch screens in a match and hide in the menus (tapped
+// directly) and while a real controller is connected.
+>>>>>>> task/B221
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
 // goes fullscreen in landscape on the first tap (where the browser allows it; an installed app starts that way).
 
@@ -161,9 +166,16 @@ for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEv
 // shown on touch screens (or after any touch) while no real controller is connected; `?touch` forces them on
 let touched = coarse.matches || new URLSearchParams(location.search).has('touch');
 addEventListener('pointerdown', e => { if (e.pointerType === 'touch') touched = true; }, { capture: true });
+// the game's menus take taps themselves (B221): the pad would cover them, so it's only up in a match
+let menu = false;
+window.hstTouchMenu = on => { menu = on; };
 const update = () => {
+<<<<<<< HEAD
   // gone when the game stops (index.html `fail`): its Reload must take the taps
   const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
+=======
+  const want = touched && !menu && !anyReal() && !document.getElementById('disc')?.offsetParent;
+>>>>>>> task/B221
   if (want !== shown) {
     shown = want;
     root.hidden = !want;
