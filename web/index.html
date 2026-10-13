@@ -212,15 +212,18 @@ async function start() {
   // M16: installed mods (OPFS mods/<id>/…) into the game, a folder without its mod.json (a save cut short) dropped
   const mods = await dir.getDirectoryHandle('mods', { create: true });
   const modsFrom = performance.now();
+  let modBytes = 0;
   const walk = async (d, path, out) => { for await (const [n, h] of d.entries()) h.kind === 'file' ? out.push([path + n, h]) : await walk(h, `${path}${n}/`, out); return out; };
   for await (const [id, h] of mods.entries()) {
     if (h.kind !== 'directory') continue;
+    // B227: an older install's upscaled set (modfs.rs kept_in_memory: never read in the browser) freed from storage
+    await h.getDirectoryHandle('textures').then(t => t.removeEntry('upscaled', { recursive: true })).catch(() => {});
     const files = await walk(h, `mods/${id}/`, []);
     if (!files.some(f => f[0] === `mods/${id}/mod.json`)) { await mods.removeEntry(id, { recursive: true }).catch(() => {}); continue; }
     say(`Reading mod ${id}…`);
-    for (const [p, fh] of files) add_mod_file(p, new Uint8Array(await (await fh.getFile()).arrayBuffer()));
+    for (const [p, fh] of files) { const b = new Uint8Array(await (await fh.getFile()).arrayBuffer()); modBytes += b.length; add_mod_file(p, b); }
   }
-  console.info(`hst: mods read from OPFS in ${Math.round(performance.now() - modsFrom)} ms`);
+  console.info(`hst: mods read from OPFS (${(modBytes / 1048576).toFixed(1)} MB) in ${Math.round(performance.now() - modsFrom)} ms`);
   // the Mods screen's picker (web.rs): over the Add mod row while it's up, or opened by a key or pad
   const pick = document.getElementById('modzip');
   window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `${r[1]}%`, width: `${r[2]}%`, height: `${r[3]}%` }); };

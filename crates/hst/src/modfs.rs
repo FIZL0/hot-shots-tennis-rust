@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::mods::{self, Mod};
 
-// ponytail: every mod file of the browser build is held in memory (the main thread can't read OPFS synchronously);
-// the ceiling is wasm32's 4 GB beside the 171 MB pack. Reading on demand from a worker if mods outgrow it.
+// ponytail: every mod file of the browser build but its upscaled set (`kept_in_memory`) is held in memory (the main
+// thread can't read OPFS synchronously): ≈ 10–40 MB a store mod beside the 171 MB pack. Reading a picked
+// character's models on demand (async, before the select/match loads them) if many installed mods outgrow a phone.
 static MEM: Mutex<BTreeMap<String, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
 
 /// `p` as a `MEM` key: `/`-separated, without `.` parts (`./mods/x` and `mods/x` are one file).
@@ -331,6 +332,16 @@ pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, 
     now(install_with(len, read, root, want, true))
 }
 
+/// Whether a mod's file `n` (inside its folder) is kept by the browser build (B227): a mod's `textures/upscaled/`
+/// set (≈ 90% of the store mods' bytes, 512 of Anya's 525 MB) is left out of memory and OPFS, so a few installed
+/// mods can't outgrow a phone's tab; the browser draws the mod's own textures, as an online peer does
+/// (`mods_online.rs`).
+// ponytail: no upscaled mod textures in the browser; reading the picked costume's set from OPFS before a match
+// (async, the main thread can't read OPFS synchronously) if they're ever wanted there
+pub fn kept_in_memory(n: &str) -> bool {
+    !n.starts_with("textures/upscaled/")
+}
+
 /// A mod zip (`len` bytes, read as [`unpack_with`] reads it) installed into `root` (the `mods/` folder) as
 /// `root/<id>/`: unpacked a file at a time under `root/.import/` (on disk, or in memory: the browser's page then
 /// stores [`files_under`] `root/<id>`), checked whole ([`check_all`]), then put in place of an installed mod with the
@@ -354,11 +365,15 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
         let put = |n: &str, b: Vec<u8>| {
             let p = stage.join(n);
             if !disk {
-                return Ok(add(&p, b.into()));
+                if kept_in_memory(n) {
+                    add(&p, b.into());
+                }
+                return Ok(());
             }
             std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
         };
-        let names = unpack_with(len, zip, put, MAX_FILE, MAX_TOTAL).await?;
+        let mut names = unpack_with(len, zip, put, MAX_FILE, MAX_TOTAL).await?;
+        names.retain(|n| disk || kept_in_memory(n));
         let j: serde_json::Value = serde_json::from_slice(&read(&stage.join("mod.json")).map_err(|e| e.to_string())?).map_err(|e| format!("mod.json: not JSON: {e}"))?;
         let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
         if let Some(w) = want.filter(|w| *w != id) {
@@ -615,6 +630,23 @@ pub(crate) mod tests {
         assert!(install(&zip_of(&cases[0].1), root).is_err());
         assert_eq!(files_under(root).len(), before.len());
         assert!(files_under(root).iter().zip(&before).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1)));
+    }
+
+    /// B227: an in-memory (browser) install keeps a mod's files but not its upscaled set, which isn't even checked.
+    #[test]
+    fn browser_install_leaves_upscaled_out() {
+        let dir = Path::new(MODS).join("test_pc00");
+        if !dir.is_dir() {
+            return eprintln!("no context/mods/test_pc00, skipped");
+        }
+        let mut files = dir_files(&dir);
+        files.push(("textures/upscaled/c00/image0.png".into(), b"not a png".to_vec()));
+        let root = Path::new("t_upscaled/mods");
+        let m = install(&zip_of(&files), root).unwrap();
+        let kept = files_under(&m.dir);
+        assert_eq!(kept.len(), files.len() - 1);
+        assert!(kept.iter().all(|f| !f.0.contains("/textures/upscaled/")));
+        remove(Path::new("t_upscaled"));
     }
 
     #[test]
