@@ -167,6 +167,29 @@ mod tests {
         }
     }
 
+    /// B131: every voice the match can ask a mod player for (shouts 1..4, serve 5 and 6, reactions 7..10, at every
+    /// key the singles game draws) sounds: the mod's own take, else its donor's disc take. Helghast ships no voice,
+    /// Wendy a full set, Chika (an umpire) six takes (skipped without the ISO or `mods/hst-mods`).
+    #[test]
+    fn mod_voices_fall_back_to_the_donor() {
+        const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/");
+        if !Path::new(ISO).is_file() || !Path::new(ROOT).is_dir() {
+            return eprintln!("no ISO or mods/hst-mods, skipped");
+        }
+        let asked = [(1, 4), (2, 2), (3, 2), (4, 1), (5, 0), (6, 2), (7, 2), (8, 4), (9, 1), (10, 1)];
+        for id in ["getagrip_pc14_helghast", "getagrip_pc03_wendy", "hst_umpire_00_chika"] {
+            let m = mods::read(&Path::new(ROOT).join(id)).unwrap();
+            let app = bot_match(&m, m.donor);
+            let bank = app.world().resource::<crate::audio::VoiceBanks>().0[1].clone().unwrap_or_else(|| panic!("{id}: no voice bank"));
+            let hd = hst_data::snd::Bank::parse(&bank.hd).unwrap_or_else(|_| panic!("{id}: no donor bank"));
+            for (p, hi) in asked {
+                for k in 0..=hi {
+                    assert!(bank.wav.contains_key(&p) || hd.key_ons(p, k).is_some(), "{id}: program {p} key {k} is silent");
+                }
+            }
+        }
+    }
+
     /// A packaged Get a Grip mod (`mods/hst-mods`, the mods repo's `out/mods`) in a match: the stats the game reads
     /// are its `params.override` cells (Get a Grip's stats ranked onto TParam), its AI row is `ai_row`.
     #[test]
