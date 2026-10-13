@@ -60,9 +60,12 @@ const pad = {
 const realPads = navigator.getGamepads?.bind(navigator) ?? (() => []);
 const anyReal = () => [...realPads()].some(g => g && g.connected);
 let shown = false;
+// B247: never listed next to a real pad, even before `update` hides the controls: a controller picked up between two
+// frames would otherwise take 2P's slot while the touch pad holds 1P's, and keep it after the touch pad goes (1P left
+// with none)
 navigator.getGamepads = () => {
   const list = [...realPads()];
-  if (shown) list.push(pad);
+  if (shown && !list.some(g => g && g.connected)) list.push(pad);
   return list;
 };
 
@@ -187,9 +190,15 @@ const update = () => {
     root.hidden = !want;
     if (!want) for (const k in B) buttons[B[k]].pressed && set(k, false);
   }
-  requestAnimationFrame(update);
 };
-update();
+const frame = () => {
+  update();
+  requestAnimationFrame(frame);
+};
+frame();
+// B247: a controller connected after the page loaded hides them at once; listening for connections also wakes the
+// engines that don't pick up a hotplugged pad from `getGamepads()` polls alone
+for (const e of ['gamepadconnected', 'gamepaddisconnected']) addEventListener(e, update);
 
 // iOS Safari / Android Chrome edge swipes go back a page (and leave the game) despite `overscroll-behavior: none`:
 // swallow touches that start at the left/right edge (pointer events, so the touch stick, still fire), and keep a
