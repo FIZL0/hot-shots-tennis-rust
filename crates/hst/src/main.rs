@@ -1,6 +1,6 @@
 //! `hst` alone imports the disc on first start and runs from that pack after (see disc.rs); `hst <iso> …` runs
 //! straight from an ISO (or a pack).
-//! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png] [--fullscreen]`
+//! Viewer / sandbox: `hst <iso> <archive.XB>... [--ball] [--court N] [--radius r] [--shot out.png] [--windowed]`
 //! Loads every model in the given disc archives and shows them with an orbit camera
 //! (drag: orbit, wheel: zoom). `--shot` saves one frame (after `--shot-at` seconds) and exits, for unattended checks;
 //! `--radius r` orbits the origin at distance r instead of framing everything (skyboxes are huge).
@@ -166,7 +166,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--vsync" => gfx.vsync = true,
             "--original" => gfx.original = true,
             "--fps" | "--scale" | "--shadows" | "--msaa" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
-            "--fullscreen" => {} // read in `main`
+            // borderless fullscreen is the default (B96); `--fullscreen` stays for older launch scripts
+            "--windowed" => gfx.windowed = true,
+            "--fullscreen" => gfx.windowed = false,
             "--music" => music = true,
             "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
@@ -227,21 +229,30 @@ fn main() {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
-    let Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
+    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
     if upscale {
         textures::init(&args.iso);
     }
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
+    // `--windowed` on the command line holds for the whole run, over the menu's setting
+    let windowed = gfx.windowed;
+    // the menu opens the window as settings.txt's graphics say, so it doesn't start fullscreen and then shrink
+    if menu && let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
+        for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
+            gfx.set(k, v);
+        }
+    }
     let mut app = App::new();
     let present_mode = gfx.present_mode();
     // a `--shot` window, or any run under the unattended runners (HST_BG=1), has its own title so the desktop can keep
     // test windows out of the way (tools/shot.sh); those runs are also silent
     let bg = args.shot.is_some() || std::env::var_os("HST_BG").is_some();
     let title = if bg { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
-    // Steam's Big Picture (`SteamGamepadUI`) and the Steam Deck (`SteamDeck`) start games full screen
-    let full = std::env::args().any(|a| a == "--fullscreen") || ["SteamGamepadUI", "SteamDeck"].iter().any(|v| std::env::var(v).is_ok_and(|v| v == "1"));
-    let mode = if full && args.shot.is_none() { bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current) } else { default() };
+    // borderless fullscreen on the current monitor unless `--windowed`/settings say otherwise; test windows stay windows
+    // (a browser only allows fullscreen from a click, so the web build stays in its page)
+    graphics::KEEP_WINDOWED.store(windowed || bg || cfg!(target_arch = "wasm32"), std::sync::atomic::Ordering::Relaxed);
+    let mode = gfx.window_mode();
     // `HST_WINDOW="3840 2160"`: the window's size in physical pixels (unattended shots at a set resolution)
     let mut resolution = bevy::window::WindowResolution::default();
     if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {

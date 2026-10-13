@@ -12,7 +12,7 @@ use hst_data::{iso::Iso, xb::Archive};
 use std::sync::Arc;
 
 use super::super::widescreen;
-use super::{Art, GRAPHICS_LABELS, Menu, POOL, Press, Screen, Settings, Slot, Text, TickerClip, Ticker, controls, slide};
+use super::{Art, GRAPHICS_LABELS, GRAPHICS_PITCH, GRAPHICS_TOP, Menu, POOL, Press, Screen, Settings, Slot, Text, TickerClip, Ticker, controls, slide};
 use crate::Args;
 use crate::audio::{MusicBanks, Sound, SoundBank};
 
@@ -195,7 +195,7 @@ pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>
 fn row_at(m: &Menu, p: Vec2) -> Option<usize> {
     let (x0, x1, y0, pitch, h, n) = match m.screen {
         Screen::Settings => (60.0, 500.0, 90.0, 44.0, 38.0, super::CONTROLS_ROW + 2),
-        Screen::Graphics => (60.0, 560.0, 66.0, 42.0, 38.0, GRAPHICS_LABELS.len() + 1),
+        Screen::Graphics => (60.0, 560.0, GRAPHICS_TOP, GRAPHICS_PITCH, 38.0, GRAPHICS_LABELS.len() + 1),
         Screen::Controls => (56.0, 620.0, 62.0, 21.0, 21.0, controls::action_names().count() + 1),
         _ => return None,
     };
@@ -293,7 +293,7 @@ mod tests {
         assert!(out[16 * 256] == 1.0 && out[16 * 256 + 255] == 1.0);
     }
 
-    /// Clicks land on the rows `layout` draws: Settings' pills 44 px apart from y 90, Graphics' 42 from 66.
+    /// Clicks land on the rows `layout` draws: Settings' pills 44 px apart from y 90, Graphics' 39.5 from 46.
     #[test]
     fn rows_under_clicks() {
         let m = Menu { screen: Screen::Settings, ..default() };
@@ -303,7 +303,8 @@ mod tests {
         assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 6.0 + 10.0)), Some(6)); // Back
         assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 7.0 + 10.0)), None);
         let g = Menu { screen: Screen::Graphics, ..default() };
-        assert_eq!(row_at(&g, Vec2::new(500.0, 66.0 + 42.0 * 7.0 + 5.0)), Some(7));
+        assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 7.0 + 5.0)), Some(7));
+        assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 8.0 + 30.0)), Some(8)); // Back
     }
 
     /// The window → 640×448 mapping undoes the centred 4:3 placement at any aspect.
