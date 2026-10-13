@@ -528,6 +528,14 @@ fn load(
                 if let Some(i) = (e.dir == "bg").then(|| ["_sky", "_clo", "_acc", "_bg"].iter().position(|k| e.stem.contains(k))).flatten() {
                     let (yaw, lift) = gs::backdrop(envir.as_deref().unwrap_or_default(), hole_envir.as_deref(), i);
                     commands.entity(id).insert(Backdrop { yaw, lift });
+                    // B75: they stand at the eye (+ lift), so by mesh centre their blended draws could sort after the
+                    // effects and billboards, which write no Z, and cover them; the game draws them first, at the far
+                    // end of Z (GS dump, court 10). A constant keeps their order among themselves (by lift).
+                    for (_, m) in parts {
+                        if let Some(mut m) = gs_materials.get_mut(m) {
+                            m.order = BACKDROP;
+                        }
+                    }
                 }
                 let set = if e.dir == "hole" { &mut look.holes } else if e.stem.contains("_sky") { &mut look.skies } else { &mut look.bg };
                 set.extend(parts.iter().map(|(_, m)| m.id()));
@@ -1005,6 +1013,8 @@ fn clouds(
                 mat.uniform.fog = gs::NO_FOG;
                 // the game builds each cloud with object flags 3: alpha and VU1's unlit path
                 mat.uniform.unlit = 1.0;
+                // B75: with the backdrops, before everything else
+                mat.order = BACKDROP;
                 // and sets its TEST to GEQUAL 0x60, FB_ONLY on fail (mode 25's split at 0x70 moved down)
                 mat.key.test = match mat.key.test {
                     gs::Test::Ge70 => gs::Test::Ge60,
@@ -1047,6 +1057,9 @@ struct Backdrop {
     yaw: f32,
     lift: f32,
 }
+
+/// The backdrops' blended-draw sort offset (`GsMaterial::order`): before the hole's `-1e6`, so before everything.
+const BACKDROP: f32 = -2.0e6;
 
 /// Runs after every Update camera move, so the backdrop never lags the camera by a frame.
 fn backdrops(camera: Query<&Transform, (With<Orbit>, Without<Backdrop>)>, mut models: Query<(&Backdrop, &mut Transform)>) {
