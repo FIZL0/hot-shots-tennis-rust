@@ -350,7 +350,7 @@ mod tests {
         let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
             return eprintln!("no ISO or round1.bin, skipped");
         };
-        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(1200).map(|f| [f.pad(0), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]).collect();
+        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(1200).map(|f| [tick_input::recorded(f.pad(0)), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]).collect();
         let mut app = app();
         // into the rally, then save, 300 ticks, restore, the same 300 again
         let mut at = 0;
@@ -382,7 +382,7 @@ mod tests {
         let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
             return eprintln!("no ISO or round1.bin, skipped");
         };
-        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(900).map(|f| [f.pad(0), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]).collect();
+        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(900).map(|f| [tick_input::recorded(f.pad(0)), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]).collect();
         let sounding = || {
             let mut app = app();
             let mut iso = hst_data::iso::Iso::open(ISO).unwrap();
@@ -429,7 +429,7 @@ mod tests {
         let (mut planned, mut runs, mut approaches) = (None::<u32>, 0, 0);
         for f in &frames {
             let before = app.world().resource::<Game>().players[0];
-            run(&mut app, &[[f.pad(0), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]]);
+            run(&mut app, &[[tick_input::recorded(f.pad(0)), tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]]);
             let p = app.world().resource::<Game>().players[0];
             let moved = p.pos != before.pos;
             match (before.pending, p.pending) {

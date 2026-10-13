@@ -71,6 +71,7 @@ mod panel;
 pub(crate) mod menu_art;
 mod popups;
 mod reaction_voices;
+mod emote;
 mod replay_camera;
 mod surprise;
 pub(crate) mod snapshot;
@@ -232,6 +233,8 @@ struct Player {
     arm: Option<([[f32; 4]; 4], f32)>,
     /// A dive under way (the press found no stroke while running).
     dive: Option<swing::Dive>,
+    /// Ticks left of a right-stick emote (`emote`, ours): no run, no stroke until it's out.
+    emote: u32,
 }
 
 /// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
@@ -497,6 +500,9 @@ struct SlotPad {
     /// Latched shot press (kind), so a press between fixed steps is never lost.
     shot: Option<i32>,
     serve: bool,
+    /// The right stick flicked fully (0 up, 1 down, 2 left, 3 right) or keys 1–4: latched as `shot`; a new
+    /// direction on the wire is an emote (`emote`).
+    emote: Option<u8>,
 }
 
 /// Controller slots 1P..4P (without `--pads` the keyboard and the first gamepad drive 1P). See `slot_of` for which
@@ -1689,6 +1695,7 @@ fn read_input(
         .find(|(a, _)| bind.key_just_pressed(&keys, *a))
         .map(|(_, kind)| kind);
     kb.serve = bind.key_just_pressed(&keys, A::Serve);
+    kb.emote = emote::KEYS.iter().position(|a| bind.key_pressed(&keys, *a)).map(|d| d as u8);
     if let Some(k) = held.keys() {
         now[k] = kb;
     }
@@ -1719,6 +1726,7 @@ fn read_input(
             .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
         s.serve |= bind.pad_just_pressed(g, A::Serve);
+        s.emote = s.emote.or(emote::flick(g.right_stick()));
         cycle |= bind.pad_just_pressed(g, A::Camera);
         turn += pad_stick(g.right_stick()).x + bind.pad_pressed(g, A::TurnRight) as i32 as f32
             - bind.pad_pressed(g, A::TurnLeft) as i32 as f32;
@@ -1731,6 +1739,9 @@ fn read_input(
             slot.shot = n.shot;
         }
         slot.serve |= n.serve;
+        if n.emote.is_some() {
+            slot.emote = n.emote;
+        }
     }
     if cycle {
         *cam = if *cam == CamMode::Original {
@@ -3004,6 +3015,9 @@ fn control(mut g: ResMut<Game>, pads: Res<Pads>, tick: Res<tick_input::TickPads>
         match pads.slot_of(i, g.players.len()) {
             Some(s) => {
                 let pad = &tick.slot(s);
+                if emote::tick(g, i, pad.emote) {
+                    continue;
+                }
                 let (shot, serve_press) = (pad.shot, pad.serve);
                 post_press(g, matches!(shot, Some(0 | 1)));
                 doubles_ai::human(g, i);
