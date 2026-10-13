@@ -59,7 +59,7 @@ fn between(shots: &[i32], tick: i32) -> u32 {
     }
     let (a, b) = ((a - 1) as f32, (b - 1) as f32);
     let (lo, hi) = if a < b { (a, b + 0.999999) } else { (a + 0.999999, b + 0.999999) };
-    (lo + (hi - lo) * ((k - at) as f32 / n as f32).powf(curve)) as u32
+    (lo + (hi - lo) * hst_sim::musl::powf((k - at) as f32 / n as f32, curve)) as u32
 }
 
 /// Each shot leaving the racket (the rally's count going up), outside a replay; the count's reset files the point.

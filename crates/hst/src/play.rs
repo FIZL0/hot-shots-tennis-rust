@@ -2538,9 +2538,10 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     set_motion(p, m, 1.0, true, None);
 }
 
-/// Figure yaw (0 faces −z) of a game-space facing direction.
+/// Figure yaw (0 faces −z) of a game-space facing direction (musl's atan2: it is in the state hash, and std's differs
+/// between native and the browser, B154).
 fn yaw(d: [f32; 4]) -> f32 {
-    (-d[0]).atan2(-d[2])
+    hst_sim::musl::atan2f(-d[0], -d[2])
 }
 
 /// A stroke squares the body up to the other end (the game's stroke mode sets facing and target forward).
