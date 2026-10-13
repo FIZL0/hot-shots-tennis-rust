@@ -186,8 +186,9 @@ pub(super) struct Ceremony {
     slot: Vec<(usize, f32)>,
     gallery: Gallery,
     court_rng: Mt,
-    sound_rng: Mt,
     voice: Option<Arc<SoundBank>>,
+    /// The shown character, whose prize voice speaks.
+    speaker: i32,
     /// The result music (with `--music`) and its level.
     music: Option<(Arc<SoundBank>, Vec<u8>)>,
     level: f32,
@@ -254,12 +255,13 @@ pub(super) fn begin(
     if !dissolve.cut(&mut commands, super::dissolve::TO_CEREMONY) {
         return;
     }
-    let Some((swapped, sound_rng)) = ENDING.lock().unwrap().take() else { return };
+    let Some((swapped, _)) = ENDING.lock().unwrap().take() else { return };
     let n = g.players.len();
     let humans: Vec<bool> = (0..n).map(|i| g.humans.get(i).copied().unwrap_or(false)).collect();
     let winner = table.winner.min(1);
     let local = local(&humans, net.as_ref().map(|np| &np.lock.mine[..]));
-    let plan = plan(&local, &g.chars, winner, swapped, table.rows[winner][8]);
+    let mut plan = plan(&local, &g.chars, winner, swapped, table.rows[winner][8]);
+    vary_lost(&mut plan, &g.chars, winner);
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let cam_name = ["win_99", "lost_99", "hand_99"][plan.clip];
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT on disc");
@@ -295,8 +297,8 @@ pub(super) fn begin(
         slot,
         gallery: g.gallery.clone(),
         court_rng: g.rng.court.clone(),
-        sound_rng,
         voice,
+        speaker: c,
         music: args.music.then(|| SoundBank::music(&mut iso, "Menu", RESULT_BGM)).flatten().map(|(b, m)| (Arc::new(b), m)),
         level: 0.0,
         flakes: Vec::new(),
@@ -328,13 +330,14 @@ pub(super) fn begin(
         }
         cer.confetti = Some(root);
     }
-    info!("winners' ceremony");
+    info!("winners' ceremony: {:?}", cer.plan.files);
     commands.insert_resource(cer);
 }
 
-/// The voice (`lost` program, key a bit of the sound generator) and the gallery's ovation or groan.
+/// The voice (`lost` program, either of its two lines, [`pick`]) and the gallery's ovation or groan.
 fn shout(c: &mut Ceremony, sound: Option<&Sound>) {
-    let bit = c.sound_rng.next() >> 16 & 1;
+    let bit = pick(c.speaker, 1 + c.plan.lost as u8, 2);
+    info!("ceremony voice: character {} program {} line {bit}", c.speaker, c.plan.lost as u8);
     if let (Some(s), Some(v)) = (sound, &c.voice) {
         s.play_centre(v, sound::Play { slot: 1, program: c.plan.lost as u8, key: bit as u8, volume: 0x80, speed: 1.0 });
     }
@@ -401,6 +404,53 @@ pub(super) fn tick(c: &mut Ceremony, players: u32, court: u8, sound: Option<&Sou
         let centre = Vec3::new(0.0, 0.0, -AHEAD);
         let d = f.at - centre;
         f.at = centre + Vec3::new(wrap(d.x, BOX.x), wrap(d.y, BOX.y), wrap(d.z, BOX.z));
+    }
+}
+
+/// B210 (ours, presentation): every celebration a character has on the disc takes turns — its lost motion's two
+/// pairs (`lost_XXa`, `lost_XXb`) and each prize voice program's two lines; the one win motion has no other. The
+/// original fixes the pair by character (`LOST_B`) and the line by a bit of the sound generator. Drawn from a
+/// generator of the ceremony's own (never the sim's), never the same as the character's last of that kind.
+/// ponytail: statics, one ceremony at a time; per run, not saved
+static PICKS: Mutex<(u32, Vec<((i32, u8), u8)>)> = Mutex::new((0, Vec::new()));
+
+/// Character `c`'s next pick of `kind` (0 lost pair, 1 win line, 2 lost line) among `n`, not its last one.
+fn pick(c: i32, kind: u8, n: u8) -> u8 {
+    let mut guard = PICKS.lock().unwrap();
+    let (x, last) = &mut *guard;
+    if *x == 0 {
+        *x = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos()) | 1;
+    }
+    // xorshift32
+    *x ^= *x << 13;
+    *x ^= *x >> 17;
+    *x ^= *x << 5;
+    let prev = last.iter().find(|e| e.0 == (c, kind)).map(|e| e.1);
+    let k = match prev {
+        Some(p) if n > 1 => (p as u32 + 1 + *x % (n as u32 - 1)) as u8 % n,
+        _ => (*x % n as u32) as u8,
+    };
+    last.retain(|e| e.0 != (c, kind));
+    last.push(((c, kind), k));
+    k
+}
+
+/// The beaten side's lost pairs taken in turn ([`pick`]): each of players 0/1 draws its own, a partner (2/3) the
+/// other one, as the original pairs them.
+fn vary_lost(plan: &mut Plan, chars: &[i32], winner: usize) {
+    let n = chars.len();
+    let loser = 1 - winner;
+    let file = |c: i32, b: bool| {
+        let c = c.clamp(0, 13);
+        let n_ = if c == 6 || c == 11 { "_n" } else { "" };
+        format!("lost/lost_{c:02}{}{n_}", if b { 'b' } else { 'a' })
+    };
+    if loser < n {
+        let b = pick(chars[loser].clamp(0, 13), 0, 2) == 1;
+        plan.files[loser][LOST] = file(chars[loser], b);
+        if loser + 2 < n {
+            plan.files[loser + 2][LOST] = file(chars[loser + 2], !b);
+        }
     }
 }
 
@@ -563,6 +613,22 @@ mod tests {
         assert_eq!(see(local(&h, Some(&[0, 2])), 1), (1, false, 2, 2));
         // online with a bot in an empty seat: only this machine's seat counts
         assert_eq!(see(local(&[true, false], Some(&[0])), 1), (0, true, 1, 3));
+    }
+
+    /// B210: two options alternate per character and kind; the lost pairs of a doubles side stay different.
+    #[test]
+    fn celebrations_take_turns() {
+        let seq: Vec<u8> = (0..6).map(|_| pick(3, 1, 2)).collect();
+        assert!(seq.windows(2).all(|w| w[0] != w[1]), "{seq:?}");
+        let mut p = plan(&[false; 4], &[1, 6, 5, 6], 0, false, 60.0);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            vary_lost(&mut p, &[1, 6, 5, 6], 0);
+            assert_ne!(p.files[1][LOST], p.files[3][LOST]);
+            assert!(p.files[1][LOST].ends_with("_n"));
+            seen.push(p.files[1][LOST].clone());
+        }
+        assert!(seen.windows(2).all(|w| w[0] != w[1]), "{seen:?}");
     }
 
     #[test]
