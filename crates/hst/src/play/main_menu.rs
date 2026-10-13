@@ -1287,7 +1287,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "lobbies" => Screen::Lobbies,
         "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
         "code" | "name" => Screen::Code,
-        "addmods" | "browsemods" | "uploadmods" => Screen::Mods,
+        "addmods" | "browsemods" | "uploadmods" | "mymods" => Screen::Mods,
         _ => Screen::Main,
     };
     if fresh && menu.screen == Screen::Main {
