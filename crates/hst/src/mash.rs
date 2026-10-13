@@ -26,12 +26,13 @@ fn stay(m: Res<Mash>, time: Res<Time>, mut exit: ResMut<Messages<AppExit>>) {
     }
 }
 
-fn press(mut m: ResMut<Mash>, mut keys: ResMut<ButtonInput<KeyCode>>, time: Res<Time>, mut exit: MessageWriter<AppExit>) {
+fn press(mut commands: Commands, mut m: ResMut<Mash>, mut keys: ResMut<ButtonInput<KeyCode>>, time: Res<Time>, mut exit: MessageWriter<AppExit>) {
     if let Some(k) = m.held.take() {
         keys.release(k);
     }
     if time.elapsed_secs() >= m.until {
         info!("HST_MASH: done, quitting");
+        commands.insert_resource(crate::mode::Quit);
         exit.write(AppExit::Success);
         return;
     }
