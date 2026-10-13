@@ -1253,7 +1253,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
-        "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
+        "lobby" | "lobby-ask" | "lobby-guest" | "lobby-vote" | "lobby-topics" => Screen::Lobby,
         "code" | "name" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" => Screen::Mods,
         _ => Screen::Main,

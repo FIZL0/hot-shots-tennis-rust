@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 use crate::mods_online::{self as mo, Ask, Wire};
-use crate::net::{Cmd, Event, Listing, Net, Online, Pick, Relay, Room, SHORT, SYMBOLS, Seat, is_short};
+use crate::net::{Cmd, Event, Listing, Net, Online, Pick, RANDOM, Relay, Room, SHORT, SYMBOLS, Seat, Topic, is_short};
 
 /// What Online does once this machine's players are picked.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +51,9 @@ pub struct View {
     pub prepared: bool,
     /// The code screen types this player's name, not a code.
     pub naming: bool,
+    /// B201a: the host is choosing what to put to a vote; this machine's ballot in the open vote.
+    pub topics: bool,
+    pub ballot: Option<u32>,
 }
 
 /// What an Online press asks of the app.
@@ -75,7 +78,10 @@ const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
 const ROWS: [&str; 7] = ["Host", "Find", "Quickplay", "Join by Code", "Name", "Relay", "Back"];
 /// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby.
-const HOST_BUTTONS: [&str; 3] = ["Start", "Copy Link", "Leave"];
+const HOST_BUTTONS: [&str; 4] = ["Start", "Vote", "Copy Link", "Leave"];
+/// What the host can put to a vote (B201a), and for how long.
+const TOPICS: [(&str, Option<Topic>); 4] = [("Court", Some(Topic::Court)), ("Umpire", Some(Topic::Umpire)), ("Singles / Doubles", Some(Topic::Mode)), ("Cancel", None)];
+const VOTE_SECS: u32 = 30;
 const GUEST_BUTTONS: [&str; 2] = ["Ready", "Leave"];
 
 /// What a lobby selection is: a guest's seat (the host can take them out) or a button.
@@ -291,6 +297,30 @@ impl Menu {
                     out.extend([Sound(2), Effect::Online(Fx::Ask(remember))]);
                 }
             }
+            Screen::Lobby if self.net.topics && !k.back => {
+                rows(TOPICS.len(), &mut self.sel, out);
+                if k.ok {
+                    self.net.topics = false;
+                    let topic = TOPICS[self.sel].1;
+                    self.sel = 0;
+                    match topic {
+                        Some(t) => out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::OpenVote(t, vote_options(t), VOTE_SECS)))]),
+                        None => out.push(Sound(1)),
+                    }
+                }
+            }
+            Screen::Lobby if let Some(v) = self.net.room.as_ref().and_then(|r| r.vote.as_ref()).filter(|_| !k.back) => {
+                // the options, then the host's End Vote
+                let n = v.options.len();
+                rows(n + self.net.hosting as usize, &mut self.sel, out);
+                if k.ok && self.sel < n {
+                    let o = v.options[self.sel];
+                    self.net.ballot = Some(o);
+                    out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Vote(o)))]);
+                } else if k.ok {
+                    out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::EndVote))]);
+                }
+            }
             Screen::Lobby => {
                 let items = self.items();
                 if k.up || k.down || k.left || k.right {
@@ -309,6 +339,9 @@ impl Menu {
                         self.net.status = format!("Taking {name} out...");
                         out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Kick(peer)))]);
                     }
+                } else if item == Item::Button("Vote") {
+                    (self.net.topics, self.sel) = (true, 0);
+                    out.push(Sound(2));
                 } else if item == Item::Button("Copy Link") && !self.net.code.is_empty() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
                 } else if item == Item::Button("Start") {
@@ -408,7 +441,13 @@ impl Menu {
                 v.status = format!("{} open lobb{}.", l.len(), if l.len() == 1 { "y" } else { "ies" });
                 v.list = l;
             }
-            Event::Room(r) => v.room = Some(r),
+            Event::Room(r) => {
+                // a vote opened or closed: the cursor to its first row
+                if r.vote.is_some() != v.room.as_ref().is_some_and(|o| o.vote.is_some()) {
+                    (self.sel, v.ballot) = (0, None);
+                }
+                v.room = Some(r);
+            }
             Event::Start(r, _) => {
                 v.room = Some(r);
                 v.started = true;
@@ -471,10 +510,35 @@ fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
 }
 
+/// How many peers can vote.
+fn r_names(r: Option<&Room>) -> usize {
+    r.map_or(0, |r| r.names.len())
+}
+
 /// The first guest in `r` not ready yet, by name (None: everyone is).
 fn waiting_for(r: &Room) -> Option<String> {
     let s = r.seats.iter().flatten().find(|s| s.peer != "host" && s.human() && !r.ready.contains(&s.peer))?;
     Some(name_of(r, &s.peer))
+}
+
+/// What a vote on `t` offers, in the confirm screen's order (courts as its strip), random last.
+fn vote_options(t: Topic) -> Vec<u32> {
+    match t {
+        Topic::Court => super::STRIP.iter().map(|&c| c as u32).chain([RANDOM]).collect(),
+        Topic::Umpire => (0..super::UMPIRES as u32).chain([RANDOM]).collect(),
+        Topic::Mode => vec![0, 1],
+    }
+}
+
+/// A vote option's name.
+fn option_name(text: &super::Text, t: Topic, o: u32) -> String {
+    match (t, o) {
+        (Topic::Court, RANDOM) => "Random Court".into(),
+        (Topic::Court, c) => court_name(text, c as usize),
+        (Topic::Umpire, RANDOM) => "Random Umpire".into(),
+        (Topic::Umpire, u) => text.msg(669 + 2 * u as usize).trim_start_matches("Umpire ").to_string(),
+        (Topic::Mode, m) => if m == 1 { "Doubles" } else { "Singles" }.into(),
+    }
 }
 
 fn court_name(text: &super::Text, c: usize) -> String {
@@ -605,9 +669,43 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
                 }
                 // the host's hand on the guest seat it would take out
-                if let (None, Some(Item::Seat(i))) = (m.net.ask, items.get(m.sel)) {
+                if let (None, false, None, Some(Item::Seat(i))) = (m.net.ask, m.net.topics, r.vote.as_ref(), items.get(m.sel)) {
                     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x0 - 60.0 + hand_x, 140.0 + 44.0 * *i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
                 }
+            }
+            if m.net.ask.is_none() && m.net.topics {
+                d.outlined(|d| d.text("Put to a vote:", 410.0, 120.0, 18.0, WHITE));
+                for (i, (t, _)) in TOPICS.iter().enumerate() {
+                    let y = 156.0 + 44.0 * i as f32;
+                    d.pill(420.0, y, 200.0, if m.sel == i { GOLD } else { [70.0, 70.0, 80.0] });
+                    d.centred(t, 520.0, y + 8.0, 22.0, if m.sel == i { WHITE } else { DIM });
+                }
+                d.info("Everyone in the lobby votes; it closes when all have voted, after 30 s, or when you end it.");
+                return;
+            }
+            if let (None, Some(v)) = (m.net.ask, room.and_then(|r| r.vote.as_ref())) {
+                // the options with their ballots so far, live; the host's End Vote last
+                let what = TOPICS.iter().find(|t| t.1 == Some(v.topic)).map_or("", |t| t.0);
+                d.outlined(|d| d.text(&format!("Vote: {what}  {} s", v.left), 410.0, 82.0, 18.0, WHITE));
+                let tally = v.tally();
+                let rows = v.options.iter().map(|&o| Some(o)).chain(m.net.hosting.then_some(None));
+                for (i, o) in rows.enumerate() {
+                    let y = 104.0 + 18.0 * i as f32;
+                    let on = m.sel == i;
+                    let fill = if on { GOLD } else if o.is_some() && o == m.net.ballot { [60.0, 90.0, 60.0] } else { [70.0, 70.0, 80.0] };
+                    d.pill_at([410.0, y, 220.0, 17.0], [[30.0; 3], WHITE, fill], 128.0);
+                    let rgb = if on { WHITE } else { DIM };
+                    match o {
+                        Some(o) => {
+                            d.fitted(&option_name(text, v.topic, o), 505.0, y + 2.0, 13.0, 170.0);
+                            d.centred(&tally[i].to_string(), 612.0, y + 2.0, 13.0, rgb);
+                        }
+                        None => d.centred("End Vote", 520.0, y + 2.0, 13.0, rgb),
+                    }
+                }
+                let voted = v.ballots.len();
+                d.info(&format!("Choose with OK (you can change it): {voted} of {} voted. Most votes wins; a tie is drawn.", r_names(room)));
+                return;
             }
             if m.net.ask.is_none() {
                 // the buttons along the bottom
@@ -655,6 +753,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 Some(Item::Seat(i)) => format!("OK takes {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 Some(Item::Button("Start")) => "Start the match now: open seats are played by the computer.".into(),
+                Some(Item::Button("Vote")) => "Let everyone vote on the court, the umpire, or singles or doubles.".into(),
                 Some(Item::Button("Copy Link")) => "Copy the lobby's link, or read out the code: friends type it in Join by Code.".into(),
                 Some(Item::Button("Ready")) => "Tell the host you're ready: they start when everyone in is, open seats played by the computer.".into(),
                 _ if room.is_some() && !m.net.hosting => "Leave the lobby. The host starts when everyone in is ready: open seats are played by the computer.".into(),
@@ -728,6 +827,13 @@ fn item_at(m: &Menu, p: Vec2) -> Option<usize> {
     let inside = |x: f32, y: f32, w: f32| p.x >= x && p.x < x + w && p.y >= y && p.y < y + 38.0;
     if m.net.ask.is_some() {
         return (0..ASK_ROWS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
+    }
+    if m.net.topics {
+        return (0..TOPICS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
+    }
+    if let Some(v) = m.net.room.as_ref().and_then(|r| r.vote.as_ref()) {
+        let n = v.options.len() + m.net.hosting as usize;
+        return (0..n).find(|&i| p.x >= 410.0 && p.x < 630.0 && p.y >= 104.0 + 18.0 * i as f32 && p.y < 121.0 + 18.0 * i as f32);
     }
     let mut buttons = 0;
     m.items().iter().position(|it| match it {
@@ -826,6 +932,13 @@ pub(super) fn sample(m: &mut Menu) {
     if m.net.naming {
         m.net.entry = "SUNNY DAY".into();
     }
+    // B201a: the court vote open, two ballots in (this machine's on the second row); the host's topic list
+    if menu == "lobby-vote" {
+        let ballots = [("host".to_string(), super::STRIP[1] as u32), (peers[0].to_string(), RANDOM)].into();
+        m.net.room.as_mut().unwrap().vote = Some(crate::net::Vote { topic: Topic::Court, options: vote_options(Topic::Court), ballots, left: 21 });
+        (m.net.ballot, m.sel) = (Some(super::STRIP[1] as u32), 1);
+    }
+    m.net.topics = menu == "lobby-topics";
     if std::env::var("HST_MENU").as_deref() == Ok("lobby-ask") {
         // 2P brought a mod this machine doesn't have: the prompt
         let w = Wire { id: "x".into(), name: "Emi".into(), donor: 1, hand: 1.0, base: 1, overrides: vec![], ai_row: 1, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
@@ -1034,7 +1147,7 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = true;
-        assert_eq!(m.items(), vec![Item::Seat(1), Item::Seat(2), Item::Button("Start"), Item::Button("Copy Link"), Item::Button("Leave")]);
+        assert_eq!(m.items(), vec![Item::Seat(1), Item::Seat(2), Item::Button("Start"), Item::Button("Vote"), Item::Button("Copy Link"), Item::Button("Leave")]);
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("k51qzi5uqu5d".into())));
         m.sel = 2;
         assert_eq!(net(&m.step(dev, ok)), None, "ACE-42 isn't ready");
@@ -1066,6 +1179,33 @@ mod tests {
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::SaveCfg)), "{fx:?}");
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
+    }
+
+    /// B201a: the host puts the court to a vote, everyone votes on the panel, the host can end it.
+    #[test]
+    fn lobby_vote() {
+        let dev = super::super::Dev::Keys;
+        let (ok, down) = (Press { ok: true, ..default() }, Press { down: true, ..default() });
+        let net = |fx: &[Effect]| fx.iter().find_map(|e| if let Effect::Online(Fx::Net(c)) = e { Some(c.clone()) } else { None });
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        m.net.hosting = true;
+        m.sel = 3;
+        assert_eq!(net(&m.step(dev, ok)), None);
+        assert!(m.net.topics);
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::OpenVote(Topic::Court, vote_options(Topic::Court), VOTE_SECS)));
+        let mut r = m.net.room.clone().unwrap();
+        r.vote = Some(crate::net::Vote { topic: Topic::Court, options: vote_options(Topic::Court), ballots: Default::default(), left: 30 });
+        m.sel = 5;
+        m.heard(Event::Room(r.clone()));
+        assert_eq!(m.sel, 0, "the cursor to the vote's first row");
+        m.step(dev, down);
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Vote(super::super::STRIP[1] as u32)));
+        m.sel = 12;
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::EndVote));
+        r.vote = None;
+        m.heard(Event::Room(r));
+        assert_eq!((m.sel, m.net.ballot), (0, None));
     }
 
     /// B159: Enter on the keyboard finishes the entry, it doesn't type the hovered key.
