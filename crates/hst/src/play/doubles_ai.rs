@@ -97,6 +97,9 @@ struct Mine {
     /// A creature struck the ball or a new path began (message 0x14 or 0x16) since its last step: back to the start of
     /// its state.
     struck: bool,
+    /// Singles: the point set-up ran (cleared by the serve message).
+    #[serde(default)]
+    set_up: bool,
 }
 
 /// The ball as the AI reads it from the ball object: y down, as the app (unlike the path, which is stored y up).
@@ -203,8 +206,17 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     }
     let row = p.ai;
     let me = &mut g.doubles_ai.me[i];
+    if singles && !std::mem::replace(&mut me.set_up, true) {
+        // B15: the singles AI's point set-up: the spot it walks back to (the middle, 10 back for the NET style, else
+        // 11), no dash, no short ball (hold and held clear on the serve message, `heard`)
+        let z = if row.style == 1 { -10.0 } else { -11.0 };
+        (me.rally.spot[0], me.rally.spot[2]) = (0.0, hst_sim::ps2::mul(p.end, z));
+        (me.rally.dash, me.rally.short) = (false, false);
+    }
     let x = &mut me.rally;
     (x.level, x.mate, x.first, x.window, x.singles) = (3, human_mate as i32, 2, PATH_MAX as i32, singles);
+    // B15: the net reach (the dashes' depth) its level gives it; unset it was 0 and every dash ran into the net
+    x.reach = hst_sim::ai::Choice::new(0, 0, false).reach;
     (x.rate, x.radius) = if singles {
         (row.singles_center_rate, row.singles_center_radius)
     } else {
@@ -343,7 +355,7 @@ pub(super) fn heard(g: &mut Game, msg: u8) {
             // a serve that touched the net: the AI stands still for the rest of it
             0x16 if g.shots == 1 => x.hold = true,
             // ponytail: the original clears both as it sets the point up; the serve message comes there
-            0xe => (x.hold, x.held) = (false, false),
+            0xe => (x.hold, x.held, m.set_up) = (false, false, false),
             _ => {}
         }
         if msg == 0x15 || msg == 0x16 && g.phase == Phase::Rally {
@@ -556,5 +568,50 @@ mod tests {
         let (without, shots) = hashes(false);
         assert!(shots > 0);
         assert_eq!(with.iter().zip(&without).position(|(a, b)| a != b), None);
+    }
+
+    /// B15: singles bots get the point set-up's walk-back spot (the middle, 10 or 11 back) and their level's net reach
+    /// (3.2), so after their own shot they go back to the baseline instead of running into the net, where the
+    /// opponent's next ball went past them.
+    #[test]
+    fn singles_bots_go_back_to_the_baseline() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
+        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 1, stage: None, play: true, singles: true, chars: vec![0, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, setup);
+        app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        let (mut stepped, mut pinned, mut rallies) = (0, 0, 0);
+        for _ in 0..60 * 60 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let g = app.world().resource::<Game>();
+            if g.phase != Phase::Rally {
+                continue;
+            }
+            rallies += 1;
+            for (i, p) in g.players.iter().enumerate() {
+                let me = &g.doubles_ai.me[i];
+                if me.set_up {
+                    stepped += 1;
+                    let z = if p.ai.style == 1 { -10.0 } else { -11.0 };
+                    assert_eq!((me.rally.spot[0], me.rally.spot[2]), (0.0, p.end * z), "p{i}");
+                    assert_eq!(me.rally.reach, 3.2, "p{i}");
+                }
+                // its own ball on the way: never up against the net (the court stops a player 1.5 from it)
+                if g.last_hitter == i as i32 && p.pos[2].abs() < 1.6 {
+                    pinned += 1;
+                }
+            }
+        }
+        assert!(rallies > 0 && stepped > 0, "{rallies} {stepped}");
+        assert_eq!(pinned, 0);
     }
 }
