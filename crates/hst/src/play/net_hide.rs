@@ -10,6 +10,9 @@
 //!
 //! k = tan 20° / tan(half the horizontal fov), at least 1 (a zoomed-in view widens the zone).
 //! Checked frame by frame against the game's own "not drawn" flag over slot 5's matches (`research/b74d_check.py`).
+//!
+//! The same pass skips any other court object of categories 17–20 the eye is buried in (`buried`): a cut-away
+//! camera standing in a flower bed or bush doesn't show it filling the lens.
 
 use bevy::prelude::*;
 use hst_sim::camera::View;
@@ -20,8 +23,44 @@ use super::Game;
 #[derive(Component)]
 pub struct HideNearCamera;
 
+/// A court object (categories 17–20, its code's third character not '0') the same pass skips while the eye is
+/// buried in it: `pos` is its plant's ground position, `prop` its collision object in `Game::world` once found
+/// (`None` inside: the model has no collision mesh, so the test never hides it).
+#[derive(Component)]
+pub struct HideAroundEye {
+    pub pos: [f32; 3],
+    pub prop: Option<Option<usize>>,
+}
+
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, hide.after(super::camera));
+    app.add_systems(Update, hide.after(super::camera)).add_systems(PostUpdate, hide_around_eye.before(bevy::transform::TransformSystems::Propagate));
+}
+
+/// The objects the eye test runs on: the pass's categories with the code character the setup checks.
+pub fn tested(category: u8, code: [u8; 4]) -> bool {
+    (17..=20).contains(&category) && code[2] != b'0'
+}
+
+/// Whether the court-object pass skips `o` for this view: a sphere of radius r = tan 20° / tan(half the horizontal
+/// fov), clamped to 1..15, centred r ahead of the eye, overlaps the object's bounding sphere, and sweeping it onto
+/// that centre from 100 m above and from (3·object radius + 2r) to either side along x all hit the object's mesh,
+/// i.e. the eye is looking into the inside of it.
+/// ponytail: plain f32 and the ball's sweep (`mesh::Object::sweep`, which drops texel-0 hits); presentation only.
+pub fn buried(v: &View, models: &[hst_sim::mesh::Model], o: &hst_sim::mesh::Object) -> bool {
+    let r = (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0);
+    let f = v.rot[2];
+    let c = [v.eye[0] + f[0] * r, v.eye[1] + f[1] * r, v.eye[2] + f[2] * r, 1.0];
+    let size = o.scale * o.radius;
+    let d2: f32 = (0..3).map(|k| (c[k] - o.center[k]).powi(2)).sum();
+    if d2 > (r + size).powi(2) {
+        return false;
+    }
+    let side = size * 3.0 + r * 2.0;
+    [[0.0, -100.0, 0.0], [-side, 0.0, 0.0], [side, 0.0, 0.0]].iter().all(|off| {
+        let start = [c[0] + off[0], c[1] + off[1], c[2] + off[2], 1.0];
+        let mut hit = hst_sim::mesh::Hit::NONE;
+        o.sweep(models, &mut hit, start, c, r, &[])
+    })
 }
 
 /// The plant the game picks: category 17 and its ground position within 1 m of the centre.
@@ -46,6 +85,29 @@ fn hide(g: Res<Game>, own: Option<Res<super::own_camera::OwnCam>>, d: Option<Res
     let vis = if hidden(&super::own_camera::shown(&g, own.as_deref()).1, d.is_some_and(|d| d.showing())) { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut q {
         v.set_if_neq(vis);
+    }
+}
+
+/// Runs on the drawn camera (any mode: match, cut-away, replay, own camera, `HST_EYE`) once it has moved.
+fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection), With<crate::Orbit>>, window: Query<&Window>, mut q: Query<(&mut HideAroundEye, &mut Visibility)>) {
+    let (Some(g), Ok((t, proj))) = (g, camera.single()) else { return };
+    let Projection::Perspective(p) = proj else { return };
+    // game space is Bevy's turned a half-turn about X; the horizontal fov as `fixed_eye` sets the vertical one
+    let aspect = window.single().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let (e, f) = (t.translation * Vec3::new(1.0, -1.0, -1.0), *t.forward() * Vec3::new(1.0, -1.0, -1.0));
+    let view = View { rot: [[0.0; 3], [0.0; 3], f.to_array()], eye: e.to_array(), fov: ((p.fov / 2.0).tan() / 0.75f32.max(1.0 / aspect)).atan() };
+    let world = &g.world.0;
+    for (mut h, mut v) in &mut q {
+        let pos = h.pos;
+        // the prop whose placement takes the plant's ground position to its model origin
+        let prop = *h.prop.get_or_insert_with(|| {
+            world.props.iter().position(|o| {
+                let m = hst_sim::vu0::transform(&o.to_model, [pos[0], pos[1], pos[2], 1.0]);
+                m[0].abs() + m[1].abs() + m[2].abs() < 1e-3
+            })
+        });
+        let hidden = prop.is_some_and(|i| buried(&view, &world.models, &world.props[i]));
+        v.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
     }
 }
 
@@ -74,5 +136,25 @@ mod tests {
         assert!(picked(17, [0.0, 0.0, 0.0]));
         assert!(!picked(17, [0.0, 0.0, 5.0]));
         assert!(!picked(18, [0.0, 0.0, 0.0]));
+    }
+
+    /// Cut-away views the port's own bots reached on Alpine Heights (disc court 6) and Wild Green (8), with the eye
+    /// in a flower bed (91) and a red flower bush (44): hidden; the match camera hides nothing in frame.
+    #[test]
+    fn buried_props() {
+        let Ok(mut iso) = hst_data::iso::Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+        let match_cam = view([0.0, -11.89, -39.238], [0.0, 0.292, 0.956], 20.0);
+        for (court, prop, eye, fwd, t) in [
+            (6, 91, [-2.4966, -1.63983, -16.0944], [0.162865, 0.036274, 0.985981], 0.0436609f32),
+            (8, 44, [5.77494, -0.114015, -19.7535], [-0.273811, -0.108348, 0.955661], 0.176327),
+        ] {
+            let w = hst_sim::court::world(&mut iso, court);
+            let v = View { rot: [[0.0; 3], [0.0; 3], fwd], eye, fov: t.atan() };
+            assert!(buried(&v, &w.models, &w.props[prop]), "court {court} prop {prop}");
+            let gone: Vec<_> = (0..w.props.len()).filter(|&i| buried(&match_cam, &w.models, &w.props[i])).collect();
+            // Wild Green's match camera stands in the forked tree behind the baseline (out of frame)
+            assert_eq!(gone, if court == 8 { vec![54] } else { vec![] }, "court {court} match camera");
+        }
+        assert!(tested(17, [0, 0, 0, 0]) && tested(20, *b"ab1\0") && !tested(18, *b"ab0\0") && !tested(16, [0; 4]));
     }
 }
