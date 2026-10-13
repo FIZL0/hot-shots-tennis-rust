@@ -526,7 +526,8 @@ async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Re
     let c = client();
     let api = format!("{HF}/api/datasets/{REPO}");
     let ask = json!({ "files": files.iter().map(|(path, b)| json!({ "path": path, "size": b.len(), "sample": BASE64.encode(&b[..b.len().min(512)]) })).collect::<Vec<_>>() });
-    let modes = call(c.post(format!("{api}/preupload/main")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await?;
+    // `create_pr`: an account with read access only may still open a PR (403 without it)
+    let modes = call(c.post(format!("{api}/preupload/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await?;
     let lfs = |path: &str| modes["files"].as_array().into_iter().flatten().any(|f| f["path"] == path && f["uploadMode"] == "lfs");
     let mut lines = vec![json!({ "key": "header", "value": { "summary": summary, "description": "Uploaded from the game." } })];
     for (path, b) in &files {
@@ -547,7 +548,8 @@ async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Re
 async fn lfs_put(c: &reqwest::Client, token: &str, oid: &str, b: &[u8]) -> Result<(), String> {
     use serde_json::json;
     let lfs = "application/vnd.git-lfs+json";
-    let ask = json!({ "operation": "upload", "transfers": ["basic", "multipart"], "hash_algo": "sha256", "ref": { "name": "main" }, "objects": [{ "oid": oid, "size": b.len() }] });
+    // no `ref`: it makes the Hub check write access to that branch, and a PR only needs read (as huggingface_hub)
+    let ask = json!({ "operation": "upload", "transfers": ["basic", "multipart"], "hash_algo": "sha256", "objects": [{ "oid": oid, "size": b.len() }] });
     let r = call(c.post(format!("{HF}/datasets/{REPO}.git/info/lfs/objects/batch")).bearer_auth(token).header("Accept", lfs).header("Content-Type", lfs).body(ask.to_string())).await?;
     let o = &r["objects"][0];
     if let Some(e) = o["error"]["message"].as_str() {
