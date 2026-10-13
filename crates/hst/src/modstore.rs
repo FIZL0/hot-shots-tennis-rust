@@ -456,7 +456,7 @@ pub fn token_in(text: &str) -> Option<String> {
 pub fn sign_in(token: String) {
     spawn(async move {
         let got = async {
-            let r = call(reqwest::Client::new().get(format!("{HF}/api/whoami-v2")).bearer_auth(&token)).await.map_err(|e| format!("Hugging Face didn't take that token ({e})"))?;
+            let r = call(client().get(format!("{HF}/api/whoami-v2")).bearer_auth(&token)).await.map_err(|e| format!("Hugging Face didn't take that token ({e})"))?;
             let name = r["name"].as_str().ok_or("Hugging Face sent no account name")?.to_string();
             if r["auth"]["accessToken"]["role"] == "read" {
                 return Err("that token can only read: make one with write access".into());
@@ -499,10 +499,15 @@ pub fn publish(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, 
     });
 }
 
-/// A request's JSON answer, or what went wrong (the status and the start of the body).
-async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
+/// An HTTP client; natively the TLS provider goes in first (building one without it panics).
+fn client() -> reqwest::Client {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::new()
+}
+
+/// A request's JSON answer, or what went wrong (the status and the start of the body).
+async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
     let r = r.send().await.map_err(|e| format!("can't reach Hugging Face: {e}"))?;
     let status = r.status();
     let body = r.bytes().await.map_err(|e| e.to_string())?;
@@ -518,7 +523,7 @@ async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
 async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Result<String, String> {
     use data_encoding::BASE64;
     use serde_json::json;
-    let c = reqwest::Client::new();
+    let c = client();
     let api = format!("{HF}/api/datasets/{REPO}");
     let ask = json!({ "files": files.iter().map(|(path, b)| json!({ "path": path, "size": b.len(), "sample": BASE64.encode(&b[..b.len().min(512)]) })).collect::<Vec<_>>() });
     let modes = call(c.post(format!("{api}/preupload/main")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await?;
@@ -698,6 +703,22 @@ mod tests {
 
     /// The real store answers (`HST_LIVE=1`): a listing comes back (empty while nobody has uploaded), and a mod
     /// with no preview gives None.
+    #[test]
+    fn live_sign_in() {
+        if std::env::var("HST_LIVE").is_err() {
+            return eprintln!("HST_LIVE unset (skipped)");
+        }
+        sign_in("hf_notarealtokennotarealtoken0000".into());
+        for _ in 0..300 {
+            if let Some(Event::Signed(r)) = take().into_iter().next() {
+                eprintln!("signed: {r:?}");
+                return assert!(r.is_err());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("no answer in 30 s");
+    }
+
     #[test]
     fn live_store() {
         if std::env::var("HST_LIVE").is_err() {
