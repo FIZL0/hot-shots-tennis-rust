@@ -99,7 +99,8 @@ fn fit(window: Query<&Window>, mut q: Query<&mut Node, With<Screen43>>) {
 struct Bar(bool);
 
 fn bars(mut commands: Commands, window: Query<&Window>, mut q: Query<(&Bar, &mut Node)>, mut spawned: Local<bool>) {
-    if WIDE.load(Ordering::Relaxed) {
+    let wide = WIDE.load(Ordering::Relaxed);
+    if wide && !*spawned {
         return;
     }
     if !std::mem::replace(&mut *spawned, true) {
@@ -108,7 +109,8 @@ fn bars(mut commands: Commands, window: Query<&Window>, mut q: Query<(&Bar, &mut
         }
     }
     let Ok(w) = window.single() else { return };
-    let side = Val::Percent(50.0 * (1.0 - share(w.width() / w.height().max(1.0))));
+    // turned back on mid-match (the pause menu's settings): no bars
+    let side = Val::Percent(if wide { 0.0 } else { 50.0 * (1.0 - share(w.width() / w.height().max(1.0))) });
     for (Bar(right), mut n) in &mut q {
         n.width = side;
         if *right {

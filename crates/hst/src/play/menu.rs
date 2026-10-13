@@ -3,12 +3,15 @@
 //! 64), the top bar (`inpane_pause03`) with "Paused" and the rules ("1 sets 4 games", `inpane_pause02`), the score
 //! board at the bottom (the result board's frame, plates and each set's games, with the points from
 //! `inpane_pause00`, tiebreak `01`), and the dialog (`i_dialog_00`/`01`): "Resume the Match" / "Return to the Menu"
-//! on pills, the chosen one bright, the hand (`hsm_yubi`) beside it swinging out 16 px and back.
+//! on pills, the chosen one bright, the hand (`hsm_yubi`) beside it swinging out 16 px and back. Between them the
+//! remaster's "Settings" (B126, ours: the dialog's sheet has no such row, so `word.tm2` writes it) opens the main
+//! menu's Settings screens over the paused match (`main_menu/pause.rs`); a click or tap on a pill chooses it.
 //!
 //! Input waits 5 ticks after it opens. Up/down move with wrap-around (repeat after 32 ticks held, then every 8;
 //! sound 0, the hand starts its swing again), ✕ chooses (sound 2), ○ does nothing, Start closes it (sound 2).
 //! "Return to the Menu" fades to black over 60 ticks; the port has no menu, so it then quits.
-//! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`).
+//! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`), with `HST_PAUSE_SETTINGS=settings|graphics|controls`
+//! on that Settings screen.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -16,6 +19,7 @@ use hst_sim::sound;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::main_menu::pause::{PauseSettings, Root as PauseRoot};
 use super::panel::{self, Colours};
 use super::widescreen::Anchor;
 use super::{Game, Pads};
@@ -55,6 +59,8 @@ const GAMES_NOW: Tex = Tex::Own(7);
 const FRAME: Tex = Tex::Own(8);
 const ROWS: Tex = Tex::Own(9);
 const HAND: Tex = Tex::Own(10);
+/// "Settings" in `word.tm2` on a row of its own (`pause::label`).
+const LABEL: Tex = Tex::Own(11);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -65,8 +71,16 @@ struct Quad {
     alpha: f32,
 }
 
-/// The dialog's text rows in `i_dialog_01`: "Resume the Match", "Return to the Menu".
-const OPTIONS: [i32; 2] = [6, 1];
+/// The dialog's text rows in `i_dialog_01`: "Resume the Match", (ours) "Settings", "Return to the Menu".
+const OPTIONS: [i32; 3] = [6, SETTINGS, 1];
+/// Not a row of `i_dialog_01`: [`LABEL`].
+const SETTINGS: i32 = -1;
+
+/// Pill `k`'s top on the dialog: lifted for three sets, centred on the options.
+fn pill_y(sets_to_win: i32, k: usize) -> i32 {
+    let lift = if sets_to_win == 3 { -72 } else { -32 };
+    lift - (OPTIONS.len() as i32 - 1) * 16 + 0xcc + 40 * k as i32
+}
 /// Points cells (column, row) by point index; 4 is Deuce, 5 Advantage (tiebreak: 0–7, 8 Deuce, 9 Advantage).
 const POINT_U: [i32; 10] = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
 const POINT_V: [i32; 10] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4];
@@ -119,6 +133,8 @@ struct Menu {
     start: bool,
     confirm: bool,
     acc: f32,
+    /// "Settings" chosen: `step` opens them.
+    settings: bool,
 }
 
 impl Menu {
@@ -152,8 +168,9 @@ impl Menu {
                 sound = Some(0);
             } else if self.confirm {
                 sound = Some(2);
-                match self.sel {
-                    0 => *self = Menu::default(),
+                match OPTIONS[self.sel] {
+                    6 => *self = Menu::default(),
+                    SETTINGS => self.settings = true,
                     _ => self.quitting = Some(0),
                 }
             }
@@ -289,7 +306,7 @@ fn layout(v: &View) -> Vec<Quad> {
     }
     y += 8 * (nopt * 5 - 1);
     row(24, 16, y + 8);
-    let y0 = lift - (nopt - 1) * 16 + 0xcc;
+    let y0 = pill_y(v.sets_to_win, 0);
     for (k, _) in OPTIONS.iter().enumerate() {
         let tint = if k == v.sel { [123.0, 105.0, 79.0] } else { [94.0, 83.0, 70.0] };
         let y = y0 + 40 * k as i32;
@@ -301,7 +318,8 @@ fn layout(v: &View) -> Vec<Quad> {
     }
     for (k, &text) in OPTIONS.iter().enumerate() {
         let (rgb, alpha) = if k == v.sel { (WHITE, 128) } else { ([94.0, 83.0, 70.0], 64) };
-        q(ROWS, [0, text * 32, 256, 32], r(192, y0 + 40 * k as i32, 256, 32), rgb, alpha);
+        let (tex, row) = if text == SETTINGS { (LABEL, 0) } else { (ROWS, text * 32) };
+        q(tex, [0, row, 256, 32], r(192, y0 + 40 * k as i32, 256, 32), rgb, alpha);
     }
     let hy = (y0 + v.sel as i32 * 40 + 8) as f32;
     out.push(Quad { tex: HAND, src: [0.0, 0.0, 64.0, 32.0], dst: [v.hand_x + 128.0, hy, 64.0, 32.0], rgb: WHITE, alpha: 128.0 });
@@ -314,7 +332,7 @@ fn layout(v: &View) -> Vec<Quad> {
 
 /// The match HUD's root nodes, hidden under the pause and result screens. Not B5b's composite node (aimed at its own
 /// output camera): it draws the whole frame, and hiding it leaves the clear colour (the "blue screen").
-type Hud = (With<Node>, Without<ChildOf>, Without<Root>, Without<super::match_stats::Root>, Without<Slot>, Without<UiTargetCamera>);
+type Hud = (With<Node>, Without<ChildOf>, Without<Root>, Without<super::match_stats::Root>, Without<Slot>, Without<UiTargetCamera>, Without<PauseRoot>);
 
 #[derive(Resource)]
 struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>);
@@ -349,14 +367,15 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
 pub fn plugin(app: &mut App) {
     app.init_resource::<Menu>()
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(Update, (step, draw).chain());
+        .add_systems(Update, (step, draw).chain().before(super::main_menu::pause::Systems));
+    super::main_menu::pause::plugin(app);
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
-    let art = TEXTURES
+    let mut art = TEXTURES
         .iter()
         .map(|name| {
             let e = arc
@@ -366,7 +385,8 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
                 .unwrap_or_else(|| panic!("{name} in INPANE"));
             panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    art.push(super::main_menu::pause::label(&mut iso, &mut images, "Settings"));
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank));
     commands
@@ -387,7 +407,8 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         });
 }
 
-/// Reads Start/✕/up/down, steps the menu at 60 Hz and holds the match's fixed clock while it is open.
+/// Reads Start/✕/up/down (and clicks or taps on the pills), steps the menu at 60 Hz and holds the match's fixed clock
+/// while it is open; with its Settings screens up, they have the input.
 fn step(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
@@ -400,6 +421,7 @@ fn step(
     sound: Option<Res<Sound>>,
     mut exit: MessageWriter<AppExit>,
     mut auto: Local<bool>,
+    (mouse, touches, window, mut settings): (Res<ButtonInput<MouseButton>>, Res<Touches>, Query<&Window, With<bevy::window::PrimaryWindow>>, ResMut<PauseSettings>),
 ) {
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(b));
     let start = keys.just_pressed(KeyCode::Escape) || any(GamepadButton::Start);
@@ -421,10 +443,33 @@ fn step(
             *auto = true;
             *menu = Menu::opened();
             play(2);
+            if timed && std::env::var_os("HST_PAUSE_SETTINGS").is_some() {
+                settings.open();
+            }
             // ponytail: the fixed clock runs on but never reaches a step; the overstep is thrown away on closing
             fixed.set_timestep(Duration::from_secs(1 << 20));
         }
         return;
+    }
+    // presses made in the menu never reach the match
+    let spent = |pads: &mut Pads| {
+        for s in &mut pads.slots {
+            s.shot = None;
+            s.serve = false;
+        }
+    };
+    if settings.open {
+        spent(&mut pads);
+        return;
+    }
+    if let (Some(p), _) = super::main_menu::pause::pointer_press(&window, &mouse, &touches)
+        && (176.0..464.0).contains(&p.x)
+        && let Some(k) = (0..OPTIONS.len()).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(g.rules.sets.clamp(1, 3), k) as f32)))
+    {
+        if k != menu.sel {
+            (menu.sel, menu.hand) = (k, Hand::default());
+        }
+        menu.confirm = true;
     }
     menu.start |= start;
     menu.confirm |= confirm;
@@ -435,10 +480,9 @@ fn step(
             play(k);
         }
     }
-    // presses made in the menu never reach the match
-    for s in &mut pads.slots {
-        s.shot = None;
-        s.serve = false;
+    spent(&mut pads);
+    if std::mem::take(&mut menu.settings) {
+        settings.open();
     }
     if menu.quitting.is_some_and(|t| t >= 60) {
         exit.write(AppExit::Success);
@@ -562,12 +606,14 @@ mod tests {
         assert!(at(POINTS, 390.0, 352.0).is_some());
         assert!(at(GAMES_NOW, 272.0, 360.0).is_some() && at(GAMES_NOW, 308.0, 360.0).is_some());
         assert!(at(Tex::Face(2), 102.0, 382.0).is_some() && at(Tex::Face(1), 498.0, 330.0).is_some());
-        // frame from y 136 to 248, pills at 156 and 196, the hand beside the first
-        assert!(at(FRAME, 160.0, 136.0).is_some() && at(FRAME, 160.0, 232.0).is_some());
+        // three options: frame from y 120 to 272, pills at 140, 180 ("Settings", ours) and 220, the hand beside the first
+        assert!(at(FRAME, 160.0, 120.0).is_some() && at(FRAME, 160.0, 256.0).is_some());
         let rows: Vec<_> = qs.iter().filter(|q| q.tex == ROWS).collect();
-        assert_eq!((rows[0].src[1], rows[0].dst[1], rows[0].alpha), (192.0, 156.0, 128.0));
-        assert_eq!((rows[1].src[1], rows[1].dst[1], rows[1].alpha), (32.0, 196.0, 64.0));
-        assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 164.0, 64.0, 32.0]);
+        assert_eq!((rows[0].src[1], rows[0].dst[1], rows[0].alpha), (192.0, 140.0, 128.0));
+        assert_eq!((rows[1].src[1], rows[1].dst[1], rows[1].alpha), (32.0, 220.0, 64.0));
+        assert_eq!(at(LABEL, 192.0, 180.0).unwrap().src, [0.0, 0.0, 256.0, 32.0]);
+        assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 148.0, 64.0, 32.0]);
+        assert_eq!((pill_y(1, 1), pill_y(3, 0)), (180, 100));
     }
 
     /// Advantage: "A" for the leader, the trailing 40 at half alpha; tiebreak deuce uses the red D.
@@ -592,7 +638,8 @@ mod tests {
         assert_eq!(found, [panel]);
     }
 
-    /// Down moves and wraps, input waits 5 ticks, the hand swings to −16 and back, ✕ on the second option fades out.
+    /// Down moves and wraps, input waits 5 ticks, the hand swings to −16 and back, ✕ on the second option asks for the
+    /// settings, on the third fades out.
     #[test]
     fn input() {
         let mut m = Menu::opened();
@@ -606,7 +653,7 @@ mod tests {
             m.tick(false, true);
         }
         assert_eq!(m.tick(false, true), Some(0)); // 32nd tick held
-        assert_eq!(m.sel, 0);
+        assert_eq!(m.sel, 2);
         let mut h = Hand::default();
         let xs: Vec<f32> = (0..60).map(|_| { h.step(); h.x }).collect();
         // out to −16 by tick 20, held 11 ticks, eased back to 0 at tick 58 and out again
@@ -615,6 +662,10 @@ mod tests {
         m.tick(false, false);
         m.tick(true, false);
         assert_eq!(m.sel, 1);
+        m.confirm = true;
+        assert_eq!(m.tick(false, false), Some(2));
+        assert!(m.open && m.settings && m.quitting.is_none());
+        m.sel = 2;
         m.confirm = true;
         assert_eq!(m.tick(false, false), Some(2));
         assert_eq!(m.quitting, Some(0));
