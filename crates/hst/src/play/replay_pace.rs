@@ -140,9 +140,11 @@ fn a_replay_skips_then_slows_in_frames() {
         app.update();
         let g = app.world().resource::<Game>();
         if !g.instant.replaying {
-            if !frames.is_empty() {
+            // an ace's replay has no skip to pace: wait for a rally's
+            if !frames.is_empty() && app.world().resource::<Pace>().last.len() >= 2 {
                 break;
             }
+            frames.clear();
             continue;
         }
         match frames.last_mut() {

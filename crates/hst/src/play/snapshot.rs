@@ -540,7 +540,7 @@ mod tests {
             r
         };
         let (mut stick, mut held) = ((0x80, 0x80), None);
-        for _ in 0..12000 {
+        for _ in 0..40000 {
             let n = next();
             if n % 30 == 0 {
                 stick = ((next() % 256) as u8, (next() % 256) as u8);
@@ -561,7 +561,8 @@ mod tests {
                 held = Some(b.pos);
             }
             let Some(at) = held else { continue };
-            if g.shots == 0 {
+            // a let's re-serve, or a fault that ended the game (the players placed at the change of ends)
+            if g.shots == 0 || matches!(g.phase, Phase::ChangeEnds(_)) {
                 return;
             }
             assert_eq!(b.pos, at, "the receiver chased a net-touched serve");
