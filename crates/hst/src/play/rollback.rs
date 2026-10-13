@@ -95,6 +95,10 @@ pub struct Rollback {
     /// ggrs' state cells by the frame last saved in each (its ring's slots): a resync's state comes from one and its
     /// re-run saves into them (B154b).
     cells: Vec<Option<(i32, Cell)>>,
+    /// B196: the match tick ggrs' frame 0 is (a session restarted mid-match, `recover.rs`), and the restart's number
+    /// (every datagram carries it, so an older session's are dropped).
+    pub base: usize,
+    pub round: u8,
 }
 
 type Cell = ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option<Replay>)>>;
@@ -141,7 +145,10 @@ impl Rollback {
             .with_num_players(seats.len())?
             .with_input_delay(DELAY)
             .with_max_prediction_window(WINDOW)
-            .with_desync_detection_mode(DesyncDetection::On { interval: super::netplay::HASH_EVERY });
+            .with_desync_detection_mode(DesyncDetection::On { interval: super::netplay::HASH_EVERY })
+            // B196: a silent peer is `recover.rs`'s to deal with (ggrs' own drops it after 2 s)
+            .with_disconnect_timeout(std::time::Duration::from_secs(1 << 20))
+            .with_disconnect_notify_delay(std::time::Duration::from_secs(1 << 20));
         for (h, &s) in seats.iter().enumerate() {
             let peer = &room.seats[s].as_ref().unwrap().peer;
             b = b.add_player(if peer == me { PlayerType::Local } else { PlayerType::Remote(peer.clone()) }, h)?;
@@ -152,7 +159,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1] })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0 })
     }
 
     /// The tick the next run is.
@@ -174,7 +181,10 @@ pub fn heard(w: &mut World, from: String, data: &[u8]) {
     if let Some(t) = rb.trace.heard.replace(now) {
         rb.trace.gap = rb.trace.gap.max((now - t).as_secs_f32() * 1000.0);
     }
-    if let Ok(m) = bincode::deserialize::<Message>(data) {
+    if data.first() != Some(&rb.round) {
+        return;
+    }
+    if let Ok(m) = bincode::deserialize::<Message>(&data[1..]) {
         rb.wires.inbox.lock().unwrap().push((from, m));
     }
 }
@@ -183,7 +193,7 @@ pub fn heard(w: &mut World, from: String, data: &[u8]) {
 pub fn outgoing(w: &World) -> Vec<(String, Vec<u8>)> {
     let Some(rb) = w.get_resource::<Rollback>() else { return Vec::new() };
     let out = std::mem::take(&mut *rb.wires.out.lock().unwrap());
-    out.into_iter().map(|(to, m)| (to, bincode::serialize(&m).unwrap())).collect()
+    out.into_iter().map(|(to, m)| (to, [vec![rb.round], bincode::serialize(&m).unwrap()].concat())).collect()
 }
 
 /// ggrs' upkeep (acks, keep-alives, its events) each frame, also while the match is paused.
@@ -197,11 +207,8 @@ pub fn poll(w: &mut World) {
             // second while it lasts (B163); `gate` spreads the waits out instead
             GgrsEvent::WaitRecommendation { .. } => {}
             GgrsEvent::DesyncDetected { frame, local_checksum, remote_checksum, .. } => {
-                super::netplay::desync(w, (frame as u32, local_checksum as u64, remote_checksum as u64))
-            }
-            GgrsEvent::Disconnected { addr } => {
-                let who: String = addr.chars().take(8).collect();
-                w.resource_mut::<Netplay>().finish(format!("Player {who} stopped answering. The match is over."), true);
+                let t = w.resource::<Rollback>().base as u32 + frame as u32;
+                super::netplay::desync(w, (t, local_checksum as u64, remote_checksum as u64))
             }
             _ => {}
         }
@@ -245,7 +252,7 @@ fn save(w: &mut World, cell: ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option
         let h = snapshot::fnv(&text);
         // progress in the log, as lockstep's (a rolled-back frame logs again, corrected)
         if frame % (every * 60) == 0 {
-            info!("rollback tick {frame}: hash {h:016x}");
+            info!("rollback tick {}: hash {h:016x}", frame as usize + w.get_resource::<Rollback>().map_or(0, |rb| rb.base));
         }
         if let Some(mut rb) = w.get_resource_mut::<Rollback>().filter(|rb| rb.sync.is_some()) {
             match rb.texts.get(&frame) {
@@ -261,8 +268,9 @@ fn save(w: &mut World, cell: ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option
                 }
             }
         }
+        let base = w.get_resource::<Rollback>().map_or(0, |rb| rb.base) as u32;
         if let Some(mut np) = w.get_resource_mut::<Netplay>() {
-            np.state = (frame as u32, text);
+            np.state = (base + frame as u32, text);
         }
         h as u128
     });
@@ -273,16 +281,27 @@ fn save(w: &mut World, cell: ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option
     cell.save(frame, Some(Arc::new((s, queue))), hash);
 }
 
-/// The host after a desync (B154b): the state at the last tick every seat's pads are in for goes out, from ggrs'
-/// cell (the match is put back as it is now).
+/// The host after a desync (B154b): the state at the last tick every seat's pads are in for goes out.
 fn send_state(w: &mut World) {
     if !w.resource::<Netplay>().resync.due {
         return;
     }
+    if let Some((t, data)) = confirmed(w) {
+        super::resync::send(&mut w.resource_mut::<Netplay>(), t, data);
+    }
+}
+
+/// The match before the last tick every seat's pads are in for, from ggrs' cell (the match is put back as it is now),
+/// and that tick; before the first tick, the match as it is.
+pub(super) fn confirmed(w: &mut World) -> Option<(u32, Vec<u8>)> {
     let rb = w.resource::<Rollback>();
-    let f = rb.sess.confirmed_frame();
-    let Some(cell) = rb.cells.iter().flatten().find(|c| c.0 == f).map(|c| c.1.clone()) else { return };
-    let Some(then) = cell.load() else { return };
+    let f = rb.sess.confirmed_frame().max(0);
+    let t = rb.base as u32 + f as u32;
+    if rb.frame == rb.base {
+        return Some((t, snapshot::encode(w)));
+    }
+    let cell = rb.cells.iter().flatten().find(|c| c.0 == f).map(|c| c.1.clone())?;
+    let then = cell.load()?;
     let (now, queue) = (snapshot::save(w), w.get_resource::<Replay>().cloned());
     snapshot::restore(w, &then.0);
     if let Some(q) = &then.1 {
@@ -293,7 +312,15 @@ fn send_state(w: &mut World) {
     if let Some(q) = queue {
         w.insert_resource(q);
     }
-    super::resync::send(&mut w.resource_mut::<Netplay>(), f as u32, data);
+    Some((t, data))
+}
+
+/// B196: a new session for `room` from tick `tick` on (the match already put there), restart number `round`.
+pub(super) fn restart(w: &mut World, room: &Room, me: &str, tick: u32, round: u8) {
+    let step = w.get_resource::<Rollback>().map_or(crate::mode::run_fixed as fn(&mut World), |rb| rb.step);
+    let mut rb = Rollback::new(room, me, step).expect("the room's seats");
+    (rb.base, rb.frame, rb.round) = (tick as usize, tick as usize, round);
+    w.insert_resource(rb);
 }
 
 /// A peer with the host's state before tick F, once every seat's pads before F are in here too (a rollback never goes
@@ -301,7 +328,8 @@ fn send_state(w: &mut World) {
 /// ggrs' cells where they're still its (a later rollback loads the mended state).
 fn take_state(w: &mut World) {
     let rb = w.resource::<Rollback>();
-    let (frame, confirmed) = (rb.frame, rb.sess.confirmed_frame());
+    let (frame, base) = (rb.frame, rb.base);
+    let confirmed = base as i32 + rb.sess.confirmed_frame();
     let mut np = w.resource_mut::<Netplay>();
     let Some((from, data)) = np.resync.pending.take_if(|p| p.0 as i32 <= confirmed) else { return };
     let log = np.lock.log.clone();
@@ -311,8 +339,9 @@ fn take_state(w: &mut World) {
     let mut rb = w.resource_mut::<Rollback>();
     let mut reqs = Vec::new();
     for f in from as usize..frame {
-        let cell = rb.cells.iter().flatten().find(|c| c.0 == f as i32).map_or_else(Cell::default, |c| c.1.clone());
-        reqs.push(GgrsRequest::SaveGameState { cell, frame: f as i32 });
+        let g = (f - base) as i32;
+        let cell = rb.cells.iter().flatten().find(|c| c.0 == g).map_or_else(Cell::default, |c| c.1.clone());
+        reqs.push(GgrsRequest::SaveGameState { cell, frame: g });
         let inputs = rb.seats.iter().map(|&s| (Input(wire(log[f][s])), ggrs::InputStatus::Confirmed)).collect();
         reqs.push(GgrsRequest::AdvanceFrame { inputs });
     }
@@ -340,8 +369,9 @@ pub fn handle(w: &mut World, reqs: Vec<GgrsRequest<Cfg>>, every: i32) {
                     w.insert_resource(q.clone());
                 }
                 let mut rb = w.resource_mut::<Rollback>();
-                rb.reruns += (rb.frame - frame as usize) as u64;
-                rb.frame = frame as usize;
+                let f = rb.base + frame as usize;
+                rb.reruns += (rb.frame - f) as u64;
+                rb.frame = f;
             }
             GgrsRequest::AdvanceFrame { inputs } => {
                 let mut now = [IDLE; 4];
@@ -382,7 +412,8 @@ pub fn gate(w: &mut World) -> bool {
     super::netplay::pump(w);
     poll(w);
     take_state(w);
-    if w.resource::<Netplay>().end.is_some() || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
+    super::recover::restarted(w);
+    if w.resource::<Netplay>().end.is_some() || w.resource::<Netplay>().recover.hold || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
         return false;
     }
     {
@@ -399,7 +430,7 @@ pub fn gate(w: &mut World) -> bool {
     // this machine's seats' pads (each seat's local device in the slot of the same number, `--pads`)
     let (handles, seats, frame) = {
         let rb = w.resource::<Rollback>();
-        (rb.sess.local_player_handles(), rb.seats.clone(), rb.sync.as_ref().map_or(rb.sess.current_frame(), |s| s.current_frame()))
+        (rb.sess.local_player_handles(), rb.seats.clone(), rb.base as i32 + rb.sync.as_ref().map_or(rb.sess.current_frame(), |s| s.current_frame()))
     };
     let mut local: Vec<_> = {
         let mut pads = w.resource_mut::<Pads>();

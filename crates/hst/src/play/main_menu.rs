@@ -1261,7 +1261,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if fresh && menu.screen == Screen::Main {
         online::linked(&mut menu);
     }
-    if !fresh {
+    if !fresh && menu.screen != Screen::Lobby {
         (menu.screen, menu.sel) = (Screen::Main, 0);
     } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);

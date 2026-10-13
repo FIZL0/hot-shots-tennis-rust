@@ -67,6 +67,7 @@ mod menu;
 pub mod netplay;
 mod rollback;
 mod resync;
+mod recover;
 mod npcs;
 mod panel;
 pub(crate) mod menu_art;

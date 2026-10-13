@@ -21,7 +21,7 @@ pub struct Resync {
     /// A peer: the host's state before tick `.0`, waiting for this machine to get there.
     pub(super) pending: Option<(u32, Vec<u8>)>,
     /// A peer: the pieces of the host's state heard so far.
-    pieces: Vec<u8>,
+    pub(super) pieces: Vec<u8>,
     /// The host: a desync was seen, the state goes out at the next tick gate.
     pub(super) due: bool,
     /// The host: a state went out and no peer has taken it yet.

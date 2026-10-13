@@ -10,8 +10,8 @@
 //! seat's, every tick, the same on every machine) with the line-up as `desync-*.json` (beside the disc; in the browser a
 //! download and the console; the ignored test `replays_a_desync` runs one again), says so on screen and plays on
 //! (B154), and the host sends the peers its state to take on (B154b, `resync.rs`). The pause screen opens and closes
-//! on every machine; the post-point press is a pad press, so it travels with the pads. A peer dropping ends the match
-//! for everyone with a message, then it goes back to the menu (no bot takes the seat). The court intro before the
+//! on every machine; the post-point press is a pad press, so it travels with the pads. A peer going silent pauses
+//! everyone until it rejoins, a bot takes its seat or the match ends (B196, `recover.rs`). The court intro before the
 //! match runs its ticks on a lockstep of its own (`Msg::Intro`, `intro_tick`), so a ✕ on any machine skips it on the
 //! same tick everywhere.
 
@@ -77,6 +77,19 @@ impl Lockstep {
         for t in 0..delay {
             *l.slot(t) = [Some(IDLE); 4];
         }
+        l
+    }
+
+    /// B196: the lockstep from tick `tick` on (a restart), on the ticks before it that `log` ran (`last` the one
+    /// before `tick`; a rejoiner's are idle).
+    pub fn from(seats: [bool; 4], mine: Vec<usize>, delay: u32, tick: u32, mut log: Vec<[Pad; 4]>, last: [Pad; 4]) -> Self {
+        let mut l = Lockstep::new(seats, mine, delay);
+        l.pending = (tick..tick + delay).map(|t| (t, [Some(IDLE); 4])).collect();
+        log.resize(tick as usize, [IDLE; 4]);
+        if let Some(p) = log.last_mut() {
+            *p = last;
+        }
+        (l.tick, l.log) = (tick, log);
         l
     }
 
@@ -175,12 +188,15 @@ pub struct Netplay {
     /// The court intro's own lockstep while it runs (`intro.rs` sets it; B42e): each tick's pad says whether that
     /// seat pressed ✕.
     pub(super) intro: Option<Lockstep>,
+    /// A peer gone silent: waiting, a bot taking over, a rejoin (B196).
+    pub recover: super::recover::Recover,
 }
 
 impl Netplay {
     pub fn new(room: Room, me: String) -> Self {
         let taken = |i: usize| room.seats.get(i).is_some_and(|s| s.as_ref().is_some_and(crate::net::Seat::human));
         let mine = (0..room.seats.len()).filter(|&i| room.seats[i].as_ref().is_some_and(|s| s.peer == me)).collect();
+        let rejoin = room.rejoin;
         let mash = std::env::var("HST_NET_MASH").ok().and_then(|v| v.parse::<u64>().ok()).map(|s| s | 1);
         Netplay {
             lock: Lockstep::new(std::array::from_fn(taken), mine, room.delay.max(1)),
@@ -197,6 +213,7 @@ impl Netplay {
             mash,
             intro: None,
             resync: Default::default(),
+            recover: super::recover::Recover::new(rejoin),
         }
     }
 
@@ -271,6 +288,7 @@ pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
 /// A network event into the match.
 pub fn take(w: &mut World, e: Event) {
     let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
+    np.recover.heard_from(&e);
     match e {
         Event::Match(Msg::Pads { tick, seats }) => np.lock.heard(tick, &seats),
         Event::Match(Msg::Intro { tick, seats }) => {
@@ -289,10 +307,13 @@ pub fn take(w: &mut World, e: Event) {
         }
         Event::Datagram(from, data) => super::rollback::heard(w, from, &data),
         Event::Match(m @ (Msg::State { .. } | Msg::Resynced(_))) => super::resync::heard(&mut np, m),
+        Event::Match(m @ (Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Rejoined { .. } | Msg::Lobby(_))) => super::recover::heard(&mut np, m),
         Event::Match(Msg::Bye(why)) | Event::Dropped(why) => {
             if why.starts_with(DESYNC) && np.end.is_none() {
                 let path = save_desync(w, &why);
                 w.resource_mut::<Netplay>().finish(format!("{why}\nInputs saved to {path}"), false);
+            } else if why.contains("The match is over") {
+                np.finish(why, false);
             } else {
                 np.finish(format!("{why} The match is over."), false);
             }
@@ -304,7 +325,9 @@ pub fn take(w: &mut World, e: Event) {
 /// The network's events in, the match's messages (and rollback's datagrams) out.
 pub(super) fn pump(w: &mut World) {
     let Some(net) = w.get_resource::<Net>() else { return };
-    for e in net.poll() {
+    // B196: going back to the lobby: its events are the menu's from now on
+    let lobby = w.get_resource::<Netplay>().is_some_and(|n| n.recover.lobby.is_some());
+    for e in if lobby { Vec::new() } else { net.poll() } {
         take(w, e);
     }
     let out = w.get_resource_mut::<Netplay>().map(|mut n| std::mem::take(&mut n.out)).unwrap_or_default();
@@ -322,8 +345,9 @@ pub(super) fn pump(w: &mut World) {
 pub fn gate(w: &mut World) -> bool {
     pump(w);
     super::resync::lockstep(w);
+    super::recover::restarted(w);
     let Some(np) = w.get_resource::<Netplay>() else { return true };
-    if np.end.is_some() || !np.lock.missing().is_empty() {
+    if np.end.is_some() || np.recover.hold || !np.lock.missing().is_empty() {
         return false;
     }
     let t = np.lock.tick;
@@ -365,6 +389,10 @@ pub(super) fn intro_tick(w: &mut World, skip: bool) -> Option<bool> {
     pump(w);
     let mut np = w.resource_mut::<Netplay>();
     let np = &mut *np;
+    // B196: a restart ended the intro (it skips to its end)
+    if np.intro.is_none() {
+        return Some(true);
+    }
     let l = np.intro.as_mut().filter(|l| l.missing().is_empty())?;
     let local = vec![Pad { buttons: skip as u16, ..IDLE }; l.mine.len()];
     let (now, msg) = l.advance(&local);
@@ -423,6 +451,9 @@ fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
 fn watch(w: &mut World) {
     pump(w);
     super::rollback::poll(w);
+    // a long frame (loading, a hidden tab) isn't everyone else going silent
+    let dt = w.resource::<Time<Real>>().delta_secs().min(0.25);
+    let notice = super::recover::tick(w, dt);
     let remote = w.get_resource::<super::rollback::Rollback>().map(|r| r.remote_seats());
     let dt = w.resource::<Time<Real>>().delta_secs();
     let open = menu::paused(w);
@@ -439,6 +470,7 @@ fn watch(w: &mut World) {
     }
     let text = match &np.end {
         Some(why) => why.clone(),
+        None if !notice.is_empty() => notice,
         None if np.stalled > STALL && !result => {
             let who: Vec<String> = np.intro.as_ref().map(Lockstep::missing).or(remote).unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
             format!("Waiting for {}...", who.join(", "))
@@ -460,6 +492,12 @@ fn watch(w: &mut World) {
         }
     }
     if close {
+        // B196: the connection goes on into the lobby (`main_menu/online.rs` `launch`'s way back)
+        if let Some(room) = w.resource_mut::<Netplay>().recover.lobby.take()
+            && let Some(net) = w.remove_resource::<Net>()
+        {
+            *LOBBY.lock().unwrap() = Some((net, room));
+        }
         w.write_message(AppExit::Success);
     }
 }
@@ -514,6 +552,9 @@ pub fn mode(iso: &str, flags: &[String], back: crate::mode::Mode, net: Net, room
         app.insert_resource(Netplay::new(room, me)).insert_resource(net);
     })
 }
+
+/// B196: the lobby an ended match goes back to, with its connection.
+pub static LOBBY: Mutex<Option<(Net, Room)>> = Mutex::new(None);
 
 /// `hst net … --play`: the match `main` starts instead of the menu (it was waiting for the lobby).
 pub static PENDING: Mutex<Option<(Net, Room, String)>> = Mutex::new(None);
@@ -1081,6 +1122,197 @@ mod tests {
                 rollback::handle(w, reqs, 1);
             }
             assert!(a.world().resource::<Rollback>().reruns > 2000);
+        }
+
+        // ---------------------------------------------------------------- a peer gone silent (B196)
+
+        use super::super::super::recover;
+
+        /// Three peers (host 1P, `h` 2P and 4P, `g` 3P; `two`: host 1P 2P, `g` 3P 4P), rollback, every message 3 rounds (ticks) on its way; a peer
+        /// not in `live` hears and does nothing (killed). `each(round, apps, live)` after every round may kill one or
+        /// add one (a rejoiner).
+        fn peers(two: bool, limit: u32, mut each: impl FnMut(u32, &mut Vec<App>, &mut Vec<bool>)) -> Vec<App> {
+            let mut room = room(0);
+            let names: &[&str] = if two { &["host", "g"] } else { &["host", "h", "g"] };
+            if !two {
+                room.seats[1].as_mut().unwrap().peer = "h".into();
+                room.seats[3].as_mut().unwrap().peer = "h".into();
+            }
+            let mut apps: Vec<App> = names
+                .iter()
+                .map(|&me| {
+                    let mut a = app(&room, me);
+                    a.insert_resource(Rollback::new(&room, me, step as fn(&mut _)).unwrap());
+                    a
+                })
+                .collect();
+            let mut live = vec![true; names.len()];
+            let mut wire: Vec<(String, u32, Event)> = Vec::new();
+            let me = |a: &App| a.world().resource::<Netplay>().me.clone();
+            for round in 0..limit {
+                for (to, at, e) in std::mem::take(&mut wire) {
+                    if at > round {
+                        wire.push((to, at, e));
+                    } else if let Some(i) = (0..apps.len()).find(|&i| live[i] && me(&apps[i]) == to) {
+                        take(apps[i].world_mut(), e);
+                    }
+                }
+                for i in (0..apps.len()).filter(|&i| live[i]) {
+                    let w = apps[i].world_mut();
+                    rollback::gate(w);
+                    recover::tick(w, 1.0 / 60.0);
+                    let from = w.resource::<Netplay>().me.clone();
+                    wire.extend(rollback::outgoing(w).into_iter().map(|(to, d)| (to, round + 3, Event::Datagram(from.clone(), d))));
+                    let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+                    let others: Vec<String> = apps.iter().map(me).filter(|p| *p != from).collect();
+                    for m in out {
+                        wire.extend(others.iter().map(|p| (p.clone(), round + 3, Event::Match(m.clone()))));
+                    }
+                }
+                each(round, &mut apps, &mut live);
+            }
+            apps
+        }
+
+        /// The notice the next frame would show (a frame of no time).
+        fn notice(a: &mut App) -> String {
+            recover::tick(a.world_mut(), 0.0)
+        }
+
+        fn press(a: &mut App, k: KeyCode) {
+            let mut keys = ButtonInput::<KeyCode>::default();
+            keys.press(k);
+            a.insert_resource(keys);
+        }
+
+        /// The peers in `apps` ran the same pads from the restart on, ggrs' checksums agreeing, `ran` ticks or more.
+        fn in_step(apps: &[&App], ran: usize) -> usize {
+            let base = apps[0].world().resource::<Rollback>().base;
+            let logs: Vec<_> = apps.iter().map(|a| a.world().resource::<Netplay>()).collect();
+            let n = logs.iter().map(|np| np.lock.log.len()).min().unwrap() - rollback::WINDOW;
+            assert!(n >= base + ran, "ran {} ticks after the restart at {base}", n - base);
+            for (a, np) in apps.iter().zip(&logs) {
+                assert_eq!(a.world().resource::<Rollback>().base, base);
+                assert_eq!((np.end.as_deref(), np.desynced), (None, false), "{}", np.me);
+                assert!(np.state.0 as usize >= n - 120, "{}: checksums stopped at {}", np.me, np.state.0);
+                assert_eq!(np.lock.log[base..n], logs[0].lock.log[base..n], "{} ran other pads", np.me);
+            }
+            base
+        }
+
+        /// B196: `g` killed mid-rally: everyone waits, nobody answers, the others are asked, the host chooses a bot
+        /// (✕), which plays 3P from the same tick on both machines left, in lockstep.
+        #[test]
+        fn a_bot_takes_a_silent_peers_seat() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (kill, s) = (600, |x: f32| (x * 60.0) as u32);
+            let mut said = Vec::new();
+            let apps = peers(false, kill + s(recover::SILENT + recover::WAIT) + 1200, |round, apps, live| {
+                if round == kill {
+                    live[2] = false;
+                }
+                if round == kill + s(recover::SILENT) + 30 || round == kill + s(recover::SILENT + recover::WAIT) + 30 {
+                    said.push([0, 1].map(|i| notice(&mut apps[i])));
+                }
+                if round == kill + s(recover::SILENT + recover::WAIT) + 60 {
+                    press(&mut apps[0], KeyCode::Enter);
+                }
+            });
+            eprintln!("{said:#?}");
+            assert!(said[0].iter().all(|t| t.starts_with("Waiting for g to come back... 2")), "{:?}", said[0]);
+            assert!(said[1].iter().all(|t| t.starts_with("g didn't come back.")), "{:?}", said[1]);
+            let base = in_step(&[&apps[0], &apps[1]], 600);
+            assert!(base > kill as usize - 30 && base <= kill as usize + rollback::WINDOW, "restarted at {base}");
+            for a in &apps[..2] {
+                assert_eq!(a.world().resource::<Pads>().seats, Some([true, true, false, true]));
+                assert_eq!(a.world().resource::<Netplay>().room.seats[2].as_ref().unwrap().peer, crate::net::CPU);
+            }
+        }
+
+        /// B196, two peers: `g` killed, the host alone chooses a bot, which plays 3P and 4P on.
+        #[test]
+        fn a_bot_takes_the_only_guests_seats() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (kill, s) = (600, |x: f32| (x * 60.0) as u32);
+            let apps = peers(true, kill + s(recover::SILENT + recover::WAIT) + 800, |round, apps, live| {
+                if round == kill {
+                    live[1] = false;
+                }
+                if round == kill + s(recover::SILENT + recover::WAIT) + 60 {
+                    press(&mut apps[0], KeyCode::Enter);
+                }
+            });
+            in_step(&[&apps[0]], 600);
+            assert_eq!(apps[0].world().resource::<Pads>().seats, Some([true, true, false, false]));
+        }
+
+        /// B196: nobody wants a bot (○ on `h`): both machines left go back to the lobby together.
+        #[test]
+        fn a_silent_peer_can_end_the_match() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (kill, s) = (600, |x: f32| (x * 60.0) as u32);
+            let apps = peers(false, kill + s(recover::SILENT + recover::WAIT) + 200, |round, apps, live| {
+                if round == kill {
+                    live[2] = false;
+                }
+                if round == kill + s(recover::SILENT + recover::WAIT) + 60 {
+                    press(&mut apps[1], KeyCode::Backspace);
+                }
+            });
+            // everyone still in goes back to the lobby together, g's seat open again
+            for a in &apps[..2] {
+                let np = a.world().resource::<Netplay>();
+                let end = np.end.clone().unwrap_or_default();
+                assert!(end.starts_with("g didn't come back. Back to the lobby..."), "{end}");
+                let lobby = np.recover.lobby.as_ref().expect("back to the lobby");
+                let peers: Vec<_> = lobby.seats.iter().map(|s| s.as_ref().map(|s| s.peer.as_str())).collect();
+                assert_eq!(peers, [Some("host"), Some("h"), None, Some("h")]);
+                assert!(lobby.ready.is_empty() && !lobby.names.contains_key("g"));
+            }
+        }
+
+        /// B196: `g` killed, then a new process for it joins (the relay gives it `g`'s seat as `g2`): the host restarts
+        /// the match with it in, and all three play on from the same tick in lockstep. And the host killed: the
+        /// guests end the match.
+        #[test]
+        fn a_silent_peer_rejoins_and_a_silent_host_ends_it() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (kill, back) = (600, 900);
+            let mut room = None;
+            let mut base = 0;
+            let apps = peers(false, back + 1300 + 1200, |round, apps, live| {
+                if round == kill {
+                    live[2] = false;
+                    room = Some(apps[0].world().resource::<Netplay>().room.clone());
+                }
+                if round == back {
+                    let mut r = room.clone().unwrap();
+                    r.rejoined("g", "g2", "g");
+                    r.rejoin = true;
+                    let mut a = app(&r, "g2");
+                    a.insert_resource(Rollback::new(&r, "g2", step as fn(&mut _)).unwrap());
+                    apps.push(a);
+                    live.push(true);
+                    take(apps[0].world_mut(), Event::Match(Msg::Rejoined { old: "g".into(), new: "g2".into(), name: "g".into() }));
+                }
+                if round == back + 1300 {
+                    base = in_step(&[&apps[0], &apps[1], &apps[3]], 600);
+                    assert!(base > kill as usize - 30 && base <= kill as usize + rollback::WINDOW, "restarted at {base}");
+                    live[0] = false;
+                }
+            });
+            for a in [&apps[1], &apps[3]] {
+                let end = a.world().resource::<Netplay>().end.clone().unwrap_or_default();
+                assert!(end.starts_with("The host stopped answering. The match is over.\nScore"), "{end}");
+            }
         }
 
         /// What a tick costs (the match tick, the snapshot ggrs keeps, a state hash): sets `rollback::WINDOW`.

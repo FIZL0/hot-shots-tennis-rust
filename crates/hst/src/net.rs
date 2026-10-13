@@ -18,7 +18,8 @@
 //! The lobby protocol (ALPN [`ALPN`]): the joiner opens a stream and sends [`Msg::Hello`] (build, its 1–3 local
 //! players' picks, its player's name); the host answers [`Msg::Room`] (seated) or [`Msg::Refused`], sends `Room` again
 //! on every change (a guest's [`Msg::Prepared`] marks it ready) and [`Msg::Start`] once the host starts with every guest
-//! ready (the open seats then go to the computer, [`CPU`]). Messages are JSON, a u32 length before each.
+//! ready (the open seats then go to the computer, [`CPU`]). Mid-match, a joiner with the same build takes a seat whose
+//! peer went silent ([`Msg::Away`]) and gets `Start` with `rejoin` set (B196, `play/recover.rs`). Messages are JSON, a u32 length before each.
 //!
 //! The app talks to this through [`Net`]: commands in, [`Event`]s out; the network runs on its own tokio thread (in the browser: a task on the page's event loop, relays only).
 //! `hst net host|find|quick|join …` drives the same thing from a terminal (two machines, no menus).
@@ -200,6 +201,9 @@ pub struct Room {
     pub names: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub ready: std::collections::BTreeSet<String>,
+    /// B196: this machine comes back into a match under way (its state follows in `Msg::Restart`).
+    #[serde(default)]
+    pub rejoin: bool,
 }
 
 impl Room {
@@ -242,6 +246,28 @@ impl Room {
         for s in self.seats.iter_mut().filter(|s| s.is_none()) {
             *s = Some(Seat { peer: CPU.into(), pick: Pick::disc(free.next().unwrap_or(0), 0) });
         }
+    }
+
+    /// B196: player `old` is back as peer `new` (named `name`): their seats and name move over.
+    pub fn rejoined(&mut self, old: &str, new: &str, name: &str) {
+        for s in self.seats.iter_mut().flatten().filter(|s| s.peer == old) {
+            s.peer = new.into();
+        }
+        self.names.remove(old);
+        self.names.insert(new.into(), name.into());
+    }
+
+    /// B196: the lobby after the match, for the players still in: the computer's seats and `away`'s open again,
+    /// everyone to say they're ready again.
+    pub fn back_to_lobby(&mut self, away: &[String]) {
+        for s in &mut self.seats {
+            if s.as_ref().is_some_and(|s| s.peer == CPU || away.contains(&s.peer)) {
+                *s = None;
+            }
+        }
+        self.names.retain(|p, _| !away.contains(p));
+        self.ready.clear();
+        (self.rejoin, self.ver) = (false, self.ver + 1);
     }
 
     fn leave(&mut self, peer: &str) {
@@ -361,12 +387,27 @@ pub enum Msg {
     /// browser's data channel takes ~256 KB a message), and a peer having taken it (the tick it's in sync from).
     State { tick: u32, data: Vec<u8>, last: bool },
     Resynced(u32),
+    /// A peer gone silent (B196, `play/recover.rs`): every peer's keep-alive; the host's word on who is away (peer
+    /// names; empty: nobody), its countdown, and whether it asks what to do now; a peer's answer (true: a bot plays
+    /// on, false: the match ends); the match going on from the host's state before `tick` with the line-up `room`
+    /// (a bot in a seat, or a player back), in pieces (`end` closes it), `last` every seat's pads the tick before.
+    Alive(String),
+    Away { who: Vec<String>, left: u32, ask: bool },
+    Choose(bool),
+    Restart { round: u8, tick: u32, room: Room, last: [[u8; 6]; 4], data: Vec<u8>, end: bool },
+    /// The host's network to its match only: player `old` came back as peer `new`.
+    Rejoined { old: String, new: String, name: String },
+    /// The players left chose to end it: everyone still in goes back to the lobby `Room` together (B196).
+    Lobby(Room),
 }
 
 impl Msg {
     /// A match message (relayed to every peer).
     fn in_match(&self) -> bool {
-        matches!(self, Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_))
+        matches!(
+            self,
+            Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_) | Msg::Alive(_) | Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Lobby(_)
+        )
     }
 }
 
@@ -569,8 +610,18 @@ impl Net {
         let _ = self.cmd.send(c);
     }
 
+    /// What came in, up to a `Start` (what follows it is the match's: B196, a rejoin's state right behind it).
     pub fn poll(&self) -> Vec<Event> {
-        self.events.lock().unwrap().try_iter().collect()
+        let rx = self.events.lock().unwrap();
+        let mut v = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            let start = matches!(e, Event::Start(..));
+            v.push(e);
+            if start {
+                break;
+            }
+        }
+        v
     }
 }
 
@@ -1051,7 +1102,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             if let Some(ep) = &cx.ep {
                 ep.set_user_data_for_address_lookup(None);
             }
-            return relay(cx, joined, gtx, guests, cmds).await;
+            // B196: back from the match to this lobby with the players still in
+            let Some((r, j, g)) = relay(cx, room, joined, gtx.clone(), guests, cmds).await else { return };
+            (room, joined, guests, starting, go) = (r, j, g, None, false);
+            ready.clear();
+            dirty = true;
+            continue;
         }
         tokio::select! {
             Some(inc) = accept(&cx.ep) => {
@@ -1196,35 +1252,82 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
 
 /// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
 /// a guest dropping ends the match for everyone.
-async fn relay(cx: &Ctx, joined: Vec<(String, Link, Conn)>, _gtx: amp::UnboundedSender<Guest>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) {
-    let to = |peer: &str| joined.iter().find(|(p, ..)| p == peer).map(|(_, _, c)| c);
+/// The host in the match: passes the match's messages and datagrams on. B196: a guest's connection going away says
+/// nothing (the match sees the silence, `play/recover.rs`); while the match says someone is away, a joiner (by the
+/// same name first) takes their seats and gets the line-up to rejoin with.
+/// The match; back to the lobby (B196): the lobby's room, the guests still in, their messages.
+type Back = (Room, Vec<(String, Link, Conn)>, amp::UnboundedReceiver<Guest>);
+
+async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, gtx: amp::UnboundedSender<Guest>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> Option<Back> {
+    let mut away: Vec<String> = Vec::new();
     loop {
+        let to = |peer: &str| joined.iter().find(|(p, ..)| p == peer).map(|(_, _, c)| c.clone());
         tokio::select! {
+            Some(inc) = accept(&cx.ep) => {
+                let gtx = gtx.clone();
+                n0_future::task::spawn(async move {
+                    let Ok(conn) = async { inc.accept()?.await.map_err(Into::into) }.await.map_err(|e: Box<dyn std::error::Error + Send + Sync>| e) else { return };
+                    let peer = conn.remote_id().to_string();
+                    let Ok((tx, rx)) = conn.accept_bi().await else { return };
+                    let (conn, link, inbox) = quic(conn, tx, rx);
+                    guest(gtx, peer, conn, link, inbox).await;
+                });
+            }
             Some(g) = guests.recv() => match g {
-                Guest::Said(peer, m) if m.in_match() => {
+                // only the host says who's away and restarts the match
+                Guest::Said(peer, m) if m.in_match() && !matches!(m, Msg::Away { .. } | Msg::Restart { .. }) => {
                     joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&m));
                     cx.say(Event::Match(m));
                 }
-                Guest::Gone(peer) => {
-                    let why = format!("Player {} left.", short(&peer));
-                    joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&Msg::Bye(why.clone())));
-                    cx.say(Event::Dropped(why));
+                Guest::Gone(peer) => joined.retain(|(p, ..)| *p != peer),
+                Guest::In { peer, name, build, link, conn, .. } => {
+                    // ponytail: the rejoiner plays the seat's old picks (a mod pick it lacks shows its stand-in)
+                    let back = away.iter().find(|p| room.names.get(*p).is_some_and(|n| *n == name)).or(away.first()).cloned();
+                    match back {
+                        Some(old) if build == BUILD => {
+                            bevy::log::info!("{name} ({}) rejoins for {}", short(&peer), short(&old));
+                            away.retain(|p| *p != old);
+                            if let Some(i) = joined.iter().position(|(p, ..)| *p == old) {
+                                joined.remove(i).2.close(b"rejoined");
+                            }
+                            let mut r = room.clone();
+                            r.rejoined(&old, &peer, &name);
+                            r.rejoin = true;
+                            link.send(&Msg::Start(r));
+                            joined.push((peer.clone(), link, conn));
+                            cx.say(Event::Match(Msg::Rejoined { old, new: peer, name }));
+                        }
+                        _ => refuse(&link, conn, "the match has started".into()),
+                    }
                 }
-                // a join while the match runs: no seat
-                Guest::In { link, conn, .. } => refuse(&link, conn, "the match has started".into()),
                 Guest::Datagram(from, to_, data) if to_ == "host" => cx.say(Event::Datagram(from, data)),
                 Guest::Datagram(from, to_, data) => {
                     if let Some(c) = to(&to_) {
-                        send_datagram(c, &from, &data);
+                        send_datagram(&c, &from, &data);
                     }
                 }
                 Guest::Said(..) | Guest::Pack(..) => {}
             },
             c = cmds.recv() => match c {
-                Some(Cmd::Send(m)) => broadcast(&joined, &m),
+                Some(Cmd::Send(Msg::Lobby(r))) => {
+                    for (_, _, conn) in joined.iter().filter(|(p, ..)| away.contains(p)) {
+                        conn.close(b"away");
+                    }
+                    joined.retain(|(p, ..)| !away.contains(p));
+                    broadcast(&joined, &Msg::Lobby(r.clone()));
+                    return Some((r, joined, guests));
+                }
+                Some(Cmd::Send(m)) => {
+                    match &m {
+                        Msg::Away { who, .. } => away.clone_from(who),
+                        Msg::Restart { room: r, .. } => room.clone_from(r),
+                        _ => {}
+                    }
+                    broadcast(&joined, &m)
+                }
                 Some(Cmd::Datagram(peer, data)) => {
                     if let Some(c) = to(&peer) {
-                        send_datagram(c, "host", &data);
+                        send_datagram(&c, "host", &data);
                     }
                 }
                 Some(Cmd::Leave) | None => {
@@ -1233,7 +1336,7 @@ async fn relay(cx: &Ctx, joined: Vec<(String, Link, Conn)>, _gtx: amp::Unbounded
                     for (_, _, conn) in &joined {
                         conn.close(b"host left");
                     }
-                    return;
+                    return None;
                 }
                 Some(_) => {}
             },
@@ -1441,8 +1544,13 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
                         }
                     });
                 }
+                Ok(Msg::Lobby(r)) if playing => {
+                    playing = false;
+                    cx.say(Event::Match(Msg::Lobby(r)));
+                }
                 Ok(Msg::Start(r)) => {
-                    playing = true;
+                    // a rejoiner (B196) gets Start without a Room first
+                    (playing, seated) = (true, true);
                     cx.say(Event::Start(r, me.clone()));
                 }
                 Ok(Msg::Ping(t)) => link.send(&Msg::Pong(t)),
@@ -2018,6 +2126,17 @@ mod tests {
             let cpus: Vec<usize> = r.seats.iter().flatten().filter(|s| !s.human()).map(|s| s.pick.char).collect();
             assert_eq!(cpus, [0, 2], "the open seats to the computer, characters nobody picked");
             assert!(matches!(next(&hev, |e| matches!(e, Event::Start(..))).await, Event::Start(_, h) if h == "host"));
+            // B196: back to the lobby together (the computer's seats open again), ready again, and a new start
+            let mut back = r.clone();
+            back.back_to_lobby(&[]);
+            hcmd.send(Cmd::Send(Msg::Lobby(back))).unwrap();
+            let Event::Match(Msg::Lobby(l)) = next(&gev, |e| matches!(e, Event::Match(Msg::Lobby(_)))).await else { unreachable!() };
+            assert_eq!(l.open(), 2);
+            gcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.contains(&guest))).await;
+            hcmd.send(Cmd::Start).unwrap();
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            assert_eq!(r.open(), 0);
         });
     }
 }
