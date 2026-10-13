@@ -570,12 +570,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.frame(4, 8);
             let room = m.net.room.as_ref();
             let title = room.map_or("Lobby".to_string(), |r| format!("{} - {}", r.name, if r.doubles { "Doubles" } else { "Singles" }));
-            d.text(&title, 40.0, 76.0, 26.0, [128.0, 110.0, 40.0]);
+            d.outlined(|d| d.text(&title, 40.0, 76.0, 26.0, [128.0, 110.0, 40.0]));
             const DIM: [f32; 3] = [100.0; 3];
             const GOLD: [f32; 3] = [128.0, 110.0, 40.0];
             let items = m.items();
             if let Some(r) = room {
-                d.text(&court_name(text, r.court), 40.0, 106.0, 20.0, WHITE);
+                d.outlined(|d| d.text(&court_name(text, r.court), 40.0, 106.0, 20.0, WHITE));
                 // a seat a row: who (1P..), their character, their name, ready; the columns centred on the pill's middle
                 let (x0, w) = (60.0, 340.0);
                 for (i, s) in r.seats.iter().enumerate() {
@@ -628,7 +628,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
                 // a mod this machine doesn't have: its looks, or its donor recoloured
-                d.text(&format!("{} is a mod you don't have.", w.name), 410.0, 120.0, 18.0, WHITE);
+                d.outlined(|d| d.text(&format!("{} is a mod you don't have.", w.name), 410.0, 120.0, 18.0, WHITE));
                 // the gold pill is the cursor (a hand would sit on the seats)
                 for (i, r) in ASK_ROWS.iter().enumerate() {
                     let y = 156.0 + 44.0 * i as f32;
@@ -643,13 +643,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
                 d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [430.0, 100.0, 170.0, 170.0], WHITE, 128.0);
                 if m.net.short.is_empty() {
-                    d.centred("Getting a short code...", 515.0, 280.0, 18.0, WHITE);
+                    d.outlined(|d| d.centred("Getting a short code...", 515.0, 280.0, 18.0, WHITE));
                 } else {
                     // the short code, big enough to read out (the QR is its link)
-                    d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD);
+                    d.outlined(|d| d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD));
                 }
             } else if m.net.hosting {
-                d.centred("Getting the code...", 515.0, 176.0, 18.0, WHITE);
+                d.outlined(|d| d.centred("Getting the code...", 515.0, 176.0, 18.0, WHITE));
             }
             let info = match items.get(m.sel) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),

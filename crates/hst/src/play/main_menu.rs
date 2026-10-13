@@ -1155,6 +1155,9 @@ const TITLES: [(&str, [f32; 3]); 5] = [
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];
+/// B152: the titles' outline (the original's ring reads ~35..60 of 255 on a PCSX2 shot, the darkest blurred by the
+/// upscale).
+const RING: [f32; 3] = [20.0; 3];
 /// Gold words: play styles, names, "Ready to go!".
 const GOLD: [f32; 3] = [128.0, 112.0, 30.0];
 /// The Singles and Doubles bars' fills.
@@ -1206,7 +1209,7 @@ impl Draw<'_> {
         let start = self.out.len();
         self.text(words, 42.0, 7.0, size, [0.0; 3]);
         self.out[start..].iter_mut().for_each(|q| q.alpha = 40.0);
-        self.text(words, 40.0, 5.0, size, WHITE);
+        self.outlined(|d| d.text(words, 40.0, 5.0, size, WHITE));
         self.anchor = Anchor::Centre;
     }
 
@@ -1282,6 +1285,26 @@ impl Draw<'_> {
             q.dst[0] = x0 + (q.dst[0] - x0) * k;
             q.dst[2] *= k;
         }
+    }
+
+    /// B152: the words `f` draws, over a dark ring as the original's titles (confirm screen's court and umpire, a
+    /// PCSX2 shot): ~1.5 px round the glyphs, near black. Each glyph is stamped in [`RING`] eight ways round, then
+    /// the fill on top; the glyphs are vector-set at `menu_art::K`×, so the ring stays sharp at any resolution.
+    fn outlined(&mut self, f: impl FnOnce(&mut Self)) {
+        let start = self.out.len();
+        f(self);
+        let fill: Vec<Quad> = self.out.drain(start..).collect();
+        for i in 0..8 {
+            let a = i as f32 * std::f32::consts::FRAC_PI_4;
+            for q in fill.iter().filter(|q| q.tex == Tex::Font) {
+                let mut q = *q;
+                q.dst[0] += 1.5 * a.cos();
+                q.dst[1] += 1.5 * a.sin();
+                q.rgb = RING;
+                self.out.push(q);
+            }
+        }
+        self.out.extend(fill);
     }
 
     /// A column of rows, the chosen one bright with the hand beside it.
@@ -1700,15 +1723,17 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             (Who::Mod(i), costume) => (text.mods[i].0, (m.mods[i].ai_row, costume)),
             (Who::Disc(c), costume) => (text.style[c], (c, costume)),
         };
-        d.label(["All-round", "Baseline", "Net Player", "Big Server"][style], x + 56.0, 188.0, 20.0, 96.0, GOLD);
+        d.outlined(|d| d.label(["All-round", "Baseline", "Net Player", "Big Server"][style], x + 56.0, 188.0, 20.0, 96.0, GOLD));
         if m.seats[p].is_none() {
-            d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
-            d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
+            d.outlined(|d| {
+                d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
+                d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
+            });
             // the computer's Tennis Lv: its AIParam row's rank (`Confirmation_04`'s titles, nine to a column)
             let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(ai.0 as u8, ai.1 as u8) as u32, ai.0 as u8, m.doubles).row;
             rank_pill(d, text.ranks.get(row).copied().unwrap_or(0) as usize, COLOURS[p], x + 1.0, 238.0);
         } else {
-            d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]);
+            d.outlined(|d| d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]));
         }
     }
     flame::draw(d, m);
@@ -1716,24 +1741,24 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     // "Umpire", the umpire's round face (the "?" tile for a random one) and name at the top right
     d.anchor = Anchor::Sides;
     let u = m.umpire as usize;
-    d.label("Umpire", 443.0, 12.0, 28.0, 78.0, WHITE);
+    d.outlined(|d| d.label("Umpire", 443.0, 12.0, 28.0, 78.0, WHITE));
     let (face, name) = match u {
         UMPIRES => ([96.0, 360.0, 92.0, 68.0], "Random".to_string()),
         _ => ([63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0], text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
     };
     d.q(if u == UMPIRES { C02 } else { C00 }, face, [486.0, 4.0, 46.0, 44.0], WHITE, 128.0);
-    d.text(&name, 538.0, 16.0, 22.0, WHITE);
+    d.outlined(|d| d.text(&name, 538.0, 16.0, 22.0, WHITE));
     d.anchor = Anchor::Centre;
     // court name, its surface and the surface's ball meters (bounce, speed); none for a random court
     let gold = [128.0, 110.0, 40.0];
     if m.court == COURTS {
-        d.text("Random Court", 30.0, 258.0, 24.0, gold);
+        d.outlined(|d| d.text("Random Court", 30.0, 258.0, 24.0, gold));
     } else {
         let court = format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court));
-        d.text(&court, 30.0, 258.0, 24.0, gold);
+        d.outlined(|d| d.text(&court, 30.0, 258.0, 24.0, gold));
         let s = SURFACE[m.court];
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
-        d.label(["Grass Court", "Clay Court", "Hard Court"][s], 462.0, 256.0, 24.0, 124.0, tint);
+        d.outlined(|d| d.label(["Grass Court", "Clay Court", "Hard Court"][s], 462.0, 256.0, 24.0, 124.0, tint));
         for (g, (icon, n)) in [([2.0, 490.0, 45.0, 22.0], METERS[s].0), ([49.0, 492.0, 46.0, 17.0], METERS[s].1)].into_iter().enumerate() {
             let x = 344.0 + 140.0 * g as f32;
             d.q(C01, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
