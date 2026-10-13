@@ -80,6 +80,34 @@ mod tests {
         assert_eq!((released, rows[80].1, rows[80].3, served), (Some(45), Some((16, 8)), 0.5, Some(96)));
     }
 
+    /// As `context/b29/run3/D_early.bin`: ✕ (strong toss), ✕ again 50 ticks later, 12 frames from contact. The
+    /// serve's contact IK steps Carol 0.0018936 along x over the countdown, a twelfth a tick from the press's tick
+    /// (weight 0), bit for bit as the original's samples.
+    #[test]
+    fn early_serve_steps() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = to_serve();
+        // the save's Carol is right-handed (the disc's is a lefty)
+        app.world_mut().resource_mut::<Game>().players[0].hand = 1.0;
+        let mut xs = vec![];
+        for t in 0..63 {
+            let b = if t < 5 || (50..55).contains(&t) { 0x2000 } else { 0 };
+            app.world_mut().resource_mut::<Replay>().0.push_back(pad(b));
+            app.world_mut().run_schedule(FixedUpdate);
+            let g = app.world().resource::<Game>();
+            if t >= 50 {
+                xs.push((g.serving.swing.map(|sw| sw.left), g.players[0].served.is_some(), g.players[0].pos[0], g.players[0].pos[2]));
+            }
+        }
+        // the original's x per sample from the press (D_early @6504..6516); z stays −12.25
+        let want: [f32; 13] = [3.0, 3.0001576, 3.0003154, 3.0004733, 3.000631, 3.000789, 3.0009468, 3.0011046, 3.0012622, 3.00142, 3.0015779, 3.0017357, 3.0018935];
+        assert_eq!((xs[0].0, xs[12].1), (Some(12), true), "press at 50, contact 12 ticks on: {xs:?}");
+        assert_eq!(xs.iter().map(|r| r.2).collect::<Vec<_>>(), want, "{xs:?}");
+        assert!(xs.iter().all(|r| r.3 == -12.25));
+    }
+
     /// A swing press with no contact left before the bounce (as `context/b29/run3/E2_late.bin`: press 119 ticks
     /// after the weak toss's): the original calls it a fault when the toss lands, then sets up the second serve.
     #[test]

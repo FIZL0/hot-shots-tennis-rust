@@ -2,7 +2,7 @@
 //! the aim inside the service box (and how a mistimed strong toss throws it off), and the timing balloon shown
 //! over a hitter's head (strokes too).
 
-use crate::pose::{Clip, M4, Skeleton, node_world};
+use crate::pose::{Clip, M4, Path, Skeleton, node_world};
 use crate::swing::PathPoint;
 use crate::shot::{self, Bounds, Table};
 
@@ -392,6 +392,199 @@ pub fn balloon_alpha(age: u32) -> Option<f32> {
         return None;
     };
     Some(a as f32 / 128.0)
+}
+
+/// The serve's (and smash's) arm table entry, built at player load from an overhead (smash 0x1f, serve 0x25) or the
+/// underhand serve motion (0x26) posed at frame 8.
+#[derive(Clone, Debug)]
+pub struct ServeArm {
+    /// Racket, right hand, right forearm and right upper arm locals (the upper arm's translation zeroed).
+    pub racket: M4,
+    pub hand: M4,
+    pub forearm: M4,
+    pub upper: M4,
+    /// Model matrix of the upper arm's parent (translation zeroed).
+    pub chain: M4,
+    /// The upper arm turned so the racket points along the solve's axis (translation zeroed).
+    pub aimed: M4,
+    /// The shoulder (the upper arm's model translation).
+    pub shoulder: [f32; 4],
+    /// Shoulder to racket point.
+    pub radius: f32,
+    /// The swing's root path (`*_serve_t_dummy`, `*_s_n_dummy` for the smash) height at frame 8: the jump is scaled
+    /// by it (0 without one: no jump scale).
+    pub lift: f32,
+}
+
+/// The entry for `clip`: the racket point turned about x into the y–z plane's −y (overhead) or +z (underhand)
+/// from the shoulder, then the arm turned 135° about z (overhead) or 90° about y (underhand).
+pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -> ServeArm {
+    use crate::pose::{ARM_NODES, axis_angle, transpose3, vmul};
+    use crate::ps2::{div, madd, msub, mul, sqrt, sub};
+    use crate::vu0::transform;
+    let idx = ARM_NODES.map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
+    let local = clip.locals(sk, clip.wrap(8.0, false));
+    let [racket, hand, forearm, mut upper, _] = idx.map(|n| local[n]);
+    let mut chain: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut p = sk.parent[idx[3]];
+    while let Some(i) = p {
+        chain = vmul(&chain, &local[i]);
+        p = sk.parent[i];
+    }
+    let tip = [racket, hand, forearm, upper, chain].iter().fold(crate::pose::TIP, |v, m| transform(m, v));
+    let m = vmul(&upper, &chain);
+    let sh = m[3];
+    let d: [f32; 4] = std::array::from_fn(|k| sub(tip[k], sh[k]));
+    let radius = sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2]));
+    let inv = div(1.0, sqrt(madd(mul(d[2], d[2]), d[1], d[1])));
+    let (ny, nz) = (mul(d[1], inv), mul(d[2], inv));
+    let (dot, cross) = if under {
+        (madd(madd(mul(ny, 0.0), 0.0, 0.0), nz, 1.0), msub(mul(ny, 1.0), nz, 0.0))
+    } else {
+        (madd(madd(mul(ny, -1.0), 0.0, 0.0), nz, 0.0), msub(mul(ny, 0.0), nz, -1.0))
+    };
+    let mut angle = crate::libm::acosf(dot.clamp(-1.0, 1.0));
+    if cross < 0.0 {
+        angle = mul(angle, -1.0);
+    }
+    let twist = if under { axis_angle(f32::from_bits(0x3fc9_0fdb), [0.0, 1.0, 0.0]) } else { axis_angle(f32::from_bits(0x4016_cbe4), [0.0, 0.0, 1.0]) };
+    let mut aimed = vmul(&vmul(&vmul(&m, &axis_angle(angle, [1.0, 0.0, 0.0])), &twist), &transpose3(&chain));
+    let zero_t = [0.0, 0.0, 0.0, 1.0];
+    (aimed[3], upper[3], chain[3]) = (zero_t, zero_t, zero_t);
+    ServeArm { racket, hand, forearm, upper, chain, aimed, shoulder: sh, radius, lift: jump.map_or(0.0, |p| p.at(8.0)[1]) }
+}
+
+/// The overhead serve's (or smash's) contact solve at the swing press: the arm turns about x to face the contact
+/// point; the body steps forward or back what the arm can't reach (z beyond radius/√2 or behind the shoulder) and
+/// jumps what the arm can't reach up; the forearm and upper arm bend in turn (up to 50 passes, CCD), then the hand,
+/// with the body stepping sideways half the remaining x once. Returns the solve and the jump's scale on the swing's
+/// root height. `contact`, `pos` are world points, `scale` the player's two size factors.
+pub fn overhead_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> (crate::pose::ArmSolve, f32) {
+    use crate::pose::{axis_cos, transpose3};
+    use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
+    use crate::vu0::transform;
+    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
+    let s01 = mul(scale[0], scale[1]);
+    let sh = a.shoulder;
+    let mut v = [sub(mul(d[0], s01), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
+    let mut step = [0.0f32; 4];
+    let lim = div(a.radius, f32::from_bits(0x3fb5_04f3));
+    if v[2] < 0.0 {
+        step[2] = v[2];
+    } else if !(v[2] <= lim) {
+        step[2] = sub(v[2], lim);
+    }
+    v[2] = sub(v[2], step[2]);
+    let ax = if v[0].abs() <= lim { sqrt(msub(mul(a.radius, a.radius), v[0], v[0])) } else { v[0].abs() };
+    let up = add(v[1], ax);
+    let jump = if up <= 0.0 { -up } else { 0.0 };
+    v[1] = add(v[1], jump);
+    let jump_scale = div(-jump, a.lift);
+    // face the point: turn about x taking −y onto it
+    let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[1], v[1])));
+    let (ny, nz) = (mul(v[1], inv), mul(v[2], inv));
+    let dot = madd(madd(mul(ny, -1.0), 0.0, 0.0), nz, 0.0);
+    let turn = if msub(mul(ny, 0.0), nz, -1.0) < 0.0 { -1.0 } else { 1.0 };
+    let r0 = axis_cos(dot.clamp(-1.0, 1.0), turn, [1.0, 0.0, 0.0]);
+    let v = transform(&r0, v);
+    let solve = arm_ccd(a, v, transpose3(&r0), [0, 1], false);
+    let mut solve = solve;
+    solve.step[2] = mul(step[2], scale[0]);
+    solve.step[0] = mul(solve.step[0], s01);
+    (solve, jump_scale)
+}
+
+/// The underhand serve's solve: the same facing turn about x (onto +z), bends about y in the x–z plane and one hand
+/// pass; the body doesn't move (zero step).
+pub fn underhand_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> crate::pose::ArmSolve {
+    use crate::pose::{axis_cos, transpose3};
+    use crate::ps2::{div, madd, msub, mul, sqrt, sub};
+    use crate::vu0::transform;
+    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
+    let sh = a.shoulder;
+    let v = [sub(mul(d[0], mul(scale[0], scale[1])), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
+    let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[1], v[1])));
+    let (ny, nz) = (mul(v[1], inv), mul(v[2], inv));
+    let dot = madd(madd(mul(ny, 0.0), 0.0, 0.0), nz, 1.0);
+    let turn = if msub(mul(ny, 1.0), nz, 0.0) < 0.0 { -1.0 } else { 1.0 };
+    let r0 = axis_cos(dot.clamp(-1.0, 1.0), turn, [1.0, 0.0, 0.0]);
+    let mut s = arm_ccd(a, transform(&r0, v), transpose3(&r0), [0, 2], true);
+    s.step = [0.0; 4];
+    s
+}
+
+/// Unit (a − b) in the plane of components `c`.
+fn unit_in(a: [f32; 4], b: [f32; 4], c: [usize; 2]) -> [f32; 2] {
+    use crate::ps2::{div, madd, mul, sqrt, sub};
+    let (x, y) = (sub(a[c[0]], b[c[0]]), sub(a[c[1]], b[c[1]]));
+    let inv = div(1.0, sqrt(madd(mul(y, y), x, x)));
+    [mul(x, inv), mul(y, inv)]
+}
+
+/// The bend shared by both serve solves, toward `v` (already in the facing frame `t0` undoes) in the plane of
+/// components `c` (x–y, turning about z; x–z, turning about y): forearm and upper arm in turn up to 50 passes
+/// (each within 30°), then the hand (only if within 30°) — twice with the sideways step in between (overhead), or
+/// once (underhand). Leaves the step's raw x (unscaled) in `step[0]`.
+fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) -> crate::pose::ArmSolve {
+    use crate::pose::{TIP, axis_cos, keep_row3, transpose3, vmul};
+    use crate::ps2::{add, div, madd, msub, mul, sub};
+    use crate::vu0::transform;
+    let axis = if under { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    // the plane's dot and the turn's sign (the cross product's out-of-plane component)
+    let dot_of = |u: [f32; 2], w: [f32; 2]| madd(madd(mul(u[1], w[1]), u[0], w[0]), 0.0, 0.0);
+    let cross_of = |u: [f32; 2], w: [f32; 2]| if under { msub(add(0.0, mul(u[1], w[0])), u[0], w[1]) } else { msub(add(0.0, mul(u[0], w[1])), u[1], w[0]) };
+    let (chain, mut hand, mut forearm, mut aimed) = (a.chain, a.hand, a.forearm, a.aimed);
+    let at_hand = if under { transform(&hand, transform(&a.racket, TIP)) } else { transform(&vmul(&a.racket, &hand), TIP) };
+    let tip = |forearm: &M4, aimed: &M4| transform(&chain, transform(aimed, transform(forearm, at_hand)));
+    let dist = |v: [f32; 4], p: [f32; 4]| {
+        let (dx, dy) = (sub(v[c[0]], p[c[0]]), sub(v[c[1]], p[c[1]]));
+        madd(mul(dy, dy), dx, dx)
+    };
+    let mut p = tip(&forearm, &aimed);
+    let mut elbow = true;
+    for _ in 0..50 {
+        if dist(v, p) <= f32::from_bits(0x3c23_d70a) {
+            break;
+        }
+        let (m, frame) = if elbow { (vmul(&vmul(&forearm, &aimed), &chain), vmul(&aimed, &chain)) } else { (vmul(&aimed, &chain), chain) };
+        let (u, w) = (unit_in(p, m[3], c), unit_in(v, m[3], c));
+        let dot = dot_of(u, w);
+        if !(dot < f32::from_bits(0x3f7f_ff58)) {
+            break;
+        }
+        let cos = if dot < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { dot };
+        let s = if dot < 0.0 || cross_of(u, w) < 0.0 { -1.0 } else { 1.0 };
+        let bent = vmul(&vmul(&m, &axis_cos(cos, s, axis)), &transpose3(&frame));
+        let j = if elbow { &mut forearm } else { &mut aimed };
+        *j = keep_row3(bent, j);
+        p = tip(&forearm, &aimed);
+        elbow = !elbow;
+    }
+    let frame = vmul(&vmul(&forearm, &aimed), &chain);
+    let mut step = [0.0f32; 4];
+    for k in 0..2 {
+        let m = vmul(&hand, &frame);
+        let (u, w) = (unit_in(p, m[3], c), unit_in(v, m[3], c));
+        let dot = dot_of(u, w);
+        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+            let cr = if under { msub(mul(u[1], w[0]), u[0], w[1]) } else { msub(mul(u[0], w[1]), u[1], w[0]) };
+            let bent = vmul(&vmul(&m, &axis_cos(dot.clamp(-1.0, 1.0), if cr < 0.0 { -1.0 } else { 1.0 }, axis)), &transpose3(&frame));
+            hand = keep_row3(bent, &hand);
+        }
+        if k == 1 || under {
+            break;
+        }
+        p = transform(&frame, transform(&hand, transform(&a.racket, TIP)));
+        if v[0].abs() <= p[0].abs() {
+            break;
+        }
+        step[0] = div(sub(v[0], p[0]), 2.0);
+        v[0] = sub(v[0], step[0]);
+    }
+    // back out of the facing turn
+    aimed = vmul(&vmul(&vmul(&aimed, &chain), &t0), &transpose3(&chain));
+    let q = |pose: &M4, m: &M4| crate::quat::from_matrix(&vmul(&transpose3(pose), m));
+    crate::pose::ArmSolve { step, quats: [q(&a.hand, &hand), q(&a.forearm, &forearm), q(&a.upper, &aimed), [0.0, 0.0, 0.0, 1.0]] }
 }
 
 #[cfg(test)]
