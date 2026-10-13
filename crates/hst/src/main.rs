@@ -315,7 +315,7 @@ fn start(argv: Vec<String>) {
         app.add_systems(Startup, load);
     }
     app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds))
-        .add_systems(PostUpdate, (fixed_eye, backdrops).chain().before(bevy::transform::TransformSystems::Propagate)).run();
+        .add_systems(PostUpdate, (fixed_eye, backdrops, hide_inside).chain().before(bevy::transform::TransformSystems::Propagate)).run();
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
@@ -594,6 +594,11 @@ fn load(
             .with_scale(Vec3::splat(s));
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let e = spawn(&mut commands, parts, t);
+            // B185: the Grand Palais end houses: the match camera behind your baseline sits inside one
+            if stem.starts_with("w-house") {
+                let b = parts.iter().filter_map(|(m, _)| bevy::camera::primitives::MeshAabb::compute_aabb(meshes.get(m)?)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), a| (lo.min(a.min().into()), hi.max(a.max().into())));
+                commands.entity(e).insert(HideInside { lo: b.0, hi: b.1, at: t.compute_affine().inverse() });
+            }
             if play::net_hide::picked(p.category, p.pos) {
                 commands.entity(e).insert(play::net_hide::HideNearCamera);
             }
@@ -1077,6 +1082,27 @@ fn clouds(
 struct Backdrop {
     yaw: f32,
     lift: f32,
+}
+
+/// A model not drawn while the eye is inside its box (model space `lo..hi`, `at` = game space → model space).
+/// From inside a Grand Palais end house (B185) its walls are all back faces, but the clock on its end façade pokes
+/// through the wall, so its casing's back half drew a ∧ in mid-court; the original shows only the court there (its
+/// GS output has no prim nearer than the floor at that spot).
+/// ponytail: by eye, not the original's rule (not found: its VU1 clip pass accepts those triangles); only the houses.
+#[derive(Component)]
+struct HideInside {
+    lo: Vec3,
+    hi: Vec3,
+    at: bevy::math::Affine3A,
+}
+
+fn hide_inside(camera: Query<&Transform, With<Orbit>>, mut models: Query<(&HideInside, &mut Visibility)>) {
+    let Ok(camera) = camera.single() else { return };
+    let eye = camera.translation * Vec3::new(1.0, -1.0, -1.0);
+    for (h, mut v) in &mut models {
+        let e = h.at.transform_point3(eye);
+        v.set_if_neq(if e.cmpge(h.lo).all() && e.cmple(h.hi).all() { Visibility::Hidden } else { Visibility::Inherited });
+    }
 }
 
 /// The backdrops' blended-draw sort offset (`GsMaterial::order`): before the hole's `-1e6`, so before everything.
