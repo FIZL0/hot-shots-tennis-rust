@@ -246,36 +246,32 @@ pub fn swing_weight(left: u32) -> f32 {
     musl::powf(musl::powf(t, musl::powf(1.0 - t, 2.0)), 2.0)
 }
 
-/// The change-ends move: the view the phase started from swung toward this tick's `to` by `w`, both taken
-/// apart as an orbit about `pivot` (heading and pitch of the look, the pivot's angles as seen from the eye in the
-/// look's own heading, its distance, the field of view) and the parts blended linearly, so the move swings round
-/// the pivot rather than sliding through it (fits both recorded glides of the original to 0.1 m).
+/// The change-ends move: the view the phase started from swung toward this tick's `to` by `w`, as the game's
+/// camera does it: both views taken apart as orbit parameters in a reference frame (`to`'s rotation at `pivot`):
+/// the look's pitch and heading as differences from the frame's (the short way round), the pivot's angles as
+/// seen from the eye in the look's own axes, its distance and the field of view; the parts blended linearly and
+/// the view rebuilt the way a scripted shot builds its orbit (`cutaway::Shot::build`).
 pub fn swing(from: &View, to: &View, w: f32, pivot: V3) -> View {
+    use crate::cutaway::{M4, diff, mul, pitch, rot_x, rot_y};
+    let v4 = |v: V3| [v[0], v[1], v[2], 0.0];
+    let frame: M4 = [v4(to.rot[0]), v4(to.rot[1]), v4(to.rot[2]), [pivot[0], pivot[1], pivot[2], 1.0]];
+    let yaw = |f: [f32; 4]| musl::atan2f(f[0], f[2]);
+    // ponytail: the game also takes the look's roll apart and blends it; both views are upright (roll 0)
     let parts = |v: &View| {
-        let f = v.rot[2];
-        let h = musl::atan2f(f[0], f[2]);
-        let (s, c) = musl::sincosf(-h);
-        let o = sub(pivot, v.eye);
-        let o = [c * o[0] + s * o[2], o[1], -s * o[0] + c * o[2]];
-        let d = dot(o, o).sqrt();
-        [h, musl::asinf(f[1]), musl::atan2f(o[0], o[2]), musl::asinf(o[1] / d), d, v.fov]
+        let d = sub(pivot, v.eye);
+        let l = v4(std::array::from_fn(|i| dot(d, v.rot[i])));
+        let (f, r) = (v4(v.rot[2]), frame[2]);
+        let (lp, ly) = (pitch(l), yaw(l));
+        [diff(pitch(f), pitch(r)), diff(yaw(f), yaw(r)), musl::atanf(musl::tanf(lp) / musl::cosf(ly)), ly, dot(d, d).sqrt(), v.fov]
     };
     let (a, b) = (parts(from), parts(to));
-    // the game takes the look's heading as a difference from the end view's, the shortest way round (of d,
-    // d ± 2π the smallest), and the pivot's angles as seen from the eye (ahead of it, near 0, never across ±π),
-    // so the eye doesn't swing the long way round the court (out through the indoor court's walls)
-    let short = |d: f32| [d, d + std::f32::consts::TAU, d - std::f32::consts::TAU].into_iter().fold(d, |m, x| if x.abs() < m.abs() { x } else { m });
-    let [h, p, ye, pe, d, fov]: [f32; 6] = std::array::from_fn(|i| {
-        let d = if i == 0 { short(b[i] - a[i]) } else { b[i] - a[i] };
-        a[i] + d * w
-    });
-    let dir = |yaw: f32, pitch: f32| {
-        let ((sy, cy), (sp, cp)) = (musl::sincosf(yaw), musl::sincosf(pitch));
-        [cp * sy, sp, cp * cy]
-    };
-    let f = dir(h, p);
-    let r = norm(cross([0.0, 1.0, 0.0], f));
-    View { rot: [r, cross(f, r), f], eye: sub(pivot, scale(dir(h + ye, pe), d)), fov }
+    let [p, h, ep, ey, d, fov]: [f32; 6] = std::array::from_fn(|i| (b[i] - a[i]) * w + a[i] + 0.0);
+    let cam = mul(&mul(&frame, &rot_y(h)), &rot_x(p));
+    let f = cam[2];
+    let cam = mul(&rot_y(yaw(f)), &rot_x(pitch(f)));
+    let o = mul(&mul(&cam, &rot_y(ey)), &rot_x(musl::atanf(musl::tanf(ep) * musl::cosf(ey))));
+    let r = |i: usize| [cam[i][0], cam[i][1], cam[i][2]];
+    View { rot: [r(0), r(1), r(2)], eye: std::array::from_fn(|i| pivot[i] - o[2][i] * d), fov }
 }
 
 fn add(a: V3, b: V3) -> V3 {

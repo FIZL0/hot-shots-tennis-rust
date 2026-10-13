@@ -195,14 +195,14 @@ impl Channel {
 }
 
 /// Row-vector matrix product `b · a` (the game's `dst = b × a`).
-fn mul(a: &M4, b: &M4) -> M4 {
+pub(crate) fn mul(a: &M4, b: &M4) -> M4 {
     std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| b[r][k] * a[k][c]).sum()))
 }
-fn rot_y(t: f32) -> M4 {
+pub(crate) fn rot_y(t: f32) -> M4 {
     let (s, c) = musl::sincosf(t);
     [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
-fn rot_x(t: f32) -> M4 {
+pub(crate) fn rot_x(t: f32) -> M4 {
     let (s, c) = musl::sincosf(t);
     [[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, -s, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
@@ -224,12 +224,12 @@ fn normalize(v: [f32; 4]) -> [f32; 4] {
 }
 
 /// Vertical angle of `v` above the horizon (Y down).
-fn pitch(v: [f32; 4]) -> f32 {
+pub(crate) fn pitch(v: [f32; 4]) -> f32 {
     musl::atan2f(-v[1], (v[0] * v[0] + v[2] * v[2]).sqrt())
 }
 
 /// Wrapped difference a − b.
-fn diff(a: f32, b: f32) -> f32 {
+pub(crate) fn diff(a: f32, b: f32) -> f32 {
     use std::f32::consts::TAU;
     let d = (a + std::f32::consts::PI) - (b + std::f32::consts::PI);
     let (p, m) = (d + TAU, d - TAU);
