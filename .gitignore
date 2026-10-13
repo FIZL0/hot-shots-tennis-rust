@@ -29,3 +29,6 @@ research/tools/wasmtime-*/
 mods-store.json
 hf-token.txt
 /mods-upload
+
+# extracted disc archives must never land at the root (B168 committed COURT/07)
+/COURT/
