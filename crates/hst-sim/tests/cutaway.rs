@@ -34,6 +34,8 @@ fn cutaway_s05() {
         let number = s[CAM + 0x114];
         let new_run = k == 0 || vsync(s) != vsync(frames[k - 1]) + 1 || number != frames[k - 1][CAM + 0x114];
         let table = |i: u8| mat(s, TAB + i as usize * 0x40);
+        let blank = hst_sim::cutaway::Frames { corner: table(6), shown: [[table(29); 4]; 2], head: table(35), spot: table(19)[3] };
+        assert_eq!(blank.get(0), table(0), "frame 0 is the port's court centre");
         if new_run {
             // the recording starts a frame or two into the shot: catch up on the yaw channel
             let mut sh = Shot::new(&shots, number, s[CAM + 0x50] == 0xff);
@@ -180,4 +182,100 @@ fn director_s05() {
     }
     eprintln!("{} cut-aways, {posed} with the pose held", runs.len() - 1);
     assert!(runs.len() > 10 && posed > 8);
+}
+
+/// The director's prediction against `cutaway2_s05.bin`: each cut-away's shown and other player posed from the
+/// disc (their reaction at 117 frames, 378 on a game-ending point, clamped to its length; `gu_set` and the team
+/// reactions moved along their root path from where they began, `cutaway::reaction_spot`) give the recorded
+/// subject frames 29/45/61/77 (+1): the game-ending point's `gu_set` included, whose head once came out with w = 2
+/// and turned the shot away from the winner.
+#[test]
+fn prediction_s05() {
+    use hst_data::{ani, mdl, xb::Archive};
+    use hst_sim::cutaway;
+    use hst_sim::pose::{Clip, Path, Skeleton, node_world};
+    const X: usize = SAMPLE;
+    const PL: usize = X + 0xd8;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Ok(mut iso)) = (std::fs::read(format!("{dir}/cutaway2_s05.bin")), Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"))) else {
+        return eprintln!("cutaway2_s05.bin or ISO absent, skipped");
+    };
+    let i32_ = |s: &[u8], o: usize| i32::from_le_bytes(s[o..o + 4].try_into().unwrap());
+    let v4 = |s: &[u8], o: usize| [0, 4, 8, 12].map(|d| f(s, o + d));
+    let samples: Vec<&[u8]> = data.chunks_exact(PL + 4 * 0x170).collect();
+    let cg_data = iso.read("PCDATA/PCCG0.XB").unwrap();
+    let cg = Archive::parse(&cg_data).unwrap();
+    let team = ["co01_f", "co02_f", "co03", "co04", "co05"];
+    let cg_anim = |name: String| cg.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)).map(|e| ani::parse(&cg.read(e).unwrap()).unwrap());
+    // per character: every costume's skeleton, and the reaction anims and root paths by motion number
+    let mut chars = std::collections::HashMap::new();
+    let (mut checked, mut game_ends) = (0, 0);
+    for k in 0..samples.len() {
+        let s = samples[k];
+        if k > 0 && i32_(s, 0) == i32_(samples[k - 1], 0) + 1 && s[CAM + 0x114] == samples[k - 1][CAM + 0x114] {
+            continue;
+        }
+        let game_end = i32_(s, X + 0x78) > 0;
+        game_ends += game_end as usize;
+        let t = if game_end { 378.0 } else { 117.0 };
+        for (n, o) in [0x1a0, 0x1a4].into_iter().enumerate() {
+            let i = i32_(s, TAB + 0x1800 + o) as usize;
+            let pl = PL + 0x170 * i;
+            let (c, m) = (i32_(s, pl + 0x124), i32_(s, pl + 0x110) as usize);
+            if !(0x2c..0x35).contains(&m) {
+                continue;
+            }
+            let (skeletons, anims): &(Vec<Skeleton>, std::collections::HashMap<usize, (ani::Anim, Option<Path>)>) = chars.entry(c).or_insert_with(|| {
+                let sks = (0..10)
+                    .filter_map(|costume| {
+                        let d = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")).ok()?;
+                        let a = Archive::parse(&d).unwrap();
+                        let e = a.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl"))?;
+                        let m = mdl::parse(&a.read(e).unwrap()).unwrap();
+                        Some(Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() })
+                    })
+                    .collect();
+                let d = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+                let arc = Archive::parse(&d).unwrap();
+                let get = |m: usize| {
+                    let stem = ani::motion_name(m, c as usize).unwrap().to_ascii_lowercase();
+                    arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).map(|e| ani::parse(&arc.read(e).unwrap()).unwrap())
+                };
+                let mut anims = std::collections::HashMap::new();
+                for m in 0x2c..0x30 {
+                    let path = (m == 0x2e).then(|| get(0x35).and_then(|a| Path::new(&a))).flatten();
+                    anims.insert(m, (get(m).unwrap(), path));
+                }
+                for (j, stem) in team.iter().enumerate() {
+                    let path = cg_anim(format!("mtgrl/re_pc00_{stem}_dummy.ani2")).and_then(|a| Path::new(&a));
+                    anims.insert(0x30 + j, (cg_anim(format!("mtgrl/re_pc00_{stem}.ani2")).unwrap(), path));
+                }
+                (sks, anims)
+            });
+            let (anim, path) = &anims[&m];
+            let rows = [v4(s, pl + 0x90), v4(s, pl + 0xa0), v4(s, pl + 0xb0)];
+            let base = v4(s, pl + 0xe0);
+            // the costume isn't recorded: the one whose skeleton fits best
+            let best = skeletons
+                .iter()
+                .map(|sk| {
+                    let clip = Clip::new(sk, anim);
+                    let len = anim.end_tick() as f32 / anim.ticks_per_frame as f32;
+                    let pos = match path {
+                        Some(p) => cutaway::reaction_spot(p.at(f32::min(t, len)), m, c, rows, base),
+                        None => [base[0], base[1], base[2], 1.0],
+                    };
+                    let player = [rows[0], rows[1], rows[2], pos];
+                    let locals = clip.locals(sk, f32::min(t, clip.length));
+                    let bone = |name: &str| node_world(sk, &locals, sk.names.iter().position(|x| x == name).unwrap(), &player);
+                    let fr = cutaway::subject_frames(&bone("Bip01Head"), &bone("Bip01Spine2"));
+                    [29, 45, 61, 77].into_iter().enumerate().flat_map(|(q, e)| (0..16).map(move |x| (q, e, x))).map(|(q, e, x)| (fr[q][x / 4][x % 4] - mat(s, TAB + (e + n) * 0x40)[x / 4][x % 4]).abs()).fold(0.0, f32::max)
+                })
+                .fold(f32::MAX, f32::min);
+            assert!(best < 1e-4, "cut-away at sample {k} (game end {game_end}) player {i} motion {m:#x}: frames off by {best}");
+            checked += 1;
+        }
+    }
+    eprintln!("{checked} predicted subjects match, {game_ends} game-ending cut-aways");
+    assert!(checked > 15 && game_ends > 0);
 }

@@ -79,7 +79,7 @@ fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M
         Some(path) if r.motion == 0x2e || r.motion >= 0x30 => {
             let [fx, _, fz, _] = p.body.face.dir;
             let rows = [[p.hand * fz, 0.0, -(p.hand * fx), 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0]];
-            hst_sim::motion::reaction_root(path.at(t.min(len)), r.motion >= 0x30, g.chars[i], rows, r.base, r.base)
+            cutaway::reaction_spot(path.at(t.min(len)), r.motion, g.chars[i], rows, r.base)
         }
         _ => [p.pos[0], p.pos[1], p.pos[2], 1.0],
     };

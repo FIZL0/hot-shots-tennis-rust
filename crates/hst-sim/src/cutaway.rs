@@ -733,9 +733,20 @@ impl Frames {
             29 | 30 | 45 | 46 | 61 | 62 | 77 | 78 => self.shown[(i as usize - 29) % 2][(i as usize - 29) / 16],
             35 => self.head,
             19 => [IDENTITY[0], IDENTITY[1], IDENTITY[2], self.spot],
+            // the table's first frame has a zero last row (w = 0), so a shot channel offset by it stays a direction
+            0 => [IDENTITY[0], IDENTITY[1], IDENTITY[2], [0.0; 4]],
             _ => IDENTITY,
         }
     }
+}
+
+/// Where a post-point reaction that carries the player (`gu_set` 0x2e, the team reactions 0x30..) leaves them:
+/// its root path point `p` turned by the player's `rows` from where it began (`base`), as
+/// [`crate::motion::reaction_root`], as a position (w = 1: the root's spot also adds up the path point's w, and a
+/// shot aimed at a head with w = 2 looks away from the player).
+pub fn reaction_spot(p: [f32; 4], motion: usize, character: i32, rows: [[f32; 4]; 3], base: [f32; 4]) -> [f32; 4] {
+    let [x, y, z, _] = crate::motion::reaction_root(p, motion >= 0x30, character, rows, base, base);
+    [x, y, z, 1.0]
 }
 
 /// On the court corner nearest `spot` (the shown player's ground spot) yet more than 5 m from it, looking at the
