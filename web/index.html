@@ -237,12 +237,6 @@ async function start() {
       mod_status(`Couldn't save ${name} in this browser's storage: ${e}`);
     }
   };
-  // M17 Upload's files, as downloads
-  window.hstDownload = (name, bytes) => {
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([bytes])), download: name });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-  };
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go

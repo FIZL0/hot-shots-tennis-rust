@@ -320,10 +320,3 @@ pub fn mod_save(id: &str, name: &str) {
         let _ = f.call2(&JsValue::NULL, &id.into(), &name.into());
     }
 }
-
-/// M17: `bytes` handed to the player as a download named `name` (Upload's files).
-pub fn download(name: &str, bytes: &[u8]) {
-    if let Some(f) = page_fn("hstDownload") {
-        let _ = f.call2(&JsValue::NULL, &name.into(), &js_sys::Uint8Array::from(bytes));
-    }
-}

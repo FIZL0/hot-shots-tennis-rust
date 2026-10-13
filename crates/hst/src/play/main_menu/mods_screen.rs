@@ -2,9 +2,11 @@
 //! desktop: the system's, `modstore::pick`), which is checked whole and kept in `mods/<id>/` (OPFS in the browser,
 //! beside the game on desktop; `modfs::install`); ✕ twice on an installed mod removes it.
 //! Browse mods lists the mod store (`modstore.rs`: Verified = merged on the store's `main`, Installed / Update by the
-//! zip's sha256) with the hovered mod's preview; ✕ downloads, checks and installs one. Upload my mod shows the rule,
-//! then packages an installed mod and opens the store's upload page. The select's roster is built when the game
-//! starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
+//! zip's sha256); ✕ downloads, checks and installs one. Upload my mod signs in with a Hugging Face write token (the
+//! token page opens, the player copies one, the next press pastes it) and then, after the rule and a second press,
+//! commits an installed mod to the store as a pull request (`modstore::publish`). Every page is a list on the left and
+//! the hovered mod on the right, as the select's cards: its picture, △ card and details. The select's roster is
+//! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
 //! inside a real tap).
 
@@ -17,21 +19,19 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use super::super::widescreen;
-use super::{Draw, Effect, GOLD, Menu, Press, Screen, Tex, WHITE};
+use super::{CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, Screen, Tex, WHITE, attribute_card};
 use crate::modstore::{self, Entry, Event};
 use crate::mods::Mod;
 
 /// The mods folder: `mods/` beside the disc pack, as the select's roster reads it (`main_menu.rs setup`).
 pub(crate) const ROOT: &str = "mods";
-/// Rows drawn at once (the rest scroll), and where.
+/// Rows drawn at once (the rest scroll), and where: the left half, Browse's tags beside them.
 const SHOWN: usize = 7;
-const X: f32 = 170.0;
+const X: f32 = 70.0;
 const Y: f32 = 74.0;
-const W: f32 = 300.0;
-/// Browse's narrower rows: its tags beside them, the hovered mod's preview right of those.
-const BX: f32 = 140.0;
-const BW: f32 = 250.0;
-const SHOT: [f32; 4] = [492.0, 80.0, 128.0, 160.0];
+const W: f32 = 180.0;
+/// The hovered mod's panel on the right half (its picture, △ card, details).
+const PANEL: [f32; 4] = [326.0, 60.0, 300.0, 336.0];
 const PITCH: f32 = 44.0;
 const H: f32 = 38.0;
 /// The rows above the installed mods on the main page.
@@ -63,6 +63,14 @@ pub(super) struct View {
     status: String,
     /// The first row drawn.
     top: usize,
+    /// The select's play style and △ grades by mod id, and the disc's path (where the select's pictures are cached).
+    stats: HashMap<String, (usize, [u8; 5])>,
+    iso: String,
+    /// The signed-in Hugging Face account; a press asked for the token on the clipboard.
+    account: Option<String>,
+    paste: bool,
+    /// The hovered mod's picture is in (`Shelf::shown`).
+    shot: bool,
 }
 
 impl View {
@@ -77,12 +85,21 @@ impl View {
     }
 
     /// Installed: Add mod, Browse mods, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
-    /// Back. Upload: the mods, Back.
+    /// Back. Upload: the account, the mods, Back.
     fn rows(&self) -> usize {
         match self.page {
             Page::Installed => TOP + self.list.len() + 2,
             Page::Browse => self.entries().len() + 2,
-            Page::Upload => self.list.len() + 1,
+            Page::Upload => self.list.len() + 2,
+        }
+    }
+
+    /// The installed mod on row `sel`, if it's one.
+    fn local(&self, sel: usize) -> Option<&Mod> {
+        match self.page {
+            Page::Installed => self.list.get(sel.checked_sub(TOP)?),
+            Page::Upload => self.list.get(sel.checked_sub(1)?),
+            Page::Browse => None,
         }
     }
 
@@ -93,10 +110,6 @@ impl View {
             Some(Some(sha)) if *sha != e.meta.sha256 => Some("Update"),
             Some(_) => Some("Installed"),
         }
-    }
-
-    fn geom(&self) -> (f32, f32) {
-        if self.page == Page::Browse { (BX, BW) } else { (X, W) }
     }
 
     /// The browse entry under the cursor.
@@ -130,6 +143,9 @@ impl Menu {
             Page::Upload => RULE.into(),
             _ => String::new(),
         };
+        if p == Page::Upload {
+            self.add.account = modstore::account().map(|a| a.0);
+        }
         if p == Page::Browse && self.add.store.is_none() && !self.add.busy {
             self.add.busy = true;
             self.add.status = "Reading the mod store...".into();
@@ -182,17 +198,31 @@ impl Menu {
                     self.mods_page(Page::Installed, 2);
                     out.push(Sound(1));
                 } else if k.ok && self.add.busy {
-                    self.add.status = "Wait for the last upload to be packed.".into();
+                    self.add.status = "Wait for the last one to finish.".into();
+                } else if k.ok && s == 0 {
+                    self.account_step(out);
+                } else if k.ok && self.add.account.is_none() {
+                    self.add.status = "Sign in first: the top row.".into();
+                    out.push(Sound(1));
                 } else if k.ok && self.add.armed == Some(s) {
-                    let m = self.add.list[s].clone();
-                    self.add.busy = true;
+                    let m = self.add.list[s - 1].clone();
                     self.add.armed = None;
-                    self.add.status = format!("Checking and packing {}...", m.name);
-                    modstore::upload(&m);
-                    out.push(Sound(2));
+                    match modstore::account() {
+                        Some((_, token)) => {
+                            self.add.busy = true;
+                            self.add.status = format!("Checking, packing and uploading {}...", m.name);
+                            let card = super::previews::card(&self.add.iso, &m);
+                            modstore::publish(&m, self.add.stats.get(&m.id).copied(), card, token);
+                            out.push(Sound(2));
+                        }
+                        None => {
+                            self.add.account = None;
+                            self.add.status = "Signed out: sign in again on the top row.".into();
+                        }
+                    }
                 } else if k.ok {
                     self.add.armed = Some(s);
-                    self.add.status = format!("{RULE} Press again to pack {}.", self.add.list[s].name);
+                    self.add.status = format!("{RULE} Press again to upload {}.", self.add.list[s - 1].name);
                     out.push(Sound(0));
                 }
             }
@@ -200,6 +230,35 @@ impl Menu {
         let n = self.add.rows();
         self.sel = self.sel.min(n - 1);
         self.add.top = self.add.top.min(self.sel).max((self.sel + 1).saturating_sub(SHOWN)).min(n.saturating_sub(SHOWN));
+    }
+
+    /// The account row: signed out, the first press opens the token page and the second pastes the token; signed in,
+    /// two presses sign out.
+    fn account_step(&mut self, out: &mut Vec<Effect>) {
+        let v = &mut self.add;
+        let again = v.armed == Some(0);
+        v.armed = if again { None } else { Some(0) };
+        v.status = match (&v.account, again) {
+            (Some(name), false) => format!("Signed in as {name}. Press again to sign out."),
+            (Some(_), true) => {
+                modstore::sign_out();
+                v.account = None;
+                "Signed out: the token is forgotten.".into()
+            }
+            (None, false) => {
+                modstore::open(modstore::TOKENS);
+                if cfg!(target_arch = "wasm32") {
+                    "On the page that opened, make a token (Write), copy it, paste it here (Ctrl+V), then press again.".into()
+                } else {
+                    "On the page that opened, make a token (Write) and copy it, then press again to paste it.".into()
+                }
+            }
+            (None, true) => {
+                v.paste = true;
+                "Checking the token...".into()
+            }
+        };
+        out.push(Effect::Sound(2));
     }
 
     fn installed_step(&mut self, k: Press, s: usize, n: usize, out: &mut Vec<Effect>) {
@@ -258,44 +317,60 @@ impl Menu {
 }
 
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
+    let shot = m.add.shot;
     let v = &m.add;
     d.frame(5, 6);
-    let (x, w) = v.geom();
     let label = |r: usize| -> String {
         match v.page {
             Page::Installed => match r {
                 0 => "Add mod".into(),
                 1 => "Browse mods".into(),
                 2 => "Upload my mod".into(),
-                r if r < TOP + v.list.len() => short(&v.list[r - TOP].name, 20),
+                r if r < TOP + v.list.len() => short(&v.list[r - TOP].name, 14),
                 r if r == TOP + v.list.len() => "Reload".into(),
                 _ => "Back".into(),
             },
             Page::Browse => match v.entries().get(r) {
-                Some(e) => short(&e.meta.name, 16),
+                Some(e) => short(&e.meta.name, 14),
                 None if r == v.entries().len() => "Refresh".into(),
                 None => "Back".into(),
             },
-            Page::Upload => v.list.get(r).map_or("Back".into(), |m| short(&m.name, 20)),
+            Page::Upload => match r {
+                0 if v.account.is_some() => "Signed in".into(),
+                0 => "Sign in".into(),
+                r => v.list.get(r - 1).map_or("Back".into(), |m| short(&m.name, 14)),
+            },
         }
     };
     let end = (v.top + SHOWN).min(v.rows());
     let labels: Vec<String> = (v.top..end).map(label).collect();
-    d.rows_at(&labels, m.sel - v.top, x, Y, w, hand_x, PITCH);
+    d.rows_at(&labels, m.sel - v.top, X, Y, W, hand_x, PITCH);
     if v.page == Page::Browse {
         for r in v.top..end {
             let Some(e) = v.entries().get(r) else { continue };
             let y = Y + PITCH * (r - v.top) as f32;
             if e.verified {
-                d.outlined(|d| d.text("Verified", x + w + 6.0, y + 2.0, 16.0, GOLD));
+                d.outlined(|d| d.text("Verified", X + W + 6.0, y + 2.0, 15.0, GOLD));
             }
             if let Some(t) = v.state(e) {
-                d.outlined(|d| d.text(t, x + w + 6.0, y + 20.0, 16.0, WHITE));
+                d.outlined(|d| d.text(t, X + W + 6.0, y + 20.0, 15.0, WHITE));
             }
         }
-        if v.hovered(m.sel).is_some() {
-            d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], SHOT, WHITE, 128.0);
-        }
+    }
+    if let Some(e) = v.hovered(m.sel) {
+        let mt = &e.meta;
+        let mut lines = details(&mt.source, &mt.author, mt.hand.map(f32::from), mt.costumes.map(|c| c as usize), mt.like.map(usize::from));
+        lines.push((format!("Version {}, {}", if mt.version.is_empty() { "1" } else { &mt.version }, mb(mt.size)), WHITE));
+        lines.push(match (e.verified, v.state(e)) {
+            (true, Some(t)) => (format!("Verified, {t}"), GOLD),
+            (true, None) => ("Verified".into(), GOLD),
+            (false, t) => (format!("Not reviewed yet{}", t.map_or(String::new(), |t| format!(", {t}"))), [100.0; 3]),
+        });
+        panel(d, &mt.name, mt.style.map(usize::from).zip(mt.grades), &lines, shot);
+    } else if let Some(md) = v.local(m.sel) {
+        let mut lines = details(&md.source, "", Some(md.hand), Some(md.costumes.len()), Some(md.donor));
+        lines.push((format!("Folder {}", md.id), [100.0; 3]));
+        panel(d, &md.name, v.stats.get(&md.id).copied(), &lines, shot);
     }
     let info = if !v.status.is_empty() {
         v.status.clone()
@@ -313,24 +388,65 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ => "Back to the main menu.".into(),
             },
             Page::Browse => match v.entries().get(m.sel) {
-                Some(e) => {
-                    let by = if e.meta.author.is_empty() { String::new() } else { format!(", by {}", e.meta.author) };
-                    let from = if e.meta.source.is_empty() { String::new() } else { format!(" from {}", e.meta.source) };
-                    let what = match v.state(e) {
-                        Some("Installed") => "installed",
-                        Some(_) => "press to update",
-                        _ => "press to install",
-                    };
-                    format!("{}{from}{by}, {}{}: {what}.", e.meta.name, mb(e.meta.size), if e.verified { ", Verified" } else { "" })
-                }
+                Some(e) => match v.state(e) {
+                    Some("Installed") => format!("{} is installed.", e.meta.name),
+                    Some(_) => format!("Press to update {}.", e.meta.name),
+                    _ => format!("Press to install {}.", e.meta.name),
+                },
                 None if m.sel == v.entries().len() => "Read the store's list again.".into(),
                 None if v.store.as_ref().is_some_and(|s| s.is_empty()) => "Nobody has shared a mod yet.".into(),
                 None => "Back to your mods.".into(),
             },
-            Page::Upload => RULE.into(),
+            Page::Upload => match (m.sel, &v.account) {
+                (0, Some(name)) => format!("Signed in to Hugging Face as {name}."),
+                (0, None) => "Sign in to Hugging Face with a token, once: the game then uploads by itself.".into(),
+                _ => RULE.into(),
+            },
         }
     };
     d.info(&info);
+}
+
+/// A mod's detail lines: where it's from, who made it, its hand, costumes and the disc character it plays like.
+fn details(source: &str, author: &str, hand: Option<f32>, costumes: Option<usize>, like: Option<usize>) -> Vec<(String, [f32; 3])> {
+    let mut l = Vec::new();
+    if !source.is_empty() {
+        l.push((format!("From {source}"), WHITE));
+    }
+    if !author.is_empty() {
+        l.push((format!("By {author}"), WHITE));
+    }
+    match (hand, costumes) {
+        (Some(h), Some(c)) => l.push((format!("{}-handed, {c} costume{}", if h < 0.0 { "Left" } else { "Right" }, if c == 1 { "" } else { "s" }), WHITE)),
+        (Some(h), None) => l.push((format!("{}-handed", if h < 0.0 { "Left" } else { "Right" }), WHITE)),
+        _ => {}
+    }
+    if let Some(name) = like.and_then(|c| CHAR_NAMES.get(c)) {
+        l.push((format!("Plays like {name}"), WHITE));
+    }
+    l
+}
+
+/// The hovered mod on the right half, as the select's card: its picture (`Tex::Shelf`) and △ card side by side, its
+/// name, then `lines`.
+fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(String, [f32; 3])], shot: bool) {
+    let [x, y, w, h] = PANEL;
+    d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CARD_FILL[2])], 128.0);
+    let pic = [x + 8.0, y + 8.0, 128.0, 160.0];
+    d.q(Tex::Solid, [0.0; 4], pic, [10.0; 3], 100.0);
+    if shot {
+        d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], pic, WHITE, 128.0);
+    } else {
+        d.centred("No picture", pic[0] + 64.0, pic[1] + 70.0, 16.0, [100.0; 3]);
+    }
+    match stats {
+        Some((style, grades)) => attribute_card(d, 2, style, &grades, x + w - 152.0, y + 4.0),
+        None => d.centred("No stats", x + w - 80.0, y + 80.0, 16.0, [100.0; 3]),
+    }
+    d.outlined(|d| d.label(name, x + w / 2.0, y + 176.0, 26.0, w - 16.0, GOLD));
+    for (i, (s, rgb)) in lines.iter().enumerate().take(6) {
+        d.label(s, x + w / 2.0, y + 210.0 + 20.0 * i as f32, 17.0, w - 16.0, *rgb);
+    }
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
@@ -342,7 +458,20 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.page = Page::Browse;
         v.store = Some(
             v.list.iter().take(9).enumerate().map(|(i, md)| {
-                let meta = modstore::Meta { id: md.id.clone(), name: md.name.clone(), source: md.source.clone(), author: ["FIZL0", "someone", ""][i % 3].into(), size: (i as u64 + 1) * 7 << 20, sha256: format!("{:064}", i % 2), ..Default::default() };
+                let meta = modstore::Meta {
+                    id: md.id.clone(),
+                    name: md.name.clone(),
+                    source: md.source.clone(),
+                    author: ["FIZL0", "someone", ""][i % 3].into(),
+                    size: (i as u64 + 1) * 7 << 20,
+                    sha256: format!("{:064}", i % 2),
+                    style: (i % 3 != 2).then_some((i % 4) as u8),
+                    grades: (i % 3 != 2).then_some([5, 4, 3, 2, 1].map(|g: u8| 1 + (g + i as u8) % 5)),
+                    hand: Some(if md.hand < 0.0 { -1 } else { 1 }),
+                    costumes: Some(md.costumes.len() as u32),
+                    like: Some(md.donor as u8),
+                    ..Default::default()
+                };
                 Entry { meta, rev: if i % 3 == 0 { "main".into() } else { format!("refs/pr/{i}") }, verified: i % 3 == 0 }
             }).collect(),
         );
@@ -350,14 +479,16 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         m.sel = 1;
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
-        v.armed = Some(0);
-        v.status = format!("{RULE} Press again to pack {}.", v.list.first().map_or("", |x| &x.name));
+        v.account = Some("FIZL0".into());
+        v.armed = Some(1);
+        v.status = format!("{RULE} Press again to upload {}.", v.list.first().map_or("", |x| &x.name));
+        m.sel = 1;
     }
 }
 
 /// The row under `p` (640×448), as `layout` draws them.
 fn row_at(v: &View, p: Vec2) -> Option<usize> {
-    let (x, w) = v.geom();
+    let (x, w) = (X, W);
     let k = ((p.y - Y) / PITCH).floor();
     let r = v.top + k as usize;
     (p.x >= x - 60.0 && p.x < x + w && k >= 0.0 && (k as usize) < SHOWN && r < v.rows() && p.y - Y - k * PITCH < H).then_some(r)
@@ -403,11 +534,14 @@ pub(super) struct Shelf {
 /// The list read on coming to the screen; the page's file input follows the Add mod row; an import's, a store
 /// listing's, a download's or an upload's outcome comes back as the status; the hovered store mod's preview is
 /// fetched once.
+#[allow(clippy::too_many_arguments)]
 fn page(
     mut menu: ResMut<Menu>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut shelf: ResMut<Shelf>,
     mut images: ResMut<Assets<Image>>,
+    (art, args): (Option<Res<super::Art>>, Option<Res<crate::Args>>),
+    mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut was: Local<Option<[f32; 4]>>,
     mut on: Local<bool>,
 ) {
@@ -416,6 +550,34 @@ fn page(
         // (a `sample` screen opens on its own page, already read)
         if *on && menu.add.page == Page::Installed {
             menu.add.refresh();
+        }
+        // the select's cards for the mods it has (its roster, built at startup)
+        if *on && let Some(art) = &art {
+            let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.id.clone(), *s)).collect();
+            menu.add.stats = stats;
+        }
+        if let Some(a) = &args {
+            menu.add.iso = a.iso.clone();
+        }
+    }
+    if std::mem::take(&mut menu.add.paste) {
+        // ponytail: desktop clipboards answer at once; the browser's is the last Ctrl+V on the page
+        #[cfg(not(target_arch = "wasm32"))]
+        let text = clipboard.as_mut().and_then(|c| c.fetch_text().poll_result()).and_then(Result::ok);
+        #[cfg(target_arch = "wasm32")]
+        let text = {
+            let _ = &mut clipboard;
+            crate::web::pasted()
+        };
+        match text.as_deref().and_then(modstore::token_in) {
+            Some(t) => {
+                menu.add.busy = true;
+                modstore::sign_in(t);
+            }
+            None => {
+                menu.add.armed = Some(0);
+                menu.add.status = "No token (hf_...) was copied: copy it, then press again.".into();
+            }
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -449,9 +611,21 @@ fn page(
                     Err(e) => format!("Not installed: {e}"),
                 };
             }
-            Event::Packaged(r) => {
+            Event::Uploaded(r) => {
                 v.busy = false;
-                v.status = r.unwrap_or_else(|e| format!("Can't upload it: {e}"));
+                v.store = None;
+                v.status = r.unwrap_or_else(|e| format!("Not uploaded: {e}"));
+            }
+            Event::Signed(r) => {
+                v.busy = false;
+                v.status = match r {
+                    Ok(name) => {
+                        let s = format!("Signed in as {name}: pick a mod to upload.");
+                        v.account = Some(name);
+                        s
+                    }
+                    Err(e) => format!("Not signed in: {e}"),
+                };
             }
             Event::Preview(id, png) => {
                 let img = png.and_then(|b| {
@@ -463,17 +637,30 @@ fn page(
     }
     let n = menu.add.rows();
     menu.sel = menu.sel.min(n - 1);
-    let hovered = if menu.screen == Screen::Mods { menu.add.hovered(menu.sel).cloned() } else { None };
-    shelf.shown = hovered.as_ref().and_then(|e| match shelf.shots.get(&e.meta.id) {
-        Some(h) => h.clone(),
-        None => {
+    let on = menu.screen == Screen::Mods;
+    let png = |b: Vec<u8>| Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok();
+    shelf.shown = if let Some(e) = menu.add.hovered(menu.sel).filter(|_| on) {
+        // a store mod's preview, fetched once
+        shelf.shots.get(&e.meta.id).cloned().unwrap_or_else(|| {
             modstore::preview(e);
+            shelf.shots.insert(e.meta.id.clone(), None);
             None
+        })
+    } else if let Some(m) = menu.add.local(menu.sel).filter(|_| on) {
+        // an installed mod's: the select's picture of it, read once
+        let key = format!("local/{}", m.id);
+        match shelf.shots.get(&key) {
+            Some(h) => h.clone(),
+            None => {
+                let h = super::previews::card(&menu.add.iso, m).and_then(png).map(|i| images.add(i));
+                shelf.shots.insert(key, h.clone());
+                h
+            }
         }
-    });
-    if let Some(e) = hovered {
-        shelf.shots.entry(e.meta.id).or_default();
-    }
+    } else {
+        None
+    };
+    menu.add.shot = shelf.shown.is_some();
     let rect = window.single().ok().and_then(|w| add_rect(&menu, w.width() / w.height().max(1.0)));
     if rect != *was {
         *was = rect;
@@ -578,16 +765,23 @@ mod tests {
         assert_eq!(tags, [Some("Installed"), Some("Update"), None]);
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.contains("installed already") && !m.add.busy);
-        assert_eq!(row_at(&m.add, Vec2::new(BX + 10.0, Y + PITCH + 5.0)), Some(1));
+        assert_eq!(row_at(&m.add, Vec2::new(X + 10.0, Y + PITCH + 5.0)), Some(1));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.page, m.sel, m.screen), (Page::Installed, 1, Screen::Mods));
         m.sel = 2;
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.page, Page::Upload);
         assert_eq!(m.add.status, RULE);
-        m.mods_step(ok(), &mut out);
-        assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("pack A.") && !m.add.busy);
+        // the account row first, then the mods; uploading needs an account
+        m.add.account = None;
         m.sel = 1;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.starts_with("Sign in first") && m.add.armed.is_none());
+        m.add.account = Some("me".into());
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("upload A.") && !m.add.busy);
+        assert_eq!(m.add.local(m.sel).map(|x| x.id.as_str()), Some("a"));
+        m.sel = 2;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Installed, 2));
     }

@@ -229,6 +229,11 @@ pub(crate) fn face(iso: &str, m: Option<&Mod>, c: usize, k: usize) -> Option<Ima
     face_from(&path, 40)
 }
 
+/// M17: mod `m`'s select picture (costume 0) as PNG bytes, once the select has baked it (or it ships its own).
+pub(super) fn card(iso: &str, m: &Mod) -> Option<Vec<u8>> {
+    read(&mod_png(&cache_dir(iso, &cache_name(iso)), m, 0, &stamp(m)))
+}
+
 /// B133: the select's face icons (each character's costume 0, as the disc grid shows each character's first face;
 /// B160: the disc grid's too), read from the face close-ups as they're baked (a mod's own preview PNG: cut from it);
 /// [`ICON_READS`] new ones a frame so a page turn doesn't stall.

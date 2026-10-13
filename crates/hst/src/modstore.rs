@@ -3,7 +3,9 @@
 //! PR's author is the mod's author); `main` wins an id, then the newest PR. Install downloads `mod.zip` over HTTPS
 //! from the store only, checks its size and sha256 against `meta.json`, then installs it through M16's checks
 //! (`modfs::install`): into `mods/<id>/` on disk, or the page's OPFS store in the browser. Upload packages an
-//! installed mod (`mod.zip`, `meta.json`, `preview.png`) and opens the repo's upload page; the game holds no token.
+//! installed mod (`mod.zip`, `meta.json`, `preview.png`) and commits it to the repo as a pull request through the
+//! Hub API (user 2026-10-13: no upload page), with the player's own Hugging Face write token, pasted once and kept
+//! in `hf-token.txt` beside settings.txt / localStorage.
 //!
 //! Network work runs off the frame (a thread natively, the page's event loop in the browser); results come back
 //! through [`take`].
@@ -28,9 +30,8 @@ const MAX_ZIP: u64 = modfs::MAX_TOTAL as u64 + (16 << 20);
 /// `meta.json` and `preview.png` caps.
 const MAX_META: u64 = 64 << 10;
 const MAX_PREVIEW: u64 = 4 << 20;
-/// Where Upload writes its files on desktop.
-#[cfg(not(target_arch = "wasm32"))]
-const OUTBOX: &str = "mods-upload";
+/// The player's Hugging Face account: `<name>\n<token>`.
+const TOKEN: &str = "hf-token.txt";
 
 /// `mods/<id>/meta.json`: what Browse shows and what Install checks.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -49,6 +50,18 @@ pub struct Meta {
     /// The mod standard's version (`mod.json` `standard`).
     #[serde(default)]
     pub skeleton: u32,
+    /// What the select shows of it, for Browse's card: play style (0..4), △ grades (1..5), hand (±1), costumes, and
+    /// the disc character it plays like (0..14). Absent in an upload from before these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grades: Option<[u8; 5]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<i8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub costumes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub like: Option<u8>,
 }
 
 /// One mod in the store.
@@ -68,7 +81,9 @@ pub enum Event {
     /// Mod `id`'s `preview.png`, or None (it has none).
     Preview(String, Option<Vec<u8>>),
     /// Upload's outcome: what to tell the player.
-    Packaged(Result<String, String>),
+    Uploaded(Result<String, String>),
+    /// A pasted token checked: the account's name, or why it isn't kept.
+    Signed(Result<String, String>),
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -178,6 +193,11 @@ fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     m.source = plain_text(&m.source, 80);
     m.author = plain_text(&m.author, 40);
     m.version = plain_text(&m.version, 16);
+    m.style = m.style.filter(|&s| s < 4);
+    m.grades = m.grades.filter(|g| g.iter().all(|&g| (1..=5).contains(&g)));
+    m.hand = m.hand.filter(|h| h.abs() == 1);
+    m.costumes = m.costumes.filter(|&c| c < 1000);
+    m.like = m.like.filter(|&c| c < 14);
     (!m.name.is_empty()).then_some(m)
 }
 
@@ -383,8 +403,9 @@ pub struct Package {
     pub preview: Option<Vec<u8>>,
 }
 
-/// Mod `m` packaged for the store, after the checks Install runs on every player's machine.
-pub fn package(m: &Mod) -> Result<Package, String> {
+/// Mod `m` packaged for the store, after the checks Install runs on every player's machine; `stats` is its play
+/// style and △ grades as the select shows them, when the select has it.
+pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, String> {
     let files = mod_files(&m.dir)?;
     let names: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
     if let Some(bad) = names.iter().find(|n| !modfs::plain(n) || !modfs::EXTENSIONS.iter().any(|e| n.to_ascii_lowercase().ends_with(&format!(".{e}")))) {
@@ -405,57 +426,161 @@ pub fn package(m: &Mod) -> Result<Package, String> {
         size: zip.len() as u64,
         sha256: sha256(&zip),
         skeleton: j["standard"].as_u64().unwrap_or(1) as u32,
+        style: stats.map(|s| s.0 as u8),
+        grades: stats.map(|s| s.1),
+        hand: Some(if m.hand < 0.0 { -1 } else { 1 }),
+        costumes: Some(m.costumes.len() as u32),
+        like: Some(m.donor as u8),
     };
     let preview = files.iter().find(|f| f.0.starts_with("previews/") && f.0.ends_with(".png")).map(|f| f.1.clone());
     Ok(Package { zip, meta, preview })
 }
 
-/// The repo's upload page for mod `id` (the player drops the three files there; it opens a pull request).
-pub fn upload_url(id: &str) -> String {
-    format!("{HF}/datasets/{REPO}/upload/main/mods/{id}")
+/// The signed-in account: its name and token.
+pub fn account() -> Option<(String, String)> {
+    let t = crate::store::read_to_string(TOKEN).ok()?;
+    let (name, token) = t.trim().split_once('\n')?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| (name.into(), token.into()))
 }
 
-/// Packages mod `m` and hands the files to the player ([`Event::Packaged`]): natively into `mods-upload/<id>/`, in
-/// the browser as downloads; then opens the upload page.
-pub fn upload(m: &Mod) {
-    let m = m.clone();
+/// The page where the player makes a token (write access) to paste.
+pub const TOKENS: &str = "https://huggingface.co/settings/tokens/new?tokenType=write&description=Hot%20Shots%20Tennis%20mods";
+
+/// `text` as a Hugging Face token (`hf_…`), if it holds one.
+pub fn token_in(text: &str) -> Option<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').find(|w| w.starts_with("hf_") && w.len() >= 30 && w.len() <= 200).map(str::to_string)
+}
+
+/// Checks a pasted token with Hugging Face and keeps it ([`Event::Signed`]).
+pub fn sign_in(token: String) {
     spawn(async move {
-        let got = package(&m).and_then(|p| {
-            let url = upload_url(&m.id);
-            let at = hand_over(&m.id, &p)?;
-            open(&url);
-            Ok(format!("{} packed ({} MB) {at}. Upload all three on the page that opened, into mods/{}/: {url}", m.name, p.meta.size.div_ceil(1 << 20), m.id))
-        });
-        send(Event::Packaged(got));
+        let got = async {
+            let r = call(reqwest::Client::new().get(format!("{HF}/api/whoami-v2")).bearer_auth(&token)).await.map_err(|e| format!("Hugging Face didn't take that token ({e})"))?;
+            let name = r["name"].as_str().ok_or("Hugging Face sent no account name")?.to_string();
+            if r["auth"]["accessToken"]["role"] == "read" {
+                return Err("that token can only read: make one with write access".into());
+            }
+            crate::store::write(TOKEN, format!("{name}\n{token}\n")).map_err(|e| format!("can't keep the token: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(TOKEN, std::fs::Permissions::from_mode(0o600));
+            }
+            Ok(name)
+        };
+        send(Event::Signed(got.await));
     });
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn hand_over(id: &str, p: &Package) -> Result<String, String> {
-    let dir = std::path::PathBuf::from(OUTBOX).join(id);
-    let w = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("mod.zip"), &p.zip)?;
-        std::fs::write(dir.join("meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())?;
-        let _ = std::fs::remove_file(dir.join("preview.png"));
-        if let Some(png) = &p.preview {
-            std::fs::write(dir.join("preview.png"), png)?;
-        }
-        Ok(())
-    };
-    w().map_err(|e| format!("can't write {}: {e}", dir.display()))?;
-    open(&std::fs::canonicalize(&dir).unwrap_or(dir.clone()).to_string_lossy());
-    Ok(format!("into {}", dir.display()))
+/// Forgets the token.
+pub fn sign_out() {
+    let _ = crate::store::write(TOKEN, "");
 }
 
-#[cfg(target_arch = "wasm32")]
-fn hand_over(_: &str, p: &Package) -> Result<String, String> {
-    crate::web::download("mod.zip", &p.zip);
-    crate::web::download("meta.json", &serde_json::to_vec_pretty(&p.meta).unwrap());
-    if let Some(png) = &p.preview {
-        crate::web::download("preview.png", png);
+/// Packages mod `m` and commits it to the store as a pull request with the player's token ([`Event::Uploaded`]).
+/// `card` is the select's picture of it, sent when the mod ships no `previews/*.png`.
+pub fn publish(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, token: String) {
+    let m = m.clone();
+    spawn(async move {
+        let got = async {
+            let p = package(&m, stats)?;
+            let dir = format!("mods/{}", m.id);
+            let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
+            if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
+                files.push((format!("{dir}/preview.png"), png));
+            }
+            let pr = commit(&token, &format!("Add mod {} ({})", m.name, m.id), files).await?;
+            // the next Browse reads the store again, this upload included
+            let _ = crate::store::write(CACHE, "");
+            Ok(format!("{} is up ({} MB): it's in everyone's Browse mods now. {pr}", m.name, p.meta.size.div_ceil(1 << 20)))
+        };
+        send(Event::Uploaded(got.await));
+    });
+}
+
+/// A request's JSON answer, or what went wrong (the status and the start of the body).
+async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let r = r.send().await.map_err(|e| format!("can't reach Hugging Face: {e}"))?;
+    let status = r.status();
+    let body = r.bytes().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let msg = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|j| j["error"].as_str().map(str::to_string)).unwrap_or_else(|| String::from_utf8_lossy(&body[..body.len().min(200)]).into());
+        return Err(format!("{status}: {msg}"));
     }
-    Ok("as downloads".into())
+    Ok(serde_json::from_slice(&body).unwrap_or_default())
+}
+
+/// The Hub's commit API (as `huggingface_hub`'s `create_commit`): asks which files go through LFS, uploads those,
+/// then commits all of them to a new pull request. Returns the PR's URL.
+async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>) -> Result<String, String> {
+    use data_encoding::BASE64;
+    use serde_json::json;
+    let c = reqwest::Client::new();
+    let api = format!("{HF}/api/datasets/{REPO}");
+    let ask = json!({ "files": files.iter().map(|(path, b)| json!({ "path": path, "size": b.len(), "sample": BASE64.encode(&b[..b.len().min(512)]) })).collect::<Vec<_>>() });
+    let modes = call(c.post(format!("{api}/preupload/main")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await?;
+    let lfs = |path: &str| modes["files"].as_array().into_iter().flatten().any(|f| f["path"] == path && f["uploadMode"] == "lfs");
+    let mut lines = vec![json!({ "key": "header", "value": { "summary": summary, "description": "Uploaded from the game." } })];
+    for (path, b) in &files {
+        lines.push(if lfs(path) {
+            let oid = sha256(b);
+            lfs_put(&c, token, &oid, b).await?;
+            json!({ "key": "lfsFile", "value": { "path": path, "algo": "sha256", "oid": oid, "size": b.len() } })
+        } else {
+            json!({ "key": "file", "value": { "path": path, "content": BASE64.encode(b), "encoding": "base64" } })
+        });
+    }
+    let body = lines.iter().map(|l| l.to_string() + "\n").collect::<String>();
+    let r = call(c.post(format!("{api}/commit/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/x-ndjson").body(body)).await?;
+    Ok(r["pullRequestUrl"].as_str().or(r["commitUrl"].as_str()).unwrap_or_default().to_string())
+}
+
+/// One file into the repo's LFS store (git-lfs batch API: a single PUT, or parts for a big file), then verified.
+async fn lfs_put(c: &reqwest::Client, token: &str, oid: &str, b: &[u8]) -> Result<(), String> {
+    use serde_json::json;
+    let lfs = "application/vnd.git-lfs+json";
+    let ask = json!({ "operation": "upload", "transfers": ["basic", "multipart"], "hash_algo": "sha256", "ref": { "name": "main" }, "objects": [{ "oid": oid, "size": b.len() }] });
+    let r = call(c.post(format!("{HF}/datasets/{REPO}.git/info/lfs/objects/batch")).bearer_auth(token).header("Accept", lfs).header("Content-Type", lfs).body(ask.to_string())).await?;
+    let o = &r["objects"][0];
+    if let Some(e) = o["error"]["message"].as_str() {
+        return Err(format!("LFS: {e}"));
+    }
+    // no upload action: the store has these bytes already
+    let Some(up) = o["actions"].get("upload") else { return Ok(()) };
+    let href = up["href"].as_str().ok_or("LFS: no upload URL")?;
+    let header = up["header"].as_object().cloned().unwrap_or_default();
+    match header.get("chunk_size").and_then(|v| v.as_str()?.parse::<usize>().ok().or(v.as_u64().map(|n| n as usize))) {
+        Some(size) if size > 0 => {
+            let mut parts: Vec<(usize, &str)> = header.iter().filter_map(|(k, v)| Some((k.parse().ok()?, v.as_str()?))).collect();
+            parts.sort();
+            let mut done = Vec::new();
+            for (i, (n, url)) in parts.into_iter().enumerate() {
+                let chunk = &b[(i * size).min(b.len())..((i + 1) * size).min(b.len())];
+                let r = c.put(url).body(chunk.to_vec()).send().await.map_err(|e| format!("upload cut short: {e}"))?;
+                let r = r.error_for_status().map_err(|e| format!("upload refused: {e}"))?;
+                let etag = r.headers().get("etag").and_then(|v| v.to_str().ok()).ok_or("upload: no ETag back")?.to_string();
+                done.push(json!({ "partNumber": n, "etag": etag }));
+            }
+            call(c.post(href).header("Accept", lfs).header("Content-Type", lfs).body(json!({ "oid": oid, "parts": done }).to_string())).await?;
+        }
+        _ => {
+            let mut put = c.put(href).body(b.to_vec());
+            for (k, v) in &header {
+                if let Some(v) = v.as_str() {
+                    put = put.header(k.as_str(), v);
+                }
+            }
+            put.send().await.map_err(|e| format!("upload cut short: {e}"))?.error_for_status().map_err(|e| format!("upload refused: {e}"))?;
+        }
+    }
+    if let Some(v) = o["actions"].get("verify") {
+        let href = v["href"].as_str().ok_or("LFS: no verify URL")?;
+        call(c.post(href).bearer_auth(token).header("Accept", lfs).header("Content-Type", lfs).body(json!({ "oid": oid, "size": b.len() }).to_string())).await?;
+    }
+    Ok(())
 }
 
 /// Opens `what` (a URL or folder) in the player's browser / file manager.
@@ -484,6 +609,16 @@ mod tests {
 
     fn meta(id: &str, zip: &[u8]) -> Meta {
         Meta { id: id.into(), name: "Lauryn".into(), size: zip.len() as u64, sha256: sha256(zip), ..Default::default() }
+    }
+
+    /// A token is picked out of whatever was copied with it; anything else isn't one.
+    #[test]
+    fn finds_the_token() {
+        let t = "hf_abcdefghijklmnopqrstuvwxyz0123";
+        assert_eq!(token_in(&format!("  {t}\n")).as_deref(), Some(t));
+        assert_eq!(token_in(&format!("token: \"{t}\"")).as_deref(), Some(t));
+        assert_eq!(token_in("hf_short"), None);
+        assert_eq!(token_in("hello there"), None);
     }
 
     /// The store's API answers as HF sends them (shapes copied from live replies, 2026-10-13).
@@ -530,7 +665,7 @@ mod tests {
             return eprintln!("no mods in {mods} (skipped)");
         };
         let m = crate::mods::read(&dir).unwrap();
-        let p = package(&m).unwrap();
+        let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
         eprintln!("packed {} ({} bytes, {} files)", m.id, p.meta.size, mod_files(&m.dir).unwrap().len());
         assert_eq!(p.meta.id, m.id);
         matches(&p.zip, &p.meta).unwrap();
