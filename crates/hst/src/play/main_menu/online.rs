@@ -367,7 +367,7 @@ impl Menu {
                 } else if item == Item::Button("Vote") {
                     (self.net.topics, self.sel) = (true, 0);
                     out.push(Sound(2));
-                } else if item == Item::Button("Copy Link") && !self.net.code.is_empty() {
+                } else if item == Item::Button("Copy Link") && shared(&self.net).is_some() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
                 } else if item == Item::Button("Start") {
                     match self.net.room.as_ref().map(waiting_for) {
@@ -780,7 +780,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         "Ready" if m.net.prepared => "Not Ready".to_string(),
                         b => b.to_string(),
                     };
-                    let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && m.net.code.is_empty());
+                    let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && shared(&m.net).is_none());
                     d.pill(x, 330.0, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
                     let k = ((BUTTON_W - 20.0) / d.width(&label, 20.0)).min(1.0);
                     d.centred(&label, x + BUTTON_W / 2.0, 339.0 + 10.0 * (1.0 - k), 20.0 * k, if on && !dim { WHITE } else if dim { [60.0; 3] } else { DIM });
@@ -799,15 +799,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 d.info("Get its looks, or play it as its donor in odd colours.");
                 return;
             }
-            if !m.net.code.is_empty() {
+            if shared(&m.net).is_some() {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
                 d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [430.0, 100.0, 170.0, 170.0], WHITE, 128.0);
-                if m.net.short.is_empty() {
-                    d.outlined(|d| d.centred("Getting a short code...", 515.0, 280.0, 18.0, WHITE));
-                } else {
-                    // the short code, big enough to read out (the QR is its link)
-                    d.outlined(|d| d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD));
-                }
+                // the short code, big enough to read out (the QR is its link)
+                d.outlined(|d| d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD));
             } else if m.net.hosting {
                 d.outlined(|d| d.centred("Getting the code...", 515.0, 176.0, 18.0, WHITE));
             }
@@ -828,6 +824,16 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.info(&info);
         }
         _ => {}
+    }
+}
+
+/// What the lobby's QR and Copy Link share: the short code's link, or the browser's LAN offer (scanned, nothing else
+/// reaches it). Never the long iroh ticket (B224: useless to type or scan); nothing until the short code is there.
+fn shared(v: &View) -> Option<String> {
+    if !v.short.is_empty() {
+        Some(crate::net::link(&v.short))
+    } else {
+        crate::net::rtc::is_offer(&v.code).then(|| v.code.clone())
     }
 }
 
@@ -877,9 +883,7 @@ pub(super) fn poll(
             menu.settle(&args.iso, &net);
         }
     }
-    let code = if menu.net.short.is_empty() { menu.net.code.clone() } else { crate::net::link(&menu.net.short) };
-    let code = &code;
-    if !menu.net.code.is_empty()
+    if let Some(code) = &shared(&menu.net)
         && made.is_none_or(|m| m.1 != *code)
         && let Some(img) = qr(code)
     {
@@ -1104,6 +1108,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             menu.net.status = if ok { "Link copied: send it to a friend (it opens this lobby), or they type the code in Join by Code.".into() } else { link };
         }
         Fx::Copy => {
+            // only the browser's LAN offer gets here (`shared`): the long iroh ticket is never offered (B224)
             let ok = clipboard.set_text(menu.net.code.clone()).is_ok();
             menu.net.status = if ok { "Code copied: send it to the other players (they paste it in Join by Code).".into() } else { format!("Code: {}", menu.net.code) };
         }
