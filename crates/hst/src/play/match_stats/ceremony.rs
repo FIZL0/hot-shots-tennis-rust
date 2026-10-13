@@ -483,18 +483,6 @@ pub(super) fn hide(
     }
 }
 
-/// Continue: the ceremony's confetti goes, the court BGM starts again from the top (the original's rematch reloads
-/// it) and comes back with the match's ticks.
-pub(super) fn end(commands: &mut Commands, cer: Option<&Ceremony>, sound: Option<&Sound>, court: Option<&crate::audio::MusicBanks>) {
-    if let (Some(s), Some((bank, mid))) = (sound.filter(|_| cer.is_some_and(|c| c.music.is_some())), court.and_then(|m| m.bgm.as_ref())) {
-        s.music(bank, mid, BGM as u32);
-    }
-    if let Some(root) = cer.and_then(|c| c.confetti) {
-        commands.entity(root).despawn();
-    }
-    commands.remove_resource::<Ceremony>();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

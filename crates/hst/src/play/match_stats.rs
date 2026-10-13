@@ -14,7 +14,8 @@
 //! menus' `info` icons) the other page's name beside the blinking d-pad, and from tick 120 "✕ Continue", which
 //! ends it once the stats page has been seen.
 //!
-//! The match pauses on it; Continue starts the next match. `HST_STATS=<seconds>` ends the match (as it stands) after
+//! The match pauses on it; Continue fades to black over 60 ticks and goes back to the menu, as the pause menu's
+//! "Return to the Menu". `HST_STATS=<seconds>` ends the match (as it stands) after
 //! that long, for `--shot`; `HST_STATS_PAGE=1` opens it on the stats page (skipping the ceremony).
 //!
 //! Before it, the original's first state: the winners' ceremony ([`ceremony`]), the banner already up.
@@ -368,6 +369,9 @@ struct Art(Vec<Handle<Image>>, Option<std::sync::Arc<crate::audio::SoundBank>>);
 struct Slot(usize);
 #[derive(Component)]
 pub(super) struct Root;
+/// The whole window's fade to black after Continue (a `Root` too, so the pause screen leaves it up with the HUD hidden).
+#[derive(Component)]
+struct Fade;
 const POOL: usize = 400;
 
 /// The "Game, Set, Match!" model.
@@ -394,6 +398,8 @@ struct Screen {
     seen: bool,
     timer: i32,
     blink: i32,
+    /// Ticks into the fade to black after Continue.
+    leaving: Option<i32>,
 }
 
 impl Screen {
@@ -481,6 +487,8 @@ fn setup(
     let bank = crate::audio::SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd");
     commands.insert_resource(Art(art, bank.map(std::sync::Arc::new)));
     commands
+        .spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(Color::NONE), GlobalZIndex(12), Fade, Root));
+    commands
         .spawn((super::widescreen::screen_43(), GlobalZIndex(11), Root))
         .with_children(|p| {
             for i in 0..POOL {
@@ -526,7 +534,7 @@ fn step(
     mut banner: Option<ResMut<Banner>>,
     sounds: Option<Res<Art>>,
     sound: Option<Res<crate::audio::Sound>>,
-    (gallery, music): (Option<Res<crate::audio::GalleryBank>>, Option<Res<crate::audio::MusicBanks>>),
+    (gallery, mut exit): (Option<Res<crate::audio::GalleryBank>>, MessageWriter<AppExit>),
     mut cer: Option<ResMut<ceremony::Ceremony>>,
     mut dissolve: ResMut<dissolve::Dissolve>,
     mut commands: Commands,
@@ -608,22 +616,19 @@ fn step(
         _ => 0,
     };
     // the page takes no input and stands still under the dissolve
-    let busy = dissolve.fading();
+    let busy = dissolve.fading() || screen.leaving.is_some();
     if busy {
         input = 0;
     }
     if input == 3 {
         if screen.seen {
             play(2);
-            g.match_stats.result = None;
-            screen.open = false;
-            ceremony::end(&mut commands, cer.as_deref(), sound.as_deref(), music.as_deref());
-            fixed.set_timestep_hz(60.0);
-            let over = fixed.overstep();
-            fixed.discard_overstep(over);
-            return;
+            info!("result screen: Continue, back to the menu");
+            screen.leaving = Some(0);
+            input = 0;
+        } else {
+            input = 1;
         }
-        input = 1;
     }
     screen.acc += time.delta_secs() * 60.0;
     while screen.acc >= 1.0 {
@@ -632,6 +637,12 @@ fn step(
             play(0xc);
         }
         input = 0;
+        if let Some(t) = &mut screen.leaving {
+            *t += 1;
+            if *t >= 60 {
+                exit.write(AppExit::Success);
+            }
+        }
         if let Some(b) = banner.as_mut() {
             b.0.tick();
         }
@@ -672,7 +683,11 @@ fn draw(
     board_art: Option<Res<popups::Art>>,
     colours: Option<Res<Colours>>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
+    mut fade: Query<&mut BackgroundColor, With<Fade>>,
 ) {
+    for mut c in &mut fade {
+        c.0 = Color::BLACK.with_alpha(screen.leaving.map_or(0.0, |t| (t as f32 / 60.0).min(1.0)));
+    }
     let (Some(art), Some(panel_art), Some(board_art), Some(colours)) = (art, panel_art, board_art, colours) else {
         return;
     };
