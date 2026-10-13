@@ -759,11 +759,6 @@ fn rally_launch(class: u8, at: V3, target: V3, l: &hst_sim::shot::Lookup) -> hst
     hst_sim::shot::launch_turned(class, at, target, l.elevation, l.speed, 0.0, 0.0, 0.0, false, l.frames)
 }
 
-/// TParam.csv's row for character 0 as cells (header cells hold quoted line breaks; character rows are plain).
-fn tparam_row(iso: &mut Iso) -> Vec<String> {
-    tparam(iso, 0)
-}
-
 /// TParam.csv's row for character `n` as cells.
 fn tparam(iso: &mut Iso, n: usize) -> Vec<String> {
     let data = iso
@@ -872,10 +867,9 @@ fn character_hand(iso: &mut Iso, n: usize) -> f32 {
     }
 }
 
-/// A player's serve: the toss hand and racket from the character's motions, heights from TParam.csv, the rest
-/// measured on character 0 (see `ServeData`).
-fn serve_data(iso: &mut Iso, data: &CharacterData) -> ServeData {
-    let row = tparam_row(iso);
+/// A player's serve: the toss hand and racket from the character's motions, heights, reach, powers and the
+/// per-toss timing tables from the player's TParam.csv `row` (B26: once character 0's for everyone).
+fn serve_data(row: &[String], data: &CharacterData) -> ServeData {
     let cm = |i: usize| -> [f32; 3] {
         let v: Vec<f32> = row[i]
             .split('/')
@@ -884,15 +878,14 @@ fn serve_data(iso: &mut Iso, data: &CharacterData) -> ServeData {
         [v[0], v[1], v[2]]
     };
     let cell = |i: usize| row[i].parse::<i32>().expect("TParam stat");
-    // ponytail: timing and depth-bias tables (+0x1644/+0x1774, +0x1554/+0x1684), mistiming error (by
-    // skill level 0) and the serve angle (+0x130c) are character 0's measured values; their sources are the
-    // character tables (P3/P8)
-    let grades = vec![
-        0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4,
-    ];
-    let bias = vec![
-        -8, -6, -4, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 6, 8, 10, 12, 14, 16,
-    ];
+    // frame counts "a/b/c" of grades 2, 3, 4 after / before the sweet frame: rally 28/29, strong toss 30/31, weak 32/33
+    let counts = |i: usize| -> [i32; 3] {
+        let v: Vec<i32> = row[i].split('/').map(|v| v.trim().parse().expect("TParam timing count")).collect();
+        [v[0], v[1], v[2]]
+    };
+    let stroke = hst_sim::swing::timing(counts(28), counts(29));
+    let (strong_grades, strong_bias) = serve::timing(counts(30), counts(31), &stroke);
+    let (weak_grades, weak_bias) = serve::timing(counts(32), counts(33), &stroke);
     let toss = |k: usize| {
         serve::toss_setup(&data.skeleton, &data.motions[&k], &data.motions[&(k + 2)])
     };
@@ -900,17 +893,17 @@ fn serve_data(iso: &mut Iso, data: &CharacterData) -> ServeData {
     ServeData {
         over: cm(65),
         under: cm(66),
-        strong_grades: grades.clone(),
-        weak_grades: grades,
+        strong_grades,
+        weak_grades,
         hand_over,
         hand_under,
         racket_over,
         racket_under,
         miss: [50, 30, 100],
-        strong_bias: bias.clone(),
-        weak_bias: bias,
+        strong_bias,
+        weak_bias,
         reach: [cell(34), cell(35)],
-        short_miss: row[54].parse().expect("TParam serve short-miss factor"),
+        short_miss: hst_sim::ai::atof(row[54].as_bytes()),
         power: cell(12),
         low_power: cell(50),
         max_angle: 22.0,
@@ -1421,7 +1414,7 @@ fn setup(
         }
         // the player object places itself
         game.rng.shared.next();
-        game.serve_data.push(serve_data(&mut iso, &data));
+        game.serve_data.push(serve_data(&mod_match::row(&mut iso, match_mod.as_deref(), i, c), &data));
         serve_character(&mut iso, c, game.aim_stats[i], game.serve_data.last_mut().unwrap());
         game.data.push(data.clone());
         let f = character::spawn(&mut commands, &data, root);
@@ -4487,7 +4480,7 @@ fn post_press(g: &mut Game, pressed: bool) {
     g.post_press |= pressed && g.phase == Phase::Post;
 }
 
-/// The serve values `serve_data` leaves at character 0's: the strong toss's mistiming error by the character's
+/// The serve values `serve_data` leaves at placeholders: the strong toss's mistiming error by the character's
 /// skill level (the game program's table) and the serve angle (TParam Serv CON).
 fn serve_character(iso: &mut Iso, n: usize, aim: hst_sim::shot::AimStats, d: &mut ServeData) {
     let (cnf, bin) = (

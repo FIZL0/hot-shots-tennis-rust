@@ -13,17 +13,7 @@ mod tests {
 
     /// A doubles match with 1P human (Carol, as slot 3), run to 1P's first serve.
     fn to_serve() -> App {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars: vec![6, 1, 2, 3], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
-        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay: false, ..default() });
-        app.insert_resource(Replay(Default::default()));
-        app.init_resource::<super::super::tick_input::TickPads>();
-        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-        app.add_systems(Startup, setup);
-        app.add_systems(FixedUpdate, (remember, super::super::tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball).chain());
-        app.update();
+        let mut app = set_up(vec![6, 1, 2, 3]);
         for _ in 0..600 {
             let g = app.world().resource::<Game>();
             if g.phase == Phase::Serve && g.score.server == 0 && g.serving.t > 30 {
@@ -32,6 +22,22 @@ mod tests {
             app.world_mut().run_schedule(FixedUpdate);
         }
         panic!("1P never served");
+    }
+
+    /// A doubles match of these characters with 1P human, set up.
+    fn set_up(chars: Vec<usize>) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay: false, ..default() });
+        app.insert_resource(Replay(Default::default()));
+        app.init_resource::<super::super::tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, setup);
+        app.add_systems(FixedUpdate, (remember, super::super::tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        app
     }
 
     fn pad(buttons: u16) -> [Pad; 4] {
@@ -118,5 +124,37 @@ mod tests {
         let (app, _) = timeline(&[(0, 0x4000), (5, 0), (119, 0x4000), (124, 0)], 140);
         let g = app.world().resource::<Game>();
         assert_eq!((g.phase.clone(), g.rally.faults), (Phase::Post, 1), "a whiffed serve is a fault");
+    }
+
+    /// B26: each player's serve data is their own character's, as slot 3's RAM (characters 6, 4, 3, 11) holds it:
+    /// contact windows, reach, powers and both tosses' timing tables (once character 0's for everyone).
+    #[test]
+    fn serve_data_per_character() {
+        let ram = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/ram/s03.bin");
+        let (Ok(ram), true) = (std::fs::read(ram), Path::new(ISO).is_file()) else {
+            return eprintln!("no ISO or s03.bin, skipped");
+        };
+        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        let f = |a: usize| f32::from_bits(u(a) as u32);
+        let chars: Vec<usize> = (0..4).map(|p| ram[0x2ef7f4 + 12 * p] as usize).collect();
+        let app = set_up(chars.clone());
+        let g = app.world().resource::<Game>();
+        for p in 0..4 {
+            let obj = u(u(0x422f80) + 0xa8 + 4 * p);
+            let d = &g.serve_data[p];
+            let table = |g: usize, b: usize, n: usize| -> (Vec<u8>, Vec<i32>) {
+                let n = u(obj + n);
+                (ram[(obj + g) & 0x1ff_ffff..][..n].to_vec(), (0..n).map(|k| u(obj + b + 4 * k) as i32).collect())
+            };
+            let at = |o: [usize; 3]| o.map(|o| f(obj + o));
+            assert_eq!(
+                (d.over, d.under, d.reach, d.power, d.low_power, d.short_miss),
+                (at([0x13cc, 0x13d0, 0x13d4]), at([0x13d8, 0x13dc, 0x13e0]), [0x1364, 0x1368].map(|o| u(obj + o) as i32), u(obj + 0x12e4) as i32, u(obj + 0x1398) as i32, f(obj + 0x13a8)),
+                "p{p} character {}",
+                chars[p]
+            );
+            assert_eq!((d.strong_grades.clone(), d.strong_bias.clone()), table(0x1644, 0x1554, 0x1680), "p{p} strong");
+            assert_eq!((d.weak_grades.clone(), d.weak_bias.clone()), table(0x1774, 0x1684, 0x17b0), "p{p} weak");
+        }
     }
 }

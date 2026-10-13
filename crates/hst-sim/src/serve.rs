@@ -137,6 +137,19 @@ pub fn stance_ball(point: [f32; 4], rows: [[f32; 4]; 3], pos: [f32; 3]) -> [f32;
     [add(v[0], pos[0]), add(v[1], pos[1]), add(v[2], pos[2])]
 }
 
+/// A character's serve timing table (grades, depth bias) for one toss, as the original builds it at setup: as the
+/// rally's (`swing::timing`) from the toss's own counts, but when its leading no-hit frames differ in number from the
+/// rally table's (`stroke`), its first 8 frames are the rally table's.
+pub fn timing(after: [i32; 3], before: [i32; 3], stroke: &(Vec<u8>, Vec<i32>)) -> (Vec<u8>, Vec<i32>) {
+    let (mut g, mut b) = crate::swing::timing(after, before);
+    let lead = |g: &[u8]| g.iter().take_while(|&&x| x == 0).count();
+    if lead(&g) != lead(&stroke.0) {
+        g[..8].copy_from_slice(&stroke.0[..8]);
+        b[..8].copy_from_slice(&stroke.1[..8]);
+    }
+    (g, b)
+}
+
 /// The serve's contact search when the swing is pressed: over the path before the first bounce, the frame
 /// whose height is closest to the ideal within the window (earliest on ties) where the timing table allows a
 /// hit. `None` is a whiff.
