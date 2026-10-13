@@ -150,66 +150,73 @@ impl Model {
         let mut out = Vec::new();
         for (material, packets) in self.materials.iter().enumerate() {
             for pk in packets {
-                let n = pk.bones.len().saturating_sub(1).min(pk.uvs.len());
-                let mut verts = Vec::with_capacity(n);
-                let mut kick = Vec::with_capacity(n);
-                let mut morph = vec![vec![[0.0f32; 3]; n]; pk.morphs.len()];
-                for v in 0..n {
-                    let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
-                    let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
-                    let mut binds: Vec<(usize, f32, [f32; 3])> = Vec::new();
-                    let mut pos = [0.0f32; 3];
-                    for e in a..b {
-                        let flags = pk.entry_flags.get(e).copied().unwrap_or(0);
-                        let node = pk.palette.get(((flags >> 3) & 7) as usize).copied().unwrap_or(pk.palette.first().copied().unwrap_or(0));
-                        let w = pk.entry_weight.get(e).copied().unwrap_or(1.0);
-                        let m = self.node_bind.get(node).copied().unwrap_or(IDENTITY);
-                        let p = pk.vertices[e].pos;
-                        let q = pk.vertices[e].normal;
-                        let mut nrm = [0.0f32; 3];
-                        for k in 0..3 {
-                            pos[k] += p[0] * m[0][k] + p[1] * m[1][k] + p[2] * m[2][k] + w * m[3][k];
-                            nrm[k] = q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
-                        }
-                        binds.push((node, w, nrm));
-                        // a morph offset moves the entry in its bone's space: rotate it like the position
-                        for (t, target) in pk.morphs.iter().enumerate() {
-                            for &(_, d) in target.iter().filter(|(i, _)| *i == e) {
-                                for k in 0..3 {
-                                    morph[t][v][k] += d[0] * m[0][k] + d[1] * m[1][k] + d[2] * m[2][k];
-                                }
-                            }
-                        }
-                    }
-                    binds.sort_by(|x, y| y.1.total_cmp(&x.1));
-                    binds.truncate(4);
-                    let total: f32 = binds.iter().map(|b| b.1).sum();
-                    // ponytail: normals of a third and fourth bone are dropped; no vertex on the disc has more than two
-                    for (k, (node, w, nrm)) in binds.iter().enumerate() {
-                        sv.joints[k] = *node as u16;
-                        sv.weights[k] = if total > 0.0 { w / total } else { 0.0 };
-                        if k < 2 {
-                            sv.normals[k] = *nrm;
-                        }
-                    }
-                    sv.pos = pos;
-                    verts.push(sv);
-                    kick.push(pk.entry_flags.get(a).is_some_and(|f| f & 0x8000 == 0));
-                }
-                // one strip per packet: a kicked vertex closes a triangle with the two before it, wound by its UV's
-                // `w` as the rigid decode (VU1 culls by it; strip parity flips some, e.g. Cody's face)
-                let mut tris = Vec::new();
-                for (i, &k) in kick.iter().enumerate() {
-                    if k && i >= 2 {
-                        let w = pk.uv_w.get(i).copied().unwrap_or(1.0);
-                        let i = i as u32;
-                        tris.push(if 0.0 <= w { [i - 2, i - 1, i] } else { [i, i - 1, i - 2] });
-                    }
-                }
+                let (verts, tris, morph) = self.skin_packet(pk);
                 out.push((material, verts, tris, morph));
             }
         }
         out
+    }
+
+    /// One packet of [`Model::skinned`]: its drawn vertices, triangles and morph offsets.
+    #[allow(clippy::type_complexity)]
+    pub fn skin_packet(&self, pk: &Packet) -> (Vec<SkinVertex>, Vec<[u32; 3]>, Vec<Vec<[f32; 3]>>) {
+        let n = pk.bones.len().saturating_sub(1).min(pk.uvs.len());
+        let mut verts = Vec::with_capacity(n);
+        let mut kick = Vec::with_capacity(n);
+        let mut morph = vec![vec![[0.0f32; 3]; n]; pk.morphs.len()];
+        for v in 0..n {
+            let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
+            let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
+            let mut binds: Vec<(usize, f32, [f32; 3])> = Vec::new();
+            let mut pos = [0.0f32; 3];
+            for e in a..b {
+                let flags = pk.entry_flags.get(e).copied().unwrap_or(0);
+                let node = pk.palette.get(((flags >> 3) & 7) as usize).copied().unwrap_or(pk.palette.first().copied().unwrap_or(0));
+                let w = pk.entry_weight.get(e).copied().unwrap_or(1.0);
+                let m = self.node_bind.get(node).copied().unwrap_or(IDENTITY);
+                let p = pk.vertices[e].pos;
+                let q = pk.vertices[e].normal;
+                let mut nrm = [0.0f32; 3];
+                for k in 0..3 {
+                    pos[k] += p[0] * m[0][k] + p[1] * m[1][k] + p[2] * m[2][k] + w * m[3][k];
+                    nrm[k] = q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k];
+                }
+                binds.push((node, w, nrm));
+                // a morph offset moves the entry in its bone's space: rotate it like the position
+                for (t, target) in pk.morphs.iter().enumerate() {
+                    for &(_, d) in target.iter().filter(|(i, _)| *i == e) {
+                        for k in 0..3 {
+                            morph[t][v][k] += d[0] * m[0][k] + d[1] * m[1][k] + d[2] * m[2][k];
+                        }
+                    }
+                }
+            }
+            binds.sort_by(|x, y| y.1.total_cmp(&x.1));
+            binds.truncate(4);
+            let total: f32 = binds.iter().map(|b| b.1).sum();
+            // ponytail: normals of a third and fourth bone are dropped; no vertex on the disc has more than two
+            for (k, (node, w, nrm)) in binds.iter().enumerate() {
+                sv.joints[k] = *node as u16;
+                sv.weights[k] = if total > 0.0 { w / total } else { 0.0 };
+                if k < 2 {
+                    sv.normals[k] = *nrm;
+                }
+            }
+            sv.pos = pos;
+            verts.push(sv);
+            kick.push(pk.entry_flags.get(a).is_some_and(|f| f & 0x8000 == 0));
+        }
+        // one strip per packet: a kicked vertex closes a triangle with the two before it, wound by its UV's
+        // `w` as the rigid decode (VU1 culls by it; strip parity flips some, e.g. Cody's face)
+        let mut tris = Vec::new();
+        for (i, &k) in kick.iter().enumerate() {
+            if k && i >= 2 {
+                let w = pk.uv_w.get(i).copied().unwrap_or(1.0);
+                let i = i as u32;
+                tris.push(if 0.0 <= w { [i - 2, i - 1, i] } else { [i, i - 1, i - 2] });
+            }
+        }
+        (verts, tris, morph)
     }
 
     /// The triangles the game collides with: those whose material has an attribute map.
