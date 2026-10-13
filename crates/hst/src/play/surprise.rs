@@ -15,20 +15,20 @@ use super::{BalloonView, Figure, Game, Phase};
 use crate::character::Rig;
 use crate::Args;
 
-/// Live pop-ups, and whether the point was over last tick.
+/// Live pop-ups, whether the point was over last tick, and the player whose skull rises this tick.
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub(super) struct Pops(Vec<Pop>, bool);
+pub(super) struct Pops(Vec<Pop>, bool, Option<usize>);
 
 /// Pop-up quad `.0` of the list (its own material).
 #[derive(Component)]
 struct View(usize, Handle<StandardMaterial>);
 
-/// Textures by `Popup` (bang, sweat, dots, swirl).
+/// Textures by `Popup` (bang, sweat, dots, swirl, skull).
 #[derive(Resource)]
-struct Art([Handle<Image>; 4]);
+struct Art([Handle<Image>; 5]);
 
-/// At most a "!" and a sweat drop or "..." per player.
-const VIEWS: usize = 8;
+/// At most a "!", a skull and a sweat drop or "..." per player.
+const VIEWS: usize = 12;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Pops>()
@@ -70,7 +70,7 @@ fn setup(
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso.read("AZUMA/C_EFF/EFFCT.XB0").expect("EFFCT archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
-    let tex = [Popup::Bang, Popup::Sweat, Popup::Dots, Popup::Swirl].map(|p| {
+    let tex = [Popup::Bang, Popup::Sweat, Popup::Dots, Popup::Swirl, Popup::Skull].map(|p| {
         let name = p.texture().to_ascii_lowercase();
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&name)).expect("pop-up texture");
         let pic = tim2::decode(&arc.read(e).expect("pop-up bytes")).expect("TIM2").remove(0);
@@ -101,8 +101,13 @@ fn setup(
 
 /// After the simulation and the balloons' ageing: raise, drop and age the pop-ups.
 fn tick(mut g: ResMut<Game>, mut pops: ResMut<Pops>) {
-    let Pops(list, was_over) = &mut *pops;
+    let Pops(list, was_over, skull) = &mut *pops;
     let clean = |b: Option<(Balloon, u32)>| matches!(b, Some((Balloon::Note | Balloon::Sweet, _)));
+    // the death lob: the skull the tick after a framed hit's balloon was dropped (the list's one pending slot)
+    if let Some(i) = skull.take() {
+        list.push(Pop::new(Popup::Skull, i));
+        info!("surprise: skull over player {i}");
+    }
     for i in 0..g.players.len() {
         let surprised = std::mem::take(&mut g.players[i].surprised) && g.humans.get(i) != Some(&true);
         let bang = list.iter().position(|p| p.popup == Popup::Bang && p.player == i);
@@ -118,6 +123,11 @@ fn tick(mut g: ResMut<Game>, mut pops: ResMut<Pops>) {
                 info!("surprise: \"!\" over player {i}");
             }
             None => {}
+        }
+        // a framed hit drops its balloon for the skull (none when the "!" already took the balloon down)
+        let p = &mut g.players[i];
+        if std::mem::take(&mut p.framed) && p.balloon.take().is_some() {
+            *skull = Some(i);
         }
     }
     // in doubles a point lost on an error: sweat over the player who made it, "..." over the partner, until the
@@ -145,7 +155,7 @@ fn tick(mut g: ResMut<Game>, mut pops: ResMut<Pops>) {
     }
     *was_over = over;
     if g.phase == Phase::Serve {
-        list.retain(|p| p.popup == Popup::Bang);
+        list.retain(|p| matches!(p.popup, Popup::Bang | Popup::Skull));
     }
     list.retain_mut(|p| p.tick());
 }

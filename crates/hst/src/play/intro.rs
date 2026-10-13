@@ -90,7 +90,7 @@ const BANNER_SOUND: u32 = 17;
 
 /// The system sound bank (slot 9), for the banner's sound (program 0 key 8).
 #[derive(Resource)]
-struct SystemBank(Option<std::sync::Arc<SoundBank>>);
+pub(super) struct SystemBank(pub(super) Option<std::sync::Arc<SoundBank>>);
 
 /// The title plate's sheets (`CourtPreview_00`, the court's name, `info`) and the court's plate row.
 #[derive(Resource)]
@@ -136,12 +136,22 @@ fn banner_quads(sets: i32, games: i32) -> Vec<(usize, [f32; 4], [f32; 4], [f32; 
 struct BannerSlot(usize);
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, start.after(super::setup))
+    app.add_systems(PostStartup, (start.after(super::setup), system_bank.after(start)))
         .add_systems(Update, (draw_plate, sounds))
         .add_systems(PostUpdate, hide_hud.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(RunFixedMainLoop, hold.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(PostUpdate, show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate))
         .add_systems(Update, (draw_banner, pose_banner));
+}
+
+/// The system bank for a match without the intro too (the framed hit's clank plays from it).
+fn system_bank(mut commands: Commands, args: Res<Args>, g: Option<Res<Game>>, system: Option<Res<SystemBank>>) {
+    if g.is_none() || system.is_some() {
+        return;
+    }
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(std::sync::Arc::new);
+    commands.insert_resource(SystemBank(bank));
 }
 
 #[allow(clippy::too_many_arguments)]

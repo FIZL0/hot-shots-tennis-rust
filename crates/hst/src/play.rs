@@ -161,6 +161,8 @@ struct Player {
     balloon: Option<(Balloon, u32)>,
     /// The AI was caught off guard this tick (a change-of-pace or fast-ball reaction, a wrong guess): `surprise`.
     surprised: bool,
+    /// B58: this tick's hit was framed (the forced "death lob"): `surprise` raises the skull over the player.
+    framed: bool,
     /// Stand-in AI: set once it has picked its shot for the coming ball (serving: the contact frame it waits for).
     bot_due: Option<usize>,
     /// Stand-in AI: the shot it last decided to leave to its partner.
@@ -1775,6 +1777,7 @@ fn strike(
     // a slow contact's mis-hit roll; a framed hit lobs to a wild spot
     let miss = g.mis_hit.take().filter(|_| class == 1 || class == 2);
     let framed = miss.filter(|m| m.wild).map(|_| timing::wild(g, who));
+    g.players[who].framed = framed.is_some();
     let (kind, target) = framed.map_or((kind, target), |f| (3, f.0));
     // launched as a volley (class 2: the volley tables and bounds, the high-ball blend), as the original
     let inside_high = swing::high_volley(branch, kind, framed.is_some(), g.players[who].aim_from[1], -at[1]);
@@ -4391,6 +4394,7 @@ fn play_sounds(
     voices: Option<Res<VoiceBanks>>,
     gallery: Option<Res<GalleryBank>>,
     music: Option<Res<MusicBanks>>,
+    system: Option<Res<intro::SystemBank>>,
     mut bgm: Local<Bgm>,
     mut heard: ResMut<heard::Heard>,
     mut played: ResMut<heard::Played>,
@@ -4434,10 +4438,12 @@ fn play_sounds(
         return;
     };
     // slot 0 the court, 1.. the players' voices (the umpire's voice, slot 5, is played below);
-    // ponytail: slot 9 (framed hits) is a character bank not loaded yet
+    // slot 9 the system bank (the framed hit's clank)
     for (p, at) in due {
         let b = if p.slot == 0 {
             Some(&bank)
+        } else if p.slot == 9 {
+            system.as_ref().and_then(|s| s.0.as_ref())
         } else {
             voices
                 .as_ref()
