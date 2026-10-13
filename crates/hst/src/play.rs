@@ -567,6 +567,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);
     app.add_plugins(match_stats::plugin);
+    app.add_plugins(MaterialPlugin::<effects::Fx>::default());
     app.add_plugins(menu::plugin);
     app.add_plugins(netplay::plugin);
     app.add_plugins(npcs::plugin);
@@ -1230,7 +1231,14 @@ fn setup(
     mut gallery_used: Local<[bool; 4]>,
     match_mod: Option<Res<crate::mods::MatchMod>>,
     swap: Option<Res<hand_swap::SwapHands>>,
+    mut fx_materials: Option<ResMut<Assets<effects::Fx>>>,
 ) {
+    // the headless tests register only StandardMaterial: the effects get a store of their own
+    let mut own_fx = None;
+    let fx_materials: &mut Assets<effects::Fx> = match fx_materials.as_deref_mut() {
+        Some(a) => a,
+        None => own_fx.insert(Assets::default()),
+    };
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let art = balloon_art(&mut iso, &mut images);
     let ((line_margin, margins), board, world, shot_params, umpire) = disc(&mut iso, args.stage, args.umpire);
@@ -1465,7 +1473,7 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
         &mut bindposes,
     )
@@ -1476,7 +1484,7 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
     )
     .expect("hit sparks");
@@ -1486,7 +1494,7 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
     )
     .expect("swing trails");
@@ -1496,7 +1504,7 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
     )
     .expect("ball flight");
@@ -1507,7 +1515,7 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
         &mut bindposes,
     )
@@ -1519,12 +1527,15 @@ fn setup(
         &mut commands,
         root,
         &mut meshes,
-        &mut materials,
+        fx_materials,
         &mut images,
         &mut bindposes,
     )
     .expect("bounce effects");
     commands.insert_resource(bounce);
+    if let Some(a) = own_fx {
+        commands.insert_resource(a);
+    }
     // the game's ball (`ball1.mdl`, radius 0.0325) and its shadow (`ballshadow.mdl`); their scales, and the outline,
     // are ball_shadow's
     let game_xb = iso.read("CMN/GAME.XB").expect("ball archive on disc");
