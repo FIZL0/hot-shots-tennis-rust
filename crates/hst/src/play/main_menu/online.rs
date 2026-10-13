@@ -1,5 +1,6 @@
 //! The Online screens (M2f, `net.rs`): Host, Find, Quickplay, Join by Code and the relay setting. Find lists every open
-//! lobby first (singles and doubles together); Host, Quickplay and Join by Code ask singles/doubles. Then this
+//! lobby first (singles and doubles together); Host and Quickplay ask singles/doubles, Join by Code and a link take the
+//! lobby's (B225). Then this
 //! machine's 1–3 players take their controllers (no more than the lobby's open seats) and join (or open) the lobby on
 //! placeholder picks, which holds their seats while they pick on the same character select as Local (B195; no
 //! computer players: the open seats are for the other peers). The lobby: its seats (who, their name, picking or
@@ -296,8 +297,7 @@ impl Menu {
                         }
                         Some(2) if !self.net.naming && is_short(&self.net.entry) => {
                             self.net.paste = self.net.entry.clone();
-                            self.net.go = Some(Go::Code);
-                            self.go(Screen::Mode, out);
+                            self.join_code(out);
                         }
                         Some(2) => out.push(Sound(1)),
                         _ => self.code_back(out),
@@ -443,12 +443,19 @@ impl Menu {
         out.push(Effect::Sound(1));
     }
 
+    /// Join by Code's code chosen: no singles/doubles (the lobby has it, taken from its room once in, B225), straight to
+    /// this machine's controllers, up to three until the lobby says (it refuses more than its open seats).
+    fn join_code(&mut self, out: &mut Vec<Effect>) {
+        (self.net.go, self.doubles, self.net.fit) = (Some(Go::Code), true, 0);
+        self.seats[1..].fill(None);
+        self.go(Screen::Assign, out);
+    }
+
     /// The pasted text as Join by Code's code: on to the picks if it parses.
     pub(super) fn pasted(&mut self, text: Option<String>, out: &mut Vec<Effect>) {
         if let Some(code) = text.as_deref().and_then(crate::net::code_in) {
             self.net.paste = code;
-            self.net.go = Some(Go::Code);
-            self.go(Screen::Mode, out);
+            self.join_code(out);
         } else {
             self.net.status = if cfg!(target_arch = "wasm32") {
                 "Paste a lobby link or code on the page first (Ctrl+V), then choose Paste."
@@ -489,6 +496,8 @@ impl Menu {
                 if r.vote.is_some() != v.room.as_ref().is_some_and(|o| o.vote.is_some()) {
                     (self.sel, v.ballot) = (0, None);
                 }
+                // the lobby's singles or doubles is everyone's (a code join didn't choose, a vote may change it)
+                self.doubles = r.doubles;
                 v.room = Some(r);
                 // seated (or the lobby open): on to its character select, the seats held meanwhile
                 if v.pick_next && self.screen == Screen::Lobby {
@@ -939,7 +948,7 @@ pub(super) fn linked(m: &mut Menu) {
     let text = std::env::var("HST_CODE").ok();
     let Some(code) = text.as_deref().and_then(crate::net::code_in) else { return };
     let net = View { paste: code, go: Some(Go::Code), ..default() };
-    *m = Menu { screen: Screen::Assign, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
+    *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
 }
 
 /// Join by Code's keyboard: typed symbols, Backspace and Enter (finish) go into the code, not to the menu's key bindings (the
@@ -1163,7 +1172,7 @@ mod tests {
         m.pasted(Some("hello".into()), &mut out);
         assert_eq!(m.screen, Screen::Online);
         m.pasted(Some(iroh::SecretKey::generate().public().to_string()), &mut out);
-        assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Code)));
+        assert_eq!((m.screen, m.net.go), (Screen::Assign, Some(Go::Code)));
     }
 
     #[test]
@@ -1189,10 +1198,18 @@ mod tests {
         }
         assert_eq!((m.net.entry.as_str(), m.sel), ("K7QX", KEYS + 2), "full: on Join");
         m.step(dev, ok);
-        assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Code)));
+        // B225: no singles/doubles, straight to the controllers; Back returns to the code
+        assert_eq!((m.screen, m.net.go), (Screen::Assign, Some(Go::Code)));
+        m.step(dev, Press { back: true, ..default() });
+        assert_eq!((m.screen, m.net.entry.as_str()), (Screen::Code, "K7QX"));
+        m.sel = KEYS + 2;
         m.step(dev, ok);
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
+        // the lobby's mode, whatever this machine had: a singles lobby's select is singles
+        assert_eq!(m.screen, Screen::Lobby);
+        m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], ..Default::default() }));
+        assert_eq!((m.screen, m.doubles, m.players()), (Screen::Chars, false, 2));
         // Back deletes, then leaves
         let mut m = Menu { screen: Screen::Code, net: View { entry: "AB".into(), ..default() }, ..default() };
         m.step(dev, Press { back: true, ..default() });
@@ -1203,7 +1220,7 @@ mod tests {
         // a pasted link joins its code
         let mut out = Vec::new();
         m.pasted(Some(crate::net::link("K7QX")), &mut out);
-        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Mode, "K7QX"));
+        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Assign, "K7QX"));
     }
 
     #[test]

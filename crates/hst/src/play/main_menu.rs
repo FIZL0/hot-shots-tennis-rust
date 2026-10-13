@@ -648,7 +648,11 @@ impl Menu {
                         }
                     } else if k.back {
                         self.seats[1..].fill(None);
-                        self.screen = if self.net.go == Some(online::Go::Find) { Screen::Lobbies } else { Screen::Mode };
+                        self.screen = match self.net.go {
+                            Some(online::Go::Find) => Screen::Lobbies,
+                            Some(online::Go::Code) => Screen::Code,
+                            _ => Screen::Mode,
+                        };
                         out.push(Sound(1));
                     }
                 } else if k.ok && seated.is_none() {
