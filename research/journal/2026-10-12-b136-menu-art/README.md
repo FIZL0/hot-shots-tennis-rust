@@ -87,8 +87,13 @@ timed out once under load (other slots were building) and passes when run alone;
   - **Singles/Doubles pill rims:** the mode screen and the character select bar drew the pills from
     [2, 2, 252, 30], cutting 2 px off every side, so the dark rim was missing top and bottom. They now take the whole
     pill, [0, 0/32, 256, 32], scaled to the same place and size (`main_menu.rs`); `k_mode3.png`, `k_chars3.png`.
-- **Faint marks under the Doubles pill's bottom border:** linear sampling at the pill rect's edge bleeds into the 1P
-  tags right below it on characterselect2_00. That was already there with the disc's sheets.
+  - **Singles/Doubles pills redrawn as shapes:** upscaled, their round ends stayed jaggy. `menu_art::PILLS` now
+    draws each as three anti-aliased stadiums (2 px dark rim, 2 px white ring, flat fill), colours sampled from the
+    disc bar, before the label is set. The stray marks under the Doubles pill came from bilinear sampling into the
+    1P tags at disc row 64; its source rect now stops at 31.75 px. `k_mode4_crop.png`, `k_chars4_crop.png`.
+  - **Pause "sets"/"games":** the "games" box in `PAUSED` was 82–106, straddling the "sets" cell (64–88) and its own
+    (88–112), so the new word was cut in half and spilled into "sets". Boxes re-measured from the sheet's ink:
+    sets 67–86, games 92–111. `k_pause5_crop.png`.
 - **Pre-existing overlap:** the "Tab / Square: 92 custom characters…" hint overlaps the character grid. That is not B136.
 - **Umpire select:** the port has no separate umpire select. The umpire is a row on the confirm screen, which is
   covered above.

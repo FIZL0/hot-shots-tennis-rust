@@ -1346,7 +1346,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         Screen::Mode => {
             d.frame(2, 5);
             // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
-            for (i, src) in [[0.0, 0.0, 256.0, 32.0], [0.0, 32.0, 256.0, 32.0]].into_iter().enumerate() {
+            for (i, src) in [[0.0, 0.0, 256.0, 32.0], [0.0, 32.0, 256.0, 31.75]].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
                 d.q(CS0, src, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
             }
@@ -1401,7 +1401,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     hints(d);
     let n = m.players();
-    d.q(CS0, if m.doubles { [0.0, 32.0, 256.0, 32.0] } else { [0.0, 0.0, 256.0, 32.0] }, [192.0, 54.0, 256.0, 32.0], WHITE, 128.0);
+    d.q(CS0, if m.doubles { [0.0, 32.0, 256.0, 31.75] } else { [0.0, 0.0, 256.0, 32.0] }, [192.0, 54.0, 256.0, 32.0], WHITE, 128.0);
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {

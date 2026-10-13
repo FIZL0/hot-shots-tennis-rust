@@ -43,6 +43,10 @@ const fn title(name: &'static str, words: &'static str) -> Sheet {
     Sheet { name, labels: &[], title: Some(words) }
 }
 
+/// Rounded bars drawn again as shapes (x, y, w, h on the disc sheet): a 2-px dark rim, a 2-px white ring and a flat
+/// fill, each colour taken from the disc bar, so their round ends stay smooth (the mode pills).
+const PILLS: &[(&str, &[(u16, u16, u16, u16)])] = &[("characterselect2_00", &[(0, 0, 256, 32), (0, 32, 256, 32)])];
+
 const SHEETS: &[Sheet] = &[
     sheet("option_00", OPTION_00),
     sheet("word", &[]),
@@ -255,8 +259,8 @@ const PAUSED: &[Label<'static>] = &[
     (48, 43, 15, 19, "4"),
     (65, 43, 14, 20, "5"),
     (81, 42, 15, 21, "6"),
-    (1, 67, 42, 15, "sets"),
-    (1, 82, 58, 24, "games"),
+    (1, 67, 43, 19, "sets"),
+    (1, 92, 59, 19, "games"),
 ];
 
 const TEAMS: &[Label<'static>] = &[(0, 4, 95, 24, "A Team"), (2, 36, 93, 22, "B Team")];
@@ -349,7 +353,8 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     }
     let chars: Vec<(u16, u16, u16, u16, String)> = if name == "word" { glyph_boxes(&pic.rgba, w) } else { vec![] };
     labels.extend(chars.iter().map(|(x, y, lw, lh, c)| (*x, *y, *lw, *lh, c.as_str())));
-    let out = rebuild(w, h, &pic.rgba, &labels, if name == "word" { BOLD } else { HEAVY }, shadow);
+    let pills = PILLS.iter().find(|p| p.0 == name).map_or(&[][..], |p| p.1);
+    let out = rebuild(w, h, &pic.rgba, pills, &labels, if name == "word" { BOLD } else { HEAVY }, shadow);
     if let Ok(dir) = std::env::var("HST_MENU_ART") {
         let _ = image::save_buffer(format!("{dir}/{name}.png"), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
     }
@@ -369,7 +374,7 @@ pub(crate) fn relabel(images: &mut Assets<Image>, w: usize, h: usize, rgba: &[u8
     let ink: Vec<(usize, usize)> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| rgba[(y * w + x) * 4 + 3] > 0x20).collect();
     let (x0, y0) = (ink.iter().map(|p| p.0).min()?, ink.iter().map(|p| p.1).min()?);
     let (x1, y1) = (ink.iter().map(|p| p.0).max()? + 1, ink.iter().map(|p| p.1).max()? + 1);
-    let out = rebuild(w, h, rgba, &[(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16, s)], HEAVY, false);
+    let out = rebuild(w, h, rgba, &[], &[(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16, s)], HEAVY, false);
     let (w, h) = (out.width(), out.height());
     let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
     crate::textures::ours(handle.id(), Vec2::splat(K as f32));
@@ -381,7 +386,7 @@ fn unpremultiply(p: Pixmap) -> Vec<u8> {
 }
 
 /// The sheet at `K`×: labels erased and set again, the rest snapped sharp.
-fn rebuild(w: usize, h: usize, rgba8: &[u8], labels: &[Label], font: &[u8], shadow: bool) -> Pixmap {
+fn rebuild(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: &[Label], font: &[u8], shadow: bool) -> Pixmap {
     let mut rgba: Vec<[f32; 4]> = rgba8.chunks(4).map(|c| [c[0], c[1], c[2], c[3]].map(|v| v as f32 / 255.0)).collect();
     let styles: Vec<Style> = labels.iter().map(|l| Style::sample(&rgba, w, h, l)).collect();
     for (&(x, y, lw, lh, t), s) in labels.iter().zip(&styles) {
@@ -393,11 +398,46 @@ fn rebuild(w: usize, h: usize, rgba8: &[u8], labels: &[Label], font: &[u8], shad
         erase(&mut rgba, w, h, &(x, y, (lw + pad).min(w as u16 - x), (lh + pad).min(h as u16 - y), t));
     }
     let mut out = upscale(&rgba, w, h);
+    for &(x, y, pw, ph) in pills {
+        // colours from the disc bar: rim and ring at the top middle, the fill halfway down left of the words
+        let at = |dx: u16, dy: u16| rgba8[((y + dy) as usize * w + (x + dx) as usize) * 4..][..3].to_vec();
+        pill(&mut out, x, y, pw, ph, [at(pw / 2, 0), at(pw / 2, 2), at(20, ph / 2)]);
+    }
     let font = ab_glyph::FontRef::try_from_slice(font).expect("menu font");
     for (l, s) in labels.iter().zip(&styles) {
         label(&mut out, &font, l, s, shadow);
     }
     out
+}
+
+/// A stadium in `cols` (rim, ring, fill), outer edge on the disc box, 2 disc px each for the rim and ring.
+fn pill(out: &mut Pixmap, x: u16, y: u16, w: u16, h: u16, cols: [Vec<u8>; 3]) {
+    let k = K as f32;
+    let (x0, y0, x1, y1) = (x as f32 * k, y as f32 * k, (x + w) as f32 * k, (y + h) as f32 * k);
+    // the box's pixels are the bar's own: clear them so the anti-aliased round ends blend onto nothing
+    let ow = out.width();
+    for py in y0 as u32..y1 as u32 {
+        out.pixels_mut()[(py * ow + x0 as u32) as usize..(py * ow + x1 as u32) as usize].fill(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    }
+    for (i, col) in cols.iter().enumerate() {
+        let d = 2.0 * k * i as f32;
+        let r = (y1 - y0) / 2.0 - d;
+        let mut pb = PathBuilder::new();
+        let (l, rr, t, b) = (x0 + d, x1 - d, y0 + d, y1 - d);
+        pb.move_to(l + r, t);
+        pb.line_to(rr - r, t);
+        // quarter circles as cubics
+        let c = r * 0.5523;
+        pb.cubic_to(rr - r + c, t, rr, t + r - c, rr, t + r);
+        pb.cubic_to(rr, b - r + c, rr - r + c, b, rr - r, b);
+        pb.line_to(l + r, b);
+        pb.cubic_to(l + r - c, b, l, b - r + c, l, b - r);
+        pb.cubic_to(l, t + r - c, l + r - c, t, l + r, t);
+        pb.close();
+        let mut paint = Paint { anti_alias: true, ..Paint::default() };
+        paint.set_color_rgba8(col[0], col[1], col[2], 255);
+        out.fill_path(&pb.finish().expect("pill"), &paint, FillRule::Winding, Transform::identity(), None);
+    }
 }
 
 /// A label's colours, from its disc pixels: the bright fill per row, the dark outline and its width.
@@ -634,7 +674,7 @@ mod tests {
                 rgba[((y * w + x) * 4) as usize..][..4].copy_from_slice(&if edge { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
             }
         }
-        let out = rebuild(w as usize, h as usize, &rgba, &[(8, 8, 48, 16, "Ok")], HEAVY, false);
+        let out = rebuild(w as usize, h as usize, &rgba, &[], &[(8, 8, 48, 16, "Ok")], HEAVY, false);
         assert_eq!((out.width(), out.height()), (w * K, h * K));
         let px = |x: u32, y: u32| out.pixel(x, y).unwrap().demultiply();
         assert_eq!(px(2, 2).alpha(), 0, "outside the box: cleared");
