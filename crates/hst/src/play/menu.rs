@@ -448,7 +448,10 @@ pub fn plugin(app: &mut App) {
         // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
         .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(Update, (step, draw).chain().before(super::main_menu::pause::Systems));
+        .add_systems(Update, (step, draw).chain().before(super::main_menu::pause::Systems))
+        // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match
+        .add_systems(Startup, super::main_menu::cursor::setup)
+        .add_systems(Update, super::main_menu::cursor::tick.after(draw));
     super::main_menu::pause::plugin(app);
 }
 
@@ -626,6 +629,7 @@ fn draw(
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
     mut others: Query<(Entity, &mut Visibility), Hud>,
     mut hidden: Local<Vec<(Entity, Visibility)>>,
+    cursor: Option<Res<super::main_menu::cursor::Cursor>>,
 ) {
     let (Some(art), Some(panel_art), Some(colours)) = (art, panel_art, colours) else {
         return;
@@ -660,7 +664,8 @@ fn draw(
             set: s.set,
             set_games: s.set_games,
             sel: menu.sel,
-            hand_x: menu.hand.x,
+            // B179: the 3D hand wags in place (`cursor.ani`) as on the main menus; `hsm_yubi` swings
+            hand_x: if cursor.is_some() { 0.0 } else { menu.hand.x },
             fade: menu.quitting,
             ask: menu.ask,
         })
@@ -673,17 +678,26 @@ fn draw(
             *vis = Visibility::Hidden;
             continue;
         };
-        img.image = match quad.tex {
-            Tex::Own(k) => art.0[k].clone(),
-            Tex::Slot => panel_art.0[1].clone(),
-            Tex::Face(p) => panel_art.0[panel::FACES + p].clone(),
+        let three_d = cursor.as_ref().filter(|_| quad.tex == HAND);
+        img.image = match (three_d, quad.tex) {
+            (Some(c), _) => c.image.clone(),
+            (_, Tex::Own(k)) => art.0[k].clone(),
+            (_, Tex::Slot) => panel_art.0[1].clone(),
+            (_, Tex::Face(p)) => panel_art.0[panel::FACES + p].clone(),
         };
         let [u, v, w, h] = quad.src;
         // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
-        img.rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (!matches!(quad.tex, Tex::Face(_)) && three_d.is_none()).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
-        let [x, y, w, h] = quad.dst;
+        let [mut x, mut y, mut w, mut h] = quad.dst;
+        if three_d.is_some() {
+            // where the main menus' rows put it (row x − 60, y + 3), not `hsm_yubi`'s (x − 48, y + 8)
+            (x, y) = (x - 12.0, y - 5.0);
+            // the hand's image covers `PAD` times its quad, around the same centre (B146)
+            let pad = super::main_menu::cursor::PAD;
+            (x, y, w, h) = (x - w * (pad - 1.0) / 2.0, y - h * (pad - 1.0) / 2.0, w * pad, h * pad);
+        }
         // widescreen: the dimmer and the top bar span the window, "Paused" and the rules keep to its left
         let anchor = if [DIM, BAR, TEXT].contains(&quad.tex) { Anchor::Span } else { Anchor::Centre };
         let (left, width) = super::widescreen::place(x, w, share, anchor);

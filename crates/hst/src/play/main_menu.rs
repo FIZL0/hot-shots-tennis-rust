@@ -41,7 +41,7 @@ use crate::audio::{Sound, SoundBank};
 pub use super::widescreen::WIDE;
 pub(crate) use previews::face;
 
-mod cursor;
+pub(super) mod cursor;
 pub(crate) mod flame;
 mod online;
 mod mods_screen;

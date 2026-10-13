@@ -1,7 +1,8 @@
 //! The menus' pointing hand (B40e1): the original's menu overlay draws `MENU00B.XB0`'s `menu/3d/cursor` model, a
 //! skinned 3D hand playing `cursor.ani` (its fingers and wrist wag in place; the hand doesn't slide), not the pause
 //! menu's swinging `hsm_yubi` sprite. Drawn here by its own camera into an image that the layout's `Tex::Cursor`
-//! quads show, so the hand stays a quad of the 640×448 layout at any aspect ratio.
+//! quads show, so the hand stays a quad of the 640×448 layout at any aspect ratio. The match's pause menu points with
+//! it too (B179, `play/menu.rs`), in place of `hsm_yubi`.
 
 use bevy::app::Propagate;
 use bevy::camera::visibility::RenderLayers;
@@ -19,7 +20,7 @@ use crate::effects::Shown;
 const LAYER: usize = 8;
 /// How many times the layout's 64×32 `Tex::Cursor` quad the image covers (same centre): room for every frame of
 /// `cursor.ani`, whose finger and wrist rise well above the fingertip-right pose (B146), as the original draws it uncropped.
-pub(super) const PAD: f32 = 3.0;
+pub(in crate::play) const PAD: f32 = 3.0;
 /// The image: the padded quad at 4×.
 const SIZE: UVec2 = UVec2::new((256.0 * PAD) as u32, (128.0 * PAD) as u32);
 /// The box the quad's 64×32 shows (x, y centre after the root's turn; width; the height is half of it): the hand and
@@ -27,8 +28,8 @@ const SIZE: UVec2 = UVec2::new((256.0 * PAD) as u32, (128.0 * PAD) as u32);
 const VIEW: [f32; 3] = [-0.11, -0.02, 0.35];
 
 #[derive(Resource)]
-pub(super) struct Cursor {
-    pub(super) image: Handle<Image>,
+pub(in crate::play) struct Cursor {
+    pub(in crate::play) image: Handle<Image>,
     effect: Effect,
     shown: Shown,
     acc: f32,
@@ -36,7 +37,7 @@ pub(super) struct Cursor {
     at: Vec<(Val, Val)>,
 }
 
-pub(super) fn setup(
+pub(in crate::play) fn setup(
     mut commands: Commands,
     args: Res<Args>,
     mut images: ResMut<Assets<Image>>,
@@ -87,7 +88,7 @@ pub(super) fn setup(
 
 /// The clip at 60 Hz, from its start again at its end. As the original, every cursor move restarts `cursor.ani` at
 /// frame 0: it opens with a still second, so a moving hand holds still and only wags once it has sat for ~1 s.
-pub(super) fn tick(
+pub(in crate::play) fn tick(
     cursor: Option<ResMut<Cursor>>,
     time: Res<Time>,
     hands: Query<(&ImageNode, &Node, &InheritedVisibility)>,
