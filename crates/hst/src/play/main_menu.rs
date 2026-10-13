@@ -1265,7 +1265,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" => Screen::Chars,
+        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "chars-online" => Screen::Chars,
         "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
@@ -1301,7 +1301,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         }
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
         mods_screen::sample(&mut menu, &screen);
-        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) {
+        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) || screen == "chars-online" {
             online::sample(&mut menu);
         }
     }
@@ -1777,6 +1777,10 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     mode_bar(d, m.doubles as usize, true, [192.0, 54.0, 256.0, 32.0], if m.doubles { "Doubles" } else { "Singles" });
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
+    // B201: online, every taken seat shows its player's place (this machine's own lead), an open one stays dark
+    let online = m.net.room.is_some() && !m.net.me.is_empty() && !m.net.started;
+    let picking = |p: usize| if online { m.seats[p].is_some() || m.remote(p).is_some() } else { picking(p) };
+    let lead = if online { (0..n).find(|&p| m.seats[p].is_some() && !m.players[p].ready).or((0..n).find(|&p| m.seats[p].is_some())).unwrap_or(lead) } else { lead };
     if m.custom {
         custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready && m.players[p].modded), lead);
     } else {
@@ -1801,7 +1805,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         let pl = m.players[p];
         let c = pl.char();
         let [x, y] = panels[p];
-        let human = m.seats[p].is_some();
+        let human = m.seats[p].is_some() || m.remote(p).is_some_and(|s| s.human());
         let picking = picking(p);
         d.anchor = Anchor::Sides;
         let modded = match m.who(p) {
@@ -1871,7 +1875,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
         }
         if !human {
-            d.text("COM", x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
+            d.text(if online && !picking { "Open" } else { "COM" }, x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
+        }
+        // B201: another machine's player: whose it is
+        if let Some(s) = m.remote(p).filter(|s| s.human() && online) {
+            let name = m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online", |n| n.as_str());
+            d.fitted(name, x + 72.0, y + 172.0, 14.0, 140.0);
         }
         d.anchor = Anchor::Centre;
     }
@@ -2416,7 +2425,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
-        (online::poll.before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
+        (online::poll.after(step).before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
     previews::plugin(app);
     mods_screen::plugin(app);

@@ -207,11 +207,57 @@ pub struct Room {
     /// B196: this machine comes back into a match under way (its state follows in `Msg::Restart`).
     #[serde(default)]
     pub rejoin: bool,
+    /// B201: each peer's players on the lobby's character select as they choose, in the order of the seats it holds.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub live: std::collections::BTreeMap<String, Vec<Live>>,
+}
+
+/// B201: one player's place on the character select, live: the disc character hovered (a mod's donor, with the mod's
+/// id), the costume, and whether they're ready on it. Only for showing; the match takes the seats' picks.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Live {
+    pub char: usize,
+    pub costume: usize,
+    pub ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#mod: Option<String>,
 }
 
 impl Room {
     pub fn open(&self) -> usize {
         self.seats.iter().filter(|s| s.is_none()).count()
+    }
+
+    /// B201: seat `i`'s player's live place on the select (its peer's k-th held seat's), if its peer sent one.
+    pub fn live_of(&self, i: usize) -> Option<&Live> {
+        let peer = &self.seats.get(i)?.as_ref()?.peer;
+        let k = self.seats[..i].iter().flatten().filter(|s| s.peer == *peer).count();
+        self.live.get(peer)?.get(k)
+    }
+
+    /// B201: the host's computer player in open (or computer) seat `i`, or the seat opened again (`None`); false (no
+    /// change) for a person's seat.
+    fn bot(&mut self, i: usize, pick: Option<Pick>) -> bool {
+        if self.seats.get(i).is_none_or(|s| s.as_ref().is_some_and(Seat::human)) {
+            return false;
+        }
+        self.seats[i] = pick.map(|pick| Seat { peer: CPU.into(), pick });
+        self.ver += 1;
+        true
+    }
+
+    /// B201: singles or doubles, the taken seats (people and computer) first in order; false (no change) if they
+    /// don't fit.
+    fn set_doubles(&mut self, doubles: bool) -> bool {
+        let taken: Vec<Seat> = self.seats.iter().flatten().cloned().collect();
+        let n = if doubles { 4 } else { 2 };
+        if doubles == self.doubles || taken.len() > n {
+            return false;
+        }
+        self.doubles = doubles;
+        self.seats = taken.into_iter().map(Some).chain(std::iter::repeat(None)).take(n).collect();
+        self.ver += 1;
+        true
     }
 
     /// Seat `peer`'s picks in the first open seats; false (and no change) if they don't all fit.
@@ -295,6 +341,7 @@ impl Room {
         self.names.remove(peer);
         self.ready.remove(peer);
         self.picking.remove(peer);
+        self.live.remove(peer);
         for s in &mut self.seats {
             if s.as_ref().is_some_and(|s| s.peer == peer) {
                 *s = None;
@@ -406,6 +453,8 @@ pub enum Msg {
     Prepared(bool),
     /// In the lobby (B195): a guest's chosen picks for the seats it holds (it joined on placeholders).
     Picks(Vec<Pick>),
+    /// B201: a guest's players' places on the select, as they move (`Room::live`).
+    Live(Vec<Live>),
     /// After a desync (B154b, `play/resync.rs`): the host's match state before a tick in pieces (`last` ends it; a
     /// browser's data channel takes ~256 KB a message), and a peer having taken it (the tick it's in sync from).
     State { tick: u32, data: Vec<u8>, last: bool },
@@ -575,6 +624,11 @@ pub enum Cmd {
     /// In the lobby (B195): this machine's chosen picks for the seats it holds; the host's court, sets, games, umpire.
     Picks(Vec<Pick>),
     Venue(usize, usize, i32, u8),
+    /// B201: this machine's players' places on the select; the host's computer player in a seat (`None` opens it);
+    /// the host's singles (false) or doubles.
+    Live(Vec<Live>),
+    Bot(usize, Option<Pick>),
+    Doubles(bool),
 }
 
 /// What the network tells the app.
@@ -585,6 +639,8 @@ pub enum Event {
     Hosting,
     /// Hosting: the code (ticket) to share.
     Code(String),
+    /// B201: this machine's peer name in the lobby's seats (a guest's endpoint ID; the host is "host").
+    Me(String),
     /// Hosting: the short code that also finds the lobby (B104).
     Short(String),
     Found(Vec<Listing>),
@@ -1208,6 +1264,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         dirty = true;
                     }
                 }
+                // B201: a guest's cursors, shown live to everyone (not a line-up change: no relisting, no ready reset)
+                Guest::Said(peer, Msg::Live(l)) => {
+                    if starting.is_none() && room.names.contains_key(&peer) && room.live.get(&peer) != Some(&l) {
+                        room.live.insert(peer, l);
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                    }
+                }
                 Guest::Said(peer, Msg::Want(h)) => {
                     if let Some(b) = want(&peer, h, &room, &joined, &mut packs, &mut wants) {
                         deliver(&peer, h, &b, &joined);
@@ -1260,6 +1324,24 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
+                }
+                Some(Cmd::Live(l)) if starting.is_none() => {
+                    room.live.insert("host".into(), l);
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
+                Some(c @ (Cmd::Bot(..) | Cmd::Doubles(_))) if starting.is_none() => {
+                    let changed = match c {
+                        Cmd::Bot(i, p) => room.bot(i, p),
+                        Cmd::Doubles(d) => room.set_doubles(d),
+                        _ => false,
+                    };
+                    if changed {
+                        ready.clear();
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                        dirty = true;
+                    }
                 }
                 Some(Cmd::Venue(court, sets, games, umpire)) if starting.is_none() => {
                     (room.court, room.sets, room.games, room.umpire) = (court, sets, games, umpire);
@@ -1561,6 +1643,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
     }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
     link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone() });
+    cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(ev.send(Event::Pack(h, b)))));
@@ -1635,6 +1718,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
                 Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
+                Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -1966,6 +2050,82 @@ mod tests {
         assert!(r.repick("g", &[Pick::disc(3, 1), Pick::disc(5, 0)]));
         let chars: Vec<_> = r.seats.iter().flatten().map(|s| s.pick.char).collect();
         assert_eq!((chars, r.picking.is_empty(), r.ready.is_empty(), r.ver), (vec![0, 3, 5], true, true, v + 1));
+    }
+
+    /// B201: the host's computer players (open and people's seats only), singles/doubles (the taken seats first, if
+    /// they fit), and each seat's live place by its peer's held-seat order.
+    #[test]
+    fn host_bots_mode_and_live_places() {
+        let mut r = room(true);
+        assert!(r.take("host", &[Pick::disc(0, 0)]) && r.take("g", &[Pick::disc(1, 0), Pick::disc(2, 0)]));
+        assert!(!r.bot(1, Some(Pick::disc(4, 0))), "a person's seat");
+        assert!(!r.bot(9, None));
+        let v = r.ver;
+        assert!(r.bot(3, Some(Pick::disc(4, 2))) && r.bot(3, Some(Pick::disc(5, 1))));
+        assert_eq!((r.seats[3].as_ref().map(|s| (s.peer.as_str(), s.pick.char)), r.ver), (Some((CPU, 5)), v + 2));
+        assert!(!r.set_doubles(false), "four taken");
+        assert!(r.bot(3, None) && r.seats[3].is_none());
+        r.live.insert("g".into(), vec![Live { char: 7, ..Default::default() }, Live { char: 8, ready: true, ..Default::default() }]);
+        assert_eq!((r.live_of(1).map(|l| l.char), r.live_of(2).map(|l| l.char), r.live_of(0)), (Some(7), Some(8), None));
+        r.leave("g");
+        assert!(r.live.is_empty() && r.set_doubles(false) && !r.set_doubles(false));
+        assert_eq!((r.doubles, r.seats.len(), r.seats[0].as_ref().map(|s| s.peer.as_str())), (false, 2, Some("host")));
+        assert!(r.set_doubles(true) && r.seats.len() == 4);
+    }
+
+    /// B201 over a local connection: a guest's live place reaches the host, the host's computer player and court reach
+    /// the guest, and Start carries them (~2 s).
+    #[test]
+    fn live_places_and_a_hosts_bot_reach_everyone() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(0, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let Event::Me(me) = next(&gev, |e| matches!(e, Event::Me(_))).await else { unreachable!() };
+            next(&gev, |e| matches!(e, Event::Room(r) if r.seats[1].as_ref().is_some_and(|s| s.peer == me))).await;
+            let l = Live { char: 6, costume: 3, ..Default::default() };
+            gcmd.send(Cmd::Live(vec![l.clone()])).unwrap();
+            hcmd.send(Cmd::Live(vec![Live { char: 2, ready: true, ..Default::default() }])).unwrap();
+            let Event::Room(seen) = next(&hev, |e| matches!(e, Event::Room(r) if r.live.len() == 2)).await else { unreachable!() };
+            assert_eq!(seen.live_of(1), Some(&l));
+            hcmd.send(Cmd::Bot(2, Some(Pick::disc(9, 4)))).unwrap();
+            hcmd.send(Cmd::Bot(1, None)).unwrap();
+            hcmd.send(Cmd::Venue(5, 1, 4, 2)).unwrap();
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5)).await else { unreachable!() };
+            assert_eq!(seen.seats[2].as_ref().map(|s| (s.human(), s.pick.char, s.pick.costume)), Some((false, 9, 4)));
+            assert_eq!(seen.seats[1].as_ref().map(|s| s.peer.as_str()), Some(me.as_str()), "the guest's seat isn't the host's to clear");
+            assert_eq!(seen.live_of(0).map(|l| l.char), Some(2));
+            gcmd.send(Cmd::Picks(vec![Pick::disc(6, 3)])).unwrap();
+            gcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.len() == 1)).await;
+            hcmd.send(Cmd::Start).unwrap();
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            let seats: Vec<_> = r.seats.iter().flatten().map(|s| (s.pick.char, s.pick.costume)).collect();
+            assert_eq!(seats[..3], [(0, 0), (6, 3), (9, 4)], "the match has the lobby's picks and the host's computer player");
+        });
     }
 
     #[test]
