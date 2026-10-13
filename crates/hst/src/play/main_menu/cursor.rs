@@ -17,10 +17,13 @@ use crate::effects::Shown;
 
 /// Its render layer (the select's previews use 1–4 and 6).
 const LAYER: usize = 8;
-/// The image: the quad's 64×32 at 4×.
-const SIZE: UVec2 = UVec2::new(256, 128);
-/// The box the image shows (x, y centre after the root's turn; width; the height is half of it): the hand and
-/// fingers of `cursor.ani`, fingertip right as the original's.
+/// How many times the layout's 64×32 `Tex::Cursor` quad the image covers (same centre): room for every frame of
+/// `cursor.ani`, whose finger and wrist rise well above the fingertip-right pose (B146), as the original draws it uncropped.
+pub(super) const PAD: f32 = 3.0;
+/// The image: the padded quad at 4×.
+const SIZE: UVec2 = UVec2::new((256.0 * PAD) as u32, (128.0 * PAD) as u32);
+/// The box the quad's 64×32 shows (x, y centre after the root's turn; width; the height is half of it): the hand and
+/// fingers of `cursor.ani`, fingertip right as the original's; the camera sees `PAD` times it.
 const VIEW: [f32; 3] = [-0.11, -0.02, 0.35];
 
 #[derive(Resource)]
@@ -65,6 +68,7 @@ pub(super) fn setup(
     effect.start();
     let image = images.add(Image::new_target_texture(SIZE.x, SIZE.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None));
     let [x, y, w] = VIEW;
+    let w = w * PAD;
     commands.spawn((
         Camera3d::default(),
         Camera { order: -1, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },

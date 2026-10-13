@@ -2002,7 +2002,11 @@ fn draw(
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
-        let [x, y, w, h] = quad.dst;
+        let [mut x, mut y, mut w, mut h] = quad.dst;
+        if quad.tex == Tex::Cursor && cursor.is_some() {
+            // the hand's image covers `PAD` times its quad, around the same centre (B146)
+            (x, y, w, h) = (x - w * (cursor::PAD - 1.0) / 2.0, y - h * (cursor::PAD - 1.0) / 2.0, w * cursor::PAD, h * cursor::PAD);
+        }
         let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
         let (mut top, mut height) = (y / 4.48, h / 4.48);
         if quad.tex == Tex::Qr
