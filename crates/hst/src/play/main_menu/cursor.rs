@@ -29,6 +29,8 @@ pub(super) struct Cursor {
     effect: Effect,
     shown: Shown,
     acc: f32,
+    /// Where the hand quads were last frame: a change is a cursor move.
+    at: Vec<(Val, Val)>,
 }
 
 pub(super) fn setup(
@@ -76,19 +78,27 @@ pub(super) fn setup(
         AmbientLight { brightness: 50.0, ..default() },
         layers,
     ));
-    commands.insert_resource(Cursor { image, effect, shown, acc: 0.0 });
+    commands.insert_resource(Cursor { image, effect, shown, acc: 0.0, at: Vec::new() });
 }
 
-/// The clip at 60 Hz, from its start again at its end.
+/// The clip at 60 Hz, from its start again at its end. As the original, every cursor move restarts `cursor.ani` at
+/// frame 0: it opens with a still second, so a moving hand holds still and only wags once it has sat for ~1 s.
 pub(super) fn tick(
     cursor: Option<ResMut<Cursor>>,
     time: Res<Time>,
+    hands: Query<(&ImageNode, &Node, &InheritedVisibility)>,
     mut q: Query<(&mut Visibility, &mut MorphWeights)>,
     mut joints: Query<&mut Transform>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Some(mut cursor) = cursor else { return };
     let c = &mut *cursor;
+    let at: Vec<_> = hands.iter().filter(|(img, _, vis)| img.image == c.image && vis.get()).map(|(_, n, _)| (n.left, n.top)).collect();
+    if at != c.at {
+        c.at = at;
+        c.effect.start();
+        c.acc = 0.0;
+    }
     c.acc += time.delta_secs() * 60.0;
     while c.acc >= 1.0 {
         c.acc -= 1.0;
