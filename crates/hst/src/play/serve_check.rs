@@ -126,6 +126,30 @@ mod tests {
         assert_eq!((g.phase.clone(), g.rally.faults), (Phase::Post, 1), "a whiffed serve is a fault");
     }
 
+    /// B13: a toss that drops untouched bounces with no contact record (the original's bounce effects stay off, as
+    /// `context/b13`'s slot 3 capture: bounces 0→1→2, record pointer null, no mark/ring/puff); a whiffed one's
+    /// bounce has one (its rally phase started with the press).
+    #[test]
+    fn untouched_toss_leaves_no_bounce_effects() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        for (script, want) in [(&[(0, 0x4000), (5, 0)][..], false), (&[(0, 0x4000), (5, 0), (119, 0x4000), (124, 0)][..], true)] {
+            let mut app = to_serve();
+            let mut seen = None;
+            for t in 0..140 {
+                let held = script.iter().rev().find(|(k, _)| *k <= t).map_or(0, |s| s.1);
+                app.world_mut().resource_mut::<Replay>().0.push_back(pad(held));
+                app.world_mut().run_schedule(FixedUpdate);
+                let g = app.world().resource::<Game>();
+                if g.flight.bounces == 1 && seen.is_none() {
+                    seen = Some(bounce_recorded(g));
+                }
+            }
+            assert_eq!(seen, Some(want), "{script:?}");
+        }
+    }
+
     /// B26: each player's serve data is their own character's, as slot 3's RAM (characters 6, 4, 3, 11) holds it:
     /// contact windows, reach, powers and both tosses' timing tables (once character 0's for everyone).
     #[test]
