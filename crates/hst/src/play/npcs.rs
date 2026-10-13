@@ -123,7 +123,7 @@ fn setup(
     };
     let players = g.rules.players as u32;
     let walkers = game.walkers(n as u32);
-    let mut hidden = Vec::new();
+    let (mut hidden, mut off) = (Vec::new(), Vec::new());
     let mut crowd = Vec::new();
     let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), mark: Vec::new(), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
@@ -184,6 +184,10 @@ fn setup(
                 let e = place(&data, &c.world, c.scale);
                 if t == 15 {
                     hidden.push(e); // the passing ball waits off until a change of ends rolls it
+                } else if !(tr.active && tr.on && tr.speed != 0.0) {
+                    // off from its spawn (court 6's bear till a deciding-set tiebreak): hidden through the intro too,
+                    // which holds the match (and `step`, which draws it) still
+                    off.push(e);
                 }
                 npcs.figures.push(Some(npcs.triggers.len()));
                 npcs.triggers.push((e, tr, row));
@@ -210,7 +214,7 @@ fn setup(
             npcs.cheers.court5(&npcs.marks);
         }
     }
-    for &e in &hidden {
+    for &e in hidden.iter().chain(&off) {
         commands.entity(e).insert(Visibility::Hidden);
     }
     npcs.uncull = hidden;
