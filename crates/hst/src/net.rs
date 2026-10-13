@@ -585,6 +585,8 @@ struct Ctx {
     ev: mpsc::Sender<Event>,
     /// This player's name (`Cmd::Name`).
     name: String,
+    /// The relays are on (n0 or own): the codes need one, as browsers reach peers only through relays (B175).
+    relays: bool,
 }
 
 type Lan = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<EndpointId, Listing>>>;
@@ -719,7 +721,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             return;
         }
     };
-    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone() };
+    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), relays: cfg.relay != Relay::Off };
     bevy::log::info!("online in {:?}", t0.elapsed());
     cx.say(Event::Status("Online.".into()));
     while let Some(c) = cmds.recv().await {
@@ -953,9 +955,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         Some(ep) => {
             cx.say(Event::Code(EndpointTicket::new(ep.addr()).to_string()));
             cx.say(Event::Status("Getting a short code...".into()));
-            let (dht, ticket) = (cx.dht.clone(), code_ticket(ep));
+            let (dht, ep, relays) = (cx.dht.clone(), ep.clone(), cx.relays);
             n0_future::task::spawn(async move {
                 let t = n0_future::time::Instant::now();
+                // B175: a browser dials only the ticket's relay, so a code without one (the relay slower than bind's
+                // 10 s) would time out there; native joiners would still find the host by the DHT
+                if relays && ep.addr().relay_urls().next().is_none() {
+                    let _ = n0_future::time::timeout(Duration::from_secs(30), ep.online()).await;
+                }
+                let ticket = code_ticket(&ep);
                 let c = roll(&dht, &ticket).await;
                 bevy::log::info!("short code {c:?} in {:?}", t.elapsed());
                 let _ = ctx_.send(c);
@@ -1006,7 +1014,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             if let Some(ep) = &cx.ep {
                 let l = room.clone();
                 ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)));
-                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new() };
+                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep));
                 n0_future::task::spawn(async move {
@@ -1339,6 +1347,11 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
             }
         },
     };
+    bevy::log::info!("dialling {addr:?}");
+    if let Some(why) = unreachable(&addr, cx.relays, code.parse::<EndpointTicket>().is_ok()) {
+        cx.say(Event::Failed(why.into()));
+        return None;
+    }
     cx.say(Event::Status(format!("Joining {}...", short(&addr.id.to_string()))));
     let conn = match n0_future::time::timeout(Duration::from_secs(30), ep.connect(addr, ALPN)).await {
         Ok(Ok(c)) => c,
@@ -1357,6 +1370,17 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
     };
     let (conn, link, inbox) = quic(conn, tx, rx);
     Some((conn, link, inbox, ep.id().to_string()))
+}
+
+/// Why a ticket's host can't be dialled from here, before a 30 s timeout says so (B175): a browser reaches peers
+/// only through the ticket's relay; with the relays off only the ticket's direct addresses (or, for a bare ID, the
+/// LAN's and the DHT's).
+fn unreachable(addr: &EndpointAddr, relays: bool, ticket: bool) -> Option<&'static str> {
+    if cfg!(target_arch = "wasm32") && addr.relay_urls().next().is_none() {
+        return Some("That host has Relay off (LAN only), and a browser can only reach a host through a relay: ask them to set Relay (Online) to n0.");
+    }
+    (!relays && ticket && addr.ip_addrs().next().is_none())
+        .then_some("That lobby can only be reached through a relay (a browser's?): set Relay (Online) to n0 to join it.")
 }
 
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
@@ -1694,6 +1718,19 @@ mod tests {
     }
 
     #[test]
+    fn relay_off_fails_fast_on_relay_only_tickets() {
+        let id = SecretKey::from_bytes(&[7; 32]).public();
+        let relay = EndpointAddr::new(id).with_relay_url("https://use1-1.relay.n0.iroh.link./".parse().unwrap());
+        let direct = EndpointAddr::new(id).with_ip_addr("192.168.1.2:4000".parse().unwrap());
+        // a browser host's ticket: only its relay
+        assert!(unreachable(&relay, false, true).is_some());
+        assert!(unreachable(&relay, true, true).is_none());
+        // a relay-off host on the LAN, and bare IDs (found by mDNS/DHT)
+        assert!(unreachable(&direct, false, true).is_none());
+        assert!(unreachable(&EndpointAddr::new(id), false, false).is_none());
+    }
+
+    #[test]
     fn seats_fill_and_free() {
         let mut r = room(true);
         assert!(r.take("a", &[Pick::disc(1, 0), Pick::disc(2, 0)]));
@@ -1743,7 +1780,7 @@ mod tests {
             let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
             let (a, b) = (dht(&net.bootstrap), dht(&net.bootstrap));
             let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
-            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new() };
+            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new(), relays: false };
             let mut r = room(true);
             r.take("host", &[Pick::disc(0, 0)]);
             announce(&cx, 4242, &r).await;
@@ -1829,7 +1866,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into() }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (hcmd, mut hrx) = amp::unbounded_channel();
@@ -1894,7 +1931,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into() }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
