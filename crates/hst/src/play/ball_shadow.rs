@@ -82,6 +82,7 @@ fn fade(
 /// Scale the ball and place the shadow and the outline (game space, under the court root) for the drawn ball and camera.
 fn place(
     g: Res<Game>,
+    own: Option<Res<super::own_camera::OwnCam>>,
     time: Res<Time<Fixed>>,
     world: Option<Res<crate::shade::Shade>>,
     mut balls: Query<(&BallView, &mut Transform), Without<Outline>>,
@@ -92,8 +93,9 @@ fn place(
         let p = Vec3::from(x).lerp(Vec3::from(y), a);
         [p.x, p.y, p.z, 1.0]
     };
-    let (pos, eye) = (mix(g.prev_ball, g.flight.ball.pos), mix(g.prev_view.eye, g.cam.view.eye));
-    let view = &g.cam.view;
+    let (v0, view) = super::own_camera::shown(&g, own.as_deref());
+    let (pos, eye) = (mix(g.prev_ball, g.flight.ball.pos), mix(v0.eye, view.eye));
+    let view = &view;
     let depth = view.local([pos[0], pos[1], pos[2]])[2];
     let t = view.fov.tan();
     let ball = shade::ball_scale(BALL_SCALE, depth, t, !matches!(g.phase, Phase::ChangeEnds(_)));

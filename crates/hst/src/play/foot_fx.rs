@@ -199,9 +199,9 @@ fn sub(g: &Game, i: usize, reacted: bool) -> i32 {
 /// Puffs face the camera, pulled back half a metre along the game view's forward row (its camera → world row 2),
 /// `size` either side along row 0 and twice that up along row 1 of the basis the run object's draw builds facing
 /// back along the camera's look (`impact_matrix(-look)`, level right); footprints lie on the court.
-fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, mut meshes: ResMut<Assets<Mesh>>) {
+fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera::OwnCam>>, mut meshes: ResMut<Assets<Mesh>>) {
     let Some(fx) = fx else { return };
-    let [ax, ay, az] = g.cam.view.rot[2];
+    let [ax, ay, az] = super::own_camera::shown(&g, own.as_deref()).1.rot[2];
     let basis = hst_sim::effect::impact_matrix([-ax, -ay, -az, -0.0], [0.0; 3]);
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
     let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 4])>| {
