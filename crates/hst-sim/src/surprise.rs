@@ -10,6 +10,9 @@
 //!   an illegal hit (a serve returned by the receiver's partner, a ball hit twice by one team): over the player who
 //!   hit last (the server if nobody hit), with a "..." balloon (`A_fukidasi_11`) over their partner. Both hold until
 //!   the next point is set up.
+//! - **Skull** (`fukidasi_dokuro`), the "death lob": a framed mis-hit (`swing::MisHit::wild`, the forced lob) drops
+//!   the hitter's timing balloon the frame it would show and raises the skull over them the frame after, human or
+//!   computer, timed as the "!".
 //! - **Swirl** (`e_guruguru`), the upset pop-up in singles on the same calls, over the same player: five 80-px cells
 //!   side by side, the next every 3 frames, held until the next point is set up.
 //!
@@ -22,6 +25,7 @@ pub enum Popup {
     Sweat,
     Dots,
     Swirl,
+    Skull,
 }
 
 impl Popup {
@@ -32,13 +36,14 @@ impl Popup {
             Popup::Sweat => "A_fukidasi_10.tm2",
             Popup::Dots => "A_fukidasi_11.tm2",
             Popup::Swirl => "e_guruguru.tm2",
+            Popup::Skull => "fukidasi_dokuro.tm2",
         }
     }
 
     /// Fade-in, hold and fade-out frames (the per-kind table; the hold of sweat and dots never runs down).
     pub fn frames(self) -> [i32; 3] {
         match self {
-            Popup::Bang => [3, 30, 3],
+            Popup::Bang | Popup::Skull => [3, 30, 3],
             Popup::Sweat | Popup::Dots | Popup::Swirl => [3, 60, 3],
         }
     }
@@ -86,7 +91,7 @@ impl Pop {
                     (self.stage, self.t) = (1, hold);
                 }
             }
-            1 if self.popup == Popup::Bang => {
+            1 if matches!(self.popup, Popup::Bang | Popup::Skull) => {
                 self.t -= 1;
                 if self.t < 0 {
                     (self.stage, self.t) = (2, fade_out);
@@ -141,6 +146,12 @@ mod tests {
     }
 
     /// The sweat drop fades in and stays.
+    /// The skull is a kind-7 entry like the "!" (B58 capture, slot 5: 43, 86, then opaque, 85, 42, 0).
+    #[test]
+    fn skull_frames() {
+        assert_eq!(alphas(Popup::Skull, 100), alphas(Popup::Bang, 100));
+    }
+
     #[test]
     fn sweat_holds() {
         let a = alphas(Popup::Sweat, 1000);
