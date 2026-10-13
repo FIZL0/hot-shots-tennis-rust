@@ -69,6 +69,8 @@ const INK: [f32; 3] = [15.0; 3];
 const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
 const CHOSEN: [f32; 3] = [123.0, 105.0, 79.0];
 const UNCHOSEN: [f32; 3] = [94.0, 83.0, 70.0];
+/// B171: a label row's size on its pill: 20 px of the 32-px pill high, at most 160 of its 288 px wide.
+const FIT: f32 = 0.625;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -327,7 +329,9 @@ fn layout(v: &View) -> Vec<Quad> {
             6 => RESUME,
             _ => RETURN,
         };
-        q(tex, [0, 0, 256, 32], r(192, y0 + 40 * k as i32, 256, 32), rgb, alpha);
+        // B171: the 256×32 row's ink is as tall as the pill; drawn at `FIT` and centred it sits inside the rims
+        let (w, h) = (256.0 * FIT, 32.0 * FIT);
+        q(tex, [0, 0, 256, 32], [320.0 - w / 2.0, (y0 + 40 * k as i32) as f32 + (32.0 - h) / 2.0, w, h], rgb, alpha);
     }
     let hy = (y0 + v.sel as i32 * 40 + 8) as f32;
     out.push(Quad { tex: HAND, src: [0.0, 0.0, 64.0, 32.0], dst: [v.hand_x + 128.0, hy, 64.0, 32.0], rgb: WHITE, alpha: 128.0 });
@@ -621,9 +625,10 @@ mod tests {
         // three options: frame from y 120 to 272, pills at 140, 180 ("Settings", ours) and 220, the hand beside the first
         assert!(at(PILL, 160.0, 120.0).is_some() && at(PILL, 160.0, 256.0).is_some());
         assert!(at(PILL, 176.0, 140.0).is_some() && at(PILL, 176.0, 220.0).is_some());
-        assert_eq!(at(RESUME, 192.0, 140.0).unwrap().alpha, 128.0);
-        assert_eq!(at(RETURN, 192.0, 220.0).unwrap().alpha, 64.0);
-        assert_eq!(at(LABEL, 192.0, 180.0).unwrap().src, [0.0, 0.0, 256.0, 32.0]);
+        // the rows centred on their pills at 160×20 (B171)
+        assert_eq!(at(RESUME, 240.0, 146.0).unwrap().alpha, 128.0);
+        assert_eq!(at(RETURN, 240.0, 226.0).unwrap().alpha, 64.0);
+        assert_eq!(at(LABEL, 240.0, 186.0).unwrap().dst, [240.0, 186.0, 160.0, 20.0]);
         assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 148.0, 64.0, 32.0]);
         assert_eq!((pill_y(1, 1), pill_y(3, 0)), (180, 100));
     }
