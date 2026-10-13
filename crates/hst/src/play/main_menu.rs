@@ -1578,27 +1578,39 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
     }
 }
 
-/// The description bar's first glyph x `f` frames after its text (`n` glyphs) changed, as the MENU overlay moves it:
-/// in from x 656 at 32 px a frame to x 16; a text wider than 616 px (`n` × 11) then scrolls left 2 px a frame from
-/// frame 160, round a loop of `(n × 11 + 656) / 2` frames that re-enters at x 656.
-#[cfg(test)]
-fn ticker_x(f: u32, n: usize) -> f32 {
-    ticker_x_in(f, n, 656)
+/// B237: `s` broken at spaces into lines of at most `cols` characters (a longer word gets a line to itself).
+fn wrap(s: &str, cols: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for w in s.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + w.chars().count() <= cols => {
+                l.push(' ');
+                l.push_str(w);
+            }
+            _ => lines.push(w.into()),
+        }
+    }
+    lines
 }
 
-/// `ticker_x` on a bar whose right edge is `right - 16` (656 on the 4:3 screen, further on a wide one): the text
-/// enters and re-enters at `right`, the same speeds, the same 616 px test.
-fn ticker_x_in(f: u32, n: usize, right: i32) -> f32 {
-    let w = 11 * n as i32;
-    let x = if w <= 616 { 16 } else { right - 2 * ((f as i32 + (right - 16) / 2 - 160) % ((w + right) >> 1)) };
-    if f < 160 { (right - 32 * f as i32).max(16) as f32 } else { x as f32 }
+/// B237: the description bar's glyph pitch (px) and lines for `s` on a `w` × `h` px bar: up to `cap` px a glyph,
+/// shrunk 5% at a time until its word-wrapped lines (1.2 em each, the advance 0.6 em) fit the bar. No marquee.
+fn fit_lines(s: &str, w: f32, h: f32, cap: f32) -> (f32, Vec<String>) {
+    let mut p = cap;
+    loop {
+        let lines = wrap(s, (w / p).max(1.0) as usize);
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+        if (lines.len() as f32 * 2.0 * p <= h && longest * p <= w) || p < 1.0 {
+            return (p, lines);
+        }
+        p *= 0.95;
+    }
 }
 
-/// `ticker_x_in` at a fractional frame count: between the original's 60 Hz steps, a glide from one to the next (not
-/// across a wrap, which jumps).
-fn ticker_glide(f: f32, n: usize, right: i32) -> f32 {
-    let (a, b) = (ticker_x_in(f as u32, n, right), ticker_x_in(f as u32 + 1, n, right));
-    if (b - a).abs() > 32.0 { a } else { a + (b - a) * f.fract() }
+/// The description bar's first glyph x (640 units) `f` frames after its page opened: in from the bar's right edge
+/// `right` at 32 a frame to x 16, as the MENU overlay brings it in; then it holds.
+fn ticker_x_in(f: f32, right: f32) -> f32 {
+    (right - 32.0 * f).max(16.0)
 }
 
 /// The description bar's clip rect; its child is the text.
@@ -1609,9 +1621,9 @@ struct TickerClip;
 #[derive(Resource, Default)]
 struct Ticker(String, f32, Option<(Screen, mods_screen::Page)>);
 
-/// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font) sized so its advance
-/// is the original's 11 px pitch on the 640-wide screen, in its tint (223), centred on the bar (y 404..436). Its bar
-/// spans the window (`Anchor::Span`), so a wide window's text enters and wraps at the window's right edge.
+/// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font), in its tint (223), on
+/// the bar (y 404..436). Its bar spans the window (`Anchor::Span`). B237: at most 10 units a glyph (the original's
+/// was 11, and scrolled when it didn't fit); a longer text word-wraps and shrinks until it fits the bar.
 fn ticker_text(
     ticker: Res<Ticker>,
     window: Query<&Window, With<PrimaryWindow>>,
@@ -1625,15 +1637,19 @@ fn ticker_text(
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
     (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
     (cnode.top, cnode.height) = (Val::Percent(404.0 / 4.48), Val::Percent(32.0 / 4.48));
-    // one 640-space unit in logical px; the font's advance is 0.6 em
+    // one 640-space unit in logical px
     let unit = share * win.width() / 640.0;
-    let em = 11.0 / 0.6 * unit;
+    let (bar_w, bar_h) = (width / 100.0 * win.width(), 32.0 / 448.0 * win.height());
+    // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
+    let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
+    let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 2.0 * unit, cap);
+    let em = p / 0.6;
     font.font_size = bevy::text::FontSize::Px(em);
-    let right = (width / 100.0 * win.width() / unit).round() as i32 + 16;
-    node.left = Val::Px(ticker_glide(ticker.1, ticker.0.chars().count(), right) * unit);
-    node.top = Val::Px((32.0 / 448.0 * win.height() - 1.2 * em) / 2.0);
-    if t.0 != ticker.0 {
-        t.0.clone_from(&ticker.0);
+    node.left = Val::Px(ticker_x_in(ticker.1, bar_w / unit + 16.0) * unit);
+    node.top = Val::Px((bar_h - 1.2 * em * lines.len() as f32) / 2.0);
+    let s = lines.join("\n");
+    if t.0 != s {
+        t.0 = s;
     }
 }
 
@@ -2496,31 +2512,18 @@ mod tests {
     }
 
     #[test]
-    fn ticker_as_measured() {
-        // Options' sound line (81 glyphs) on the original, frame by frame from its change
-        let x = |f| ticker_x(f, 81);
-        assert_eq!([x(0), x(1), x(19), x(20), x(160), x(161)], [656.0, 624.0, 48.0, 16.0, 16.0, 14.0]);
-        // last shown at -888 (last glyph at -8), then back in at 656; 773 frames a run after that
-        assert_eq!([x(160 + 452), x(160 + 453), x(160 + 453 + 772), x(160 + 453 + 773)], [-888.0, 656.0, -888.0, 656.0]);
-        // music's line (37 glyphs) fits and holds
-        assert_eq!(ticker_x(1000, 37), 16.0);
-        // the overlay's test: 616 px (56 glyphs) still holds, 57 scroll
-        assert_eq!([ticker_x(10, 56), ticker_x(1000, 56), ticker_x(161, 57)], [336.0, 16.0, 14.0]);
-    }
-
-    #[test]
-    fn ticker_glides() {
-        // whole frames land on the 60 Hz positions; between them, the share of the step
-        for f in [0, 1, 19, 20, 160, 161, 612, 613, 1385] {
-            assert_eq!(ticker_glide(f as f32, 81, 656), ticker_x(f, 81));
-        }
-        assert_eq!([ticker_glide(0.25, 81, 656), ticker_glide(19.5, 81, 656), ticker_glide(160.5, 81, 656)], [648.0, 32.0, 15.0]);
-        // a wrap jumps (no glide from -888 back across the bar)
-        assert_eq!(ticker_glide(612.5, 81, 656), -888.0);
-        // a wide bar (right edge at 1120): enters there, scrolls on from 16 at the same 2 px a frame, re-enters there
-        let x = |f| ticker_x_in(f, 81, 1136);
-        assert_eq!([x(0), x(1), x(35), x(160), x(161)], [1136.0, 1104.0, 16.0, 16.0, 14.0]);
-        assert_eq!([x(160 + 452), x(160 + 453)], [-888.0, 1136.0]);
+    fn description_wraps_and_fits() {
+        assert_eq!(wrap("a bb ccc dddd", 6), ["a bb", "ccc", "dddd"]);
+        assert_eq!(wrap("toolongword x", 4), ["toolongword", "x"]);
+        // a short line keeps the cap; a long one wraps to fit the bar, never wider than it
+        let (p, l) = fit_lines("Play music in the menus.", 600.0, 30.0, 10.0);
+        assert_eq!((p, l.len()), (10.0, 1));
+        let long = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once. Press again to upload Anya.";
+        let (p, l) = fit_lines(long, 600.0, 30.0, 10.0);
+        assert!(l.len() >= 2 && l.len() as f32 * 2.0 * p <= 30.0 && l.iter().all(|l| l.chars().count() as f32 * p <= 600.0));
+        assert_eq!(l.join(" "), long);
+        // flies in from the right edge at 32 a frame, then holds at 16
+        assert_eq!([ticker_x_in(0.0, 656.0), ticker_x_in(1.0, 656.0), ticker_x_in(20.0, 656.0), ticker_x_in(1000.0, 656.0)], [656.0, 624.0, 16.0, 16.0]);
     }
 
     #[test]
