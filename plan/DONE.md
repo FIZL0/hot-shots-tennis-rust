@@ -250,6 +250,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B129** Winners face the wrong way after the match (bug, user 2026-10-12): on the post-game win screen the players sometimes face the wrong way. Find which (winner/loser, side of court, lefty, team) and match the original's facing → `play.rs` react · `hst-sim/src/flow.rs` · `play/result.rs`
 - [x] **B131** Mod characters fall back to stock player sounds (bug, user 2026-10-12): a mod without its own voice/SFX plays nothing; it should use its donor's (or a default disc character's) grunts, shouts and voice lines, until M8e gives it its own → `mods.rs` · `hst-sim/src/sound.rs` · `play.rs` sound cues | with M8e
 - [x] **B130** Continue on the post-game screen exits to the menu (user 2026-10-12): choosing Continue after the match ends goes back to the main menu (fade out, as Return to the Menu) → `play/result.rs` · `play/main_menu.rs`
+- [x] **B132** Locked onto the ball, ran to it, still missed (bug, user 2026-10-12): a player pressed to hit, locked onto the ball and moved to it, then whiffed. Check the lock-then-swing path against the original (lock condition, the run-to spot, the contact search and swing timing after a lock) with a PINE recording of a human locking late and early, and fix where the port differs (B26 is the serve version) → `hst-sim/src/swing.rs` · `play.rs` press/find_contact/whiff · `player.rs` | t: swing.rs
 
 
 ### Shots
