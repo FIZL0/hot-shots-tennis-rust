@@ -450,7 +450,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (ceremony::begin, step, draw, draw_banner).chain())
         .add_systems(Update, ceremony::pose.after(crate::character::animate).after(crate::character::uv_offsets).before(crate::character::texture_faces))
         .add_systems(PostUpdate, ceremony::hide.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
-        .add_systems(PostUpdate, ceremony::show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate));
+        // in Update after the match camera: written in PostUpdate the fov never reached the camera's clip matrix (B246)
+        .add_systems(Update, ceremony::show.after(crate::character::animate));
 }
 
 #[allow(clippy::too_many_arguments)]

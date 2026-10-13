@@ -140,7 +140,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (draw_plate, sounds))
         .add_systems(PostUpdate, hide_hud.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(RunFixedMainLoop, hold.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
-        .add_systems(PostUpdate, show.before(crate::backdrops).before(bevy::transform::TransformSystems::Propagate))
+        .add_systems(Update, show.after(crate::character::animate)) // after the match camera, as the ceremony (B246)
         .add_systems(Update, (draw_banner, pose_banner));
 }
 
