@@ -1588,7 +1588,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                         Who::Disc(c) => c,
                     };
                     rank_pill(d, com_rank(&text.ranks, c, costume, m.doubles), COLOURS[p], x + 17.0, y + 114.0);
-                } else {
+                }
+                // the hand tag on every card, a computer's too (the original's COM Carol wears "Left hander" there)
+                {
                     let words = if m.hand(text, p) < 0.0 { "Left hander" } else { "Right hander" };
                     d.pill_at([x + 70.0, y + 5.0, 66.0, 19.0], [INK, WHITE, if pl.swap { [128.0, 100.0, 20.0] } else { [90.0, 72.0, 48.0] }], 128.0);
                     d.label(words, x + 103.0, y + 8.0, 13.0, 56.0, WHITE);
