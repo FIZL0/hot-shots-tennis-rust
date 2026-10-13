@@ -202,11 +202,19 @@ fn net_touch_words_match_the_game() {
     let Some((world, materials)) = disc(COURT as u32) else {
         return eprintln!("disc missing, skipped");
     };
-    // recording, overwrite vsync, the net word's texture (12 + effect kind)
-    let cases = [("cord_over3", 7864, 14), ("serve_let", 7785, 14), ("net_low", 7864, 15), ("post_back", 7864, 13)];
+    // recording, overwrite vsync, the first word's texture (12 + effect kind): the net's (B85), then a wall's and an
+    // object's (B134: the ruins' cloth-hung wall, CLOTH, and a wooden prop, WOOD, each the ball's first contact)
+    let cases = [
+        ("b85/cord_over3", 7864, 14),
+        ("b85/serve_let", 7785, 14),
+        ("b85/net_low", 7864, 15),
+        ("b85/post_back", 7864, 13),
+        ("b134/cloth", 7864, 23),
+        ("b134/wood", 7864, 24),
+    ];
     let mut seen = 0;
     for (name, poke, word) in cases {
-        let Ok(data) = std::fs::read(format!("{root}/context/b85/{name}.bin")) else {
+        let Ok(data) = std::fs::read(format!("{root}/context/{name}.bin")) else {
             eprintln!("{name}.bin missing, skipped");
             continue;
         };
@@ -239,11 +247,11 @@ fn net_touch_words_match_the_game() {
                 }
             }
         }
-        assert_eq!(made.first(), Some(&word), "{name}: the net's word first");
+        assert_eq!(made.first(), Some(&word), "{name}: the first word");
         eprintln!("{name}: {frames} frames, words {made:?}");
         seen += 1;
     }
-    eprintln!("{seen} net touches checked");
+    eprintln!("{seen} net, wall and object touches checked");
 }
 
 #[test]
