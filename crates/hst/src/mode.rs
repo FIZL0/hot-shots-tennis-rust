@@ -304,9 +304,21 @@ struct Warming(Visibility, bool);
 /// While the loading screen is up over the new mode, every mesh is drawn under it, hidden or out of view too, so the
 /// pipelines a hidden effect needs (a hit's sparks, a lob's landing marks) compile behind the cover, not on its first
 /// show mid-match: the browser compiles them on the main thread (B110). `loaded` waits for them.
-fn warm(mut commands: Commands, loading: Query<&Loading>, mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>), (With<Mesh3d>, Without<Warming>)>) {
+fn warm(
+    mut commands: Commands,
+    loading: Query<&Loading>,
+    mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>), (With<Mesh3d>, Without<Warming>)>,
+    mut cams: Query<(Entity, &mut Camera), Without<WarmingCamera>>,
+) {
     if !loading.iter().any(|l| l.built) {
         return;
+    }
+    // an overlay camera off until its moment (the umpire's call models, B155) draws too: its view's pipelines
+    for (e, mut c) in &mut cams {
+        if !c.is_active {
+            c.is_active = true;
+            commands.entity(e).insert(WarmingCamera);
+        }
     }
     for (e, mut v, unculled) in &mut q {
         commands.entity(e).insert((Warming(*v, !unculled), bevy::camera::visibility::NoFrustumCulling));
@@ -314,8 +326,16 @@ fn warm(mut commands: Commands, loading: Query<&Loading>, mut q: Query<(Entity, 
     }
 }
 
-/// Each warmed mesh back as its systems left it, before they run again.
-fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming)>) {
+/// A camera made active under the loading screen (it was off).
+#[derive(Component)]
+struct WarmingCamera;
+
+/// Each warmed mesh and camera back as its systems left it, before they run again.
+fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming)>, mut cams: Query<(Entity, &mut Camera), With<WarmingCamera>>) {
+    for (e, mut c) in &mut cams {
+        c.is_active = false;
+        commands.entity(e).remove::<WarmingCamera>();
+    }
     for (e, mut v, w) in &mut q {
         *v = w.0;
         let mut e = commands.entity(e);
