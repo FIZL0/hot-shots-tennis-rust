@@ -620,6 +620,9 @@ fn lan_list(lan: &Lan) -> Vec<Listing> {
 
 impl Ctx {
     fn say(&self, e: Event) {
+        if let Event::Failed(why) = &e {
+            bevy::log::info!("online: {why}");
+        }
         let _ = self.ev.send(e);
     }
 }
@@ -962,6 +965,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 // 10 s) would time out there; native joiners would still find the host by the DHT
                 if relays && ep.addr().relay_urls().next().is_none() {
                     let _ = n0_future::time::timeout(Duration::from_secs(30), ep.online()).await;
+                }
+                // B114: relays off, right after bind the address can still be empty; a bare ID in the code fails
+                // the join with "no addressing information" when the DHT has no record of the host yet
+                for _ in 0..50 {
+                    if ep.addr().ip_addrs().next().is_some() || ep.addr().relay_urls().next().is_some() {
+                        break;
+                    }
+                    n0_future::time::sleep(Duration::from_millis(100)).await;
                 }
                 let ticket = code_ticket(&ep);
                 let c = roll(&dht, &ticket).await;
@@ -1355,6 +1366,10 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
     cx.say(Event::Status(format!("Joining {}...", short(&addr.id.to_string()))));
     let conn = match n0_future::time::timeout(Duration::from_secs(30), ep.connect(addr, ALPN)).await {
         Ok(Ok(c)) => c,
+        Ok(Err(iroh::endpoint::ConnectError::Connect { source: iroh::endpoint::ConnectWithOptsError::NoAddress { .. }, .. })) => {
+            cx.say(Event::Failed("Couldn't find the host's address: the lobby may have closed, or the host has Relay off on another network (ask them to set Relay (Online) to n0).".into()));
+            return None;
+        }
         Ok(Err(e)) => {
             cx.say(Event::Failed(format!("Couldn't reach the host: {e}")));
             return None;
@@ -1392,8 +1407,17 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(ev.send(Event::Pack(h, b)))));
     let mut seated = false;
     let mut playing = false;
+    // B114: connected but no seat from the host by then: give up instead of "Joining..." for ever
+    let handshake = n0_future::time::sleep(Duration::from_secs(20));
+    n0_future::pin!(handshake);
+    cx.say(Event::Status("Connected: waiting for the host's lobby...".into()));
     loop {
         tokio::select! {
+            _ = &mut handshake, if !seated => {
+                cx.say(Event::Failed("The host didn't answer (no lobby after 20 s).".into()));
+                conn.close(b"left");
+                return false;
+            }
             m = inbox.recv() => match m.unwrap_or_else(|| Err("closed".into())) {
                 Ok(Msg::Room(r)) | Ok(Msg::Start(r)) if r.check().is_err() => {
                     cx.say(Event::Failed(format!("Left: {}", r.check().unwrap_err())));
@@ -1401,6 +1425,10 @@ async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedR
                     return seated;
                 }
                 Ok(Msg::Room(r)) => {
+                    if !seated {
+                        // B114: the last status was "Joining...", which read as still trying
+                        cx.say(Event::Status("Joined: choose Ready when you are.".into()));
+                    }
                     seated = true;
                     cx.say(Event::Room(r));
                 }
@@ -1690,8 +1718,21 @@ async fn roll(dht: &Dht, ticket: &str) -> Option<String> {
 
 /// The ticket the short code `code` stands for, if its lobby is open.
 async fn resolve(dht: &Dht, code: &str) -> Option<String> {
-    let (t, seq) = n0_future::time::timeout(Duration::from_secs(30), lookup(dht, code)).await.ok()??;
-    fresh(seq).then_some(t)
+    // B114: asked again until 20 s are up, as a code just rolled can take a few seconds to reach the relay or DHT
+    // nodes this machine asks
+    let until = n0_future::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let left = until.saturating_duration_since(n0_future::time::Instant::now());
+        if let Ok(Some((t, seq))) = n0_future::time::timeout(left, lookup(dht, code)).await
+            && fresh(seq)
+        {
+            return Some(t);
+        }
+        if n0_future::time::Instant::now() + Duration::from_secs(3) >= until {
+            return None;
+        }
+        n0_future::time::sleep(Duration::from_secs(3)).await;
+    }
 }
 
 /// The ticket put under a short code: the endpoint's whole address if it fits a DHT item (1000 bytes), else its ID
@@ -1816,10 +1857,12 @@ mod tests {
             r.take("host", &[Pick::disc(0, 0)]);
             host.set_user_data_for_address_lookup(lan_data(&Listing::of(host.id(), &r)));
             let t = tokio::time::Instant::now();
-            while lan_list(&lan).is_empty() && t.elapsed() < Duration::from_secs(15) {
+            // (only this host's: other tests' hosts are on the LAN too)
+            let mine = || lan_list(&lan).into_iter().filter(|l| l.id == host.id().to_string()).collect::<Vec<_>>();
+            while mine().is_empty() && t.elapsed() < Duration::from_secs(15) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            let list = lan_list(&lan);
+            let list = mine();
             assert_eq!(list.len(), 1, "no LAN listing in 15 s (is multicast blocked?)");
             assert_eq!((list[0].id.clone(), list[0].open()), (host.id().to_string(), 1));
             let accept = tokio::spawn({
@@ -1962,6 +2005,8 @@ mod tests {
             // doubles with two seats open: Start waits for the guest's ready, then the computer takes the open seats
             let Event::Room(seen) = next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 2)).await else { unreachable!() };
             let guest = seen.seats[1].as_ref().unwrap().peer.clone();
+            // B114: seated, the guest's status moves on from "Joining..."
+            next(&gev, |e| matches!(e, Event::Status(s) if s.starts_with("Joined"))).await;
             assert_eq!(seen.names.get(&guest).map(String::as_str), Some("g"), "the guest's name from its Hello");
             hcmd.send(Cmd::Start).unwrap();
             tokio::time::sleep(Duration::from_millis(500)).await;

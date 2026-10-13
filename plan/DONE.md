@@ -325,6 +325,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B96** Launch in windowed fullscreen (user 2026-10-11): the game should start borderless fullscreen on the current monitor by default (keep a windowed option in settings; `--shot` keeps its fixed-size floating window) → `main.rs` window setup · settings (P23 Graphics)
 - [x] **B115** Start button in the online lobby (user 2026-10-12): the host needs a Start to begin the match with whoever has joined (empty slots CPU) instead of waiting for every slot to fill; guests see who's in and that the host can start. Pad, keyboard and touch → `play/main_menu/online.rs` · `net.rs`
 - [x] **B15** CPUs sometimes don't hit the ball (bug, user 2026-10-07): AI players just miss/let balls go that they should play. Reproduce (all-CPU `HST_AUTOPLAY`, log misses), compare with the original's AI decision (reach, run target, swing trigger) and match the CPU logic exactly → `hst-sim/src/ai.rs` · `play.rs` ai
+- [x] **B114** Join by code from the menu hangs (user 2026-10-12): entering a lobby code in Online → Join by Code sits on "joining" forever or fails with "no address". Find where it stops (short code → DHT record lookup, ticket/endpoint decode, iroh dial via relay/direct, handshake) on native and in the browser, fix it, and give every failure a clear message plus a timeout instead of an endless joining screen. Done when a second instance (and a second browser) joins a hosted lobby by typing its code from the menu → `play/main_menu/online.rs` · `net.rs` · `web.rs`
 
 
 ### Shots
