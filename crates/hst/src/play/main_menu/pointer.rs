@@ -170,6 +170,10 @@ impl Menu {
 #[derive(Default)]
 pub(super) struct State {
     mouse: Option<Vec2>,
+    /// B233: the row or face the mouse is over: hovering selects only on moving onto a new one, so a resting mouse
+    /// that reports a jitter (sub-pixel moves, a compositor re-sending it, a pad's touchpad) can't pull the pad's or
+    /// keyboard's cursor back every frame.
+    hovered: Option<Act>,
     finger: Option<(u64, Vec2, Vec2, bool)>,
     wheel: f32,
     touched: f32,
@@ -237,7 +241,11 @@ pub(in crate::play) fn pointer(
         let c = win.cursor_position();
         if c != st.mouse {
             st.mouse = c;
-            out(c.and_then(|c| hover(at(c, SLOP))), false);
+            let a = c.and_then(|c| hover(at(c, SLOP)));
+            if a != st.hovered {
+                st.hovered = a;
+                out(a, false);
+            }
         }
         if mouse.just_pressed(MouseButton::Left)
             && let Some(c) = c
@@ -412,6 +420,72 @@ pub(super) mod tests {
         app.world_mut().write_message(TouchInput { phase: TouchPhase::Ended, position: Vec2::new(400.0, 120.0), window: win, force: None, id: 8 });
         app.update();
         assert!(app.world().resource::<Pending>().0.contains(&(Act::Row(3, OK), true)), "{:?}", app.world().resource::<Pending>().0);
+    }
+
+    /// B233: a resting mouse that jitters (sub-pixel moves every frame) over Copy Link, or over E on the name
+    /// entry, doesn't pull the pad's cursor back: → from Copy Link stays on Leave while the code fills in, and the
+    /// pad walks the whole entry grid.
+    #[test]
+    fn resting_mouse_keeps_the_pads_cursor() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin));
+        app.init_resource::<Pending>().init_resource::<Hits>().add_systems(Update, pointer);
+        // the mouse counts 0.6 s after the last touch: past that from the first frame
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(250)));
+        (0..4).for_each(|_| app.update());
+        // 4:3, so a 640×448 point (x, y) is at (x, y × 480 / 448)
+        let win = app.world_mut().spawn((Window { resolution: (640, 480).into(), ..default() }, PrimaryWindow)).id();
+        // one frame with the mouse at `at` (+ a jitter) over `m`'s hits, its acts played as the menu's step does
+        let frame = |app: &mut App, m: &mut Menu, at: Vec2, n: usize| {
+            let (h, outside) = hits(m);
+            app.insert_resource(Hits(h, outside));
+            let p = Vec2::new(at.x + 0.25 * (n % 2) as f32, (at.y + 0.25 * (n % 3) as f32) * 480.0 / 448.0);
+            app.world_mut().get_mut::<Window>(win).unwrap().set_cursor_position(Some(p));
+            app.update();
+            for (a, tap) in std::mem::take(&mut app.world_mut().resource_mut::<Pending>().0) {
+                m.point(Dev::Keys, a, tap);
+            }
+        };
+        let centre = |m: &Menu, i: usize| {
+            let r = hits(m).0.into_iter().find(|h| h.act == Act::Row(i, OK)).unwrap().rect;
+            Vec2::new(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
+        };
+        let right = Press { right: true, ..default() };
+        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's → to Leave holds
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        super::super::online::sample(&mut m);
+        (m.net.hosting, m.sel) = (true, 0);
+        // seats 1–3, Start Characters Court, Copy Link (6) Leave (7)
+        let copy = 6;
+        let at = centre(&m, copy);
+        frame(&mut app, &mut m, at, 0);
+        assert_eq!(m.sel, copy, "hovering selects");
+        m.step(Dev::Keys, right);
+        assert_eq!(m.sel, copy + 1);
+        for n in 1..30 {
+            if n == 10 {
+                m.net.code = "filled in".into();
+            }
+            frame(&mut app, &mut m, at, n);
+            assert_eq!(m.sel, copy + 1, "frame {n}");
+        }
+        // the name entry with the mouse resting on E: the pad walks every key and button
+        let mut m = Menu { screen: Screen::Code, sel: 4, net: super::super::online::View { naming: true, ..default() }, ..default() };
+        let at = centre(&m, 4);
+        // the name's 40 keys, then Delete Clear Save Back
+        let keys = 40;
+        let mut seen = std::collections::BTreeSet::new();
+        for n in 0..(keys + 4) * 2 {
+            frame(&mut app, &mut m, at, n);
+            seen.insert(m.sel);
+            let row_end = if m.sel < keys { m.sel % 8 == 7 } else { m.sel == keys + 3 };
+            // → along the row (it wraps), then ↓ at its end
+            m.step(Dev::Keys, right);
+            if row_end {
+                m.step(Dev::Keys, Press { down: true, ..default() });
+            }
+        }
+        assert_eq!(seen, (0..keys + 4).collect(), "every key and button reached");
     }
 
 }
