@@ -55,8 +55,15 @@ struct Mine {
     shots: i32,
     /// The re-entry's return-to-centre draw, made in the hit message (`heard_hit`).
     early: Option<u32>,
-    /// A creature struck the ball (message 0x14) since its last step: back to the start of its state, as on 0x16.
+    /// A creature struck the ball or a new path began (message 0x14 or 0x16) since its last step: back to the start of
+    /// its state.
     struck: bool,
+}
+
+/// The ball as the AI reads it from the ball object: y down, as the app (unlike the path, which is stored y up).
+fn ball(g: &Game) -> [f32; 4] {
+    let [x, y, z] = g.flight.ball.pos;
+    [x, y, z, 1.0]
 }
 
 fn up(v: V3) -> [f32; 4] {
@@ -140,10 +147,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         receiver: g.score.receiver,
         hitter: g.last_hitter,
         shots: g.shots,
-        ball: up(g.flight.ball.pos),
-        // ponytail: the app settles a hit at once (both counters equal), the path's mode and line gap are the
-        // plain path's (P11k6)
-        hits: [g.shots; 2],
+        ball: ball(g),
+        // ponytail: the path's mode and line gap are the plain path's (P11k6)
+        hits: [g.flight.bounces, g.flight.contacts],
         gravity: hst_sim::ball::Params::default().gravity,
         drag: hst_sim::ball::Params::default().drag,
         floor: 0,
@@ -308,6 +314,19 @@ fn landing(g: &Game) -> [f32; 4] {
 /// reaction), sent where the original sends it, in its order within the tick.
 pub(super) fn heard(g: &mut Game, msg: u8) {
     g.doubles_ai.hear(&g.players, msg);
+    for m in &mut g.doubles_ai.me {
+        let x = &mut m.rally;
+        match msg {
+            // a serve that touched the net: the AI stands still for the rest of it
+            0x16 if g.shots == 1 => x.hold = true,
+            // ponytail: the original clears both as it sets the point up; the serve message comes there
+            0xe => (x.hold, x.held) = (false, false),
+            _ => {}
+        }
+        if msg == 0x15 || msg == 0x16 && g.phase == Phase::Rally {
+            x.held = false;
+        }
+    }
 }
 
 impl Shared {
@@ -319,7 +338,7 @@ impl Shared {
             self.claim.0 = -1;
         }
         self.records.iter_mut().for_each(|r| r.n = -1);
-        if msg == 0x14 {
+        if matches!(msg, 0x14 | 0x16) {
             // only an AI in its receive or rally hears it
             for (m, p) in self.me.iter_mut().zip(players) {
                 m.struck = p.ai_mind.is_some_and(|x| matches!(x.phase, Ai::Receive | Ai::Rally));
@@ -400,8 +419,8 @@ pub(super) fn human(g: &mut Game, i: usize) {
         receiver: g.score.receiver,
         hitter: g.last_hitter,
         shots: g.shots,
-        ball: up(g.flight.ball.pos),
-        hits: [g.shots; 2],
+        ball: ball(g),
+        hits: [g.flight.bounces, g.flight.contacts],
         gravity: hst_sim::ball::Params::default().gravity,
         drag: hst_sim::ball::Params::default().drag,
         records: g.doubles_ai.records,
