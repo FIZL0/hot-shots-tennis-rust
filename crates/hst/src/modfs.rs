@@ -48,9 +48,18 @@ pub fn read_dir(p: &Path) -> Vec<PathBuf> {
 }
 
 /// Every in-memory file under folder `p` (path, bytes): an import's files for the page to store.
+#[cfg(any(test, target_arch = "wasm32"))]
 pub fn files_under(p: &Path) -> Vec<(String, Arc<[u8]>)> {
     let pre = format!("{}/", key(p));
     MEM.lock().unwrap().range(pre.clone()..).take_while(|(k, _)| k.starts_with(&pre)).map(|(k, b)| (k.clone(), b.clone())).collect()
+}
+
+/// Writes file `p` of an installed mod: in memory in the browser (the page stores it), else on disk.
+pub fn write(p: &Path, b: Vec<u8>) -> Result<(), String> {
+    if cfg!(target_arch = "wasm32") {
+        return Ok(add(p, b.into()));
+    }
+    std::fs::write(p, b).map_err(|e| format!("can't write {}: {e}", p.display()))
 }
 
 /// Drops every in-memory file under folder `p`.
@@ -68,6 +77,7 @@ pub const MAX_FILE: usize = 768 << 20;
 pub const MAX_TOTAL: usize = 1 << 30;
 
 /// A mod's files: paths relative to its folder, and their bytes.
+#[cfg(test)]
 pub type Files = Vec<(String, Vec<u8>)>;
 
 /// Whether `n` is a plain relative path that stays inside the mod's folder: no root, drive, `..`, `.`, empty part,
@@ -104,32 +114,76 @@ fn crc32(d: &[u8]) -> u32 {
 /// [`plain`] path with a known extension, no symlink, device or duplicate (case-blind), within the caps; `mod.json`
 /// at the top or in the one folder everything is in (that folder is dropped). macOS's `__MACOSX/` and `.DS_Store`
 /// are left out. Anything else wrong rejects the whole zip.
+#[cfg(test)]
 pub fn unpack(zip: &[u8]) -> Result<Files, String> {
     unpack_capped(zip, MAX_FILE, MAX_TOTAL)
 }
 
+#[cfg(test)]
 fn unpack_capped(zip: &[u8], max_file: usize, max_total: usize) -> Result<Files, String> {
+    let mut out = Vec::new();
+    now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |n, b| Ok(out.push((n.to_string(), b))), max_file, max_total))?;
+    Ok(out)
+}
+
+/// A future that never waits (a read from memory or a file) run to its end.
+#[cfg(not(target_arch = "wasm32"))]
+fn now<T>(f: impl Future<Output = T>) -> T {
+    use std::task::{Context, Poll, Waker};
+    match std::pin::pin!(f).poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(t) => t,
+        Poll::Pending => unreachable!("a read that waits"),
+    }
+}
+
+/// One file in a zip's directory, its data not read yet.
+struct Entry {
+    name: String,
+    method: usize,
+    crc: u32,
+    packed: usize,
+    size: u32,
+    local: u64,
+}
+
+/// [`unpack`] one entry at a time (B204: a big mod is never whole in memory): `read(at, n)` gives `n` bytes of the
+/// `len`-byte zip from `at` (always in range), and each file goes to `put(path in the mod, bytes)` as it's inflated.
+/// The directory is checked whole before any file is read. The mod's file names, in the zip's order.
+pub async fn unpack_with<F: Future<Output = Result<Vec<u8>, String>>>(
+    len: u64,
+    mut read: impl FnMut(u64, usize) -> F,
+    mut put: impl FnMut(&str, Vec<u8>) -> Result<(), String>,
+    max_file: usize,
+    max_total: usize,
+) -> Result<Vec<String>, String> {
+    let mut at = async |from: u64, n: usize| if from.checked_add(n as u64).is_some_and(|e| e <= len) { read(from, n).await } else { Err("the zip is cut short".into()) };
     // the end of central directory record: the last one, within its comment's 64 KB of the end
-    let from = zip.len().saturating_sub(22 + 0xffff);
-    let end = (from..=zip.len().saturating_sub(22)).rev().find(|&i| zip[i..].starts_with(b"PK\x05\x06")).ok_or("not a zip file")?;
-    let (n, at) = (u16_at(zip, end + 10)?, u32_at(zip, end + 16)?);
-    if u16_at(zip, end + 4)? != 0 || u16_at(zip, end + 6)? != 0 || u16_at(zip, end + 8)? != n || n == 0xffff || at == u32::MAX {
+    let from = len.saturating_sub(22 + 0xffff);
+    let tail = at(from, (len - from) as usize).await?;
+    let end = (0..=tail.len().saturating_sub(22)).rev().find(|&i| tail[i..].starts_with(b"PK\x05\x06")).ok_or("not a zip file")?;
+    let (n, size, dir_at) = (u16_at(&tail, end + 10)?, u32_at(&tail, end + 12)?, u32_at(&tail, end + 16)?);
+    if u16_at(&tail, end + 4)? != 0 || u16_at(&tail, end + 6)? != 0 || u16_at(&tail, end + 8)? != n || n == 0xffff || dir_at == u32::MAX {
         return Err("split and zip64 archives aren't supported".into());
     }
     if n > MAX_ENTRIES {
         return Err(format!("more than {MAX_ENTRIES} files"));
     }
-    let (mut at, mut total, mut seen, mut out) = (at as usize, 0usize, HashSet::new(), Vec::new());
+    // each entry ≤ 46 + three 64 KB fields
+    if size as usize > n * (46 + 3 * 0xffff) {
+        return Err("a damaged zip directory".into());
+    }
+    let dir = at(dir_at as u64, size as usize).await?;
+    let (mut i, mut seen, mut files) = (0, HashSet::new(), Vec::new());
     for _ in 0..n {
-        if u32_at(zip, at)? != 0x0201_4b50 {
+        if u32_at(&dir, i)? != 0x0201_4b50 {
             return Err("a damaged zip directory".into());
         }
-        let (made, flags, method) = (u16_at(zip, at + 4)?, u16_at(zip, at + 8)?, u16_at(zip, at + 10)?);
-        let (crc, packed, size) = (u32_at(zip, at + 16)?, u32_at(zip, at + 20)?, u32_at(zip, at + 24)?);
-        let (nlen, xlen, clen) = (u16_at(zip, at + 28)?, u16_at(zip, at + 30)?, u16_at(zip, at + 32)?);
-        let (attrs, local) = (u32_at(zip, at + 38)?, u32_at(zip, at + 42)? as usize);
-        let raw = zip.get(at + 46..at + 46 + nlen).ok_or("the zip is cut short")?;
-        at += 46 + nlen + xlen + clen;
+        let (made, flags, method) = (u16_at(&dir, i + 4)?, u16_at(&dir, i + 8)?, u16_at(&dir, i + 10)?);
+        let (crc, packed, size) = (u32_at(&dir, i + 16)?, u32_at(&dir, i + 20)?, u32_at(&dir, i + 24)?);
+        let (nlen, xlen, clen) = (u16_at(&dir, i + 28)?, u16_at(&dir, i + 30)?, u16_at(&dir, i + 32)?);
+        let (attrs, local) = (u32_at(&dir, i + 38)?, u32_at(&dir, i + 42)? as u64);
+        let raw = dir.get(i + 46..i + 46 + nlen).ok_or("the zip is cut short")?;
+        i += 46 + nlen + xlen + clen;
         let name = std::str::from_utf8(raw).map_err(|_| "a file name that isn't UTF-8")?;
         if !plain(name) {
             return Err(format!("`{name}`: not a plain path inside the mod"));
@@ -159,36 +213,56 @@ fn unpack_capped(zip: &[u8], max_file: usize, max_total: usize) -> Result<Files,
         if !EXTENSIONS.contains(&ext.as_str()) {
             return Err(format!("`{name}`: only {} files can be in a mod", EXTENSIONS.map(|e| format!(".{e}")).join(" ")));
         }
-        if u32_at(zip, local)? != 0x0403_4b50 || zip.get(local + 30..local + 30 + nlen) != Some(raw) {
+        if !matches!(method, 0 | 8) {
+            return Err(format!("`{name}`: compressed with a method zips rarely use (only stored and deflate)"));
+        }
+        files.push(Entry { name: name.to_string(), method, crc, packed: packed as usize, size, local });
+    }
+    // `mod.json` at the top, or one folder holding everything (a zipped mod folder) that is dropped
+    let top = if files.iter().any(|f| f.name == "mod.json") {
+        String::new()
+    } else {
+        let top = files.first().and_then(|f| f.name.split_once('/')).map(|t| format!("{}/", t.0)).ok_or("no mod.json in the zip")?;
+        if !files.iter().all(|f| f.name.starts_with(&top)) || !files.iter().any(|f| f.name == format!("{top}mod.json")) {
+            return Err("no mod.json in the zip (it must be at the top, or in the one folder everything is in)".into());
+        }
+        top
+    };
+    let mut total = 0;
+    for f in &files {
+        let name = &f.name;
+        let cap = max_file.min(max_total - total);
+        if f.method == 0 && f.packed > cap {
+            return Err(format!("`{name}` is too big"));
+        }
+        // header, data and a little room for the extra field in one read: each read waits a frame in the browser
+        let start = 30 + name.len();
+        let mut head = at(f.local, (start + f.packed + 256).min(len.saturating_sub(f.local) as usize).max(start)).await?;
+        if u32_at(&head, 0)? != 0x0403_4b50 || &head[30..start] != name.as_bytes() {
             return Err(format!("`{name}`: damaged in the zip"));
         }
-        let start = local + 30 + nlen + u16_at(zip, local + 28)?;
-        let data = zip.get(start..start + packed as usize).ok_or("the zip is cut short")?;
-        let cap = max_file.min(max_total - total);
-        let bytes = match method {
-            0 if data.len() <= cap => data.to_vec(),
-            0 => return Err(format!("`{name}` is too big")),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, cap).map_err(|e| match e.status {
+        let from = start + u16_at(&head, 28)? as usize;
+        let data = match head.get(from..from + f.packed) {
+            Some(_) => {
+                head.truncate(from + f.packed);
+                head.split_off(from)
+            }
+            None => at(f.local + from as u64, f.packed).await?,
+        };
+        let bytes = match f.method {
+            0 => data,
+            _ => miniz_oxide::inflate::decompress_to_vec_with_limit(&data, cap).map_err(|e| match e.status {
                 miniz_oxide::inflate::TINFLStatus::HasMoreOutput => format!("`{name}` is too big"),
                 _ => format!("`{name}`: damaged in the zip"),
             })?,
-            _ => return Err(format!("`{name}`: compressed with a method zips rarely use (only stored and deflate)")),
         };
-        if bytes.len() != size as usize || crc32(&bytes) != crc {
+        if bytes.len() != f.size as usize || crc32(&bytes) != f.crc {
             return Err(format!("`{name}`: damaged in the zip"));
         }
         total += bytes.len();
-        out.push((name.to_string(), bytes));
+        put(&name[top.len()..], bytes)?;
     }
-    if !out.iter().any(|f| f.0 == "mod.json") {
-        // one folder holding everything (a zipped mod folder)
-        let top = out.first().and_then(|f| f.0.split_once('/')).map(|t| format!("{}/", t.0)).ok_or("no mod.json in the zip")?;
-        if !out.iter().all(|f| f.0.starts_with(&top)) || !out.iter().any(|f| f.0 == format!("{top}mod.json")) {
-            return Err("no mod.json in the zip (it must be at the top, or in the one folder everything is in)".into());
-        }
-        out.iter_mut().for_each(|f| f.0.drain(..top.len()).for_each(drop));
-    }
-    Ok(out)
+    Ok(files.into_iter().map(|f| f.name[top.len()..].to_string()).collect())
 }
 
 /// A mod id fit for a folder name: 1..=64 ASCII letters, digits, `_` or `-`.
@@ -199,20 +273,28 @@ pub fn good_id(id: &str) -> bool {
 /// Every file of the mod in `dir` read the way the game reads it, as hostile input: `mods::read`, each `.glb`
 /// through `mods::open`'s checks (every costume also §7's), each image decoded within limits, each `.wav` as PCM16.
 pub fn check_all(dir: &Path, files: &[String]) -> Result<Mod, String> {
+    let m = check_mod(dir)?;
+    files.iter().try_for_each(|f| check_file(dir, f))?;
+    Ok(m)
+}
+
+fn check_mod(dir: &Path) -> Result<Mod, String> {
     let m = mods::read(dir)?;
     mods::check(&m)?;
-    for f in files {
-        let p = dir.join(f);
-        let bytes = || read(&p).map_err(|e| format!("{f}: {e}"));
-        match f.rsplit_once('.').map(|e| e.1.to_ascii_lowercase()).as_deref() {
-            Some("glb") => mods::open(&p).map(drop)?,
-            Some(ext @ ("png" | "webp")) => image_ok(&bytes()?, ext).map_err(|e| format!("{f}: {e}"))?,
-            Some("wav") if crate::audio::pcm(&bytes()?).is_none() => return Err(format!("{f}: not a PCM16 wav")),
-            Some("json") => drop(serde_json::from_slice::<serde_json::Value>(&bytes()?).map_err(|e| format!("{f}: not JSON: {e}"))?),
-            _ => {}
-        }
-    }
     Ok(m)
+}
+
+fn check_file(dir: &Path, f: &str) -> Result<(), String> {
+    let p = dir.join(f);
+    let bytes = || read(&p).map_err(|e| format!("{f}: {e}"));
+    match f.rsplit_once('.').map(|e| e.1.to_ascii_lowercase()).as_deref() {
+        Some("glb") => mods::open(&p).map(drop)?,
+        Some(ext @ ("png" | "webp")) => image_ok(&bytes()?, ext).map_err(|e| format!("{f}: {e}"))?,
+        Some("wav") if crate::audio::pcm(&bytes()?).is_none() => return Err(format!("{f}: not a PCM16 wav")),
+        Some("json") => drop(serde_json::from_slice::<serde_json::Value>(&bytes()?).map_err(|e| format!("{f}: not JSON: {e}"))?),
+        _ => {}
+    }
+    Ok(())
 }
 
 /// An image decodes as its extension's format within 8192×8192 and 256 MB (WebP, which this build can't decode, is
@@ -230,32 +312,96 @@ fn image_ok(b: &[u8], ext: &str) -> Result<(), String> {
     }
 }
 
-/// A mod zip installed into `root` (the `mods/` folder) as `root/<id>/`, in memory: unpacked ([`unpack`]), checked
-/// whole ([`check_all`]) under `root/.import/`, then put in place of an installed mod with the same id. On any
-/// failure nothing is kept. Its files are then [`files_under`] `root/<id>` for the page to store.
+/// A mod zip installed into `root` (the `mods/` folder) as `root/<id>/`, in memory ([`install_with`]).
+#[cfg(test)]
 pub fn install(zip: &[u8], root: &Path) -> Result<Mod, String> {
-    let files = unpack(zip)?;
-    let manifest = &files.iter().find(|f| f.0 == "mod.json").ok_or("no mod.json")?.1;
-    let j: serde_json::Value = serde_json::from_slice(manifest).map_err(|e| format!("mod.json: not JSON: {e}"))?;
-    let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
+    now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, false))
+}
+
+/// The mod zip file `zip` installed into `root/<id>/` on disk ([`install_with`]); `want` is the id it must hold.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, String> {
+    use io::{Read, Seek};
+    let mut f = std::fs::File::open(zip).map_err(|e| format!("can't open the zip: {e}"))?;
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let read = |at, n| {
+        let mut b = vec![0; n];
+        std::future::ready(f.seek(io::SeekFrom::Start(at)).and_then(|_| f.read_exact(&mut b)).map(|_| b).map_err(|e| format!("can't read the zip: {e}")))
+    };
+    now(install_with(len, read, root, want, true))
+}
+
+/// A mod zip (`len` bytes, read as [`unpack_with`] reads it) installed into `root` (the `mods/` folder) as
+/// `root/<id>/`: unpacked a file at a time under `root/.import/` (on disk, or in memory: the browser's page then
+/// stores [`files_under`] `root/<id>`), checked whole ([`check_all`]), then put in place of an installed mod with the
+/// same id. `want` is the id it must hold (a store download's). On any failure nothing of it is kept.
+pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
+    len: u64,
+    zip: impl FnMut(u64, usize) -> F,
+    root: &Path,
+    want: Option<&str>,
+    disk: bool,
+) -> Result<Mod, String> {
     let stage = root.join(".import");
-    remove(&stage);
-    let names: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
-    for (n, b) in files {
-        add(&stage.join(n), b.into());
-    }
-    let got = check_all(&stage, &names);
-    let staged = files_under(&stage);
-    remove(&stage);
-    got.map_err(|e| e.replace(&format!("{}/", stage.display()), ""))?;
+    let clear = || {
+        remove(&stage);
+        if disk {
+            let _ = std::fs::remove_dir_all(&stage);
+        }
+    };
+    clear();
+    let checked = async {
+        let put = |n: &str, b: Vec<u8>| {
+            let p = stage.join(n);
+            if !disk {
+                return Ok(add(&p, b.into()));
+            }
+            std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
+        };
+        let names = unpack_with(len, zip, put, MAX_FILE, MAX_TOTAL).await?;
+        let j: serde_json::Value = serde_json::from_slice(&read(&stage.join("mod.json")).map_err(|e| e.to_string())?).map_err(|e| format!("mod.json: not JSON: {e}"))?;
+        let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
+        if let Some(w) = want.filter(|w| *w != id) {
+            return Err(format!("the zip holds `{id}`, not `{w}`"));
+        }
+        check_mod(&stage)?;
+        #[cfg(target_arch = "wasm32")]
+        let mut last = js_sys::Date::now();
+        for f in &names {
+            // the browser draws a frame every 50 ms of checks (each yield waits a whole frame)
+            #[cfg(target_arch = "wasm32")]
+            if js_sys::Date::now() - last > 50.0 {
+                crate::web::breathe().await;
+                last = js_sys::Date::now();
+            }
+            check_file(&stage, f)?;
+        }
+        Ok(id)
+    };
+    let id = match checked.await {
+        Ok(id) => id,
+        Err(e) => {
+            clear();
+            return Err(e.replace(&format!("{}/", stage.display()), ""));
+        }
+    };
     let dir = root.join(&id);
-    remove(&dir);
-    let (from, to) = (key(&stage), key(&dir));
-    let mut mem = MEM.lock().unwrap();
-    for (k, b) in staged {
-        mem.insert(format!("{to}{}", &k[from.len()..]), b);
+    if disk {
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = std::fs::rename(&stage, &dir) {
+            clear();
+            return Err(format!("can't write {}: {e}", dir.display()));
+        }
+    } else {
+        remove(&dir);
+        let (from, to) = (key(&stage), key(&dir));
+        let mut mem = MEM.lock().unwrap();
+        let staged: Vec<String> = mem.range(format!("{from}/")..).take_while(|(k, _)| k.starts_with(&format!("{from}/"))).map(|(k, _)| k.clone()).collect();
+        for k in staged {
+            let b = mem.remove(&k).unwrap();
+            mem.insert(format!("{to}{}", &k[from.len()..]), b);
+        }
     }
-    drop(mem);
     mods::read(&dir)
 }
 

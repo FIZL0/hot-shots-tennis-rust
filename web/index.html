@@ -135,7 +135,7 @@ window.hstWebGL2 = () => {
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
-const { default: init, run, paste, typed_code, add_card, add_mod_file, import_mod, mod_files, mod_status, drop_mod } = await import(pkg + 'hst.js');
+const { default: init, run, paste, typed_code, add_card, add_mod_file, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
 say('Opening this browser\'s storage…');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
@@ -187,6 +187,7 @@ async function start() {
   };
   // M16: installed mods (OPFS mods/<id>/…) into the game, a folder without its mod.json (a save cut short) dropped
   const mods = await dir.getDirectoryHandle('mods', { create: true });
+  const modsFrom = performance.now();
   const walk = async (d, path, out) => { for await (const [n, h] of d.entries()) h.kind === 'file' ? out.push([path + n, h]) : await walk(h, `${path}${n}/`, out); return out; };
   for await (const [id, h] of mods.entries()) {
     if (h.kind !== 'directory') continue;
@@ -195,6 +196,7 @@ async function start() {
     say(`Reading mod ${id}…`);
     for (const [p, fh] of files) add_mod_file(p, new Uint8Array(await (await fh.getFile()).arrayBuffer()));
   }
+  console.info(`hst: mods read from OPFS in ${Math.round(performance.now() - modsFrom)} ms`);
   // the Mods screen's picker (web.rs): over the Add mod row while it's up, or opened by a key or pad
   const pick = document.getElementById('modzip');
   window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `${r[1]}%`, width: `${r[2]}%`, height: `${r[3]}%` }); };
@@ -205,12 +207,15 @@ async function start() {
     pick.value = '';
     if (!f) return;
     mod_status(`Checking ${f.name}...`);
-    // the status is drawn before the check holds the page
-    await new Promise(r => setTimeout(r, 100));
+    // read from the file a part at a time, never whole (B204)
     let m;
-    try { m = import_mod(new Uint8Array(await f.arrayBuffer())); } catch (e) { mod_status(`Couldn't add ${f.name}: ${e}`); return; }
+    try { m = await import_mod(f); } catch (e) { mod_status(`Couldn't add ${f.name}: ${e}`); return; }
     await window.hstModSave(m.id, m.name);
   };
+  // a mod store download (web.rs zip): streamed into OPFS mod-download.zip (emptied), then read back from it a part
+  // at a time
+  window.hstZip = async read => { const h = await dir.getFileHandle('mod-download.zip', { create: !read }); return read ? h.getFile() : h.createWritable(); };
+  window.hstZipDrop = () => dir.removeEntry('mod-download.zip').catch(() => {});
   // an installed mod (a picked zip, or one the mod store downloaded, M17) from the game into OPFS mods/<id>/
   window.hstModSave = async (id, name) => {
     mod_status(`Saving ${name}...`);
@@ -225,11 +230,13 @@ async function start() {
         await w.write(bytes);
         await w.close();
       };
-      // all at once (a write is slow on its own), mod.json (mod_files' last) after the rest is in
-      const files = [...mod_files(id)];
-      const json = files.pop();
-      await Promise.all(files.map(put));
-      await put(json);
+      // eight at a time (a write is slow on its own; all at once held the whole mod twice, B204), mod.json
+      // (mod_paths' last) after the rest is in
+      const paths = mod_paths(id), json = paths.pop();
+      const one = p => put([p, mod_file(id, p)]);
+      const next = async () => { for (let p; (p = paths.shift()) !== undefined;) await one(p); };
+      await Promise.all(Array.from({ length: 8 }, next));
+      await one(json);
       mod_status(`Added ${name}. Reload to play it.`);
     } catch (e) {
       await mods.removeEntry(id, { recursive: true }).catch(() => {});
