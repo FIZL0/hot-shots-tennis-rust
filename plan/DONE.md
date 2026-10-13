@@ -249,6 +249,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B125** P1 tosses the ball by itself when the game loads (user 2026-10-12): at the start of a match P1 throws the serve toss up without the player pressing anything (the toss only; no hit follows). Find what starts the toss (a held/leftover menu confirm press carried into the match, the bot/auto-serve path taking a human server, or `auto_shot`) and fix it so a human server waits for their own input, as in the original. Done when starting a match as a human server never tosses until the button is pressed → `play.rs` serve/read_input · `play/main_menu.rs` match start · `main.rs` auto_shot
 - [x] **B129** Winners face the wrong way after the match (bug, user 2026-10-12): on the post-game win screen the players sometimes face the wrong way. Find which (winner/loser, side of court, lefty, team) and match the original's facing → `play.rs` react · `hst-sim/src/flow.rs` · `play/result.rs`
 - [x] **B131** Mod characters fall back to stock player sounds (bug, user 2026-10-12): a mod without its own voice/SFX plays nothing; it should use its donor's (or a default disc character's) grunts, shouts and voice lines, until M8e gives it its own → `mods.rs` · `hst-sim/src/sound.rs` · `play.rs` sound cues | with M8e
+- [x] **B130** Continue on the post-game screen exits to the menu (user 2026-10-12): choosing Continue after the match ends goes back to the main menu (fade out, as Return to the Menu) → `play/result.rs` · `play/main_menu.rs`
 
 
 ### Shots

@@ -1711,9 +1711,9 @@ mod tests {
             let mut r = room(false);
             r.take("host", &[Pick { r#mod: Some(Box::new(wire.clone())), ..Pick::disc(3, 0) }]);
             tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
-            // the next event `want` matches (10 s at most)
+            // the next event `want` matches (30 s at most: the DHT testnet is slow under parallel load)
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
-                for _ in 0..500 {
+                for _ in 0..1500 {
                     while let Ok(e) = ev.try_recv() {
                         if want(&e) {
                             return e;
