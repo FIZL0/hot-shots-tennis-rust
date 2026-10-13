@@ -22,6 +22,9 @@ pub const DELAY: usize = 2;
 /// How many ticks a machine may run on guessed pads before it waits (ggrs' prediction window). A re-run of the whole
 /// window is `WINDOW + 1` ticks and as many saves in one frame: measured in `tick_cost` (journal: 2026-10-12-m2h).
 pub const WINDOW: usize = 8;
+/// Time sync: while this machine runs `n` ticks ahead of the others' middle, it sits out one tick in every
+/// `SPREAD / n` (at least every other), never several in a row (B163).
+pub const SPREAD: u32 = 20;
 
 pub struct Cfg;
 
@@ -71,8 +74,8 @@ pub struct Rollback {
     seats: Vec<usize>,
     /// The next tick a run gives its pads to (where the last restore put the match, then counting).
     frame: usize,
-    /// Ticks to sit out (ggrs' advice when this machine runs ahead).
-    skip: u32,
+    /// Gate calls since this machine last sat out a tick (time sync).
+    since: u32,
     /// `HST_NET_SYNCTEST=n` with every seat on this machine: ggrs' sync test runs the ticks instead, each tick going
     /// back `n` ticks and running them again, and stops on a state hash that comes out differently.
     sync: Option<ggrs::SyncTestSession<Cfg>>,
@@ -82,6 +85,42 @@ pub struct Rollback {
     pub step: fn(&mut World),
     /// Ticks run again after a restore, in all.
     pub reruns: u64,
+    /// The frame-time and network trace (B163).
+    trace: Trace,
+}
+
+/// What each tick gate saw (B163): every 30 s a summary line in the log, and with `HST_NET_TRACE=file.csv` (native)
+/// a row per gate call.
+#[derive(Default)]
+struct Trace {
+    file: Option<std::io::BufWriter<std::fs::File>>,
+    t0: Option<web_time::Instant>,
+    /// When the last datagram came in, and the longest wait between two since the last row.
+    heard: Option<web_time::Instant>,
+    gap: f32,
+    /// Since the last summary: frames over 33 ms, the longest frame, the longest re-run, ticks sat out, stalls.
+    slow: u32,
+    worst: f32,
+    rolled: usize,
+    skipped: u32,
+    stalls: u32,
+    next: f32,
+}
+
+impl Trace {
+    fn new() -> Self {
+        let file = std::env::var("HST_NET_TRACE").ok().and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new);
+        let mut t = Trace { file, t0: Some(web_time::Instant::now()), next: 30.0, ..default() };
+        t.row(format_args!("t_ms,dt_ms,frame,ran,rolled,cost_ms,skip,stall,ahead,ping_ms,behind,gap_ms"));
+        t
+    }
+
+    fn row(&mut self, r: std::fmt::Arguments) {
+        use std::io::Write;
+        if let Some(f) = &mut self.file {
+            let _ = writeln!(f, "{r}");
+        }
+    }
 }
 
 impl Rollback {
@@ -103,7 +142,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, skip: 0, step, reruns: 0 })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, trace: Trace::new() })
     }
 
     /// The tick the next run is.
@@ -120,7 +159,11 @@ impl Rollback {
 
 /// A peer's datagram into ggrs.
 pub fn heard(w: &mut World, from: String, data: &[u8]) {
-    let Some(rb) = w.get_resource::<Rollback>() else { return };
+    let Some(mut rb) = w.get_resource_mut::<Rollback>() else { return };
+    let now = web_time::Instant::now();
+    if let Some(t) = rb.trace.heard.replace(now) {
+        rb.trace.gap = rb.trace.gap.max((now - t).as_secs_f32() * 1000.0);
+    }
     if let Ok(m) = bincode::deserialize::<Message>(data) {
         rb.wires.inbox.lock().unwrap().push((from, m));
     }
@@ -140,7 +183,9 @@ pub fn poll(w: &mut World) {
     let events: Vec<_> = rb.sess.events().collect();
     for e in events {
         match e {
-            GgrsEvent::WaitRecommendation { skip_frames } => w.resource_mut::<Rollback>().skip += skip_frames,
+            // ggrs' advice sits out the whole lead at once, and only from 3 ticks: a freeze of 50 ms or more, every
+            // second while it lasts (B163); `gate` spreads the waits out instead
+            GgrsEvent::WaitRecommendation { .. } => {}
             GgrsEvent::DesyncDetected { frame, local_checksum, remote_checksum, .. } => {
                 super::netplay::desync(w, (frame as u32, local_checksum as u64, remote_checksum as u64))
             }
@@ -250,8 +295,11 @@ pub fn gate(w: &mut World) -> bool {
     }
     {
         let mut rb = w.resource_mut::<Rollback>();
-        if rb.skip > 0 {
-            rb.skip -= 1;
+        rb.since += 1;
+        let ahead = rb.sess.frames_ahead().max(0) as u32;
+        if ahead > 0 && rb.since >= (SPREAD / ahead).max(2) {
+            rb.since = 0;
+            note(w, (0, 0), 0.0, true);
             return false;
         }
     }
@@ -283,6 +331,7 @@ pub fn gate(w: &mut World) -> bool {
     for (&h, &p) in handles.iter().zip(&local) {
         rb.sess.add_local_input(h, Input(wire(p))).expect("a local seat");
     }
+    let (t0, f0, r0) = (web_time::Instant::now(), rb.frame, rb.reruns);
     match rb.sess.advance_frame() {
         Ok(reqs) => {
             handle(w, reqs, super::netplay::HASH_EVERY as i32);
@@ -292,6 +341,43 @@ pub fn gate(w: &mut World) -> bool {
         Err(GgrsError::PredictionThreshold) => {}
         Err(e) => warn!("rollback: {e}"),
     }
+    let rb = w.resource::<Rollback>();
+    let ran = (rb.frame + (rb.reruns - r0) as usize - f0, (rb.reruns - r0) as usize);
+    note(w, ran, t0.elapsed().as_secs_f32() * 1000.0, false);
     super::netplay::pump(w);
     false
+}
+
+/// The trace's row for this gate call: `ran` ticks run of which `rolled` were re-runs, `cost` ms spent on them, or
+/// a tick sat out (`skip`: time sync) or none run (a stall: waiting for a peer's pads).
+fn note(w: &mut World, (ran, rolled): (usize, usize), cost: f32, skip: bool) {
+    let stall = !skip && ran == 0;
+    let dt = w.resource::<Time<Real>>().delta_secs() * 1000.0;
+    let mut rb = w.resource_mut::<Rollback>();
+    let frame = rb.sess.current_frame();
+    let ahead = rb.sess.frames_ahead();
+    let stats: Vec<_> = rb.sess.remote_player_handles().into_iter().filter_map(|h| rb.sess.network_stats(h).ok()).collect();
+    let ping = stats.iter().map(|s| s.ping).max().unwrap_or(0);
+    let behind = stats.iter().map(|s| s.local_frames_behind).max().unwrap_or(0);
+    let tr = &mut rb.trace;
+    let t = tr.t0.get_or_insert_with(web_time::Instant::now).elapsed().as_secs_f32();
+    let gap = std::mem::take(&mut tr.gap);
+    tr.row(format_args!("{:.1},{dt:.2},{frame},{ran},{rolled},{cost:.2},{},{},{ahead},{ping},{behind},{gap:.1}", t * 1000.0, skip as u8, stall as u8));
+    tr.slow += (dt > 33.0) as u32;
+    tr.worst = tr.worst.max(dt);
+    tr.rolled = tr.rolled.max(rolled);
+    tr.skipped += skip as u32;
+    tr.stalls += stall as u32;
+    if t >= tr.next {
+        tr.next = t + 30.0;
+        info!(
+            "rollback, last 30 s: {} frames over 33 ms (longest {:.0} ms), longest re-run {} ticks, {} ticks sat out, {} stalls, ping {ping} ms, {ahead} ticks ahead",
+            tr.slow, tr.worst, tr.rolled, tr.skipped, tr.stalls
+        );
+        let (file, t0) = (tr.file.take(), tr.t0);
+        *tr = Trace { file, t0, next: tr.next, ..default() };
+        if let Some(f) = &mut tr.file {
+            let _ = std::io::Write::flush(f);
+        }
+    }
 }
