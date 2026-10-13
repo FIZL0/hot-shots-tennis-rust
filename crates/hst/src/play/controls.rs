@@ -345,6 +345,16 @@ impl PadSlots {
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Bindings>().init_resource::<PadSlots>().add_systems(Startup, load);
+    app.add_systems(PreUpdate, no_key_repeat.after(bevy::input::InputSystems));
+}
+
+/// B95: a held key presses once, like a held pad button. The OS's key repeat is dropped: Bevy ignores a repeat while
+/// the key is down, but one arriving after a release it missed (focus lost and back while held) would press again. The
+/// menus' held-direction repeat is their own timer, the same for the pad and the keyboard.
+fn no_key_repeat(mut keys: ResMut<ButtonInput<KeyCode>>, mut events: MessageReader<bevy::input::keyboard::KeyboardInput>) {
+    for e in events.read().filter(|e| e.repeat && e.state.is_pressed()) {
+        keys.clear_just_pressed(e.key_code);
+    }
 }
 
 /// Whether the app reads this pad. Under Steam Input, Steam lists the physical pads it stands in for in
@@ -427,6 +437,27 @@ mod tests {
         assert_eq!(s.0, [Some(c), Some(b), None, None]);
         s.update(&[c]);
         assert_eq!((s.0, s.connected()), ([Some(c), None, None, None], 1));
+    }
+
+    #[test]
+    fn held_key_presses_once() {
+        use bevy::input::{ButtonState, InputPlugin, keyboard::{Key, KeyboardFocusLost, KeyboardInput}};
+        let mut app = App::new();
+        app.add_plugins(InputPlugin).add_systems(PreUpdate, no_key_repeat.after(bevy::input::InputSystems));
+        let key = |app: &mut App, repeat| {
+            let e = KeyboardInput { key_code: KeyCode::KeyJ, logical_key: Key::Character("j".into()), state: ButtonState::Pressed, text: None, repeat, window: Entity::PLACEHOLDER };
+            app.world_mut().write_message(e);
+            app.update();
+            app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyJ)
+        };
+        assert!(key(&mut app, false));
+        assert!(!key(&mut app, true));
+        // focus lost while held releases it; the OS repeat coming back mustn't press again
+        app.world_mut().write_message(KeyboardFocusLost);
+        app.update();
+        assert!(!key(&mut app, true));
+        assert!(app.world().resource::<ButtonInput<KeyCode>>().pressed(KeyCode::KeyJ));
+        assert!(!key(&mut app, true));
     }
 
     #[test]
