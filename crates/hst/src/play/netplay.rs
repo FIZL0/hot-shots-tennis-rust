@@ -6,9 +6,10 @@
 //! The gate (`mode::Gate`) runs before each of the match's ticks: it hands the tick's `[Pad; 4]` to the match as a
 //! one-tick `Replay` (`tick_input`), so the match never reads local devices itself (while an instant replay plays its
 //! own queue, only the tick's presses go in, for its ✕/○ skip: `run_on`). Before every [`HASH_EVERY`]th tick
-//! each machine sends its `snapshot::state_hash`; a mismatch stops the match for everyone and saves the inputs (every
-//! seat's, every tick, the same on every machine) with the line-up beside the disc as `desync-*.json` (each machine
-//! its own copy; the ignored test `replays_a_desync` runs one again). The pause screen opens and closes on every machine; the post-point
+//! each machine sends its `snapshot::state_hash`; on a mismatch each machine logs it and saves the inputs (every
+//! seat's, every tick, the same on every machine) with the line-up as `desync-*.json` (beside the disc; in the browser a
+//! download and the console; the ignored test `replays_a_desync` runs one again), says so on screen and plays on
+//! (B154: bringing the states back together is B154b). The pause screen opens and closes on every machine; the post-point
 //! press is a pad press, so it travels with the pads. A peer dropping ends the match for everyone with a message,
 //! then it goes back to the menu (no bot takes the seat). The court intro before the match runs its ticks on a lockstep
 //! of its own (`Msg::Intro`, `intro_tick`), so a ✕ on any machine skips it on the same tick everywhere.
@@ -30,6 +31,8 @@ const STALL: f32 = 0.25;
 const END: f32 = 5.0;
 /// The desync message's start (a peer that hears it saves its inputs too).
 const DESYNC: &str = "Out of sync";
+/// How long a desync's note stays up (real seconds).
+const NOTE: f32 = 6.0;
 
 /// `--pads`' gamepad for a peer's seat.
 const REMOTE: usize = 99;
@@ -155,6 +158,10 @@ pub struct Netplay {
     pub out: Vec<Msg>,
     /// Why the match ended; it closes `END` seconds later.
     pub end: Option<String>,
+    /// The states went apart (a report is saved for the first mismatch; B154b brings them back), and the note on
+    /// screen with its seconds left.
+    pub desynced: bool,
+    note: Option<(String, f32)>,
     paused: bool,
     /// The last hashed tick and its state's text (`snapshot::state_text`), for a desync's report.
     pub(super) state: (u32, String),
@@ -178,6 +185,8 @@ impl Netplay {
             me,
             out: Vec::new(),
             end: None,
+            desynced: false,
+            note: None,
             paused: false,
             state: (0, String::new()),
             stalled: 0.0,
@@ -226,16 +235,29 @@ fn save_desync(w: &World, why: &str) -> String {
     let path = crate::net::Online::path(&iso).with_file_name(format!("desync-{unix}-{me}.json"));
     let pads: Vec<[[u8; 6]; 4]> = np.lock.log.iter().map(|t| t.map(wire)).collect();
     let json = serde_json::json!({ "why": why, "room": np.room, "me": np.me, "pads": pads, "state_tick": np.state.0, "state": np.state.1 });
-    match std::fs::write(&path, json.to_string()) {
-        Ok(()) => path.display().to_string(),
+    #[cfg(target_arch = "wasm32")]
+    let saved = crate::web::save_file(&path.file_name().unwrap().to_string_lossy(), &json.to_string());
+    #[cfg(not(target_arch = "wasm32"))]
+    let saved = std::fs::write(&path, json.to_string()).map(|()| path.display().to_string());
+    match saved {
+        Ok(at) => at,
         Err(e) => format!("(not saved: {e})"),
     }
 }
 
+/// The states differ at tick `t`: logged every time, the first time also the report and a note on screen; the match
+/// plays on.
 pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
-    let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x}): the match stops.");
+    let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x})");
+    warn!("online: {why}");
+    if w.resource::<Netplay>().desynced {
+        return;
+    }
     let path = save_desync(w, &why);
-    w.resource_mut::<Netplay>().finish(format!("{why}\nInputs saved to {path}"), true);
+    info!("online: inputs saved to {path}");
+    let mut np = w.resource_mut::<Netplay>();
+    np.desynced = true;
+    np.note = Some((format!("{why}: playing on.\nInputs saved to {path}"), NOTE));
 }
 
 /// A network event into the match.
@@ -306,8 +328,6 @@ pub fn gate(w: &mut World) -> bool {
         np.out.push(Msg::Hash { tick: t, hash: h });
         if let Some(bad) = np.lock.own_hash(t, h) {
             desync(w, bad);
-            pump(w);
-            return false;
         }
     }
     // this machine's seats' pads (each seat's local device sits in the slot of the same number, `--pads`)
@@ -413,7 +433,13 @@ fn watch(w: &mut World) {
             let who: Vec<String> = np.intro.as_ref().map(Lockstep::missing).or(remote).unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
             format!("Waiting for {}...", who.join(", "))
         }
-        None => String::new(),
+        None => match &mut np.note {
+            Some((say, left)) if *left > 0.0 => {
+                *left -= dt;
+                say.clone()
+            }
+            _ => String::new(),
+        },
     };
     let close = np.ended > END;
     pump(w);
@@ -743,22 +769,29 @@ mod tests {
             eprintln!("in sync over {n} ticks, {replays} instant replays");
         }
 
-        /// A tick run on different pads: both stop at the next hash with the desync message and save the inputs.
+        /// A tick run on different pads: both see it at the next hash, save the inputs, say so and play on (B154).
         #[test]
-        fn a_desync_stops_both_and_saves() {
+        fn a_desync_is_saved_and_play_goes_on() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
             // tick 119's pads are in the state hashed before tick 120
-            let apps = play(6, 2000, Some(119));
-            for a in &apps {
-                let end = a.world().resource::<Netplay>().end.clone().expect("the match ended");
-                assert!(end.starts_with("Out of sync at tick 120"), "{end}");
-                let path = end.rsplit("Inputs saved to ").next().unwrap();
-                let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("saved")).unwrap();
+            for a in &play(6, 400, Some(119)) {
+                let path = reported(a, 120);
+                let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("saved")).unwrap();
                 assert!(saved["pads"].as_array().unwrap().len() >= 120);
                 std::fs::remove_file(path).unwrap();
             }
+        }
+
+        /// A desync at tick `t` was noted and saved, and the match went on past it: the report's path.
+        fn reported(a: &App, t: u32) -> String {
+            let np = a.world().resource::<Netplay>();
+            assert_eq!(np.end, None);
+            assert!(np.desynced && np.lock.log.len() > t as usize + 60, "played on to {}", np.lock.log.len());
+            let (say, _) = np.note.clone().expect("the desync's note");
+            assert!(say.starts_with(&format!("Out of sync at tick {t} ")), "{say}");
+            say.rsplit("Inputs saved to ").next().unwrap().to_string()
         }
 
         /// A lockstep match's inputs run again as `replays_a_desync` does come out the same, instant replays and all.
@@ -897,18 +930,14 @@ mod tests {
             eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {replays} instant replays, {:.0?}", t0.elapsed());
         }
 
-        /// A tick that runs differently on one machine: both stop at the next checksum and save their inputs.
+        /// A tick that runs differently on one machine: both see it at the next checksum, save their inputs and play on.
         #[test]
-        fn rollback_desync_stops_both_and_saves() {
+        fn rollback_desync_is_saved_and_play_goes_on() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
-            let apps = play_rollback(5, 1200, true);
-            for a in &apps {
-                let end = a.world().resource::<Netplay>().end.clone().expect("the match ended");
-                assert!(end.starts_with("Out of sync at tick 330"), "{end}");
-                let path = end.rsplit("Inputs saved to ").next().unwrap();
-                std::fs::remove_file(path).expect("saved");
+            for a in &play_rollback(5, 600, true) {
+                std::fs::remove_file(reported(a, 330)).expect("saved");
             }
         }
 

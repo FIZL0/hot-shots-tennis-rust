@@ -82,6 +82,11 @@ pub struct Rollback {
     pub step: fn(&mut World),
     /// Ticks run again after a restore, in all.
     pub reruns: u64,
+    /// Ticks sat out (ggrs' wait advice) and frames held on the prediction window, in all (B154's lag numbers).
+    pub skipped: u64,
+    pub held: u64,
+    /// The last stats line: (real seconds, reruns, ticks run) then.
+    logged: (f32, u64, usize),
 }
 
 impl Rollback {
@@ -103,7 +108,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, skip: 0, step, reruns: 0 })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, skip: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0) })
     }
 
     /// The tick the next run is.
@@ -140,7 +145,11 @@ pub fn poll(w: &mut World) {
     let events: Vec<_> = rb.sess.events().collect();
     for e in events {
         match e {
-            GgrsEvent::WaitRecommendation { skip_frames } => w.resource_mut::<Rollback>().skip += skip_frames,
+            GgrsEvent::WaitRecommendation { skip_frames } => {
+                let mut rb = w.resource_mut::<Rollback>();
+                rb.skip += skip_frames;
+                rb.skipped += skip_frames as u64;
+            }
             GgrsEvent::DesyncDetected { frame, local_checksum, remote_checksum, .. } => {
                 super::netplay::desync(w, (frame as u32, local_checksum as u64, remote_checksum as u64))
             }
@@ -151,6 +160,34 @@ pub fn poll(w: &mut World) {
             _ => {}
         }
     }
+    stats(w);
+}
+
+/// Every 10 s in the log: each peer's round trip and how far ahead it runs, and the ticks re-run, sat out and held
+/// since (B154: what online lag is made of).
+fn stats(w: &mut World) {
+    let now = w.resource::<Time<Real>>().elapsed_secs();
+    let mut rb = w.resource_mut::<Rollback>();
+    if now - rb.logged.0 < 10.0 {
+        return;
+    }
+    let peers: Vec<String> = rb
+        .sess
+        .remote_player_handles()
+        .into_iter()
+        .filter_map(|h| rb.sess.network_stats(h).ok().map(|n| format!("{}P {} ms round trip, this machine {} ticks behind it", rb.seats[h] + 1, n.ping, n.local_frames_behind)))
+        .collect();
+    let ticks = rb.frame - rb.logged.2.min(rb.frame);
+    info!(
+        "rollback at tick {}: {}; last {ticks} ticks: {} re-run, {} sat out, {} held (delay {DELAY}, window {WINDOW})",
+        rb.frame,
+        peers.join(", "),
+        rb.reruns - rb.logged.1,
+        rb.skipped,
+        rb.held
+    );
+    rb.logged = (now, rb.reruns, rb.frame);
+    (rb.skipped, rb.held) = (0, 0);
 }
 
 /// Saves the state into ggrs' cell, with its hash every `every` ticks (ggrs compares those).
@@ -289,7 +326,7 @@ pub fn gate(w: &mut World) -> bool {
             w.resource_mut::<Netplay>().stalled = 0.0;
         }
         // too far ahead of a peer: wait for its pads ("Waiting for …" after a while)
-        Err(GgrsError::PredictionThreshold) => {}
+        Err(GgrsError::PredictionThreshold) => w.resource_mut::<Rollback>().held += 1,
         Err(e) => warn!("rollback: {e}"),
     }
     super::netplay::pump(w);

@@ -179,6 +179,16 @@ pub fn typed() -> String {
     std::mem::take(&mut *TYPED.lock().unwrap())
 }
 
+/// A file for the player to keep (a desync's report, B154): the page's `hstSaveFile` keeps it in OPFS `reports/` and
+/// downloads it; the text goes to the console too, so a page without the hook (or a blocked download) still has it.
+pub fn save_file(name: &str, text: &str) -> io::Result<String> {
+    bevy::log::info!("{name}: {text}");
+    let f = js_sys::Reflect::get(&web_sys::window().unwrap(), &"hstSaveFile".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    let f = f.ok_or_else(|| io::Error::other("no hstSaveFile on the page (the report is in the console)"))?;
+    f.call2(&JsValue::NULL, &name.into(), &text.into()).map_err(io_err)?;
+    Ok(format!("{name} (downloaded; also in the console)"))
+}
+
 /// Join by Code's code entry shown or gone: the page puts a tap target up that opens the phone's keyboard.
 pub fn code_entry(on: bool) {
     let f = js_sys::Reflect::get(&web_sys::window().unwrap(), &"hstCodeEntry".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok());

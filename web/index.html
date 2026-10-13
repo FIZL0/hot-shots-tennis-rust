@@ -175,6 +175,13 @@ async function start() {
   for await (const [name, h] of cards.entries()) if (h.kind === 'file') add_card(name, new Uint8Array(await (await h.getFile()).arrayBuffer()));
   window.hstCard = (name, bytes) => cards.getFileHandle(name, { create: true }).then(async h => { const w = await h.createWritable(); await w.write(bytes); await w.close(); }).catch(e => console.warn(`hst: card ${name}: ${e}`));
   window.hstCardDrop = name => cards.removeEntry(name).catch(() => {});
+  // a file for the player (web.rs save_file: a desync's report): kept in OPFS reports/ and downloaded
+  window.hstSaveFile = (name, text) => {
+    dir.getDirectoryHandle('reports', { create: true }).then(d => d.getFileHandle(name, { create: true })).then(async h => { const w = await h.createWritable(); await w.write(text); await w.close(); }).catch(e => console.warn(`hst: ${name}: ${e}`));
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  };
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
