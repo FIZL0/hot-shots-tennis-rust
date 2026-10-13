@@ -622,6 +622,7 @@ fn bake(
     fixed: Res<Time<Fixed>>,
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
+    compiling: Option<Res<crate::mode::Compiling>>,
 ) {
     if menu.screen != Screen::Chars && baker.job.is_none() {
         return;
@@ -637,6 +638,11 @@ fn bake(
     let baker = &mut *baker;
     if let Some(job) = &mut baker.job {
         job.frames += 1;
+        // B142: a part whose pipeline is still compiling isn't drawn (a mod's first MASK material: Emi's body and
+        // hair), and an uncapped menu runs `wait` frames in milliseconds; count from the last compile
+        if job.reading.is_none() && compiling.is_some_and(|c| c.busy()) {
+            job.frames = 0;
+        }
         let wait = if baker.jobs == 0 { 30 } else { 4 };
         let ticked = fixed.elapsed_secs() - job.start >= SETTLE_TICKS as f32 / 60.0;
         let data = job.done.lock().unwrap().take();
