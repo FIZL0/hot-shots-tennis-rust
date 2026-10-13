@@ -213,7 +213,7 @@ pub struct Room {
 }
 
 /// B201: one player's place on the character select, live: the disc character hovered (a mod's donor, with the mod's
-/// id), the costume, and whether they're ready on it. Only for showing; the match takes the seats' picks.
+/// id and name), the costume, and whether they're ready on it. Only for showing; the match takes the seats' picks.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Live {
     pub char: usize,
@@ -221,6 +221,9 @@ pub struct Live {
     pub ready: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#mod: Option<String>,
+    /// B234: the mod's own name, for peers that don't have it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
 }
 
 impl Room {
