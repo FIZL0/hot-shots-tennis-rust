@@ -495,7 +495,8 @@ impl Trail {
         }
         // fade in over the first 30% of the swing, out over the last 40%; a fast racket draws brighter
         let (life, length) = (self.life, self.length);
-        let (rise, fall) = (mul(length as f32, 0.3) as i32, mul(length as f32, 0.4) as i32);
+        // B197: at least 1, for a trail a rollback left past its swing's length (the game's divides by zero there)
+        let (rise, fall) = ((mul(length as f32, 0.3) as i32).max(1), (mul(length as f32, 0.4) as i32).max(1));
         let a = if length - life < rise {
             ((length - life) * 128 / rise) as f32
         } else if life < fall {

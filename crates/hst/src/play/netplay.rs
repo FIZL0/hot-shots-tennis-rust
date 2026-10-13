@@ -504,6 +504,10 @@ fn watch(w: &mut World) {
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Startup, setup).add_systems(Update, watch.run_if(resource_exists::<Netplay>));
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("HST_NET_THROTTLE").is_some() {
+        app.add_systems(Last, super::rollback::throttle.run_if(resource_exists::<Netplay>));
+    }
 }
 
 /// The match's flags (as `main_menu`'s) for `room`, this machine being `me`: its seats driven by `devices` in seat
@@ -1102,7 +1106,9 @@ mod tests {
             assert_eq!(longest, 1, "the host sat out {longest} ticks in a row");
             let [a, b] = apps.each_ref().map(frame);
             assert!(a.abs_diff(b) <= 2, "host at tick {a}, guest at {b}");
-            assert!(apps[0].world().resource::<Rollback>().sess.frames_ahead() <= 1);
+            // B197: time sync moves each clock at most `SHIFT` off real time; this guest's 20 lost ticks (the harness
+            // doesn't hand them back as Bevy's fixed loop now does) take both up to it, a tick or two short
+            assert!(apps[0].world().resource::<Rollback>().sess.frames_ahead() <= 2);
         }
 
         /// B228: the host's own emote (1P's flick, a local seat on the host) plays on both machines, in sync. The
@@ -1297,6 +1303,107 @@ mod tests {
                 assert_eq!(np.lock.log[base..n], logs[0].lock.log[base..n], "{} ran other pads", np.me);
             }
             base
+        }
+
+        /// B197: rollback peers (`two`: host 1P 2P, `g` 3P 4P; else one seat each: host, `h`, `g`, `k`), every datagram 3
+        /// rounds on its way, a round being a 60th of a second of real time; peer `i` runs the tick gate `calls(i, round)`
+        /// times in it (Bevy's fixed loop: a 20 fps peer 3 times every third round, one hitching none for a while and
+        /// then all it missed at once). Each peer's ticks run (`Rollback::frame`) after every round.
+        fn paced(two: bool, limit: u32, calls: impl Fn(usize, u32) -> u32) -> (Vec<App>, Vec<Vec<usize>>) {
+            let mut room = room(0);
+            let names: &[&str] = if two { &["host", "g"] } else { &["host", "h", "g", "k"] };
+            if !two {
+                for (s, p) in [(1, "h"), (2, "g"), (3, "k")] {
+                    room.seats[s].as_mut().unwrap().peer = p.into();
+                }
+            }
+            let mut apps: Vec<App> = names.iter().map(|&me| {
+                let mut a = app(&room, me);
+                a.insert_resource(Rollback::new(&room, me, step as fn(&mut _)).unwrap());
+                a
+            }).collect();
+            let mut ran = vec![Vec::new(); apps.len()];
+            let mut wire: Vec<(usize, u32, String, Vec<u8>)> = Vec::new();
+            for round in 0..limit {
+                for (to, at, from, d) in std::mem::take(&mut wire) {
+                    if at <= round {
+                        take(apps[to].world_mut(), Event::Datagram(from, d));
+                    } else {
+                        wire.push((to, at, from, d));
+                    }
+                }
+                for i in 0..apps.len() {
+                    for _ in 0..calls(i, round) {
+                        let w = apps[i].world_mut();
+                        // a frozen peer's datagrams wait for it in the network's queue (`net.rs`), as they would
+                        rollback::gate(w);
+                        let me = w.resource::<Netplay>().me.clone();
+                        for (to, d) in rollback::outgoing(w) {
+                            let j = names.iter().position(|n| **n == to).unwrap();
+                            wire.push((j, round + 3, me.clone(), d));
+                        }
+                        let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+                        for j in (0..names.len()).filter(|&j| j != i) {
+                            for m in &out {
+                                take(apps[j].world_mut(), Event::Match(m.clone()));
+                            }
+                        }
+                    }
+                    ran[i].push(apps[i].world().resource::<Rollback>().frame());
+                }
+            }
+            (apps, ran)
+        }
+
+        /// B197: the slow peer's schedule: 20 fps (3 ticks every third 60th of a second) and, every 3 s, a 1 s hitch
+        /// (nothing for 60 rounds, then 60 gate calls in one frame).
+        fn slow(round: u32) -> u32 {
+            match round % 180 {
+                120..179 => 0,
+                179 => 60,
+                r => (r % 3 == 2) as u32 * 3,
+            }
+        }
+
+        /// B197's acceptance: one slow peer (20 fps with 1 s hitches) leaves the others at full speed (60 ticks a
+        /// second of real time, never two rounds without a tick, at most `SHIFT` behind real time) and every peer in
+        /// sync; the slow one keeps up in real time too.
+        fn a_slow_peer(two: bool) {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let limit = 900;
+            let (apps, ran) = paced(two, limit, |i, r| if i == 1 { slow(r) } else { 1 });
+            for (i, f) in ran.iter().enumerate() {
+                // its session's start (ggrs' handshake) and first tick
+                let start = f.iter().position(|&f| f > 0).unwrap();
+                let behind = (limit as usize - start) as i32 - f[limit as usize - 1] as i32;
+                let rb = apps[i].world().resource::<Rollback>();
+                eprintln!("peer {i}: {behind} ticks behind real time, {} held, {} sat out, {} re-run, ahead {}", rb.held, rb.skipped, rb.reruns, rb.sess.frames_ahead());
+                assert!(behind.abs() <= rollback::SHIFT + 3 + 60 * (i == 1) as i32, "peer {i} {behind} ticks behind real time");
+                if i == 1 {
+                    continue;
+                }
+                let idle = f[start + 30..].windows(3).filter(|w| w[0] == w[2]).count();
+                assert_eq!(idle, 0, "peer {i} went two rounds without a tick");
+            }
+            let logs: Vec<_> = apps.iter().map(|a| a.world().resource::<Netplay>()).collect();
+            let n = logs.iter().map(|np| np.lock.log.len()).min().unwrap() - rollback::WINDOW;
+            assert!(n > 600, "only {n} ticks in step");
+            for np in &logs {
+                assert_eq!((np.end.as_deref(), np.desynced), (None, false), "{}", np.me);
+                assert_eq!(np.lock.log[..n], logs[0].lock.log[..n], "{} ran other pads", np.me);
+            }
+        }
+
+        #[test]
+        fn a_slow_peer_leaves_the_other_at_full_speed() {
+            a_slow_peer(true);
+        }
+
+        #[test]
+        fn a_slow_peer_leaves_three_others_at_full_speed() {
+            a_slow_peer(false);
         }
 
         /// B196: `g` killed mid-rally: everyone waits, nobody answers, the others are asked, the host chooses a bot

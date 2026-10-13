@@ -19,12 +19,24 @@ use std::sync::{Arc, Mutex};
 
 /// The local input delay, ticks.
 pub const DELAY: usize = 2;
-/// How many ticks a machine may run on guessed pads before it waits (ggrs' prediction window). A re-run of the whole
-/// window is `WINDOW + 1` ticks and as many saves in one frame: measured in `tick_cost` (journal: 2026-10-12-m2h).
-pub const WINDOW: usize = 8;
-/// Time sync: while this machine runs `n` ticks ahead of the others' middle, it sits out one tick in every
-/// `SPREAD / n` (at least every other), never several in a row (B163).
+/// How many ticks a machine may run on guessed pads before it waits (ggrs' prediction window). B197: 80 (1.3 s), so
+/// the others play on through a peer's 1 s hitch instead of stalling (ggrs' input queue holds 128). A re-run of the
+/// whole window is `WINDOW + 1` ticks and as many saves in one frame (~45 ms here, `tick_cost`, journal
+/// 2026-10-12-m2h), but a hitching peer's pads mostly come back as guessed (held), so it's rarely re-run at all.
+pub const WINDOW: usize = 80;
+/// Time sync: while this machine runs ahead of (behind) the others' middle, its clock goes back (forward) a tick in
+/// every `SPREAD` (B163: never several in a row; B197: gently, 3 ticks a second, so a peer's hitch doesn't show as
+/// the others slowing down and speeding up again: every machine keeps real time, both sides of a gap close it).
 pub const SPREAD: u32 = 20;
+/// B197: how far time sync may set this machine's clock off real time, ticks. Each machine's match runs at 60 ticks a
+/// real second; time sync only evens out their start and time a frozen peer lost, so a peer that can't keep up
+/// slows the others by 5% at most, and not past this (then they wait on it at `WINDOW`).
+pub const SHIFT: i32 = WINDOW as i32 / 2;
+/// B197: the most ticks a machine catches up after a stall (waiting on a peer's pads); a longer wait is dropped.
+pub const OWE: i32 = WINDOW as i32;
+/// B197: a frame this long still runs all its ticks (Bevy's fixed loop drops time past `Time<Virtual>`'s max delta,
+/// 250 ms by default): a peer's 1 s hitch is caught up at once.
+pub const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub struct Cfg;
 
@@ -76,6 +88,10 @@ pub struct Rollback {
     frame: usize,
     /// Gate calls since this machine last sat out a tick (time sync).
     since: u32,
+    /// B197: real-time ticks (gate calls) not run yet, and how many of those time sync keeps this machine behind
+    /// (negative: ahead of real time).
+    owed: i32,
+    shift: i32,
     /// `HST_NET_SYNCTEST=n` with every seat on this machine: ggrs' sync test runs the ticks instead, each tick going
     /// back `n` ticks and running them again, and stops on a state hash that comes out differently.
     sync: Option<ggrs::SyncTestSession<Cfg>>,
@@ -155,11 +171,11 @@ impl Rollback {
         }
         let sync = std::env::var("HST_NET_SYNCTEST").ok().and_then(|v| v.parse().ok()).filter(|_| seats.iter().all(|&s| room.seats[s].as_ref().unwrap().peer == me));
         let sync = match sync {
-            Some(n) => Some(SessionBuilder::<Cfg>::new().with_num_players(seats.len())?.with_check_distance(n).with_input_delay(DELAY).start_synctest_session()?),
+            Some(n) => Some(SessionBuilder::<Cfg>::new().with_num_players(seats.len())?.with_max_prediction_window(WINDOW).with_check_distance(n).with_input_delay(DELAY).start_synctest_session()?),
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0 })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, owed: 0, shift: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0 })
     }
 
     /// The tick the next run is.
@@ -416,17 +432,47 @@ pub fn gate(w: &mut World) -> bool {
     if w.resource::<Netplay>().end.is_some() || w.resource::<Netplay>().recover.hold || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
         return false;
     }
-    {
+    // B197: every call is a tick of real time (Bevy's fixed step); one that didn't run (a stall, time sync) is run
+    // later, a second tick in a call, so the match keeps 60 ticks a second whatever the others' frame rate. An instant
+    // replay's skip (the clock sped up) runs a tick a call and owes nothing.
+    let real = w.get_resource::<Time<Virtual>>().is_none_or(|v| v.relative_speed() <= 1.0);
+    if let Some(mut v) = w.get_resource_mut::<Time<Virtual>>().filter(|v| v.relative_speed() == 1.0 && v.max_delta() != CATCH_UP) {
+        v.set_max_delta(CATCH_UP);
+    }
+    let want = {
         let mut rb = w.resource_mut::<Rollback>();
         rb.since += 1;
-        let ahead = rb.sess.frames_ahead().max(0) as u32;
-        if ahead > 0 && rb.since >= (SPREAD / ahead).max(2) {
-            rb.since = 0;
-            rb.skipped += 1;
-            note(w, (0, 0), 0.0, true);
-            return false;
+        let ahead = rb.sess.frames_ahead();
+        if ahead != 0 && rb.since >= SPREAD {
+            let s = (rb.shift + ahead.signum()).clamp(-SHIFT, SHIFT);
+            if s != rb.shift {
+                (rb.shift, rb.since) = (s, 0);
+            }
+        }
+        if real {
+            rb.owed = (rb.owed + 1).min(OWE.max(rb.shift + 1));
+            (rb.owed - rb.shift).clamp(0, 2)
+        } else {
+            1
+        }
+    };
+    if want == 0 {
+        w.resource_mut::<Rollback>().skipped += 1;
+        note(w, (0, 0), 0.0, true);
+    }
+    for _ in 0..want {
+        if !advance(w) {
+            break;
+        }
+        if real {
+            w.resource_mut::<Rollback>().owed -= 1;
         }
     }
+    false
+}
+
+/// Runs the next tick (and any re-runs ggrs asks for): false if it couldn't (waiting on a peer's pads).
+fn advance(w: &mut World) -> bool {
     // this machine's seats' pads (each seat's local device in the slot of the same number, `--pads`)
     let (handles, seats, frame) = {
         let rb = w.resource::<Rollback>();
@@ -450,27 +496,34 @@ pub fn gate(w: &mut World) -> bool {
             Ok(reqs) => handle(w, reqs, 1),
             Err(e) => w.resource_mut::<Netplay>().finish(format!("Sync test: {e}"), true),
         }
-        return false;
+        return true;
     }
     for (&h, &p) in handles.iter().zip(&local) {
         rb.sess.add_local_input(h, Input(wire(p))).expect("a local seat");
     }
     let (t0, f0, r0) = (web_time::Instant::now(), rb.frame, rb.reruns);
-    match rb.sess.advance_frame() {
+    let ok = match rb.sess.advance_frame() {
         Ok(reqs) => {
             handle(w, reqs, super::netplay::HASH_EVERY as i32);
             w.resource_mut::<Netplay>().stalled = 0.0;
             send_state(w);
+            true
         }
         // too far ahead of a peer: wait for its pads ("Waiting for …" after a while)
-        Err(GgrsError::PredictionThreshold) => w.resource_mut::<Rollback>().held += 1,
-        Err(e) => warn!("rollback: {e}"),
-    }
+        Err(GgrsError::PredictionThreshold) => {
+            w.resource_mut::<Rollback>().held += 1;
+            false
+        }
+        Err(e) => {
+            warn!("rollback: {e}");
+            false
+        }
+    };
     let rb = w.resource::<Rollback>();
     let ran = (rb.frame + (rb.reruns - r0) as usize - f0, (rb.reruns - r0) as usize);
     note(w, ran, t0.elapsed().as_secs_f32() * 1000.0, false);
     super::netplay::pump(w);
-    false
+    ok
 }
 
 /// The trace's row for this gate call: `ran` ticks run of which `rolled` were re-runs, `cost` ms spent on them, or
@@ -505,4 +558,23 @@ fn note(w: &mut World, (ran, rolled): (usize, usize), cost: f32, skip: bool) {
             let _ = std::io::Write::flush(f);
         }
     }
+}
+
+/// B197's test knob, `HST_NET_THROTTLE="FPS HITCH_MS"` (native): this machine's frames capped to FPS, and every 3 s
+/// one frame HITCH_MS longer (a slow peer, a hitch).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn throttle(mut last: Local<Option<(std::time::Instant, std::time::Instant)>>) {
+    use std::time::{Duration, Instant};
+    let v = std::env::var("HST_NET_THROTTLE").unwrap_or_default();
+    let mut it = v.split_whitespace().map(|n| n.parse::<f32>().unwrap_or(0.0));
+    let (fps, hitch) = (it.next().unwrap_or(0.0), it.next().unwrap_or(0.0));
+    let now = Instant::now();
+    let (frame, hitched) = last.get_or_insert((now, now));
+    let mut until = *frame + Duration::from_secs_f32(if fps > 0.0 { 1.0 / fps } else { 0.0 });
+    if hitch > 0.0 && now - *hitched >= Duration::from_secs(3) {
+        *hitched = now;
+        until += Duration::from_secs_f32(hitch / 1000.0);
+    }
+    std::thread::sleep(until.saturating_duration_since(now));
+    *frame = Instant::now();
 }
