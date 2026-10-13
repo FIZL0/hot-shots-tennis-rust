@@ -79,14 +79,22 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4(vertex.position, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
 #ifdef GS_GUARD
-    // VU1's reject pass drops every court triangle with a vertex behind the eye or outside the GS guard band,
+    // VU1's reject pass drops every court triangle with a vertex outside the GS guard band,
     // 2048 ± 1280 in GS coordinates: ±4 half-widths across (at the original's 4:3) and ±1280/112 half-heights of the
     // 224-line field. That is what hides w-house2 (Grand Palais) with the eye inside it. A NaN position drops every
     // triangle using the vertex.
     // ponytail: band size from a stage-7 GS dump (largest drawn |x − 2048| 1261), not the microcode's own constant
+    // CLIP tests against |w|, so a vertex behind the eye is only flagged when it lies outside the band too.
+    // Ground (facing up, under 1 m) is exempt: the GPU clips it, so a low replay camera keeps the floor in front of it
+    // (B169); the original's floor would lose its big near triangles there too.
     let p = out.position;
     let across = view_bindings::view.clip_from_view[1][1] * 0.75 / view_bindings::view.clip_from_view[0][0];
-    if p.w <= 0.0 || abs(p.x) * across > 4.0 * p.w || abs(p.y) > 1280.0 / 112.0 * p.w {
+#ifdef VERTEX_NORMALS
+    let ground = out.world_position.y < 1.0 && normalize(mesh_functions::mesh_normal_local_to_world(vertex.normal, instance)).y > 0.7;
+#else
+    let ground = false;
+#endif
+    if !ground && (abs(p.x) * across > 4.0 * abs(p.w) || abs(p.y) > 1280.0 / 112.0 * abs(p.w)) {
         let z = p.w * 0.0;
         out.position = vec4(z / z);
     }
