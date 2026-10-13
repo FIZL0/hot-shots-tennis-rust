@@ -196,7 +196,7 @@ fn row_at(m: &Menu, p: Vec2) -> Option<usize> {
     let (x0, x1, y0, pitch, h, n) = match m.screen {
         Screen::Settings => (60.0, 500.0, 90.0, 44.0, 38.0, super::CONTROLS_ROW + 2),
         Screen::Graphics => (60.0, 560.0, 66.0, 42.0, 38.0, GRAPHICS_LABELS.len() + 1),
-        Screen::Controls => (56.0, 620.0, 72.0, 28.0, 28.0, controls::action_names().count() + 1),
+        Screen::Controls => (56.0, 620.0, 62.0, 21.0, 21.0, controls::action_names().count() + 1),
         _ => return None,
     };
     let k = ((p.y - y0) / pitch).floor();

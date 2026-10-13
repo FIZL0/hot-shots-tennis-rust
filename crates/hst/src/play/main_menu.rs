@@ -1464,16 +1464,16 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.frame(1, 6);
             let names: Vec<_> = controls::action_names().collect();
             for (i, n) in names.iter().chain(&["back"]).enumerate() {
-                let y = 72.0 + 28.0 * i as f32;
+                let y = 62.0 + 21.0 * i as f32;
                 let on = i == m.sel;
                 let rgb = if on { WHITE } else { [40.0; 3] };
-                d.text(&n.replace('_', " "), 120.0, y, 22.0, rgb);
+                d.text(&n.replace('_', " "), 120.0, y, 19.0, rgb);
                 if i < names.len() {
                     let s = if on && m.rebinding.is_some() { "press a key or button...".to_string() } else { bind.names(i).join("  ") };
-                    d.text(&s, 300.0, y, 22.0, if on && m.rebinding.is_some() { [128.0, 110.0, 40.0] } else { rgb });
+                    d.text(&s, 300.0, y, 19.0, if on && m.rebinding.is_some() { [128.0, 110.0, 40.0] } else { rgb });
                 }
             }
-            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [56.0 + hand_x, 68.0 + 28.0 * m.sel as f32, 64.0, 32.0], WHITE, 128.0);
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [56.0 + hand_x, 56.0 + 21.0 * m.sel as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(if m.rebinding.is_some() { "Press the new key or button (Escape cancels)." } else { "Choose an action to rebind." });
         }
         Screen::Mode => {

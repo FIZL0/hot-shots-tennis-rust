@@ -1,0 +1,210 @@
+//! Right-stick emotes (B145, ours, layered on top): a human flicks the right stick fully up / down / left / right
+//! (keys 1–4) and their player plays one of four of the character's own motions with its voice line, standing: no
+//! run, no stroke and no swing press until the motion is out. A ball that comes meanwhile goes by unhit — that's the
+//! cost. Only between points' starts and ends: in a rally, or waiting for an opponent's serve (not serving, not
+//! mid-stroke, not reacting to a point). The flick is part of the match input (`tick_input`'s right stick bytes),
+//! so replays and online play see it alike; bots never emote. Nothing here draws from the match's generators.
+
+use bevy::prelude::*;
+use hst_sim::sound;
+
+use super::{Game, Phase, controls::Action, set_motion};
+
+/// The emotes by flick (up, down, left, right): the character's post-point reactions `gu_set` (the big win),
+/// `di_set` (the big loss), `gu` (a won point), `di` (a lost one) — a mod character's from its pack.
+pub(super) const MOTIONS: [usize; 4] = [0x2e, 0x2f, 0x2c, 0x2d];
+
+/// Keys 1–4 by default, in flick order.
+pub(super) const KEYS: [Action; 4] = [Action::EmoteUp, Action::EmoteDown, Action::EmoteLeft, Action::EmoteRight];
+
+/// A right stick (`Gamepad::right_stick`, +y up) pushed fully toward one side: its emote direction.
+pub(super) fn flick(v: Vec2) -> Option<u8> {
+    // ponytail: "fully" is 0.9 of the way out, so worn sticks still reach it
+    (v.length() >= 0.9).then(|| match v.y.abs() > v.x.abs() {
+        true if v.y > 0.0 => 0,
+        true => 1,
+        false if v.x < 0.0 => 2,
+        false => 3,
+    })
+}
+
+/// Human player `i`'s turn while it may emote: `start` is this tick's new flick. True while the emote holds the
+/// player (`control` skips its turn).
+pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
+    let open = g.phase == Phase::Rally || g.phase == Phase::Serve && g.score.server != i as i32;
+    if !open {
+        g.players[i].emote = 0;
+        return false;
+    }
+    if let Some(d) = start
+        && g.players[i].emote == 0
+        && idle(g, i)
+        && let Some(clip) = g.data[i].motions.get(&MOTIONS[d as usize])
+    {
+        let ticks = clip.length.ceil() as u32;
+        let p = &mut g.players[i];
+        p.emote = ticks.max(1);
+        p.body.running = false;
+        p.body.vel = [0.0; 3];
+        set_motion(p, MOTIONS[d as usize] as i32, 1.0, false, None);
+        voice(g, i, MOTIONS[d as usize]);
+    }
+    let p = &mut g.players[i];
+    if p.emote == 0 {
+        return false;
+    }
+    p.emote -= 1;
+    (p.prev, p.vel, p.aim, p.dpad) = (p.pos, Vec2::ZERO, Vec2::ZERO, 0);
+    true
+}
+
+/// Nothing under way: no stroke, dive, whiff, serve follow-through, reaction or body hit.
+fn idle(g: &Game, i: usize) -> bool {
+    let p = &g.players[i];
+    p.swing.is_none()
+        && p.after.is_none()
+        && p.contact.is_none()
+        && p.pending.is_none()
+        && p.approach.is_none()
+        && p.whiff.is_none()
+        && p.dive.is_none()
+        && p.served.is_none()
+        && p.follow.is_none()
+        && p.wait_swing.is_none()
+        && p.root.is_none()
+        && !super::bodyhit::standing(g, i)
+}
+
+/// The reaction's voice line for the emote's motion (`sound::reaction_voice`, as a winner, never the losers' group
+/// groan), its key picked without the match's generators and without the key memory the real reactions keep.
+fn voice(g: &mut Game, i: usize, motion: usize) {
+    let Some((program, lo, hi, _)) = sound::reaction_voice(g.players.len() as u32, motion as i32, false, false, || 100) else {
+        return;
+    };
+    // ponytail: the key by the player's position bits, the same on every machine; an emote counter if it repeats
+    let draw = g.players[i].pos[0].to_bits() ^ g.players[i].pos[2].to_bits();
+    if let Some(play) = g.voices[i].react(i, (program, lo, hi, None), || draw) {
+        g.whooshes.push((0, i, play));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tick_input::{IDLE, TickPads, decode};
+    use super::*;
+
+    #[test]
+    fn flicks() {
+        assert_eq!([Vec2::Y, -Vec2::Y, -Vec2::X, Vec2::X, Vec2::new(0.5, 0.5), Vec2::ZERO].map(flick), [Some(0), Some(1), Some(2), Some(3), None, None]);
+    }
+
+    /// A flick goes over the wire as the right stick and comes back once, on the tick it starts.
+    #[test]
+    fn flick_on_the_wire() {
+        for d in 0..4 {
+            let mut s = super::super::SlotPad { emote: Some(d), ..default() };
+            let p = super::super::tick_input::take(&mut s);
+            assert_eq!(s.emote, None);
+            assert_eq!((decode(p, IDLE).emote, decode(p, p).emote, decode(IDLE, p).emote), (Some(d), None, None));
+            let mut t = TickPads::default();
+            t.push([p, IDLE, IDLE, IDLE]);
+            assert_eq!(t.slot(0).emote, Some(d));
+        }
+        assert_eq!(decode(super::super::tick_input::recorded(hst_sim::replay::Pad { rx: 0x80, ry: 0, ..IDLE }), IDLE).emote, None);
+    }
+}
+
+/// An emote in the app's singles match: 2P (a disc character, 1P a bot that serves first) flicks the right stick during the rally; it
+/// stands, its motion plays and its presses do nothing for the motion's length, then it runs and swings again.
+/// Needs the ISO at the repository root (skipped without).
+#[cfg(test)]
+mod match_tests {
+    use super::super::tick_input::{IDLE, Replay, TickPads};
+    use super::MOTIONS;
+    use super::super::*;
+    use crate::{Args, GameSpace};
+    use hst_sim::replay::Pad;
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    fn app(pads: Vec<[Pad; 4]>) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(Pads { seats: Some([false, true, false, false]), autoplay: false, ..default() });
+        app.insert_resource(Replay(pads.into_iter().collect()));
+        app.init_resource::<TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, setup);
+        app.add_systems(FixedUpdate, (remember, super::super::tick_input::systems(), control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        app
+    }
+
+    /// 2P's position, emote ticks left, whether a press is under way (search, whiff or swing), motion; the phase.
+    fn step(app: &mut App) -> (V3, u32, bool, usize, Phase) {
+        app.world_mut().run_schedule(FixedUpdate);
+        let g = app.world().resource::<Game>();
+        let p = &g.players[1];
+        (p.pos, p.emote, p.pending.is_some() || p.whiff.is_some() || p.swing.is_some(), p.cmd.id, g.phase.clone())
+    }
+
+    #[test]
+    fn an_emote_locks_then_plays_on() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let left = Pad { lx: 0, ..IDLE };
+        let flick = Pad { rx: 0x80, ry: 0, ..left };
+        let cross = Pad { buttons: 0x2000, ..left };
+        let n = 600;
+        let rally = {
+            let mut a = app(vec![]);
+            (0..n).find(|_| step(&mut a).4 == Phase::Rally).expect("a rally")
+        };
+        let len = app(vec![]).world().resource::<Game>().data[1].motions[&MOTIONS[0]].length.ceil() as usize;
+        // waiting for 1P's serve: 2P emotes from tick `at`, stick held left and ✕ pressed meanwhile, then ✕ in the rally
+        let at = 10;
+        assert!(at + len + 20 < rally, "the emote ({len} ticks) outlasts the serve's wait ({rally})");
+        let mut pads = vec![[IDLE, left, IDLE, IDLE]; n];
+        pads[at][1] = flick;
+        pads[at + 5][1] = cross;
+        pads[rally + 10][1] = cross;
+        let mut a = app(pads);
+        let mut last = None;
+        for t in 0..rally + 12 {
+            let (pos, emote, pressed, motion, phase) = step(&mut a);
+            if (at..at + len).contains(&t) {
+                assert_eq!((emote as usize, motion, pressed), (at + len - 1 - t, MOTIONS[0], false), "tick {t}");
+                assert!(last.is_none_or(|l| l == pos), "moved while emoting, tick {t}");
+                last = Some(pos);
+            }
+            if t == at + len + 2 {
+                assert_ne!(Some(pos), last, "didn't run after the emote");
+            }
+            if t == rally + 10 {
+                assert!(phase == Phase::Rally && pressed, "the press after the emote did nothing");
+            }
+        }
+        // the same flick as the serve comes: it goes by unhit and the point's end clears the lock
+        let mut pads = vec![[IDLE; 4]; n];
+        pads[rally + 2][1] = flick;
+        pads[rally + 10][1] = cross;
+        let mut a = app(pads);
+        let (mut emoted, mut ended) = (false, None);
+        for t in 0..n {
+            let (_, emote, pressed, _, phase) = step(&mut a);
+            assert!(!pressed, "pressed while emoting, tick {t}");
+            emoted |= emote > 0;
+            if let Some(e) = ended {
+                assert_eq!(emote, 0, "the lock outlived the point (ended {e})");
+                return eprintln!("emote {len} ticks, rally from {rally}, the point ended at {e}, {} ticks in", e - rally - 2);
+            }
+            if emoted && phase != Phase::Rally {
+                ended = Some(t);
+            }
+        }
+        panic!("the point never ended");
+    }
+}

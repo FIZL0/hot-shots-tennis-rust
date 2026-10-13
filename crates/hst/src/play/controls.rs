@@ -28,9 +28,14 @@ pub enum Action {
     Camera,
     TurnLeft,
     TurnRight,
+    /// Emotes (`play::emote`), as the right stick flicked up, down, left, right.
+    EmoteUp,
+    EmoteDown,
+    EmoteLeft,
+    EmoteRight,
 }
 
-const ACTIONS: [(Action, &str); 11] = [
+const ACTIONS: [(Action, &str); 15] = [
     (Action::Up, "up"),
     (Action::Down, "down"),
     (Action::Left, "left"),
@@ -42,6 +47,10 @@ const ACTIONS: [(Action, &str); 11] = [
     (Action::Camera, "camera"),
     (Action::TurnLeft, "turn_left"),
     (Action::TurnRight, "turn_right"),
+    (Action::EmoteUp, "emote_up"),
+    (Action::EmoteDown, "emote_down"),
+    (Action::EmoteLeft, "emote_left"),
+    (Action::EmoteRight, "emote_right"),
 ];
 
 /// One binding: a key or a pad button.
@@ -52,7 +61,7 @@ enum Input {
 }
 
 #[derive(Resource, Clone, PartialEq, Debug)]
-pub struct Bindings([Vec<Input>; 11]);
+pub struct Bindings([Vec<Input>; 15]);
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -71,6 +80,10 @@ impl Default for Bindings {
             vec![K(C::KeyC), Pad(P::Select)],
             vec![K(C::ArrowLeft)],
             vec![K(C::ArrowRight)],
+            vec![K(C::Digit1)],
+            vec![K(C::Digit2)],
+            vec![K(C::Digit3)],
+            vec![K(C::Digit4)],
         ])
     }
 }
@@ -154,7 +167,7 @@ impl Bindings {
              # Keys by Bevy KeyCode name (J or KeyJ, 1 or Digit1, Space, ArrowLeft, ShiftLeft, …),\n\
              # pad buttons with a Pad prefix (PadSouth = ✕/A, PadEast = ○/B, PadNorth = △/Y, PadWest, PadLeftTrigger,\n\
              # PadRightTrigger2, PadSelect, PadDPadUp, …). The left stick always moves; the right stick turns the free\n\
-             # camera; Esc/Start pause.\n",
+             # camera, and flicked fully up/down/left/right plays the emotes; Esc/Start pause.\n",
         );
         for (i, (_, name)) in ACTIONS.iter().enumerate() {
             let names: Vec<_> = self.0[i].iter().map(|x| x.name()).collect();

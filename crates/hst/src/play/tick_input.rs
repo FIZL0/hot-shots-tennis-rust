@@ -7,7 +7,8 @@
 //! Buttons are held bits; a shot or serve press is a bit that wasn't set the tick before. The face buttons are the
 //! game's (✕ 0x2000 topspin, ○ 0x4000 slice, △ 0x1000 lob); the keyboard's serve-only key rides on □ (0x8000).
 //! Sticks are the bytes after the pad driver's deadzone, as `pad_stick` leaves them, so a local pad round-trips
-//! exactly.
+//! exactly. The right stick (ours: the original reads none) carries only the emote flick (`super::emote`), one axis
+//! at its end, the other centred; a recording's right stick is dropped (`recorded`).
 
 use super::{Pads, SlotPad, stick_byte};
 use bevy::prelude::*;
@@ -64,10 +65,19 @@ impl TickPads {
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Replay(pub VecDeque<[Pad; 4]>);
 
+/// The emote flicks' right stick bytes (rx, ry): up, down, left, right.
+const FLICKS: [(u8, u8); 4] = [(0x80, 0), (0x80, 0xff), (0, 0x80), (0xff, 0x80)];
+
+/// A PCSX2 recording's pad as match input: its right stick (which the original ignores) centred, so it never emotes.
+pub fn recorded(p: Pad) -> Pad {
+    Pad { rx: 0x80, ry: 0x80, ..p }
+}
+
 fn encode(s: &SlotPad) -> Pad {
     let shot = SHOTS.iter().find(|(_, k)| s.shot == Some(*k)).map_or(0, |(b, _)| *b);
     let serve = if s.serve { SQUARE } else { 0 };
-    Pad { buttons: s.dpad | shot | serve, lx: stick_byte(s.stick.x), ly: stick_byte(-s.stick.y), ..IDLE }
+    let (rx, ry) = s.emote.map_or((0x80, 0x80), |d| FLICKS[d as usize]);
+    Pad { buttons: s.dpad | shot | serve, lx: stick_byte(s.stick.x), ly: stick_byte(-s.stick.y), rx, ry }
 }
 
 pub(super) fn decode(p: Pad, last: Pad) -> SlotPad {
@@ -76,11 +86,13 @@ pub(super) fn decode(p: Pad, last: Pad) -> SlotPad {
         b / if b < 0.0 { 128.0 } else { 127.0 }
     };
     let new = p.buttons & !last.buttons;
+    let flick = |p: Pad| FLICKS.iter().position(|&f| f == (p.rx, p.ry)).map(|d| d as u8);
     SlotPad {
         stick: Vec2::new(axis(p.lx), -axis(p.ly)),
         dpad: p.buttons & DPAD,
         shot: SHOTS.iter().find(|(b, _)| new & b != 0).map(|(_, k)| *k),
         serve: new & SQUARE != 0,
+        emote: flick(p).filter(|_| flick(p) != flick(last)),
     }
 }
 
@@ -89,7 +101,7 @@ pub(super) fn decode(p: Pad, last: Pad) -> SlotPad {
 fn local(mut pads: ResMut<Pads>, mut tick: ResMut<TickPads>) {
     let now = pads.slots.each_mut().map(|s| {
         let p = encode(s);
-        (s.shot, s.serve) = (None, false);
+        (s.shot, s.serve, s.emote) = (None, false, None);
         p
     });
     tick.push(now);
@@ -98,7 +110,7 @@ fn local(mut pads: ResMut<Pads>, mut tick: ResMut<TickPads>) {
 /// A local slot's pad for this tick, its latched presses spent (as `local`).
 pub(super) fn take(s: &mut SlotPad) -> Pad {
     let p = encode(s);
-    (s.shot, s.serve) = (None, false);
+    (s.shot, s.serve, s.emote) = (None, false, None);
     p
 }
 
@@ -134,7 +146,7 @@ mod tests {
         for i in 0..=400 {
             let v = i as f32 / 200.0 - 1.0;
             for (dpad, shot, serve) in [(0, None, false), (0x10 | 0x20, Some(0), false), (0x80, Some(1), true), (0x40, Some(3), false)] {
-                let s = SlotPad { stick: super::super::pad_stick(Vec2::new(v, -v * 0.7)), dpad, shot, serve };
+                let s = SlotPad { stick: super::super::pad_stick(Vec2::new(v, -v * 0.7)), dpad, shot, serve, emote: None };
                 let p = encode(&s);
                 let d = decode(p, IDLE);
                 assert_eq!((d.stick.x.to_bits(), d.stick.y.to_bits(), d.dpad, d.shot, d.serve), (s.stick.x.to_bits(), s.stick.y.to_bits(), dpad, shot, serve), "{v}");
@@ -186,7 +198,7 @@ mod replay_tests {
         let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
             return eprintln!("no ISO or round1.bin, skipped");
         };
-        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(1200).map(|f| [f.pad(0), IDLE, IDLE, IDLE]).collect();
+        let pads: Vec<_> = hst_sim::replay::frames(&data).iter().take(1200).map(|f| [super::recorded(f.pad(0)), IDLE, IDLE, IDLE]).collect();
         let played = run(&pads);
         let idle = run(&vec![[IDLE; 4]; pads.len()]);
         assert_eq!(played, run(&pads), "the same pads gave a different match");
