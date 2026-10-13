@@ -394,6 +394,7 @@ fn watch(w: &mut World) {
     pump(w);
     super::rollback::poll(w);
     let remote = w.get_resource::<super::rollback::Rollback>().map(|r| r.remote_seats());
+    let rollback = remote.is_some();
     let dt = w.resource::<Time<Real>>().delta_secs();
     let open = menu::paused(w);
     let result = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
@@ -411,7 +412,10 @@ fn watch(w: &mut World) {
         Some(why) => why.clone(),
         None if np.stalled > STALL && !result => {
             let who: Vec<String> = np.intro.as_ref().map(Lockstep::missing).or(remote).unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
-            format!("Waiting for {}...", who.join(", "))
+            // a long wait (a player tabbed out, B162) says when rollback gives up
+            let left = (super::rollback::GONE.as_secs_f32() - np.stalled) as u32;
+            let ends = if np.stalled > 5.0 && rollback { format!("\nThe match ends in {}:{:02} if they don't come back.", left / 60, left % 60) } else { String::new() };
+            format!("Waiting for {}...{ends}", who.join(", "))
         }
         None => String::new(),
     };
@@ -895,6 +899,70 @@ mod tests {
             let replays = apps[0].world().resource::<Game>().instant.replays;
             assert!(to_the_end || replays > 1, "{replays} instant replays");
             eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {replays} instant replays, {:.0?}", t0.elapsed());
+        }
+
+        /// B162: the guest's frame loop stops (a hidden browser tab, a minimised window) at tick 300 for `away` of real
+        /// time while its network still queues the host's datagrams; the host stalls, nobody is dropped, and after
+        /// it comes back both run on in sync.
+        fn tabbed_out(away: std::time::Duration) {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let room = room(0);
+            let mut apps = ["host", "g"].map(|me| {
+                let mut a = app(&room, me);
+                a.insert_resource(Rollback::new(&room, me, step as fn(&mut _)).unwrap());
+                a
+            });
+            let mut wire: Vec<(usize, String, Vec<u8>)> = Vec::new();
+            let mut gone: Option<std::time::Instant> = None;
+            let mut round = 0;
+            while round < 900 {
+                for (to, from, d) in std::mem::take(&mut wire) {
+                    take(apps[to].world_mut(), Event::Datagram(from, d));
+                }
+                let g = apps[1].world().resource::<Rollback>().frame();
+                if g == 300 && gone.is_none() {
+                    gone = Some(std::time::Instant::now());
+                }
+                let hidden = gone.is_some_and(|t| t.elapsed() < away);
+                for i in 0..2 {
+                    if i == 1 && hidden {
+                        continue;
+                    }
+                    let w = apps[i].world_mut();
+                    rollback::gate(w);
+                    let me = w.resource::<Netplay>().me.clone();
+                    wire.extend(rollback::outgoing(w).into_iter().map(|(_, d)| (1 - i, me.clone(), d)));
+                    for m in std::mem::take(&mut w.resource_mut::<Netplay>().out) {
+                        take(apps[1 - i].world_mut(), Event::Match(m));
+                    }
+                }
+                if hidden {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    assert!(apps[0].world().resource::<Rollback>().frame() <= 300 + rollback::WINDOW + rollback::DELAY + 1, "the host ran on without the guest");
+                } else {
+                    round += 1;
+                }
+            }
+            let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
+            assert_eq!((&a.end, &b.end), (&None, &None));
+            let n = a.lock.log.len().min(b.lock.log.len()) - rollback::WINDOW;
+            assert!(n > 800, "only {n} ticks");
+            assert_eq!(a.lock.log[..n], b.lock.log[..n]);
+        }
+
+        /// Longer than ggrs' 2 s default disconnect timeout.
+        #[test]
+        fn rollback_survives_a_tab_out() {
+            tabbed_out(std::time::Duration::from_secs(5));
+        }
+
+        /// The task's 2 minutes: `cargo test --release -p hst tab_out_for_2_min -- --ignored`.
+        #[test]
+        #[ignore]
+        fn rollback_survives_a_tab_out_for_2_min() {
+            tabbed_out(std::time::Duration::from_secs(120));
         }
 
         /// A tick that runs differently on one machine: both stop at the next checksum and save their inputs.

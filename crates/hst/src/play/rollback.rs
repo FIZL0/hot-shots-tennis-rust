@@ -22,6 +22,10 @@ pub const DELAY: usize = 2;
 /// How many ticks a machine may run on guessed pads before it waits (ggrs' prediction window). A re-run of the whole
 /// window is `WINDOW + 1` ticks and as many saves in one frame: measured in `tick_cost` (journal: 2026-10-12-m2h).
 pub const WINDOW: usize = 8;
+/// How long a silent peer is waited for before the match ends (B162). A tabbed-out browser or minimised window stops
+/// the frame loop and with it ggrs' keep-alives (iroh's and WebRTC's own keep the connection), so ggrs' 2 s default
+/// would drop a player who only looked away; meanwhile everyone else stalls on "Waiting for …" within [`WINDOW`] ticks.
+pub const GONE: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub struct Cfg;
 
@@ -92,6 +96,7 @@ impl Rollback {
             .with_num_players(seats.len())?
             .with_input_delay(DELAY)
             .with_max_prediction_window(WINDOW)
+            .with_disconnect_timeout(GONE)
             .with_desync_detection_mode(DesyncDetection::On { interval: super::netplay::HASH_EVERY });
         for (h, &s) in seats.iter().enumerate() {
             let peer = &room.seats[s].as_ref().unwrap().peer;
@@ -145,8 +150,10 @@ pub fn poll(w: &mut World) {
                 super::netplay::desync(w, (frame as u32, local_checksum as u64, remote_checksum as u64))
             }
             GgrsEvent::Disconnected { addr } => {
-                let who: String = addr.chars().take(8).collect();
-                w.resource_mut::<Netplay>().finish(format!("Player {who} stopped answering. The match is over."), true);
+                let rb = w.resource::<Rollback>();
+                let who: Vec<String> = rb.sess.handles_by_address(addr).iter().map(|&h| format!("{}P", rb.seats[h] + 1)).collect();
+                let mins = GONE.as_secs() / 60;
+                w.resource_mut::<Netplay>().finish(format!("{} gone for {mins} minutes. The match is over.", who.join(", ")), true);
             }
             _ => {}
         }
