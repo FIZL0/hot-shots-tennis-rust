@@ -173,6 +173,11 @@ impl Menu {
         }
     }
 
+    /// B221: the pointer moved off the row a first ✕ armed.
+    pub(super) fn mods_choose(&mut self) {
+        self.add.armed = None;
+    }
+
     pub(super) fn mods_step(&mut self, k: Press, out: &mut Vec<Effect>) {
         use Effect::Sound;
         let n = self.add.rows();
@@ -403,6 +408,8 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
         d.out.remove(i);
     }
+    // B221: a tap off the popup is Later
+    d.popup(Some(super::pointer::Act::Row(1, super::pointer::OK)));
     d.anchor = super::Anchor::Span;
     d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
     d.anchor = super::Anchor::Centre;
@@ -413,15 +420,11 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         let y = ASK_TOP + 40.0 * k as f32;
         let on = k == a;
         d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+        d.hit([176.0, y, 288.0, 32.0], super::pointer::Act::Row(k, super::pointer::OK));
         d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
     }
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, ASK_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
     d.said = "Mods aren't loaded while the game runs: Reload restarts it with them; Later keeps playing as it is.".into();
-}
-
-/// The popup's pill under `p` (640×448).
-fn ask_at(p: Vec2) -> Option<usize> {
-    (0..2).find(|&k| (176.0..464.0).contains(&p.x) && (0.0..32.0).contains(&(p.y - ASK_TOP - 40.0 * k as f32)))
 }
 
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
@@ -452,7 +455,14 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     };
     let end = (v.top + SHOWN).min(v.rows());
     let labels: Vec<String> = (v.top..end).map(label).collect();
+    let hits = d.hits.len();
     d.rows_at(&labels, m.sel - v.top, X, Y, W, hand_x, PITCH);
+    // the rows shown are `top..`
+    for h in &mut d.hits[hits..] {
+        if let super::pointer::Act::Row(r, _) = &mut h.act {
+            *r += v.top;
+        }
+    }
     if v.page == Page::Browse {
         for r in v.top..end {
             let Some(e) = v.entries().get(r) else { continue };
@@ -594,47 +604,6 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.armed = Some(1);
         v.status = format!("{RULE} Press again to upload {}.", v.list.first().map_or("", |x| &x.name));
         m.sel = 1;
-    }
-}
-
-/// The row under `p` (640×448), as `layout` draws them.
-fn row_at(v: &View, p: Vec2) -> Option<usize> {
-    let (x, w) = (X, W);
-    let k = ((p.y - Y) / PITCH).floor();
-    let r = v.top + k as usize;
-    (p.x >= x - 60.0 && p.x < x + w && k >= 0.0 && (k as usize) < SHOWN && r < v.rows() && p.y - Y - k * PITCH < H).then_some(r)
-}
-
-/// A click or tap on a row chooses it (as ✕ would), the right button is Back.
-fn pointer(
-    window: Query<&Window, With<PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touches: Res<Touches>,
-    mut menu: ResMut<Menu>,
-    mut click: ResMut<super::pause::Click>,
-) {
-    if menu.screen == Screen::Main && menu.add.ask.is_some() {
-        let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
-        if let Some(k) = at.and_then(ask_at) {
-            menu.add.ask = Some(k);
-            click.0 = Some(Press { ok: true, ..default() });
-        } else if back {
-            click.0 = Some(Press { back: true, ..default() });
-        }
-        return;
-    }
-    if menu.screen != Screen::Mods {
-        return;
-    }
-    let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
-    if let Some(r) = at.and_then(|p| row_at(&menu.add, p)) {
-        if r != menu.sel {
-            menu.add.armed = None;
-        }
-        menu.sel = r;
-        click.0 = Some(Press { ok: true, ..default() });
-    } else if back {
-        click.0 = Some(Press { back: true, ..default() });
     }
 }
 
@@ -799,7 +768,7 @@ fn page(
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Shelf>().add_systems(Update, (pointer.before(super::step), page.before(super::draw)));
+    app.init_resource::<Shelf>().add_systems(Update, page.before(super::draw));
 }
 
 #[cfg(test)]
@@ -867,9 +836,6 @@ mod tests {
         assert_eq!(m.screen, Screen::Mods);
         m.mods_step(Press { back: true, ..default() }, &mut Vec::new());
         assert_eq!((m.screen, m.add.ask), (Screen::Main, None));
-        // the pills where they're drawn
-        assert_eq!(ask_at(Vec2::new(320.0, ASK_TOP + 50.0)), Some(1));
-        assert_eq!(ask_at(Vec2::new(320.0, ASK_TOP - 10.0)), None);
     }
 
     /// A long list scrolls to keep the cursor on screen, and taps land on the drawn rows.
@@ -882,9 +848,11 @@ mod tests {
             m.mods_step(Press { down: true, ..default() }, &mut out);
         }
         assert_eq!((m.sel, m.add.top), (10, 4));
-        assert_eq!(row_at(&m.add, Vec2::new(X + 10.0, Y + PITCH * 6.0 + 5.0)), Some(10));
-        assert_eq!(row_at(&m.add, Vec2::new(X + 10.0, Y + PITCH * 7.0 + 5.0)), None);
-        assert_eq!(row_at(&m.add, Vec2::new(X + 10.0, Y + H + 2.0)), None);
+        let at = |x: f32, y: f32| super::super::pointer::tests::act_at(&m, x, y);
+        assert_eq!(at(X + 10.0, Y + PITCH * 6.0 + 5.0), Some(super::super::pointer::Act::Row(10, super::super::pointer::OK)));
+        assert_eq!(at(X + 10.0, Y + PITCH * 7.0 + 5.0), None);
+        // the gap between two rows goes to the nearer one
+        assert_eq!(at(X + 10.0, Y + H + 1.0), Some(super::super::pointer::Act::Row(4, super::super::pointer::OK)));
         assert!(add_rect(&m, 16.0 / 9.0).is_none());
         (0..10).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
         assert_eq!((m.sel, m.add.top), (0, 0));
@@ -910,7 +878,7 @@ mod tests {
         assert_eq!(tags, [Some("Installed"), Some("Update"), None]);
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.contains("installed already") && !m.add.busy);
-        assert_eq!(row_at(&m.add, Vec2::new(X + 10.0, Y + PITCH + 5.0)), Some(1));
+        assert_eq!(super::super::pointer::tests::act_at(&m, X + 10.0, Y + PITCH + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.page, m.sel, m.screen), (Page::Installed, 1, Screen::Mods));
         m.sel = 2;

@@ -535,7 +535,13 @@ fn step(
     mut banner: Option<ResMut<Banner>>,
     sounds: Option<Res<Art>>,
     sound: Option<Res<crate::audio::Sound>>,
-    (gallery, mut exit): (Option<Res<crate::audio::GalleryBank>>, MessageWriter<AppExit>),
+    (gallery, mut exit, mouse, touches, window): (
+        Option<Res<crate::audio::GalleryBank>>,
+        MessageWriter<AppExit>,
+        Res<ButtonInput<MouseButton>>,
+        Res<Touches>,
+        Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ),
     mut cer: Option<ResMut<ceremony::Ceremony>>,
     mut dissolve: ResMut<dissolve::Dissolve>,
     mut commands: Commands,
@@ -593,12 +599,14 @@ fn step(
         fixed.set_timestep(Duration::from_secs(1 << 20));
     }
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|p| p.just_pressed(b));
-    let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South);
+    // B221: a click or tap on the left or right quarter slides that way, anywhere else is the confirm button
+    let tap = super::main_menu::pause::pointer_press(&window, &mouse, &touches).0.map(|p| p.x);
+    let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South) || tap.is_some_and(|x| (160.0..480.0).contains(&x));
     // the left stick as a d-pad: a push past half way
     let x = gamepads.iter().filter(|g| super::controls::readable(g)).filter_map(|p| p.get(GamepadAxis::LeftStickX)).find(|x| x.abs() >= 0.5).unwrap_or(0.0);
     let pushed = |s: f32| x * s >= 0.5 && *stick * s < 0.5;
-    let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || any(GamepadButton::DPadRight) || pushed(1.0);
-    let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) || any(GamepadButton::DPadLeft) || pushed(-1.0);
+    let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || any(GamepadButton::DPadRight) || pushed(1.0) || tap.is_some_and(|x| x >= 480.0);
+    let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) || any(GamepadButton::DPadLeft) || pushed(-1.0) || tap.is_some_and(|x| x < 160.0);
     *stick = x;
     let play = |key: u8| {
         if let (Some(s), Some(b)) = (&sound, sounds.as_deref().and_then(|a| a.1.as_ref())) {

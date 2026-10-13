@@ -506,6 +506,7 @@ fn step(
     mut exit: MessageWriter<AppExit>,
     mut auto: Local<bool>,
     (mouse, touches, window, mut settings): (Res<ButtonInput<MouseButton>>, Res<Touches>, Query<&Window, With<bevy::window::PrimaryWindow>>, ResMut<PauseSettings>),
+    mut hovered: Local<Option<Vec2>>,
 ) {
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(b));
     let start = keys.just_pressed(KeyCode::Escape) || any(GamepadButton::Start);
@@ -552,10 +553,23 @@ fn step(
         spent(&mut pads);
         return;
     }
-    if let (Some(p), _) = super::main_menu::pause::pointer_press(&window, &mouse, &touches)
-        && (176.0..464.0).contains(&p.x)
-        && let Some(k) = (0..OPTIONS.len()).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(g.rules.sets.clamp(1, 3), k) as f32)))
+    let sets = g.rules.sets.clamp(1, 3);
+    let pill = |p: Vec2| (176.0..464.0).contains(&p.x).then(|| (0..OPTIONS.len()).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(sets, k) as f32)))).flatten();
+    // B221: the mouse over a pill moves the hand there; a right click, or a click or tap off the pills, is Back
+    let (press, right) = super::main_menu::pause::pointer_press(&window, &mouse, &touches);
+    let at = super::main_menu::pause::cursor_point(&window);
+    if at != *hovered
+        && let Some(k) = at.and_then(pill)
     {
+        match menu.ask {
+            Some(a) if k > 0 && a != k - 1 => (menu.ask, menu.hand) = (Some(k - 1), Hand::default()),
+            None if k != menu.sel => (menu.sel, menu.hand) = (k, Hand::default()),
+            _ => {}
+        }
+    }
+    *hovered = at;
+    menu.cancel |= right || press.is_some_and(|p| pill(p).is_none());
+    if let Some(k) = press.and_then(pill) {
         match menu.ask {
             // the question's row isn't a pill
             Some(_) if k == 0 => {}

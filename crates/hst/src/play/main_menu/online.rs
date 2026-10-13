@@ -13,6 +13,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::pointer::{Act, OK};
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 use crate::mods_online::{self as mo, Ask, Wire};
 use crate::net::{Cmd, Event, Listing, Net, Online, Pick, RANDOM, Relay, Room, SHORT, SYMBOLS, Seat, Topic, is_short};
@@ -624,6 +625,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             for (row, i) in (first..n + 2).take(7).enumerate() {
                 let (y, on) = (76.0 + 44.0 * row as f32, i == m.sel);
                 d.pill(x, y, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
+                d.hit([x, y, w, 38.0], Act::Row(i, OK));
                 let rgb = if on { WHITE } else { [100.0; 3] };
                 let Some(l) = m.net.list.get(i) else {
                     d.centred(if i == n { "Refresh" } else { "Back" }, x + w / 2.0, y + 7.0, 24.0, rgb);
@@ -669,6 +671,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             for (i, c) in keys.iter().enumerate() {
                 let (x, y) = (320.0 - 232.0 + 58.0 * (i % 8) as f32 + 3.0, top + 44.0 * (i / 8) as f32);
                 d.pill(x, y, 52.0, if m.sel == i { ON } else { OFF });
+                d.hit([x, y, 52.0, 38.0], Act::Row(i, OK));
                 let rgb = if m.sel == i { WHITE } else { [100.0; 3] };
                 if *c == b' ' {
                     d.centred("Spc", x + 26.0, y + 11.0, 16.0, rgb);
@@ -681,6 +684,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 let (x, y, on) = (320.0 - 232.0 + 116.0 * i as f32 + 2.0, top + 44.0 * rows as f32 + 8.0, m.sel == keys.len() + i);
                 let dim = i == 2 && if m.net.naming { m.net.entry.trim().is_empty() } else { !is_short(&m.net.entry) };
                 d.pill(x, y, 112.0, if on { ON } else { OFF });
+                d.hit([x, y, 112.0, 38.0], Act::Row(keys.len() + i, OK));
                 d.centred(l, x + 56.0, y + 7.0, 24.0, if on && !dim { WHITE } else if dim { [60.0; 3] } else { [100.0; 3] });
             }
             let info = match () {
@@ -705,6 +709,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 for (i, s) in r.seats.iter().enumerate() {
                     let y = 140.0 + 44.0 * i as f32;
                     d.pill(x0, y, w, if s.is_some() { super::COLOURS[i] } else { [60.0; 3] });
+                    if let Some(k) = items.iter().position(|it| *it == Item::Seat(i)) {
+                        d.hit([x0, y, w, 38.0], Act::Row(k, OK));
+                    }
                     d.centred(&format!("{}P", i + 1), x0 + 30.0, y + 9.0, 20.0, WHITE);
                     let Some(s) = s else {
                         d.centred("open", x0 + 110.0, y + 9.0, 20.0, DIM);
@@ -736,10 +743,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 }
             }
             if m.net.ask.is_none() && m.net.topics {
+                // B221: a tap off the topics is their Cancel
+                d.popup(Some(Act::Row(TOPICS.len() - 1, OK)));
                 d.outlined(|d| d.text("Put to a vote:", 410.0, 120.0, 18.0, WHITE));
                 for (i, (t, _)) in TOPICS.iter().enumerate() {
                     let y = 156.0 + 44.0 * i as f32;
                     d.pill(420.0, y, 200.0, if m.sel == i { GOLD } else { [70.0, 70.0, 80.0] });
+                    d.hit([420.0, y, 200.0, 38.0], Act::Row(i, OK));
                     d.centred(t, 520.0, y + 8.0, 22.0, if m.sel == i { WHITE } else { DIM });
                 }
                 d.info("Everyone in the lobby votes; it closes when all have voted, after 30 s, or when you end it.");
@@ -756,6 +766,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     let on = m.sel == i;
                     let fill = if on { GOLD } else if o.is_some() && o == m.net.ballot { [60.0, 90.0, 60.0] } else { [70.0, 70.0, 80.0] };
                     d.pill_at([410.0, y, 220.0, 17.0], [[30.0; 3], WHITE, fill], 128.0);
+                    d.hit([410.0, y, 220.0, 18.0], Act::Row(i, OK));
                     let rgb = if on { WHITE } else { DIM };
                     match o {
                         Some(o) => {
@@ -782,6 +793,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     };
                     let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && m.net.code.is_empty());
                     d.pill(x, 330.0, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
+                    d.hit([x, 330.0, BUTTON_W, 38.0], Act::Row(*i, OK));
                     let k = ((BUTTON_W - 20.0) / d.width(&label, 20.0)).min(1.0);
                     d.centred(&label, x + BUTTON_W / 2.0, 339.0 + 10.0 * (1.0 - k), 20.0 * k, if on && !dim { WHITE } else if dim { [60.0; 3] } else { DIM });
                 }
@@ -789,10 +801,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
                 // a mod this machine doesn't have: its looks, or its donor recoloured
                 d.outlined(|d| d.text(&format!("{} is a mod you don't have.", w.name), 410.0, 120.0, 18.0, WHITE));
-                // the gold pill is the cursor (a hand would sit on the seats)
+                // the gold pill is the cursor (a hand would sit on the seats); it has to be answered
+                d.popup(None);
                 for (i, r) in ASK_ROWS.iter().enumerate() {
                     let y = 156.0 + 44.0 * i as f32;
                     d.pill(420.0, y, 200.0, if m.sel == i { GOLD } else { [70.0, 70.0, 80.0] });
+                    d.hit([420.0, y, 200.0, 38.0], Act::Row(i, OK));
                     let k = (176.0 / d.width(r.0, 22.0)).min(1.0);
                     d.centred(r.0, 520.0, y + 8.0 + 11.0 * (1.0 - k), 22.0 * k, if m.sel == i { WHITE } else { DIM });
                 }
@@ -884,49 +898,6 @@ pub(super) fn poll(
         && let Some(img) = qr(code)
     {
         commands.insert_resource(QrImage(images.add(img), code.clone()));
-    }
-}
-
-/// The lobby item under `p` (640×448) as `layout` draws it: a mod question's row, a guest's seat (host), a button.
-fn item_at(m: &Menu, p: Vec2) -> Option<usize> {
-    let inside = |x: f32, y: f32, w: f32| p.x >= x && p.x < x + w && p.y >= y && p.y < y + 38.0;
-    if m.net.ask.is_some() {
-        return (0..ASK_ROWS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
-    }
-    if m.net.topics {
-        return (0..TOPICS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
-    }
-    if let Some(v) = m.net.room.as_ref().and_then(|r| r.vote.as_ref()) {
-        let n = v.options.len() + m.net.hosting as usize;
-        return (0..n).find(|&i| p.x >= 410.0 && p.x < 630.0 && p.y >= 104.0 + 18.0 * i as f32 && p.y < 121.0 + 18.0 * i as f32);
-    }
-    let mut buttons = 0;
-    m.items().iter().position(|it| match it {
-        Item::Seat(i) => inside(60.0, 140.0 + 44.0 * *i as f32, 340.0),
-        Item::Button(_) => {
-            buttons += 1;
-            inside(60.0 + BUTTON_STEP * (buttons - 1) as f32, 330.0, BUTTON_W)
-        }
-    })
-}
-
-/// A click or tap on a lobby button or seat chooses it (as ✕ would), the right button is Back.
-pub(super) fn pointer(
-    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touches: Res<Touches>,
-    mut menu: ResMut<Menu>,
-    mut click: ResMut<super::pause::Click>,
-) {
-    if menu.screen != Screen::Lobby {
-        return;
-    }
-    let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
-    if let Some(i) = at.and_then(|p| item_at(&menu, p)) {
-        menu.sel = i;
-        click.0 = Some(Press { ok: true, ..default() });
-    } else if back {
-        click.0 = Some(Press { back: true, ..default() });
     }
 }
 
@@ -1211,14 +1182,18 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = true;
+        let at = |m: &Menu, x: f32, y: f32| match super::super::pointer::tests::act_at(m, x, y) {
+            Some(Act::Row(i, _)) => Some(i),
+            _ => None,
+        };
         // the host: seats 1, 2 (guests), then Start, Copy Link, Leave along the bottom
-        assert_eq!(item_at(&m, Vec2::new(200.0, 140.0 + 44.0 + 10.0)), Some(0));
-        assert_eq!(item_at(&m, Vec2::new(200.0, 150.0)), None, "the host's own seat");
-        assert_eq!(item_at(&m, Vec2::new(70.0, 340.0)), Some(2), "Start");
-        assert_eq!(item_at(&m, Vec2::new(60.0 + 5.0 * BUTTON_STEP + 50.0, 360.0)), Some(7), "Leave");
-        assert_eq!(item_at(&m, Vec2::new(60.0 + BUTTON_W + 4.0, 340.0)), None, "between pills");
+        assert_eq!(at(&m, 200.0, 140.0 + 44.0 + 10.0), Some(0));
+        assert_eq!(at(&m, 200.0, 150.0), None, "the host's own seat");
+        assert_eq!(at(&m, 70.0, 340.0), Some(2), "Start");
+        assert_eq!(at(&m, 60.0 + 5.0 * BUTTON_STEP + 50.0, 360.0), Some(7), "Leave");
+        assert_eq!(at(&m, 60.0 + BUTTON_W + 4.0, 340.0), Some(3), "between pills: the nearer");
         m.net.hosting = false;
-        assert_eq!(item_at(&m, Vec2::new(70.0, 340.0)), Some(0), "a guest's Ready");
+        assert_eq!(at(&m, 70.0, 340.0), Some(0), "a guest's Ready");
     }
 
     #[test]

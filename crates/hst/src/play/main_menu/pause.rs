@@ -12,7 +12,7 @@ use hst_data::{iso::Iso, xb::Archive};
 use std::sync::Arc;
 
 use super::super::widescreen;
-use super::{Art, GRAPHICS_LABELS, GRAPHICS_PITCH, GRAPHICS_TOP, Menu, POOL, Press, Screen, Settings, Slot, Text, TickerClip, Ticker, controls, slide};
+use super::{Art, Menu, POOL, Screen, Settings, Slot, Text, TickerClip, Ticker, slide};
 use crate::Args;
 use crate::audio::{MusicBanks, Sound, SoundBank};
 
@@ -28,10 +28,6 @@ impl PauseSettings {
         *self = PauseSettings { open: true, fresh: true };
     }
 }
-
-/// A click or tap this frame, as a keyboard press (`super::step`).
-#[derive(Resource, Default)]
-pub(super) struct Click(pub Option<Press>);
 
 #[derive(Component)]
 pub(in crate::play) struct Root;
@@ -179,9 +175,16 @@ fn opened(ps: Res<PauseSettings>, args: Res<Args>, mut menu: ResMut<Menu>, mut s
 
 /// The 640×448 point under a window position, on the centred 4:3 screen the rows are drawn on.
 fn screen_point(win: &Window, p: Vec2) -> Vec2 {
-    let share = widescreen::share(win.width() / win.height().max(1.0));
-    let x = (p.x / win.width().max(1.0) * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
-    Vec2::new(x, p.y / win.height().max(1.0) * 448.0)
+    #[allow(unused_mut)]
+    let mut size = Vec2::new(win.width().max(1.0), win.height().max(1.0));
+    // the browser measures in CSS px (`pointer.rs`)
+    #[cfg(target_arch = "wasm32")]
+    if let Some(css) = crate::web::page_size() {
+        size = css;
+    }
+    let share = widescreen::share(size.x / size.y);
+    let x = (p.x / size.x * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
+    Vec2::new(x, p.y / size.y * 448.0)
 }
 
 /// This frame's left click or first tap, and whether the right button was clicked.
@@ -191,37 +194,10 @@ pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>
     (at.map(|p| screen_point(win, p)), mouse.just_pressed(MouseButton::Right))
 }
 
-/// The row of the Settings screens under `p` (640×448), as `super::layout` draws them.
-fn row_at(m: &Menu, p: Vec2) -> Option<usize> {
-    let (x0, x1, y0, pitch, h, n) = match m.screen {
-        Screen::Settings => (60.0, 500.0, 90.0, 44.0, 38.0, super::CONTROLS_ROW + 2),
-        Screen::Graphics => (60.0, 560.0, GRAPHICS_TOP, GRAPHICS_PITCH, 38.0, GRAPHICS_LABELS.len() + 1),
-        Screen::Controls => (56.0, 620.0, 62.0, 21.0, 21.0, controls::action_names().count() + 1),
-        _ => return None,
-    };
-    let k = ((p.y - y0) / pitch).floor();
-    (p.x >= x0 && p.x < x1 && k >= 0.0 && (k as usize) < n && p.y - y0 - k * pitch < h).then_some(k as usize)
-}
-
-/// A click or tap on a row chooses it (as ✕ would), the right button goes back.
-fn pointer(
-    ps: Res<PauseSettings>,
-    window: Query<&Window, With<PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touches: Res<Touches>,
-    mut menu: ResMut<Menu>,
-    mut click: ResMut<Click>,
-) {
-    if !ps.open || ps.fresh || menu.rebinding.is_some() {
-        return;
-    }
-    let (at, back) = pointer_press(&window, &mouse, &touches);
-    if let Some(row) = at.and_then(|p| row_at(&menu, p)) {
-        menu.sel = row;
-        click.0 = Some(Press { ok: true, ..default() });
-    } else if back {
-        click.0 = Some(Press { back: true, ..default() });
-    }
+/// The 640×448 point under the mouse, if it's over the window.
+pub(in crate::play) fn cursor_point(window: &Query<&Window, With<PrimaryWindow>>) -> Option<Vec2> {
+    let win = window.single().ok()?;
+    win.cursor_position().map(|p| screen_point(win, p))
 }
 
 /// Back on the Settings screen leaves for the main menu's first screen: here, the pause menu. And the settings the
@@ -263,10 +239,13 @@ fn after(
 }
 
 pub(in crate::play) fn plugin(app: &mut App) {
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, touch_menu);
     let open = |ps: Res<PauseSettings>| ps.open;
     let live = |ps: Res<PauseSettings>| ps.open && !ps.fresh;
     app.init_resource::<PauseSettings>()
-        .init_resource::<Click>()
+        .init_resource::<super::pointer::Pending>()
+        .init_resource::<super::pointer::Hits>()
         .init_resource::<Ticker>()
         .init_resource::<slide::Slide>()
         // `super::draw` reads the custom page's mod icons (none in a match); without it the draw panicked (B139)
@@ -275,15 +254,26 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .add_systems(PostStartup, setup)
         .add_systems(
             Update,
-            (opened, pointer, super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
+            (opened, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
                 .chain()
                 .in_set(Systems),
         );
 }
 
+/// B221: the phone's on-screen pad hides while the pause or result screen is up, so taps reach the menu under it.
+#[cfg(target_arch = "wasm32")]
+fn touch_menu(w: &World, mut was: Local<Option<bool>>) {
+    let on = super::super::menu::paused(w) || w.get_resource::<super::super::Game>().is_some_and(|g| g.match_stats.result.is_some());
+    if *was != Some(on) {
+        *was = Some(on);
+        crate::web::touch_menu(on);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{Press, controls};
 
     /// A full 512×32 row shrinks to half height, centred, edge to edge (B171).
     #[test]
@@ -292,20 +282,6 @@ mod tests {
         let col: Vec<f32> = (0..32).map(|y| out[y * 256 + 128]).collect();
         assert!(col[..8].iter().chain(&col[24..]).all(|&a| a == 0.0) && col[8..24].iter().all(|&a| a == 1.0), "{col:?}");
         assert!(out[16 * 256] == 1.0 && out[16 * 256 + 255] == 1.0);
-    }
-
-    /// Clicks land on the rows `layout` draws: Settings' pills 44 px apart from y 90, Graphics' 39.5 from 46.
-    #[test]
-    fn rows_under_clicks() {
-        let m = Menu { screen: Screen::Settings, ..default() };
-        assert_eq!(row_at(&m, Vec2::new(270.0, 100.0)), Some(0));
-        assert_eq!(row_at(&m, Vec2::new(460.0, 90.0 + 44.0 * 3.0 + 20.0)), Some(3)); // the switch beside Match Music
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 + 40.0)), None); // between pills
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 6.0 + 10.0)), Some(6)); // Back
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 7.0 + 10.0)), None);
-        let g = Menu { screen: Screen::Graphics, ..default() };
-        assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 7.0 + 5.0)), Some(7));
-        assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 8.0 + 30.0)), Some(8)); // Back
     }
 
     /// The window → 640×448 mapping undoes the centred 4:3 placement at any aspect.
@@ -355,12 +331,11 @@ mod tests {
         app.world_mut().resource_mut::<PauseSettings>().open();
         app.update();
         let was = app.world().resource::<Menu>().settings.0[2];
-        app.world_mut().resource_mut::<Menu>().sel = 2;
-        app.world_mut().resource_mut::<Click>().0 = Some(Press { ok: true, ..default() });
+        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(2, super::super::pointer::OK), true));
         app.update();
         assert_eq!(app.world().resource::<Menu>().settings.0[2], !was, "Menu Music didn't change");
         assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
-        app.world_mut().resource_mut::<Click>().0 = Some(Press { back: true, ..default() });
+        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
         app.update();
         assert!(!app.world().resource::<PauseSettings>().open, "Back didn't return to the pause menu");
         app.update();

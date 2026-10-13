@@ -45,6 +45,7 @@ mod cursor;
 pub(crate) mod flame;
 mod online;
 mod mods_screen;
+mod pointer;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
@@ -1326,6 +1327,9 @@ struct Draw<'a> {
     said: String,
     /// Where `q` puts its quads on a wide window.
     anchor: Anchor,
+    /// B221: what the pointer can press (`pointer.rs`), and what a press outside them does.
+    hits: Vec<pointer::Hit>,
+    outside: Option<pointer::Act>,
 }
 
 const WHITE: [f32; 3] = [128.0; 3];
@@ -1378,6 +1382,17 @@ impl Draw<'_> {
         self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0 });
     }
 
+    /// B221: `rect` (placed as `q` would place it) does `act` under the pointer.
+    fn hit(&mut self, rect: [f32; 4], act: pointer::Act) {
+        self.hits.push(pointer::Hit { rect, anchor: self.anchor, act });
+    }
+
+    /// B221: a popup is up: only what's drawn from here on takes the pointer, and a press outside it does `outside`.
+    fn popup(&mut self, outside: Option<pointer::Act>) {
+        self.hits.clear();
+        self.outside = outside;
+    }
+
     /// The screen's wall (tiled) and title bar.
     fn frame(&mut self, title: usize, wall: usize) {
         self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0 });
@@ -1395,6 +1410,8 @@ impl Draw<'_> {
         self.text(words, 42.0, 7.0, size, [0.0; 3]);
         self.out[start..].iter_mut().for_each(|q| q.alpha = 40.0);
         self.outlined(|d| d.text(words, 40.0, 5.0, size, WHITE));
+        // B221: the title's tab is Back for the pointer
+        self.hit([-30.0, -30.0, w + 110.0, 70.0], pointer::press(|k| k.back = true));
         self.anchor = Anchor::Centre;
     }
 
@@ -1505,6 +1522,7 @@ impl Draw<'_> {
             let on = i == sel;
             self.pill(x, yy, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
             self.centred(l, x + w / 2.0, yy + 7.0, 24.0, if on { WHITE } else { [100.0; 3] });
+            self.hit([x, yy, w, 38.0], pointer::Act::Row(i, pointer::OK));
         }
         self.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + pitch * sel as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
     }
@@ -1587,7 +1605,13 @@ fn ticker_text(
 }
 
 fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> (Vec<Quad>, String) {
-    let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre };
+    let d = drawn(m, text, bind, pads, hand_x);
+    (d.out, d.said)
+}
+
+/// The screen's quads, words and hit rects.
+fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> Draw<'a> {
+    let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
         Screen::Main => {
             d.frame(0, 5);
@@ -1610,6 +1634,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.rows(&labels, m.sel, 120.0, 90.0, 300.0, hand_x);
             for (i, on) in m.settings.0.iter().enumerate() {
                 d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + 44.0 * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
+                d.hit([420.0, 90.0 + 44.0 * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
@@ -1628,7 +1653,13 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             // nine rows: closer than the other screens' to clear the description bar (y 404)
             d.rows_at(&labels, m.sel, 120.0, GRAPHICS_TOP, 300.0, hand_x, GRAPHICS_PITCH);
             for i in 0..GRAPHICS_LABELS.len() {
-                d.text(&m.settings.graphics_value(i), 440.0, GRAPHICS_TOP + GRAPHICS_PITCH * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
+                let (y, rgb) = (GRAPHICS_TOP + GRAPHICS_PITCH * i as f32, if i == m.sel { WHITE } else { [40.0; 3] });
+                d.text(&m.settings.graphics_value(i), 440.0, y + 7.0, 24.0, rgb);
+                // B221: the value's arrows (a tap on its left half steps back, on its right half on)
+                d.text("<", 424.0, y + 7.0, 24.0, rgb);
+                d.text(">", 614.0, y + 7.0, 24.0, rgb);
+                d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(i, Press { left: true, ..default() }));
+                d.hit([520.0, y, 115.0, 38.0], pointer::Act::Row(i, Press { right: true, ..default() }));
             }
             d.info(match m.sel {
                 0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
@@ -1650,6 +1681,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 let on = i == m.sel;
                 let rgb = if on { WHITE } else { [40.0; 3] };
                 d.text(&n.replace('_', " "), 120.0, y, 19.0, rgb);
+                d.hit([120.0, y, 500.0, 21.0], pointer::Act::Row(i, pointer::OK));
                 if i < names.len() {
                     let s = if on && m.rebinding.is_some() { "press a key or button...".to_string() } else { bind.names(i).join("  ") };
                     d.text(&s, 300.0, y, 19.0, if on && m.rebinding.is_some() { [128.0, 110.0, 40.0] } else { rgb });
@@ -1664,6 +1696,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             for (i, words) in ["Singles", "Doubles"].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
                 mode_bar(&mut d, i, on, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], words);
+                d.hit([131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], pointer::Act::Row(i, pointer::OK));
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
@@ -1673,6 +1706,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             for p in 0..m.players() {
                 let y = 90.0 + 70.0 * p as f32;
                 d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
+                d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
                 d.text(&dev_name(m.seats[p], pads), 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else { [60.0, 110.0, 40.0] });
             }
@@ -1684,7 +1718,13 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
     }
-    (d.out, d.said)
+    // B221: the screens with no Back row show the title tab's Back
+    if matches!(m.screen, Screen::Mode | Screen::Assign | Screen::Chars | Screen::Confirm) && m.picking.is_none() {
+        d.anchor = Anchor::Span;
+        d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
+        d.anchor = Anchor::Centre;
+    }
+    d
 }
 
 fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
@@ -1743,8 +1783,14 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
             d.q(Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], tint, 128.0);
         }
+        for (i, &(_, x, y)) in GRID.iter().enumerate() {
+            d.hit([x - 32.0, y - 32.0, 64.0, 64.0], pointer::Act::Cell(i));
+        }
         let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
         d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
+        if !m.mods.is_empty() {
+            d.hit([170.0, 155.0, 300.0, 20.0], pointer::press(|k| k.page = true));
+        }
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
     for p in 0..n {
@@ -1761,6 +1807,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // a card nobody is picking on yet is dark
         let fill = if picking || pl.ready { CARD_FILL[p] } else { CARD_FILL[p].map(|c| c * 0.45) };
         d.box3([x, y, 144.0, 168.0], 12.0, [Some(INK), Some(if picking || pl.ready { WHITE } else { [60.0; 3] }), Some(fill)], 128.0);
+        // B221: a tap on a card readies its pick, on a ready one picks again
+        d.hit([x, y, 144.0, 168.0], pointer::press(|k| if pl.ready { k.back = true } else { k.ok = true }));
         if picking || pl.ready {
             if pl.card {
                 let (style, grades) = modded.map_or((text.style[c], text.grades[c]), |i| text.mods[i]);
@@ -1783,6 +1831,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 {
                     let words = if m.hand(text, p) < 0.0 { "Left hander" } else { "Right hander" };
                     d.pill_at([x + 70.0, y + 5.0, 66.0, 19.0], [INK, WHITE, if pl.swap { [128.0, 100.0, 20.0] } else { [90.0, 72.0, 48.0] }], 128.0);
+                    d.hit([x + 70.0, y + 2.0, 66.0, 25.0], pointer::press(|k| k.hand = true));
                     d.label(words, x + 103.0, y + 8.0, 13.0, 56.0, WHITE);
                 }
                 match modded {
@@ -1844,6 +1893,10 @@ fn hints(d: &mut Draw) {
     d.q(INFO, [160.0, 9.0, 32.0, 19.0], [440.0, 27.0, 30.0, 18.0], WHITE, 128.0);
     d.q(INFO, [160.0, 73.0, 32.0, 19.0], [472.0, 27.0, 30.0, 18.0], WHITE, 128.0);
     d.label("Select Costume", 570.0, 27.0, 19.0, 128.0, WHITE);
+    // B221: the hints are buttons too
+    d.hit([308.0, 22.0, 130.0, 30.0], pointer::press(|k| k.card = true));
+    d.hit([438.0, 22.0, 33.0, 30.0], pointer::press(|k| k.prev = true));
+    d.hit([471.0, 22.0, 165.0, 30.0], pointer::press(|k| k.next = true));
     d.anchor = Anchor::Centre;
 }
 
@@ -1883,6 +1936,7 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lea
         let tint = if m.next_free(lead, Who::Mod(i), 0, false).is_none() { [50.0; 3] } else { WHITE };
         d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], tint, 128.0);
         d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
+        d.hit([x - 28.0, y - 28.0, 56.0, 56.0], pointer::Act::Cell(i));
     }
     for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
         let (fx, fy) = g.cell(m.players[p].pick);
@@ -1894,9 +1948,14 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lea
         q.dst[1] = ICON_BOX + (q.dst[1] - ICON_BOX) / g.tall;
         q.dst[3] /= g.tall;
     }
+    for h in d.hits.iter_mut().filter(|h| matches!(h.act, pointer::Act::Cell(_))) {
+        h.rect[1] = ICON_BOX + (h.rect[1] - ICON_BOX) / g.tall;
+        h.rect[3] /= g.tall;
+    }
     let per = g.per();
     let pages = m.mods.len().div_ceil(per);
     d.centred(&format!("Custom characters  {}/{pages}", page.start / per + 1), 320.0, 386.0, 14.0, WHITE);
+    d.hit([200.0, 382.0, 240.0, 22.0], pointer::press(|k| k.page = true));
 }
 
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
@@ -1982,6 +2041,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     let pos = [[60.0, 286.0, 260.0], [40.0, 334.0, 180.0], [230.0, 334.0, 180.0], [420.0, 334.0, 180.0], [40.0, 372.0, 180.0]];
     for (i, ((label, value), [x, y, w])) in rows.iter().zip(pos).enumerate() {
         let on = i == m.sel;
+        d.hit([x, if i == 0 { y } else { y - 4.0 }, w, 38.0], pointer::Act::Row(i, pointer::OK));
         if i == 0 {
             d.pill(x, y, w, if on { [128.0, 40.0, 60.0] } else { [80.0, 40.0, 50.0] });
             d.label("Start the match!", x + w / 2.0, y + 6.0, 26.0, 160.0, GOLD);
@@ -2008,6 +2068,8 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
 /// number from the sheet's digits, ◀ ▶ at the ends) or umpire picker (`Confirmation_03`'s five face cards, the hovered
 /// one large and raised), in place of the rows. Positions measured off PCSX2 shots (`context/b64`).
 fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
+    // B221: a tap off the picker puts it back, as ○
+    d.popup(Some(pointer::press(|k| k.back = true)));
     d.anchor = Anchor::Span;
     d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 326.0, 640.0, 78.0], [40.0, 90.0, 60.0], 90.0);
     d.anchor = Anchor::Centre;
@@ -2023,6 +2085,7 @@ fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             let (w, h) = (92.0 * k, 68.0 * k);
             let (x, y) = (320.0 + 112.0 * off as f32 - w / 2.0, 366.0 - h / 2.0);
             d.q(C02, [96.0 * (tile % 2) as f32, 72.0 * (tile / 2) as f32, 92.0, 68.0], [x, y, w, h], lit, 128.0);
+            d.hit([x, y, w, h], pointer::Act::Pick(STRIP.get(p).copied().unwrap_or(COURTS)));
             if p < COURTS {
                 let n = (p + 1).to_string();
                 for (i, c) in n.bytes().enumerate() {
@@ -2033,6 +2096,8 @@ fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
         }
         d.q(C02, [192.0, 0.0, 28.0, 56.0], [27.0, 341.0, 25.0, 50.0], WHITE, 128.0);
         d.q(C02, [228.0, 0.0, 24.0, 56.0], [589.0, 341.0, 22.0, 50.0], WHITE, 128.0);
+        d.hit([15.0, 336.0, 45.0, 60.0], pointer::press(|k| k.left = true));
+        d.hit([580.0, 336.0, 45.0, 60.0], pointer::press(|k| k.right = true));
         (349, [226.0, 330.0])
     } else {
         d.q(CONFIRM, [2.0, 260.0, 140.0, 25.0], [30.0, 300.0, 140.0, 25.0], WHITE, 128.0);
@@ -2044,6 +2109,7 @@ fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
             // our Random: the court sheet's "?" tile after the five cards
             let src = if c == UMPIRES { [96.0, 360.0, 92.0, 68.0] } else { [8.0 + 88.0 * c as f32, 392.0, 80.0, 64.0] };
             d.q(if c == UMPIRES { C02 } else { CONFIRM }, src, dst, WHITE, 128.0);
+            d.hit(dst, pointer::Act::Pick(c));
         }
         (333, [62.0 + 96.0 * u as f32 - 92.0, 330.0])
     };
@@ -2071,7 +2137,7 @@ fn step(
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
     mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
-    (net, mut clipboard, mut click): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pause::Click>>),
+    (net, mut clipboard, mut pending): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pointer::Pending>>),
 ) {
     let play = |key: u8| {
         if let (Some(s), Some(Art(_, Some(b), _))) = (&sound, art.as_deref()) {
@@ -2082,7 +2148,8 @@ fn step(
     pads.sort();
     // the controls screen waiting for a key or button
     if let Some(i) = menu.rebinding {
-        if keys.just_pressed(KeyCode::Escape) {
+        // a tap or click cancels too (a phone has no key to bind)
+        if keys.just_pressed(KeyCode::Escape) || pending.as_mut().is_some_and(|p| !std::mem::take(&mut p.0).is_empty()) {
             menu.rebinding = None;
             play(1);
             return;
@@ -2105,6 +2172,9 @@ fn step(
         return;
     }
     let dt = time.delta_secs();
+    // B221: the pointer's acts (`pointer.rs`), as its device's
+    let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();
+    let pointed = pointer::device(&menu, &pads);
     let mut devices = vec![(Dev::Keys, None)];
     devices.extend(pads.iter().map(|&e| (Dev::Pad(e), Some(e))));
     for (dev, id) in devices {
@@ -2121,10 +2191,6 @@ fn step(
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
                 k.hand = bind.key_just_pressed(&keys, Action::Camera);
-                // a click or tap (`pause::pointer`) comes in as the keyboard's
-                if let Some(c) = click.as_mut().and_then(|c| c.0.take()) {
-                    (k.ok, k.back) = (k.ok || c.ok, k.back || c.back);
-                }
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -2144,10 +2210,19 @@ fn step(
             dirs[i] = repeat.entry((id, i)).or_default().step(h, dt);
         }
         [k.up, k.down, k.left, k.right] = dirs;
-        if k == Press::default() {
+        let mut fx = Vec::new();
+        if dev == pointed {
+            for (a, tap) in std::mem::take(&mut acts) {
+                fx.extend(menu.point(dev, a, tap));
+            }
+        }
+        if k == Press::default() && fx.is_empty() {
             continue;
         }
-        for e in menu.step(dev, k) {
+        if k != Press::default() {
+            fx.extend(menu.step(dev, k));
+        }
+        for e in fx {
             match e {
                 Effect::Sound(s) => play(s),
                 Effect::SaveSettings => {
@@ -2197,6 +2272,7 @@ fn draw(
     cursor: Option<Res<cursor::Cursor>>,
     icons: Res<Icons>,
     shelf: Res<mods_screen::Shelf>,
+    mut hits: ResMut<pointer::Hits>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -2205,7 +2281,9 @@ fn draw(
     let hand_x = 0.0;
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
-    let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
+    let d = drawn(&menu, &art.2, &bind, &pads, hand_x);
+    *hits = pointer::Hits(d.hits, d.outside);
+    let (quads, said) = (d.out, d.said);
     if said != ticker.0 {
         *ticker = Ticker(said, 0.0);
     }
@@ -2328,9 +2406,15 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
         .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
-    app.init_resource::<pause::Click>().add_systems(Update, (online::poll.before(draw), online::typing.before(step), online::pointer.before(step)));
+    app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
+        Update,
+        (online::poll.before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
+    );
     previews::plugin(app);
     mods_screen::plugin(app);
+    // B221: no on-screen pad over the menus (they take taps); the match turns it back on
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Startup, || crate::web::touch_menu(true));
 }
 
 #[cfg(test)]

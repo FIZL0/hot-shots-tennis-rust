@@ -197,6 +197,20 @@ pub fn code_entry(on: bool) {
     }
 }
 
+/// The page's size in CSS px (the canvas fills it): where touches and the mouse are measured.
+pub fn page_size() -> Option<bevy::math::Vec2> {
+    let w = web_sys::window()?;
+    let (x, y) = (w.inner_width().ok()?.as_f64()?, w.inner_height().ok()?.as_f64()?);
+    (x > 0.0 && y > 0.0).then(|| bevy::math::Vec2::new(x as f32, y as f32))
+}
+
+/// A menu is up (B221: it takes taps itself) or a match is on: the page shows its on-screen pad only in a match.
+pub fn touch_menu(on: bool) {
+    if let Some(f) = page_fn("hstTouchMenu") {
+        let _ = f.call1(&JsValue::NULL, &on.into());
+    }
+}
+
 /// The select's baked cards (B120, `play/main_menu/previews.rs`): OPFS `previews/` files by name, all read by the page
 /// before `run` (`add_card`); new ones written back through the page's `hstCard`, old drawings' dropped by `hstCardDrop`.
 static CARDS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<[u8]>>>> = std::sync::Mutex::new(None);
