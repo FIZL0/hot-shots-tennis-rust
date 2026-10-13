@@ -41,7 +41,8 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
   toss hand, racket.
 - **All UI at any aspect ratio** (user 2026-10-08): every HUD element, pop-up, menu, result/loading screen and
   new screen must lay out for any aspect ratio and resolution, pinned/scaled like B17's panels
-  (`play/widescreen.rs`), never locked to 4:3 or one resolution. Any UI task isn't done until it is.
+  (`play/widescreen.rs`), never locked to 4:3 or one resolution. Scale uniformly, never stretch (user 2026-10-13): an element keeps
+  its own aspect at any window size; extra space goes around it. Any UI task isn't done until it is.
 - **Look at the original too**: `tools/screenshot.sh` (PCSX2) vs `--shot out.png` at the same moment for anything
   visual; screenshots go in `context/`, not the journal.
 - Findings → `research/journal/<date>-<slug>/`. When a task lands: tick it, add to `plan/REFERENCE.md` *Done* /
