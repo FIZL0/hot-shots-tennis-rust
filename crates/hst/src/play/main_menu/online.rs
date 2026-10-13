@@ -211,6 +211,18 @@ impl Menu {
         r.seats.get(p)?.as_ref().filter(|s| s.peer != self.net.me)
     }
 
+    /// B234: the name of the mod another machine's player in seat `p` is on, when this machine doesn't have it (the
+    /// select shows its donor's looks); `None` for a disc character or a mod of this machine's own.
+    pub(super) fn remote_mod_name(&self, p: usize) -> Option<&str> {
+        let s = self.remote(p)?;
+        let r = self.net.room.as_ref()?;
+        let (id, name) = match r.live_of(p).filter(|_| s.human()) {
+            Some(l) => (l.r#mod.as_deref()?, l.name.as_str()),
+            None => s.pick.r#mod.as_deref().map(|w| (w.id.as_str(), w.name.as_str()))?,
+        };
+        (!self.mods.iter().any(|m| m.id == id) && !name.is_empty()).then_some(name)
+    }
+
     /// B201: the select's panels as the lobby's seats: this machine's players moved into the seats it holds (in
     /// order), every other seat showing its player's live place (a computer's pick, ready; an open seat empty).
     pub(super) fn align(&mut self) {
@@ -251,11 +263,11 @@ impl Menu {
             .filter(|&p| self.seats[p].is_some())
             .map(|p| {
                 let (who, costume) = self.pick(p);
-                let (char, id) = match who {
-                    super::Who::Disc(c) => (c, None),
-                    super::Who::Mod(i) => (self.mods[i].donor, Some(self.mods[i].id.clone())),
+                let (char, id, name) = match who {
+                    super::Who::Disc(c) => (c, None, String::new()),
+                    super::Who::Mod(i) => (self.mods[i].donor, Some(self.mods[i].id.clone()), self.mods[i].name.clone()),
                 };
-                Live { char, costume, ready: self.players[p].ready, r#mod: id }
+                Live { char, costume, ready: self.players[p].ready, r#mod: id, name }
             })
             .collect()
     }
@@ -871,6 +883,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                             let c = live.unwrap().char;
                             d.q(super::NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x0 + 58.0, y + 7.0, 105.0, 24.0], DIM, 128.0);
                         }
+                        // B234: still choosing, on a mod: its own name, dimmed
+                        _ if live.is_some_and(|l| !l.name.is_empty()) => {
+                            let n = &live.unwrap().name;
+                            let k = (100.0 / d.width(n, 20.0).max(1.0)).min(1.0);
+                            d.centred(n, x0 + 110.0, y + 9.0 + 10.0 * (1.0 - k), 20.0 * k, DIM);
+                        }
                         // B195: still choosing, the seat held
                         _ if live.is_some() || r.picking.contains(&s.peer) => d.centred("Picking...", x0 + 110.0, y + 9.0, 20.0, DIM),
                         // the name from the select's name sheet (a mod's in text)
@@ -1172,9 +1190,9 @@ pub(super) fn sample(m: &mut Menu) {
     }
     // B201: ACE-42 on Kaoru's second costume, live; as 2P (Sunny Day) on the shared select, the host ready beside them
     let r = m.net.room.as_mut().unwrap();
-    r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None }]);
+    r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new() }]);
     if menu == "chars-online" {
-        r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None }]);
+        r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new() }]);
         r.ready.clear();
         (m.net.hosting, m.net.me, m.net.go) = (false, peers[0].into(), Some(Go::Code));
         m.align();
@@ -1474,6 +1492,37 @@ mod tests {
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
     }
 
+    /// B234: a mod pick is named by the mod, not its donor, on the peer that has it and on one that doesn't (the
+    /// name rides along with the live place and the seat's pick).
+    #[test]
+    fn mod_name_not_donor() {
+        let w = Wire { id: "emi".into(), name: "Emi".into(), donor: 4, hand: 1.0, base: 4, overrides: vec![], ai_row: 4, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
+        // the guest with the mod, on it: its live place carries the name
+        let mut a = Menu { screen: Screen::Chars, ..default() };
+        a.mods = vec![crate::mods_online::for_match(&w, None)];
+        a.seats[0] = Some(super::super::Dev::Keys);
+        (a.players[0].modded, a.players[0].pick) = (true, 0);
+        let live = a.lives();
+        assert_eq!((live[0].char, live[0].r#mod.as_deref(), live[0].name.as_str()), (4, Some("emi"), "Emi"));
+        // the host without it: still choosing, then ready with the mod's pick in the seat
+        let mut b = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut b);
+        (b.net.me, b.net.go) = ("host".into(), Some(Go::Code));
+        let r = b.net.room.as_mut().unwrap();
+        r.live.insert("k51qzi5uqu5d".into(), live);
+        assert_eq!(b.remote_mod_name(1), Some("Emi"));
+        let r = b.net.room.as_mut().unwrap();
+        r.live.clear();
+        r.seats[1].as_mut().unwrap().pick = Pick { r#mod: Some(Box::new(w.clone())), ..Pick::disc(4, 0) };
+        assert_eq!((b.remote_mod_name(1), b.remote_mod_name(2)), (Some("Emi"), None), "a disc pick keeps the sheet's name");
+        // with the mod installed the select draws it as this machine's own (its name from its pack)
+        b.mods = vec![crate::mods_online::for_match(&w, None)];
+        assert_eq!(b.remote_mod_name(1), None);
+        b.seats[0] = Some(super::super::Dev::Keys);
+        b.align();
+        assert_eq!(b.pick(1), (super::super::Who::Mod(0), 0));
+    }
+
     /// B201: the select's panels are the lobby's seats (this machine's player in the one it holds, the others' live
     /// places beside it, their ready costumes taken); the host's computer players and singles / doubles.
     #[test]
@@ -1485,8 +1534,8 @@ mod tests {
         let mut m = Menu { screen: Screen::Chars, ..default() };
         sample(&mut m);
         let r = m.net.room.as_mut().unwrap();
-        r.live.insert("host".into(), vec![Live { char: 6, costume: 2, ready: true, r#mod: None }]);
-        r.live.insert("r8mxw2pa0c1e".into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None }]);
+        r.live.insert("host".into(), vec![Live { char: 6, costume: 2, ready: true, r#mod: None, name: String::new() }]);
+        r.live.insert("r8mxw2pa0c1e".into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new() }]);
         (m.net.hosting, m.net.me, m.net.go, m.seats[0], m.doubles) = (false, "k51qzi5uqu5d".into(), Some(Go::Code), Some(dev), false);
         m.players[0].cursor = 3;
         m.align();
@@ -1499,7 +1548,7 @@ mod tests {
         m.players[1].cursor = super::super::GRID.iter().position(|g| g.0 == 6).unwrap();
         m.players[1].costume = 2;
         assert!(m.blocked(1));
-        assert_eq!(m.lives(), vec![Live { char: 6, costume: 2, ready: false, r#mod: None }]);
+        assert_eq!(m.lives(), vec![Live { char: 6, costume: 2, ready: false, r#mod: None, name: String::new() }]);
         // the host: OK on the open seat adds a computer player nobody has, ←→ / L1 R1 change it, OK clears it
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);

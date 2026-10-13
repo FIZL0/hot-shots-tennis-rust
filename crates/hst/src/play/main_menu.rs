@@ -1989,7 +1989,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                         // M1m: the game it comes from, under the hand badge beside the player tag
                         d.fitted(&m.mods[i].source, x + 92.0, y + 27.0, 11.0, 88.0);
                     }
-                    None => d.label(CHAR_NAMES[c], x + 72.0, y + 142.0, 20.0, 128.0, GOLD),
+                    // B234: another machine's mod this one doesn't have: its own name over the donor's looks
+                    None => match m.remote_mod_name(p) {
+                        Some(name) => d.fitted(name, x + 72.0, y + 142.0, 20.0, 128.0),
+                        None => d.label(CHAR_NAMES[c], x + 72.0, y + 142.0, 20.0, 128.0, GOLD),
+                    },
                 }
             }
             if pl.ready {
