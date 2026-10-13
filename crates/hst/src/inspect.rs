@@ -262,6 +262,15 @@ fn sub_view(crop: Rect, size: Vec2) -> SubCameraView {
     let half = Vec2::new(AXIS.x.max(640.0 - AXIS.x), AXIS.y.max(448.0 - AXIS.y));
     let k = 16.0;
     let full = Vec2::new(2.0 * half.x / px, 2.0 * half.y) * k;
+    let (c, e) = widen(crop, size);
+    let origin = Vec2::new(AXIS.x / px - half.x / px, AXIS.y - half.y);
+    SubCameraView { full_size: full.as_uvec2(), offset: (c - origin) * k, size: (e * k).as_uvec2() }
+}
+
+/// `crop` (frame pixels) widened (or heightened) to `size`'s aspect about its centre, as corner and extent in
+/// display-square units (x over the frame pixel's aspect).
+fn widen(crop: Rect, size: Vec2) -> (Vec2, Vec2) {
+    let px = FOCAL.x / FOCAL.y;
     let (mut c, mut e) = (Vec2::new(crop.min.x / px, crop.min.y), Vec2::new(crop.size().x / px, crop.size().y));
     let want = size.x / size.y;
     if e.x / e.y < want {
@@ -271,8 +280,17 @@ fn sub_view(crop: Rect, size: Vec2) -> SubCameraView {
         c.y -= (e.x / want - e.y) / 2.0;
         e.y = e.x / want;
     }
-    let origin = Vec2::new(AXIS.x / px - half.x / px, AXIS.y - half.y);
-    SubCameraView { full_size: full.as_uvec2(), offset: (c - origin) * k, size: (e * k).as_uvec2() }
+    (c, e)
+}
+
+/// B160: the part of the original's frame that pixels `part` of a `size` image drawn with `crop` show, so a preview
+/// can draw just that part at another resolution (the face icon's close-up).
+pub fn sub_crop(crop: Rect, size: Vec2, part: Rect) -> Rect {
+    let px = FOCAL.x / FOCAL.y;
+    let (c, e) = widen(crop, size);
+    let k = e.y / size.y;
+    let (a, b) = (c + part.min * k, c + part.max * k);
+    Rect::from_corners(Vec2::new(a.x * px, a.y), Vec2::new(b.x * px, b.y))
 }
 
 /// The inspect screen's buttons on any pad (R2, L2, △), and 1/2/3 on the keyboard, for every preview (`--inspect`).
@@ -417,16 +435,31 @@ fn lay_out(window: Query<&Window, With<PrimaryWindow>>, mut cams: Query<(&Camera
 }
 
 /// B133: a character's face icon, cut from its select preview's PNG (`play/main_menu/previews.rs`, the cards' 3D
-/// render baked once per character × costume × mod version): the body's column (the opaque pixels' median x in the
-/// drawing's upper half, so a racket held out or up doesn't pull it), the head's top (the first row with a few opaque
-/// pixels within 20 px of it), the head's centre (the median x of the [`ICON_CROP`]-px square's middle half below
-/// that), that square scaled to `inner`×`inner` in the top left of a 64×64 image and cut round: 64 for the select's
-/// grid (its disc faces fill their 64×64 cell), 40 for the match panel (INPANE's `face_CC_OO.tm2` is a 40-px round
-/// head in the top left of 64×64, transparent elsewhere). Framing measured side by side with the disc faces of
-/// pc00/05/11/13 and checked on every baked disc and mod preview (`context/b133/v2.png`). None if `png` doesn't
-/// decode or drew nothing.
+/// render baked once per character × costume × mod version) at [`face_square`], scaled to `inner`×`inner` in the top
+/// left of a 64×64 image and cut round ([`round`]): 64 for the select's grid (its disc faces fill their 64×64 cell),
+/// 40 for the match panel (INPANE's `face_CC_OO.tm2` is a 40-px round head in the top left of 64×64, transparent
+/// elsewhere). Framing measured side by side with the disc faces of pc00/05/11/13 and checked on every baked disc and
+/// mod preview (`context/b133/v2.png`). None if `png` doesn't decode or drew nothing. B160: only for a mod's own
+/// preview PNG now; baked ones get a sharp close-up of the same square ([`icon`]).
 pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    let sq = face_square(&img)?;
+    let head = image::imageops::crop_imm(&img, sq.min.x, sq.min.y, sq.width(), sq.height()).to_image();
+    Some(round(&head, 64, inner))
+}
+
+/// B160: an icon from a baked head close-up (`<preview>-face.png`, the [`face_square`] drawn at its own resolution):
+/// [`face_icon`]'s layout at the PNG's size (`inner` out of 64).
+pub fn icon(png: &[u8], inner: u32) -> Option<Image> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    Some(round(&img, img.width(), inner))
+}
+
+/// The face icon's square in a preview's pixels: the body's column (the opaque pixels' median x in the drawing's upper
+/// half, so a racket held out or up doesn't pull it), the head's top (the first row with a few opaque pixels within
+/// 20 px of it), the head's centre (the median x of the [`ICON_CROP`]-px square's middle half below that). None if
+/// nothing drew.
+pub fn face_square(img: &image::RgbaImage) -> Option<URect> {
     let (w, h) = img.dimensions();
     let opaque = |x: u32, y: u32| img.get_pixel(x, y)[3] > 0;
     let s = ICON_CROP.min(w).min(h);
@@ -444,9 +477,14 @@ pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
     let cx = median((top + s / 4).min(h)..(top + s * 3 / 4).min(h), left..(left + s).min(w)).unwrap_or(body);
     let x0 = cx.saturating_sub(s / 2).min(w - s);
     let y0 = top.saturating_sub(2).min(h - s);
-    let inner = inner.clamp(1, 64);
-    let head = image::imageops::resize(&image::imageops::crop_imm(&img, x0, y0, s, s).to_image(), inner, inner, image::imageops::FilterType::Triangle);
-    let mut face = image::RgbaImage::new(64, 64);
+    Some(URect::new(x0, y0, x0 + s, y0 + s))
+}
+
+/// `head` (square) scaled to `inner`/64 of a `canvas`-px square image, in its top left, cut round.
+fn round(head: &image::RgbaImage, canvas: u32, inner: u32) -> Image {
+    let inner = (canvas * inner.clamp(1, 64) / 64).max(1);
+    let head = image::imageops::resize(head, inner, inner, image::imageops::FilterType::Triangle);
+    let mut face = image::RgbaImage::new(canvas, canvas);
     image::imageops::replace(&mut face, &head, 0, 0);
     let r = inner as f32 / 2.0;
     for (x, y, p) in face.enumerate_pixels_mut() {
@@ -454,13 +492,13 @@ pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
         p[3] = (p[3] as f32 * (r - d).clamp(0.0, 1.0)) as u8;
     }
     use bevy::render::render_resource::{Extent3d, TextureDimension};
-    Some(Image::new(
-        Extent3d { width: 64, height: 64, depth_or_array_layers: 1 },
+    Image::new(
+        Extent3d { width: canvas, height: canvas, depth_or_array_layers: 1 },
         TextureDimension::D2,
         face.into_raw(),
         TextureFormat::Rgba8UnormSrgb,
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    ))
+    )
 }
 
 /// The face icon's square in a baked preview's pixels (384×480: the head and hair of the tallest and shortest).
@@ -497,6 +535,21 @@ mod tests {
             let c = pelvis_centre(&sk, &m.motions[&id], t, PI, 1.0).unwrap();
             assert!((c.x - x).abs() < 1e-5 && (c.y - z).abs() < 1e-5, "motion {id:#x} frame {t}: {c} vs ({x}, {z})");
         }
+    }
+
+    /// B160: a sub-crop draws exactly those pixels: the whole image is the widened crop, and a square of it drawn
+    /// square needs no widening and keeps its place.
+    #[test]
+    fn sub_crop_is_the_pixels() {
+        let size = Vec2::new(384.0, 480.0);
+        let whole = sub_crop(CROP, size, Rect::new(0.0, 0.0, 384.0, 480.0));
+        let (c, e) = widen(CROP, size);
+        let (c2, e2) = widen(whole, size);
+        assert!(c.abs_diff_eq(c2, 1e-3) && e.abs_diff_eq(e2, 1e-3), "{c} {e} vs {c2} {e2}");
+        let sq = sub_crop(CROP, size, Rect::new(150.0, 40.0, 250.0, 140.0));
+        let (c3, e3) = widen(sq, Vec2::splat(320.0));
+        let k = e.y / size.y;
+        assert!(c3.abs_diff_eq(c + Vec2::new(150.0, 40.0) * k, 1e-3) && e3.abs_diff_eq(Vec2::splat(100.0 * k), 1e-3), "{c3} {e3}");
     }
 
     /// The icon centres on the head: a 20-px "head" at x 200..220 under a 2-px "racket" further left.
