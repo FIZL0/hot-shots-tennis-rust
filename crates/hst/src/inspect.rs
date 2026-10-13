@@ -456,14 +456,29 @@ pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
     let sq = face_square(&img, None)?;
     let head = image::imageops::crop_imm(&img, sq.min.x, sq.min.y, sq.width(), sq.height()).to_image();
-    Some(round(&head, 64, inner))
+    Some(round(&panel(head, inner), 64, inner))
 }
 
 /// B160: an icon from a baked head close-up (`<preview>-face.png`, the [`face_square`] drawn at its own resolution):
 /// [`face_icon`]'s layout at the PNG's size (`inner` out of 64).
 pub fn icon(png: &[u8], inner: u32) -> Option<Image> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
-    Some(round(&img, img.width(), inner))
+    let canvas = img.width();
+    Some(round(&panel(img, inner), canvas, inner))
+}
+
+/// B67: the match panel's head crop of a [`face_square`] (side, left, top as fractions of it): INPANE's
+/// `face_CC_OO.tm2` frames hair top to chin in its 40 px, tighter than the select grid. Fitted by grey correlation of
+/// every disc character's costume-0 close-up against its disc face (`research/journal/2026-10-13-b67-panel-faces/`).
+const PANEL_CROP: [f32; 3] = [0.68, 0.16, 0.085];
+
+/// `head` cut to [`PANEL_CROP`] for the panel's 40-px faces (`inner` < 64); the select grid's (64) as is.
+fn panel(head: image::RgbaImage, inner: u32) -> image::RgbaImage {
+    if inner >= 64 {
+        return head;
+    }
+    let ([s, x, y], w) = (PANEL_CROP, head.width() as f32);
+    image::imageops::crop_imm(&head, (x * w) as u32, (y * w) as u32, (s * w) as u32, (s * w) as u32).to_image()
 }
 
 /// B176: where preview `p`'s `Bip01Head` origin (the jaw, in every rig seen) is in a `size` image of its crop. None
@@ -657,5 +672,10 @@ mod tests {
         let data = face_icon(&png, 40).unwrap().data.unwrap();
         assert_eq!(data[(20 * 64 + 20) * 4], 255);
         assert_eq!(data[(50 * 64 + 50) * 4 + 3], 0);
+        // B67: the panel's is PANEL_CROP of the square, the grid's the whole square
+        let sq = image::RgbaImage::from_fn(100, 100, |x, y| image::Rgba([x as u8, y as u8, 0, 255]));
+        let cut = panel(sq.clone(), 40);
+        assert_eq!((cut.dimensions(), cut.get_pixel(0, 0)[0], cut.get_pixel(0, 0)[1]), ((68, 68), 16, 8));
+        assert_eq!(panel(sq, 64).dimensions(), (100, 100));
     }
 }
