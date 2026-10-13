@@ -79,6 +79,8 @@ pub struct GsKey {
     pub cull: bool,
     /// Drawn through a mirrored matrix (a left-hander's x scale −1): the winding flips, so the faces kept flip too.
     pub mirror: bool,
+    /// A court model: VU1 drops every triangle with a vertex outside its guard band (gs.wgsl, `GS_GUARD`).
+    pub guard: bool,
 }
 
 #[derive(ShaderType, Clone, Copy, Debug)]
@@ -354,7 +356,7 @@ impl GsMaterial {
             .map(|test| GsMaterial {
                 uniform,
                 texture: texture.clone().filter(|_| textured),
-                key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0, cull: !m.two_sided, mirror: false },
+                key: GsKey { textured, modulate, test, blend, fog: prim & 0x20 != 0, cull: !m.two_sided, mirror: false, guard: false },
                 order: 0.0,
             })
             .collect()
@@ -372,6 +374,7 @@ impl GsMaterial {
             prim &= !0x20;
         }
         let mut draws = Self::for_batch(m, prim, texture);
+        draws.iter_mut().for_each(|d| d.key.guard = true);
         if hole {
             let mut lt = draws.swap_remove(0);
             lt.key.modulate = true;
@@ -432,6 +435,9 @@ impl Material for GsMaterial {
         descriptor.primitive.cull_mode = (k.cull && !shadow).then_some(if k.mirror { bevy::render::render_resource::Face::Front } else { bevy::render::render_resource::Face::Back });
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never));
+        }
+        if k.guard {
+            descriptor.vertex.shader_defs.push("GS_GUARD".into());
         }
         // the browser build is WebGL2's (no noperspective)
         #[cfg(target_arch = "wasm32")]
@@ -539,15 +545,15 @@ mod tests {
         let keys = |m: &mtl::Material, prim| GsMaterial::for_batch(m, prim, tex.clone()).iter().map(|g| g.key).collect::<Vec<_>>();
         // opaque material, textured unblended batch: HIGHLIGHT2, no test
         let k = keys(&material("grass", 5, 1.0), 0x30);
-        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None, fog: true, cull: true, mirror: false }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: false, test: Test::Always, blend: None, fog: true, cull: true, mirror: false, guard: false }]);
         // mode 15 cut-out, translucent colour → MODULATE
         let k = keys(&material("leaf", 15, 0.5), 0x70);
-        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal), fog: true, cull: true, mirror: false }]);
+        assert_eq!(k, [GsKey { textured: true, modulate: true, test: Test::Ge40, blend: Some(mtl::Blend::Normal), fog: true, cull: true, mirror: false, guard: false }]);
         // mode 25: two draws
         assert_eq!(keys(&material("fence@vert", 25, 1.0), 0x70).iter().map(|k| k.test).collect::<Vec<_>>(), [Test::Ge70, Test::Lt70]);
         // court lines: @add without ABE still adds, no Z; @sub wins over @add; untextured batch
         let k = keys(&material("line@add@sub", 15, 0.4), 0x20);
-        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub), fog: true, cull: true, mirror: false }]);
+        assert_eq!(k, [GsKey { textured: false, modulate: true, test: Test::Never, blend: Some(mtl::Blend::Sub), fog: true, cull: true, mirror: false, guard: false }]);
         // specular exponent 128·(+0x10)^1.65, at least 1; highlight +0x14
         let mut m = material("crayline", 5, 1.0);
         m.header[0x10..0x14].copy_from_slice(&0.49f32.to_le_bytes());
@@ -564,7 +570,7 @@ mod tests {
         let tex = Some(Handle::default());
         let keys = |m: &mtl::Material, prim, hole| GsMaterial::for_court_batch(m, prim, tex.clone(), hole).iter().map(|g| g.key).collect::<Vec<_>>();
         // opaque, no @vert: unchanged
-        assert_eq!(keys(&material("grass", 5, 1.0), 0x30, false), GsMaterial::for_batch(&material("grass", 5, 1.0), 0x30, tex.clone()).iter().map(|g| g.key).collect::<Vec<_>>());
+        assert_eq!(keys(&material("grass", 5, 1.0), 0x30, false), GsMaterial::for_batch(&material("grass", 5, 1.0), 0x30, tex.clone()).iter().map(|g| GsKey { guard: true, ..g.key }).collect::<Vec<_>>());
         // MODULATE (translucent colour or @vert) → ABE on every batch
         assert_eq!(keys(&material("leaf", 5, 0.5), 0x30, false)[0].blend, Some(mtl::Blend::Normal));
         assert_eq!(keys(&material("fence@vert", 5, 1.0), 0x30, false)[0].blend, Some(mtl::Blend::Normal));
@@ -573,7 +579,7 @@ mod tests {
         assert!(keys(&material("line@add@sub", 5, 1.0), 0x30, false)[0].fog);
         // the hole: MODULATE, A ≥ 0x80 opaque with Z, below blended without
         let k = keys(&material("abb_zassou", 5, 1.0), 0x30, true);
-        let base = GsKey { textured: true, modulate: true, test: Test::Ge80, blend: None, fog: true, cull: true, mirror: false };
+        let base = GsKey { textured: true, modulate: true, test: Test::Ge80, blend: None, fog: true, cull: true, mirror: false, guard: true };
         assert_eq!(k, [base, GsKey { test: Test::Lt80, blend: Some(mtl::Blend::Normal), ..base }]);
         assert_eq!(GsMaterial::for_court_batch(&material("abb_zassou", 5, 1.0), 0x30, tex.clone(), true)[1].uniform.highlight, 0.0);
         // a hole @add batch keeps its add in both draws
