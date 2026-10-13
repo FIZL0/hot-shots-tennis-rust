@@ -265,6 +265,7 @@ fn hold(w: &mut World) {
             }
             intro.acc -= 1.0 / 60.0;
             intro.at += 1;
+            pose_players(w);
             if intro.at <= intro.frames {
                 intro.shot.step(Shot::court);
             }
@@ -293,6 +294,20 @@ fn hold(w: &mut World) {
         }
     } else {
         fixed.set_timestep(Duration::from_secs(1 << 20));
+    }
+}
+
+/// One intro tick of the players' motions and the held ball, as the original runs them through the intro (its
+/// match frame and motion clocks count on from the intro's start; recorded on court 4): the server loops its
+/// stance (0x20, bouncing the ball on the stance's ball track), the others their ready stance, and the match starts
+/// with those clocks where the intro left them. Only the drawn motions and the held ball's spot (rewritten every
+/// tick before the toss; the toss leaves from the player's matrix, `serve::toss_points`), so the sim and its RNG
+/// are as the setup left them.
+fn pose_players(w: &mut World) {
+    for r in [w.run_system_cached(super::motions), w.run_system_cached(crate::character::tick), w.run_system_cached(super::held_ball)] {
+        if let Err(e) = r {
+            warn!("intro pose: {e}");
+        }
     }
 }
 
