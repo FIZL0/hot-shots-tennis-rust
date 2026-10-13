@@ -1345,9 +1345,10 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         }
         Screen::Mode => {
             d.frame(2, 5);
-            for (i, src) in [[2.0, 2.0, 252.0, 30.0], [2.0, 34.0, 252.0, 30.0]].into_iter().enumerate() {
+            // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
+            for (i, src) in [[0.0, 0.0, 256.0, 32.0], [0.0, 32.0, 256.0, 32.0]].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
-                d.q(CS0, src, [134.0, 150.0 + 70.0 * i as f32, 372.0, 44.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
+                d.q(CS0, src, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
@@ -1400,7 +1401,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     hints(d);
     let n = m.players();
-    d.q(CS0, if m.doubles { [2.0, 34.0, 252.0, 30.0] } else { [2.0, 2.0, 252.0, 30.0] }, [194.0, 56.0, 252.0, 30.0], WHITE, 128.0);
+    d.q(CS0, if m.doubles { [0.0, 32.0, 256.0, 32.0] } else { [0.0, 0.0, 256.0, 32.0] }, [192.0, 54.0, 256.0, 32.0], WHITE, 128.0);
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {

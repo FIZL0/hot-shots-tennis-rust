@@ -76,13 +76,17 @@ timed out once under load (other slots were building) and passes when run alone;
   - the HUD's COM/Lv tags and stat numbers;
   - walls, portraits and faces;
   - the loading hints, which are baked into each 512×256 hint picture.
-- **The pause "Settings" label** on the in-match pause pill is built at 1× from word.tm2 pixels by
-  `pause::label`, so it is upscaled rather than vector.
 - **The bottom ticker** still uses the port's monospace font (not part of the disc sheets).
 - **Outline residue (fixed after review):** the disc outline's faint outer pixel lies 1 px past the measured ink box.
   Left behind, it showed as dashes above "S" and below "g" on Singles/Doubles and as a dark halo on the pause and
   dialog buttons, so the new outline looked cut off. Labels with an outline are now erased with a 1 px margin
   (`rebuild`); see `context/b136/k_mode2.png` and `k_pause2.png`. Tiny unoutlined tags keep the tight box.
+- **Fixed after review:**
+  - **Pause "Settings":** `pause::label` builds this row at 1× from word.tm2 glyphs. It is now set again as vector text
+    (`menu_art::relabel`, same fill and outline sampling as the dialog rows); `k_pause3.png`/`k_pause4.png`.
+  - **Singles/Doubles pill rims:** the mode screen and the character select bar drew the pills from
+    [2, 2, 252, 30], cutting 2 px off every side, so the dark rim was missing top and bottom. They now take the whole
+    pill, [0, 0/32, 256, 32], scaled to the same place and size (`main_menu.rs`); `k_mode3.png`, `k_chars3.png`.
 - **Faint marks under the Doubles pill's bottom border:** linear sampling at the pill rect's edge bleeds into the 1P
   tags right below it on characterselect2_00. That was already there with the disc's sheets.
 - **Pre-existing overlap:** the "Tab / Square: 92 custom characters…" hint overlaps the character grid. That is not B136.

@@ -52,7 +52,8 @@ fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
     arc.read(e).expect("archive bytes")
 }
 
-/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings").
+/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings"),
+/// set again in the remastered font (`menu_art::relabel`) unless `--original`.
 pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image> {
     let font = sheet(iso, "MENU/MENU04.XB0", "/word.tm2");
     let glyphs = super::glyphs(&font);
@@ -85,6 +86,9 @@ pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str)
             let c = (30.0 + 225.0 * a) as u8;
             rgba[(y as usize * w + x as usize) * 4..][..4].copy_from_slice(&[c, c, c, (edge.max(a) * 255.0) as u8]);
         }
+    }
+    if let Some(h) = super::super::menu_art::relabel(images, w, h, &rgba, s) {
+        return h;
     }
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))

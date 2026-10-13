@@ -360,6 +360,22 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     handle
 }
 
+/// A sheet the port made itself from disc glyphs (`pause::label`'s row, `w`×`h`), its one word `s` set again at `K`×
+/// round its ink; `None` with `--original`.
+pub(crate) fn relabel(images: &mut Assets<Image>, w: usize, h: usize, rgba: &[u8], s: &str) -> Option<Handle<Image>> {
+    if OFF.load(Ordering::Relaxed) {
+        return None;
+    }
+    let ink: Vec<(usize, usize)> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| rgba[(y * w + x) * 4 + 3] > 0x20).collect();
+    let (x0, y0) = (ink.iter().map(|p| p.0).min()?, ink.iter().map(|p| p.1).min()?);
+    let (x1, y1) = (ink.iter().map(|p| p.0).max()? + 1, ink.iter().map(|p| p.1).max()? + 1);
+    let out = rebuild(w, h, rgba, &[(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16, s)], HEAVY, false);
+    let (w, h) = (out.width(), out.height());
+    let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+    crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+    Some(handle)
+}
+
 fn unpremultiply(p: Pixmap) -> Vec<u8> {
     p.pixels().iter().map(|c| c.demultiply()).flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()]).collect()
 }
