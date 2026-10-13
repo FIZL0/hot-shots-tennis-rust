@@ -28,3 +28,4 @@ research/tools/wasmtime-*/
 # M17 store listing cache and the player's Hugging Face token (written beside the game)
 mods-store.json
 hf-token.txt
+/mods-upload
