@@ -246,30 +246,88 @@ static MOD_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 #[wasm_bindgen]
 pub fn add_mod_file(path: String, bytes: js_sys::Uint8Array) {
     if crate::modfs::plain(&path) {
-        crate::modfs::add(std::path::Path::new(&path), bytes.to_vec().into());
+        crate::modfs::add(std::path::Path::new(&path), shared(&bytes));
     }
 }
 
-/// Page: a picked mod zip, checked and installed (`modfs::install`, in memory): `{id, name}`, or why it was refused
-/// (nothing of it kept).
+/// `b` copied once, straight into a shared buffer (B204: `to_vec().into()` held every mod file twice on the way).
+fn shared(b: &js_sys::Uint8Array) -> Arc<[u8]> {
+    let mut out = Arc::<[u8]>::new_uninit_slice(b.length() as usize);
+    b.copy_to_uninit(Arc::get_mut(&mut out).unwrap());
+    // SAFETY: copy_to_uninit filled every byte
+    unsafe { out.assume_init() }
+}
+
+/// Page: a picked mod zip (a `File`), checked and installed a file at a time (`modfs::install_with`, in memory):
+/// `{id, name}`, or why it was refused (nothing of it kept).
 #[wasm_bindgen]
-pub fn import_mod(zip: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
-    let m = crate::modfs::install(&zip.to_vec(), crate::play::main_menu::mods_root()).map_err(|e| JsValue::from(e))?;
+pub async fn import_mod(zip: web_sys::Blob) -> Result<JsValue, JsValue> {
+    let root = crate::play::main_menu::mods_root();
+    let m = crate::modfs::install_with(zip.size() as u64, |at, n| read_blob(zip.clone(), at, n), root, None, false).await.map_err(JsValue::from)?;
     let o = js_sys::Object::new();
     js_sys::Reflect::set(&o, &"id".into(), &m.id.into())?;
     js_sys::Reflect::set(&o, &"name".into(), &m.name.into())?;
     Ok(o.into())
 }
 
-/// Page: an installed mod's files as `[path inside the mod, bytes]`, `mod.json` last (a write cut short leaves a
-/// folder without one, which the page drops at the next start).
+/// Page: an installed mod's file paths inside it, `mod.json` last (a write cut short leaves a folder without one,
+/// which the page drops at the next start). The page takes each file's bytes as it writes it (`mod_file`: B204, never
+/// the whole mod at once).
 #[wasm_bindgen]
-pub fn mod_files(id: String) -> js_sys::Array {
+pub fn mod_paths(id: String) -> Vec<String> {
     let dir = crate::play::main_menu::mods_root().join(&id);
-    let pre = format!("{}/{id}/", crate::play::main_menu::mods_root().display());
-    let mut files = crate::modfs::files_under(&dir);
-    files.sort_by_key(|f| f.0.ends_with("/mod.json") && f.0.matches('/').count() == 2);
-    files.into_iter().map(|(p, b)| js_sys::Array::of2(&p.strip_prefix(&pre).unwrap_or(&p).into(), &js_sys::Uint8Array::from(&b[..]))).collect()
+    let pre = format!("{}/", crate::modfs::key(&dir));
+    let mut files: Vec<String> = crate::modfs::files_under(&dir).into_iter().map(|(p, _)| p[pre.len()..].to_string()).collect();
+    files.sort_by_key(|f| f == "mod.json");
+    files
+}
+
+/// Page: file `path` of installed mod `id`.
+#[wasm_bindgen]
+pub fn mod_file(id: String, path: String) -> Option<js_sys::Uint8Array> {
+    let p = crate::play::main_menu::mods_root().join(id).join(path);
+    crate::modfs::read(&p).ok().map(|b| js_sys::Uint8Array::from(&b[..]))
+}
+
+fn js_err(e: JsValue) -> String {
+    e.as_string().unwrap_or_else(|| format!("{e:?}"))
+}
+
+/// `o.method(...args)`, awaited when it gives a promise.
+pub async fn call(o: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, String> {
+    let f: js_sys::Function = js_sys::Reflect::get(o, &method.into()).map_err(js_err)?.dyn_into().map_err(js_err)?;
+    let r = f.apply(o, &args.iter().collect()).map_err(js_err)?;
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&r)).await.map_err(js_err)
+}
+
+/// `n` bytes of `b` from `at`.
+pub async fn read_blob(b: web_sys::Blob, at: u64, n: usize) -> Result<Vec<u8>, String> {
+    let part = b.slice_with_f64_and_f64(at as f64, (at + n as u64) as f64).map_err(js_err)?;
+    let ab = wasm_bindgen_futures::JsFuture::from(part.array_buffer()).await.map_err(js_err)?;
+    let u = js_sys::Uint8Array::new(&ab);
+    if u.length() as usize != n {
+        return Err("the zip is cut short".into());
+    }
+    Ok(u.to_vec())
+}
+
+/// A mod store download's zip (B204): the page's OPFS `mod-download.zip`, a writable (emptied) or the file to read.
+pub async fn zip(read: bool) -> Result<JsValue, String> {
+    call(&web_sys::window().unwrap().into(), "hstZip", &[read.into()]).await
+}
+
+pub fn zip_drop() {
+    if let Some(f) = page_fn("hstZipDrop") {
+        let _ = f.call0(&JsValue::NULL);
+    }
+}
+
+/// Lets the browser draw a frame (a long job split up between them).
+pub async fn breathe() {
+    let p = js_sys::Promise::new(&mut |done, _| {
+        let _ = web_sys::window().unwrap().set_timeout_with_callback(&done);
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 }
 
 /// Page: mod `id` out of the game again (its save to OPFS failed).

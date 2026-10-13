@@ -84,6 +84,8 @@ pub enum Event {
     Uploaded(Result<String, String>),
     /// A pasted token checked: the account's name, or why it isn't kept.
     Signed(Result<String, String>),
+    /// An install under way: what to show (how much has arrived, or that it's being checked).
+    Progress(String),
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -116,8 +118,8 @@ fn file_url(rev: &str, path: &str) -> String {
     format!("{HF}/datasets/{REPO}/resolve/{}/{path}", rev_part(rev))
 }
 
-/// GET `url` (the store's only), at most `cap` bytes.
-async fn get(url: &str, cap: u64) -> Result<Vec<u8>, String> {
+/// GET `url` (the store's only): its answer, unless it says it's more than `cap` bytes.
+async fn answer(url: &str, cap: u64) -> Result<reqwest::Response, String> {
     debug_assert!(url.starts_with(HF));
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -126,7 +128,12 @@ async fn get(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     if r.content_length().is_some_and(|n| n > cap) {
         return Err("too big".into());
     }
-    let b = r.bytes().await.map_err(|e| format!("download cut short: {e}"))?;
+    Ok(r)
+}
+
+/// GET `url` (the store's only), at most `cap` bytes.
+async fn get(url: &str, cap: u64) -> Result<Vec<u8>, String> {
+    let b = answer(url, cap).await?.bytes().await.map_err(|e| format!("download cut short: {e}"))?;
     if b.len() as u64 > cap {
         return Err("too big".into());
     }
@@ -269,19 +276,23 @@ pub fn preview(e: &Entry) {
     spawn(async move { send(Event::Preview(id, get(&url, MAX_PREVIEW).await.ok())) });
 }
 
-/// `bytes` is the zip `meta` describes: its size and sha256.
-fn matches(bytes: &[u8], meta: &Meta) -> Result<(), String> {
-    if bytes.len() as u64 != meta.size {
-        return Err(format!("the download is {} bytes, the store says {}", bytes.len(), meta.size));
+/// A download of `size` bytes with sha256 `hash` is the zip `meta` describes.
+fn matches(size: u64, hash: &str, meta: &Meta) -> Result<(), String> {
+    if size != meta.size {
+        return Err(format!("the download is {size} bytes, the store says {}", meta.size));
     }
-    if sha256(bytes) != meta.sha256 {
+    if hash != meta.sha256 {
         return Err("the download doesn't match its sha256 (damaged or changed)".into());
     }
     Ok(())
 }
 
+fn hex(d: &[u8]) -> String {
+    d.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 fn sha256(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    hex(&Sha256::digest(b))
 }
 
 /// What an installed mod came from (`mods/<id>/store.json`, written beside it by Install).
@@ -296,20 +307,102 @@ pub fn stamp(dir: &Path) -> Option<Stamp> {
     serde_json::from_slice(&modfs::read(&dir.join("store.json")).ok()?).ok()
 }
 
-/// Downloads, checks and installs `e` into `root` ([`Event::Installed`]).
+/// Downloads, checks and installs `e` into `root` ([`Event::Installed`]), saying how far it's got
+/// ([`Event::Progress`]). The zip streams to a file (B204: never whole in memory) and is hashed as it arrives; only
+/// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards.
 pub fn install(e: &Entry, root: &Path) {
     let (e, root) = (e.clone(), root.to_path_buf());
     spawn(async move {
         let got = async {
-            let zip = get(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), e.meta.size.min(MAX_ZIP)).await?;
-            matches(&zip, &e.meta)?;
-            keep(&put(&zip, &e, &root)?)
+            let mut zip = Zip::create(&root).await?;
+            let (size, hash) = download(&e, &mut zip).await?;
+            matches(size, &hash, &e.meta)?;
+            send(Event::Progress(format!("Checking {}...", e.meta.name)));
+            let m = zip.install(&root, &e.meta.id).await?;
+            let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified };
+            modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
+            keep(&m)
         };
         send(Event::Installed(got.await));
     });
 }
 
-/// Desktop Add mod: the system's file picker for a mod `.zip`, installed like a download (`modfs::install`'s
+/// `e`'s `mod.zip` from the store into `zip`: its size and sha256.
+async fn download(e: &Entry, zip: &mut Zip) -> Result<(u64, String), String> {
+    use n0_future::StreamExt;
+    let cap = e.meta.size.min(MAX_ZIP);
+    let r = answer(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), cap).await?;
+    let total = r.content_length().unwrap_or(e.meta.size).max(1);
+    let (mut got, mut hash, mut chunks) = (0u64, Sha256::new(), r.bytes_stream());
+    while let Some(c) = chunks.next().await {
+        let c = c.map_err(|e| format!("download cut short: {e}"))?;
+        let mb = got >> 20;
+        got += c.len() as u64;
+        if got > cap {
+            return Err("too big".into());
+        }
+        hash.update(&c);
+        zip.write(&c).await?;
+        if got >> 20 != mb {
+            send(Event::Progress(format!("Downloading {}... {} / {} MB ({}%)", e.meta.name, got >> 20, total >> 20, got * 100 / total)));
+        }
+    }
+    Ok((got, hex(&hash.finalize())))
+}
+
+/// A download's zip until it's installed: `mods/.download.zip` beside the game, removed when dropped.
+#[cfg(not(target_arch = "wasm32"))]
+struct Zip(std::fs::File, std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Zip {
+    async fn create(root: &Path) -> Result<Self, String> {
+        let p = root.join(".download.zip");
+        let f = std::fs::create_dir_all(root).and_then(|_| std::fs::File::create(&p)).map_err(|e| format!("can't write {}: {e}", p.display()))?;
+        Ok(Zip(f, p))
+    }
+    async fn write(&mut self, b: &[u8]) -> Result<(), String> {
+        std::io::Write::write_all(&mut self.0, b).map_err(|e| format!("can't write {}: {e}", self.1.display()))
+    }
+    async fn install(&self, root: &Path, id: &str) -> Result<Mod, String> {
+        modfs::install_file(&self.1, root, Some(id))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Zip {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.1);
+    }
+}
+
+/// A download's zip until it's installed: OPFS `mod-download.zip` (the page's), removed when dropped.
+#[cfg(target_arch = "wasm32")]
+struct Zip(wasm_bindgen::JsValue);
+
+#[cfg(target_arch = "wasm32")]
+impl Zip {
+    async fn create(_: &Path) -> Result<Self, String> {
+        crate::web::zip(false).await.map(Zip)
+    }
+    async fn write(&mut self, b: &[u8]) -> Result<(), String> {
+        crate::web::call(&self.0, "write", &[js_sys::Uint8Array::from(b).into()]).await.map(drop)
+    }
+    async fn install(&self, root: &Path, id: &str) -> Result<Mod, String> {
+        crate::web::call(&self.0, "close", &[]).await?;
+        let f: web_sys::Blob = wasm_bindgen::JsCast::unchecked_into(crate::web::zip(true).await?);
+        modfs::install_with(f.size() as u64, |at, n| crate::web::read_blob(f.clone(), at, n), root, Some(id), false).await
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for Zip {
+    fn drop(&mut self) {
+        crate::web::zip_drop();
+    }
+}
+
+/// Desktop Add mod: the system's file picker for a mod `.zip`, installed like a download (`modfs::install_file`'s
 /// checks) into `root/<id>/` on disk. The browser build picks through the page instead (`web.rs`).
 // ponytail: macOS wants dialogs on the main thread; this runs on a worker (fine on Linux/Windows).
 #[cfg(not(target_arch = "wasm32"))]
@@ -324,55 +417,18 @@ pub fn pick(root: &Path) {
             if len > MAX_ZIP {
                 return Err(format!("{len} bytes is bigger than a mod may be"));
             }
-            let zip = std::fs::read(f.path()).map_err(|e| e.to_string())?;
-            keep(&modfs::install(&zip, &root)?)
+            keep(&modfs::install_file(f.path(), &root, None)?)
         })();
         send(Event::Installed(got));
     });
 }
 
-/// A checked zip installed in memory as `root/<id>/` (`modfs::install`) with its [`Stamp`].
-fn put(zip: &[u8], e: &Entry, root: &Path) -> Result<Mod, String> {
-    let m = modfs::install(zip, root)?;
-    if m.id != e.meta.id {
-        modfs::remove(&m.dir);
-        return Err(format!("the zip holds `{}`, not `{}`", m.id, e.meta.id));
-    }
-    let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified };
-    modfs::add(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap().into());
-    Ok(m)
-}
-
-/// Keeps an installed mod: natively on disk; in the browser the page writes it to OPFS and says how that went.
+/// Keeps an installed mod: natively it's on disk already; in the browser the page writes it to OPFS and says how
+/// that went.
 fn keep(m: &Mod) -> Result<String, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    to_disk(&m.dir)?;
     #[cfg(target_arch = "wasm32")]
     crate::web::mod_save(&m.id, &m.name);
     Ok(m.name.clone())
-}
-
-/// The in-memory mod in `dir` written over `dir` on disk, then dropped from memory.
-#[cfg(not(target_arch = "wasm32"))]
-fn to_disk(dir: &Path) -> Result<(), String> {
-    let files = modfs::files_under(dir);
-    let tmp = dir.with_extension("download");
-    let _ = std::fs::remove_dir_all(&tmp);
-    let pre = format!("{}/", modfs::key(dir));
-    let write = || -> std::io::Result<()> {
-        for (k, b) in &files {
-            let p = tmp.join(k.strip_prefix(&pre).unwrap_or(k));
-            std::fs::create_dir_all(p.parent().unwrap())?;
-            std::fs::write(p, b)?;
-        }
-        let _ = std::fs::remove_dir_all(dir);
-        std::fs::rename(&tmp, dir)
-    };
-    let r = write().map_err(|e| format!("can't write {}: {e}", dir.display()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    // on disk now, or (failed) not kept at all
-    modfs::remove(dir);
-    r
 }
 
 /// Every file of the mod in `dir` (path inside it, bytes), sorted; Install's `store.json` left out.
@@ -675,30 +731,36 @@ mod tests {
         let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
         eprintln!("packed {} ({} bytes, {} files)", m.id, p.meta.size, mod_files(&m.dir).unwrap().len());
         assert_eq!(p.meta.id, m.id);
-        matches(&p.zip, &p.meta).unwrap();
+        matches(p.zip.len() as u64, &sha256(&p.zip), &p.meta).unwrap();
         let mut bad = p.zip.clone();
         bad[100] ^= 1;
-        assert!(matches(&bad, &p.meta).unwrap_err().contains("sha256"));
-        assert!(matches(&p.zip[1..], &p.meta).is_err());
-        let root = Path::new("t_store_mods");
-        let e = Entry { meta: p.meta.clone(), rev: "refs/pr/1".into(), verified: false };
-        let got = put(&p.zip, &e, root).unwrap();
+        assert!(matches(bad.len() as u64, &sha256(&bad), &p.meta).unwrap_err().contains("sha256"));
+        assert!(matches(p.zip.len() as u64 - 1, &sha256(&p.zip[1..]), &p.meta).is_err());
+        // streamed to its file, then installed on disk from it (over an older copy) a file at a time; a zip whose mod
+        // isn't the listed id leaves the older copy as it was; nothing is kept in memory, the zip goes when done
+        let disk = std::env::temp_dir().join(format!("hst-store-{}", std::process::id()));
+        std::fs::create_dir_all(disk.join(&m.id).join("old")).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let got = rt
+            .block_on(async {
+                let mut z = Zip::create(&disk).await.unwrap();
+                for c in p.zip.chunks(64 << 10) {
+                    z.write(c).await.unwrap();
+                }
+                assert!(z.install(&disk, "someone_else").await.unwrap_err().contains("not `someone_else`"));
+                assert!(disk.join(&m.id).join("old").exists() && !disk.join(".import").exists());
+                z.install(&disk, &m.id).await
+            })
+            .unwrap();
+        assert!(!disk.join(".download.zip").exists() && !disk.join(".import").exists());
+        assert!(!disk.join(&m.id).join("old").exists());
+        assert!(modfs::files_under(&disk).is_empty());
+        assert_eq!(crate::mods::read(&got.dir).unwrap().id, m.id);
+        let s = Stamp { sha256: p.meta.sha256.clone(), rev: "refs/pr/1".into(), verified: false };
+        modfs::write(&got.dir.join("store.json"), serde_json::to_vec(&s).unwrap()).unwrap();
         assert_eq!(stamp(&got.dir).unwrap().rev, "refs/pr/1");
         // the stamp stays out of a re-upload's zip
         assert!(!mod_files(&got.dir).unwrap().iter().any(|f| f.0 == "store.json"));
-        modfs::remove(&got.dir);
-        let wrong = Entry { meta: Meta { id: "someone_else".into(), ..e.meta.clone() }, ..e.clone() };
-        assert!(put(&p.zip, &wrong, root).unwrap_err().contains("not `someone_else`"));
-        assert!(!modfs::is_file(&root.join(&m.id).join("mod.json")));
-        // natively the install lands on disk (over an older copy) and leaves memory
-        let disk = std::env::temp_dir().join(format!("hst-store-{}", std::process::id()));
-        std::fs::create_dir_all(disk.join(&m.id).join("old")).unwrap();
-        let got = put(&p.zip, &e, &disk).unwrap();
-        to_disk(&got.dir).unwrap();
-        assert!(!disk.join(&m.id).join("old").exists() && !disk.join(format!("{}.download", m.id)).exists());
-        assert!(modfs::files_under(&got.dir).is_empty());
-        assert_eq!(crate::mods::read(&got.dir).unwrap().id, m.id);
-        assert_eq!(stamp(&got.dir).unwrap().sha256, p.meta.sha256);
         assert_eq!(mod_files(&got.dir).unwrap().len(), mod_files(&m.dir).unwrap().len());
         std::fs::remove_dir_all(&disk).unwrap();
     }
@@ -719,6 +781,38 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         panic!("no answer in 30 s");
+    }
+
+    /// A real store mod installed (`HST_LIVE_INSTALL=<id>`, B204) into a temporary folder, its progress and (Linux) the
+    /// peak memory printed: it should stay well under the mod's size.
+    #[test]
+    fn live_install() {
+        let Ok(id) = std::env::var("HST_LIVE_INSTALL") else { return eprintln!("HST_LIVE_INSTALL unset (skipped)") };
+        list(true);
+        let root = std::env::temp_dir().join(format!("hst-live-{}", std::process::id()));
+        let started = std::time::Instant::now();
+        loop {
+            for ev in take() {
+                match ev {
+                    Event::Listing(r) => install(r.unwrap().iter().find(|e| e.meta.id == id).expect("not in the store"), &root),
+                    Event::Progress(s) if s.ends_with("0%)") || !s.contains('%') => eprintln!("{:.1}s {s}", started.elapsed().as_secs_f32()),
+                    Event::Installed(r) => {
+                        eprintln!("{:.1}s {r:?}", started.elapsed().as_secs_f32());
+                        let n = walk_len(&root.join(&id));
+                        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+                        eprintln!("{n} files; {}", status.lines().find(|l| l.starts_with("VmHWM")).unwrap_or("no VmHWM"));
+                        std::fs::remove_dir_all(&root).unwrap();
+                        return assert!(r.is_ok() && n > 0);
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    fn walk_len(d: &Path) -> usize {
+        std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| if e.path().is_dir() { walk_len(&e.path()) } else { 1 }).sum()
     }
 
     #[test]

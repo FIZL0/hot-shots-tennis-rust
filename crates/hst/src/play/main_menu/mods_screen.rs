@@ -739,6 +739,7 @@ fn page(
                     Err(e) => format!("Not installed: {e}"),
                 };
             }
+            Event::Progress(s) => v.status = s,
             Event::Uploaded(r) => {
                 v.busy = false;
                 v.store = None;
