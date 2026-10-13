@@ -92,7 +92,12 @@ pub struct Rollback {
     logged: (f32, u64, usize),
     /// The frame-time and network trace (B163).
     trace: Trace,
+    /// ggrs' state cells by the frame last saved in each (its ring's slots): a resync's state comes from one and its
+    /// re-run saves into them (B154b).
+    cells: Vec<Option<(i32, Cell)>>,
 }
+
+type Cell = ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option<Replay>)>>;
 
 /// What each tick gate saw (B163): every 30 s a summary line in the log, and with `HST_NET_TRACE=file.csv` (native)
 /// a row per gate call.
@@ -147,7 +152,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new() })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1] })
     }
 
     /// The tick the next run is.
@@ -261,7 +266,60 @@ fn save(w: &mut World, cell: ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option
         }
         h as u128
     });
+    if let Some(mut rb) = w.get_resource_mut::<Rollback>() {
+        let n = rb.cells.len();
+        rb.cells[frame as usize % n] = Some((frame, cell.clone()));
+    }
     cell.save(frame, Some(Arc::new((s, queue))), hash);
+}
+
+/// The host after a desync (B154b): the state at the last tick every seat's pads are in for goes out, from ggrs'
+/// cell (the match is put back as it is now).
+fn send_state(w: &mut World) {
+    if !w.resource::<Netplay>().resync.due {
+        return;
+    }
+    let rb = w.resource::<Rollback>();
+    let f = rb.sess.confirmed_frame();
+    let Some(cell) = rb.cells.iter().flatten().find(|c| c.0 == f).map(|c| c.1.clone()) else { return };
+    let Some(then) = cell.load() else { return };
+    let (now, queue) = (snapshot::save(w), w.get_resource::<Replay>().cloned());
+    snapshot::restore(w, &then.0);
+    if let Some(q) = &then.1 {
+        w.insert_resource(q.clone());
+    }
+    let data = snapshot::encode(w);
+    snapshot::restore(w, &now);
+    if let Some(q) = queue {
+        w.insert_resource(q);
+    }
+    super::resync::send(&mut w.resource_mut::<Netplay>(), f as u32, data);
+}
+
+/// A peer with the host's state before tick F, once every seat's pads before F are in here too (a rollback never goes
+/// back past it to an unmended cell) (B154b): the state in, ticks F.. run again on the pads it ran them on, saved into
+/// ggrs' cells where they're still its (a later rollback loads the mended state).
+fn take_state(w: &mut World) {
+    let rb = w.resource::<Rollback>();
+    let (frame, confirmed) = (rb.frame, rb.sess.confirmed_frame());
+    let mut np = w.resource_mut::<Netplay>();
+    let Some((from, data)) = np.resync.pending.take_if(|p| p.0 as i32 <= confirmed) else { return };
+    let log = np.lock.log.clone();
+    if let Err(e) = snapshot::decode(w, &data) {
+        return warn!("online: the host's state didn't load: {e}");
+    }
+    let mut rb = w.resource_mut::<Rollback>();
+    let mut reqs = Vec::new();
+    for f in from as usize..frame {
+        let cell = rb.cells.iter().flatten().find(|c| c.0 == f as i32).map_or_else(Cell::default, |c| c.1.clone());
+        reqs.push(GgrsRequest::SaveGameState { cell, frame: f as i32 });
+        let inputs = rb.seats.iter().map(|&s| (Input(wire(log[f][s])), ggrs::InputStatus::Confirmed)).collect();
+        reqs.push(GgrsRequest::AdvanceFrame { inputs });
+    }
+    rb.frame = from as usize;
+    rb.reruns += (frame - from as usize) as u64;
+    handle(w, reqs, super::netplay::HASH_EVERY as i32);
+    super::resync::taken(&mut w.resource_mut::<Netplay>(), from, frame as u32);
 }
 
 /// Carries out ggrs' requests: save, restore, run a tick on these pads. The local devices' latches (`Pads`) stay as
@@ -323,6 +381,7 @@ pub fn handle(w: &mut World, reqs: Vec<GgrsRequest<Cfg>>, every: i32) {
 pub fn gate(w: &mut World) -> bool {
     super::netplay::pump(w);
     poll(w);
+    take_state(w);
     if w.resource::<Netplay>().end.is_some() || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
         return false;
     }
@@ -370,6 +429,7 @@ pub fn gate(w: &mut World) -> bool {
         Ok(reqs) => {
             handle(w, reqs, super::netplay::HASH_EVERY as i32);
             w.resource_mut::<Netplay>().stalled = 0.0;
+            send_state(w);
         }
         // too far ahead of a peer: wait for its pads ("Waiting for …" after a while)
         Err(GgrsError::PredictionThreshold) => w.resource_mut::<Rollback>().held += 1,

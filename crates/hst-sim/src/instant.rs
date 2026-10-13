@@ -65,7 +65,7 @@ pub struct Point {
 }
 
 /// What the decision does.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Decision {
     /// Run an instant replay of this point.
     pub replay: bool,

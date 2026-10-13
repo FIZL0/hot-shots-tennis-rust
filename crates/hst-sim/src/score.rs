@@ -4,7 +4,7 @@
 /// Cap on the deuce counter (game data value; only shown by the scoreboard).
 const DEUCE_COUNT_CAP: i32 = 99;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rules {
     /// Sets needed to win the match.
     pub sets: i32,
@@ -19,7 +19,7 @@ pub struct Rules {
 }
 
 /// What a point did to the score (the scoreboard's event code).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Point = 1,
     Game = 3,
@@ -27,7 +27,7 @@ pub enum Event {
     TiebreakPoint = 6,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Score {
     pub points: [i32; 2],
     pub games: [i32; 2],

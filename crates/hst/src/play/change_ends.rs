@@ -9,7 +9,7 @@ use hst_sim::flow::CHANGE_ENDS;
 
 use super::{Game, Phase};
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Swing {
     /// The view shown at the end of the last tick.
     last: Option<View>,
@@ -113,3 +113,5 @@ mod tests {
         assert!(eye(&after).distance(eye(&to)) < 0.05, "the serve set-up continues from it: {after:?} vs {to:?}");
     }
 }
+
+impl super::snapshot::Wire for Swing {}

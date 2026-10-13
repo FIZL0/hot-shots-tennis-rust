@@ -17,14 +17,15 @@ use hst_sim::rng::Mt;
 const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
 /// The entities drawing one effect model.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Shown<M: Asset = StandardMaterial> {
     pub(crate) root: Entity,
     joints: Vec<Entity>,
+    #[serde(skip)]
     pub(crate) materials: Vec<Handle<M>>,
 }
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Impacts {
     models: Vec<(Effect, Shown<Fx>)>,
     /// The impact playing (the game has one).
@@ -33,7 +34,7 @@ pub struct Impacts {
 
 /// A shot leaving the racket: shot kind (0 top … 4 drop; a smash's own kind), whether it is a smash (its own
 /// model), the ball's position and velocity.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Hit {
     pub kind: i32,
     pub smash: bool,
@@ -190,12 +191,14 @@ pub fn draw(fx: Res<Impacts>, mut q: Query<(&mut Visibility, &mut MorphWeights)>
     }
 }
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HitSparks {
     sparks: Sparks,
+    #[serde(skip)]
     mesh: Handle<Mesh>,
     view: Entity,
     /// `*tubu00` for top … drop, then smash.
+    #[serde(skip)]
     looks: [Handle<Fx>; 6],
 }
 
@@ -405,10 +408,11 @@ pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<As
 }
 
 /// The ball's flight ribbon and glow, each one mesh.
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BallFlight {
     flight: Flight,
     glow: Glow,
+    #[serde(skip)]
     ribbon: Handle<Mesh>,
     disc: Entity,
     /// The ball at the last frame.
@@ -416,6 +420,7 @@ pub struct BallFlight {
     vel: Vec3,
     /// The glow textures for top … drop: the game's list has `impactef_slice` (the ✕) first and `impactef_top`
     /// (the ○) second, so topspin shows the ✕ and slice the ○, the buttons pressed.
+    #[serde(skip)]
     looks: [Handle<Fx>; 5],
 }
 
@@ -516,15 +521,18 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
 }
 
 /// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BallBounce {
     bounce: Bounce,
     ring: Shown<Fx>,
     crater: Shown<Fx>,
     /// This flight's contacts so far (the first two bounces).
     contacts: Vec<Contact>,
+    #[serde(skip)]
     marks: Handle<Mesh>,
+    #[serde(skip)]
     puffs: Handle<Mesh>,
+    #[serde(skip)]
     dust: Handle<Mesh>,
     /// The court's dust and mark colours (1 = the game's 128).
     look: ([f32; 3], [f32; 3]),
@@ -649,7 +657,7 @@ pub fn draw_bounce(
 
 /// The landing markers: `chakudan_p` (red, a looping pulse) at the shot's aim and `smash_p` (yellow, one 120-frame
 /// play, then held) at the smash point; each placed on the court at (x, z) or hidden.
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LandingMarks {
     red: (Effect, Shown<Fx>),
     smash: (Effect, Shown<Fx>),
@@ -735,3 +743,31 @@ pub fn draw_marks(fx: Res<LandingMarks>, mut q: Query<(&mut Visibility, &mut Mor
         }
     }
 }
+
+// a resync's state (`play::snapshot::encode`) keeps this machine's drawing entities and handles
+impl crate::play::snapshot::Wire for Impacts {
+    fn local(&mut self, l: &Self) {
+        self.models.iter_mut().zip(&l.models).for_each(|(m, l)| m.1 = l.1.clone());
+    }
+}
+
+impl crate::play::snapshot::Wire for HitSparks {
+    fn local(&mut self, l: &Self) {
+        (self.mesh, self.view, self.looks) = (l.mesh.clone(), l.view, l.looks.clone());
+    }
+}
+
+impl crate::play::snapshot::Wire for BallFlight {
+    fn local(&mut self, l: &Self) {
+        (self.ribbon, self.disc, self.looks) = (l.ribbon.clone(), l.disc, l.looks.clone());
+    }
+}
+
+impl crate::play::snapshot::Wire for BallBounce {
+    fn local(&mut self, l: &Self) {
+        (self.ring, self.crater) = (l.ring.clone(), l.crater.clone());
+        (self.marks, self.puffs, self.dust) = (l.marks.clone(), l.puffs.clone(), l.dust.clone());
+    }
+}
+
+impl crate::play::snapshot::Wire for LandingMarks {}

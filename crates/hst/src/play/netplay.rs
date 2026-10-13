@@ -9,10 +9,11 @@
 //! each machine sends its `snapshot::state_hash`; on a mismatch each machine logs it and saves the inputs (every
 //! seat's, every tick, the same on every machine) with the line-up as `desync-*.json` (beside the disc; in the browser a
 //! download and the console; the ignored test `replays_a_desync` runs one again), says so on screen and plays on
-//! (B154: bringing the states back together is B154b). The pause screen opens and closes on every machine; the post-point
-//! press is a pad press, so it travels with the pads. A peer dropping ends the match for everyone with a message,
-//! then it goes back to the menu (no bot takes the seat). The court intro before the match runs its ticks on a lockstep
-//! of its own (`Msg::Intro`, `intro_tick`), so a ✕ on any machine skips it on the same tick everywhere.
+//! (B154), and the host sends the peers its state to take on (B154b, `resync.rs`). The pause screen opens and closes
+//! on every machine; the post-point press is a pad press, so it travels with the pads. A peer dropping ends the match
+//! for everyone with a message, then it goes back to the menu (no bot takes the seat). The court intro before the
+//! match runs its ticks on a lockstep of its own (`Msg::Intro`, `intro_tick`), so a ✕ on any machine skips it on the
+//! same tick everywhere.
 
 use super::tick_input::{self, IDLE, Replay};
 use super::{Game, Pads, menu, snapshot};
@@ -158,7 +159,7 @@ pub struct Netplay {
     pub out: Vec<Msg>,
     /// Why the match ended; it closes `END` seconds later.
     pub end: Option<String>,
-    /// The states went apart (a report is saved for the first mismatch; B154b brings them back), and the note on
+    /// The states went apart (a report is saved for the first mismatch; until a resync, B154b), and the note on
     /// screen with its seconds left.
     pub desynced: bool,
     note: Option<(String, f32)>,
@@ -169,6 +170,8 @@ pub struct Netplay {
     ended: f32,
     /// `HST_NET_MASH=seed`: this machine's seats press random buttons (unattended tests).
     pub(super) mash: Option<u64>,
+    /// Bringing the states back together after a desync (B154b).
+    pub resync: super::resync::Resync,
     /// The court intro's own lockstep while it runs (`intro.rs` sets it; B42e): each tick's pad says whether that
     /// seat pressed ✕.
     pub(super) intro: Option<Lockstep>,
@@ -193,6 +196,7 @@ impl Netplay {
             ended: 0.0,
             mash,
             intro: None,
+            resync: Default::default(),
         }
     }
 
@@ -248,8 +252,12 @@ fn save_desync(w: &World, why: &str) -> String {
 /// The states differ at tick `t`: logged every time, the first time also the report and a note on screen; the match
 /// plays on.
 pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
+    if w.resource::<Netplay>().resync.stale(t) {
+        return;
+    }
     let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x})");
     warn!("online: {why}");
+    super::resync::ask(&mut w.resource_mut::<Netplay>());
     if w.resource::<Netplay>().desynced {
         return;
     }
@@ -280,6 +288,7 @@ pub fn take(w: &mut World, e: Event) {
             menu::set_paused(w, open);
         }
         Event::Datagram(from, data) => super::rollback::heard(w, from, &data),
+        Event::Match(m @ (Msg::State { .. } | Msg::Resynced(_))) => super::resync::heard(&mut np, m),
         Event::Match(Msg::Bye(why)) | Event::Dropped(why) => {
             if why.starts_with(DESYNC) && np.end.is_none() {
                 let path = save_desync(w, &why);
@@ -312,6 +321,7 @@ pub(super) fn pump(w: &mut World) {
 /// The match's tick gate: true runs the next tick on every seat's pads.
 pub fn gate(w: &mut World) -> bool {
     pump(w);
+    super::resync::lockstep(w);
     let Some(np) = w.get_resource::<Netplay>() else { return true };
     if np.end.is_some() || !np.lock.missing().is_empty() {
         return false;
@@ -670,6 +680,7 @@ mod tests {
             app.world_mut().run_schedule(PostStartup);
             let mut np = Netplay::new(room.clone(), me.into());
             np.mash = Some(if me == "host" { 0x1234_5679 } else { 0x9abc_def1 });
+            np.resync.step = step;
             app.insert_resource(np).insert_resource(tick_input::Replay(Default::default()));
             app
         }
@@ -769,7 +780,8 @@ mod tests {
             eprintln!("in sync over {n} ticks, {replays} instant replays");
         }
 
-        /// A tick run on different pads: both see it at the next hash, save the inputs, say so and play on (B154).
+        /// A tick run on different pads: both see it at the next hash, save the inputs, say so, the guest takes the
+        /// host's state and they play on in sync (B154, B154b).
         #[test]
         fn a_desync_is_saved_and_play_goes_on() {
             if !Path::new(ISO).is_file() {
@@ -784,14 +796,38 @@ mod tests {
             }
         }
 
-        /// A desync at tick `t` was noted and saved, and the match went on past it: the report's path.
+        /// A desync at tick `t` was noted and saved, resynced once, and the match went on past it with every hash
+        /// since agreeing: the report's path.
         fn reported(a: &App, t: u32) -> String {
             let np = a.world().resource::<Netplay>();
             assert_eq!(np.end, None);
-            assert!(np.desynced && np.lock.log.len() > t as usize + 60, "played on to {}", np.lock.log.len());
+            assert!(np.lock.log.len() > t as usize + 60, "played on to {}", np.lock.log.len());
+            assert_eq!(np.resync.done, 1, "resyncs");
+            assert!(!np.desynced && np.state.0 >= np.resync.fresh + 2 * super::super::HASH_EVERY, "out of sync again by tick {}", np.state.0);
+            eprintln!("{}: resynced from tick {}, hashed to {}", np.me, np.resync.fresh, np.state.0);
             let (say, _) = np.note.clone().expect("the desync's note");
             assert!(say.starts_with(&format!("Out of sync at tick {t} ")), "{say}");
             say.rsplit("Inputs saved to ").next().unwrap().to_string()
+        }
+
+        /// B154b: a state from `snapshot::encode` taken on by a match that's elsewhere hashes the same, and its
+        /// pieces fit a message.
+        #[test]
+        fn a_sent_state_hashes_the_same() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let [mut host, mut g] = play(6, 700, None);
+            let data = super::super::snapshot::encode(host.world_mut());
+            let json = serde_json::to_vec(&Msg::State { tick: 0, data: vec![255; crate::play::resync::PIECE], last: false }).unwrap().len();
+            eprintln!("state {} KB, a piece {} KB as JSON", data.len() / 1024, json / 1024);
+            // a browser's data channel takes 256 KB
+            assert!(json < 256 << 10, "{json} bytes");
+            let mut fresh = app(&room(0), "g");
+            for b in [g.world_mut(), fresh.world_mut()] {
+                super::super::snapshot::decode(b, &data).unwrap();
+                assert_eq!(super::super::snapshot::state_text(b), super::super::snapshot::state_text(host.world_mut()));
+            }
         }
 
         /// A lockstep match's inputs run again as `replays_a_desync` does come out the same, instant replays and all.
@@ -965,13 +1001,31 @@ mod tests {
             assert!(apps[0].world().resource::<Rollback>().sess.frames_ahead() <= 1);
         }
 
-        /// A tick that runs differently on one machine: both see it at the next checksum, save their inputs and play on.
+        /// A tick that runs differently on one machine: both see it at the next checksum, save their inputs, the
+        /// guest takes the host's state, and the hashes from then on agree (B154b).
         #[test]
         fn rollback_desync_is_saved_and_play_goes_on() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
-            for a in &play_rollback(5, 600, true) {
+            // ggrs compares the confirmed ticks' checksums: none differ after the resync (`reported`)
+            let apps = play_rollback(5, 900, true);
+            for a in &apps {
+                std::fs::remove_file(reported(a, 330)).expect("saved");
+            }
+        }
+
+        /// B154b's acceptance: the forced desync's match, resynced, plays to the end in sync (~25 s optimised):
+        /// `cargo test --release -p hst a_resynced_match_finishes -- --ignored`.
+        #[test]
+        #[ignore]
+        fn a_resynced_match_finishes() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            REPLAYS.set(false);
+            for a in &play_rollback(5, 400_000, true) {
+                assert!(a.world().resource::<Game>().match_stats.result.is_some(), "the match didn't finish");
                 std::fs::remove_file(reported(a, 330)).expect("saved");
             }
         }

@@ -46,3 +46,16 @@ pub mod foot;
 pub mod tornado;
 pub mod shade;
 pub mod instant;
+
+/// serde has no arrays past 32 (`#[serde(with = "crate::big")]`): such an array as a sequence.
+pub mod big {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer, T: Serialize, const N: usize>(a: &[T; N], s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(a)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>, const N: usize>(d: D) -> Result<[T; N], D::Error> {
+        Vec::<T>::deserialize(d)?.try_into().map_err(|_| D::Error::custom(format!("not {N} entries")))
+    }
+}

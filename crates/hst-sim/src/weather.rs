@@ -36,7 +36,7 @@ pub struct Wind {
 }
 
 /// One game's weather.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Game {
     pub weather: u8,
     /// Wind speed (0 calm; a full gust is 9) and the direction it blows from (degrees).

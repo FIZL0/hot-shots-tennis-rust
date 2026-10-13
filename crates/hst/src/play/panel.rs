@@ -94,7 +94,7 @@ struct View {
 }
 
 /// The panel's own timeline, counted in match ticks.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Clock {
     /// Ticks since the serve phase began (1 on its first tick), 0 when not serving.
     serve: u32,
@@ -807,3 +807,5 @@ mod tests {
         assert_eq!(banners(&v), [0.0]);
     }
 }
+
+impl super::snapshot::Wire for Clock {}

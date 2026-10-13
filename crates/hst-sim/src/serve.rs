@@ -19,7 +19,7 @@ pub const TOSS_RELEASE: u32 = 45;
 pub const SWEET_FRAME: i32 = 8;
 
 /// The three tosses: strong (overhand, the riskier serve), weak (overhand, forgiving), underhand.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Toss {
     Strong,
     Weak,
@@ -346,7 +346,7 @@ pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [
 }
 
 /// The balloon over a hitter's head.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Balloon {
     /// Pressed early, bad timing.
     Bunny,

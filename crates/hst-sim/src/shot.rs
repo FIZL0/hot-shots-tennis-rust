@@ -349,7 +349,7 @@ pub fn stick_kind(branch: u8, kind: i32, stick: [f32; 2], facing: f32) -> i32 {
 /// The character values a human's aim reads (TParam): the widest angle off straight per contact, in degrees
 /// (strokes, volleys/dives/smashes, serves), its share in % for a body shot (stroke, volley) and for a stroke
 /// or volley taken under `under` metres (rising ball).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct AimStats {
     pub con: [i32; 3],
     pub body: [i32; 2],
@@ -422,7 +422,7 @@ pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, 
 /// A rally aim and what it leaves for the launch: the centred stick's sideways `nudge` (tenths, added to the
 /// timing error's side), `short_only` (a drop shot: the depth error can only fall short) and the plain smash's
 /// `held` depth (m) taken off its depth error.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Aim {
     pub target: V3,
     pub nudge: i32,
@@ -518,7 +518,7 @@ pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: b
 }
 
 /// The court margins `inside` pulls a rally shot's aim by (`hst_data::exe::Game::court_margins`).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Margins {
     /// Per class (0 serve .. 3 smash) and kind: (across, along) for a shot mode ≥ 0, then for one < 0.
     pub lines: [[[f32; 4]; 5]; 4],

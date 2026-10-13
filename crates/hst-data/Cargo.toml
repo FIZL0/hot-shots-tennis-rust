@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# the online resync's state transfer (hst `play/snapshot.rs`)
+serde = { version = "1", features = ["derive"] }
 png = "0.18.1"
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "alloc"] }

@@ -17,7 +17,7 @@ pub const SEEN: usize = 0xb4;
 pub const LOST_LOG: usize = 50;
 
 /// One entry of the predicted ball path as the AI copies it: position, velocity (4 words each) and bounces.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Ball {
     pub pos: [f32; 4],
     pub vel: [f32; 4],
@@ -25,7 +25,7 @@ pub struct Ball {
 }
 
 /// The AI's copy of the predicted path, shared by both AIs: the frame it was taken and its entries.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PathCopy {
     pub stamp: i32,
     pub balls: Vec<Ball>,
@@ -60,7 +60,7 @@ pub struct World {
 
 /// A player's shot record: the frame it was written, the frames to its contact (relative to `stamp`; −2 none,
 /// −3 hitting), the contact kind, where the player stood and where it runs to.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Shot {
     pub stamp: i32,
     pub n: i32,
@@ -128,7 +128,7 @@ pub struct Body {
 }
 
 /// The rally AI state (doubles, or singles with `singles`).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rally {
     pub level: u8,
     /// Beside a human partner (> 0).
@@ -1811,7 +1811,7 @@ impl Rally {
 /// A human player's shot record keeper (its AI object runs it while a human plays it): whether it has found its
 /// contact, the path entry the next search starts from, the kind found, the tiered search's bounce floor (1 while
 /// the find was made with it) and whether it may volley (it stood within 6.4 of the net when the shot came).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Human {
     pub found: bool,
     pub next: i32,

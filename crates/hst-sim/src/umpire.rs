@@ -16,7 +16,7 @@ use crate::score::{Event, Score};
 pub const IDLE: u8 = 0;
 
 /// What the head looks at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Look {
     /// The court centre (and the eye eases there too, as for `Back`).
     Centre,
@@ -29,7 +29,7 @@ pub enum Look {
 /// Where the head looks when it isn't watching the ball: 2 m up over the court centre.
 const CENTRE: [f32; 3] = [0.0, -2.0, 0.0];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Umpire {
     /// Chair position (game space) and the direction she faces (x, z), toward the court centre.
     pub pos: [f32; 3],

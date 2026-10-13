@@ -31,7 +31,7 @@ const PLAYER_SIDE: f32 = 1.7;
 
 type V3 = [f32; 3];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct View {
     /// Rows: right, down, forward (camera to world).
     pub rot: [V3; 3],
@@ -59,7 +59,7 @@ impl View {
 }
 
 /// The camera's state between frames.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub view: View,
     dolly: f32,

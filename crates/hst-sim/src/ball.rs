@@ -8,7 +8,7 @@ pub use crate::vu0::V4;
 pub const GRAVITY_PER_FRAME: f32 = 0.0027222224;
 
 /// Per-ball constants that stay fixed for a whole flight.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Params {
     /// Quadratic drag coefficient (0.04 for the regular ball).
     pub drag: f32,
@@ -57,7 +57,7 @@ pub const COURTS: [Surface; 12] = {
 };
 
 /// How a collision material treats the ball (one row of the game's material table).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Material {
     /// The playing surface: bounces by the court's `Surface`.
     pub court: bool,
@@ -85,7 +85,7 @@ pub const NET: Material = Material { court: false, special: true, restitution: 0
 const NET_PUSH: f32 = 0.003;
 
 /// Everything decided when the ball is struck.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Shot {
     pub params: Params,
     /// Vertical dip/rise spread over the flight as a half sine, until the first bounce.
@@ -125,7 +125,7 @@ impl Default for Shot {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Ball {
     pub pos: V3,
     /// Displacement per frame.
@@ -208,7 +208,7 @@ pub fn rows4(r: [V3; 3]) -> [V4; 4] {
 }
 
 /// A ball in play from the moment it was struck. Field comments give the original's ball-object offsets.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Flight {
     pub ball: Ball,
     /// Frames since the shot (+0xac).

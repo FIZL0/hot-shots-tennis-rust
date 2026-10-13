@@ -14,7 +14,7 @@
 //! - each game won: each team's share of the game's points, scaled so the leader's is 100, summed for the rating.
 
 /// One player's counts.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Player {
     pub fastest_kmh: f32,
     pub points_won: u32,
@@ -43,7 +43,7 @@ fn rate(n: u32, of: u32) -> f32 {
     if of == 0 { 0.0 } else { n as f32 / of as f32 * 100.0 }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
     pub players: [Player; 4],
     pub longest_rally: u32,
@@ -63,7 +63,7 @@ pub struct Stats {
 
 /// The screen's values: per player the 9 rows (fastest serve in mph, points won, missed shots, double faults,
 /// aces, sweet-spot %, net play %, forehand %, rating; the rating on players 0 and 1 only, by team).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Table {
     pub rows: [[f32; 9]; 4],
     pub longest_rally: u32,

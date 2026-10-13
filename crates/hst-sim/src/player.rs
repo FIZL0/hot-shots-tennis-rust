@@ -6,7 +6,7 @@ use crate::libm::acosf;
 use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
 
 /// A character's movement stats (TParam.csv: SPE, Agili, STA, and the stamina a dive / backhand / smash costs).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
     /// SPE / 10.
     pub speed: f32,
@@ -425,7 +425,7 @@ pub fn base_motion(motion: i32) -> i32 {
 }
 
 /// A player's facing (+0x3d60) and its turn state.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Facing {
     /// Unit direction the body faces (game space, w carried along).
     pub dir: [f32; 4],
@@ -663,7 +663,7 @@ pub struct Scene {
 }
 
 /// A player's body in the play state: position, run, stamina, motion and facing.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Body {
     pub pos: [f32; 3],
     /// Last run velocity (+0x3e00).

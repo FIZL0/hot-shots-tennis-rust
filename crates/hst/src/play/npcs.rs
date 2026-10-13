@@ -39,7 +39,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd));
 }
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Npcs {
     umpire: Option<(Entity, Anim)>,
     /// Each walker with where it stands (its home; it turns there, `npc::walker_facing`).
@@ -56,6 +56,7 @@ pub(super) struct Npcs {
     ends: bool,
     serving: bool,
     /// The passing ball's materials with their own alpha and blending, faded by its +0x274 (`npc::Trigger::speed`).
+    #[serde(skip)]
     fade: Vec<(Handle<StandardMaterial>, f32, AlphaMode)>,
     /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
     uncull: Vec<Entity>,
@@ -68,6 +69,7 @@ pub(super) struct Npcs {
     /// The trigger creatures and the sound emitters (`Game::emitters`, `None`) in spawn order.
     figures: Vec<Option<usize>>,
     /// The cheer marks' sprites (`npc/clap`) and their sizes by kind (`exe::Game::cheer_sprites`).
+    #[serde(skip)]
     sprites: Handle<Mesh>,
     sizes: [[f32; 5]; 2],
     /// The match's first point has been served (the walkers' match-start cheer ends then).
@@ -78,11 +80,12 @@ pub(super) struct Npcs {
     reacted: bool,
     /// Court 5's own creatures (`npc::Crowd`), each with its parts' materials and, per material, its `.UVA` track's
     /// offset at each atlas frame.
+    #[serde(with = "crowd_state")]
     crowd: Vec<(npc::Crowd, Vec<(Handle<StandardMaterial>, Vec<[f32; 2]>)>)>,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct Anim {
     frame: f32,
     next: f32,
@@ -689,5 +692,34 @@ fn draw_crowd(npcs: Option<Res<Npcs>>, mut materials: ResMut<Assets<StandardMate
                 materials.get_mut(h).unwrap().uv_transform = bevy::math::Affine2::from_translation(off);
             }
         }
+    }
+}
+
+/// A resync's `Npcs` (`snapshot::encode`): the court 5 creatures' state without their materials.
+mod crowd_state {
+    use super::{Handle, StandardMaterial, npc::Crowd};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    type Parts = Vec<(Handle<StandardMaterial>, Vec<[f32; 2]>)>;
+
+    pub fn serialize<S: Serializer>(c: &[(Crowd, Parts)], s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(c.iter().map(|c| &c.0))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(Crowd, Parts)>, D::Error> {
+        Ok(Vec::<Crowd>::deserialize(d)?.into_iter().map(|c| (c, Vec::new())).collect())
+    }
+}
+
+// and this machine's own entities and handles
+impl super::snapshot::Wire for Npcs {
+    fn local(&mut self, l: &Self) {
+        if let (Some(u), Some(l)) = (&mut self.umpire, &l.umpire) {
+            u.0 = l.0;
+        }
+        self.walkers.iter_mut().zip(&l.walkers).for_each(|(w, l)| w.0 = l.0);
+        self.triggers.iter_mut().zip(&l.triggers).for_each(|(t, l)| t.0 = l.0);
+        self.crowd.iter_mut().zip(&l.crowd).for_each(|(c, l)| c.1 = l.1.clone());
+        (self.fade, self.uncull, self.sprites) = (l.fade.clone(), l.uncull.clone(), l.sprites.clone());
     }
 }

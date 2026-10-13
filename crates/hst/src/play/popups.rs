@@ -505,7 +505,7 @@ const CALL_SCALE: f32 = 5.7;
 #[derive(Component)]
 struct CallCamera;
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Calls {
     models: Vec<(hst_sim::effect::Effect, crate::effects::Shown)>,
     playing: Option<usize>,
@@ -1008,7 +1008,7 @@ use hst_sim::ps2::{add, div, mul, sub};
 use hst_sim::score::{Rules, Score};
 
 /// What the banners follow through the match (the original's shot record, scoreboard flags and bounce mark).
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Finish {
     /// Per player: the character's TParam Strk POW and Voley POW.
     pub power: Vec<[i32; 2]>,
@@ -1646,3 +1646,5 @@ mod speed_tests {
         assert_eq!(s.quads()[1].1[0], 552.0);
     }
 }
+
+impl super::snapshot::Wire for Calls {}

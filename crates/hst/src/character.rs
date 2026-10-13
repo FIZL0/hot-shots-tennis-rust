@@ -239,7 +239,7 @@ pub struct Rig {
 
 /// The motion a character plays: the game's motion number and its clock (`hst_sim::motion::Clock`), with the
 /// sampled time one tick earlier (drawing blends the two).
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Motion {
     pub id: usize,
     pub clock: Clock,

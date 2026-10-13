@@ -17,7 +17,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(FixedUpdate, (log.after(super::simulate), hush.before(super::play_sounds), pace.after(super::instant_replay::run)));
 }
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Pace {
     /// The point's shots: the tick each left the racket.
     shots: Vec<i32>,
@@ -163,3 +163,5 @@ fn a_replay_skips_then_slows_in_frames() {
     }
     assert!(frames.iter().map(|f| f.1).sum::<u32>() > 100, "no slow motion");
 }
+
+impl super::snapshot::Wire for Pace {}

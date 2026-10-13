@@ -20,8 +20,9 @@ pub fn now() -> u8 {
 }
 
 /// The match's schedule and the game it is on; `fixed` forces one weather (`HST_WEATHER`).
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Weather {
+    #[serde(with = "hst_sim::big")]
     pub schedule: [Game; GAMES],
     pub game: usize,
     pub fixed: Option<u8>,
@@ -118,3 +119,5 @@ pub(crate) fn apply(
         }
     }
 }
+
+impl crate::play::snapshot::Wire for Weather {}
