@@ -21,6 +21,11 @@ pub static OFF: AtomicBool = AtomicBool::new(false);
 /// The rebuilt sheets' scale over the disc's.
 pub const K: u32 = 4;
 
+/// A wall's scale over the disc's tile (the tiled quad divides its stretch by it): `K`, or 1 with `--original`.
+pub(crate) fn wall_k() -> f32 {
+    if OFF.load(Ordering::Relaxed) { 1.0 } else { K as f32 }
+}
+
 static HEAVY: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
 static BOLD: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-Bold.ttf");
 
@@ -428,6 +433,15 @@ const OPTION_00: &[Label<'static>] = &[
 pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
     // match_stats names `info` by its folder ("/2d/info.tm2")
     let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
+    if name.starts_with("wall_") && !OFF.load(Ordering::Relaxed) {
+        let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
+        let (w, h) = (pic.width as usize, pic.height as usize);
+        let rgba = grid(&pic.rgba, w, h);
+        let img = Image::new(Extent3d { width: w as u32 * K, height: h as u32 * K, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+        let handle = images.add(img);
+        crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+        return handle;
+    }
     let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
     let Some(sheet) = sheet else { return super::panel::image(images, data) };
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
@@ -464,6 +478,35 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     let handle = images.add(img);
     crate::textures::ours(handle.id(), Vec2::splat(K as f32));
     handle
+}
+
+/// A menu wall (graph paper: a dark line every 16 texels, a faint one between) drawn again clean at `K`×: a column or
+/// row that is mostly one line colour on the disc is that line, the hand-drawn wobble and dashes are dropped. Each
+/// line stays one disc px wide, so the tile keeps its look but its edges stay sharp when the screen magnifies it.
+fn grid(rgba: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let px = |x: usize, y: usize| -> [u8; 4] { rgba[(y * w + x) * 4..][..4].try_into().unwrap() };
+    let mut count = std::collections::HashMap::<[u8; 4], usize>::new();
+    (0..h).for_each(|y| (0..w).for_each(|x| *count.entry(px(x, y)).or_default() += 1));
+    let bg = *count.iter().max_by_key(|c| c.1).unwrap().0;
+    let lum = |c: [u8; 4]| c[0] as u32 + c[1] as u32 + c[2] as u32;
+    // a line's colour: the commonest non-paper colour along it, if it covers most of it; the darker one wins a crossing
+    let line = |cells: Vec<[u8; 4]>| {
+        let n = cells.len();
+        let mut c = std::collections::HashMap::<[u8; 4], usize>::new();
+        cells.into_iter().filter(|&p| p != bg).for_each(|p| *c.entry(p).or_default() += 1);
+        c.into_iter().filter(|&(_, k)| k * 2 > n).map(|(p, _)| p).min_by_key(|&p| lum(p))
+    };
+    let cols: Vec<_> = (0..w).map(|x| line((0..h).map(|y| px(x, y)).collect())).collect();
+    let rows: Vec<_> = (0..h).map(|y| line((0..w).map(|x| px(x, y)).collect())).collect();
+    let k = K as usize;
+    let mut out = Vec::with_capacity(w * h * k * k * 4);
+    for y in 0..h * k {
+        for x in 0..w * k {
+            let c = [cols[x / k], rows[y / k]].into_iter().flatten().min_by_key(|&p| lum(p)).unwrap_or(bg);
+            out.extend_from_slice(&c);
+        }
+    }
+    out
 }
 
 /// A sheet the port made itself from disc glyphs (`pause::label`'s row, `w`×`h`), its one word `s` set again at `K`×
@@ -1064,6 +1107,21 @@ fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wall's grid lines survive at `K`×, its stray wobble pixels don't.
+    #[test]
+    fn wall_grid_drops_wobble() {
+        let (paper, dark, faint) = ([200, 200, 200, 255], [100, 100, 100, 255], [150, 150, 150, 255]);
+        let mut t = vec![paper; 16 * 16];
+        (0..16).for_each(|i| (t[i], t[i * 16], t[8 * 16 + i], t[i * 16 + 8]) = (dark, dark, faint, faint));
+        t[3 * 16 + 9] = faint; // wobble
+        let out = grid(&t.concat(), 16, 16);
+        let at = |x: usize, y: usize| -> [u8; 4] { out[(y * 16 * K as usize + x) * 4..][..4].try_into().unwrap() };
+        let k = K as usize;
+        assert_eq!((at(0, 5 * k), at(5 * k, 0), at(0, 0)), (dark, dark, dark));
+        assert_eq!((at(8 * k, 5 * k), at(5 * k, 8 * k), at(8 * k, 0)), (faint, faint, dark));
+        assert_eq!((at(9 * k, 3 * k), at(3 * k, 3 * k)), (paper, paper));
+    }
 
     /// Our pill and box slices tile their box exactly, the pill's ends round (h / 2 wide), the box's corners `c`.
     #[test]
