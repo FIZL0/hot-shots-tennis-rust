@@ -61,6 +61,8 @@ Short codes (B104): a hosted lobby shows a 4-character code (lobby screen, QR = 
 on-screen picker, keyboard: type, phone: OS keyboard) or takes a pasted code/link; "Copy Link" (OK on the lobby) gives
 `https://opentennis.dev/?code=<code>`, which opens straight into that lobby's character pick
 (desktop: `HST_CODE=<code> hst`). CLI: `hst net host` prints `Short("…")`, `hst net join <short>`.
+Mods in the browser (M16): main menu → Mods → Add mod picks a mod `.zip` (checked whole by `modfs::install`, kept in
+OPFS `mods/<id>/`, loaded into memory at start); ✕ twice on a mod removes it; Reload brings changes into the select.
 LAN between browsers (M2k, `net/rtc.rs`): relay Off → Host gives a WebRTC offer QR (`?code=rtco…`), the guest's answer
 QR (`?code=rtca…`) goes back to the host's tab (a tab opened with it hands it over by BroadcastChannel, or paste).
 Two-browser check: `tools/web_lan.mjs` (host, guest and answer pages in one headless Chromium, RTC stats, hashes).

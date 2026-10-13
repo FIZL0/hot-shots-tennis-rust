@@ -109,6 +109,10 @@ fn rem_pio2(x: f32) -> (i32, f32, f32) {
 }
 
 pub fn sinf(x: f32) -> f32 {
+    if !x.is_finite() {
+        // NaN for NaN and ±inf, as fdlibm (a mod's degenerate pose can feed one in)
+        return x - x;
+    }
     if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fd8 {
         return k_sin(x, 0.0, false);
     }
@@ -122,6 +126,10 @@ pub fn sinf(x: f32) -> f32 {
 }
 
 pub fn cosf(x: f32) -> f32 {
+    if !x.is_finite() {
+        // NaN for NaN and ±inf, as fdlibm (a mod's degenerate pose can feed one in)
+        return x - x;
+    }
     if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fd8 {
         return k_cos(x, 0.0);
     }

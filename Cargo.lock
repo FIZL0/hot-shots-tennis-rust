@@ -3604,6 +3604,7 @@ dependencies = [
  "iroh-mdns-address-lookup",
  "iroh-tickets",
  "js-sys",
+ "miniz_oxide 0.8.9",
  "n0-future",
  "n0-mainline",
  "qrcode",

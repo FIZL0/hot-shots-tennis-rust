@@ -26,9 +26,12 @@
   #boot.err, #boot.slow { pointer-events: auto; background: #000; }
   #boot.err #step { color: #f88; white-space: pre-wrap; max-width: 40em; overflow-wrap: anywhere; }
   #boot a { color: #8cf; }
+  /* M16: the Mods screen's Add mod row (web.rs mod_picker): a tap on it is the file input's own */
+  #modzip { position: fixed; z-index: 5; opacity: 0; cursor: pointer; }
 </style>
 </head>
 <body>
+<input id="modzip" type="file" accept=".zip,application/zip" hidden aria-label="Add mod">
 <input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" aria-label="Lobby code">
 <div id="disc" hidden>
   <p>Pick your own <b>Hot Shots Tennis (USA)</b> disc image (SCUS-97610). The game copies what it needs (≈ 170 MB)
@@ -132,7 +135,7 @@ window.hstWebGL2 = () => {
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
-const { default: init, run, paste, typed_code, add_card } = await import(pkg + 'hst.js');
+const { default: init, run, paste, typed_code, add_card, add_mod_file, import_mod, mod_files, mod_status, drop_mod } = await import(pkg + 'hst.js');
 say('Opening this browser\'s storage…');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
@@ -181,6 +184,54 @@ async function start() {
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  };
+  // M16: installed mods (OPFS mods/<id>/…) into the game, a folder without its mod.json (a save cut short) dropped
+  const mods = await dir.getDirectoryHandle('mods', { create: true });
+  const walk = async (d, path, out) => { for await (const [n, h] of d.entries()) h.kind === 'file' ? out.push([path + n, h]) : await walk(h, `${path}${n}/`, out); return out; };
+  for await (const [id, h] of mods.entries()) {
+    if (h.kind !== 'directory') continue;
+    const files = await walk(h, `mods/${id}/`, []);
+    if (!files.some(f => f[0] === `mods/${id}/mod.json`)) { await mods.removeEntry(id, { recursive: true }).catch(() => {}); continue; }
+    say(`Reading mod ${id}…`);
+    for (const [p, fh] of files) add_mod_file(p, new Uint8Array(await (await fh.getFile()).arrayBuffer()));
+  }
+  // the Mods screen's picker (web.rs): over the Add mod row while it's up, or opened by a key or pad
+  const pick = document.getElementById('modzip');
+  window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `${r[1]}%`, width: `${r[2]}%`, height: `${r[3]}%` }); };
+  window.hstModPick = () => pick.click();
+  window.hstModDrop = id => mods.removeEntry(id, { recursive: true }).catch(e => console.warn(`hst: removing mod ${id}: ${e}`));
+  pick.onchange = async () => {
+    const f = pick.files[0];
+    pick.value = '';
+    if (!f) return;
+    mod_status(`Checking ${f.name}...`);
+    // the status is drawn before the check holds the page
+    await new Promise(r => setTimeout(r, 100));
+    let m;
+    try { m = import_mod(new Uint8Array(await f.arrayBuffer())); } catch (e) { mod_status(`Couldn't add ${f.name}: ${e}`); return; }
+    mod_status(`Saving ${m.name}...`);
+    try {
+      await mods.removeEntry(m.id, { recursive: true }).catch(() => {});
+      const top = await mods.getDirectoryHandle(m.id, { create: true });
+      const put = async ([p, bytes]) => {
+        const parts = p.split('/');
+        let d = top;
+        for (const s of parts.slice(0, -1)) d = await d.getDirectoryHandle(s, { create: true });
+        const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable();
+        await w.write(bytes);
+        await w.close();
+      };
+      // all at once (a write is slow on its own), mod.json (mod_files' last) after the rest is in
+      const files = [...mod_files(m.id)];
+      const json = files.pop();
+      await Promise.all(files.map(put));
+      await put(json);
+      mod_status(`Added ${m.name}. Reload to play it.`);
+    } catch (e) {
+      await mods.removeEntry(m.id, { recursive: true }).catch(() => {});
+      drop_mod(m.id);
+      mod_status(`Couldn't save ${m.name} in this browser's storage: ${e}`);
+    }
   };
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));

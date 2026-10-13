@@ -236,3 +236,80 @@ pub fn cards_keep(prefix: &str) {
 fn page_fn(name: &str) -> Option<js_sys::Function> {
     js_sys::Reflect::get(&web_sys::window().unwrap(), &name.into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok())
 }
+
+/// M16's mods (`modfs.rs`, `play/main_menu/mods_screen.rs`): the page reads OPFS `mods/` into the game before `run`
+/// (`add_mod_file`), imports a picked zip (`import_mod`, then writes `mod_files` back to OPFS), and reports how that
+/// went (`mod_status`); the game asks the page to open its picker, place it over the Add mod row, drop a mod, reload.
+static MOD_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Page: one installed mod file, `mods/<id>/…`.
+#[wasm_bindgen]
+pub fn add_mod_file(path: String, bytes: js_sys::Uint8Array) {
+    if crate::modfs::plain(&path) {
+        crate::modfs::add(std::path::Path::new(&path), bytes.to_vec().into());
+    }
+}
+
+/// Page: a picked mod zip, checked and installed (`modfs::install`, in memory): `{id, name}`, or why it was refused
+/// (nothing of it kept).
+#[wasm_bindgen]
+pub fn import_mod(zip: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
+    let m = crate::modfs::install(&zip.to_vec(), std::path::Path::new(crate::play::main_menu::MODS_ROOT)).map_err(|e| JsValue::from(e))?;
+    let o = js_sys::Object::new();
+    js_sys::Reflect::set(&o, &"id".into(), &m.id.into())?;
+    js_sys::Reflect::set(&o, &"name".into(), &m.name.into())?;
+    Ok(o.into())
+}
+
+/// Page: an installed mod's files as `[path inside the mod, bytes]`, `mod.json` last (a write cut short leaves a
+/// folder without one, which the page drops at the next start).
+#[wasm_bindgen]
+pub fn mod_files(id: String) -> js_sys::Array {
+    let dir = std::path::Path::new(crate::play::main_menu::MODS_ROOT).join(&id);
+    let pre = format!("{}/{id}/", crate::play::main_menu::MODS_ROOT);
+    let mut files = crate::modfs::files_under(&dir);
+    files.sort_by_key(|f| f.0.ends_with("/mod.json") && f.0.matches('/').count() == 2);
+    files.into_iter().map(|(p, b)| js_sys::Array::of2(&p.strip_prefix(&pre).unwrap_or(&p).into(), &js_sys::Uint8Array::from(&b[..]))).collect()
+}
+
+/// Page: mod `id` out of the game again (its save to OPFS failed).
+#[wasm_bindgen]
+pub fn drop_mod(id: String) {
+    crate::modfs::remove(&std::path::Path::new(crate::play::main_menu::MODS_ROOT).join(id));
+}
+
+/// Page: the Mods screen's description bar (an import checked, saved, or refused).
+#[wasm_bindgen]
+pub fn mod_status(text: String) {
+    *MOD_STATUS.lock().unwrap() = Some(text);
+}
+
+pub fn mod_status_take() -> Option<String> {
+    MOD_STATUS.lock().unwrap().take()
+}
+
+/// Opens the page's mod picker (a key's or pad's ✕ on Add mod; a tap lands on the picker itself).
+pub fn mod_pick() {
+    if let Some(f) = page_fn("hstModPick") {
+        let _ = f.call0(&JsValue::NULL);
+    }
+}
+
+/// The page's mod picker over `rect` (left, top, width, height in % of the window), or gone.
+pub fn mod_picker(rect: Option<[f32; 4]>) {
+    if let Some(f) = page_fn("hstModPicker") {
+        let r: JsValue = rect.map_or(JsValue::NULL, |r| r.iter().map(|&v| JsValue::from(v)).collect::<js_sys::Array>().into());
+        let _ = f.call1(&JsValue::NULL, &r);
+    }
+}
+
+/// Drops mod `id` from OPFS.
+pub fn mod_drop(id: &str) {
+    if let Some(f) = page_fn("hstModDrop") {
+        let _ = f.call1(&JsValue::NULL, &id.into());
+    }
+}
+
+pub fn reload() {
+    let _ = web_sys::window().unwrap().location().reload();
+}
