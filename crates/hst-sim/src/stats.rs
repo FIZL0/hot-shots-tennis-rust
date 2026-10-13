@@ -69,6 +69,10 @@ pub struct Table {
     pub longest_rally: u32,
     pub frames: u32,
     pub winner: usize,
+    /// The finished match's score (sets won, each set's games) for the final board; the game's own score is reset
+    /// for the next match as soon as this one ends.
+    #[serde(default)]
+    pub score: crate::score::Score,
 }
 
 impl Stats {
@@ -185,7 +189,7 @@ impl Stats {
                 if i < 2 { rating[i].clamp(0, 100) as f32 } else { 0.0 },
             ]
         });
-        Table { rows, longest_rally: self.longest_rally, frames: self.frames, winner }
+        Table { rows, longest_rally: self.longest_rally, frames: self.frames, winner, score: Default::default() }
     }
 }
 

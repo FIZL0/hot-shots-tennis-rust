@@ -102,8 +102,8 @@ pub(super) struct Final {
     pub(super) dx: f32,
 }
 
-/// The final board for the match just over, won by `winner`.
-pub(super) fn final_board(g: &Game, slots: [usize; 4], pill: [[u8; 3]; 4], winner: usize, fin: Final) -> Vec<Quad> {
+/// The final board for the match just over (its `score`, kept past the reset), won by `winner`.
+pub(super) fn final_board(g: &Game, score: &hst_sim::score::Score, slots: [usize; 4], pill: [[u8; 3]; 4], winner: usize, fin: Final) -> Vec<Quad> {
     let mut out = Vec::new();
     board(
         &View {
@@ -119,9 +119,9 @@ pub(super) fn final_board(g: &Game, slots: [usize; 4], pill: [[u8; 3]; 4], winne
             deuce_count: 0,
             swapped: false,
             show: ShowState { event: Event::Set, stage: 3, t: 0, n: 0, fading_out: false },
-            set_games: g.score.set_games,
-            set: g.score.set,
-            sets: g.score.sets,
+            set_games: score.set_games,
+            set: score.set,
+            sets: score.sets,
             sets_to_win: g.rules.sets,
             match_over: true,
             rise: 1,
@@ -972,6 +972,34 @@ mod tests {
         v.show.event = Event::Set;
         v.match_over = true;
         assert!(layout(&v).is_empty());
+    }
+
+    /// The final board from a played-out 6-2 3-6 6-4 match: each set's games and the sets won 2-1 (B183: it showed a
+    /// fresh score, 0 sets and no games, as the match's own score is reset at its end).
+    #[test]
+    fn final_board_played() {
+        let r = Rules { sets: 2, games: 6, no_deuce: false, one_point_games: false, players: 2 };
+        let mut s = Score::new();
+        for (a, b) in [(6, 2), (3, 6), (6, 4)] {
+            // the loser's games first, then the winner's
+            let (lose, win) = if a > b { (1, 0) } else { (0, 1) };
+            for w in std::iter::repeat_n(lose, a.min(b)).chain(std::iter::repeat_n(win, a.max(b))) {
+                for _ in 0..4 {
+                    s.point(&r, w);
+                }
+                s.new_game();
+            }
+            s.new_set();
+        }
+        assert!(s.match_over);
+        let mut v = singles(3, 0, 0, false);
+        (v.set_games, v.set, v.sets, v.sets_to_win, v.match_over, v.scorer) = (s.set_games, s.set, s.sets, r.sets, true, 0);
+        v.show.event = Event::Set;
+        v.fin = Some(Final { highlight: 0, scale: 1.0, dx: 0.0 });
+        let games: Vec<_> = quads(&v, |t| t == Tex::Board(1)).into_iter().filter(|q| q.1[0] < 320).map(|q| (q.1[0] / 32, q.2[0], q.2[1] + 40)).collect();
+        assert_eq!(games, [(6, 272, 328), (3, 272, 360), (6, 272, 392), (2, 336, 328), (6, 336, 360), (4, 336, 392)]);
+        let sets: Vec<_> = quads(&v, |t| t == Tex::Board(3)).into_iter().filter(|q| q.1[1] == 0 && q.1[2] == 48).map(|q| q.1[0] / 48).collect();
+        assert_eq!(sets, [2, 1]);
     }
 
     /// Tiebreak 0-0 → 0-1 mid-swap: the old 0 slid up and fading, the new 1 under its fading white copy, the banner.

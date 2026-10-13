@@ -98,7 +98,8 @@ pub(super) fn scored(g: &mut Game, before: &Score, event: Option<Event>, team: u
 }
 
 pub(super) fn match_over(g: &mut Game) {
-    let table = g.match_stats.finish(g.post_winner.clamp(0, 1) as usize);
+    let mut table = g.match_stats.finish(g.post_winner.clamp(0, 1) as usize);
+    table.score = g.score.clone();
     g.match_stats = hst_sim::stats::Stats::new();
     g.match_stats.result = Some(table);
     *ceremony::ENDING.lock().unwrap() = Some((g.score.swapped, g.rng.sound.clone()));
@@ -654,8 +655,8 @@ fn step(
 }
 
 /// The result board's quads as the stats screen draws them.
-fn board(g: &Game, slots: [usize; 4], pill: [[u8; 3]; 4], winner: usize, fin: Final) -> Vec<Quad> {
-    popups::final_board(g, slots, pill, winner, fin)
+fn board(g: &Game, score: &hst_sim::score::Score, slots: [usize; 4], pill: [[u8; 3]; 4], winner: usize, fin: Final) -> Vec<Quad> {
+    popups::final_board(g, score, slots, pill, winner, fin)
         .into_iter()
         .map(|q| Quad {
             tex: match q.tex {
@@ -705,7 +706,7 @@ fn draw(
             let Some(dx) = screen.page_x(p) else { continue };
             let mut page = if p == 0 {
                 let fin = Final { highlight: screen.alpha, scale: screen.scale, dx: dx as f32 };
-                board(&g, slots, colours.0, table.winner, fin)
+                board(&g, &table.score, slots, colours.0, table.winner, fin)
             } else {
                 let mut page = layout(&View {
                     table,
@@ -801,7 +802,7 @@ mod tests {
         let mut rows = [[0.0; 9]; 4];
         rows[0] = [161.0 * 0.62137, 24.0, 3.0, 1.0, 2.0, 37.5, 0.0, 60.0, 64.0];
         rows[1] = [149.0 * 0.62137, 18.0, 7.0, 1.0, 0.0, 12.25, 10.0, 55.0, 36.0];
-        Table { rows, longest_rally: 7, frames: 60 * 754, winner: 0 }
+        Table { rows, longest_rally: 7, frames: 60 * 754, winner: 0, score: Default::default() }
     }
 
     /// Singles: the values' digits where the original draws them, the bests highlighted, ties not.
