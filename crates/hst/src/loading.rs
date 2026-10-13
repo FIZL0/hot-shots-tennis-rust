@@ -140,7 +140,8 @@ pub fn cover(iso: String, court: usize) -> impl FnOnce(&mut World, Entity) + Sen
         let back = court.checked_sub(1).and_then(|c| entry(&mut disc, &format!("MENU/WALL/SUB{court:02}.XB"), &format!("/l_bg{c:02}.bmp")));
         let art = entry(&mut disc, "MENU/MENU00B.XB0", "/loading.tm2");
         let mut images = world.resource_mut::<Assets<Image>>();
-        let [wall, back, art] = [wall.as_deref().and_then(sheet), back.as_deref().and_then(bmp), art.as_deref().and_then(sheet)].map(|i| i.map(|i| images.add(i)));
+        let [wall, back] = [wall.as_deref().and_then(sheet), back.as_deref().and_then(bmp)].map(|i| i.map(|i| images.add(i)));
+        let art = art.map(|d| crate::play::menu_art::image(&mut images, &d, "loading"));
         let abs = |[x, y, w, h]: [f32; 4]| Node {
             position_type: PositionType::Absolute,
             left: Val::Percent(x / 6.4),

@@ -472,7 +472,7 @@ fn setup(
                 .iter()
                 .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
                 .unwrap_or_else(|| panic!("{name} in {xb}"));
-            art.push(panel::image(&mut images, &arc.read(e).expect("archive bytes")));
+            art.push(super::menu_art::image(&mut images, &arc.read(e).expect("archive bytes"), name));
         }
         if xb.contains("PRIZE") {
             // game space (y down) → Bevy, as the call models

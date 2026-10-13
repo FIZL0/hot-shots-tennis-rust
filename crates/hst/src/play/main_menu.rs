@@ -88,7 +88,7 @@ const SETS: [i32; 3] = [1, 3, 5];
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
 const CARDS: [[f32; 2]; 4] = [[4.0, 4.0], [4.0, 180.0], [156.0, 4.0], [156.0, 180.0]];
 /// `word.tm2`'s glyphs, 12 to a 32-px row from y 32.
-const FONT: [&str; 15] = [
+pub(super) const FONT: [&str; 15] = [
     "aàáâãäåæbcçd",
     "ðeèéêëfghiìí",
     "îïjklmnñoòóô",
@@ -806,6 +806,8 @@ enum Tex {
     Qr,
     /// Mod `i`'s face icon on the custom page ([`Icons`]).
     Icon(usize),
+    /// Our button pill's layers (`menu_art::pill_layers`).
+    Pill,
 }
 
 /// B133: the custom page's face icons by mod, as `previews.rs` reads them.
@@ -1015,32 +1017,40 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     ))];
     let font = read(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
-    art.push(panel::image(&mut images, &font));
+    art.push(super::menu_art::image(&mut images, &font, "word"));
     let inpane = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let inpane = Archive::parse(&inpane).expect("xb archive");
     let hand = inpane.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("hsm_yubi.tm2")).expect("hsm_yubi");
     art.push(panel::image(&mut images, &inpane.read(hand).expect("INPANE bytes")));
     // Z1: read every sheet first so their replacements decode on all cores at once
-    let mut sheets: Vec<Vec<u8>> =
-        SHEETS.iter().chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")]).map(|(xb, name)| read(&mut iso, xb, &format!("/{name}.tm2"))).collect();
+    let mut sheets: Vec<(String, Vec<u8>)> = SHEETS
+        .iter()
+        .chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")])
+        .map(|(xb, name)| (name.to_string(), read(&mut iso, xb, &format!("/{name}.tm2"))))
+        .collect();
     for u in 0..5 {
-        sheets.push(read(&mut iso, "MENU/MENU60.XB0", &format!("/item_umpire{u:02}.tm2")));
+        let name = format!("item_umpire{u:02}");
+        sheets.push((name.clone(), read(&mut iso, "MENU/MENU60.XB0", &format!("/{name}.tm2"))));
     }
     let shots = ["cs2_shots_nomal_a", "cs2_shots_nomal_b", "cs2_shots_cos_a", "cs2_shots_cos_b"]
         .into_iter()
         .map(String::from)
         .chain((0..CHARS).map(|c| format!("cs2_shots_{c:02}")));
     for name in shots {
-        sheets.push(read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2")));
+        sheets.push((name.clone(), read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2"))));
     }
-    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/info.tm2"));
-    sheets.push(read(&mut iso, "MENU/MENU12B.XB0", "/confirmation_04.tm2"));
-    sheets.push(read(&mut iso, "MENU/MENU12A.XB0", "/keyassign_characterselect2.tm2"));
-    for n in ["00", "01", "02"] {
-        sheets.push(read(&mut iso, "MENU/MENU03.XB0", &format!("/confirmation_{n}.tm2")));
+    for (xb, name) in [
+        ("MENU/MENU12A.XB0", "info"),
+        ("MENU/MENU12B.XB0", "confirmation_04"),
+        ("MENU/MENU12A.XB0", "keyassign_characterselect2"),
+        ("MENU/MENU03.XB0", "confirmation_00"),
+        ("MENU/MENU03.XB0", "confirmation_01"),
+        ("MENU/MENU03.XB0", "confirmation_02"),
+    ] {
+        sheets.push((name.into(), read(&mut iso, xb, &format!("/{name}.tm2"))));
     }
-    let _pre = crate::textures::prefetch_tim2(sheets.iter().map(Vec::as_slice));
-    art.extend(sheets.iter().map(|d| panel::image(&mut images, d)));
+    let _pre = crate::textures::prefetch_tim2(sheets.iter().map(|s| s.1.as_slice()));
+    art.extend(sheets.iter().map(|(name, d)| super::menu_art::image(&mut images, d, name)));
     let glyphs = glyphs(&font);
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
@@ -1066,6 +1076,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         .collect();
     info!("{} custom characters in {}", roster.len(), mods_dir.display());
     let (mod_text, mods) = roster.into_iter().unzip();
+    art.push(super::menu_art::pill_layers(&mut images));
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
 
     let fresh = kept.is_none();
@@ -1185,11 +1196,19 @@ impl Draw<'_> {
         self.centred(s, cx, y + size * (1.0 - k) / 2.0, size * k, WHITE);
     }
 
-    /// A pill (`Option_00`'s white one, three-sliced) tinted.
+    /// A pill filled `rgb` in the mode pills' style: dark rim, white ring.
     fn pill(&mut self, x: f32, y: f32, w: f32, rgb: [f32; 3]) {
-        self.q(OPTION, [66.0, 2.0, 19.0, 38.0], [x, y, 19.0, 38.0], rgb, 128.0);
-        self.q(OPTION, [85.0, 2.0, 24.0, 38.0], [x + 19.0, y, w - 38.0, 38.0], rgb, 128.0);
-        self.q(OPTION, [109.0, 2.0, 19.0, 38.0], [x + w - 19.0, y, 19.0, 38.0], rgb, 128.0);
+        self.pill3(x, y, w, [[30.0; 3], WHITE, rgb]);
+    }
+
+    /// A pill (our own, `menu_art::pill_layers`, three-sliced) with its rim, ring and fill each in its own colour.
+    fn pill3(&mut self, x: f32, y: f32, w: f32, cols: [[f32; 3]; 3]) {
+        for (i, rgb) in cols.into_iter().enumerate() {
+            let [l, m, r] = super::menu_art::pill_slices(i);
+            self.q(Tex::Pill, l, [x, y, 19.0, 38.0], rgb, 128.0);
+            self.q(Tex::Pill, m, [x + 19.0, y, w - 38.0, 38.0], rgb, 128.0);
+            self.q(Tex::Pill, r, [x + w - 19.0, y, 19.0, 38.0], rgb, 128.0);
+        }
     }
 
     /// A column of rows, the chosen one bright with the hand beside it.
@@ -1358,9 +1377,10 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         }
         Screen::Mode => {
             d.frame(2, 5);
-            for (i, src) in [[2.0, 2.0, 252.0, 30.0], [2.0, 34.0, 252.0, 30.0]].into_iter().enumerate() {
+            // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
+            for (i, src) in [[0.0, 0.0, 256.0, 32.0], [0.0, 32.0, 256.0, 31.75]].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
-                d.q(CS0, src, [134.0, 150.0 + 70.0 * i as f32, 372.0, 44.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
+                d.q(CS0, src, [131.0, 147.0 + 70.0 * i as f32, 378.0, 47.0], if on { WHITE } else { DIMMED }, if on { 128.0 } else { 90.0 });
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
@@ -1413,7 +1433,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(3, 7);
     hints(d);
     let n = m.players();
-    d.q(CS0, if m.doubles { [2.0, 34.0, 252.0, 30.0] } else { [2.0, 2.0, 252.0, 30.0] }, [194.0, 56.0, 252.0, 30.0], WHITE, 128.0);
+    d.q(CS0, if m.doubles { [0.0, 32.0, 256.0, 31.75] } else { [0.0, 0.0, 256.0, 32.0] }, [192.0, 54.0, 256.0, 32.0], WHITE, 128.0);
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {
@@ -1864,6 +1884,7 @@ fn draw(
                 None => art.0[2].clone(),
             },
             Tex::Sheet(k) => art.0[3 + k].clone(),
+            Tex::Pill => art.0.last().expect("pill").clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
             Tex::Icon(i) => match icons.0.get(&i) {

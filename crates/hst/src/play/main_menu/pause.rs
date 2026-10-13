@@ -41,8 +41,8 @@ pub(in crate::play) struct Root;
 pub(in crate::play) struct Systems;
 
 /// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
-/// `wall_option` and `option_00`.
-const POOL_HERE: usize = 240;
+/// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered).
+const POOL_HERE: usize = 480;
 
 /// One sheet out of a disc archive.
 fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
@@ -52,7 +52,8 @@ fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
     arc.read(e).expect("archive bytes")
 }
 
-/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings").
+/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings"),
+/// set again in the remastered font (`menu_art::relabel`) unless `--original`.
 pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image> {
     let font = sheet(iso, "MENU/MENU04.XB0", "/word.tm2");
     let glyphs = super::glyphs(&font);
@@ -86,6 +87,9 @@ pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str)
             rgba[(y as usize * w + x as usize) * 4..][..4].copy_from_slice(&[c, c, c, (edge.max(a) * 255.0) as u8]);
         }
     }
+    if let Some(h) = super::super::menu_art::relabel(images, w, h, &rgba, s) {
+        return h;
+    }
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))
 }
@@ -101,10 +105,10 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     ));
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
-    let mut art = vec![solid, super::panel::image(&mut images, &font), super::panel::image(&mut images, &hand)];
+    let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word"), super::panel::image(&mut images, &hand)];
     // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets, the rest left empty
     for (xb, name) in &super::SHEETS[..10] {
-        art.push(if name.ends_with("option") || *name == "option_00" { super::panel::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2"))) } else { Handle::default() });
+        art.push(if name.ends_with("option") || *name == "option_00" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
     }
     let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
