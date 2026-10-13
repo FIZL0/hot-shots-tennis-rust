@@ -4172,8 +4172,18 @@ fn start_effects(
         f.landing.1.court,
         smash,
         marks_age(&g),
+        bounce_recorded(&g),
         &mut transforms,
     );
+}
+
+/// Whether a bounce now leaves a contact record, as the original's ball step: only once its game phase is past the
+/// serve (from the tick after the serve's swing press), so a toss that drops untouched makes no bounce effects.
+fn bounce_recorded(g: &Game) -> bool {
+    match g.phase {
+        Phase::Serve => g.serving.swing.is_some() || g.serving.whiffed,
+        _ => true,
+    }
 }
 
 /// Whether the ball marks age this tick: from the serve's swing (the play phase's enter) until the players react

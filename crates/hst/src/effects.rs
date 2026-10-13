@@ -581,12 +581,13 @@ pub fn load_bounce(
 
 impl BallBounce {
     /// One game frame of the ball (`bounces` so far, the last landing `at` on `court` ground moving at `vel`);
-    /// `smash` a smash landing at 85 km/h or more; `fading` the marks age (`play::marks_age`).
+    /// `smash` a smash landing at 85 km/h or more; `fading` the marks age (`play::marks_age`); `recorded` a bounce
+    /// now leaves a contact record (`play::bounce_recorded`): without one it makes no mark, ring or puff.
     // ponytail: every contact's surface is the flat court (normal up); the stage mesh's own normal would tilt the ring
-    pub fn frame(&mut self, bounces: i32, at: [f32; 3], vel: [f32; 3], court: bool, smash: bool, fading: bool, transforms: &mut Query<&mut Transform>) {
+    pub fn frame(&mut self, bounces: i32, at: [f32; 3], vel: [f32; 3], court: bool, smash: bool, fading: bool, recorded: bool, transforms: &mut Query<&mut Transform>) {
         if bounces == 0 {
             self.contacts.clear();
-        } else if bounces as usize > self.contacts.len() && self.contacts.len() < 3 {
+        } else if recorded && bounces as usize > self.contacts.len() && self.contacts.len() < 3 {
             self.contacts.push(Contact { point: [at[0], at[1], at[2], 1.0], vel: [vel[0], vel[1], vel[2], 0.0], normal: [0.0, -1.0, 0.0, 0.0], court });
         }
         self.bounce.fading = fading;
