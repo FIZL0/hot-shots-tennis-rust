@@ -4,7 +4,10 @@ match!" screen on court 4), presses ✕ (copy 1 confirms with ✕), waits for th
 (vtable 0x1d2180, type 15) and its animation controller (+0x5c, frame at +0x38, header *(+0x24), length +0x2c),
 then records <frames> samples: u32 vsync, u8 match phase (gm+0x54), the object (0x290), *(+0xb8) (8: playing,
 route), the controller (0x40), its header (0x30), the shared MT (0x9d0). Header: u32 object address.
-Usage (under tools/pcsx2.sh): b24_rec15.py <slot> <frames> <out.bin>"""
+B24d: a negative <slot> loads -<slot> mid-match (no ✕) with the ball's played flags cleared, and [lcg] sets the low
+word of rand()'s state first (the court generator is reseeded from rand() entering the change of ends, so another
+roll and route).
+Usage (under tools/pcsx2.sh): b24_rec15.py <slot> <frames> <out.bin> [lcg]"""
 import os, struct, subprocess, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 from pine import Pine
@@ -12,9 +15,9 @@ from pine import Pine
 TRIG, GM = 0x1d2180, 0x422f80
 slot, want, out = int(sys.argv[1]), int(sys.argv[2]), open(sys.argv[3], "wb")
 p = Pine()
-p.load_state(slot)
+p.load_state(abs(slot))
 time.sleep(1.0)
-subprocess.run([os.path.join(os.path.dirname(__file__), "..", "tools", "vpad.py"), "send", "press cross 150"], check=True)
+if slot > 0: subprocess.run([os.path.join(os.path.dirname(__file__), "..", "tools", "vpad.py"), "send", "press cross 150"], check=True)
 t = time.time()
 while not p.read32(GM):
     if time.time() - t > 60: sys.exit("no match object")
@@ -29,6 +32,12 @@ while obj is None:
                 break
         if obj: break
     if time.time() - t > 90: sys.exit("no type-15 creature")
+if slot < 0:  # a mid-match save may have played it already: clear played (+0xbc, +0xbd)
+    p.write32(obj + 0xbc, p.read32(obj + 0xbc) & ~0xffff)
+if len(sys.argv) > 4:  # after the load has landed (a write straight after load_state is lost)
+    lcg = p.read32(0x1b80f0) + 0xa8  # rand()'s state (low word): the court generator is reseeded from it at 0xe
+    p.write32(lcg, int(sys.argv[4]))
+    if p.read32(lcg) != int(sys.argv[4]): sys.exit("rand state write lost")
 print("creature", hex(obj), "phase", p.read8(gm + 0x54), flush=True)
 out.write(struct.pack("<I", obj))
 last, n = p.read32(0x1d5780), 0
