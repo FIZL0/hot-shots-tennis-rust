@@ -606,6 +606,8 @@ fn load(
             }
             if play::net_hide::picked(p.category, p.pos) {
                 commands.entity(e).insert(play::net_hide::HideNearCamera);
+            } else if play::net_hide::tested(p.category, p.code) {
+                commands.entity(e).insert(play::net_hide::HideAroundEye { pos: p.pos, prop: None });
             }
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
