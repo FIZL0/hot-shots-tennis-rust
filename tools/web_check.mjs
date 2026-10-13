@@ -15,10 +15,15 @@ mkdirSync(out, { recursive: true });
 const log = [];
 const web = process.env.WEB_PORT ?? 8765, cdp = process.env.CDP_PORT ?? 9333;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// every chromium we start dies with this script (a crash, timeout or kill would otherwise leave a hidden hst playing music)
+const kids = new Set();
+process.on('exit', () => kids.forEach(c => c.kill()));
+for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(1));
 
 async function visit(n, pick) {
-  const chrome = spawn('chromium', ['--headless=new', `--remote-debugging-port=${cdp}`, `--user-data-dir=${resolve(process.env.PROFILE ?? resolve(out, 'profile'))}`,
+  const chrome = spawn('chromium', ['--headless=new', '--mute-audio', `--remote-debugging-port=${cdp}`, `--user-data-dir=${resolve(process.env.PROFILE ?? resolve(out, 'profile'))}`,
     '--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--window-size=1280,720', ...(process.env.CHROME_FLAGS ?? '').split(' ').filter(Boolean), 'about:blank'], { stdio: 'ignore' });
+  kids.add(chrome);
   let targets;
   for (let i = 0; i < 50 && !targets; i++) {
     await sleep(200);

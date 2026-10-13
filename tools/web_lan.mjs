@@ -12,12 +12,17 @@ mkdirSync(out, { recursive: true });
 const web = process.env.WEB_PORT ?? 8765, cdp = process.env.CDP_PORT ?? 9334;
 const base = `http://localhost:${web}/`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// every chromium we start dies with this script (a crash, timeout or kill would otherwise leave a hidden hst playing music)
+const kids = new Set();
+process.on('exit', () => kids.forEach(c => c.kill()));
+for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(1));
 const log = [];
 const say = s => { log.push(s); console.log(s); };
 
-const chrome = spawn('chromium', ['--headless=new', `--remote-debugging-port=${cdp}`, `--user-data-dir=${resolve(out, 'profile')}`,
+const chrome = spawn('chromium', ['--headless=new', '--mute-audio', `--remote-debugging-port=${cdp}`, `--user-data-dir=${resolve(out, 'profile')}`,
   '--ignore-gpu-blocklist', '--window-size=960,540', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows', ...(process.env.CHROME_FLAGS ?? '').split(' ').filter(Boolean), 'about:blank'], { stdio: 'ignore' });
+  kids.add(chrome);
 process.on('exit', () => { writeFileSync(resolve(out, 'console.txt'), log.join('\n') + '\n'); chrome.kill(); });
 let version;
 for (let i = 0; i < 50 && !version; i++) {

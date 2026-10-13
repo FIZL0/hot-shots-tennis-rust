@@ -12,10 +12,15 @@ const log = [];
 // HST_WEB_PORT / HST_CDP_PORT: other ports (runs side by side)
 const WEB = process.env.HST_WEB_PORT ?? 8765, CDP = process.env.HST_CDP_PORT ?? 9333;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// every chromium we start dies with this script (a crash, timeout or kill would otherwise leave a hidden hst playing music)
+const kids = new Set();
+process.on('exit', () => kids.forEach(c => c.kill()));
+for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(1));
 
 async function open() {
-  const chrome = spawn('chromium', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${resolve(out, 'profile')}`,
+  const chrome = spawn('chromium', ['--headless=new', '--mute-audio', `--remote-debugging-port=${CDP}`, `--user-data-dir=${resolve(out, 'profile')}`,
     '--ignore-gpu-blocklist', '--window-size=1280,720', 'about:blank'], { stdio: 'ignore' });
+  kids.add(chrome);
   let targets;
   for (let i = 0; i < 50 && !targets; i++) {
     await sleep(200);
