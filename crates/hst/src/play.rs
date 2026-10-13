@@ -45,6 +45,7 @@ use crate::{Args, GameSpace, Orbit};
 use snapshot::Const;
 
 mod ball_shadow;
+mod smash_marker;
 mod bodyhit;
 mod change_ends;
 pub mod controls;
