@@ -427,6 +427,9 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
         return;
     }
     *m = if open { Menu::opened() } else { Menu::default() };
+    if let (true, Some(s)) = (open, w.get_resource::<Sound>()) {
+        s.hold_followed();
+    }
     let mut fixed = w.resource_mut::<Time<Fixed>>();
     if open {
         fixed.set_timestep(Duration::from_secs(1 << 20));
@@ -519,6 +522,10 @@ fn step(
         if (start || timed) && g.match_stats.result.is_none() {
             *auto = true;
             *menu = Menu::opened();
+            // B77: the whistle and the like stop where they are until the match goes on
+            if let Some(s) = &sound {
+                s.hold_followed();
+            }
             play(2);
             if timed && std::env::var_os("HST_PAUSE_SETTINGS").is_some() {
                 settings.open();
