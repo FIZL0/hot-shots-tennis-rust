@@ -236,6 +236,8 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .init_resource::<Click>()
         .init_resource::<Ticker>()
         .init_resource::<slide::Slide>()
+        // `super::draw` reads the custom page's mod icons (none in a match); without it the draw panicked (B139)
+        .init_resource::<super::Icons>()
         .add_systems(PostStartup, setup)
         .add_systems(
             Update,
@@ -282,5 +284,42 @@ mod tests {
         assert!(!m.settings.0[0] && fx.contains(&super::super::Effect::SaveSettings));
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// B139: the overlay's systems run in an app with only what a match has (no main menu): open Settings, toggle
+    /// Menu Music (not Widescreen: `after` stores that in a global the parallel widescreen tests read), Back to the
+    /// pause menu, no panic. `settings.txt` goes beside the ISO, so a linked copy in a temp directory keeps the
+    /// user's. Needs the ISO at the repository root, skipped without.
+    #[test]
+    fn open_change_back_in_a_match() {
+        let iso = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+        if !std::path::Path::new(iso).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let dir = std::env::temp_dir().join(format!("hst-b139-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("game.iso");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(std::fs::canonicalize(iso).unwrap(), &link).unwrap();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::input::InputPlugin));
+        app.init_asset::<Image>().init_resource::<bevy::clipboard::Clipboard>().init_resource::<crate::graphics::Graphics>();
+        app.insert_resource(Args { iso: link.to_string_lossy().into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.add_plugins(controls::plugin);
+        plugin(&mut app);
+        app.update();
+        app.world_mut().resource_mut::<PauseSettings>().open();
+        app.update();
+        let was = app.world().resource::<Menu>().settings.0[2];
+        app.world_mut().resource_mut::<Menu>().sel = 2;
+        app.world_mut().resource_mut::<Click>().0 = Some(Press { ok: true, ..default() });
+        app.update();
+        assert_eq!(app.world().resource::<Menu>().settings.0[2], !was, "Menu Music didn't change");
+        assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
+        app.world_mut().resource_mut::<Click>().0 = Some(Press { back: true, ..default() });
+        app.update();
+        assert!(!app.world().resource::<PauseSettings>().open, "Back didn't return to the pause menu");
+        app.update();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
