@@ -37,7 +37,7 @@ use crate::graphics::Graphics;
 use crate::audio::{Sound, SoundBank};
 
 pub use super::widescreen::WIDE;
-pub(crate) use previews::mod_face;
+pub(crate) use previews::face;
 
 mod cursor;
 pub(crate) mod flame;
@@ -803,15 +803,15 @@ enum Tex {
     Preview(usize),
     /// The lobby code's QR (`online::QrImage`).
     Qr,
-    /// Mod `i`'s face icon on the custom page ([`Icons`]).
-    Icon(usize),
+    /// A character's face icon on the select ([`Icons`]; a disc one not baked yet draws its `FACES` square).
+    Icon(Who),
     /// Our button pill's layers (`menu_art::pill_layers`).
     Pill,
 }
 
-/// B133: the custom page's face icons by mod, as `previews.rs` reads them.
+/// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
 #[derive(Resource, Default)]
-struct Icons(std::collections::HashMap<usize, Handle<Image>>);
+struct Icons(std::collections::HashMap<Who, Handle<Image>>);
 
 /// The mods on the custom page the lead player's pick is on.
 fn custom_page(m: &Menu) -> std::ops::Range<usize> {
@@ -840,7 +840,8 @@ const SHEETS: [(&str, &str); 15] = [
     ("MENU/MENU12B.XB0", "characterselect2_04"),
 ];
 const CS0: Tex = Tex::Sheet(10);
-const FACES: Tex = Tex::Sheet(11);
+/// The disc grid's faces sheet (`SHEETS` index): drawn for a face icon not baked yet.
+const FACES: usize = 11;
 const NAMES: Tex = Tex::Sheet(12);
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
 const ATTRS: Tex = Tex::Sheet(14);
@@ -1527,7 +1528,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // the faces, darkened where every costume of it is ... (all open in the remaster)
         for &(c, x, y) in &GRID {
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
-            d.q(FACES, [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
+            d.q(Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
         }
         let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
         d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
@@ -1664,7 +1665,7 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
     for i in page.clone() {
         let (x, y) = cell(i);
         d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
-        d.q(Tex::Icon(i), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], WHITE, 128.0);
+        d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], WHITE, 128.0);
         d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
     }
     for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
@@ -1953,9 +1954,10 @@ fn draw(
             Tex::Pill => art.0.last().expect("pill").clone(),
             Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
-            Tex::Icon(i) => match icons.0.get(&i) {
-                Some(h) => h.clone(),
-                None => {
+            Tex::Icon(w) => match (icons.0.get(&w), w) {
+                (Some(h), _) => h.clone(),
+                (None, Who::Disc(_)) => art.0[3 + FACES].clone(),
+                (None, Who::Mod(_)) => {
                     *vis = Visibility::Hidden;
                     continue;
                 }
@@ -1969,7 +1971,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && !matches!(quad.tex, Tex::Icon(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
