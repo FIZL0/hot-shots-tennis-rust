@@ -303,7 +303,11 @@ fn world(e: &[u8]) -> World {
 fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
     let singles = name.contains("singles");
     let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).ok()?;
-    let table = table()?;
+    let mut table = table()?;
+    if name.contains("let_go") {
+        // recorded with every CPU row's let-go margin poked to -3 m (`HST_MARGIN=-3`)
+        table.iter_mut().for_each(|r| r.line_margin = -3.0);
+    }
     assert_eq!(&d[..4], b"AIRL");
     let mt0 = Mt::of(&d[8..8 + MT_SIZE]);
     let mut o = 8 + MT_SIZE;
@@ -496,4 +500,26 @@ fn singles_net_and_base_match_the_game() {
             eprintln!("{name} {what}: calls, per substate {n:?}");
         }
     }
+}
+
+/// B57: CPUs let a ball that will land out go by. `ai_let_go_s05.bin` is slot 5 with the line-call margin pulled 2 m
+/// inside every line (`HST_LINE=-2`, so near-line landings are called out) and every CPU row's let-go margin at -3 m
+/// (`HST_MARGIN=-3`), so out calls whose distance to the nearest true line is negative still pass the check: the BASE
+/// CPU in substate 2 sets its hold and stands, as the game did.
+#[test]
+fn cpus_let_out_balls_go() {
+    let name = "ai_let_go_s05.bin";
+    for tag in [1, 2, 3] {
+        let Some(n) = replay(name, tag) else { return eprintln!("fixture or disc missing, skipped") };
+        eprintln!("{name} tag {tag}: calls, per substate {n:?}");
+    }
+    let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).unwrap();
+    let (mut o, mut holds) = (8 + MT_SIZE, 0);
+    while o < d.len() {
+        let e = &d[o..o + u32_at(&d, o + 4) as usize];
+        let x = &d[o + e.len()..o + e.len() + u32_at(&d, o + e.len() + 4) as usize];
+        o += e.len() + x.len();
+        holds += (u32_at(e, 0) != 1 && e[A + 0xbc] == 0 && x[A + 0xbc] == 1 && e[0x56d] == 2) as usize;
+    }
+    assert!(holds >= 2, "{holds} let-go holds");
 }
