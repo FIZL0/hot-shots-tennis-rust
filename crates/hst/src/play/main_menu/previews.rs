@@ -642,6 +642,8 @@ fn bake(
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
     compiling: Option<Res<crate::mode::Compiling>>,
+    rigs: Query<&crate::character::Rig>,
+    globals: Query<&GlobalTransform>,
 ) {
     if menu.screen != Screen::Chars && baker.job.is_none() {
         return;
@@ -684,7 +686,9 @@ fn bake(
             let size = if job.face { FACE } else { BAKE };
             let rgba = straight(&data, size);
             let path = if job.face { face_path(&job.path) } else { job.path.clone() };
-            let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i));
+            // B176: framed on the rig's head bone
+            let head = cams.get(job.cam).ok().and_then(|p| inspect::head_px(p, BAKE.as_vec2(), &rigs, &globals));
+            let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i, head));
             job.saving.push(IoTaskPool::get().spawn(async move { save(rgba, size, &path) }));
             // B160: the same drawing's head square again at [`FACE`]
             if let (Some(sq), Ok(p)) = (square, cams.get(job.cam)) {

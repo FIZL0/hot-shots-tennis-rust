@@ -454,7 +454,7 @@ fn lay_out(window: Query<&Window, With<PrimaryWindow>>, mut cams: Query<(&Camera
 /// preview PNG now; baked ones get a sharp close-up of the same square ([`icon`]).
 pub fn face_icon(png: &[u8], inner: u32) -> Option<Image> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
-    let sq = face_square(&img)?;
+    let sq = face_square(&img, None)?;
     let head = image::imageops::crop_imm(&img, sq.min.x, sq.min.y, sq.width(), sq.height()).to_image();
     Some(round(&head, 64, inner))
 }
@@ -466,13 +466,59 @@ pub fn icon(png: &[u8], inner: u32) -> Option<Image> {
     Some(round(&img, img.width(), inner))
 }
 
-/// The face icon's square in a preview's pixels: the body's column (the opaque pixels' median x in the drawing's upper
-/// half, so a racket held out or up doesn't pull it), the head's top (the first row with a few opaque pixels within
-/// 20 px of it), the head's centre (the median x of the [`ICON_CROP`]-px square's middle half below that). None if
-/// nothing drew.
-pub fn face_square(img: &image::RgbaImage) -> Option<URect> {
+/// B176: where preview `p`'s `Bip01Head` origin (the jaw, in every rig seen) is in a `size` image of its crop. None
+/// without that joint.
+pub fn head_px(p: &Preview, size: Vec2, rigs: &Query<&character::Rig>, globals: &Query<&GlobalTransform>) -> Option<Vec2> {
+    let rig = rigs.get(p.rig).ok()?;
+    let head = globals.get(rig.joints[rig.data.joint("Bip01Head")?]).ok()?;
+    Some(image_px(p.crop, size, head.translation()))
+}
+
+/// B176: where world point `w` lands in a `size` image drawn with `crop` (the camera at the origin looking down −z).
+pub fn image_px(crop: Rect, size: Vec2, w: Vec3) -> Vec2 {
+    let px = FOCAL.x / FOCAL.y;
+    let f = AXIS + FOCAL * Vec2::new(w.x, -w.y) / -w.z;
+    let (c, e) = widen(crop, size);
+    (Vec2::new(f.x / px, f.y) - c) * size.y / e.y
+}
+
+/// The face icon's square in a preview's pixels. B176: with the head bone's pixel `head` ([`head_px`]), framed on the
+/// rig: the head's top is where the opaque column above it (±12 px, gaps of up to 3 rows) ends, so hair and hats
+/// count; the square is [`HEAD_FIT`] × that height, its top a little above the hair, centred on the middle of the head's
+/// opaque run through the bone over the upper 70% (a turned or leaning head: Mifune). Checked on every disc costume
+/// and the mods (`context/b176/`). Without it (a mod's own preview PNG), B133's: the body's column (the opaque pixels'
+/// median x in the drawing's upper half, so a racket held out or up doesn't pull it), the head's top (the first row
+/// with a few opaque pixels within 20 px of it), the head's centre (the median x of the [`ICON_CROP`]-px square's
+/// middle half below that). None if nothing drew.
+pub fn face_square(img: &image::RgbaImage, head: Option<Vec2>) -> Option<URect> {
     let (w, h) = img.dimensions();
-    let opaque = |x: u32, y: u32| img.get_pixel(x, y)[3] > 0;
+    let opaque = |x: u32, y: u32| x < w && y < h && img.get_pixel(x, y)[3] > 0;
+    if let Some(at) = head.filter(|a| a.x >= 12.0 && a.y >= 1.0 && a.x < (w - 12) as f32 && a.y < h as f32) {
+        let (hx, hy) = (at.x as u32, at.y as u32);
+        let (mut top, mut gap) = (hy, 0);
+        for y in (0..hy).rev() {
+            if (hx - 12..=hx + 12).any(|x| opaque(x, y)) {
+                (top, gap) = (y, 0);
+            } else if gap == 3 {
+                break;
+            } else {
+                gap += 1;
+            }
+        }
+        let s = ((HEAD_FIT * (hy - top) as f32) as u32).clamp(16, w.min(h));
+        let runs: Vec<f32> = (top..top + (hy - top) * 7 / 10)
+            .filter(|&y| opaque(hx, y))
+            .map(|y| {
+                let l = (hx.saturating_sub(s / 2)..hx).rev().take_while(|&x| opaque(x, y)).last().unwrap_or(hx);
+                let r = (hx + 1..hx + s / 2).take_while(|&x| opaque(x, y)).last().unwrap_or(hx);
+                (l + r) as f32 / 2.0
+            })
+            .collect();
+        let cx = if runs.is_empty() { hx } else { (runs.iter().sum::<f32>() / runs.len() as f32) as u32 };
+        let x0 = cx.saturating_sub(s / 2).min(w - s);
+        let y0 = top.saturating_sub(s * 7 / 100).min(h - s);
+        return Some(URect::new(x0, y0, x0 + s, y0 + s));
+    }
     let s = ICON_CROP.min(w).min(h);
     let median = |rows: std::ops::Range<u32>, cols: std::ops::Range<u32>| {
         let mut xs: Vec<u32> = rows.flat_map(|y| cols.clone().filter(move |&x| opaque(x, y))).collect();
@@ -490,6 +536,9 @@ pub fn face_square(img: &image::RgbaImage) -> Option<URect> {
     let y0 = top.saturating_sub(2).min(h - s);
     Some(URect::new(x0, y0, x0 + s, y0 + s))
 }
+
+/// B176: a rig-framed face square's side over the head's height (hair top to the head bone).
+const HEAD_FIT: f32 = 1.6;
 
 /// `head` (square) scaled to `inner`/64 of a `canvas`-px square image, in its top left, cut round.
 fn round(head: &image::RgbaImage, canvas: u32, inner: u32) -> Image {
@@ -561,6 +610,27 @@ mod tests {
         let (c3, e3) = widen(sq, Vec2::splat(320.0));
         let k = e.y / size.y;
         assert!(c3.abs_diff_eq(c + Vec2::new(150.0, 40.0) * k, 1e-3) && e3.abs_diff_eq(Vec2::splat(100.0 * k), 1e-3), "{c3} {e3}");
+    }
+
+    /// B176: framed on the head bone: a 60-px tall "hair" column over the bone fits whole, a racket head above it
+    /// (past a gap) doesn't count, and a head leaning left of the bone pulls the square with it.
+    #[test]
+    fn face_square_fits_the_head() {
+        let mut img = image::RgbaImage::new(384, 480);
+        let mut fill = |xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+            for y in ys {
+                for x in xs.clone() {
+                    img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+                }
+            }
+        };
+        fill(170..215, 60..400); // head (leaning left of the bone at x 200) and body
+        fill(195..205, 20..50); // racket above, 10 rows clear of the hair
+        let sq = face_square(&img, Some(Vec2::new(200.0, 120.0))).unwrap();
+        assert_eq!(sq.height(), (60.0 * HEAD_FIT) as u32);
+        assert!(sq.min.y < 60 && sq.min.y > 50, "top just above the hair: {sq:?}");
+        assert!(sq.max.y > 120, "the jaw inside: {sq:?}");
+        assert_eq!(sq.center().x, 192, "centred on the head's run, not the bone: {sq:?}");
     }
 
     /// The icon centres on the head: a 20-px "head" at x 200..220 under a 2-px "racket" further left.
