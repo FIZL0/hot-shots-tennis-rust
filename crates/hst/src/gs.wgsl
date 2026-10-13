@@ -80,13 +80,14 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.position = position_world_to_clip(out.world_position.xyz);
 #ifdef GS_GUARD
     // VU1's reject pass drops every court triangle with a vertex behind the eye or outside the GS guard band,
-    // 2048 ± 1280 in GS coordinates: ±4 half-widths across (at the original's 4:3) and ±1280/112 half-heights of the
-    // 224-line field. That is what hides w-house2 (Grand Palais) with the eye inside it. A NaN position drops every
+    // 2048 ± 1280 in GS coordinates: ±1280/278.5 half-widths across (at the original's 4:3, one half-width — tan of
+    // the 10° half field of view — is 278.5 GS pixels, not 320; B168: court 7's under-floor box, GS dump) and
+    // ±1280/112 half-heights of the 224-line field. That is what hides w-house2 (Grand Palais) with the eye inside it. A NaN position drops every
     // triangle using the vertex.
     // ponytail: band size from a stage-7 GS dump (largest drawn |x − 2048| 1261), not the microcode's own constant
     let p = out.position;
     let across = view_bindings::view.clip_from_view[1][1] * 0.75 / view_bindings::view.clip_from_view[0][0];
-    if p.w <= 0.0 || abs(p.x) * across > 4.0 * p.w || abs(p.y) > 1280.0 / 112.0 * p.w {
+    if p.w <= 0.0 || abs(p.x) * across > 1280.0 / 278.5 * p.w || abs(p.y) > 1280.0 / 112.0 * p.w {
         let z = p.w * 0.0;
         out.position = vec4(z / z);
     }
