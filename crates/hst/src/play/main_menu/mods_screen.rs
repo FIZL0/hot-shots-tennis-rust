@@ -59,7 +59,7 @@ pub(super) enum Page {
 
 #[derive(Default, Clone, Debug)]
 pub(super) struct View {
-    page: Page,
+    pub(super) page: Page,
     /// Installed mods.
     list: Vec<Mod>,
     /// The store's listing (None: not read yet), and each entry's sha256 if it's installed.

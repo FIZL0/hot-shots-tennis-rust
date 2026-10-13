@@ -1558,9 +1558,9 @@ fn ticker_glide(f: f32, n: usize, right: i32) -> f32 {
 #[derive(Component)]
 struct TickerClip;
 
-/// Frames (60 Hz, fractional) since the description bar's text changed, and that text.
+/// The description bar's text, frames (60 Hz, fractional) since its page opened, and that page.
 #[derive(Resource, Default)]
-struct Ticker(String, f32);
+struct Ticker(String, f32, Option<(Screen, mods_screen::Page)>);
 
 /// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font) sized so its advance
 /// is the original's 11 px pitch on the 640-wide screen, in its tint (223), centred on the bar (y 404..436). Its bar
@@ -2210,10 +2210,12 @@ fn draw(
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
     let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
-    if said != ticker.0 {
-        // a mod download's progress line changes every few frames: show it in place, not sliding in each time
-        let f = if said.starts_with("Downloading ") { 160.0 } else { 0.0 };
-        *ticker = Ticker(said, f);
+    // the text flies in when a page opens, not on every new selection or status line
+    let page = Some((menu.screen, menu.add.page));
+    if page != ticker.2 {
+        *ticker = Ticker(said, 0.0, page);
+    } else {
+        ticker.0 = said;
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
