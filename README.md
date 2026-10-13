@@ -117,6 +117,9 @@ of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo'
 ## Online play
 
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
+Set your name under Online → Name; the lobby shows it on your seats. Guests press Ready, and the host presses Start
+when everyone is ready. Any seats still open are played by the computer. The host can also take a guest out of the
+lobby (OK on their seat).
 Lobbies are found over the public BitTorrent DHT. Players connect peer to peer with [iroh](https://iroh.computer), and
 a relay steps in when a direct path can't be made. In the browser everything goes through the relay: join by code
 (paste the code on the page with Ctrl+V, or open the page with `?code=<code>`) or host; Find isn't there (no UDP in a
@@ -134,7 +137,7 @@ so joining by code works there too. Your firewall must let mDNS (UDP 5353) and t
 Settings live in `online.txt` beside the ISO. The Online screen writes this file, or you can edit it yourself:
 
 ```
-name = Tennis            # your lobby's name
+name = Player            # your name (on your lobby seats; a host's lobby is listed under it)
 relay = n0               # n0 (iroh's public relays), own (relay_url), off (direct only)
 relay_url = https://relay.example.org
 ```
@@ -146,7 +149,8 @@ a domain, run it with a TLS config (`iroh-relay --config-path relay.toml`, see i
 
 The same flow runs in a terminal without the window. Each command prints the events:
 `hst net host|find|quick [doubles] [players]`, `hst net join <code> [players]`, each with an optional
-`--relay n0|off|<url>`.
+`--relay n0|off|<url>`. A guest is ready once it joins. The host starts when every seat is taken, or with `--bots` as
+soon as one guest is in and ready, and the computer plays the open seats.
 
 ## Development
 

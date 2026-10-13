@@ -169,7 +169,7 @@ pub struct Netplay {
 
 impl Netplay {
     pub fn new(room: Room, me: String) -> Self {
-        let taken = |i: usize| room.seats.get(i).is_some_and(|s| s.is_some());
+        let taken = |i: usize| room.seats.get(i).is_some_and(|s| s.as_ref().is_some_and(crate::net::Seat::human));
         let mine = (0..room.seats.len()).filter(|&i| room.seats[i].as_ref().is_some_and(|s| s.peer == me)).collect();
         let mash = std::env::var("HST_NET_MASH").ok().and_then(|v| v.parse::<u64>().ok()).map(|s| s | 1);
         Netplay {
@@ -443,8 +443,9 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
     let seats: Vec<_> = (0..room.seats.len())
         .map(|s| match &room.seats[s] {
             Some(x) if x.peer == me => mine.next().copied().flatten().or(Some(super::controls::Seat::Pad(REMOTE))),
-            Some(_) => Some(super::controls::Seat::Pad(REMOTE)),
-            None => None,
+            Some(x) if x.human() => Some(super::controls::Seat::Pad(REMOTE)),
+            // open, or the computer's (`net::CPU`, started with open seats)
+            _ => None,
         })
         .collect();
     let court = (room.court + 1).to_string();
@@ -626,7 +627,9 @@ mod tests {
             app.init_asset::<crate::gs::GsMaterial>();
             let chars = [0, 2, 1, 3].map(|s| room.seats[s].as_ref().unwrap().pick.char).to_vec();
             app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games as i32, pads: None });
-            app.insert_resource(Pads { seats: Some([true; 4]), autoplay: false, ..default() });
+            // the computer plays the seats no person has (B151: started with open seats)
+            let human = std::array::from_fn(|i| room.seats[i].as_ref().is_some_and(Seat::human));
+            app.insert_resource(Pads { seats: Some(human), autoplay: false, ..default() });
             app.init_resource::<tick_input::TickPads>();
             app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
             app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
@@ -647,7 +650,10 @@ mod tests {
 
         /// Rounds until the match is over or `limit`, `bad` changes the guest's pads at that tick; the two apps.
         fn play(lag: u32, limit: u32, bad: Option<u32>) -> [App; 2] {
-            let room = room(crate::net::delay_for(std::time::Duration::from_millis(2 * lag as u64 * 1000 / 60)));
+            play_room(room(crate::net::delay_for(std::time::Duration::from_millis(2 * lag as u64 * 1000 / 60))), lag, limit, bad)
+        }
+
+        fn play_room(room: Room, lag: u32, limit: u32, bad: Option<u32>) -> [App; 2] {
             let mut apps = [app(&room, "host"), app(&room, "g")];
             let mut wire: Vec<(usize, u32, Msg)> = Vec::new();
             // an instant replay's queue as each tick of it runs: it only plays its own pads (M2h1)
@@ -696,6 +702,25 @@ mod tests {
         #[test]
         fn doubles_at_100ms_stays_in_sync() {
             in_sync(3600, false);
+        }
+
+        /// B151: the host started with two seats open, the computer plays them on both machines alike.
+        #[test]
+        fn doubles_with_computer_seats_stays_in_sync() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let mut room = room(crate::net::delay_for(std::time::Duration::from_millis(200)));
+            room.seats[1] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(1, 0) });
+            room.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(3, 0) });
+            let apps = play_room(room, 6, 3600, None);
+            let [a, b] = apps.each_ref().map(|a| a.world().resource::<Netplay>());
+            assert_eq!((a.end.as_deref(), b.end.as_deref()), (None, None));
+            assert_eq!((a.lock.mine.clone(), b.lock.mine.clone()), (vec![0], vec![2]));
+            let n = a.lock.log.len().min(b.lock.log.len());
+            assert!(n > 3000, "{n} ticks");
+            eprintln!("computer seats in sync over {n} ticks");
+            assert_eq!(a.lock.log[..n], b.lock.log[..n]);
         }
 
         fn in_sync(limit: u32, to_the_end: bool) {

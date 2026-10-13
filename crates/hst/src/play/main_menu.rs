@@ -1100,8 +1100,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
-        "lobby" | "lobby-ask" => Screen::Lobby,
-        "code" => Screen::Code,
+        "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
+        "code" | "name" => Screen::Code,
         _ => Screen::Main,
     };
     if fresh && menu.screen == Screen::Main {
@@ -1117,7 +1117,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].card = screen.ends_with("attrs");
         menu.players[0].ready = screen == "coms";
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
-        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
+        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) {
             online::sample(&mut menu);
         }
     }
