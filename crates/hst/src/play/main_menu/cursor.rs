@@ -21,7 +21,7 @@ const LAYER: usize = 8;
 const SIZE: UVec2 = UVec2::new(256, 128);
 /// The box the image shows (x, y centre after the root's turn; width; the height is half of it): the hand and
 /// fingers of `cursor.ani`, fingertip right as the original's.
-const VIEW: [f32; 3] = [-0.09, -0.02, 0.3];
+const VIEW: [f32; 3] = [-0.11, -0.02, 0.35];
 
 #[derive(Resource)]
 pub(super) struct Cursor {
@@ -48,14 +48,18 @@ pub(super) fn setup(
         commands.entity(root).despawn();
         return;
     };
-    // the original lights it (VU1): lit here by its own light, grey on the shadowed side
+    // the original lights it (VU1): lit here by its own light from the front and above, mid-grey with darker edges
+    // and a lighter back as the original's (Options screen, context/b135/orig)
     for m in &shown.materials {
         if let Some(mut m) = materials.get_mut(m) {
             m.unlit = false;
             m.perceptual_roughness = 0.8;
+            // a solid hand: blended (no depth write) its palm and curled fingers showed through the back in draw order
+            m.alpha_mode = AlphaMode::Opaque;
+            m.depth_bias = 0.0;
         }
     }
-    commands.spawn((DirectionalLight { illuminance: 4000.0, ..default() }, Transform::from_xyz(-1.0, 2.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y), layers.clone()));
+    commands.spawn((DirectionalLight { illuminance: 800.0, ..default() }, Transform::from_xyz(0.0, 3.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y), layers.clone()));
     // no MOR: without this the effect ends on its first frame
     effect.looping = true;
     effect.start();
@@ -69,7 +73,7 @@ pub(super) fn setup(
         Msaa::Off,
         Projection::Orthographic(OrthographicProjection { scaling_mode: ScalingMode::Fixed { width: w, height: w / 2.0 }, ..OrthographicProjection::default_3d() }),
         Transform::from_xyz(x, y, 10.0),
-        AmbientLight { brightness: 250.0, ..default() },
+        AmbientLight { brightness: 50.0, ..default() },
         layers,
     ));
     commands.insert_resource(Cursor { image, effect, shown, acc: 0.0 });
