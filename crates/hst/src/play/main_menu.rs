@@ -545,7 +545,7 @@ impl Menu {
             }
         };
         // a lobby link's start (`online::linked`): the first device to press anything is this machine's player
-        if self.screen == Screen::Chars && self.online() && self.seats[0].is_none() {
+        if self.screen == Screen::Assign && self.online() && self.seats[0].is_none() {
             self.seats[0] = Some(dev);
         }
         let host = self.seats[0];
@@ -637,10 +637,15 @@ impl Menu {
                             *p = Player::default();
                         }
                         self.custom = false;
-                        self.go(Screen::Chars, &mut out);
+                        if self.online() {
+                            // B195: into the lobby first (seats held), then its character select
+                            self.online_open(&mut out);
+                        } else {
+                            self.go(Screen::Chars, &mut out);
+                        }
                     } else if k.back {
                         self.seats[1..].fill(None);
-                        self.screen = Screen::Mode;
+                        self.screen = if self.net.go == Some(online::Go::Find) { Screen::Lobbies } else { Screen::Mode };
                         out.push(Sound(1));
                     }
                 } else if k.ok && seated.is_none() {
@@ -764,7 +769,8 @@ impl Menu {
                         }
                         out.push(Sound(1));
                     } else if p == 0 {
-                        self.screen = Screen::Assign;
+                        // online: back to the lobby, the seats still held
+                        self.screen = if self.online() { Screen::Lobby } else { Screen::Assign };
                         out.push(Sound(1));
                     }
                 }
@@ -817,6 +823,8 @@ impl Menu {
                 } else if k.ok && self.sel == 0 {
                     out.extend([Sound(2), Launch]);
                     self.screen = Screen::Playing;
+                } else if k.back && self.online() {
+                    self.go(Screen::Lobby, &mut out);
                 } else if k.back {
                     for p in 0..4 {
                         self.unready(p);

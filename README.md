@@ -117,6 +117,8 @@ of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo'
 ## Online play
 
 Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
+Find lists every open lobby (singles and doubles, the host, court and open seats); you pick your characters after
+joining, in the lobby, which holds your seats meanwhile (Characters picks again, the host's Court changes the venue).
 Set your name under Online → Name; the lobby shows it on your seats. Guests press Ready, and the host presses Start
 when everyone is ready. Any seats still open are played by the computer. The host can also take a guest out of the
 lobby (OK on their seat).
