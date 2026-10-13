@@ -1,7 +1,7 @@
 //! Right-stick emotes (B145, ours, layered on top): a human flicks the right stick fully up / down / left / right
 //! (keys 1–4) and their player plays one of four of the character's own motions with its voice line, standing: no
 //! run, no stroke and no swing press until the motion is out. A ball that comes meanwhile goes by unhit — that's the
-//! cost. Only between points' starts and ends: in a rally, or waiting for an opponent's serve (not serving, not
+//! cost. Only between points' starts and ends: in a rally, waiting for a serve, or serving before the toss (not
 //! mid-stroke, not reacting to a point). The flick is part of the match input (`tick_input`'s right stick bytes),
 //! so replays and online play see it alike; bots never emote. Nothing here draws from the match's generators.
 
@@ -31,7 +31,9 @@ pub(super) fn flick(v: Vec2) -> Option<u8> {
 /// Human player `i`'s turn while it may emote: `start` is this tick's new flick. True while the emote holds the
 /// player (`control` skips its turn).
 pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
-    let open = g.phase == Phase::Rally || g.phase == Phase::Serve && g.score.server != i as i32;
+    // the server too, until its toss (B228: online the host is 1P, who serves first)
+    let serving = g.phase == Phase::Serve && g.score.server == i as i32;
+    let open = g.phase == Phase::Rally || g.phase == Phase::Serve && (!serving || g.serving.toss.is_none());
     if !open {
         g.players[i].emote = 0;
         return false;
@@ -55,6 +57,10 @@ pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
     }
     p.emote -= 1;
     (p.prev, p.vel, p.aim, p.dpad) = (p.pos, Vec2::ZERO, Vec2::ZERO, 0);
+    if serving {
+        // the ball stays in hand (`held_ball` puts it at the emote's hand), as `serve_turn` holds it
+        super::hold_ball(g);
+    }
     true
 }
 
@@ -128,11 +134,15 @@ mod match_tests {
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
     fn app(pads: Vec<[Pad; 4]>) -> App {
+        seated([false, true, false, false], pads)
+    }
+
+    fn seated(seats: [bool; 4], pads: Vec<[Pad; 4]>) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
-        app.insert_resource(Pads { seats: Some([false, true, false, false]), autoplay: false, ..default() });
+        app.insert_resource(Pads { seats: Some(seats), autoplay: false, ..default() });
         app.insert_resource(Replay(pads.into_iter().collect()));
         app.init_resource::<TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
@@ -206,5 +216,38 @@ mod match_tests {
             }
         }
         panic!("the point never ended");
+    }
+
+    /// B228: the server emotes before its toss (online the host is 1P and serves first), the ball in its hand
+    /// all the while, then tosses as usual.
+    #[test]
+    fn the_server_emotes_before_the_toss() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let flick = Pad { rx: 0, ry: 0x80, ..IDLE };
+        let cross = Pad { buttons: 0x2000, ..IDLE };
+        let len = app(vec![]).world().resource::<Game>().data[0].motions[&MOTIONS[2]].length.ceil() as usize;
+        let (at, n) = (10, 600);
+        let mut pads = vec![[IDLE; 4]; n];
+        pads[at][0] = flick;
+        pads[at + len + 5][0] = cross;
+        let mut a = seated([true, false, false, false], pads);
+        for t in 0..n {
+            a.world_mut().run_schedule(FixedUpdate);
+            let g = a.world().resource::<Game>();
+            let p = &g.players[0];
+            if (at..at + len).contains(&t) {
+                assert_eq!((p.emote as usize, p.cmd.id, g.phase.clone()), (at + len - 1 - t, MOTIONS[2], Phase::Serve), "tick {t}");
+                let d = (0..3).map(|k| (g.flight.ball.pos[k] - p.pos[k]).powi(2)).sum::<f32>().sqrt();
+                assert!(d < 2.5 && g.flight.ball.vel == [0.0; 3], "the ball left the hand, tick {t}: {d} m");
+            }
+            // the press tosses (a second would swing)
+            if g.serving.toss.is_some() {
+                assert_eq!(t, at + len + 5, "tossed at tick {t}");
+                return;
+            }
+        }
+        panic!("never tossed");
     }
 }
