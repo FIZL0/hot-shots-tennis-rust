@@ -500,7 +500,7 @@ pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     crate::textures::add_tim2(images, img, &pic)
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>) {
+fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>, mods: Option<Res<crate::mods::MatchMod>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso
         .read("AZUMA/INPANE/INPANE.XB0")
@@ -523,10 +523,22 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         .iter()
         .map(|t| get(format!("/{}.tm2", t.to_ascii_lowercase())))
         .collect();
-    art.extend(g.chars.iter().enumerate().map(|(i, &c)| {
+    // B133: a mod's own face, cut from its select preview (the donor's until that's baked)
+    let own: Vec<_> = (0..g.chars.len()).map(|i| {
         let o = args.outfits.get(i).copied().unwrap_or(0);
-        get(format!("face/face_{c:02}_{o:02}.tm2"))
-    }));
+        mods.as_ref().and_then(|m| m.get(i)).and_then(|m| super::main_menu::mod_face(&args.iso, m, o))
+    }).collect();
+    let mut drawn = Vec::new();
+    for (i, (&c, own)) in g.chars.iter().zip(own).enumerate() {
+        let o = args.outfits.get(i).copied().unwrap_or(0);
+        if let Some(img) = own {
+            drawn.push((art.len(), img));
+        }
+        art.push(get(format!("face/face_{c:02}_{o:02}.tm2")));
+    }
+    for (k, img) in drawn {
+        art[k] = images.add(img);
+    }
     commands.insert_resource(Art(art));
     let (cnf, bin) = (
         iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"),
