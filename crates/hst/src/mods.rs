@@ -77,17 +77,21 @@ impl MatchMod {
 pub fn read(dir: &Path) -> Result<Mod, String> {
     let at = dir.join("mod.json");
     let err = |m: String| format!("{}: {m}", at.display());
-    let text = std::fs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
+    let text = crate::modfs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
     let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
     let num = |v: &serde_json::Value, what: &str, max: u64| v.as_u64().filter(|&n| n <= max).map(|n| n as usize).ok_or_else(|| err(format!("`{what}` must be a number 0..={max}")));
-    let text = |k: &str| j[k].as_str().map(str::to_string).ok_or_else(|| err(format!("`{k}` must be a string")));
+    // shown as plain text, length-capped (M16)
+    let text = |k: &str| j[k].as_str().filter(|t| (1..=64).contains(&t.chars().count())).map(str::to_string).ok_or_else(|| err(format!("`{k}` must be a string of 1 to 64 characters")));
+    // a path in the manifest names a file inside the mod, never anything outside it (M16)
+    let inside = |k: &str, f: &str| if crate::modfs::plain(f) { Ok(()) } else { Err(err(format!("`{k}` `{f}` must be a path inside the mod folder"))) };
     if j["standard"].as_u64() != Some(1) {
         return Err(err(format!("`standard` is {}, this game reads standard 1", j["standard"])));
     }
     let mut costumes: Vec<String> = j["costumes"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    costumes.iter().try_for_each(|c| inside("costumes", c))?;
     // M1n: a listed costume with no .glb is left out (the select never offers an empty one), not the whole mod
     costumes.retain(|c| {
-        let ok = dir.join(c).is_file();
+        let ok = crate::modfs::is_file(&dir.join(c));
         if !ok {
             warn!("{}: costume `{c}` not found, left out", at.display());
         }
@@ -116,16 +120,21 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     }
     let texture_face = match j["face"].as_str() {
         Some("morph" | "none") => false,
-        Some("texture") if dir.join("face.json").is_file() => true,
+        Some("texture") if crate::modfs::is_file(&dir.join("face.json")) => true,
         Some("texture") => return Err(err("`face` \"texture\" needs a face.json".into())),
         _ => return Err(err("`face` must be \"morph\", \"texture\" or \"none\"".into())),
     };
     if !j["eyes"].is_null() && !j["eyes"].as_array().is_some_and(|a| a.iter().all(|m| m.is_string())) {
         return Err(err("`eyes` must list the eyes' glTF material names".into()));
     }
+    if let Some(f) = j["motions"].as_str() {
+        inside("motions", f)?;
+    }
+    let voice = j["voice"].as_str().unwrap_or("voice/").to_string();
+    inside("voice", voice.strip_suffix('/').unwrap_or(&voice))?;
     let motions = match &j["motions"] {
         serde_json::Value::Null => None,
-        serde_json::Value::String(f) if dir.join(f).is_file() => Some(f.clone()),
+        serde_json::Value::String(f) if crate::modfs::is_file(&dir.join(f)) => Some(f.clone()),
         v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
     };
     let ai_row = num(&j["ai_row"], "ai_row", 13)?;
@@ -141,7 +150,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         dir: dir.to_path_buf(),
         id: text("id")?,
         name: text("name")?,
-        source: game(j["source"].as_str().unwrap_or("")),
+        source: game(j["source"].as_str().unwrap_or("")).chars().take(64).collect(),
         costumes,
         donor,
         hand,
@@ -150,7 +159,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         ai_row,
         texture_face,
         no_face: j["face"] == "none",
-        voice: j["voice"].as_str().unwrap_or("voice/").to_string(),
+        voice,
     })
 }
 
@@ -164,10 +173,10 @@ fn game(source: &str) -> String {
 /// A folder without a `mod.json` is searched one level down (a pack, e.g. `mods/hst-mods` → the mods repo's `out/mods`);
 /// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly.
 pub fn list(root: &Path) -> Vec<Mod> {
-    let sub = |d: &Path| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).collect::<Vec<_>>();
+    let sub = crate::modfs::read_dir;
     // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods)
     let mut dirs: Vec<PathBuf> =
-        sub(root).into_iter().flat_map(|d| if d.join("mod.json").is_file() { vec![d] } else { sub(&d) }).filter(|d| d.join("mod.json").is_file()).collect();
+        sub(root).into_iter().flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
     dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }
@@ -217,13 +226,145 @@ pub fn voice(m: &Mod) -> Option<crate::audio::SoundBank> {
 }
 
 /// A `.glb`: its document and binary chunk.
-fn open(path: &Path) -> Result<(gltf::Document, Vec<u8>), String> {
+pub(crate) fn open(path: &Path) -> Result<(gltf::Document, Vec<u8>), String> {
     // ponytail: glTF's own validation skipped (older rerig.py output lacks POSITION min/max); §7's checks gate the file
-    let g = gltf::Gltf::from_slice_without_validation(&std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
+    let g = gltf::Gltf::from_slice_without_validation(&crate::modfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
     if g.buffers().any(|b| !matches!(b.source(), gltf::buffer::Source::Bin)) {
         return Err(format!("{}: buffers must be embedded (.glb)", path.display()));
     }
-    Ok((g.document, g.blob.unwrap_or_default()))
+    let blob = g.blob.unwrap_or_default();
+    sound(&g.document, &blob).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((g.document, blob))
+}
+
+/// A `.glb`'s structure, checked before anything reads it (M16: a mod is hostile input until it passes): glTF's own
+/// validation (indices in range, enums; POSITION's min/max may be missing), images embedded, every accessor dense,
+/// inside its view and the view inside the binary chunk, of the type its reader takes, the node tree a tree no deeper
+/// than 1024, each skin's inverse binds one per joint, and each primitive's attributes as long as its POSITION, its
+/// indices and joints in range.
+fn sound(doc: &gltf::Document, blob: &[u8]) -> Result<(), String> {
+    use gltf::accessor::{DataType as D, Dimensions as N};
+    use gltf::json::validation::Validate;
+    let root = doc.as_json();
+    // gltf-json's validation indexes POSITION's accessor unchecked (it would panic)
+    let pos = gltf::json::validation::Checked::Valid(gltf::Semantic::Positions);
+    if root.meshes.iter().flat_map(|m| &m.primitives).any(|p| p.attributes.get(&pos).is_some_and(|a| a.value() >= root.accessors.len())) {
+        return Err("a POSITION accessor that isn't there".into());
+    }
+    // nor does it check an animation channel's target node
+    if root.animations.iter().flat_map(|a| &a.channels).any(|c| c.target.node.value() >= root.nodes.len()) {
+        return Err("an animation of a node that isn't there".into());
+    }
+    let mut bad = None;
+    root.validate(root, gltf::json::Path::new, &mut |path, e| {
+        let p = path().to_string();
+        if !(p.ends_with(".min") || p.ends_with(".max")) {
+            bad.get_or_insert(format!("not valid glTF: {p}: {e}"));
+        }
+    });
+    if let Some(e) = bad {
+        return Err(e);
+    }
+    if doc.images().any(|i| !matches!(i.source(), gltf::image::Source::View { .. })) {
+        return Err("images must be embedded".into());
+    }
+    for a in doc.accessors() {
+        let (Some(v), None) = (a.view(), a.sparse()) else { return Err(format!("accessor {} must be dense, in a buffer view", a.index())) };
+        let stride = v.stride().unwrap_or(a.size());
+        let end = (a.count().checked_sub(1)).and_then(|c| c.checked_mul(stride)).and_then(|n| n.checked_add(a.offset() + a.size()));
+        let view_end = v.offset().checked_add(v.length());
+        if stride < a.size() || end.is_none_or(|e| e > v.length()) || view_end.is_none_or(|e| e > blob.len()) {
+            return Err(format!("accessor {} is outside its data", a.index()));
+        }
+    }
+    let is = |a: &gltf::Accessor, dims: &[N], types: &[D]| -> Result<(), String> {
+        if dims.contains(&a.dimensions()) && types.contains(&a.data_type()) { Ok(()) } else { Err(format!("accessor {} has the wrong type", a.index())) }
+    };
+    let ints = [D::U8, D::U16];
+    let unorm = [D::F32, D::U8, D::U16];
+    let n_nodes = doc.nodes().len();
+    let mut parent = vec![None; n_nodes];
+    for n in doc.nodes() {
+        for c in n.children() {
+            if parent[c.index()].replace(n.index()).is_some() {
+                return Err(format!("node {} has two parents", c.index()));
+            }
+        }
+    }
+    for i in 0..n_nodes {
+        let (mut p, mut depth) = (parent[i], 0);
+        while let Some(q) = p {
+            depth += 1;
+            if depth > 1024 || q == i {
+                return Err("the node tree has a loop or is too deep".into());
+            }
+            p = parent[q];
+        }
+    }
+    let joints = doc.skins().map(|s| s.joints().len()).max().unwrap_or(0);
+    for s in doc.skins() {
+        if s.joints().len() == 0 || s.joints().len() > u16::MAX as usize {
+            return Err("a skin with no or too many joints".into());
+        }
+        if let Some(a) = s.inverse_bind_matrices() {
+            is(&a, &[N::Mat4], &[D::F32])?;
+            if a.count() != s.joints().len() {
+                return Err("a skin's inverse binds aren't one per joint".into());
+            }
+        }
+    }
+    for mesh in doc.meshes() {
+        for p in mesh.primitives() {
+            let pos = p.get(&gltf::Semantic::Positions).ok_or("a primitive without POSITION")?;
+            let n = pos.count();
+            for (sem, a) in p.attributes() {
+                use gltf::Semantic as S;
+                match sem {
+                    S::Positions | S::Normals => is(&a, &[N::Vec3], &[D::F32])?,
+                    S::Tangents => is(&a, &[N::Vec4], &[D::F32])?,
+                    S::TexCoords(_) => is(&a, &[N::Vec2], &unorm)?,
+                    S::Colors(_) => is(&a, &[N::Vec3, N::Vec4], &unorm)?,
+                    S::Joints(_) => is(&a, &[N::Vec4], &ints)?,
+                    S::Weights(_) => is(&a, &[N::Vec4], &unorm)?,
+                    S::Extras(_) => is(&a, &[N::Vec2], &[D::F32])?,
+                }
+                if a.count() != n {
+                    return Err(format!("accessor {} isn't one per vertex", a.index()));
+                }
+            }
+            for t in p.morph_targets() {
+                for a in [t.positions(), t.normals(), t.tangents()].into_iter().flatten() {
+                    is(&a, &[N::Vec3], &[D::F32])?;
+                    if a.count() != n {
+                        return Err(format!("accessor {} isn't one per vertex", a.index()));
+                    }
+                }
+            }
+            let r = p.reader(|_| Some(blob));
+            if let Some(a) = p.indices() {
+                is(&a, &[N::Scalar], &[D::U8, D::U16, D::U32])?;
+            }
+            if r.read_indices().is_some_and(|i| i.into_u32().any(|i| i as usize >= n)) {
+                return Err("a primitive's indices go past its vertices".into());
+            }
+            if p.get(&gltf::Semantic::Joints(0)).is_some() && r.read_joints(0).is_some_and(|j| j.into_u16().flatten().any(|j| j as usize >= joints.max(1))) {
+                return Err("a vertex rides a joint the skin doesn't have".into());
+            }
+        }
+    }
+    for anim in doc.animations() {
+        for c in anim.channels() {
+            let (i, o) = (c.sampler().input(), c.sampler().output());
+            is(&i, &[N::Scalar], &[D::F32])?;
+            use gltf::animation::Property as P;
+            match c.target().property() {
+                P::Translation | P::Scale => is(&o, &[N::Vec3], &[D::F32])?,
+                P::Rotation => is(&o, &[N::Vec4], &[D::F32, D::I8, D::U8, D::I16, D::U16])?,
+                P::MorphTargetWeights => is(&o, &[N::Scalar], &[D::F32, D::I8, D::U8, D::I16, D::U16])?,
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every node's glTF world matrix.
@@ -393,7 +534,7 @@ fn materials_of(
     for im in doc.images() {
         let gltf::image::Source::View { view, mime_type } = im.source() else { return Err("images must be embedded".into()) };
         let bytes = blob.get(view.offset()..view.offset() + view.length()).ok_or("image outside the buffer")?;
-        let up = upscaled.and_then(|d| std::fs::read(d.join(image_file(&im))).ok());
+        let up = upscaled.filter(|_| crate::modfs::plain(&image_file(&im))).and_then(|d| crate::modfs::read(&d.join(image_file(&im))).ok());
         let (bytes, ty) = match &up {
             Some(b) => (&b[..], ImageType::Extension("png")),
             None => (bytes, ImageType::MimeType(mime_type)),
@@ -451,7 +592,7 @@ fn texture_face(
 ) -> Result<character::TextureFace, String> {
     let at = dir.join("face.json");
     let err = |m: String| format!("{}: {m}", at.display());
-    let text = std::fs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
+    let text = crate::modfs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
     let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
     // one image pair per file (an emotion's eye and mouth channels share one)
     let mut loaded: HashMap<String, (Handle<Image>, Handle<Image>)> = HashMap::new();
@@ -459,7 +600,10 @@ fn texture_face(
         if let Some(t) = loaded.get(p) {
             return Ok(t.clone());
         }
-        let bytes = std::fs::read(dir.join(p)).map_err(|e| err(format!("`{p}`: {e}")))?;
+        if !crate::modfs::plain(p) {
+            return Err(err(format!("`{p}` must be a path inside the mod folder")));
+        }
+        let bytes = crate::modfs::read(&dir.join(p)).map_err(|e| err(format!("`{p}`: {e}")))?;
         let ext = Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("png");
         let sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, address_mode_v: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::linear() });
         let img = Image::from_buffer(&bytes, ImageType::Extension(ext), CompressedImageFormats::NONE, true, sampler, RenderAssetUsages::RENDER_WORLD).map_err(|e| err(format!("`{p}`: {e}")))?;
@@ -698,7 +842,7 @@ pub fn load(
 
     // the racket: racket.glb in the Racket joint's space, else the donor's
     let racket = match m.dir.join("racket.glb") {
-        f if f.is_file() => {
+        f if crate::modfs::is_file(&f) => {
             let (rdoc, rblob) = open(&f)?;
             let rh = materials_of(&rdoc, &rblob, upscaled_dir(m, &f).as_deref(), images, materials, &mut gs)?;
             let mut out = Vec::new();
@@ -744,7 +888,7 @@ pub fn load(
 
 /// `mod.json`'s `eyes` (§4c): the glTF materials the donor's `.UVA` eye track moves (`read` checked the list).
 fn eye_materials(dir: &Path) -> Vec<String> {
-    let j: serde_json::Value = std::fs::read_to_string(dir.join("mod.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let j: serde_json::Value = crate::modfs::read_to_string(&dir.join("mod.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     j["eyes"].as_array().into_iter().flatten().filter_map(|m| m.as_str().map(str::to_string)).collect()
 }
 
@@ -782,6 +926,13 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
                 Some(ReadOutputs::Translations(t)) => t.map(|[x, y, z]| [x, y, z, 1.0]).collect(),
                 _ => continue,
             };
+            // hostile input (M16): the game's squad and sinf take unit quaternions, ticks fit an i32
+            let unit = |v: &[f32; 4]| (v.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 0.01;
+            let near = |v: &[f32; 4]| v.iter().all(|x| x.abs() < 1000.0);
+            let rot = matches!(c.target().property(), gltf::animation::Property::Rotation);
+            if !times.iter().all(|t| (0.0..=3600.0).contains(t)) || !values.iter().all(|v| if rot { unit(v) } else { near(v) }) {
+                return Err(ctx(format!("`{name}`: a key out of range (times 0..=3600 s, rotations unit, positions within 1000 m)")));
+            }
             let mut list: Vec<(i32, [f32; 4])> = Vec::new();
             for (t, v) in times.iter().zip(values) {
                 match list.last_mut() {
@@ -1161,6 +1312,105 @@ mod tests {
             assert!(hand.iter().all(|p| p.is_finite() && p.length() < 2.5), "{hand:?}");
             assert!(hand.iter().any(|p| (*p - hand[0]).length() > 0.05), "motion {id:#x} doesn't move the hand");
         }
+    }
+
+    /// Seeded mutations of a real mod's costume and motions `.glb` (numbers in its glTF JSON, bytes in its binary
+    /// chunk): `read`, `check`, `skeleton` and (with the ISO) `load` return errors, never panic (M16's fuzz run;
+    /// `HST_FUZZ=n` runs n instead of 400).
+    #[test]
+    fn mutated_glbs_never_panic() {
+        let dir = Path::new(MODS).join("opentee2_pc16_lauryn");
+        if !dir.is_dir() {
+            return eprintln!("no context/mods/opentee2_pc16_lauryn, skipped");
+        }
+        let mut iso = Iso::open(ISO).ok();
+        let at = Path::new("t_fuzz/lauryn");
+        let files = crate::modfs::tests::dir_files(&dir);
+        for (n, b) in files.iter().filter(|f| !f.0.starts_with("textures/") && !f.0.starts_with("voice/")) {
+            crate::modfs::add(&at.join(n), b.clone().into());
+        }
+        let mut s = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let numbers = [0.0, 1.0, -1.0, 2.0, 3.0, 4.0, 255.0, 65535.0, 4294967295.0, 1e30, -1e30, 0.5];
+        let n = std::env::var("HST_FUZZ").ok().and_then(|n| n.parse().ok()).unwrap_or(400);
+        let (mut loaded, mut checked, mut panics) = (0, 0, Vec::new());
+        for i in 0..n {
+            let name = if i % 3 == 2 { "motions.glb" } else { "model/pc16_lauryn_own.glb" };
+            let glb = &files.iter().find(|f| f.0 == name).unwrap().1;
+            let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+            let (mut j, mut bin): (serde_json::Value, Vec<u8>) = (serde_json::from_slice(&glb[20..20 + len]).unwrap(), glb[20 + len..].to_vec());
+            if i % 2 == 0 {
+                // 1..=3 numbers anywhere in the JSON (indices, counts, offsets, strides, types, values)
+                fn nth(v: &mut serde_json::Value, k: &mut usize, to: f64) -> bool {
+                    match v {
+                        serde_json::Value::Number(_) if *k == 0 => {
+                            *v = serde_json::Number::from_f64(to).map_or(serde_json::Value::Null, |n| if to.fract() == 0.0 && to.abs() < 1e19 { (to as i64).into() } else { n.into() });
+                            true
+                        }
+                        serde_json::Value::Number(_) => {
+                            *k -= 1;
+                            false
+                        }
+                        serde_json::Value::Array(a) => a.iter_mut().any(|v| nth(v, k, to)),
+                        serde_json::Value::Object(o) => o.values_mut().any(|v| nth(v, k, to)),
+                        _ => false,
+                    }
+                }
+                fn count(v: &serde_json::Value) -> usize {
+                    match v {
+                        serde_json::Value::Number(_) => 1,
+                        serde_json::Value::Array(a) => a.iter().map(count).sum(),
+                        serde_json::Value::Object(o) => o.values().map(count).sum(),
+                        _ => 0,
+                    }
+                }
+                let leaves = count(&j);
+                for _ in 0..1 + rnd() % 3 {
+                    let to = if rnd() % 2 == 0 { numbers[rnd() as usize % numbers.len()] } else { (rnd() % 100_000) as f64 };
+                    nth(&mut j, &mut (rnd() as usize % leaves), to);
+                }
+            } else {
+                // bytes of the binary chunk (vertex data, indices, joints, weights, inverse binds, keys)
+                for _ in 0..1 + rnd() % 64 {
+                    let k = 8 + rnd() as usize % (bin.len() - 8);
+                    bin[k] = rnd() as u8;
+                }
+            }
+            let mut text = serde_json::to_vec(&j).unwrap();
+            text.resize(text.len().next_multiple_of(4), b' ');
+            let mut out = b"glTF".to_vec();
+            out.extend(2u32.to_le_bytes());
+            out.extend(((20 + text.len() + bin.len()) as u32).to_le_bytes());
+            out.extend((text.len() as u32).to_le_bytes());
+            out.extend(b"JSON");
+            out.extend(text);
+            out.extend(bin);
+            crate::modfs::add(&at.join(name), out.into());
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Ok(m) = read(at)
+                    && check(&m).is_ok()
+                    && skeleton(&m, 0).is_ok()
+                {
+                    checked += 1;
+                    if let Some(iso) = iso.as_mut() {
+                        let mut s = Stores(default(), default(), default(), default());
+                        loaded += load(iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).is_ok() as usize;
+                    }
+                }
+            }));
+            if run.is_err() {
+                panics.push(i);
+            }
+            crate::modfs::add(&at.join(name), glb.clone().into());
+        }
+        eprintln!("{n} mutations: {checked} passed the checks, {loaded} loaded");
+        crate::modfs::remove(Path::new("t_fuzz"));
+        assert!(panics.is_empty(), "mutations {panics:?} panicked");
     }
 
     /// A model off the standard is refused, naming what is wrong.

@@ -44,6 +44,9 @@ pub(crate) use previews::face;
 mod cursor;
 pub(crate) mod flame;
 mod online;
+mod mods_screen;
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
+pub(crate) use mods_screen::ROOT as MODS_ROOT;
 pub(super) mod pause;
 mod previews;
 mod slide;
@@ -317,6 +320,8 @@ enum Screen {
     Lobby,
     /// Join by Code's code entry (B104).
     Code,
+    /// M16: add and remove mods (the browser build's; `mods_screen.rs`).
+    Mods,
     /// A match is running (the window is hidden).
     Playing,
 }
@@ -379,6 +384,8 @@ struct Menu {
     picking: Option<usize>,
     /// B190: the custom grid's fit to the window.
     grid: Grid,
+    /// M16: the Mods screen's state.
+    add: mods_screen::View,
 }
 
 impl Default for Menu {
@@ -403,6 +410,7 @@ impl Default for Menu {
             flame: flame::Flame::default(),
             picking: None,
             grid: Grid::default(),
+            add: default(),
         }
     }
 }
@@ -412,7 +420,7 @@ impl Default for Menu {
 const MAIN: [&str; 4] = ["Local", "Online", "Settings", "Quit"];
 /// A web page can't close itself (an `AppExit` there only freezes it), so the browser build has no Quit.
 #[cfg(target_arch = "wasm32")]
-const MAIN: [&str; 3] = ["Local", "Online", "Settings"];
+const MAIN: [&str; 4] = ["Local", "Online", "Settings", "Mods"];
 const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
@@ -555,6 +563,8 @@ impl Menu {
                             self.go(Screen::Online, &mut out);
                         }
                         2 => self.go(Screen::Settings, &mut out),
+                        #[cfg(target_arch = "wasm32")]
+                        3 => self.mods_open(&mut out),
                         _ => out.push(Quit),
                     }
                 }
@@ -815,6 +825,7 @@ impl Menu {
                 }
             }
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
+            Screen::Mods => self.mods_step(k, &mut out),
             _ => {}
         }
         out
@@ -1240,6 +1251,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "lobbies" => Screen::Lobbies,
         "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
         "code" | "name" => Screen::Code,
+        "addmods" => Screen::Mods,
         _ => Screen::Main,
     };
     if fresh && menu.screen == Screen::Main {
@@ -1299,12 +1311,13 @@ struct Draw<'a> {
 
 const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
-const TITLES: [(&str, [f32; 3]); 5] = [
+const TITLES: [(&str, [f32; 3]); 6] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
     ("Options", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
     ("Character Selection", [102.0, 70.0, 40.0]),
     ("Confirm Settings", [55.0, 80.0, 42.0]),
+    ("Mods", [110.0, 65.0, 75.0]),
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];
@@ -1565,6 +1578,8 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 0 => text.msg(188).to_string(),
                 1 => "Play over the internet (coming later).".into(),
                 2 => text.msg(190).to_string(),
+                #[cfg(target_arch = "wasm32")]
+                3 => "Add custom characters from mod .zip files, or remove them.".into(),
                 _ => "Close the game.".into(),
             };
             d.info(&info);
@@ -1648,6 +1663,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, hand_x),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
+        Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
     }
     (d.out, d.said)
 }
@@ -2250,6 +2266,7 @@ impl Screen {
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
+            Screen::Mods => Some(0),
             Screen::Playing => None,
         }
     }
@@ -2286,6 +2303,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
     app.init_resource::<pause::Click>().add_systems(Update, (online::poll.before(draw), online::typing.before(step), online::pointer.before(step)));
     previews::plugin(app);
+    mods_screen::plugin(app);
 }
 
 #[cfg(test)]

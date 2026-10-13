@@ -40,13 +40,13 @@ impl SoundBank {
     #[allow(dead_code)]
     pub fn wavs(dir: &std::path::Path) -> Option<Self> {
         let mut wav: std::collections::HashMap<usize, Vec<(usize, (Arc<[i16]>, u32))>> = Default::default();
-        for e in std::fs::read_dir(dir).ok()?.flatten() {
-            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        for e in crate::modfs::read_dir(dir) {
+            let name = e.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
             let Some((p, k)) = name.strip_suffix(".wav").and_then(|s| s.split_once('_')) else { continue };
             let (Ok(p), Ok(k)) = (p.parse(), k.parse()) else { continue };
-            match std::fs::read(e.path()).ok().and_then(|d| pcm(&d)) {
+            match crate::modfs::read(&e).ok().and_then(|d| pcm(&d)) {
                 Some((pcm, rate)) => wav.entry(p).or_default().push((k, (pcm.into(), rate))),
-                None => warn!("{}: not a PCM16 wav, skipped", e.path().display()),
+                None => warn!("{}: not a PCM16 wav, skipped", e.display()),
             }
         }
         let wav: std::collections::HashMap<_, _> = wav.into_iter().map(|(p, mut ks)| { ks.sort_by_key(|k| k.0); (p, ks.into_iter().map(|k| k.1).collect()) }).collect();
@@ -56,7 +56,7 @@ impl SoundBank {
 
 /// A RIFF PCM16 wav as mono samples (channels averaged) and its sample rate.
 // ponytail: PCM16 only (what the mod tools write)
-fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
+pub(crate) fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
     if d.get(0..4)? != b"RIFF" || d.get(8..12)? != b"WAVE" {
         return None;
     }
