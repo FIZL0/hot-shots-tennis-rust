@@ -9,7 +9,8 @@
 //! beside the disc image.
 //!
 //! Who plays: the device that chose Local is player 1; in the assignment the other pads and the keyboard join with ✕
-//! (the first free seat, ←/→ to change seat, ○ to leave), up to four humans, any device on any seat; the rest are the
+//! (the first free seat, ←/→ to change seat, ○ or its seat's ✕ to leave; on the character select ✕ holds the seat open
+//! for the next device's ✕, B238), up to four humans, any device on any seat; the rest are the
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
@@ -296,6 +297,8 @@ impl Settings {
 enum Dev {
     Keys,
     Pad(Entity),
+    /// B238: a human's seat on the character select whose device was taken off (✕): the next device's ✕ takes it.
+    Open,
 }
 
 /// One device's presses this frame (directions already repeated).
@@ -548,6 +551,21 @@ impl Menu {
         None
     }
 
+    /// B238: whether seat `p` has a device that ✕ may take off: not this machine's first (the menu's driver).
+    fn droppable(&self, p: usize) -> bool {
+        matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && self.seats.iter().position(Option::is_some) != Some(p)
+    }
+
+    /// B238: seat `p`'s device off it: free in the assignment, held open on the select for another device to join.
+    fn drop_seat(&mut self, p: usize) -> bool {
+        if !self.droppable(p) {
+            return false;
+        }
+        self.seats[p] = if self.screen == Screen::Chars { Some(Dev::Open) } else { None };
+        self.unready(p);
+        true
+    }
+
     /// One device's presses on the current screen.
     fn step(&mut self, dev: Dev, k: Press) -> Vec<Effect> {
         use Effect::*;
@@ -692,6 +710,12 @@ impl Menu {
                 }
             }
             Screen::Chars => {
+                // B238: a device not seated takes the first seat held open for one
+                if k.ok && !self.seats.contains(&Some(dev)) && let Some(p) = self.seats.iter().position(|s| *s == Some(Dev::Open)) {
+                    self.seats[p] = Some(dev);
+                    out.push(Sound(2));
+                    return out;
+                }
                 let Some(p) = self.driven(dev) else { return out };
                 if k.page {
                     if self.mods.is_empty() {
@@ -792,9 +816,15 @@ impl Menu {
                             self.unready(q);
                         }
                         out.push(Sound(1));
+                    } else if self.seats[p] == Some(dev) && self.drop_seat(p) {
+                        // B238: a joined device's ○ takes it off its seat
+                        out.push(Sound(1));
                     } else if p == 0 {
                         // online: back to the lobby, the seats still held
                         self.screen = if self.online() { Screen::Lobby } else { Screen::Assign };
+                        if !self.online() {
+                            self.seats.iter_mut().filter(|s| **s == Some(Dev::Open)).for_each(|s| *s = None);
+                        }
                         out.push(Sound(1));
                     }
                 }
@@ -904,7 +934,7 @@ impl Menu {
         let seat = |p: usize| match self.seats[p] {
             Some(Dev::Keys) => Some(Seat::Keys),
             Some(Dev::Pad(e)) => pads.iter().position(|x| *x == e).map(Seat::Pad),
-            None => None,
+            Some(Dev::Open) | None => None,
         };
         let seats: Vec<_> = (0..self.players()).map(seat).collect();
         let mut a = vec!["--play".to_string(), "--stage".into(), court.to_string(), "--court".into(), court.to_string()];
@@ -1575,6 +1605,7 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
         None => "COM".into(),
         Some(Dev::Keys) => "Keyboard".into(),
         Some(Dev::Pad(e)) => format!("Controller {}", pads.iter().position(|x| *x == e).map_or(0, |i| i + 1)),
+        Some(Dev::Open) => "X or Enter joins".into(),
     }
 }
 
@@ -1745,8 +1776,11 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
                 d.text(&dev_name(m.seats[p], pads), 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else { [60.0, 110.0, 40.0] });
+                if m.droppable(p) {
+                    drop_button(&mut d, p, 482.0, y + 14.0);
+                }
             }
-            d.info(&format!("{} Others: X or Enter joins, Left/Right changes seat, O leaves.", text.msg(193)));
+            d.info(&format!("{} Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
         }
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
@@ -1914,6 +1948,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             let name = m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online", |n| n.as_str());
             d.fitted(name, x + 72.0, y + 172.0, 14.0, 140.0);
         }
+        // B238: a joined device's ✕ on its card's corner, and a seat waiting for one
+        if m.seats[p] == Some(Dev::Open) {
+            d.outlined(|d| d.label("X or Enter joins", x + 72.0, y + 76.0, 18.0, 128.0, WHITE));
+        } else if m.droppable(p) {
+            drop_button(d, p, x + 120.0, y - 8.0);
+        }
         d.anchor = Anchor::Centre;
     }
     match m.who(lead) {
@@ -1926,6 +1966,13 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         Who::Disc(c) if !m.mods.is_empty() => d.info(&format!("{} (Tab / Square: custom characters)", text.msg(308 + c))),
         Who::Disc(c) => d.info(text.msg(308 + c)),
     }
+}
+
+/// B238: the ✕ that takes seat `p`'s device off it (tapped or clicked; the device's own ○ does it too).
+fn drop_button(d: &mut Draw, p: usize, x: f32, y: f32) {
+    d.pill_at([x, y, 28.0, 28.0], [INK, WHITE, [120.0, 30.0, 30.0]], 128.0);
+    d.centred("X", x + 14.0, y + 4.0, 20.0, WHITE);
+    d.hit([x, y, 28.0, 28.0], pointer::Act::Drop(p));
 }
 
 /// The header's key hints as the original's: △ the attribute card, L1 / R1 the costume (`info.tm2`'s buttons,
@@ -2717,6 +2764,46 @@ mod tests {
         }
         m.step(Dev::Keys, ok);
         assert_eq!((m.umpire as usize, m.picking), (UMPIRES, None));
+    }
+
+    #[test]
+    fn a_dropped_device_frees_its_seat() {
+        let [pa, pb] = [5, 6].map(|n| Dev::Pad(Entity::from_raw_u32(n).unwrap()));
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        m.step(pa, ok);
+        m.step(pb, ok);
+        assert_eq!(m.seats, [Some(Dev::Keys), Some(pa), Some(pb), None]);
+        // B238: the ✕ on 2P (tapped, played as 1P's device): its seat is free, another device joins it
+        m.point(Dev::Keys, pointer::Act::Drop(1), true);
+        assert!(!m.point(Dev::Keys, pointer::Act::Drop(0), true).contains(&Effect::Sound(1))); // 1P's own stays
+        assert_eq!(m.seats, [Some(Dev::Keys), None, Some(pb), None]);
+        m.step(pa, ok);
+        assert_eq!(m.seats[1], Some(pa));
+        // on the select: held open (still a human's), the next device's ✕ takes it, the dropped one's does nothing
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(pb, ok);
+        assert!(m.players[2].ready);
+        m.step(pb, press(|p| &mut p.back)); // ready → picking again
+        m.step(pb, press(|p| &mut p.back)); // ○ off its seat
+        assert_eq!((m.seats[2], m.players[2].ready), (Some(Dev::Open), false));
+        assert_eq!(m.driven(pb), None);
+        m.step(pb, ok);
+        assert_eq!(m.seats[2], Some(pb));
+        m.point(Dev::Keys, pointer::Act::Drop(2), true);
+        m.step(pa, ok); // seated already: readies its own, doesn't take the open seat
+        assert_eq!((m.seats[2], m.players[1].ready), (Some(Dev::Open), true));
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Chars); // not to the confirm screen with a seat open
+        let keys2 = Dev::Pad(Entity::from_raw_u32(7).unwrap());
+        m.step(keys2, ok);
+        assert_eq!(m.seats[2], Some(keys2));
+        // 1P backing out to the assignment frees seats still open
+        m.point(Dev::Keys, pointer::Act::Drop(2), true);
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert_eq!((m.screen, m.seats), (Screen::Assign, [Some(Dev::Keys), Some(pa), None, None]));
     }
 
     #[test]
