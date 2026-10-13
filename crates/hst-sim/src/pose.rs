@@ -465,7 +465,7 @@ fn row3(m: &M4) -> [f32; 4] {
 }
 
 /// The 3×3 transpose of `m` (row 3 and column 3 of the identity): the inverse of a pure rotation.
-fn transpose3(m: &M4) -> M4 {
+pub(crate) fn transpose3(m: &M4) -> M4 {
     [[m[0][0], m[1][0], m[2][0], 0.0], [m[0][1], m[1][1], m[2][1], 0.0], [m[0][2], m[1][2], m[2][2], 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
 
@@ -528,7 +528,7 @@ pub struct ArmTable {
 }
 
 /// The node names the table reads.
-const ARM_NODES: [&str; 5] = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
+pub(crate) const ARM_NODES: [&str; 5] = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
 
 /// The arm table from the skeleton and the stroke and volley motions (0x10 … 0x1b) of `character`.
 pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
@@ -619,7 +619,7 @@ pub fn axis_cos(c: f32, sign: f32, axis: [f32; 3]) -> M4 {
 }
 
 /// The racket point in the racket's frame.
-const TIP: [f32; 4] = [0.0, 0.7, 0.0, 1.0];
+pub(crate) const TIP: [f32; 4] = [0.0, 0.7, 0.0, 1.0];
 
 /// What the contact solve leaves for the swing: the body's step (x sideways, z forward; player units) and the
 /// turn of right hand, right forearm, right upper arm and left upper arm from the stroke's frame-8 pose.
@@ -630,7 +630,7 @@ pub struct ArmSolve {
 }
 
 /// Unit (x, y) of `a − b`.
-fn unit_xy(a: [f32; 4], b: [f32; 4]) -> [f32; 2] {
+pub(crate) fn unit_xy(a: [f32; 4], b: [f32; 4]) -> [f32; 2] {
     use ps2::{div, madd, mul, sqrt, sub};
     let (x, y) = (sub(a[0], b[0]), sub(a[1], b[1]));
     let inv = div(1.0, sqrt(madd(mul(y, y), x, x)));
@@ -638,7 +638,7 @@ fn unit_xy(a: [f32; 4], b: [f32; 4]) -> [f32; 2] {
 }
 
 /// `m` with row 3 of `keep`.
-fn keep_row3(m: M4, keep: &M4) -> M4 {
+pub(crate) fn keep_row3(m: M4, keep: &M4) -> M4 {
     [m[0], m[1], m[2], keep[3]]
 }
 

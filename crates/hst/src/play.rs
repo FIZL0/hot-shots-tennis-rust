@@ -2023,8 +2023,10 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
             if allowed {
                 g.players[i].missed = false;
                 let grades = g.serve_data[i].grades(toss).to_vec();
-                match serve::search(&g.serve_data[i], toss, &predicted_path(g, grades.len())) {
+                let path = predicted_path(g, grades.len());
+                match serve::search(&g.serve_data[i], toss, &path) {
                     Some(k) => {
+                        serve_ik_start(g, i, toss, k, path[k].pos);
                         let kind = if toss == Toss::Under {
                             3
                         } else {
@@ -2111,6 +2113,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         p.recover = motion::serve_recovery(toss == Toss::Strong, sw.kind);
         // the swing plays on at speed 1 from contact
         set_motion(p, motion::serve_swing(toss == Toss::Under, 1).0, 1.0, false, None);
+        serve_ik_tick(g, i);
         g.serving = Serving::default();
         return;
     }
@@ -2122,6 +2125,47 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         };
         hold_ball(g);
     }
+    if s.swing.is_some() {
+        serve_ik_tick(g, i);
+    }
+}
+
+/// The serve's contact IK, solved at the swing press for the path point it hits at (`ball`, `k` frames on): the
+/// arm reaches for it over the countdown and an overhead serve steps the body toward it (the underhand one only
+/// turns the arm). The jump the overhead solve also gives isn't applied: the port keeps players on the ground.
+fn serve_ik_start(g: &mut Game, i: usize, toss: Toss, k: usize, ball: [f32; 3]) {
+    let under = toss == Toss::Under;
+    let Some(d) = g.data.get(i).cloned() else { return };
+    let Some(clip) = d.motions.get(&(motion::serve_swing(under, 0).0 as usize)) else { return };
+    let arm = serve::serve_arm(&d.skeleton, clip, d.paths.get(&0x25), under);
+    let p = &mut g.players[i];
+    let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+    // the second size factor is 1 in normal play, as the strokes' solve
+    let (contact, scale) = ([ball[0], ball[1], ball[2], 1.0], [p.end, 1.0]);
+    let solve = if under {
+        serve::underhand_solve(&arm, contact, pos, scale)
+    } else {
+        serve::overhead_solve(&arm, contact, pos, scale).0
+    };
+    // the countdown is the IK's frame count as it is, from 0 (a stroke's goes through `ik_frames`)
+    p.ik = Some(ArmIk { solve, frames: k as i32, n: 0, on: true, free: !under, pos0: pos, seen: pos });
+}
+
+/// The serve IK's frame, after the serve's own (the press tick too, at weight 0; the contact tick before the hit's
+/// ramp-down, which `advance_stroke` runs on): as a stroke's, without the partner check the original skips for the
+/// server.
+fn serve_ik_tick(g: &mut Game, i: usize) {
+    let p = &mut g.players[i];
+    let end = p.end;
+    let Some(ik) = p.ik.as_mut() else { return };
+    let mut pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
+    let (w, _) = ik.tick(&mut pos, |at, d| {
+        let to = loco::mover([at[0], at[1], at[2]], [d[0], d[1], d[2]], end, None, false);
+        let free = to[0] == hst_sim::ps2::add(at[0], d[0]) && to[2] == hst_sim::ps2::add(at[2], d[2]);
+        ([to[0], to[1], to[2], at[3]], free)
+    });
+    p.arm = Some((ik.solve.quats, w));
+    p.pos = [pos[0], pos[1], pos[2]];
 }
 
 /// The server's whiffed serve swing, as the original: the swing plays on and turns into its miss motion after its
