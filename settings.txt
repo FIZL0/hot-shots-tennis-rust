@@ -1,5 +1,5 @@
 widescreen = on
-upscaled_textures = on
+upscaled_textures = off
 menu_music = on
 music = off
 frame_limit = uncapped
