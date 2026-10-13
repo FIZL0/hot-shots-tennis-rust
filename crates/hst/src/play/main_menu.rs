@@ -551,6 +551,16 @@ impl Menu {
         None
     }
 
+    /// B247: on a phone 1P is the screen (taps, or the on-screen pad), and the on-screen pad hides once a real one is in:
+    /// a real pad's first press takes 1P over (on any screen, in the match too) instead of only joining as another
+    /// player from the controller screen.
+    fn pad_takes_touch_seat(&mut self, dev: Dev, pads: &[Entity]) {
+        let touch = |s: Option<Dev>| matches!(s, Some(Dev::Keys)) || matches!(s, Some(Dev::Pad(e)) if !pads.contains(&e));
+        if matches!(dev, Dev::Pad(_)) && !self.seats.contains(&Some(dev)) && touch(self.seats[0]) {
+            self.seats[0] = Some(dev);
+        }
+    }
+
     /// B238: whether seat `p` has a device that ✕ may take off: not this machine's first (the menu's driver).
     fn droppable(&self, p: usize) -> bool {
         matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && self.seats.iter().position(Option::is_some) != Some(p)
@@ -2232,6 +2242,14 @@ fn picker(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
 struct Kept(Menu);
 
 #[allow(clippy::too_many_arguments)]
+/// B247: the page is played by touch (a phone or tablet, `web/touch.js`): its 1P seat is the screen's.
+fn touch_page() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::touched();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
+}
+
 fn step(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -2318,6 +2336,9 @@ fn step(
             dirs[i] = repeat.entry((id, i)).or_default().step(h, dt);
         }
         [k.up, k.down, k.left, k.right] = dirs;
+        if k != Press::default() && touch_page() {
+            menu.pad_takes_touch_seat(dev, &pads);
+        }
         let mut fx = Vec::new();
         if dev == pointed {
             for (a, tap) in std::mem::take(&mut acts) {
@@ -3056,6 +3077,25 @@ mod tests {
         assert_eq!(GRID[grid_step(1, 0.0, 1.0)].0, 4);
         assert_eq!(GRID[grid_step(6, 0.0, 1.0)].0, 12);
         assert_eq!(GRID[grid_step(13, -1.0, 0.0)].0, 10);
+    }
+
+    #[test]
+    fn real_pad_takes_touch_seat() {
+        let [t, a, b] = [4, 5, 6].map(|n| Entity::from_raw_u32(n).unwrap());
+        let mut m = Menu { seats: [Some(Dev::Keys), None, None, None], ..default() };
+        m.pad_takes_touch_seat(Dev::Pad(a), &[a]);
+        assert_eq!(m.seats[..2], [Some(Dev::Pad(a)), None]);
+        // a second real pad doesn't take it from the first
+        m.pad_takes_touch_seat(Dev::Pad(b), &[a, b]);
+        assert_eq!(m.seats[..2], [Some(Dev::Pad(a)), None]);
+        // 1P on the on-screen pad, hidden once a real one is in
+        m.seats = [Some(Dev::Pad(t)), None, None, None];
+        m.pad_takes_touch_seat(Dev::Pad(a), &[a]);
+        assert_eq!(m.seats[0], Some(Dev::Pad(a)));
+        // a pad already on 2P stays there
+        m.seats = [Some(Dev::Keys), Some(Dev::Pad(b)), None, None];
+        m.pad_takes_touch_seat(Dev::Pad(b), &[b]);
+        assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(Dev::Pad(b))]);
     }
 
     #[test]

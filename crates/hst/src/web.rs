@@ -212,6 +212,11 @@ pub fn touch_menu(on: bool) {
     }
 }
 
+/// B247: the page is played by touch (a touch screen, or touched once; `web/touch.js`).
+pub fn touched() -> bool {
+    page_fn("hstTouched").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy())
+}
+
 /// The select's baked cards (B120, `play/main_menu/previews.rs`): OPFS `previews/` files by name, all read by the page
 /// before `run` (`add_card`); new ones written back through the page's `hstCard`, old drawings' dropped by `hstCardDrop`.
 static CARDS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<[u8]>>>> = std::sync::Mutex::new(None);
