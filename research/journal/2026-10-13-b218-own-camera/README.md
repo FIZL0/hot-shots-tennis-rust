@@ -51,3 +51,9 @@ No desync / panic in any log. `own_camera` unit test: `cam_of` for singles and d
   so they stay right; only their size scale could be off by the fov difference). Not measured.
 - Shots were taken at fixed times with mashing pads, not continuously through a rally; "own player in view" was
   checked by eye on 5 pairs of shots.
+
+## Wrap-up
+
+The code landed in main with the WIP commit (merged as `task/B218`); this run only adds `pair.sh` (left uncommitted
+in slot s4) and ticks the task after the tests pass. Shots rechecked by eye (`s70`: host behind +z, guest behind −z,
+each with its own player near the bottom).
