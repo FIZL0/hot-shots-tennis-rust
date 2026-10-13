@@ -181,4 +181,40 @@ mod tests {
             assert_eq!((d.weak_grades.clone(), d.weak_bias.clone()), table(0x1774, 0x1684, 0x17b0), "p{p} weak");
         }
     }
+
+    /// B14: a left-handed server tosses with the mirrored hand: Carol's toss leaves her hand and peaks on the
+    /// opposite side of her facing line from the right-handed Carol's, at the same height and depth (the sim's
+    /// release and apex are bit-exact against the original's for the lefty in `hst-sim` `match_s05_serves`).
+    #[test]
+    fn lefty_toss_mirrored() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        // (across, up, ahead) of the ball from the server, in the server's frame, at release and at the apex
+        let toss = |hand: f32| {
+            let mut app = to_serve();
+            app.world_mut().resource_mut::<Game>().players[0].hand = hand;
+            let mut out = vec![];
+            for t in 0..80 {
+                app.world_mut().resource_mut::<Replay>().0.push_back(pad(if t < 5 { 0x4000 } else { 0 }));
+                app.world_mut().run_schedule(FixedUpdate);
+                let g = app.world().resource::<Game>();
+                let (p, b) = (&g.players[0], g.flight.ball);
+                let [fx, _, fz, _] = p.body.face.dir;
+                let d = [b.pos[0] - p.pos[0], b.pos[1] - p.pos[1], b.pos[2] - p.pos[2]];
+                // release, then the top of the toss (velocity's y turns: game space is y-down)
+                if g.serving.tossed && (out.is_empty() || (out.len() == 1 && b.vel[1] >= 0.0)) {
+                    out.push([d[0] * fz - d[2] * fx, d[1], d[0] * fx + d[2] * fz]);
+                }
+            }
+            assert_eq!(out.len(), 2, "hand {hand}: no toss");
+            out
+        };
+        let (left, right) = (toss(-1.0), toss(1.0));
+        eprintln!("lefty {left:?}\nrighty {right:?}");
+        assert!(right[0][0].abs() > 0.1, "the toss leaves from the body's side: {right:?}");
+        for (l, r) in left.iter().zip(&right) {
+            assert!((l[0] + r[0]).abs() < 1e-4 && (l[1] - r[1]).abs() < 1e-4 && (l[2] - r[2]).abs() < 1e-4, "lefty {l:?} vs righty {r:?}");
+        }
+    }
 }
