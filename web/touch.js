@@ -1,7 +1,7 @@
 // On-screen controls for phones and tablets, and the page's other mobile bits. The controls are a virtual pad in the
 // browser's standard layout added to `navigator.getGamepads()`, which the game polls like any controller (gilrs), so
 // menus and matches read them through the same bindings as a real pad (✕ = shot / OK, ○ = slice / back, △ = lob,
-// □, L1/R1, Select = camera, Start = pause). They show on touch screens and hide while a real controller is connected.
+// □, L1/R1, Select = swap hand, Start = pause). They show on touch screens and hide while a real controller is connected.
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
 // goes fullscreen in landscape on the first tap (where the browser allows it; an installed app starts that way).
 

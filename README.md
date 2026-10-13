@@ -55,8 +55,7 @@ partner (P1 + P2 vs 2 CPUs). In singles it plays the opponent. Every other playe
 | Slice / Serve | K | B |
 | Lob | L | Y |
 | Drive | U | RB |
-| Camera (original / free) | C | Select |
-| Turn free camera | Arrow keys | Right stick |
+| Swap hand (character select) | C | Select |
 
 ### In the browser
 

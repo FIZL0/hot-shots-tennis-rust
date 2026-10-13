@@ -8,10 +8,10 @@
 //! The view is the original's match camera, behind the −z baseline; the stick moves and aims screen-relative.
 //! A red dot marks where the ball will bounce.
 //!
-//! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, L lob, J/Space serve, C camera
-//! (original / free), arrow keys turn the free camera, Esc pause (`play/menu.rs`).
-//! Gamepad: left stick or d-pad move/aim, A (✕) topspin, B (○) slice, Y (△) lob, A serve, Start pause, Select camera,
-//! right stick turns the free camera. As the original, there is no flat or drop button: the stick toward the
+//! Keyboard (player 1): WASD move (aim while swinging), J topspin, K slice, L lob, J/Space serve, C swaps the
+//! hand at character select, Esc pause (`play/menu.rs`).
+//! Gamepad: left stick or d-pad move/aim, A (✕) topspin, B (○) slice, Y (△) lob, A serve, Start pause, Select swaps the
+//! hand at character select. The camera is the original's match camera only (B218). As the original, there is no flat or drop button: the stick toward the
 //! net at contact makes a topspin flat, pulled back makes a slice a drop shot (`shot::stick_kind`).
 
 use bevy::prelude::*;
@@ -62,6 +62,7 @@ mod markers;
 mod mod_match;
 pub mod hand_swap;
 pub mod net_hide;
+mod own_camera;
 mod match_stats;
 mod menu;
 pub mod netplay;
@@ -387,6 +388,9 @@ struct Game {
     cam_cut: bool,
     /// The human whose end the camera follows (the original turns round to stay behind its human).
     cam_owner: Option<usize>,
+    /// Online: per player, the player whose end its machine's camera follows (`own_camera`); empty offline.
+    #[serde(default)]
+    cam_of: Vec<usize>,
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
     pelvis: Const<Vec<Vec<[f32; 2]>>>,
     /// Each player's character number and data.
@@ -546,18 +550,6 @@ impl Pads {
     }
 }
 
-#[derive(Resource, Default, Clone, Copy, PartialEq)]
-enum CamMode {
-    #[default]
-    Original,
-    Free,
-}
-
-#[derive(Resource, Default)]
-struct CamState {
-    turn: f32,
-}
-
 #[derive(Component)]
 struct Figure(usize);
 /// The ball model, or (`true`) its shadow.
@@ -577,6 +569,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(change_ends::plugin);
     app.add_plugins(ball_shadow::plugin);
     app.add_plugins(net_hide::plugin);
+    app.add_plugins(own_camera::plugin);
     app.add_plugins(foot_fx::plugin);
     app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);
@@ -598,8 +591,6 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(intro::plugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
-        .init_resource::<CamMode>()
-        .init_resource::<CamState>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
         .add_systems(
             Update,
@@ -1317,6 +1308,7 @@ fn setup(
         prev_view: Camera::new().view,
         cam_cut: false,
         cam_owner: Some(0),
+        cam_of: Vec::new(),
         pelvis: vec![vec![[0.0, 1.0]; 48]; rules.players as usize].into(),
         chars: vec![0; rules.players as usize],
         body_hit: None,
@@ -1677,9 +1669,6 @@ fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
     mut pads: ResMut<Pads>,
-    mut cam: ResMut<CamMode>,
-    mut cs: ResMut<CamState>,
-    time: Res<Time>,
     bind: Res<controls::Bindings>,
     mut held: ResMut<controls::PadSlots>,
 ) {
@@ -1703,9 +1692,6 @@ fn read_input(
     if let Some(k) = held.keys() {
         now[k] = kb;
     }
-    let mut cycle = bind.key_just_pressed(&keys, A::Camera);
-    let mut turn = bind.key_pressed(&keys, A::TurnRight) as i32 as f32
-        - bind.key_pressed(&keys, A::TurnLeft) as i32 as f32;
     // controllers keep their slot while connected (`controls::PadSlots`); new ones fill the first free slot
     let mut list: Vec<_> = gamepads
         .iter()
@@ -1731,9 +1717,6 @@ fn read_input(
             .map(|(_, k)| k));
         s.serve |= bind.pad_just_pressed(g, A::Serve);
         s.emote = s.emote.or(emote::flick(g.right_stick()));
-        cycle |= bind.pad_just_pressed(g, A::Camera);
-        turn += pad_stick(g.right_stick()).x + bind.pad_pressed(g, A::TurnRight) as i32 as f32
-            - bind.pad_pressed(g, A::TurnLeft) as i32 as f32;
     }
     pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
@@ -1747,14 +1730,6 @@ fn read_input(
             slot.emote = n.emote;
         }
     }
-    if cycle {
-        *cam = if *cam == CamMode::Original {
-            CamMode::Free
-        } else {
-            CamMode::Original
-        };
-    }
-    cs.turn = turn * time.delta_secs() * 1.5;
 }
 
 /// Launch a serve (class 0), stroke (class 1) or smash (class 3) of `kind` by player `who` from the ball's position toward
@@ -1988,7 +1963,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         } else {
             // walk the baseline: a human by the pad's run direction (its dead square, camera flip), a bot by its stick
             let walk = if g.humans.get(i) == Some(&true) {
-                pad_run(g, g.players[i].aim, g.players[i].dpad)
+                pad_run(g, i, g.players[i].aim, g.players[i].dpad)
             } else {
                 stick
             };
@@ -2345,9 +2320,8 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
 
 /// The run direction the original gives a human's stick (`hst_sim::player::pad_dir`): the stick as pad bytes, its
 /// dead square, rescale and ×1.2 clip, or the d-pad bits (`dpad`, full length on diagonals) while the stick is
-/// dead, on world axes, turned by π when the camera looks from the +z side. ponytail: world axes also under the
-/// free camera
-fn pad_run(g: &Game, stick: Vec2, dpad: u16) -> Vec2 {
+/// dead, on world axes, turned by π when player `i`'s camera looks from the +z side (`own_camera::flipped`).
+fn pad_run(g: &Game, i: usize, stick: Vec2, dpad: u16) -> Vec2 {
     // 0x00 full left/up, 0x80 centre, 0xff full right/down
     let byte =
         |v: f32| (128.0 + v.clamp(-1.0, 1.0) * if v < 0.0 { 128.0 } else { 127.0 }).round() as u8;
@@ -2357,7 +2331,7 @@ fn pad_run(g: &Game, stick: Vec2, dpad: u16) -> Vec2 {
         3
     };
     let [x, z] = loco::pad_dir(dpad, byte(stick.x), byte(-stick.y), phase);
-    if g.cam.view.eye[2] >= 0.0 {
+    if own_camera::flipped(g, i) {
         Vec2::new(-x, -z)
     } else {
         Vec2::new(x, z)
@@ -3060,12 +3034,12 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     if g.phase == Phase::Serve && g.score.server == i as i32 {
         let press = shot.or(serve_press.then_some(0));
         // the serve aims with the run direction, as the original (its dead square, ×1.2 clip, camera flip)
-        let stick = pad_run(g, pad.stick, pad.dpad);
+        let stick = pad_run(g, i, pad.stick, pad.dpad);
         serve_turn(g, i, stick, press);
         return;
     }
     let moved = pad.stick != Vec2::ZERO || pad.dpad != 0;
-    let stick = pad_run(g, pad.stick, pad.dpad) != Vec2::ZERO;
+    let stick = pad_run(g, i, pad.stick, pad.dpad) != Vec2::ZERO;
     if serve_follow(&mut g.players[i], stick) {
         return;
     }
@@ -3079,11 +3053,11 @@ fn human(g: &mut Game, i: usize, pad: &SlotPad, shot: Option<i32>, serve_press: 
     let search = searching(&mut g.players[i]);
     let p = &g.players[i];
     if !search && p.contact.is_none() && p.whiff.is_none() && p.swing.is_none() && p.dive.is_none() {
-        let dir = p.approach.unwrap_or_else(|| pad_run(g, pad.stick, pad.dpad));
+        let dir = p.approach.unwrap_or_else(|| pad_run(g, i, pad.stick, pad.dpad));
         locomote(g, i, dir);
     }
     // the stick at the moment of contact aims the shot: the run direction, as the original
-    let aim = pad_run(g, pad.stick, pad.dpad);
+    let aim = pad_run(g, i, pad.stick, pad.dpad);
     advance_stroke(g, i, move |_| aim);
 }
 
@@ -4082,24 +4056,20 @@ fn orbit_from(eye: [f32; 3], forward: [f32; 3]) -> (Vec3, f32, f32) {
     )
 }
 
-/// The original's match camera (`hst_sim::camera`); free mode leaves the mouse/right stick in charge.
+/// The original's match camera (`hst_sim::camera`; online, this machine's own: `own_camera`).
 fn camera(
     g: Res<Game>,
+    own: Option<Res<own_camera::OwnCam>>,
     time: Res<Time<Fixed>>,
-    mode: Res<CamMode>,
-    cs: Res<CamState>,
     window: Query<&Window>,
     mut q: Query<(&mut Orbit, &mut Projection)>,
 ) {
     let Ok((mut o, mut proj)) = q.single_mut() else {
         return;
     };
-    if *mode == CamMode::Free {
-        o.yaw += cs.turn;
-        return;
-    }
     // between the last two ticks' views
-    let (a, v0, v) = (time.overstep_fraction(), g.prev_view, g.cam.view);
+    let (v0, v) = own_camera::shown(&g, own.as_deref());
+    let a = time.overstep_fraction();
     let mix = |x: V3, y: V3| Vec3::from(x).lerp(Vec3::from(y), a).to_array();
     let (eye, pitch, yaw) = orbit_from(mix(v0.eye, v.eye), mix(v0.rot[2], v.rot[2]));
     let fov = v0.fov + (v.fov - v0.fov) * a;

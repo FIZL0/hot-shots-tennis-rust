@@ -42,8 +42,8 @@ pub fn hidden(v: &View, cutaway: bool) -> bool {
     low < top
 }
 
-fn hide(g: Res<Game>, d: Option<Res<super::cutaway::Director>>, mut q: Query<&mut Visibility, With<HideNearCamera>>) {
-    let vis = if hidden(&g.cam.view, d.is_some_and(|d| d.showing())) { Visibility::Hidden } else { Visibility::Inherited };
+fn hide(g: Res<Game>, own: Option<Res<super::own_camera::OwnCam>>, d: Option<Res<super::cutaway::Director>>, mut q: Query<&mut Visibility, With<HideNearCamera>>) {
+    let vis = if hidden(&super::own_camera::shown(&g, own.as_deref()).1, d.is_some_and(|d| d.showing())) { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut q {
         v.set_if_neq(vis);
     }

@@ -25,9 +25,8 @@ pub enum Action {
     Lob,
     /// Serve only (keyboard Space by default; ✕ serves too, as the original).
     Serve,
+    /// Select: swap the character's hand at character select (`camera`, its old name, kept for existing files).
     Camera,
-    TurnLeft,
-    TurnRight,
     /// Emotes (`play::emote`), as the right stick flicked up, down, left, right.
     EmoteUp,
     EmoteDown,
@@ -35,7 +34,7 @@ pub enum Action {
     EmoteRight,
 }
 
-const ACTIONS: [(Action, &str); 15] = [
+const ACTIONS: [(Action, &str); 13] = [
     (Action::Up, "up"),
     (Action::Down, "down"),
     (Action::Left, "left"),
@@ -45,8 +44,6 @@ const ACTIONS: [(Action, &str); 15] = [
     (Action::Lob, "lob"),
     (Action::Serve, "serve"),
     (Action::Camera, "camera"),
-    (Action::TurnLeft, "turn_left"),
-    (Action::TurnRight, "turn_right"),
     (Action::EmoteUp, "emote_up"),
     (Action::EmoteDown, "emote_down"),
     (Action::EmoteLeft, "emote_left"),
@@ -61,7 +58,7 @@ enum Input {
 }
 
 #[derive(Resource, Clone, PartialEq, Debug)]
-pub struct Bindings([Vec<Input>; 15]);
+pub struct Bindings([Vec<Input>; 13]);
 
 impl Default for Bindings {
     fn default() -> Self {
@@ -78,8 +75,6 @@ impl Default for Bindings {
             vec![K(C::KeyL), Pad(P::North)],
             vec![K(C::Space)],
             vec![K(C::KeyC), Pad(P::Select)],
-            vec![K(C::ArrowLeft)],
-            vec![K(C::ArrowRight)],
             vec![K(C::Digit1)],
             vec![K(C::Digit2)],
             vec![K(C::Digit3)],
@@ -143,6 +138,10 @@ impl Bindings {
                 continue;
             };
             let Some(i) = ACTIONS.iter().position(|(_, n)| *n == action.trim()) else {
+                // the free camera's turn keys (gone, B218) in an older file
+                if matches!(action.trim(), "turn_left" | "turn_right") {
+                    continue;
+                }
                 errors.push(format!("unknown action: {}", action.trim()));
                 continue;
             };
@@ -166,8 +165,8 @@ impl Bindings {
             "# Hot Shots Tennis remaster controls. One line per action: action = Key Key PadButton …\n\
              # Keys by Bevy KeyCode name (J or KeyJ, 1 or Digit1, Space, ArrowLeft, ShiftLeft, …),\n\
              # pad buttons with a Pad prefix (PadSouth = ✕/A, PadEast = ○/B, PadNorth = △/Y, PadWest, PadLeftTrigger,\n\
-             # PadRightTrigger2, PadSelect, PadDPadUp, …). The left stick always moves; the right stick turns the free\n\
-             # camera, and flicked fully up/down/left/right plays the emotes; Esc/Start pause.\n",
+             # PadRightTrigger2, PadSelect, PadDPadUp, …). The left stick always moves; the right stick flicked\n\
+             # fully up/down/left/right plays the emotes; Esc/Start pause; camera swaps the hand at character select.\n",
         );
         for (i, (_, name)) in ACTIONS.iter().enumerate() {
             let names: Vec<_> = self.0[i].iter().map(|x| x.name()).collect();
