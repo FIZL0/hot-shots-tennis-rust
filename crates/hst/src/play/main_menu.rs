@@ -12,7 +12,9 @@
 //! (the first free seat, ←/→ to change seat, ○ to leave), up to four humans, any device on any seat; the rest are the
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
-//! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
+//! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
+//! it, and a character with none free is drawn dark and passed over by the cursor); the computer's players are
+//! picked by player 1 after the humans.
 //! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
@@ -398,8 +400,29 @@ impl Menu {
 
     /// Whether player `p`'s character and costume are locked in by someone else.
     fn blocked(&self, p: usize) -> bool {
-        matches!(self.pick(p), (Who::Mod(i), k) if self.broken.contains(&(i, k)))
-            || (0..self.players()).any(|q| q != p && self.players[q].ready && self.pick(q) == self.pick(p))
+        !self.free(p, self.who(p), self.players[p].costume)
+    }
+
+    /// Whether `w`'s costume `c` is open to player `p`: loaded, and nobody else ready on it.
+    fn free(&self, p: usize, w: Who, c: usize) -> bool {
+        let pick = self.resolve(w, c);
+        !matches!(pick, (Who::Mod(i), k) if self.broken.contains(&(i, k)))
+            && !(0..self.players()).any(|q| q != p && self.players[q].ready && self.pick(q) == pick)
+    }
+
+    /// B66: `w`'s first costume open to player `p` from `from` on (wrapping, `back` the other way), if any.
+    fn next_free(&self, p: usize, w: Who, from: usize, back: bool) -> Option<usize> {
+        let n = self.costumes(w);
+        (0..n).map(|j| if back { (from + n - j) % n } else { (from + j) % n }).find(|&c| self.free(p, w, c))
+    }
+
+    /// B66: every player not ready who sits on a costume that's taken moves on to that character's next free one.
+    fn skip_taken(&mut self) {
+        for p in 0..self.players() {
+            if !self.players[p].ready && self.blocked(p) && let Some(c) = self.next_free(p, self.who(p), self.players[p].costume, false) {
+                self.players[p].costume = c;
+            }
+        }
     }
 
     /// Player `p` picking again, on the page shown.
@@ -570,9 +593,12 @@ impl Menu {
                     }
                 }
                 let costumes = self.costumes(self.who(p));
-                let broken = |c: usize| matches!(self.resolve(self.who(p), c), (Who::Mod(i), k) if self.broken.contains(&(i, k)));
-                let broken: Vec<bool> = (0..costumes).map(broken).collect();
                 let n_mods = self.mods.len();
+                // B66: characters with no costume open to `p` (every one taken or failed to load) are passed over
+                let full_mod: Vec<bool> = (0..n_mods).map(|i| self.next_free(p, Who::Mod(i), 0, false).is_none()).collect();
+                let full_disc: Vec<bool> = (0..CHARS).map(|i| self.next_free(p, Who::Disc(GRID[i].0), 0, false).is_none()).collect();
+                let costume_to = |back: bool| self.next_free(p, self.who(p), (self.players[p].costume + if back { costumes - 1 } else { 1 }) % costumes, back);
+                let (next_c, prev_c) = (costume_to(false), costume_to(true));
                 let me = &mut self.players[p];
                 if k.card {
                     me.card = !me.card;
@@ -585,14 +611,34 @@ impl Menu {
                 if !me.ready {
                     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
                     if (dx != 0.0 || dy != 0.0) && me.modded {
-                        let to = (me.pick as i32 + dx as i32 + dy as i32 * ICON_COLS as i32).clamp(0, n_mods as i32 - 1) as usize;
+                        let d = dx as i32 + dy as i32 * ICON_COLS as i32;
+                        let mut to = me.pick as i32;
+                        // ponytail: past a full one the same way, staying put at the edge (the grid doesn't wrap either)
+                        loop {
+                            to += d;
+                            if !(0..n_mods as i32).contains(&to) {
+                                to = to.clamp(0, n_mods as i32 - 1);
+                                if full_mod[to as usize] {
+                                    to = me.pick as i32;
+                                }
+                                break;
+                            }
+                            if !full_mod[to as usize] {
+                                break;
+                            }
+                        }
+                        let to = to as usize;
                         if to != me.pick {
                             me.pick = to;
                             me.costume = 0;
                             out.push(Sound(0));
                         }
                     } else if dx != 0.0 || dy != 0.0 {
-                        let to = grid_step(me.cursor, dx, dy);
+                        let mut to = grid_step(me.cursor, dx, dy);
+                        while full_disc[to] && to != me.cursor {
+                            let on = grid_step(to, dx, dy);
+                            to = if on == to { me.cursor } else { on };
+                        }
                         if to != me.cursor {
                             me.cursor = to;
                             me.costume = 0;
@@ -600,21 +646,21 @@ impl Menu {
                         }
                     }
                     if k.prev || k.next {
-                        // M1n: past a costume that failed to load
-                        for _ in 0..costumes {
-                            me.costume = (me.costume + if k.next { 1 } else { costumes - 1 }) % costumes;
-                            if !broken[me.costume] {
-                                break;
-                            }
+                        // M1n / B66: past a costume that failed to load or that someone else is ready on
+                        if let Some(c) = if k.next { next_c } else { prev_c } {
+                            me.costume = c;
                         }
                         out.push(Sound(0));
                     }
                 }
+                // B66: landing on a taken costume moves on to the next free one
+                self.skip_taken();
                 if k.ok && !self.players[p].ready {
                     if self.blocked(p) {
                         out.push(Sound(1));
                     } else {
                         self.players[p].ready = true;
+                        self.skip_taken();
                         out.push(Sound(2));
                         if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
                             self.online_ready(&mut out);
@@ -1550,13 +1596,14 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     if m.custom {
-        custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready && m.players[p].modded));
+        custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready && m.players[p].modded), lead);
     } else {
         groups(d);
-        // the faces, darkened where every costume of it is ... (all open in the remaster)
+        // the faces, darkened where every costume of it is taken (B66: for the player picking)
         for &(c, x, y) in &GRID {
+            let tint = if m.next_free(lead, Who::Disc(c), 0, false).is_none() { [50.0; 3] } else { WHITE };
             d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
-            d.q(Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], WHITE, 128.0);
+            d.q(Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], tint, 128.0);
         }
         let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
         d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
@@ -1687,7 +1734,7 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
 
 /// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
 /// tag of each player picking on this page on theirs.
-fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
+fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lead: usize) {
     let per = ICON_COLS * ICON_ROWS;
     let page = custom_page(m);
     let cell = |i: usize| (ICON_X[i % ICON_COLS], ICON_TOP + ICON_PITCH * (i % per / ICON_COLS) as f32);
@@ -1695,7 +1742,8 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>) {
     for i in page.clone() {
         let (x, y) = cell(i);
         d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
-        d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], WHITE, 128.0);
+        let tint = if m.next_free(lead, Who::Mod(i), 0, false).is_none() { [50.0; 3] } else { WHITE };
+        d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], tint, 128.0);
         d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
     }
     for p in players.filter(|&p| page.contains(&m.players[p].pick)) {
@@ -2175,6 +2223,27 @@ mod tests {
         assert!(fired[0] && !fired[1]);
     }
 
+    fn fake_mod(donor: usize) -> crate::mods::Mod {
+        crate::mods::Mod {
+            dir: "mods/x".into(),
+            id: "x".into(),
+            name: "x".into(),
+            source: String::new(),
+            costumes: vec![],
+            donor,
+            hand: 1.0,
+            base: donor,
+            overrides: vec![],
+            ai_row: donor,
+            texture_face: false,
+            no_face: false,
+            voice: "voice/".into(),
+            motions: None,
+            costume_of: None,
+            skeleton: None,
+        }
+    }
+
     #[test]
     fn locked_costumes_and_match_order() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
@@ -2189,12 +2258,19 @@ mod tests {
         assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(pad)]);
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
-        // both on Ashley costume 1: 1P locks it in, 2P can't ready on it, then can on costume 2
+        // B66: both on Ashley costume 1: 1P locks it in, 2P moves on to costume 2; leaving Ashley and coming back
+        // lands on costume 2 again, and L1 / R1 pass costume 1
         m.step(Dev::Keys, ok);
-        assert!(m.players[0].ready && m.blocked(1));
-        m.step(pad, ok);
-        assert!(!m.players[1].ready);
+        assert!(m.players[0].ready && !m.blocked(1));
+        assert_eq!(m.players[1].costume, 1);
+        m.step(pad, press(|p| &mut p.right));
+        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
+        m.step(pad, press(|p| &mut p.left));
+        assert_eq!((m.players[1].char(), m.players[1].costume), (0, 1));
+        m.step(pad, press(|p| &mut p.prev));
+        assert_eq!(m.players[1].costume, COSTUMES - 1);
         m.step(pad, press(|p| &mut p.next));
+        assert_eq!(m.players[1].costume, 1, "10 → 2, past 1");
         m.step(pad, ok);
         assert!(m.players[1].ready);
         // 1P now picks the computer's 3P and 4P: Cody, then Jun
@@ -2212,6 +2288,23 @@ mod tests {
         assert_eq!(flag("--pads"), "k,1,-,-");
         assert_eq!((flag("--umpire"), flag("--sets"), flag("--games")), ("4".into(), "1".into(), "4".into()));
         assert!(!a.contains(&"--singles".to_string()));
+        // B66: a character with no free costume is passed over by left/right/up/down (one-costume mods, 4 a row:
+        // 1 and 4 taken), never stopped on
+        let one = |i: usize| crate::mods::Mod { id: format!("m{i}"), costumes: vec!["model/c00.glb".into()], ..fake_mod(i) };
+        let mut m = Menu { screen: Screen::Chars, doubles: true, custom: true, mods: (0..9).map(one).collect(), seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        m.players = [Player { modded: true, ..default() }; 4];
+        for (q, i) in [(1, 1), (2, 4)] {
+            (m.players[q].pick, m.players[q].ready) = (i, true);
+        }
+        let go = |m: &mut Menu, f: fn(&mut Press) -> &mut bool| {
+            m.step(Dev::Keys, press(f));
+            m.players[0].pick
+        };
+        assert_eq!(go(&mut m, |p| &mut p.right), 2);
+        assert_eq!(go(&mut m, |p| &mut p.left), 0);
+        assert_eq!(go(&mut m, |p| &mut p.left), 0, "the list's start");
+        assert_eq!(go(&mut m, |p| &mut p.down), 8);
+        assert_eq!(go(&mut m, |p| &mut p.up), 0);
     }
 
     #[test]
@@ -2317,16 +2410,16 @@ mod tests {
         m.step(Dev::Keys, press(|p| &mut p.next));
         assert_eq!(m.players[0].costume, 0, "mod a has 2 costumes");
         m.step(Dev::Keys, ok); // 1P: a, costume 1
-        // the computer's 2P on a costume 1 too: closed; down to b, then back up and on to costume 2
-        assert!(m.blocked(1));
-        m.step(Dev::Keys, ok);
-        assert!(!m.players[1].ready);
+        // the computer's 2P on a costume 1 too: moved on to costume 2; down to b, then back up: costume 2 again
+        assert!(!m.blocked(1));
+        assert_eq!(m.players[1].costume, 1);
         m.step(Dev::Keys, press(|p| &mut p.down));
         assert_eq!(m.who(1), Who::Mod(1));
         m.step(Dev::Keys, press(|p| &mut p.down)); // the list ends
         assert_eq!(m.who(1), Who::Mod(1));
         m.step(Dev::Keys, press(|p| &mut p.up));
         m.step(Dev::Keys, press(|p| &mut p.prev));
+        assert_eq!(m.players[1].costume, 1, "L1 passes the taken costume 1");
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Confirm);
         let a = m.args(&[]);
