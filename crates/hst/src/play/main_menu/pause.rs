@@ -260,7 +260,8 @@ pub(in crate::play) fn plugin(app: &mut App) {
         );
 }
 
-/// B221: the phone's on-screen pad hides while the pause or result screen is up, so taps reach the menu under it.
+/// B221/B244: the phone's on-screen stick keeps to its corner while the pause or result screen is up, so taps reach the
+/// menu under it.
 #[cfg(target_arch = "wasm32")]
 fn touch_menu(w: &World, mut was: Local<Option<bool>>) {
     let on = super::super::menu::paused(w) || w.get_resource::<super::super::Game>().is_some_and(|g| g.match_stats.result.is_some());

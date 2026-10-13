@@ -297,7 +297,7 @@ impl Seat {
 
 /// Controller slots 1P..4P: the gamepad entity holding each. A slot is kept while its pad stays connected.
 /// With seats (`--pads`) slot `s` first takes pad `n` of seat `Pad(n)` (an index into the sorted pad list), then any
-/// free pad if that one is gone; a keyboard or computer seat never takes a pad.
+/// free pad if that one is gone; a computer seat never takes a pad, a keyboard seat only in the browser (`update`).
 #[derive(Resource, Default)]
 pub struct PadSlots(pub [Option<Entity>; 4], pub Option<[Option<Seat>; 4]>);
 
@@ -305,6 +305,12 @@ impl PadSlots {
     /// Drop pads gone from `present`, then give each new one the first free slot (in connection order). With seats a
     /// pad seat prefers its own pad and the others stay empty.
     pub fn update(&mut self, present: &[Entity]) {
+        self.update_with(present, cfg!(target_arch = "wasm32"));
+    }
+
+    /// `update`; `keys_take_spare`: the keyboard seat also takes a pad no other seat wants. B244: in the browser a phone's
+    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js) must drive that seat in the match.
+    pub fn update_with(&mut self, present: &[Entity], keys_take_spare: bool) {
         for s in &mut self.0 {
             if s.is_some_and(|e| !present.contains(&e)) {
                 *s = None;
@@ -312,6 +318,7 @@ impl PadSlots {
         }
         let wants = |i: usize| self.1.map_or(Some(None), |seats| match seats[i] {
             Some(Seat::Pad(n)) => Some(Some(n)),
+            Some(Seat::Keys) if keys_take_spare => Some(None),
             _ => None,
         });
         // seats' own pads first, so a seat whose pad is gone doesn't take one another empty seat is waiting for
@@ -416,6 +423,13 @@ mod tests {
         // a pad plugged back in fills it
         s.update(&[b, c, a]);
         assert_eq!(s.0, [Some(a), Some(c), None, Some(b)]);
+        // B244, the browser: the keyboard's seat takes a pad no seat wants (the touch pad), never another seat's
+        let mut s = PadSlots([None; 4], Some([k, p(1), None, None]));
+        s.update_with(&[a, b], true);
+        assert_eq!((s.0, s.keys()), ([Some(a), Some(b), None, None], Some(0)));
+        let mut s = PadSlots([None; 4], Some([k, p(0), None, None]));
+        s.update_with(&[a], true);
+        assert_eq!(s.0, [None, Some(a), None, None]);
         // no seats: connection order, the keyboard with 1P
         let mut s = PadSlots::default();
         s.update(&[a, b, c]);

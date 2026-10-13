@@ -204,7 +204,8 @@ pub fn page_size() -> Option<bevy::math::Vec2> {
     (x > 0.0 && y > 0.0).then(|| bevy::math::Vec2::new(x as f32, y as f32))
 }
 
-/// A menu is up (B221: it takes taps itself) or a match is on: the page shows its on-screen pad only in a match.
+/// A menu is up (B221: it takes taps itself) or a match is on: in a menu the page's on-screen pad keeps its stick to a
+/// fixed corner circle so taps elsewhere reach the menu (B244); in a match the stick follows the thumb.
 pub fn touch_menu(on: bool) {
     if let Some(f) = page_fn("hstTouchMenu") {
         let _ = f.call1(&JsValue::NULL, &on.into());

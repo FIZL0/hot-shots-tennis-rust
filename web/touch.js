@@ -1,8 +1,9 @@
 // On-screen controls for phones and tablets, and the page's other mobile bits. The controls are a virtual pad in the
 // browser's standard layout added to `navigator.getGamepads()`, which the game polls like any controller (gilrs), so
 // menus and matches read them through the same bindings as a real pad (✕ = shot / OK, ○ = slice / back, △ = lob,
-// □, L1/R1, Select = swap hand, Start = pause). They show on touch screens in a match and hide in the menus (tapped
-// directly) and while a real controller is connected.
+// □, L1/R1, Select = swap hand, Start = pause). They show on touch screens (menus and matches) and hide while a real
+// controller is connected. In the menus, which also take taps (B221), the stick is a fixed circle at the bottom left so
+// taps anywhere else reach the menu; in a match it appears wherever the left thumb lands.
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
 // goes fullscreen in landscape on the first tap (where the browser allows it; an installed app starts that way).
 
@@ -71,6 +72,8 @@ const css = `
 #touch[hidden] { display: none; }
 #touch .zone { position: absolute; left: 0; top: 18%; bottom: 0; width: 45%; pointer-events: auto; touch-action: none; }
 #touch .base, #touch .knob { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); }
+#touch.menu .zone { top: auto; width: calc(var(--u) * 2.6); height: calc(var(--u) * 2.6); border-radius: 50%;
+  left: calc(env(safe-area-inset-left) + var(--u) * .4); bottom: calc(env(safe-area-inset-bottom) + var(--u) * .4); }
 #touch .base { width: calc(var(--u) * 2.6); height: calc(var(--u) * 2.6); background: #fff2; border: 2px solid #fff5; }
 #touch .knob { width: calc(var(--u) * 1.2); height: calc(var(--u) * 1.2); background: #fff6; }
 #touch button { position: absolute; pointer-events: auto; touch-action: none; border: 2px solid #fff5; background: #0004;
@@ -128,12 +131,14 @@ const base = zone.querySelector('.base');
 const knob = zone.querySelector('.knob');
 let stick = null;
 const place = (el, x, y) => { el.style.left = `${x}px`; el.style.top = `${y}px`; };
+const centre = el => { el.style.left = el.style.top = '50%'; };
 zone.addEventListener('pointerdown', e => {
   if (stick) return;
   e.preventDefault();
   zone.setPointerCapture(e.pointerId);
   const r = zone.getBoundingClientRect();
-  stick = { id: e.pointerId, x: e.clientX - r.left, y: e.clientY - r.top };
+  // in the menus the stick sits still: its centre is the zone's
+  stick = menu ? { id: e.pointerId, x: r.width / 2, y: r.height / 2 } : { id: e.pointerId, x: e.clientX - r.left, y: e.clientY - r.top };
   place(base, stick.x, stick.y);
   place(knob, stick.x, stick.y);
   base.hidden = knob.hidden = false;
@@ -153,7 +158,8 @@ zone.addEventListener('pointermove', e => {
 const release = e => {
   if (stick?.id !== e.pointerId) return;
   stick = null;
-  base.hidden = knob.hidden = true;
+  base.hidden = knob.hidden = !menu;
+  if (menu) centre(knob);
   pad.axes[0] = pad.axes[1] = 0;
   stamp();
 };
@@ -162,12 +168,18 @@ for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEv
 // shown on touch screens (or after any touch) while no real controller is connected; `?touch` forces them on
 let touched = coarse.matches || new URLSearchParams(location.search).has('touch');
 addEventListener('pointerdown', e => { if (e.pointerType === 'touch') touched = true; }, { capture: true });
-// the game's menus take taps themselves (B221): the pad would cover them, so it's only up in a match
+// the game's menus take taps themselves (B221): there the stick keeps to its own circle (`.menu`), drawn at rest
 let menu = false;
-window.hstTouchMenu = on => { menu = on; };
+window.hstTouchMenu = on => {
+  menu = on;
+  root.classList.toggle('menu', on);
+  if (stick) release({ pointerId: stick.id });
+  base.hidden = knob.hidden = !on;
+  if (on) [base, knob].forEach(centre);
+};
 const update = () => {
   // gone when the game stops (index.html `fail`): its Reload must take the taps
-  const want = touched && !menu && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
+  const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
   if (want !== shown) {
     shown = want;
     root.hidden = !want;
