@@ -9,6 +9,10 @@
     tools/ctx.py tick <ID>       mark done: [x] here and in plan/<ID>.md, move the line to plan/DONE.md
     tools/ctx.py block <ID> WHY  mark [~] with "BLOCKED: WHY" appended
     tools/ctx.py unblock <ID> [NOTE]  reopen: [ ], drop "BLOCKED: …", append NOTE (what unblocked it)
+    tools/ctx.py move <ID> WHERE      WHERE = top | before ID | after ID | in SECTION (its end); moves sub-items too
+    tools/ctx.py add <PREFIX> TEXT [@ WHERE]  new "- [ ] **<next free id>** TEXT", default top of Next; prints the id
+    tools/ctx.py note <ID> TEXT       append " — TEXT" to the task (user details, priority reasons)
+    tools/ctx.py newid <PREFIX>       next free id, e.g. B -> B212
     tools/ctx.py archive         move every [x] line left in TODO.md to DONE.md (after merges, hand edits)
     tools/ctx.py brief <ID>      everything a task starts from: its line, plan/<ID>.md, its journal (newest file in
                                  full), where its files are and their last commits; the runners paste it in the prompt
@@ -160,6 +164,62 @@ def unblock(todo, tid, note=''):
     _write(todo, ls)
 
 
+def _place(ls, where, ref):
+    """Index to insert a top-level item at: top (first task under Next), before/after ID, or in SECTION (its end)."""
+    if where == 'top':
+        where, ref = 'in', 'Next'
+        i = next(i for i, l in enumerate(ls) if _level(l) and ref.lower() in l.lower()) + 1
+        while i < len(ls) and not ITEM.match(ls[i]) and not _level(ls[i]):
+            i += 1
+        return i
+    if where in ('before', 'after'):
+        i = _find(ls, ref)
+        return i if where == 'before' else i + len(_item_block(ls, i))
+    if where == 'in':
+        h = next((i for i, l in enumerate(ls) if _level(l) and ref.lower() in l.lower()), None)
+        if h is None:
+            raise SystemExit(f'ctx: no section {ref!r}')
+        j = h + 1
+        while j < len(ls) and not (0 < _level(ls[j]) <= _level(ls[h])):
+            j += 1
+        while ls[j - 1].strip() == '':
+            j -= 1
+        return j
+    raise SystemExit(f'ctx: where must be top | before ID | after ID | in SECTION, not {where!r}')
+
+
+def move(todo, tid, where, ref=None):
+    ls = list(lines(todo))
+    i = _find(ls, tid)
+    blk = _item_block(ls, i)
+    del ls[i:i + len(blk)]
+    j = _place(ls, where, ref)
+    ls[j:j] = blk
+    _write(todo, ls)
+
+
+def next_id(paths, prefix):
+    n = [int(m.group(1)) for p in paths for l in lines(p)
+         if (m := re.match(rf'\s*- \[.\] \*\*{re.escape(prefix)}(\d+)\b', l))]
+    return f'{prefix}{max(n, default=0) + 1}'
+
+
+def add(todo, done, prefix, text, where='top', ref=None):
+    tid = next_id([todo, done], prefix)
+    ls = list(lines(todo))
+    j = _place(ls, where, ref)
+    ls[j:j] = [f'- [ ] **{tid}** {text}']
+    _write(todo, ls)
+    return tid
+
+
+def note(todo, tid, text):
+    ls = list(lines(todo))
+    i = _find(ls, tid)
+    ls[i + len(_item_block(ls, i)) - 1] += f' — {text}'
+    _write(todo, ls)
+
+
 JOURNAL_MAX = 12000  # chars of the newest journal file put in a brief; the rest is a Read away
 
 
@@ -221,6 +281,18 @@ if __name__ == '__main__':
     if args[:1] == ['unblock'] and len(args) > 1:
         unblock(todo, args[1], ' '.join(args[2:]))
         sys.exit(print(f'unblocked {args[1]}'))
+    if args[:1] == ['move'] and len(args) > 2:
+        move(todo, args[1], args[2], ' '.join(args[3:]) or None)
+        sys.exit(print(f'moved {args[1]} {" ".join(args[2:])}'))
+    if args[:1] == ['add'] and len(args) > 2:
+        text, _, where = ' '.join(args[2:]).partition(' @ ')
+        w = where.split(maxsplit=1) or ['top']
+        sys.exit(print(f'added {add(todo, done, args[1], text, w[0], (w[1:] or [None])[0])}'))
+    if args[:1] == ['note'] and len(args) > 2:
+        note(todo, args[1], ' '.join(args[2:]))
+        sys.exit(print(f'noted {args[1]}'))
+    if args[:1] == ['newid'] and len(args) == 2:
+        sys.exit(print(next_id([todo, done], args[1])))
     if args[:1] == ['brief'] and len(args) == 2:
         sys.exit(print('\n'.join(brief(root, args[1]))))
     if args == ['archive']:
