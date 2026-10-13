@@ -965,6 +965,11 @@ mod tests {
                 let t = hst_sim::pose::wrap(pose_frame(n, pose.length), f.uv_length, true);
                 let v = hst_sim::face::sample(ticks, values, hst_sim::ps2::mul(t, 80.0), &mut 0, true);
                 assert_eq!([v[0].to_bits(), v[1].to_bits()], [0xbca3_d70a, 0x3ca3_d70a]);
+                // B144: the held frame's face smiles open (joy_mouth 1), as the select's baked and live cards draw it
+                let mut t = hst_sim::motion::Clock { time: pose_frame(n, pose.length), sampled: 0.0, speed: 0.0, looping: false, hold: None };
+                t.tick(f.length);
+                let joy = f.tracks.iter().find(|tr| model.morph_names[tr.0].ends_with("joy_mouth")).unwrap();
+                assert_eq!(hst_sim::face::sample(&joy.1, &joy.2, hst_sim::ps2::mul(t.sampled, 80.0), &mut 0, false)[0], 1.0);
             }
             held.push(pose_frame(n, pose.length));
         }
@@ -1012,3 +1017,4 @@ mod uv_tests {
         assert_eq!(with, want);
     }
 }
+
