@@ -98,15 +98,26 @@ fn port(u: &Umpire) -> (i32, [bool; 4], i32, i32, i32, [bool; 3], i32, [i32; 2],
 
 #[test]
 fn umpire_s05() {
+    run("umpire_s05", false);
+}
+
+/// Slot 5 poked to 4-3 in games with team 1 at 40-0 (`umpire_tiebreak.bin`, starts mid-match at a serve): team 1
+/// takes the game to 4-4, she announces the tiebreak at the next serve and stays silent on every tiebreak point.
+#[test]
+fn umpire_tiebreak() {
+    run("umpire_tiebreak", true);
+}
+
+fn run(name: &str, mid: bool) {
     use hst_data::exe;
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| format!("{root}/context/fixtures"));
     let (Ok(data), Ok(cnf), Ok(bin)) = (
-        std::fs::read(format!("{dir}/umpire_s05.bin")),
+        std::fs::read(format!("{dir}/{name}.bin")),
         std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")),
         std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")),
     ) else {
-        return eprintln!("umpire_s05.bin or disc files absent, skipped");
+        return eprintln!("{name}.bin or disc files absent, skipped");
     };
     let game = exe::Game::new(&cnf, &bin).unwrap();
     let timing = game.scoreboard_timing(0, 4);
@@ -118,12 +129,19 @@ fn umpire_s05() {
     });
     let s0 = &ss[0];
     let (lang, ids) = (s0.0[460], (s0.0[454], s0.0[455]));
-    assert_eq!(s0.phase().1, 0, "starts at the match entry");
+    assert!(mid || s0.phase().1 == 0, "starts at the match entry");
     // ponytail: court unknown in this recording (only the deuce-again word on court 5 depends on it)
     let mut u = Umpire::new([0.0; 3], s0.0[s0.u(0xd4)] != 0, 0, game.umpire_words(lang, ids.0, ids.1), s0.ball());
     // left from the point before the save state
     u.look_ticks = s0.i(s0.u(0x17c));
     u.look_step = [s0.f(s0.u(0x180)), s0.f(s0.u(0x184)), s0.f(s0.u(0x188))];
+    if mid {
+        // a mid-match start takes her state as recorded
+        let (motion, [side, t0, t1, over], countdown, look, _, [seen, rally, calling], part, keys, programs) = s0.state();
+        (u.motion, u.side, u.tiebreak, u.over, u.countdown, u.seen, u.rally, u.calling, u.part, u.keys, u.programs) =
+            (motion as u8, side, [t0, t1], over, countdown, seen, rally, calling, part, keys, programs);
+        u.look = [Look::Centre, Look::Ball, Look::Back][look as usize];
+    }
     let mut pp: Option<(PostPoint, Score, Rally)> = None;
     let mut called = false;
     let (mut ticks, mut calls, mut plays, mut left) = (0, 0, 0, i32::MAX);
@@ -184,8 +202,8 @@ fn umpire_s05() {
         assert!((0..3).all(|k| (u.look_step[k] - step[k]).abs() < 1e-4), "tick {}: look step {:?} vs {step:?}", s.tick(), u.look_step);
         ticks += 1;
     }
-    eprintln!("umpire_s05: {ticks} ticks, {calls} queued calls, {plays} voices, next words {left}+ ticks before the countdown");
-    assert!(calls > 20 && left > 0, "every second word waits for the first to end");
+    eprintln!("{name}: {ticks} ticks, {calls} queued calls, {plays} voices, next words {left}+ ticks before the countdown");
+    assert!(mid || calls > 20 && left > 0, "every second word waits for the first to end");
 }
 
 /// Her chair on court 10 where the recording's game put her (umpire +0xa0, read live from slot 5).

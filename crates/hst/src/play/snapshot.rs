@@ -335,6 +335,58 @@ mod tests {
         app
     }
 
+    /// B71: every tiebreak point plays court, crowd and racket sounds like any other point.
+    #[test]
+    fn tiebreak_points_sound() {
+        if !Path::new(ISO).is_file() {
+            return;
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.init_asset::<crate::gs::GsMaterial>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 1, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 1, pads: None });
+        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay: true, ..default() });
+        app.init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
+        app.add_systems(PostStartup, setup);
+        app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
+        let mut iso = hst_data::iso::Iso::open(ISO).unwrap();
+        let sound = crate::audio::Sound::test(&mut iso);
+        app.insert_resource(crate::audio::court_bank(&mut iso, 1));
+        app.insert_resource(crate::audio::GalleryBank(crate::audio::gallery_bank(&mut iso, 1, 0).map(std::sync::Arc::new)));
+        app.insert_resource(sound.clone());
+        app.add_systems(FixedUpdate, play_sounds.after(held_ball));
+        app.add_plugins(instant_replay::plugin);
+        app.finish();
+        app.cleanup();
+        app.world_mut().run_schedule(Startup);
+        app.world_mut().run_schedule(PostStartup);
+        app.world_mut().resource_mut::<Game>().humans[0] = true;
+        let (mut last, mut plays, mut tiebreak_points) = (String::new(), 0, 0);
+        for _ in 0..60 * 60 * 25 {
+            run(&mut app, &[[tick_input::IDLE; 4]]);
+            let mut g = app.world_mut().resource_mut::<Game>();
+            // the first game goes to the other side so the one-game match reaches a tiebreak at 1-1
+            if g.score.games == [1, 0] && g.phase == Phase::Serve {
+                g.score.games = [0, 1];
+            }
+            let now = format!("{:?} {:?}", g.score.points, g.score.games);
+            if now != last {
+                if g.score.tiebreak && !last.is_empty() {
+                    assert!(sound.plays() > plays, "tiebreak point {now} played no sound");
+                    tiebreak_points += 1;
+                }
+                (last, plays) = (now, sound.plays());
+                if g.score.match_over {
+                    break;
+                }
+            }
+        }
+        assert!(tiebreak_points > 3, "reached the tiebreak ({tiebreak_points} points)");
+    }
+
     fn run(app: &mut App, pads: &[[hst_sim::replay::Pad; 4]]) -> Vec<u64> {
         pads.iter()
             .map(|p| {
