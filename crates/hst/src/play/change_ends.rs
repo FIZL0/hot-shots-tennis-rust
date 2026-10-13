@@ -114,6 +114,8 @@ mod tests {
                     let at = hst_sim::flow::serve_placement(0, &{ let mut s = g.score.clone(); s.next_point(&g.rules); s }, 0, g.players[0].stance, g.players[0].formation, g.score.swapped);
                     assert_eq!(g.players[0].end, at.facing, "player 0 at the new end");
                 }
+                // B73: the original's player markers are up through the whole change of ends
+                assert!(super::super::markers::shown(g), "markers up at change-ends tick {n}");
                 views.push((n, g.prev_view, g.cam.view));
                 to = app.world().resource::<Swing>().run.map(|r| r.1);
             } else if !views.is_empty() {

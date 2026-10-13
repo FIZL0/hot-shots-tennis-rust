@@ -1,7 +1,8 @@
 //! The original's player markers: before each serve a "1P".."4P"/"COM" tag with a pointer under it hangs over each
 //! player's head (`azuma/panel/i_playerinfo` in `AZUMA/C_EFF/EFFCT.XB0`, 40×32 cells), tinted with the player's
 //! panel colour. They come on when the point is set up and go the moment the server starts the toss (back if the
-//! toss is caught), solid (no fade), only in games of more than one player.
+//! toss is caught), solid (no fade), only in games of more than one player. A change of ends sets the point up on
+//! its first tick, so they are up over the players' new spots through the whole change-ends glide too (B73).
 //!
 //! Each is a camera-facing quad whose bottom edge (the pointer's tip) is at the player's ground position raised to
 //! the character's reach centre (TParam column 55) + 0.65 m. Its half-width is 0.3 · max(1, 0.15·z·t) · min(1,
@@ -33,10 +34,12 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, draw.after(super::balloons));
 }
 
-/// Whether the markers show: from the serve's set-up until the toss, with more than one player.
+/// Whether the markers show: from the serve's set-up (or the change of ends before it) until the toss, with more
+/// than one player.
 pub(super) fn shown(g: &Game) -> bool {
+    let set_up = matches!(g.phase, Phase::ChangeEnds(_)) || g.phase == Phase::Serve && g.serving.toss.is_none();
     // not under the result screen, which replaces the match HUD
-    g.players.len() > 1 && g.phase == Phase::Serve && g.serving.toss.is_none() && g.match_stats.result.is_none()
+    g.players.len() > 1 && set_up && g.match_stats.result.is_none()
 }
 
 /// The marker's half-width at view depth `z` with `t` = tan(horizontal half-angle).
