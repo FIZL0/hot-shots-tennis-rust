@@ -568,7 +568,8 @@ fn draw(
             Tex::Face(p) => panel_art.0[panel::FACES + p].clone(),
         };
         let [u, v, w, h] = quad.src;
-        img.rect = Some(Rect::new(u, v, u + w, v + h));
+        // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
+        img.rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
