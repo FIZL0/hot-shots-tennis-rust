@@ -4174,8 +4174,9 @@ fn start_effects(
     mut commands: Commands,
 ) {
     smash_frame(&mut g);
-    marks.red_at = g.marks.red;
-    marks.smash_at = g.marks.smash.as_ref().and_then(|(s, _, _)| s.at());
+    let up = landing_shown(&g);
+    marks.red_at = g.marks.red.filter(|_| up);
+    marks.smash_at = g.marks.smash.as_ref().and_then(|(s, _, _)| s.at()).filter(|_| up);
     marks.tick(g.marks.start);
     let hit = g.hit_effect.take();
     if let Some(h) = hit {
@@ -4205,6 +4206,13 @@ fn start_effects(
         bounce_recorded(&g),
         &mut transforms,
     );
+}
+
+/// Whether the landing markers may show: the original's marker manager drops both on the players' reaction to the
+/// point (message 0x19), so they're gone through the rest of the point-over and the change of ends (B193); `g.marks`
+/// itself is kept until the next point (the AI reads it).
+fn landing_shown(g: &Game) -> bool {
+    !matches!(g.phase, Phase::ChangeEnds(_)) && !g.post.as_ref().is_some_and(|p| p.reacted)
 }
 
 /// Whether a bounce now leaves a contact record, as the original's ball step: only once its game phase is past the

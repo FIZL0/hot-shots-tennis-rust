@@ -102,7 +102,7 @@ mod tests {
         app.add_systems(Startup, setup);
         app.add_systems(FixedUpdate, (remember, control, move |mut g: ResMut<Game>| g.cam_owner = owner.or(g.cam_owner), simulate, motions, character::tick, played_out, held_ball).chain());
         app.update();
-        let (mut views, mut to, mut after) = (Vec::new(), None, None);
+        let (mut views, mut to, mut after, mut aimed) = (Vec::new(), None, None, false);
         for frame in 0..60 * 600 {
             let ends = app.world().resource::<Game>().score.swapped;
             app.world_mut().run_schedule(FixedUpdate);
@@ -116,6 +116,9 @@ mod tests {
                 }
                 // B73: the original's player markers are up through the whole change of ends
                 assert!(super::super::markers::shown(g), "markers up at change-ends tick {n}");
+                // B193: the last shot's landing markers went with the players' reaction (the original's 0x19)
+                assert!(!landing_shown(g), "landing markers hidden at change-ends tick {n}");
+                aimed |= g.marks.red.is_some();
                 views.push((n, g.prev_view, g.cam.view));
                 to = app.world().resource::<Swing>().run.map(|r| r.1);
             } else if !views.is_empty() {
@@ -123,6 +126,7 @@ mod tests {
                 break;
             }
         }
+        assert!(aimed, "the point before the change had a red landing marker to hide");
         // 80 down to 0, as the game's 81 change-ends ticks
         assert_eq!(views.len() as u32, hst_sim::flow::CHANGE_ENDS + 1, "a whole change-ends phase");
         let to = to.expect("the move ran to its end view");
