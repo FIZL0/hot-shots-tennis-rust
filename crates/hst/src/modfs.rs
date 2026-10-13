@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::mods::{self, Mod};
 
-// ponytail: every mod file of the browser build but its upscaled set (`kept_in_memory`) is held in memory (the main
+// ponytail: every mod file of the browser build (never an upscaled set, `upscaled`) is held in memory (the main
 // thread can't read OPFS synchronously): ≈ 10–40 MB a store mod beside the 171 MB pack. Reading a picked
 // character's models on demand (async, before the select/match loads them) if many installed mods outgrow a phone.
 static MEM: Mutex<BTreeMap<String, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
@@ -319,7 +319,7 @@ fn image_ok(b: &[u8], ext: &str) -> Result<(), String> {
 /// A mod zip installed into `root` (the `mods/` folder) as `root/<id>/`, in memory ([`install_with`]).
 #[cfg(test)]
 pub fn install(zip: &[u8], root: &Path) -> Result<Mod, String> {
-    now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, false))
+    now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, false, false))
 }
 
 /// The mod zip file `zip` installed into `root/<id>/` on disk ([`install_with`]); `want` is the id it must hold.
@@ -332,29 +332,30 @@ pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, 
         let mut b = vec![0; n];
         std::future::ready(f.seek(io::SeekFrom::Start(at)).and_then(|_| f.read_exact(&mut b)).map(|_| b).map_err(|e| format!("can't read the zip: {e}")))
     };
-    now(install_with(len, read, root, want, true))
+    now(install_with(len, read, root, want, true, true))
 }
 
-/// Whether a mod's file `n` (inside its folder) is kept by the browser build (B227): a mod's `textures/upscaled/`
-/// set (≈ 90% of the store mods' bytes, 512 of Anya's 525 MB) isn't downloaded or kept in memory and OPFS, so a few installed
-/// mods can't outgrow a phone's tab; the browser draws the mod's own textures, as an online peer does
-/// (`mods_online.rs`).
+/// Whether a mod's file `n` (inside its folder) is in its upscaled set (B227): ≈ 90% of the store mods' bytes (512
+/// of Anya's 525 MB). The browser never installs it (a few installed mods outgrew a phone's tab; it draws the mod's
+/// own textures, as an online peer does, `mods_online.rs`), nor does the desktop with Upscaled Downloads off.
 // ponytail: no upscaled mod textures in the browser; reading the picked costume's set from OPFS before a match
 // (async, the main thread can't read OPFS synchronously) if they're ever wanted there
-pub fn kept_in_memory(n: &str) -> bool {
-    !n.starts_with("textures/upscaled/")
+pub fn upscaled(n: &str) -> bool {
+    n.starts_with("textures/upscaled/")
 }
 
 /// A mod zip (`len` bytes, read as [`unpack_with`] reads it) installed into `root` (the `mods/` folder) as
 /// `root/<id>/`: unpacked a file at a time under `root/.import/` (on disk, or in memory: the browser's page then
 /// stores [`files_under`] `root/<id>`), checked whole ([`check_all`]), then put in place of an installed mod with the
-/// same id. `want` is the id it must hold (a store download's). On any failure nothing of it is kept.
+/// same id. `want` is the id it must hold (a store download's). `upscaled` false leaves the mod's upscaled set
+/// ([`upscaled`]) out, unread. On any failure nothing of it is kept.
 pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
     len: u64,
     zip: impl FnMut(u64, usize) -> F,
     root: &Path,
     want: Option<&str>,
     disk: bool,
+    with_upscaled: bool,
 ) -> Result<Mod, String> {
     let stage = root.join(".import");
     let clear = || {
@@ -372,7 +373,7 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
             }
             std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
         };
-        let names = unpack_with(len, zip, |n| disk || kept_in_memory(n), put, MAX_FILE, MAX_TOTAL).await?;
+        let names = unpack_with(len, zip, |n| with_upscaled || !upscaled(n), put, MAX_FILE, MAX_TOTAL).await?;
         let j: serde_json::Value = serde_json::from_slice(&read(&stage.join("mod.json")).map_err(|e| e.to_string())?).map_err(|e| format!("mod.json: not JSON: {e}"))?;
         let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
         if let Some(w) = want.filter(|w| *w != id) {

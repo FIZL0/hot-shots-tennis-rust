@@ -208,7 +208,7 @@ impl Menu {
                     } else {
                         self.add.busy = true;
                         self.add.status = format!("Downloading {} ({})...", e.meta.name, mb(e.meta.size));
-                        modstore::install(&e, root());
+                        modstore::install(&e, root(), self.settings.0[super::UPSCALED_DOWNLOADS]);
                         out.push(Sound(2));
                     }
                 }

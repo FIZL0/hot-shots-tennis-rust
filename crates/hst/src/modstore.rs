@@ -310,28 +310,37 @@ pub fn stamp(dir: &Path) -> Option<Stamp> {
 
 /// Downloads, checks and installs `e` into `root` ([`Event::Installed`]), saying how far it's got
 /// ([`Event::Progress`]). The zip streams to a file (B204: never whole in memory) and is hashed as it arrives; only
-/// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards. The
-/// browser reads the parts it keeps straight from the store instead ([`ranged`]).
-pub fn install(e: &Entry, root: &Path) {
+/// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards.
+/// Without its `upscaled` set (Upscaled Downloads off, and always in the browser) the parts kept are read straight
+/// from the store instead ([`ranged`]).
+pub fn install(e: &Entry, root: &Path, upscaled: bool) {
     let (e, root) = (e.clone(), root.to_path_buf());
     spawn(async move {
         let got = async {
             #[cfg(not(target_arch = "wasm32"))]
-            let m = {
-                let mut zip = Zip::create(&root).await?;
-                let (size, hash) = download(&e, &mut zip).await?;
-                matches(size, &hash, &e.meta)?;
-                send(Event::Progress(format!("Checking {}...", e.meta.name)));
-                zip.install(&root, &e.meta.id).await?
-            };
+            let m = if upscaled { whole(&e, &root).await? } else { ranged(&e, &root, true).await? };
             #[cfg(target_arch = "wasm32")]
-            let m = ranged(&e, &root).await?;
+            // the browser never takes the upscaled set (its setting is locked off there)
+            let m = {
+                let _ = upscaled;
+                ranged(&e, &root, false).await?
+            };
             let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified };
             modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
             keep(&m)
         };
         send(Event::Installed(got.await));
     });
+}
+
+/// `e`'s whole `mod.zip` downloaded, checked and installed on disk.
+#[cfg(not(target_arch = "wasm32"))]
+async fn whole(e: &Entry, root: &Path) -> Result<Mod, String> {
+    let mut zip = Zip::create(root).await?;
+    let (size, hash) = download(e, &mut zip).await?;
+    matches(size, &hash, &e.meta)?;
+    send(Event::Progress(format!("Checking {}...", e.meta.name)));
+    zip.install(root, &e.meta.id).await
 }
 
 /// `e`'s `mod.zip` from the store into `zip`: its size and sha256.
@@ -384,12 +393,10 @@ impl Drop for Zip {
     }
 }
 
-/// B227: the browser installs `e`'s `mod.zip` from the store a part at a time (HTTP range requests), reading only
-/// the files it keeps (`modfs::kept_in_memory`: never the upscaled set, ≈ 90% of a store mod), so nothing of it is
-/// stored whole. Its sha256 needs all of it, so here its size is checked against the store's, and each file's CRC-32
+/// B227: `e`'s `mod.zip` installed from the store a part at a time (HTTP range requests) without its upscaled set
+/// (`modfs::upscaled`, ≈ 90% of a store mod), which is never downloaded; on `disk`, else in memory (the browser). Its sha256 needs all of it, so here its size is checked against the store's, and each file's CRC-32
 /// as it's unpacked (`modfs::unpack_with`); the connection is HTTPS to the store either way.
-#[cfg(any(test, target_arch = "wasm32"))]
-async fn ranged(e: &Entry, root: &Path) -> Result<Mod, String> {
+async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
     send(Event::Progress(format!("Downloading {}...", e.meta.name)));
     let r = range(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), 0, 1).await?;
     // the zip's size from "bytes 0-0/<size>"; the rest is asked of the URL the store redirected to (its CDN)
@@ -400,7 +407,7 @@ async fn ranged(e: &Entry, root: &Path) -> Result<Mod, String> {
     if len > MAX_ZIP {
         return Err("too big".into());
     }
-    let (url, got) = (r.url().to_string(), std::cell::Cell::new(0u64));
+    let (url, got) = (r.url().to_string(), std::sync::atomic::AtomicU64::new(0));
     let read = |at: u64, n: usize| {
         let (url, got, name) = (url.clone(), &got, &e.meta.name);
         async move {
@@ -411,19 +418,17 @@ async fn ranged(e: &Entry, root: &Path) -> Result<Mod, String> {
             if b.len() != n {
                 return Err("download cut short".into());
             }
-            let mb = got.get() >> 20;
-            got.set(got.get() + n as u64);
-            if got.get() >> 20 != mb {
-                send(Event::Progress(format!("Downloading {name}... {} MB", got.get() >> 20)));
+            let was = got.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+            if (was + n as u64) >> 20 != was >> 20 {
+                send(Event::Progress(format!("Downloading {name}... {} MB", (was + n as u64) >> 20)));
             }
             Ok(b.to_vec())
         }
     };
-    modfs::install_with(len, read, root, Some(&e.meta.id), false).await
+    modfs::install_with(len, read, root, Some(&e.meta.id), disk, false).await
 }
 
 /// Bytes `at..at + n` of `url` (the store's file, or where it redirected).
-#[cfg(any(test, target_arch = "wasm32"))]
 async fn range(url: &str, at: u64, n: usize) -> Result<reqwest::Response, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -711,7 +716,7 @@ mod tests {
         let meta: Meta = rt.block_on(async { serde_json::from_slice(&get(&file_url("refs/pr/2", "mods/oob_pc12_anya/meta.json"), MAX_META).await.unwrap()).unwrap() });
         let e = Entry { meta, rev: "refs/pr/2".into(), verified: false };
         let root = Path::new("t_ranged/mods");
-        let m = rt.block_on(ranged(&e, root)).unwrap();
+        let m = rt.block_on(ranged(&e, root, false)).unwrap();
         let files = modfs::files_under(&m.dir);
         let mb = files.iter().map(|f| f.1.len()).sum::<usize>() >> 20;
         let fetched = take().into_iter().filter_map(|e| if let Event::Progress(p) = e { Some(p) } else { None }).last().unwrap();
@@ -719,6 +724,11 @@ mod tests {
         assert!(files.iter().all(|f| !f.0.contains("/textures/upscaled/")) && files.iter().any(|f| f.0.ends_with(".glb")));
         assert!(mb < 64);
         modfs::remove(Path::new("t_ranged"));
+        // the desktop's, with Upscaled Downloads off: the same files, on disk
+        let disk = std::env::temp_dir().join(format!("hst-ranged-{}", std::process::id()));
+        let m = rt.block_on(ranged(&e, &disk, true)).unwrap();
+        assert!(m.dir.join("mod.json").is_file() && !m.dir.join("textures/upscaled").exists() && modfs::files_under(&disk).is_empty());
+        std::fs::remove_dir_all(&disk).unwrap();
     }
 
     use super::*;
@@ -847,7 +857,7 @@ mod tests {
         loop {
             for ev in take() {
                 match ev {
-                    Event::Listing(r) => install(r.unwrap().iter().find(|e| e.meta.id == id).expect("not in the store"), &root),
+                    Event::Listing(r) => install(r.unwrap().iter().find(|e| e.meta.id == id).expect("not in the store"), &root, true),
                     Event::Progress(s) if s.ends_with("0%)") || !s.contains('%') => eprintln!("{:.1}s {s}", started.elapsed().as_secs_f32()),
                     Event::Installed(r) => {
                         eprintln!("{:.1}s {r:?}", started.elapsed().as_secs_f32());

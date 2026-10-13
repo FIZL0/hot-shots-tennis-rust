@@ -194,7 +194,7 @@ pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>
 /// The row of the Settings screens under `p` (640×448), as `super::layout` draws them.
 fn row_at(m: &Menu, p: Vec2) -> Option<usize> {
     let (x0, x1, y0, pitch, h, n) = match m.screen {
-        Screen::Settings => (60.0, 500.0, 90.0, 44.0, 38.0, super::CONTROLS_ROW + 2),
+        Screen::Settings => (60.0, 500.0, 90.0, super::SETTINGS_PITCH, 38.0, super::CONTROLS_ROW + 2),
         Screen::Graphics => (60.0, 560.0, GRAPHICS_TOP, GRAPHICS_PITCH, 38.0, GRAPHICS_LABELS.len() + 1),
         Screen::Controls => (56.0, 620.0, 62.0, 21.0, 21.0, controls::action_names().count() + 1),
         _ => return None,
@@ -238,7 +238,7 @@ fn after(
         return;
     }
     ps.fresh = false;
-    let [wide, _, _, match_music] = menu.settings.0;
+    let [wide, _, _, match_music, _] = menu.settings.0;
     widescreen::WIDE.store(wide, std::sync::atomic::Ordering::Relaxed);
     if match_music != args.music
         && let (Some(game), Some(sound), Some(mut music)) = (game, sound, music)
@@ -294,15 +294,15 @@ mod tests {
         assert!(out[16 * 256] == 1.0 && out[16 * 256 + 255] == 1.0);
     }
 
-    /// Clicks land on the rows `layout` draws: Settings' pills 44 px apart from y 90, Graphics' 39.5 from 46.
+    /// Clicks land on the rows `layout` draws: Settings' pills 39 px apart from y 90, Graphics' 39.5 from 46.
     #[test]
     fn rows_under_clicks() {
         let m = Menu { screen: Screen::Settings, ..default() };
         assert_eq!(row_at(&m, Vec2::new(270.0, 100.0)), Some(0));
-        assert_eq!(row_at(&m, Vec2::new(460.0, 90.0 + 44.0 * 3.0 + 20.0)), Some(3)); // the switch beside Match Music
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 + 40.0)), None); // between pills
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 6.0 + 10.0)), Some(6)); // Back
-        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 44.0 * 7.0 + 10.0)), None);
+        assert_eq!(row_at(&m, Vec2::new(460.0, 90.0 + 39.0 * 3.0 + 20.0)), Some(3)); // the switch beside Match Music
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 39.0 + 38.5)), None); // between pills
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 39.0 * 7.0 + 10.0)), Some(7)); // Back
+        assert_eq!(row_at(&m, Vec2::new(270.0, 90.0 + 39.0 * 8.0 + 10.0)), None);
         let g = Menu { screen: Screen::Graphics, ..default() };
         assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 7.0 + 5.0)), Some(7));
         assert_eq!(row_at(&g, Vec2::new(500.0, 46.0 + 39.5 * 8.0 + 30.0)), Some(8)); // Back

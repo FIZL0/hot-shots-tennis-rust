@@ -263,7 +263,7 @@ fn shared(b: &js_sys::Uint8Array) -> Arc<[u8]> {
 #[wasm_bindgen]
 pub async fn import_mod(zip: web_sys::Blob) -> Result<JsValue, JsValue> {
     let root = crate::play::main_menu::mods_root();
-    let m = crate::modfs::install_with(zip.size() as u64, |at, n| read_blob(zip.clone(), at, n), root, None, false).await.map_err(JsValue::from)?;
+    let m = crate::modfs::install_with(zip.size() as u64, |at, n| read_blob(zip.clone(), at, n), root, None, false, false).await.map_err(JsValue::from)?;
     let o = js_sys::Object::new();
     js_sys::Reflect::set(&o, &"id".into(), &m.id.into())?;
     js_sys::Reflect::set(&o, &"name".into(), &m.name.into())?;
