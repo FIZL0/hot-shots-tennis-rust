@@ -214,7 +214,7 @@ fn after(
         return;
     }
     ps.fresh = false;
-    let [wide, _, _, match_music] = menu.settings.0;
+    let [wide, _, _, match_music, _] = menu.settings.0;
     widescreen::WIDE.store(wide, std::sync::atomic::Ordering::Relaxed);
     if match_music != args.music
         && let (Some(game), Some(sound), Some(mut music)) = (game, sound, music)

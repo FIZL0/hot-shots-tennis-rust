@@ -177,10 +177,20 @@ pub(super) const FONT: [&str; 15] = [
 
 /// The enhancements, each on or off (all on by default), and the graphics settings, saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 4], Graphics);
+pub struct Settings([bool; 5], Graphics);
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match).
-const SETTING_NAMES: [&str; 4] = ["widescreen", "upscaled_textures", "menu_music", "music"];
-const SETTING_LABELS: [&str; 4] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music"];
+const SETTING_NAMES: [&str; 5] = ["widescreen", "upscaled_textures", "menu_music", "music", "upscaled_downloads"];
+const SETTING_LABELS: [&str; 5] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music", "Upscaled Downloads"];
+/// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
+/// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
+const UPSCALED_DOWNLOADS: usize = 4;
+/// The Settings screen's row pitch (eight rows above the description bar).
+pub(super) const SETTINGS_PITCH: f32 = 39.0;
+/// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
+/// Downloads, `modstore::install`).
+fn locked(i: usize) -> bool {
+    cfg!(target_arch = "wasm32") && (i == 1 || i == UPSCALED_DOWNLOADS)
+}
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
@@ -193,7 +203,7 @@ const GRAPHICS_ALL: [&str; 8] = ["Preset", "Resolution", "Shadows", "Frame Limit
 const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(7).0 } else { &GRAPHICS_ALL };
 
 /// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
-const SETTING_DEFAULTS: [bool; 4] = [true, true, true, false];
+const SETTING_DEFAULTS: [bool; 5] = [true, true, true, false, true];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -210,9 +220,11 @@ fn cycle<T: PartialEq + Copy>(list: &[T], cur: T, d: isize) -> T {
 impl Settings {
     fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
+        let mut downloads = None;
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
             if let Some(i) = SETTING_NAMES.iter().position(|n| *n == k.trim()) {
                 s.0[i] = v.trim() != "off";
+                downloads = downloads.or((i == UPSCALED_DOWNLOADS).then_some(s.0[i]));
             } else if k.trim() == "uncapped_fps" {
                 // before the graphics settings: off waited for the display
                 s.1.vsync = v.trim() == "off";
@@ -220,6 +232,7 @@ impl Settings {
                 s.1.set(k, v);
             }
         }
+        s.0[UPSCALED_DOWNLOADS] = downloads.unwrap_or(s.0[1]);
         s
     }
 
@@ -270,7 +283,7 @@ impl Settings {
 
     /// The match's flags for these settings.
     fn flags(&self) -> Vec<String> {
-        let [wide, upscale, _, music] = self.0;
+        let [wide, upscale, _, music, _] = self.0;
         let on = [(!wide, "--4x3"), (!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
         on.chain(self.1.flags()).collect()
     }
@@ -577,8 +590,11 @@ impl Menu {
             Screen::Settings => {
                 rows(CONTROLS_ROW + 2, &mut self.sel, &mut out);
                 let s = self.sel;
-                if s < SETTING_NAMES.len() && (k.ok || k.left || k.right) {
+                if s < SETTING_NAMES.len() && !locked(s) && (k.ok || k.left || k.right) {
                     self.settings.0[s] = !self.settings.0[s];
+                    if s == 1 {
+                        self.settings.0[UPSCALED_DOWNLOADS] = self.settings.0[1];
+                    }
                     out.extend([Sound(0), SaveSettings]);
                 } else if k.ok && s == GRAPHICS_ROW {
                     self.go(Screen::Graphics, &mut out);
@@ -1635,18 +1651,21 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.frame(1, 6);
             let mut labels: Vec<String> = SETTING_LABELS.iter().map(|s| s.to_string()).collect();
             labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
-            d.rows(&labels, m.sel, 120.0, 90.0, 300.0, hand_x);
+            d.rows_at(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, SETTINGS_PITCH);
             for (i, on) in m.settings.0.iter().enumerate() {
-                d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + 44.0 * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
-                d.hit([420.0, 90.0 + 44.0 * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
+                let on = &(*on && !locked(i));
+                d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + SETTINGS_PITCH * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
+                d.hit([420.0, 90.0 + SETTINGS_PITCH * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
+                1 | 4 if locked(1) => "Upscaled textures aren't available in the browser.".into(),
                 1 => "Use the upscaled textures in mods/texture-replacements.".into(),
                 2 => "Play music in the menus.".into(),
                 3 => "Play each court's music during a match.".into(),
-                4 => "Resolution, shadows, frame limit and vsync.".into(),
-                5 => "Change the keys and buttons (controls.txt).".into(),
+                4 => "Download mods' upscaled textures from the mod store (most of a mod's size).".into(),
+                5 => "Resolution, shadows, frame limit and vsync.".into(),
+                6 => "Change the keys and buttons (controls.txt).".into(),
                 _ => text.msg(190).to_string(),
             });
         }
@@ -2492,20 +2511,23 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, true, false, false], Graphics::LOW);
+        let s = Settings([true, true, false, false, true], Graphics::LOW);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false], d));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false, true], d));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, true, false], d));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d));
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false], d));
+        assert_eq!(Settings::parse(""), Settings([true, true, true, false, true], d));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true], d));
+        // Upscaled Downloads follows Upscaled Textures unless it's set itself
+        assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
+        assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false, true], d));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, true, false], d).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, true, false, true], d).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, true, false, true], d).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, true, false, true, true], d).flags().contains(&"--music".to_string()));
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, false, true], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, false, true, false], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
         // the preset row steps through the presets; changing any other row makes it Custom
         let mut s = Settings::default();
         s.graphics_step(0, 1);
