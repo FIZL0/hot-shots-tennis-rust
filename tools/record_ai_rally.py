@@ -223,6 +223,9 @@ time.sleep(1)  # the load lands late: a patch written before it is overwritten b
 v0 = p.read32(VSYNC)
 while p.read32(VSYNC) - v0 < 5: time.sleep(0.05)
 gm0 = p.read32(GM_PTR)
+if "HST_LINE" in os.environ:  # B57: the line-call margin (m past each line; the game's is the ball radius); a
+    # negative one pulls every line in, so ordinary landings are called out and the CPUs' let-go check runs
+    p.write32(0x403bec, struct.unpack("<I", struct.pack("<f", float(os.environ["HST_LINE"])))[0])
 installed = []
 
 
@@ -265,6 +268,13 @@ for spec in filter(None, os.environ.get("HST_AI", "").split(",")):
     assert ai, f"player {k} has no AI object"
     p.write32(ai + 0xc, 0x3174c0 + row * 0x118)
     p.write32(ai + 0x10, p.read32(ai + 0x10) & ~0xff | level)
+# HST_MARGIN=<m> (B57): every CPU's table row gets this let-go margin (+0x90), so with HST_LINE the out calls near a
+# line reach the let-go check; tests replaying such a fixture apply the same margin
+if "HST_MARGIN" in os.environ:
+    for k in range(4):
+        pl = p.read32(gm0 + 0xa8 + 4 * k)
+        ai = pl and p.read32(pl + 0x80)
+        if ai: p.write32(p.read32(ai + 0xc) + 0x90, struct.unpack("<I", struct.pack("<f", float(os.environ["HST_MARGIN"])))[0])
 # HST_DRIVE=1 (P11k7): P1 (slot 3/4, human) is driven by the virtual pad as it records: it holds 4 m off the net,
 # steers to an incoming ball's x and z and presses ○ once per ball within 2.5 m of it, so its own swings claim
 # the path and its record sees volleys; serving it stands and presses ○ every 25 polls (idle, every 60). Needs tools/vpad.py serve.
@@ -276,8 +286,18 @@ if DRIVE:
     f32 = lambda a: struct.unpack("<f", struct.pack("<I", p.read32(a)))[0]
     me, ball = p.read32(gm0 + 0xa8), p.read32(gm0 + 0x88)
     held, pressed_for, idle = None, None, 0
+# HST_WIDE=1 (B57): at each return press P1 holds the stick to a far corner (alternating sides) for a few polls,
+# aiming wide and long so some balls land out; HST_REACH=<m> presses that far from the ball instead of 2.5 m
+# (early, mistimed swings)
+WIDE = os.environ.get("HST_WIDE") == "1"
+REACH = float(os.environ.get("HST_REACH", "2.5"))
+BTN = os.environ.get("HST_BTN", "circle")  # the shot button P1 presses (triangle = lob)
+aiming, wide_side = 0, 1
 def drive():
-    global held, pressed_for, idle
+    global held, pressed_for, idle, aiming, wide_side
+    if aiming:
+        aiming -= 1
+        return
     bx, bz, vz = f32(ball + 0x120), f32(ball + 0x128), f32(ball + 0x138)
     mx, mz = f32(me + 0x3d70), f32(me + 0x3d78)
     hit = tuple(p.read32(ball + o) for o in (0x70, 0x74, 0x78))  # a new hit point marks a new ball
@@ -292,12 +312,15 @@ def drive():
         held = stick
         send(f"stick l {stick[0]} {stick[1]}")
     idle += 1
-    if coming and hit != pressed_for and bz * side > 0 and ((bx - mx) ** 2 + (bz - mz) ** 2) ** 0.5 < 2.5:
+    if coming and hit != pressed_for and bz * side > 0 and ((bx - mx) ** 2 + (bz - mz) ** 2) ** 0.5 < REACH:
         pressed_for, idle = hit, 0
-        send("press circle 60")
+        if WIDE:
+            wide_side, aiming, held = -wide_side, 15, None
+            send(f"stick l {wide_side} -1")
+        send(f"press {BTN} 60")
     elif idle > (25 if serving else 60):
         idle = 0
-        send("press circle 60")
+        send(f"press {BTN} 60")
 # HST_PROBE=1 (P11k8): 0x362090 called from the doubles NET routine (ra 0x3d0c9c) appends (vsync, a0, sp, 0, the
 # quad at a1 = the routine's uninitialised stand scratch) to PROBE..PROBE_END, kept in out + ".probe"
 PROBE, PROBE_END, PPTR = 0x1e0d000, 0x1e10000, DATA + 0x60

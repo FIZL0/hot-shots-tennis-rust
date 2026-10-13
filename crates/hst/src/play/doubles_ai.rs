@@ -22,6 +22,9 @@ pub(super) struct Shared {
     claim: (i32, i32),
     /// The last ball path stepped (`step`) and what it was stepped from.
     built: Built,
+    /// The path's line gap (B57): the distance to the nearest line of the last landing that went from no call to
+    /// out; kept across paths and points as the original's.
+    gap: f32,
 }
 
 #[cfg(test)]
@@ -35,9 +38,45 @@ fn no_cache() -> bool {
     false
 }
 
+/// The predicted ball path from now, and (B57) the path's mode and gap.
+fn path(g: &mut Game) -> Vec<PathBall> {
+    // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
+    // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
+    // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
+    let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
+    if g.doubles_ai.built.0 != key || no_cache() {
+        let (path, mode, gap) = predict(g.flight, &g.shot, g.court, g.path_base);
+        g.doubles_ai.built = Built(key, path, mode, gap);
+    }
+    if let Some(gap) = g.doubles_ai.built.3 {
+        g.doubles_ai.gap = gap;
+    }
+    g.doubles_ai.built.1.clone()
+}
+
+/// The path stepped from `f` against the court (no net), its mode (the far end's line call) and, B57, the gap the
+/// original takes on a step that calls a not-yet-landed ball out (in, net or net-out first leave the old gap).
+fn predict(mut f: Flight, shot: &hst_sim::ball::Shot, court: usize, base: i32) -> (Vec<PathBall>, u8, Option<f32>) {
+    let mut path = Vec::with_capacity(PATH_MAX);
+    f.net = false;
+    let mut gap = None;
+    for _ in 0..PATH_MAX {
+        let e = path_entry(&f);
+        let [x, y, z] = e.pos;
+        let [u, v, s] = e.vel;
+        path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: base + f.contacts });
+        let was = f.call;
+        f.step(shot, &COURTS[court]);
+        if was == hst_sim::judge::Call::None && f.call == hst_sim::judge::Call::Out {
+            gap = Some(f.line_distance);
+        }
+    }
+    (path, f.call as u8, gap)
+}
+
 /// A cache, so not part of the state (`snapshot::state_hash` prints `Game`).
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
-struct Built(String, Vec<PathBall>);
+struct Built(String, Vec<PathBall>, u8, Option<f32>);
 
 impl std::fmt::Debug for Built {
     fn fmt(&self, _: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -148,7 +187,6 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         hitter: g.last_hitter,
         shots: g.shots,
         ball: ball(g),
-        // ponytail: the path's mode and line gap are the plain path's (P11k6)
         hits: [g.flight.bounces, g.flight.contacts],
         gravity: hst_sim::ball::Params::default().gravity,
         drag: hst_sim::ball::Params::default().drag,
@@ -158,25 +196,10 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         path_mode: 0,
         path_gap: 0.0,
     };
+    // B57: a CPU lets a ball that will land out by its row's margin go by (the NET and BASE routines' hold)
+    (w.path_mode, w.path_gap) = (g.doubles_ai.built.2, g.doubles_ai.gap);
     if g.doubles_ai.path.stamp != w.frame {
-        // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
-        // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
-        // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
-        let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
-        if g.doubles_ai.built.0 != key || no_cache() {
-            let mut path = Vec::with_capacity(PATH_MAX);
-            let mut f = g.flight;
-            f.net = false;
-            for _ in 0..PATH_MAX {
-                let e = path_entry(&f);
-                let [x, y, z] = e.pos;
-                let [u, v, s] = e.vel;
-                path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
-                f.step(&g.shot, &COURTS[g.court]);
-            }
-            g.doubles_ai.built = Built(key, path);
-        }
-        w.path = g.doubles_ai.built.1.clone();
+        w.path = path(g);
     }
     let row = p.ai;
     let me = &mut g.doubles_ai.me[i];
@@ -427,24 +450,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
         ..Default::default()
     };
     if g.doubles_ai.path.stamp != w.frame {
-        // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
-        // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
-        // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
-        let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
-        if g.doubles_ai.built.0 != key || no_cache() {
-            let mut path = Vec::with_capacity(PATH_MAX);
-            let mut f = g.flight;
-            f.net = false;
-            for _ in 0..PATH_MAX {
-                let e = path_entry(&f);
-                let [x, y, z] = e.pos;
-                let [u, v, s] = e.vel;
-                path.push(PathBall { pos: [x, y, z, 0.0], vel: [u, v, s, 0.0], bounces: g.path_base + f.contacts });
-                f.step(&g.shot, &COURTS[g.court]);
-            }
-            g.doubles_ai.built = Built(key, path);
-        }
-        w.path = g.doubles_ai.built.1.clone();
+        w.path = path(g);
     }
     let row = p.ai;
     let d = &mut g.doubles_ai;
@@ -489,6 +495,34 @@ pub(super) fn formations(g: &mut Game, draws: &[u32]) {
 mod tests {
     use super::*;
     use crate::{Args, GameSpace};
+
+    /// B57: a rally ball landing 1 m past the baseline gives the path mode 2 (out) and gap 1 m; one landing in, mode
+    /// 1 and no gap; a ball already called keeps the old gap.
+    #[test]
+    fn path_mode_and_gap() {
+        let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let lines = hst_sim::judge::Lines { shots: 3, doubles: true, side: 0, hitter_far: false, margin: 0.0 };
+        let shot = hst_sim::ball::Shot { params: hst_sim::ball::Params::default(), ..Default::default() };
+        let landing = |vz: f32| {
+            let mut f = Flight::new(Ball { pos: [0.0, -1.0, 0.5], vel: [0.0, 0.0, vz], spin: 0.0 }, id, id);
+            f.lines = Some(lines);
+            let mut p = f;
+            p.net = false;
+            for _ in 0..PATH_MAX {
+                if p.contacts == 0 {
+                    p.step(&shot, &COURTS[1]);
+                }
+            }
+            (predict(f, &shot, 1, 0), p.landing.0[2])
+        };
+        let (out, z) = landing(0.55);
+        assert!(z > 11.885, "{z}");
+        assert_eq!(out.1, 2);
+        assert!((out.2.unwrap() - (z - 11.885)).abs() < 0.05, "{:?} {z}", out.2);
+        let ((_, mode, gap), z) = landing(0.3);
+        assert!(z < 11.885, "{z}");
+        assert_eq!((mode, gap), (1, None));
+    }
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
