@@ -369,6 +369,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B247** Browser build on mobile: controllers connected after the web app is opened aren't detected (gamepad hotplug); pick one up without a reload
 - [x] **B235** Volume settings (user 2026-10-13): sliders in Settings for master, music (menu and match BGM), sound effects (SFX, crowd, menu sounds) and voices (players, umpire), saved with the other settings and applied at once, including to sounds already playing. Presentation only: no effect on the sim or replays. Any aspect ratio (`play/widescreen.rs`), pad/keyboard/touch. Test: setting each slider to 0 silences only its group → `audio.rs` · `play/main_menu.rs` (settings) · settings save
 - [x] **B247** Browser build on mobile: controllers connected after the web app is opened aren't detected (gamepad hotplug); pick one up without a reload
+- [x] **B231** Emotes while serving (B145, user 2026-10-13): an emote (right stick / 1–4) pressed while the player waits to serve plays its voice but the body keeps the serve-stance animation; it should play the emote's motion, then go back to the serve stance (without touching the sim RNG or serve timing; a toss already started isn't interrupted). Check singles and online → play/ emotes (B145) · play.rs motions/serve · hst-sim/src/motion.rs
 
 
 ### Shots
