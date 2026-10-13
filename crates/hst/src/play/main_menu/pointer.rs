@@ -342,7 +342,7 @@ pub(super) mod tests {
         m.point(Dev::Keys, a, true);
         assert_eq!(m.screen, Screen::Settings);
         // Settings → Graphics → its first value's arrows
-        tap(&mut m, 270.0, 90.0 + super::super::SETTINGS_PITCH * 5.0 + 19.0);
+        tap(&mut m, 270.0, super::super::SETTINGS_TOP + super::super::SETTINGS_PITCH * 5.0 + 19.0);
         assert_eq!(m.screen, Screen::Graphics);
         let v = m.settings.graphics_value(3);
         let y = super::super::GRAPHICS_TOP + super::super::GRAPHICS_PITCH * 3.0 + 19.0;

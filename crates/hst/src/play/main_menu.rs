@@ -16,7 +16,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer's players are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -37,7 +37,7 @@ use super::panel;
 use super::widescreen::Anchor;
 use crate::Args;
 use crate::graphics::Graphics;
-use crate::audio::{Sound, SoundBank};
+use crate::audio::{Sound, SoundBank, Volumes};
 
 pub use super::widescreen::WIDE;
 pub(crate) use previews::face;
@@ -176,17 +176,19 @@ pub(super) const FONT: [&str; 15] = [
 
 // ---------------------------------------------------------------- settings
 
-/// The enhancements, each on or off (all on by default), and the graphics settings, saved in `settings.txt`.
+/// The enhancements, each on or off (all on by default), the graphics settings and the volumes (B235), saved in
+/// `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 5], Graphics);
+pub struct Settings([bool; 5], Graphics, Volumes);
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match).
 const SETTING_NAMES: [&str; 5] = ["widescreen", "upscaled_textures", "menu_music", "music", "upscaled_downloads"];
 const SETTING_LABELS: [&str; 5] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music", "Upscaled Downloads"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 4;
-/// The Settings screen's row pitch (eight rows above the description bar).
-pub(super) const SETTINGS_PITCH: f32 = 39.0;
+/// The Settings screen's first row and row pitch: nine rows above the description bar, as the Graphics screen's.
+pub(super) const SETTINGS_TOP: f32 = GRAPHICS_TOP;
+pub(super) const SETTINGS_PITCH: f32 = GRAPHICS_PITCH;
 /// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
 /// Downloads, `modstore::install`).
 fn locked(i: usize) -> bool {
@@ -194,7 +196,10 @@ fn locked(i: usize) -> bool {
 }
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
-const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
+const SOUND_ROW: usize = GRAPHICS_ROW + 1;
+const CONTROLS_ROW: usize = SOUND_ROW + 1;
+/// B235: the Sound screen's sliders (`Volumes`' order), 0..=10 each.
+const SOUND_LABELS: [&str; 4] = ["Master", "Music", "Sound Effects", "Voices"];
 /// The Graphics screen's first row and row pitch (640×448): its nine rows fit between the title tab (to y 40) and the
 /// description bar (y 404).
 const GRAPHICS_TOP: f32 = 46.0;
@@ -208,7 +213,7 @@ const SETTING_DEFAULTS: [bool; 5] = [true, true, true, false, true];
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default())
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default())
     }
 }
 
@@ -234,12 +239,13 @@ impl Settings {
             }
         }
         s.0[UPSCALED_DOWNLOADS] = downloads.unwrap_or(s.0[1]);
+        s.2 = Volumes::parse(text);
         s
     }
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        on + &self.1.text()
+        on + &self.1.text() + &self.2.text()
     }
 
     /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
@@ -328,6 +334,8 @@ enum Screen {
     Main,
     Settings,
     Graphics,
+    /// B235: the volume sliders.
+    Sound,
     Controls,
     Mode,
     Assign,
@@ -626,6 +634,8 @@ impl Menu {
                     out.extend([Sound(0), SaveSettings]);
                 } else if k.ok && s == GRAPHICS_ROW {
                     self.go(Screen::Graphics, &mut out);
+                } else if k.ok && s == SOUND_ROW {
+                    self.go(Screen::Sound, &mut out);
                 } else if k.ok && s == CONTROLS_ROW {
                     self.go(Screen::Controls, &mut out);
                 } else if (k.ok && s > CONTROLS_ROW) || k.back {
@@ -642,6 +652,19 @@ impl Menu {
                     out.extend([Sound(0), SaveSettings]);
                 } else if k.ok || k.back {
                     self.sel = GRAPHICS_ROW;
+                    self.screen = Screen::Settings;
+                    out.push(Sound(1));
+                }
+            }
+            Screen::Sound => {
+                rows(SOUND_LABELS.len() + 1, &mut self.sel, &mut out);
+                let s = self.sel;
+                if s < SOUND_LABELS.len() && (k.left || k.right) {
+                    let v = &mut self.settings.2 .0[s];
+                    *v = if k.left { v.saturating_sub(1) } else { (*v + 1).min(10) };
+                    out.extend([Sound(0), SaveSettings]);
+                } else if (k.ok && s == SOUND_LABELS.len()) || k.back {
+                    self.sel = SOUND_ROW;
                     self.screen = Screen::Settings;
                     out.push(Sound(1));
                 }
@@ -1306,7 +1329,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() });
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default());
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| Settings::parse(&t));
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
     // back from a match: its pause menu may have changed them (B126)
@@ -1318,6 +1341,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     menu.screen = match screen.as_str() {
         "settings" => Screen::Settings,
         "graphics" => Screen::Graphics,
+        "sound" => Screen::Sound,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
@@ -1720,12 +1744,12 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
         Screen::Settings => {
             d.frame(1, 6);
             let mut labels: Vec<String> = SETTING_LABELS.iter().map(|s| s.to_string()).collect();
-            labels.extend(["Graphics".into(), "Controls".into(), "Back".into()]);
-            d.rows_locked(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, SETTINGS_PITCH, |i| i < SETTING_NAMES.len() && locked(i));
+            labels.extend(["Graphics".into(), "Sound".into(), "Controls".into(), "Back".into()]);
+            d.rows_locked(&labels, m.sel, 120.0, SETTINGS_TOP, 300.0, hand_x, SETTINGS_PITCH, |i| i < SETTING_NAMES.len() && locked(i));
             for (i, on) in m.settings.0.iter().enumerate() {
                 let on = &(*on && !locked(i));
-                d.text(if *on { "ON" } else { "OFF" }, 440.0, 90.0 + SETTINGS_PITCH * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
-                d.hit([420.0, 90.0 + SETTINGS_PITCH * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
+                d.text(if *on { "ON" } else { "OFF" }, 440.0, SETTINGS_TOP + SETTINGS_PITCH * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
+                d.hit([420.0, SETTINGS_TOP + SETTINGS_PITCH * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
             }
             d.info(&match m.sel {
                 0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
@@ -1735,7 +1759,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 3 => "Play each court's music during a match.".into(),
                 4 => "Download mods' upscaled textures from the mod store (most of a mod's size).".into(),
                 5 => "Resolution, shadows, frame limit and vsync.".into(),
-                6 => "Change the keys and buttons (controls.txt).".into(),
+                6 => "The volume of the music, the sound effects and the voices.".into(),
+                7 => "Change the keys and buttons (controls.txt).".into(),
                 _ => text.msg(190).to_string(),
             });
         }
@@ -1763,6 +1788,30 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
                 6 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
                 7 if GRAPHICS_LABELS.len() > 7 => "Borderless fullscreen on the current monitor, or a window.",
+                _ => "Back to the settings.",
+            });
+        }
+        Screen::Sound => {
+            d.frame(1, 6);
+            let mut labels: Vec<String> = SOUND_LABELS.iter().map(|s| s.to_string()).collect();
+            labels.push("Back".into());
+            d.rows_at(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, 44.0);
+            for (i, v) in m.settings.2 .0.iter().enumerate() {
+                let (y, rgb) = (90.0 + 44.0 * i as f32, if i == m.sel { WHITE } else { [40.0; 3] });
+                // the slider: a dark track, filled gold to the volume, with its arrows (a tap on the left half turns
+                // it down, on the right half up, as the Graphics screen's values)
+                d.text("<", 424.0, y + 7.0, 24.0, rgb);
+                d.text(">", 614.0, y + 7.0, 24.0, rgb);
+                d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 160.0, 10.0], [15.0; 3], 128.0);
+                d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 16.0 * *v as f32, 10.0], if i == m.sel { GOLD } else { [100.0, 90.0, 40.0] }, 128.0);
+                d.hit([420.0, y, 104.0, 38.0], pointer::Act::Row(i, Press { left: true, ..default() }));
+                d.hit([524.0, y, 111.0, 38.0], pointer::Act::Row(i, Press { right: true, ..default() }));
+            }
+            d.info(match m.sel {
+                0 => "The volume of everything.",
+                1 => "The menu and match music and the jingles.",
+                2 => "The court, the crowd, the weather and the menu sounds.",
+                3 => "The players' and the umpire's voices.",
                 _ => "Back to the settings.",
             });
         }
@@ -2357,6 +2406,9 @@ fn step(
                 Effect::SaveSettings => {
                     // applied live: the menu draws with them too
                     gfx.set_if_neq(menu.settings.1);
+                    if let Some(s) = &sound {
+                        s.set_volumes(menu.settings.2);
+                    }
                     let path = Settings::path(&args.iso);
                     if let Err(e) = crate::store::write(&path, menu.settings.text()) {
                         warn!("{}: {e}", path.display());
@@ -2500,7 +2552,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Settings | Screen::Graphics | Screen::Controls => Some(0),
+            Screen::Main | Screen::Settings | Screen::Graphics | Screen::Sound | Screen::Controls => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
@@ -2600,6 +2652,25 @@ mod tests {
         assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
     }
 
+    /// B235: Settings → Sound; ← / → step a slider (clamped to 0..=10) and save; the volumes round-trip settings.txt.
+    #[test]
+    fn sound_sliders() {
+        let mut m = Menu { screen: Screen::Settings, sel: SOUND_ROW, ..default() };
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!(m.screen, Screen::Sound);
+        m.step(Dev::Keys, press(|k| &mut k.down));
+        let fx = m.step(Dev::Keys, press(|k| &mut k.left));
+        assert!(fx.contains(&Effect::SaveSettings));
+        m.step(Dev::Keys, press(|k| &mut k.right));
+        m.step(Dev::Keys, press(|k| &mut k.right));
+        assert_eq!(m.settings.2, Volumes([10, 10, 10, 10]));
+        (0..12).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
+        assert_eq!(m.settings.2, Volumes([10, 0, 10, 10]));
+        assert_eq!(Settings::parse(&m.settings.text()), m.settings);
+        m.step(Dev::Keys, press(|k| &mut k.back));
+        assert_eq!((m.screen, m.sel), (Screen::Settings, SOUND_ROW));
+    }
+
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
         let mut p = Press::default();
         *f(&mut p) = true;
@@ -2608,23 +2679,23 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, true, false, false, true], Graphics::LOW);
+        let s = Settings([true, true, false, false, true], Graphics::LOW, Volumes::default());
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false, true], d));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false, true], d, Volumes::default()));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, true, false, true], d));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true], d));
+        assert_eq!(Settings::parse(""), Settings([true, true, true, false, true], d, Volumes::default()));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true], d, Volumes::default()));
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false, true], d));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false, true], d, Volumes::default()));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, true, false, true], d).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, true, false, true, true], d).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, true, false, true], d, Volumes::default()).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, true, false, true, true], d, Volumes::default()).flags().contains(&"--music".to_string()));
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, false, true, false], d).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, false, true, false], d, Volumes::default()).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
         // the preset row steps through the presets; changing any other row makes it Custom
         let mut s = Settings::default();
         s.graphics_step(0, 1);
