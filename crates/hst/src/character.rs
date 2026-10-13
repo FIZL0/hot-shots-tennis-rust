@@ -91,7 +91,8 @@ pub struct CharacterData {
     pub motions: HashMap<usize, Clip>,
     /// Root paths of the motions that carry the player, by motion number: the post-point reactions (`gu_set` from
     /// the character's own `*_gu_set_dummy`, the team reactions co03–co05 from their shared dummies) and the
-    /// dive (`receive_f` from `*_receive_f_dummy`).
+    /// dive (`receive_f` from `*_receive_f_dummy`); the serve's and smash's jump heights (0x25 from
+    /// `*_serve_t_dummy`, 0x1f from `*_s_n_dummy`).
     pub paths: HashMap<usize, Path>,
     /// Every joint's inverse bind matrix, for the skinned parts.
     pub binds: Handle<SkinnedMeshInverseBindposes>,
@@ -569,6 +570,10 @@ pub fn disc_motions_with(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: i
         // the motion numbers 0x30.. are the team reactions (below); the files of those names are ball paths
         if id < 0x30 {
             motions.insert(id, Clip::new(skeleton, &a));
+        }
+        // the smash's and the serve's root paths (their contact IK scales the jump by its height at frame 8)
+        if id == 0x30 || id == 0x31 {
+            paths.extend(Path::new(&a).map(|p| (if id == 0x30 { 0x1f } else { 0x25 }, p)));
         }
         // gu_set's root path
         if id == 0x35 {

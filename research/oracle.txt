@@ -19,3 +19,7 @@ walker_animate 39e8b0
 walker_set_anim 39e3a0
 # Court + props sphere sweep (a1 hit record, a2 start {pos, r}, a3 end): hst_sim::mesh::World::sweep, hooked in
 world_sweep 32f690
+# Overhead serve/smash contact IK (a0 player, a1 table 1 = serve, 0 = smash; contact +0x3fb0, position +0x3d70):
+# hst_sim::serve::overhead_solve; underhand serve (a0 player): hst_sim::serve::underhand_solve
+overhead_arm_solve 358ba0
+underhand_arm_solve 359ec0
