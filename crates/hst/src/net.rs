@@ -204,56 +204,9 @@ pub struct Room {
     /// B195: peers seated but still on the lobby's character select (their seats hold placeholder picks).
     #[serde(default)]
     pub picking: std::collections::BTreeSet<String>,
-    /// B201a: the vote the host has open, if any.
-    #[serde(default)]
-    pub vote: Option<Vote>,
     /// B196: this machine comes back into a match under way (its state follows in `Msg::Restart`).
     #[serde(default)]
     pub rejoin: bool,
-}
-
-/// What a lobby vote decides (the host picks which one to put to a vote).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Topic {
-    Court,
-    Umpire,
-    /// 0 singles, 1 doubles.
-    Mode,
-}
-
-/// The option "a random one of the others", resolved by the vote's seed.
-pub const RANDOM: u32 = u32::MAX;
-
-/// A lobby vote (B201a): the options, each peer's ballot, and the seconds left (the host counts down).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Vote {
-    pub topic: Topic,
-    pub options: Vec<u32>,
-    pub ballots: std::collections::BTreeMap<String, u32>,
-    pub left: u32,
-}
-
-impl Vote {
-    /// Ballots for each option, in `options` order.
-    pub fn tally(&self) -> Vec<usize> {
-        self.options.iter().map(|o| self.ballots.values().filter(|b| *b == o).count()).collect()
-    }
-
-    /// The winner: most ballots, a tie (and [`RANDOM`]) broken by a seed from the ballots themselves, so any peer
-    /// that has the vote gets the same pick. None: nobody voted.
-    pub fn result(&self) -> Option<u32> {
-        let t = self.tally();
-        let top = *t.iter().max().filter(|&&n| n > 0)?;
-        // FNV-1a over the ballots (a BTreeMap: same order everywhere)
-        let seed = self.ballots.iter().flat_map(|(p, b)| p.bytes().chain(b.to_le_bytes())).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
-        let tied: Vec<u32> = self.options.iter().zip(&t).filter(|(_, n)| **n == top).map(|(o, _)| *o).collect();
-        let won = tied[(seed % tied.len() as u64) as usize];
-        if won != RANDOM {
-            return Some(won);
-        }
-        let rest: Vec<u32> = self.options.iter().copied().filter(|&o| o != RANDOM).collect();
-        rest.get((seed / 7 % rest.len().max(1) as u64) as usize).copied()
-    }
 }
 
 impl Room {
@@ -314,30 +267,6 @@ impl Room {
         }
     }
 
-    /// Every peer in the lobby has voted.
-    fn all_voted(&self) -> bool {
-        self.vote.as_ref().is_some_and(|v| self.names.keys().all(|p| v.ballots.contains_key(p)))
-    }
-
-    /// Close the vote and apply its result (singles only if the people seated fit).
-    fn close_vote(&mut self) {
-        let Some(v) = self.vote.take() else { return };
-        match (v.topic, v.result()) {
-            (Topic::Court, Some(c)) => self.court = c as usize,
-            (Topic::Umpire, Some(u)) => self.umpire = u as u8,
-            (Topic::Mode, Some(m)) if (m == 1) != self.doubles => {
-                let taken: Vec<Seat> = self.seats.iter().flatten().cloned().collect();
-                let n = if m == 1 { 4 } else { 2 };
-                if taken.len() <= n {
-                    self.doubles = m == 1;
-                    self.seats = taken.into_iter().map(Some).chain(std::iter::repeat(None)).take(n).collect();
-                    self.ver += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// B196: player `old` is back as peer `new` (named `name`): their seats and name move over.
     pub fn rejoined(&mut self, old: &str, new: &str, name: &str) {
         for s in self.seats.iter_mut().flatten().filter(|s| s.peer == old) {
@@ -357,7 +286,7 @@ impl Room {
         }
         self.names.retain(|p, _| !away.contains(p));
         self.picking.retain(|p| !away.contains(p));
-        (self.ready, self.vote) = (Default::default(), None);
+        self.ready.clear();
         (self.rejoin, self.ver) = (false, self.ver + 1);
     }
 
@@ -365,9 +294,6 @@ impl Room {
         self.ver += 1;
         self.names.remove(peer);
         self.ready.remove(peer);
-        if let Some(v) = &mut self.vote {
-            v.ballots.remove(peer);
-        }
         self.picking.remove(peer);
         for s in &mut self.seats {
             if s.as_ref().is_some_and(|s| s.peer == peer) {
@@ -478,8 +404,6 @@ pub enum Msg {
     Ready(u32),
     /// In the lobby: a guest is ready to play (or not any more).
     Prepared(bool),
-    /// In the lobby: a guest's ballot in the open vote (B201a).
-    Vote(u32),
     /// In the lobby (B195): a guest's chosen picks for the seats it holds (it joined on placeholders).
     Picks(Vec<Pick>),
     /// After a desync (B154b, `play/resync.rs`): the host's match state before a tick in pieces (`last` ends it; a
@@ -648,10 +572,6 @@ pub enum Cmd {
     Prepared(bool),
     Start,
     Kick(String),
-    /// In the lobby (B201a): the host opens a vote (topic, options, seconds), this peer votes, the host ends it now.
-    OpenVote(Topic, Vec<u32>, u32),
-    Vote(u32),
-    EndVote,
     /// In the lobby (B195): this machine's chosen picks for the seats it holds; the host's court, sets, games, umpire.
     Picks(Vec<Pick>),
     Venue(usize, usize, i32, u8),
@@ -1200,7 +1120,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             let worst = joined.iter().map(|(p, ..)| rtt.get(p).copied().unwrap_or(Duration::from_millis(250))).max().unwrap_or_default();
             room.delay = delay_for(worst);
             room.lockstep = std::env::var_os("HST_NET_LOCKSTEP").is_some();
-            room.close_vote();
             room.seed = (SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_nanos()) as u32) | 1;
             room.bots();
             broadcast(&joined, &Msg::Start(room.clone()));
@@ -1278,13 +1197,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         cx.say(Event::Room(room.clone()));
                     }
                 }
-                Guest::Said(peer, Msg::Vote(o)) => {
-                    if ballot(&mut room, &peer, o) {
-                        broadcast(&joined, &Msg::Room(room.clone()));
-                        cx.say(Event::Room(room.clone()));
-                        dirty = true;
-                    }
-                }
                 Guest::Said(peer, Msg::Picks(p)) => {
                     let ok = p.iter().filter_map(|p| p.r#mod.as_deref()).try_for_each(crate::mods_online::Wire::check).is_ok();
                     if starting.is_none() && ok && room.repick(&peer, &p) {
@@ -1330,16 +1242,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => {
                 broadcast(&joined, &Msg::Ping(micros(t0)));
-                // the vote's countdown, shown live on every peer
-                if let Some(v) = &mut room.vote {
-                    v.left = v.left.saturating_sub(1);
-                    if v.left == 0 {
-                        room.close_vote();
-                        dirty = true;
-                    }
-                    broadcast(&joined, &Msg::Room(room.clone()));
-                    cx.say(Event::Room(room.clone()));
-                }
             }
             _ = tick.tick() => dirty = true,
             Some(c) = rolled.recv() => {
@@ -1351,19 +1253,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             c = cmds.recv() => match c {
                 Some(Cmd::Ready(v)) if v == room.ver => drop(ready.insert("host".into())),
                 Some(Cmd::Start) => go = true,
-                Some(c @ (Cmd::OpenVote(..) | Cmd::Vote(_) | Cmd::EndVote)) => {
-                    match c {
-                        Cmd::OpenVote(topic, options, secs) if room.vote.is_none() && !options.is_empty() => {
-                            room.vote = Some(Vote { topic, options, ballots: Default::default(), left: secs.max(1) });
-                        }
-                        Cmd::Vote(o) => drop(ballot(&mut room, "host", o)),
-                        Cmd::EndVote => room.close_vote(),
-                        _ => continue,
-                    }
-                    broadcast(&joined, &Msg::Room(room.clone()));
-                    cx.say(Event::Room(room.clone()));
-                    dirty = true;
-                }
                 Some(Cmd::Picks(p)) if starting.is_none() && room.repick("host", &p) => {
                     ready.clear();
                     broadcast(&joined, &Msg::Room(room.clone()));
@@ -1409,16 +1298,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
         }
     }
-}
-
-/// `peer`'s ballot `o` into the open vote (true if it changed the room); everyone voted closes it.
-fn ballot(room: &mut Room, peer: &str, o: u32) -> bool {
-    let Some(v) = room.vote.as_mut().filter(|v| v.options.contains(&o)) else { return false };
-    v.ballots.insert(peer.into(), o);
-    if room.all_voted() {
-        room.close_vote();
-    }
-    true
 }
 
 /// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
@@ -1750,7 +1629,6 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
                 Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
-                Some(Cmd::Vote(o)) => link.send(&Msg::Vote(o)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -1789,13 +1667,6 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
         games = a.get(i + 1).and_then(|g| g.parse().ok()).unwrap_or(games);
         a.drain(i..(i + 2).min(a.len()));
     }
-    // B201a: `--vote C`: the host opens a court vote once every seat is taken, every peer votes court C (RANDOM: 11)
-    let mut vote: Option<u32> = None;
-    if let Some(i) = a.iter().position(|x| x == "--vote") {
-        vote = a.get(i + 1).and_then(|v| v.parse().ok()).map(|c: u32| if c >= 11 { RANDOM } else { c });
-        a.drain(i..(i + 2).min(a.len()));
-    }
-    let (mut opened, mut voted) = (false, false);
     let doubles = a.iter().any(|x| x == "doubles");
     // start once a guest is in and ready, the open seats to the computer (else once every seat is taken)
     let bots = a.iter().any(|x| x == "--bots");
@@ -1810,7 +1681,7 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
         Some("quick") => Cmd::Quick(room),
         Some("join") => Cmd::Join(a.get(1).cloned().unwrap_or_default(), picks),
         _ => {
-            eprintln!("usage: hst net host|find|quick [doubles] [players] | join <code> [players]  [--relay n0|off|<url>] [--games N] [--bots] [--vote court] [--play [disc] [flags]]");
+            eprintln!("usage: hst net host|find|quick [doubles] [players] | join <code> [players]  [--relay n0|off|<url>] [--games N] [--bots] [--play [disc] [flags]]");
             return None;
         }
     };
@@ -1823,19 +1694,6 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
     loop {
         for e in net.poll() {
             println!("{:6.2}s {e:?}", t0.elapsed().as_secs_f32());
-            if let (Some(c), Event::Room(r)) = (vote, &e) {
-                if host && !opened && r.open() == 0 {
-                    opened = true;
-                    net.send(Cmd::OpenVote(Topic::Court, (0..11).chain([RANDOM]).collect(), 30));
-                }
-                if r.vote.is_some() && !voted {
-                    voted = true;
-                    net.send(Cmd::Vote(c));
-                }
-                if host && (!voted || r.vote.is_some()) {
-                    continue;
-                }
-            }
             match e {
                 // no menus: a guest is ready once seated, the host starts once every seat is taken and everyone's ready
                 Event::Room(_) if !host && !said_ready => {
@@ -2102,38 +1960,6 @@ mod tests {
     }
 
     #[test]
-    fn votes_close_on_the_winner_ties_seeded() {
-        let mut r = room(true);
-        r.take("host", &[Pick::disc(0, 0)]);
-        r.take("a", &[Pick::disc(1, 0)]);
-        r.take("b", &[Pick::disc(2, 0)]);
-        r.names = ["host", "a", "b"].map(|p| (p.to_string(), p.to_string())).into();
-        let open = |r: &mut Room| r.vote = Some(Vote { topic: Topic::Court, options: (0..11).chain([RANDOM]).collect(), ballots: Default::default(), left: 30 });
-        // a majority wins once everyone has voted
-        open(&mut r);
-        assert!(ballot(&mut r, "host", 3) && ballot(&mut r, "a", 5));
-        assert!(!ballot(&mut r, "b", 99));
-        assert!(r.vote.is_some());
-        ballot(&mut r, "b", 5);
-        assert_eq!((r.vote.is_none(), r.court), (true, 5));
-        // a three-way tie: one of the three, the same for the same ballots; random never stays random
-        let mut v = Vote { topic: Topic::Court, options: (0..11).chain([RANDOM]).collect(), ballots: Default::default(), left: 1 };
-        v.ballots = [("host", 1), ("a", 2), ("b", RANDOM)].map(|(p, b)| (p.to_string(), b)).into();
-        let w = v.result().unwrap();
-        assert!(w < 11 && v.clone().result() == Some(w));
-        v.ballots.clear();
-        assert_eq!(v.result(), None);
-        // singles only if the seated fit
-        r.vote = Some(Vote { topic: Topic::Mode, options: vec![0, 1], ballots: [("host".to_string(), 0)].into(), left: 1 });
-        r.close_vote();
-        assert!(r.doubles);
-        r.leave("b");
-        r.vote = Some(Vote { topic: Topic::Mode, options: vec![0, 1], ballots: [("host".to_string(), 0)].into(), left: 1 });
-        r.close_vote();
-        assert_eq!((r.doubles, r.seats.len(), r.open()), (false, 2, 0));
-    }
-
-    #[test]
     fn quickplay_takes_the_busiest_that_fits() {
         let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time };
         let list = [l("a", 1, 4, 5), l("b", 2, 4, 1), l("c", 3, 4, 9), l("d", 1, 2, 9)];
@@ -2309,7 +2135,7 @@ mod tests {
     }
 
     #[test]
-    fn three_peers_vote_a_court_and_start_on_it() {
+    fn three_peers_see_the_hosts_court_and_start_on_it() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let testnet = n0_mainline::Testnet::new(3).await.unwrap();
@@ -2342,15 +2168,10 @@ mod tests {
             next(&aev, |e| matches!(e, Event::Room(_))).await;
             tokio::spawn(async move { join(&bcx, &c2, vec![Pick::disc(2, 0)], &mut brx).await });
             next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 1)).await;
-            hcmd.send(Cmd::OpenVote(Topic::Court, (0..11).chain([RANDOM]).collect(), 30)).unwrap();
-            // every peer sees the vote and the ballots live
-            next(&bev, |e| matches!(e, Event::Room(r) if r.vote.is_some())).await;
-            hcmd.send(Cmd::Vote(7)).unwrap();
-            acmd.send(Cmd::Vote(7)).unwrap();
-            next(&bev, |e| matches!(e, Event::Room(r) if r.vote.as_ref().is_some_and(|v| v.ballots.len() == 2))).await;
-            bcmd.send(Cmd::Vote(2)).unwrap();
-            // all voted: closed on the majority
-            next(&aev, |e| matches!(e, Event::Room(r) if r.vote.is_none() && r.court == 7)).await;
+            // the host alone picks the court: every peer sees it
+            hcmd.send(Cmd::Venue(7, 0, 4, 4)).unwrap();
+            next(&aev, |e| matches!(e, Event::Room(r) if r.court == 7)).await;
+            next(&bev, |e| matches!(e, Event::Room(r) if r.court == 7)).await;
             acmd.send(Cmd::Prepared(true)).unwrap();
             bcmd.send(Cmd::Prepared(true)).unwrap();
             next(&hev, |e| matches!(e, Event::Room(r) if r.ready.len() == 2)).await;
