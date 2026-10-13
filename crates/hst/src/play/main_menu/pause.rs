@@ -162,6 +162,7 @@ fn opened(ps: Res<PauseSettings>, args: Res<Args>, mut menu: ResMut<Menu>, mut s
         let settings = crate::store::read_to_string(Settings::path(&args.iso)).map_or(menu.settings, |t| Settings::parse(&t));
         let screen = match std::env::var("HST_PAUSE_SETTINGS").as_deref() {
             Ok("graphics") => Screen::Graphics,
+            Ok("sound") => Screen::Sound,
             Ok("controls") => Screen::Controls,
             _ => Screen::Settings,
         };
