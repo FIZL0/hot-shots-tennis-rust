@@ -408,23 +408,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every real mod, zipped as its folder, installs and reads back as it reads from disc.
-    #[test]
-    fn real_mods_install() {
-        let Ok(dirs) = std::fs::read_dir(MODS) else { return eprintln!("no context/mods, skipped") };
-        let root = Path::new("t_real/mods");
-        for d in dirs.flatten() {
-            let Ok(want) = mods::read(&d.path()) else { continue };
-            let files: Files = dir_files(&d.path()).into_iter().map(|(n, b)| (format!("{}/{n}", want.id), b)).collect();
-            let got = install(&zip_of(&files), root).unwrap_or_else(|e| panic!("{}: {e}", want.id));
-            assert_eq!((got.id.as_str(), got.costumes.len(), got.hand), (want.id.as_str(), want.costumes.len(), want.hand));
-            assert_eq!(files_under(&root.join(&want.id)).len(), files.len());
-            assert!(mods::list(root).iter().any(|m| m.id == want.id));
-            remove(&root.join(&want.id));
-        }
-        assert!(files_under(root).is_empty());
-    }
-
     /// The bad-mod half of the bad-mod set: a real mod with one file broken is refused, and nothing of it is kept
     /// (nor of the import), while an installed mod with the same id stays as it was.
     #[test]

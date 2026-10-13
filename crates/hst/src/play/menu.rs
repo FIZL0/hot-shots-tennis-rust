@@ -73,9 +73,9 @@ const YES: Tex = Tex::Own(16);
 const NO: Tex = Tex::Own(17);
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
 const INK: [f32; 3] = [15.0; 3];
-const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
-const CHOSEN: [f32; 3] = [123.0, 105.0, 79.0];
-const UNCHOSEN: [f32; 3] = [94.0, 83.0, 70.0];
+pub(super) const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
+pub(super) const CHOSEN: [f32; 3] = [123.0, 105.0, 79.0];
+pub(super) const UNCHOSEN: [f32; 3] = [94.0, 83.0, 70.0];
 /// B171: a label row's size on its pill: 20 px of the 32-px pill high, at most 160 of its 288 px wide.
 const FIT: f32 = 0.625;
 

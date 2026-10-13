@@ -81,6 +81,11 @@ pub(super) struct View {
     paste: bool,
     /// The hovered mod's picture is in (`Shelf::shown`).
     shot: bool,
+    /// B205: a mod was installed or removed since the game started (the note on the main menu's Mods row), and since
+    /// the main menu last asked; the Reload / Later popup is up on the main menu (0 = Reload chosen).
+    changed: bool,
+    fresh: bool,
+    pub(super) ask: Option<usize>,
 }
 
 impl View {
@@ -88,6 +93,11 @@ impl View {
         self.list = crate::mods::list(root());
         self.have = self.list.iter().map(|m| (m.id.clone(), modstore::stamp(&m.dir).map(|s| s.sha256))).collect();
         self.armed = None;
+    }
+
+    fn changed(&mut self) {
+        self.changed = true;
+        self.fresh = true;
     }
 
     fn entries(&self) -> &[Entry] {
@@ -276,6 +286,10 @@ impl Menu {
         if k.back || (k.ok && s == n - 1) {
             self.screen = Screen::Main;
             self.sel = 3;
+            // B205: ask once per change; Later leaves the note on the Mods row
+            if std::mem::take(&mut self.add.fresh) {
+                self.add.ask = Some(0);
+            }
             out.push(Sound(1));
         } else if k.ok && s == 0 {
             // a pad's or key's ✕ (a tap lands on the page's input itself)
@@ -295,11 +309,8 @@ impl Menu {
             self.mods_page(Page::Upload, 0);
             out.push(Sound(2));
         } else if k.ok && s == n - 2 {
-            #[cfg(target_arch = "wasm32")]
-            crate::web::reload();
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.add.status = "Restart the game to bring the changes into the select.".into();
+            if let Err(e) = reload(out) {
+                self.add.status = e;
             }
         } else if k.ok {
             let i = s - TOP;
@@ -315,6 +326,7 @@ impl Menu {
                     let _ = std::fs::remove_dir_all(&dir);
                 }
                 self.add.refresh();
+                self.add.changed();
                 self.add.status = format!("Removed {name}. Reload to take it out of the select.");
                 out.push(Sound(1));
             } else {
@@ -324,6 +336,92 @@ impl Menu {
             }
         }
     }
+}
+
+/// Reload: the browser reloads the page; the desktop game starts itself again with the same arguments and closes (the
+/// select's roster, the mods' textures and sounds are all read at startup).
+fn reload(out: &mut Vec<Effect>) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = out;
+        crate::web::reload();
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let exe = std::env::current_exe().map_err(|e| format!("Couldn't restart: {e}. Restart the game by hand."))?;
+        std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .spawn()
+            .map_err(|e| format!("Couldn't restart: {e}. Restart the game by hand."))?;
+        out.push(Effect::Quit);
+        Ok(())
+    }
+}
+
+/// The Reload / Later popup's pills (640×448): their tops, 40 px apart as the pause dialog's.
+const ASK_TOP: f32 = 226.0;
+
+impl Menu {
+    /// B205: one press on the main menu while the popup is up (it takes them all): up/down/left/right move between
+    /// Reload and Later, ✕ chooses, ○ is Later. Returns whether the popup was up.
+    pub(super) fn ask_step(&mut self, k: Press, out: &mut Vec<Effect>) -> bool {
+        let Some(a) = self.add.ask else { return false };
+        if k.up || k.down || k.left || k.right {
+            self.add.ask = Some(1 - a);
+            out.push(Effect::Sound(0));
+        } else if k.ok && a == 0 {
+            out.push(Effect::Sound(2));
+            if let Err(e) = reload(out) {
+                // the desktop couldn't start itself again: say so on the Mods row's note and close
+                self.add.status = e;
+                self.add.ask = None;
+            }
+        } else if k.ok || k.back {
+            self.add.ask = None;
+            out.push(Effect::Sound(1));
+        }
+        true
+    }
+}
+
+/// B205, on the main menu: the note beside the Mods row while mods changed since the start, and the popup over a
+/// dimmed menu in the pause dialog's style (`menu.rs`: rounded box, title, a pill per choice, the chosen one bright,
+/// the hand beside it).
+pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
+    let v = &m.add;
+    if v.changed && v.ask.is_none() {
+        // the Mods row: `layout`'s main rows from y 120, 44 apart, 240 wide from x 200
+        d.outlined(|d| d.text("Reload", 448.0, 120.0 + 44.0 * 3.0 + 9.0, 20.0, GOLD));
+        if m.sel == 3 {
+            d.said = "Mods changed: Reload on the Mods page brings them into the select.".into();
+        }
+    }
+    let Some(a) = v.ask else { return };
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    // the menu's own hand goes; the popup has its own
+    if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
+        d.out.remove(i);
+    }
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = super::Anchor::Centre;
+    d.box3([160.0, ASK_TOP - 70.0, 320.0, 70.0 + 72.0 + 16.0], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    d.outlined(|d| d.label("Mods changed.", 320.0, ASK_TOP - 56.0, 22.0, 288.0, WHITE));
+    d.outlined(|d| d.label("Reload now to use them?", 320.0, ASK_TOP - 32.0, 22.0, 288.0, WHITE));
+    for (k, word) in ["Reload", "Later"].into_iter().enumerate() {
+        let y = ASK_TOP + 40.0 * k as f32;
+        let on = k == a;
+        d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+        d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
+    }
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, ASK_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
+    d.said = "Mods aren't loaded while the game runs: Reload restarts it with them; Later keeps playing as it is.".into();
+}
+
+/// The popup's pill under `p` (640×448).
+fn ask_at(p: Vec2) -> Option<usize> {
+    (0..2).find(|&k| (176.0..464.0).contains(&p.x) && (0.0..32.0).contains(&(p.y - ASK_TOP - 40.0 * k as f32)))
 }
 
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
@@ -460,7 +558,7 @@ fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(St
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown) / `uploadmods` (Upload, one mod armed): for `--shot`s.
+/// shown) / `uploadmods` (Upload, one mod armed) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
     v.refresh();
@@ -487,6 +585,9 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         );
         v.have = v.list.iter().take(4).enumerate().map(|(i, md)| (md.id.clone(), (i != 2).then(|| format!("{:064}", 0)))).collect();
         m.sel = 1;
+    } else if screen == "reloadmods" {
+        (v.changed, v.ask) = (true, Some(0));
+        m.sel = 3;
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
         v.account = Some("FIZL0".into());
@@ -512,6 +613,16 @@ fn pointer(
     mut menu: ResMut<Menu>,
     mut click: ResMut<super::pause::Click>,
 ) {
+    if menu.screen == Screen::Main && menu.add.ask.is_some() {
+        let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
+        if let Some(k) = at.and_then(ask_at) {
+            menu.add.ask = Some(k);
+            click.0 = Some(Press { ok: true, ..default() });
+        } else if back {
+            click.0 = Some(Press { back: true, ..default() });
+        }
+        return;
+    }
     if menu.screen != Screen::Mods {
         return;
     }
@@ -593,6 +704,10 @@ fn page(
     #[cfg(target_arch = "wasm32")]
     if let Some(s) = crate::web::mod_status_take() {
         menu.add.refresh();
+        // the page's word for a picked mod saved (index.html)
+        if s.starts_with("Added ") {
+            menu.add.changed();
+        }
         menu.add.status = s;
     }
     for e in modstore::take() {
@@ -614,6 +729,9 @@ fn page(
             Event::Installed(r) => {
                 v.busy = false;
                 v.refresh();
+                if r.is_ok() {
+                    v.changed();
+                }
                 v.status = match r {
                     // the browser's page says when it's saved
                     Ok(_) if cfg!(target_arch = "wasm32") => v.status.clone(),
@@ -735,6 +853,22 @@ mod tests {
         assert_eq!(m.sel, m.add.rows() - 1);
         m.mods_step(ok(), &mut out);
         assert_eq!((m.screen, m.sel), (Screen::Main, 3));
+        // B205: back on the main menu the popup asks (Reload chosen) and takes the presses; Later closes it, the note stays
+        assert_eq!(m.add.ask, Some(0));
+        let out = m.step(super::super::Dev::Keys, Press { down: true, ..default() });
+        assert_eq!((m.add.ask, m.sel), (Some(1), 3));
+        assert_eq!(out, [Effect::Sound(0)]);
+        let out = m.step(super::super::Dev::Keys, ok());
+        assert_eq!((m.add.ask, m.screen, m.add.changed), (None, Screen::Main, true));
+        assert_eq!(out, [Effect::Sound(1)]);
+        // no new change: no second ask
+        m.step(super::super::Dev::Keys, ok());
+        assert_eq!(m.screen, Screen::Mods);
+        m.mods_step(Press { back: true, ..default() }, &mut Vec::new());
+        assert_eq!((m.screen, m.add.ask), (Screen::Main, None));
+        // the pills where they're drawn
+        assert_eq!(ask_at(Vec2::new(320.0, ASK_TOP + 50.0)), Some(1));
+        assert_eq!(ask_at(Vec2::new(320.0, ASK_TOP - 10.0)), None);
     }
 
     /// A long list scrolls to keep the cursor on screen, and taps land on the drawn rows.

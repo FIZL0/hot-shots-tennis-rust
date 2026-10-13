@@ -549,6 +549,9 @@ impl Menu {
             self.seats[0] = Some(dev);
         }
         let host = self.seats[0];
+        if self.screen == Screen::Main && self.ask_step(k, &mut out) {
+            return out;
+        }
         match self.screen {
             Screen::Main => {
                 rows(MAIN.len(), &mut self.sel, &mut out);
@@ -1269,6 +1272,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if fresh && menu.screen == Screen::Main {
         online::linked(&mut menu);
     }
+    if fresh && screen == "reloadmods" {
+        mods_screen::sample(&mut menu, &screen);
+    }
     if !fresh {
         (menu.screen, menu.sel) = (Screen::Main, 0);
     } else if menu.screen != Screen::Main {
@@ -1595,6 +1601,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 _ => "Close the game.".into(),
             };
             d.info(&info);
+            mods_screen::ask_layout(&mut d, m, hand_x);
         }
         Screen::Settings => {
             d.frame(1, 6);
