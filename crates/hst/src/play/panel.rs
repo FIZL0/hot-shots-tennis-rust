@@ -523,10 +523,10 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         .iter()
         .map(|t| get(format!("/{}.tm2", t.to_ascii_lowercase())))
         .collect();
-    // B133: a mod's own face, cut from its select preview (the donor's until that's baked)
-    let own: Vec<_> = (0..g.chars.len()).map(|i| {
+    // B133: a mod's own face, cut from its select preview (the donor's until that's baked); B160: a disc one's too
+    let own: Vec<_> = g.chars.iter().enumerate().map(|(i, &c)| {
         let o = args.outfits.get(i).copied().unwrap_or(0);
-        mods.as_ref().and_then(|m| m.get(i)).and_then(|m| super::main_menu::mod_face(&args.iso, m, o))
+        super::main_menu::face(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o)
     }).collect();
     let mut drawn = Vec::new();
     for (i, (&c, own)) in g.chars.iter().zip(own).enumerate() {
@@ -643,7 +643,8 @@ fn draw(
         };
         let [u, v, w, h] = quad.src;
         img.image = art.0[tex].clone();
-        img.rect = Some(Rect::new(u, v, u + w, v + h));
+        // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
+        img.rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;

@@ -39,7 +39,7 @@ use bevy::prelude::*;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::TextureUsages;
 use bevy::window::PrimaryWindow;
-use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
+use bevy::tasks::{IoTaskPool, Task};
 use hst_data::iso::Iso;
 
 use super::{Art, Dev, GRID, Menu, Screen, Slot, Tex, Who, layout};
@@ -53,10 +53,14 @@ use crate::Args;
 use crate::play::controls::Bindings;
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 5;
+const RENDER: u32 = 6;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
 /// row, so the read-back has no row padding.
 const BAKE: UVec2 = UVec2::new(384, 480);
+/// B160: a face icon's close-up (the preview's [`inspect::face_square`] drawn again on its own): the select grid's
+/// 60-px face is ~290 px on a 2160-line window.
+// ponytail: one fixed size; bake at the window's icon pixels if 8K windows show it soft
+const FACE: UVec2 = UVec2::new(320, 320);
 /// `FixedUpdate` ticks (60 Hz) a baked preview draws before its read-back.
 const SETTLE_TICKS: u32 = 6;
 /// The baker's render layer (the cards use 1–4).
@@ -214,38 +218,49 @@ fn cache_dir(iso: &str, name: &str) -> PathBuf {
     super::Settings::path(iso).with_file_name("cache").join("previews").join(name)
 }
 
-/// B133: mod `m`'s costume `k` face icon (`inspect::face_icon`) for the match panel, from its select preview; None
-/// until that's baked (the panel shows the donor's disc face).
-pub(crate) fn mod_face(iso: &str, m: &Mod, k: usize) -> Option<Image> {
-    let path = mod_png(&cache_dir(iso, &cache_name(iso)), m, k, &stamp(m));
-    inspect::face_icon(&read(&path)?, 40)
+/// B133: player face icon (INPANE's layout, [`inspect::face_icon`]) for the match panel, from the select preview of
+/// mod `m`'s costume `k`, else (B160) disc character `c`'s; None until that's baked (the panel shows the disc face).
+pub(crate) fn face(iso: &str, m: Option<&Mod>, c: usize, k: usize) -> Option<Image> {
+    let dir = cache_dir(iso, &cache_name(iso));
+    let path = match m {
+        Some(m) => mod_png(&dir, m, k, &stamp(m)),
+        None => dir.join(format!("d{c:02}-{k}.png")),
+    };
+    face_from(&path, 40)
 }
 
-/// B133: the custom page's icons (each mod's costume 0, as the disc grid shows each character's first face), read
-/// from the previews as they're baked; [`ICON_READS`] new ones a frame so a page turn doesn't stall.
-fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<usize>>) {
-    if menu.screen != Screen::Chars || !menu.custom {
+/// B133: the select's face icons (each character's costume 0, as the disc grid shows each character's first face;
+/// B160: the disc grid's too), read from the face close-ups as they're baked (a mod's own preview PNG: cut from it);
+/// [`ICON_READS`] new ones a frame so a page turn doesn't stall.
+fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<Who>>) {
+    if menu.screen != Screen::Chars {
         return;
     }
     let mut reads = 0;
-    for i in super::custom_page(&menu) {
-        if reads == ICON_READS || icons.0.contains_key(&i) || failed.contains(&i) {
+    let page: Vec<Who> = if menu.custom { super::custom_page(&menu).map(Who::Mod).collect() } else { GRID.iter().map(|&(c, ..)| Who::Disc(c)).collect() };
+    for w in page {
+        if reads == ICON_READS || icons.0.contains_key(&w) || failed.contains(&w) {
             continue;
         }
-        let Some(path) = loader.path((Who::Mod(i), 0), &menu).filter(|p| cached(p)) else { continue };
+        let Some(path) = loader.path((w, 0), &menu) else { continue };
+        // a baked preview's close-up lands a few frames after it
+        let own = !path.starts_with(&loader.dir);
+        if !cached(&if own { path.clone() } else { face_path(&path) }) {
+            continue;
+        }
         reads += 1;
-        match read(&path).and_then(|b| inspect::face_icon(&b, 64)) {
+        match face_from(&path, 64) {
             Some(img) => {
-                icons.0.insert(i, images.add(img));
+                icons.0.insert(w, images.add(img));
             }
             None => {
-                failed.insert(i);
+                failed.insert(w);
             }
         }
     }
 }
 
-/// Icons read a frame (each ~4 ms: a PNG decode and a crop).
+/// Icons read a frame (each a few ms: a PNG decode and a scale).
 const ICON_READS: usize = 2;
 
 /// A mod's PNG name stem: its folder's name and its newest file's time, so an edited mod is baked again.
@@ -589,8 +604,12 @@ struct Job {
     /// The read-back's entity, once asked; the result lands in `done`.
     reading: Option<Entity>,
     done: Arc<Mutex<Option<Vec<u8>>>>,
-    /// The PNG being written (true: written).
-    saving: Option<Task<bool>>,
+    /// The PNGs being written (true: written): the preview's, then its face close-up's (B160).
+    saving: Vec<Task<bool>>,
+    /// Drawing the face close-up (B160): the camera retargeted onto [`FACE`] at the preview's head square.
+    face: bool,
+    /// Every drawing read back; waiting for `saving`.
+    drawn: bool,
 }
 
 fn start_baker(mut commands: Commands, menu: Res<Menu>) {
@@ -646,10 +665,11 @@ fn bake(
         let wait = if baker.jobs == 0 { 30 } else { 4 };
         let ticked = fixed.elapsed_secs() - job.start >= SETTLE_TICKS as f32 / 60.0;
         let data = job.done.lock().unwrap().take();
-        if let Some(saving) = &mut job.saving {
-            // Z1: the PNG encode (~20 ms) runs on the IO pool; the next job waits for the file
-            if let Some(ok) = check_ready(saving) {
-                if ok {
+        if job.drawn {
+            // Z1: the PNG encodes (~20 ms) run on the IO pool; the next job waits for the files
+            if job.saving.iter().all(|t| t.is_finished()) {
+                let ok: Vec<bool> = job.saving.drain(..).map(|t| bevy::tasks::block_on(t)).collect();
+                if ok.first() == Some(&true) {
                     info!("baked {}", job.path.display());
                 } else {
                     baker.failed.insert(job.key);
@@ -658,12 +678,28 @@ fn bake(
                 baker.jobs += 1;
             }
         } else if let Some(data) = data {
-            if let Some(r) = job.reading {
+            if let Some(r) = job.reading.take() {
                 gone.0.push(r);
             }
-            gone.0.extend(preview_entities(job.cam, &cams, &parents));
-            let path = job.path.clone();
-            job.saving = Some(IoTaskPool::get().spawn(async move { save(&data, &path) }));
+            let size = if job.face { FACE } else { BAKE };
+            let rgba = straight(&data, size);
+            let path = if job.face { face_path(&job.path) } else { job.path.clone() };
+            let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i));
+            job.saving.push(IoTaskPool::get().spawn(async move { save(rgba, size, &path) }));
+            // B160: the same drawing's head square again at [`FACE`]
+            if let (Some(sq), Ok(p)) = (square, cams.get(job.cam)) {
+                let crop = inspect::sub_crop(p.crop, BAKE.as_vec2(), sq.as_rect());
+                let image = inspect::target(&mut images, FACE);
+                images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
+                commands.entity(job.cam).insert((
+                    Preview { rect: p.rect, crop, n: p.n, rig: p.rig, centre: p.centre },
+                    bevy::camera::RenderTarget::Image(bevy::camera::ImageRenderTarget { handle: image.clone(), scale_factor: 1.0 }),
+                ));
+                (job.image, job.face, job.frames) = (image, true, 0);
+            } else {
+                gone.0.extend(preview_entities(job.cam, &cams, &parents));
+                job.drawn = true;
+            }
         } else if job.frames >= wait && ticked && job.reading.is_none() {
             let done = job.done.clone();
             let r = commands
@@ -680,7 +716,9 @@ fn bake(
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
         let path = loader.path(key, &menu);
-        let Some(path) = path.filter(|p| !cached(p) && !baker.failed.contains(&key)) else {
+        // B160: a baked one without its face close-up (a run quit between the two) is drawn again
+        let done = |p: &PathBuf| cached(p) && (!p.starts_with(&loader.dir) || cached(&face_path(p)));
+        let Some(path) = path.filter(|p| !done(p) && !baker.failed.contains(&key)) else {
             baker.queue.pop();
             continue;
         };
@@ -704,7 +742,7 @@ fn bake(
                 let image = inspect::target(&mut images, BAKE);
                 images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
                 let cam = inspect::spawn_into(&mut commands, &data, c, hand, BAKE_LAYER, image.clone());
-                baker.job = Some(Job { key, path, cam, image, frames: 0, start: fixed.elapsed_secs(), reading: None, done: default(), saving: None });
+                baker.job = Some(Job { key, path, cam, image, frames: 0, start: fixed.elapsed_secs(), reading: None, done: default(), saving: Vec::new(), face: false, drawn: false });
                 return;
             }
         }
@@ -715,9 +753,9 @@ fn bake(
     }
 }
 
-/// The baker's read-back (`BAKE`, `Rgba16Float`: GS-encoded colour, alpha −1 where nothing drew, as
-/// `inspect.wgsl` reads it) as an sRGB PNG with straight alpha: what `inspect.wgsl` would draw. False if nothing drew.
-fn save(data: &[u8], path: &Path) -> bool {
+/// The baker's read-back (`size`, `Rgba16Float`: GS-encoded colour, alpha −1 where nothing drew, as `inspect.wgsl`
+/// reads it) as sRGB bytes with straight alpha: what `inspect.wgsl` would draw.
+fn straight(data: &[u8], size: UVec2) -> Vec<u8> {
     let half = |b: &[u8]| {
         let h = u16::from_le_bytes([b[0], b[1]]);
         let (s, e, m) = ((h >> 15) as u32, ((h >> 10) & 0x1f) as u32, (h & 0x3ff) as u32);
@@ -729,10 +767,15 @@ fn save(data: &[u8], path: &Path) -> bool {
         if s == 1 { -f } else { f }
     };
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let mut rgba = Vec::with_capacity((BAKE.x * BAKE.y * 4) as usize);
-    for px in data.chunks_exact(8).take((BAKE.x * BAKE.y) as usize) {
+    let mut rgba = Vec::with_capacity((size.x * size.y * 4) as usize);
+    for px in data.chunks_exact(8).take((size.x * size.y) as usize) {
         rgba.extend([byte(half(&px[0..])), byte(half(&px[2..])), byte(half(&px[4..])), byte(half(&px[6..]) + 1.0)]);
     }
+    rgba
+}
+
+/// [`straight`]'s bytes as a PNG at `path`. False if nothing drew.
+fn save(rgba: Vec<u8>, size: UVec2, path: &Path) -> bool {
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         warn!("{}: the preview drew nothing", path.display());
         return false;
@@ -740,13 +783,28 @@ fn save(data: &[u8], path: &Path) -> bool {
     // B120: fast deflate (~4× quicker than the default, a bigger file): in the browser the encode runs inside a frame
     let mut png = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut png, image::codecs::png::CompressionType::Fast, image::codecs::png::FilterType::Adaptive);
-    let r = image::ImageEncoder::write_image(encoder, &rgba, BAKE.x, BAKE.y, image::ExtendedColorType::Rgba8).map_err(|e| e.to_string());
+    let r = image::ImageEncoder::write_image(encoder, &rgba, size.x, size.y, image::ExtendedColorType::Rgba8).map_err(|e| e.to_string());
     match r.and_then(|()| write(path, png).map_err(|e| e.to_string())) {
         Ok(()) => true,
         Err(e) => {
             warn!("{}: {e}", path.display());
             false
         }
+    }
+}
+
+/// B160: a baked preview's face close-up beside it (`d05-0.png` → `d05-0-face.png`).
+fn face_path(preview: &Path) -> PathBuf {
+    let stem = preview.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    preview.with_file_name(format!("{stem}-face.png"))
+}
+
+/// B160: a face icon (`inner` out of 64, [`inspect::face_icon`]) from `preview`'s close-up, else (a mod's own preview
+/// PNG, which has none) cut from the preview itself; None until baked.
+fn face_from(preview: &Path, inner: u32) -> Option<Image> {
+    match read(&face_path(preview)) {
+        Some(b) => inspect::icon(&b, inner),
+        None => inspect::face_icon(&read(preview)?, inner),
     }
 }
 
