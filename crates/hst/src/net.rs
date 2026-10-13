@@ -718,14 +718,12 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), St
         // testing: no direct UDP paths, everything through the relay
         b = b.clear_ip_transports();
     }
+    // B224: no waiting for the home relay here (up to 10 s before Host could show a code): the short code's ticket
+    // and a join wait for it themselves
     let ep = b.bind().await.map_err(|e| e.to_string())?;
     // LAN: bare IDs resolve by mDNS and hosts' listings ride on it (no internet needed)
     let mdns = MdnsAddressLookup::builder().service_name(MDNS).build(ep.id()).map_err(|e| format!("mDNS: {e}"))?;
     ep.address_lookup().map_err(|e| e.to_string())?.add(mdns.clone());
-    if *relay != Relay::Off {
-        // a home relay before the ticket, so the code works from anywhere (bounded: a dead relay still leaves LAN)
-        let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
-    }
     Ok((ep, mdns))
 }
 
@@ -762,9 +760,8 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
         Relay::Off => unreachable!("the browser's LAN is WebRTC (`bind`)"),
     };
+    // the short code's ticket waits for the home relay (nothing else reaches a browser), not the bind (B224)
     let ep = Endpoint::builder(presets::Minimal).secret_key(SecretKey::generate()).alpns(vec![ALPN.to_vec()]).relay_mode(mode).bind().await.map_err(|e| e.to_string())?;
-    // the code needs the home relay in it: nothing else reaches a browser
-    let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     Ok((ep, ()))
 }
 
@@ -1034,8 +1031,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     match &cx.ep {
         Some(ep) => {
             cx.say(Event::Code(EndpointTicket::new(ep.addr()).to_string()));
-            cx.say(Event::Status("Getting a short code...".into()));
-            let (dht, ep, relays) = (cx.dht.clone(), ep.clone(), cx.relays);
+            // B224: the short code shown at once, checked and published in the background (re-rolled if taken)
+            let first = new_short();
+            bevy::log::info!("short code {first} shown");
+            cx.say(Event::Short(first.clone()));
+            cx.say(Event::Status("Putting the code online...".into()));
+            let (dht, ep, relays, ev) = (cx.dht.clone(), ep.clone(), cx.relays, cx.ev.clone());
             n0_future::task::spawn(async move {
                 let t = n0_future::time::Instant::now();
                 // B175: a browser dials only the ticket's relay, so a code without one (the relay slower than bind's
@@ -1052,7 +1053,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     n0_future::time::sleep(Duration::from_millis(100)).await;
                 }
                 let ticket = code_ticket(&ep);
-                let c = roll(&dht, &ticket).await;
+                bevy::log::info!("ticket with its addresses in {:?}", t.elapsed());
+                let c = roll(&dht, first, &ticket, |c| drop(ev.send(Event::Short(c.into())))).await;
                 bevy::log::info!("short code {c:?} in {:?}", t.elapsed());
                 let _ = ctx_.send(c);
             });
@@ -1247,7 +1249,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             Some(c) = rolled.recv() => {
                 code = c;
                 cx.say(Event::Short(code.clone().unwrap_or_default()));
-                cx.say(Event::Status(if code.is_some() { "Waiting for players..." } else { "No short code (no DHT): share the QR or the long code." }.into()));
+                cx.say(Event::Status(if code.is_some() { "Waiting for players..." } else { "No short code (no internet?): players on this network find the lobby with Find." }.into()));
                 dirty = true;
             }
             c = cmds.recv() => match c {
@@ -1553,6 +1555,10 @@ fn unreachable(addr: &EndpointAddr, relays: bool, ticket: bool) -> Option<&'stat
 
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
 async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
+    // a home relay first, as when bind waited for it (B224 moved that here; bounded: a dead relay still leaves LAN)
+    if let Some(ep) = cx.ep.as_ref().filter(|_| cx.relays) {
+        let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
+    }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
     link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone() });
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
@@ -1866,12 +1872,15 @@ async fn relay_put(code: &str, ticket: &str) -> bool {
     r.and_then(|r| r.error_for_status()).map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok()
 }
 
-/// A short code for the lobby with `ticket`: a free one, published (None: the DHT or relay can't be reached).
-async fn roll(dht: &Dht, ticket: &str) -> Option<String> {
+/// A short code for the lobby with `ticket`, `code` first: a free one, published (None: the DHT or relay can't be
+/// reached). Each code tried after a taken one goes to `show`.
+async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Option<String> {
     for _ in 0..5 {
-        let code = new_short();
         match n0_future::time::timeout(Duration::from_secs(15), lookup(dht, &code)).await {
-            Ok(Some((_, seq))) if fresh(seq) => continue,
+            Ok(Some((_, seq))) if fresh(seq) => {
+                code = new_short();
+                show(&code);
+            }
             _ => return publish(dht, &code, ticket).await.then_some(code),
         }
     }
