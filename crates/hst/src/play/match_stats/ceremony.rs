@@ -427,6 +427,7 @@ pub(super) fn pose(
     g: Res<super::super::Game>,
     mut figures: Query<(&super::super::Figure, &Rig, &mut Transform)>,
     mut joints: Query<&mut Transform, Without<super::super::Figure>>,
+    kids: Query<&Children>,
 ) {
     let Some(c) = cer else { return };
     for (f, rig, mut tf) in &mut figures {
@@ -435,8 +436,18 @@ pub(super) fn pose(
         tf.translation = Vec3::from(*at);
         tf.rotation = if *far { Quat::from_rotation_y(std::f32::consts::PI) } else { Quat::IDENTITY };
         // a left-hander is mirrored in x and turned π (the original's ceremony setup): a mirror in z, not the
-        // match's x mirror. Carol's and Will's `_n` motions are made for it; a swapped hand faces away, as there
-        tf.scale = Vec3::new(1.0, 1.0, g.players[i].hand);
+        // match's x mirror. Carol's and Will's `_n` motions are made for it. Left-handed is the character's own
+        // hand (TParam), not the one played: the select's hand toggle doesn't reach the ceremony
+        let hand = g.strong_hand[i];
+        tf.scale = Vec3::new(1.0, 1.0, hand);
+        // the racket is its own model, placed at the racket joint with its x row times that hand: mirrored back
+        if let Some(r) = rig.data.joint("Racket") {
+            for &part in kids.get(rig.joints[r]).into_iter().flatten() {
+                if let Ok(mut pt) = joints.get_mut(part) {
+                    pt.scale.x = hand;
+                }
+            }
+        }
         let (s, t) = c.slot[i];
         let Some(clip) = &c.clips[i][s] else { continue };
         for (j, joint) in rig.data.joints.iter().enumerate() {
