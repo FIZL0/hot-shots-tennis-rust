@@ -203,8 +203,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     if gfx.original {
         play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed);
         upscale = false;
-        play::menu_art::OFF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    // per parse, so a match after an `--original` one gets the remastered menu sheets back
+    play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
     Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands }
 }
@@ -232,9 +233,6 @@ fn main() {
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
     let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
-    if upscale {
-        textures::init(&args.iso);
-    }
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
@@ -244,6 +242,11 @@ fn start(argv: Vec<String>) {
         for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
             gfx.set(k, v);
         }
+    }
+    // B222: settings.txt's `original = on` too: the disc's own textures, no texture pack (its 4× walls would tile 4× big)
+    play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
+    if upscale && !gfx.original {
+        textures::init(&args.iso);
     }
     let mut app = App::new();
     let present_mode = gfx.present_mode();
