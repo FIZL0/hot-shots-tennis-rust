@@ -319,9 +319,14 @@ impl Menu {
             }
         } else if k.ok {
             let i = s - TOP;
-            let (id, name) = (self.add.list[i].id.clone(), self.add.list[i].name.clone());
-            if self.add.armed == Some(i) {
-                let dir = self.add.list[i].dir.clone();
+            let (id, name, dir) = (self.add.list[i].id.clone(), self.add.list[i].name.clone(), self.add.list[i].dir.clone());
+            // desktop: only a store download / Add mod install (`mods/<id>`) is the game's to delete; a folder put in
+            // by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put it there
+            if cfg!(not(target_arch = "wasm32")) && dir != root().join(&id) {
+                self.add.armed = None;
+                self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
+                out.push(Sound(0));
+            } else if self.add.armed == Some(i) {
                 crate::modfs::remove(&dir);
                 #[cfg(target_arch = "wasm32")]
                 crate::web::mod_drop(&id);
@@ -836,6 +841,18 @@ mod tests {
         assert_eq!(m.screen, Screen::Mods);
         m.mods_step(Press { back: true, ..default() }, &mut Vec::new());
         assert_eq!((m.screen, m.add.ask), (Screen::Main, None));
+    }
+
+    /// A mod in a folder put in by hand (here a pack's) isn't removed: the press says where to delete it.
+    #[test]
+    fn hand_added_mods_stay() {
+        let mut m = Menu { screen: Screen::Mods, sel: TOP, ..default() };
+        m.add.list = vec![Mod { dir: root().join("pack/p"), ..a_mod("p", "P") }];
+        let mut out = Vec::new();
+        m.mods_step(ok(), &mut out);
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.armed, None);
+        assert!(m.add.status.starts_with("P was added by hand"), "{}", m.add.status);
     }
 
     /// A long list scrolls to keep the cursor on screen, and taps land on the drawn rows.
