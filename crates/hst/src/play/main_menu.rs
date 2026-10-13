@@ -2215,7 +2215,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
         .add_systems(Update, ((step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
-    app.add_systems(Update, (online::poll.before(draw), online::typing.before(step)));
+    app.init_resource::<pause::Click>().add_systems(Update, (online::poll.before(draw), online::typing.before(step), online::pointer.before(step)));
     previews::plugin(app);
 }
 
