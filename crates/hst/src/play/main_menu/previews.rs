@@ -886,6 +886,7 @@ fn buttons(
         let pressed = |b: GamepadButton, k: bool| match dev {
             Dev::Keys => k,
             Dev::Pad(e) => pads.get(e).is_ok_and(|g| g.just_pressed(b)),
+            Dev::Open => false,
         };
         if pressed(GamepadButton::RightTrigger2, keys.just_pressed(KeyCode::Digit1)) {
             pending.0[player] = Some(Act::Win);

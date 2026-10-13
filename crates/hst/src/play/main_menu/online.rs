@@ -1120,6 +1120,7 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         .map(|d| match d {
             super::Dev::Keys => Some(super::Seat::Keys),
             super::Dev::Pad(e) => pads.iter().position(|x| *x == e).map(super::Seat::Pad),
+            super::Dev::Open => None,
         })
         .collect();
     let flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());

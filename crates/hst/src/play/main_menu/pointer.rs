@@ -25,6 +25,8 @@ pub(super) enum Act {
     Pick(usize),
     /// A button: a tap is this press.
     Press(Press),
+    /// B238: a seat's ✕: a tap takes its device off it.
+    Drop(usize),
 }
 
 /// ✕.
@@ -155,6 +157,8 @@ impl Menu {
                 }
             }
             Act::Pick(_) => {}
+            Act::Drop(p) if tap && self.drop_seat(p) => out.push(Effect::Sound(1)),
+            Act::Drop(_) => {}
         }
         out
     }
