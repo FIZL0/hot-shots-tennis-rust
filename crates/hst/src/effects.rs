@@ -466,8 +466,8 @@ impl BallFlight {
 }
 
 /// The ribbon from the ball back along its samples, facing the camera, `speed`·20 long, fading to its end; the glow
-/// a disc across the flight at the ball, spinning a quarter turn and fading over its last 15 frames.
-// ponytail: the game's tilt of a disc flying along the court, its texture flip by facing and its halved ribbon
+/// a disc at the ball turning a quarter turn from along the flight to across it and fading over its last 15 frames.
+// ponytail: the game's flag switch on the glow by flight facing (towards/away from the camera) and its halved ribbon
 // length under one of its mode counts are left out
 pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<Fx>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<Fx>>) {
     let Ok((cam, proj)) = cam.single() else { return };
@@ -477,7 +477,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
     if let Ok((mut t, mut v, look)) = disc.get_mut(fx.disc) {
         *v = if fx.glow.life > 0 { Visibility::Visible } else { Visibility::Hidden };
         let turn = GLOW_TURN * fx.glow.life as f32 / GLOW_FRAMES as f32;
-        *t = Transform::from_translation(fx.pos).looking_to(fx.vel.try_normalize().unwrap_or(Vec3::Z), Vec3::Y) * Transform::from_rotation(Quat::from_rotation_z(turn));
+        *t = Transform::from_translation(fx.pos).with_rotation(glow_turn(fx.vel, turn));
         if let Some(mut m) = materials.get_mut(&look.0) {
             m.base.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
         }
@@ -518,6 +518,21 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
         }
     }
     fill(&mut mesh, pos, uv, colour, index);
+}
+
+/// The glow's orientation (game space): a frame looking along the flight (side = up × flight); a flight within 60° of
+/// the court's length is turned about up towards it (onto it under 30°, easing to no turn at 60°); then the disc turns
+/// about its side axis by `turn`, from lying along the flight (a quarter turn) to facing it (none).
+fn glow_turn(vel: Vec3, turn: f32) -> Quat {
+    let d = vel.try_normalize().unwrap_or(Vec3::Z);
+    let side = Vec3::Y.cross(d).try_normalize().unwrap_or(Vec3::X);
+    let mut basis = Quat::from_mat3(&Mat3::from_cols(side, d.cross(side), d));
+    let a = d.x.abs().atan2(d.z.abs());
+    let limit = 60f32.to_radians();
+    if a < limit {
+        basis = Quat::from_rotation_y(-(limit - a).min(a) * d.x.signum() * d.z.signum()) * basis;
+    }
+    basis * Quat::from_rotation_x(turn)
 }
 
 /// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
