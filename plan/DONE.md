@@ -256,6 +256,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B31e** Sun glare post pass (gap from B31d): while the match camera looks within ~37° of the sun (−dot(view, sun) > 0.8, flag on), the game draws two half-texel-offset passes of the frame at FIX = ((−dot−0.8)/0.2·0.5 + rain·0.2)·clamp(sun height,0,0.8)/0.8·128/0.7 instead of the 25 % persistence; port it into the persistence pass and compare by eye against PCSX2 facing the sun → `hud_gamma.rs` · `persist.wgsl` | j: 2026-10-08-p17q-tornado
 - [x] **B134** Pop-ups when the ball hits a wall (user 2026-10-12): when the ball hits a stage wall/object, show the original's pop-up for it (find which pop-up, position, timing and sound in the original; P39c/B39c's object hits) → `play/popups.rs` · `hst-sim/src/mesh.rs` world query · `play.rs` simulate
 - [x] **B137** Bounce effects bugged on mobile (bug, user 2026-10-12, seen in the browser/phone build): the ball's bounce effects draw wrong on mobile. Reproduce in the web build on a phone (or a mobile GPU/WebGL2 profile on desktop), pin down what's off (missing, stretched, wrong colour/alpha, stuck, wrong place) against desktop and the original (`tools/screenshot.sh`), and fix; rendering only has to look right → `effects.rs` bounce effects · `play.rs` | with B13 (bounces before the serve)
+- [x] **B24d** Passing ball routes 1–3 against a recording (in B24) → `hst-sim/tests/npc.rs` · `research/b24_rec15.py` | t: npc.rs | j: 2026-10-08-b24-court-events
 
 
 ### Shots
