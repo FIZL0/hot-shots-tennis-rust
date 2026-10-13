@@ -26,6 +26,7 @@ mod graphics;
 mod handshake;
 mod gs;
 mod modfs;
+mod modstore;
 mod mods;
 mod mods_online;
 mod net;

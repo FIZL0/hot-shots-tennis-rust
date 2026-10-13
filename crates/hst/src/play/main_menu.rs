@@ -959,6 +959,8 @@ enum Tex {
     Preview(usize),
     /// The lobby code's QR (`online::QrImage`).
     Qr,
+    /// The hovered store mod's preview (`mods_screen::Shelf`).
+    Shelf,
     /// A character's face icon on the select ([`Icons`]; a disc one not baked yet draws its `FACES` square).
     Icon(Who),
     /// Our button pill's layers (`menu_art::pill_layers`).
@@ -1253,7 +1255,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "lobbies" => Screen::Lobbies,
         "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
         "code" | "name" => Screen::Code,
-        "addmods" => Screen::Mods,
+        "addmods" | "browsemods" | "uploadmods" => Screen::Mods,
         _ => Screen::Main,
     };
     if fresh && menu.screen == Screen::Main {
@@ -1279,6 +1281,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             menu.players.iter_mut().for_each(|p| p.cursor = 6);
         }
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
+        mods_screen::sample(&mut menu, &screen);
         if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) {
             online::sample(&mut menu);
         }
@@ -2179,6 +2182,7 @@ fn draw(
     qr: Option<Res<online::QrImage>>,
     cursor: Option<Res<cursor::Cursor>>,
     icons: Res<Icons>,
+    shelf: Res<mods_screen::Shelf>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -2219,6 +2223,13 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Shelf => match &shelf.shown {
+                Some(h) => h.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Qr => match &qr {
                 Some(qr) => qr.0.clone(),
                 None => {
@@ -2228,7 +2239,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);

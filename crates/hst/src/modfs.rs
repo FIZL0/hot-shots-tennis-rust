@@ -15,7 +15,7 @@ use crate::mods::{self, Mod};
 static MEM: Mutex<BTreeMap<String, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
 
 /// `p` as a `MEM` key: `/`-separated, without `.` parts (`./mods/x` and `mods/x` are one file).
-fn key(p: &Path) -> String {
+pub(crate) fn key(p: &Path) -> String {
     p.components().filter(|c| !matches!(c, Component::CurDir)).map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
@@ -259,6 +259,47 @@ pub fn install(zip: &[u8], root: &Path) -> Result<Mod, String> {
     mods::read(&dir)
 }
 
+/// A zip of `files` (stored or deflated), each with Unix mode `mode`, written by hand like any zip tool would (M17 upload packages, and the tests' archives).
+pub fn zip(files: &[(&str, &[u8])], deflate: bool, mode: u32) -> Vec<u8> {
+    let (mut out, mut dir) = (Vec::new(), Vec::new());
+    for (name, data) in files {
+        let packed = if deflate { miniz_oxide::deflate::compress_to_vec(data, 6) } else { data.to_vec() };
+        let head = |sig: u32, central: bool, at: usize| {
+            let mut h = sig.to_le_bytes().to_vec();
+            if central {
+                h.extend((3u16 << 8 | 20).to_le_bytes());
+            }
+            h.extend(20u16.to_le_bytes());
+            h.extend(0u16.to_le_bytes());
+            h.extend((if deflate { 8u16 } else { 0 }).to_le_bytes());
+            h.extend([0; 4]);
+            h.extend(crc32(data).to_le_bytes());
+            h.extend((packed.len() as u32).to_le_bytes());
+            h.extend((data.len() as u32).to_le_bytes());
+            h.extend((name.len() as u16).to_le_bytes());
+            h.extend(0u16.to_le_bytes());
+            if central {
+                h.extend([0; 6]);
+                h.extend((mode << 16).to_le_bytes());
+                h.extend((at as u32).to_le_bytes());
+            }
+            h.extend(name.as_bytes());
+            h
+        };
+        dir.extend(head(0x0201_4b50, true, out.len()));
+        out.extend(head(0x0403_4b50, false, 0));
+        out.extend(&packed);
+    }
+    let at = out.len();
+    out.extend(&dir);
+    out.extend(b"PK\x05\x06\0\0\0\0");
+    out.extend((files.len() as u16).to_le_bytes().repeat(2));
+    out.extend((dir.len() as u32).to_le_bytes());
+    out.extend((at as u32).to_le_bytes());
+    out.extend([0, 0]);
+    out
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -289,46 +330,6 @@ pub(crate) mod tests {
         zip(&files.iter().map(|f| (f.0.as_str(), &f.1[..])).collect::<Vec<_>>(), false, 0o100644)
     }
 
-    /// A zip of `files` (stored or deflated), each with Unix mode `mode`, written by hand like any zip tool would.
-    pub(crate) fn zip(files: &[(&str, &[u8])], deflate: bool, mode: u32) -> Vec<u8> {
-        let (mut out, mut dir) = (Vec::new(), Vec::new());
-        for (name, data) in files {
-            let packed = if deflate { miniz_oxide::deflate::compress_to_vec(data, 6) } else { data.to_vec() };
-            let head = |sig: u32, central: bool, at: usize| {
-                let mut h = sig.to_le_bytes().to_vec();
-                if central {
-                    h.extend((3u16 << 8 | 20).to_le_bytes());
-                }
-                h.extend(20u16.to_le_bytes());
-                h.extend(0u16.to_le_bytes());
-                h.extend((if deflate { 8u16 } else { 0 }).to_le_bytes());
-                h.extend([0; 4]);
-                h.extend(crc32(data).to_le_bytes());
-                h.extend((packed.len() as u32).to_le_bytes());
-                h.extend((data.len() as u32).to_le_bytes());
-                h.extend((name.len() as u16).to_le_bytes());
-                h.extend(0u16.to_le_bytes());
-                if central {
-                    h.extend([0; 6]);
-                    h.extend((mode << 16).to_le_bytes());
-                    h.extend((at as u32).to_le_bytes());
-                }
-                h.extend(name.as_bytes());
-                h
-            };
-            dir.extend(head(0x0201_4b50, true, out.len()));
-            out.extend(head(0x0403_4b50, false, 0));
-            out.extend(&packed);
-        }
-        let at = out.len();
-        out.extend(&dir);
-        out.extend(b"PK\x05\x06\0\0\0\0");
-        out.extend((files.len() as u16).to_le_bytes().repeat(2));
-        out.extend((dir.len() as u32).to_le_bytes());
-        out.extend((at as u32).to_le_bytes());
-        out.extend([0, 0]);
-        out
-    }
 
     const MANIFEST: &[u8] = br#"{"standard":1,"id":"x","name":"X","costumes":["c.glb"],"donor":3,"hand":"right","params":{"base":3},"ai_row":3,"face":"none"}"#;
 

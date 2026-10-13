@@ -209,10 +209,14 @@ async function start() {
     await new Promise(r => setTimeout(r, 100));
     let m;
     try { m = import_mod(new Uint8Array(await f.arrayBuffer())); } catch (e) { mod_status(`Couldn't add ${f.name}: ${e}`); return; }
-    mod_status(`Saving ${m.name}...`);
+    await window.hstModSave(m.id, m.name);
+  };
+  // an installed mod (a picked zip, or one the mod store downloaded, M17) from the game into OPFS mods/<id>/
+  window.hstModSave = async (id, name) => {
+    mod_status(`Saving ${name}...`);
     try {
-      await mods.removeEntry(m.id, { recursive: true }).catch(() => {});
-      const top = await mods.getDirectoryHandle(m.id, { create: true });
+      await mods.removeEntry(id, { recursive: true }).catch(() => {});
+      const top = await mods.getDirectoryHandle(id, { create: true });
       const put = async ([p, bytes]) => {
         const parts = p.split('/');
         let d = top;
@@ -222,16 +226,22 @@ async function start() {
         await w.close();
       };
       // all at once (a write is slow on its own), mod.json (mod_files' last) after the rest is in
-      const files = [...mod_files(m.id)];
+      const files = [...mod_files(id)];
       const json = files.pop();
       await Promise.all(files.map(put));
       await put(json);
-      mod_status(`Added ${m.name}. Reload to play it.`);
+      mod_status(`Added ${name}. Reload to play it.`);
     } catch (e) {
-      await mods.removeEntry(m.id, { recursive: true }).catch(() => {});
-      drop_mod(m.id);
-      mod_status(`Couldn't save ${m.name} in this browser's storage: ${e}`);
+      await mods.removeEntry(id, { recursive: true }).catch(() => {});
+      drop_mod(id);
+      mod_status(`Couldn't save ${name} in this browser's storage: ${e}`);
     }
+  };
+  // M17 Upload's files, as downloads
+  window.hstDownload = (name, bytes) => {
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([bytes])), download: name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   };
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));

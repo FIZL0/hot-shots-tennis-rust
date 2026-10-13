@@ -35,6 +35,8 @@ data-encoding = "2"
 reqwest = { version = "0.13", default-features = false }
 # mod zips (M16, `modfs.rs`): deflate, already built for png
 miniz_oxide = "0.8"
+# the mod store's download check (M17, `modstore.rs`; already built for iroh)
+sha2 = "0.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -53,6 +55,8 @@ n0-mainline = "0.7"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 iroh-mdns-address-lookup = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# Add mod's file picker on desktop (the xdg portal on Linux; the browser build uses the page's input)
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [features]
 # the browser build on WebGPU (`tools/web.sh` builds it beside the default WebGL2 one; the page picks)

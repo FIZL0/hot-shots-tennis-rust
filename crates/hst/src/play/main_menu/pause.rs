@@ -271,6 +271,7 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .init_resource::<slide::Slide>()
         // `super::draw` reads the custom page's mod icons (none in a match); without it the draw panicked (B139)
         .init_resource::<super::Icons>()
+        .init_resource::<super::mods_screen::Shelf>()
         .add_systems(PostStartup, setup)
         .add_systems(
             Update,

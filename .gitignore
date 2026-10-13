@@ -25,3 +25,6 @@ research/tools/wasmtime-*/
 /target-*/
 /web/pkg/
 /web/pkg-webgpu/
+# M17 store listing cache and upload outbox (written beside the game)
+mods-store.json
+mods-upload/

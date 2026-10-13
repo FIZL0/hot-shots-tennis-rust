@@ -313,3 +313,17 @@ pub fn mod_drop(id: &str) {
 pub fn reload() {
     let _ = web_sys::window().unwrap().location().reload();
 }
+
+/// M17: a mod the store installed (in memory) written to OPFS by the page, which then reports it (`mod_status`).
+pub fn mod_save(id: &str, name: &str) {
+    if let Some(f) = page_fn("hstModSave") {
+        let _ = f.call2(&JsValue::NULL, &id.into(), &name.into());
+    }
+}
+
+/// M17: `bytes` handed to the player as a download named `name` (Upload's files).
+pub fn download(name: &str, bytes: &[u8]) {
+    if let Some(f) = page_fn("hstDownload") {
+        let _ = f.call2(&JsValue::NULL, &name.into(), &js_sys::Uint8Array::from(bytes));
+    }
+}
