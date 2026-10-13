@@ -7,7 +7,7 @@
 use hst_sim::player::ReachStats;
 use hst_sim::replay::{Frame, frames_live};
 use hst_sim::shot::{Bounds, Margins, Table, launch, lookup};
-use hst_sim::swing::{TimingError, dive_lock, high_blend, launch_motion, mis_hit, lob_variant, mode_variant, table_mode, timing, timing_error, timing_launch};
+use hst_sim::swing::{TimingError, dive_lock, high_blend, high_volley, launch_motion, mis_hit, lob_variant, mode_variant, table_mode, timing, timing_error, timing_launch};
 use hst_sim::ps2::mul;
 
 const FIXTURES: [(&str, Option<&str>); 10] = [
@@ -102,7 +102,7 @@ fn timed_launches_like_the_game() {
     let i = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v3 = |b: &[u8], o: usize| [f(b, o), f(b, o + 4), f(b, o + 8)];
     let (mut seen, mut scattered, mut moded, mut bad) = (0, 0, 0, vec![]);
-    let (mut dulls, mut framed, mut dives, mut awkwards) = (0, 0, 0, 0);
+    let (mut dulls, mut framed, mut dives, mut awkwards, mut high_volleys) = (0, 0, 0, 0, 0);
     for (fx, ram) in FIXTURES {
         let Ok(data) = std::fs::read(format!("{}/{fx}", dir())) else { continue };
         let ram = ram.and_then(|r| std::fs::read(format!("{}/{r}", dir())).ok());
@@ -148,6 +148,12 @@ fn timed_launches_like_the_game() {
                 (grades[lock as usize], bias[lock as usize], lock - 8)
             };
             let grade = byte(w1, p, 0x3ee8);
+            // a ground stroke's class: the volley launch off a high ball inside the service line (+0x3ef8 the z at
+            // the lock, +0x3f44 the contact height)
+            if branch == 1 && high_volley(branch, kind, byte(w1, p, 0x3f06) != 0, w1.player_f32(p, 0x3ef8), w1.player_f32(p, 0x3f44)) != (class == 2) {
+                bad.push(format!("{at}: ground stroke launched as class {class}"));
+            }
+            high_volleys += (branch == 1 && class == 2) as usize;
             assert_eq!((grade, word(w1, p, 0x3f98), word(w1, p, 0x3fa0)), (lock_grade, lock_bias, offset), "{at}: lock");
             dives += (branch == 3) as usize;
             // the motion flags read at the launch: the player's current motion (+0x3df0), which on every recorded
@@ -270,8 +276,8 @@ fn timed_launches_like_the_game() {
     for b in &bad {
         eprintln!("{b}");
     }
-    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {dulls} dull, {framed} framed, {dives} dives, {awkwards} awkward, {} wrong", bad.len());
-    assert!(bad.is_empty() && (seen == 0 || dulls > 0 && framed > 0 && dives > 0 && awkwards > 0) && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
+    eprintln!("{seen} launches, {scattered} scattered, {moded} off a variant table, {dulls} dull, {framed} framed, {dives} dives, {awkwards} awkward, {high_volleys} high-ball volleys, {} wrong", bad.len());
+    assert!(bad.is_empty() && (seen == 0 || dulls > 0 && framed > 0 && dives > 0 && awkwards > 0 && high_volleys > 0) && (seen == 0 || seen > 100), "{} of {seen} launches wrong", bad.len());
 }
 
 /// `wild_aim`'s five ways by its draws (the case draws in the top half-word, as the game's RNG gives them).
