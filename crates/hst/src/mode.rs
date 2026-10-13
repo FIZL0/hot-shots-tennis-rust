@@ -112,7 +112,14 @@ const ZOOM: f32 = 1.5;
 
 /// Render pipelines still compiling (the render world's count, a frame or two behind; compute ones aren't counted).
 #[derive(Resource, Clone, Default)]
-struct Compiling(Arc<AtomicUsize>);
+pub(crate) struct Compiling(Arc<AtomicUsize>);
+
+impl Compiling {
+    /// Whether any render pipeline is still compiling.
+    pub(crate) fn busy(&self) -> bool {
+        self.0.load(Ordering::Relaxed) > 0
+    }
+}
 
 pub fn plugin(app: &mut App) {
     let compiling = Compiling::default();

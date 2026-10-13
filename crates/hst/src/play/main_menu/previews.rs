@@ -52,7 +52,7 @@ use crate::Args;
 use crate::play::controls::Bindings;
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 4;
+const RENDER: u32 = 5;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
 /// row, so the read-back has no row padding.
 const BAKE: UVec2 = UVec2::new(384, 480);
@@ -604,6 +604,7 @@ fn bake(
     mut hovered: Local<Vec<Key>>,
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
+    compiling: Option<Res<crate::mode::Compiling>>,
 ) {
     if menu.screen != Screen::Chars && baker.job.is_none() {
         return;
@@ -619,6 +620,11 @@ fn bake(
     let baker = &mut *baker;
     if let Some(job) = &mut baker.job {
         job.frames += 1;
+        // B142: a part whose pipeline is still compiling isn't drawn (a mod's first MASK material: Emi's body and
+        // hair), and an uncapped menu runs `wait` frames in milliseconds; count from the last compile
+        if job.reading.is_none() && compiling.is_some_and(|c| c.busy()) {
+            job.frames = 0;
+        }
         let wait = if baker.jobs == 0 { 30 } else { 4 };
         let data = job.done.lock().unwrap().take();
         if let Some(saving) = &mut job.saving {
