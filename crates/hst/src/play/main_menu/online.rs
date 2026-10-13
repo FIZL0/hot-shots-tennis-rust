@@ -79,7 +79,7 @@ const KEYS: usize = SYMBOLS.len();
 /// The name's keys on the same grid, and its longest.
 const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
-const ROWS: [&str; 7] = ["Host", "Find", "Quickplay", "Join by Code", "Name", "Relay", "Back"];
+const ROWS: [&str; 7] = ["Quickplay", "Host", "Find", "Join by Code", "Name", "Relay", "Back"];
 /// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby.
 const HOST_BUTTONS: [&str; 5] = ["Start", "Characters", "Court", "Copy Link", "Leave"];
 const GUEST_BUTTONS: [&str; 3] = ["Ready", "Characters", "Leave"];
@@ -222,7 +222,7 @@ impl Menu {
                     self.net.entry = if self.net.naming { cfg.name.to_ascii_uppercase().chars().take(NAME_MAX).collect() } else { String::new() };
                     self.net.status.clear();
                     self.go(Screen::Code, out);
-                } else if k.ok && self.sel == 1 {
+                } else if k.ok && self.sel == 2 {
                     // B195: every open lobby first, singles and doubles; the players after choosing one
                     self.net.go = Some(Go::Find);
                     self.net.list.clear();
@@ -230,7 +230,7 @@ impl Menu {
                     self.go(Screen::Lobbies, out);
                     out.push(Effect::Online(Fx::Net(Cmd::Find)));
                 } else if k.ok && self.sel < 3 {
-                    self.net.go = Some([Go::Host, Go::Find, Go::Quick][self.sel]);
+                    self.net.go = Some([Go::Quick, Go::Host, Go::Find][self.sel]);
                     self.net.fit = 0;
                     self.go(Screen::Mode, out);
                 } else if (k.ok && self.sel == 6) || k.back {
@@ -400,7 +400,7 @@ impl Menu {
     }
 
     pub(super) fn back_to_online(&mut self, out: &mut Vec<Effect>) {
-        self.sel = [Go::Host, Go::Find, Go::Quick, Go::Code].iter().position(|g| Some(*g) == self.net.go).unwrap_or(0);
+        self.sel = [Go::Quick, Go::Host, Go::Find, Go::Code].iter().position(|g| Some(*g) == self.net.go).unwrap_or(0);
         self.net.go = None;
         self.net.code.clear();
         self.net.short.clear();
@@ -541,9 +541,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.rows(&labels, m.sel, 170.0, 84.0, 300.0, hand_x);
             let info = match m.sel {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
-                0 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".into(),
-                1 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
-                2 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
+                1 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".into(),
+                2 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
+                0 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
                 3 => "Type the host's 4-character code, or paste their link or code.".into(),
                 4 => format!("Your name on your lobby seats (now {}).", m.net.cfg.as_ref().map_or("Player", |c| c.name.as_str())),
                 5 if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
@@ -1015,7 +1015,8 @@ mod tests {
         let ok = Press { ok: true, ..default() };
         // B195: Online → Host → singles/doubles → controllers → the lobby (no character yet) → its select → lobby
         m.step(dev, ok);
-        assert_eq!(m.screen, Screen::Online);
+        assert_eq!((m.screen, m.sel), (Screen::Online, 0), "Quickplay first");
+        m.step(dev, Press { down: true, ..default() });
         m.step(dev, ok);
         assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Host)));
         m.step(dev, Press { down: true, ..default() });
@@ -1156,7 +1157,7 @@ mod tests {
     fn find_first_then_pick_in_the_lobby() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
-        let mut m = Menu { screen: Screen::Online, sel: 1, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        let mut m = Menu { screen: Screen::Online, sel: 2, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
         let fx = m.step(dev, ok);
         assert_eq!(m.screen, Screen::Lobbies);
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Find))), "{fx:?}");

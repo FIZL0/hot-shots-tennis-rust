@@ -34,3 +34,10 @@
 - Other peers' live cursors while picking are B201 (the select is local; others see "Picking..." then the result).
 - Front-end only, no original to match (PLAN: menus are ours to design). Online gameplay untouched: `Room`'s new
   field is lobby-only and frozen into the Start room as before.
+
+## Follow-ups (user 2026-10-13)
+- Online menu order: Quickplay, Host, Find, Join by Code (Quickplay first).
+- Merging with B201a (voting, on main): the host keeps the lobby's **Court** button (straight to the confirm screen,
+  `Cmd::Venue`, no vote) next to **Vote**: both, not one replacing the other. Six host buttons need a narrower
+  `BUTTON_STEP`/`BUTTON_W` (or two rows) to fit 4:3.
+- Public/private lobbies don't exist yet (every hosted lobby is announced): B213.
