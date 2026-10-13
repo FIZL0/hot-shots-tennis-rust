@@ -26,11 +26,16 @@ mod tests {
 
     /// A doubles match of these characters with 1P human, set up.
     fn set_up(chars: Vec<usize>) -> App {
+        set_up_seats(chars, [true, false, false, false])
+    }
+
+    /// A doubles match of these characters, `seats` human, set up.
+    fn set_up_seats(chars: Vec<usize>, seats: [bool; 4]) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
-        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay: false, ..default() });
+        app.insert_resource(Pads { seats: Some(seats), autoplay: false, ..default() });
         app.insert_resource(Replay(Default::default()));
         app.init_resource::<super::super::tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
@@ -216,5 +221,43 @@ mod tests {
         for (l, r) in left.iter().zip(&right) {
             assert!((l[0] + r[0]).abs() < 1e-4 && (l[1] - r[1]).abs() < 1e-4 && (l[2] - r[2]).abs() < 1e-4, "lefty {l:?} vs righty {r:?}");
         }
+    }
+
+    /// B69: a swing locked onto a faulted serve still comes due during the call (the original cancels locks only on
+    /// the reaction's 0x19, and a fault has none), and it still hits, but the point stays over: the original's hit
+    /// check runs only in the rally phase, so the fault stands and the second serve follows.
+    #[test]
+    fn a_faulted_serve_cant_be_returned() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = set_up_seats(vec![6, 1, 2, 3], [false; 4]);
+        let tick = |app: &mut App| {
+            app.world_mut().resource_mut::<Replay>().0.push_back([IDLE; 4]);
+            app.world_mut().run_schedule(FixedUpdate);
+        };
+        // the bots' first fault (tick 1832 of this match)
+        for _ in 0..3000 {
+            tick(&mut app);
+            let g = app.world().resource::<Game>();
+            if g.phase == Phase::Post && g.rally.faults == 1 {
+                break;
+            }
+        }
+        let g = &mut *app.world_mut().resource_mut::<Game>();
+        assert_eq!((g.phase.clone(), g.rally.faults, g.shots), (Phase::Post, 1, 1), "no fault");
+        let rally = g.rally;
+        let receiver = g.score.receiver as usize;
+        strike(g, receiver, 1, 0, [0.0, 0.0, 0.0], (1, 0, 0));
+        assert_eq!((g.phase.clone(), g.rally), (Phase::Post, rally), "the return restarted the point");
+        for _ in 0..600 {
+            tick(&mut app);
+            let g = app.world().resource::<Game>();
+            assert!(g.phase != Phase::Rally || g.shots > 0 && g.last_hitter == g.score.server, "rally played on after the fault");
+            if g.phase == Phase::Serve {
+                return assert_eq!(g.rally.faults, 1, "second serve");
+            }
+        }
+        panic!("no second serve");
     }
 }
