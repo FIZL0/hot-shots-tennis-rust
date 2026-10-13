@@ -120,7 +120,11 @@ const SETTING_LABELS: [&str; 4] = ["Widescreen", "Upscaled Textures", "Menu Musi
 /// The Settings screen's rows after the switches.
 const GRAPHICS_ROW: usize = SETTING_NAMES.len();
 const CONTROLS_ROW: usize = GRAPHICS_ROW + 1;
-const GRAPHICS_LABELS: [&str; 7] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing"];
+/// The Graphics screen's first row and row pitch (640×448): its nine rows fit between the title tab (to y 40) and the
+/// description bar (y 404).
+const GRAPHICS_TOP: f32 = 46.0;
+const GRAPHICS_PITCH: f32 = 39.5;
+const GRAPHICS_LABELS: [&str; 8] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing", "Display"];
 
 /// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
 const SETTING_DEFAULTS: [bool; 4] = [true, true, true, false];
@@ -166,13 +170,14 @@ impl Settings {
             0 => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
-                *g = Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1;
+                *g = Graphics { windowed: g.windowed, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
             }
             1 => g.scale = cycle(&SCALES, g.scale, d),
             2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
             3 => g.fps = cycle(&FPS, g.fps, d),
             4 => g.vsync = !g.vsync,
             5 => g.original = !g.original,
+            7 => g.windowed = !g.windowed,
             _ => g.msaa = cycle(&MSAA, g.msaa, d),
         }
     }
@@ -188,11 +193,12 @@ impl Settings {
             3 => format!("{} fps", g.fps),
             4 => if g.vsync { "On" } else { "Off" }.into(),
             5 => if g.original { "On" } else { "Off" }.into(),
+            7 => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             _ => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
         }
     }
 
-    fn path(iso: &str) -> std::path::PathBuf {
+    pub(crate) fn path(iso: &str) -> std::path::PathBuf {
         std::path::Path::new(iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()).join("settings.txt")
     }
 
@@ -1522,10 +1528,10 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
             d.frame(1, 6);
             let mut labels: Vec<String> = GRAPHICS_LABELS.iter().map(|s| s.to_string()).collect();
             labels.push("Back".into());
-            // eight rows: closer than the other screens' to clear the description bar (y 404)
-            d.rows_at(&labels, m.sel, 120.0, 66.0, 300.0, hand_x, 42.0);
+            // nine rows: closer than the other screens' to clear the description bar (y 404)
+            d.rows_at(&labels, m.sel, 120.0, GRAPHICS_TOP, 300.0, hand_x, GRAPHICS_PITCH);
             for i in 0..GRAPHICS_LABELS.len() {
-                d.text(&m.settings.graphics_value(i), 440.0, 66.0 + 42.0 * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
+                d.text(&m.settings.graphics_value(i), 440.0, GRAPHICS_TOP + GRAPHICS_PITCH * i as f32 + 7.0, 24.0, if i == m.sel { WHITE } else { [40.0; 3] });
             }
             d.info(match m.sel {
                 0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
@@ -1535,6 +1541,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
                 4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
                 5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
                 6 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
+                7 => "Borderless fullscreen on the current monitor, or a window.",
                 _ => "Back to the settings.",
             });
         }
@@ -2292,6 +2299,10 @@ mod tests {
         assert_eq!(s.1, d);
         s.graphics_step(1, -1);
         assert_eq!((s.1.scale, s.graphics_value(0).as_str()), (85, "Custom"));
+        // the display row survives a preset change and keeps the preset's name
+        s.graphics_step(7, 1);
+        s.graphics_step(0, 1);
+        assert_eq!((s.1.windowed, s.graphics_value(0).as_str(), s.graphics_value(7).as_str()), (true, "Default", "Window"));
         s.graphics_step(5, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
     }

@@ -1,12 +1,13 @@
-//! Video settings (remaster-only): frame limit, vsync, render resolution scale, shadow quality, MSAA and the original
+//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, vsync, render resolution scale, shadow quality, MSAA and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also turns widescreen and upscaled textures off, `main.rs`).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
-//! (`--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--original`). The simulation stays a fixed
+//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--original`). The simulation stays a fixed
 //! 60 Hz tick whatever these are. Defaults draw as before these settings existed.
 
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
-use bevy::window::{PresentMode, PrimaryWindow};
+use bevy::window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,7 +29,12 @@ pub struct Graphics {
     pub msaa: u32,
     /// Draw as the PS2 did: the court at 640×448 and the HUD at 448 lines, scaled up unfiltered (overrides `scale`).
     pub original: bool,
+    /// A window instead of borderless fullscreen on the current monitor (the default, B96). Not part of a preset.
+    pub windowed: bool,
 }
+
+/// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
+pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
 
 pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
@@ -37,16 +43,16 @@ pub const MSAA: [u32; 3] = [1, 2, 4];
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false };
-    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false };
+    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -57,6 +63,7 @@ impl Graphics {
             "scale" | "render_scale" => self.scale = v.trim_end_matches('%').parse::<u32>().map_or(self.scale, |s| s.clamp(25, 100)),
             "msaa" | "anti_aliasing" => self.msaa = MSAA.into_iter().find(|&m| msaa_name(m) == v).unwrap_or(self.msaa),
             "original" => self.original = v != "off",
+            "windowed" => self.windowed = v != "off",
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             _ => return false,
         }
@@ -66,7 +73,7 @@ impl Graphics {
     /// settings.txt lines.
     pub fn text(&self) -> String {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
-        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" })
+        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" })
     }
 
     /// The match's flags.
@@ -78,15 +85,22 @@ impl Graphics {
         if self.original {
             f.push("--original".into());
         }
+        if self.windowed {
+            f.push("--windowed".into());
+        }
         f
     }
 
     pub fn preset(&self) -> &'static str {
-        Self::PRESETS.iter().find(|(_, g)| g == self).map_or("Custom", |(n, _)| n)
+        Self::PRESETS.iter().find(|(_, g)| Graphics { windowed: self.windowed, ..*g } == *self).map_or("Custom", |(n, _)| n)
     }
 
     pub fn present_mode(&self) -> PresentMode {
         if self.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync }
+    }
+
+    pub fn window_mode(&self) -> WindowMode {
+        if self.windowed || KEEP_WINDOWED.load(Ordering::Relaxed) { WindowMode::Windowed } else { WindowMode::BorderlessFullscreen(MonitorSelection::Current) }
     }
 }
 
@@ -115,6 +129,10 @@ fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
     if g.is_changed() {
         for mut w in &mut w {
             w.present_mode = g.present_mode();
+            let mode = g.window_mode();
+            if w.mode != mode {
+                w.mode = mode;
+            }
         }
     }
 }
@@ -177,7 +195,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -185,6 +203,8 @@ mod tests {
         }
         assert_eq!(Graphics::default().preset(), "Default");
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
+        assert_eq!(Graphics { windowed: true, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
     }
 }
