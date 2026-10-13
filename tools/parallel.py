@@ -2,7 +2,7 @@
 """Unattended runner, several tasks at once: like tools/single.sh, but keeps N (3) Claude
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
-    tmux new -s hst tools/parallel.sh [N] [p|d] [f] [m]  # e.g. 5 p; m = a build dir per slot; f = keep starting past 94% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
+    tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 94% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -43,7 +43,7 @@ WT = ROOT + '-slots'
 HELP = """\
 tools/parallel.sh — run several Claude agents on plan/TODO.md tasks at once (run it inside tmux)
 
-  tools/parallel.sh N [p|d] [f] [m [B]]
+  tools/parallel.sh N [p|d] [f]
 
   N   number of agents at once, e.g. 5                          default: 3
   p   priority: the next open tasks in plan/TODO.md order,
@@ -51,28 +51,21 @@ tools/parallel.sh — run several Claude agents on plan/TODO.md tasks at once (r
   d   different files: the first open task, then later tasks    default
       that don't touch the same files
   f   force: keep starting tasks past 94% weekly usage          default: pause until the weekly reset
-  m   multiple builds: a target/ per slot (no waiting on        default: one shared target/
-      each other's builds; ~45 GB and a full Bevy build each)
-  m B B builds shared round-robin by the slots (m 2 or m2):     slot n uses target/ (B=1) or target-k/
-      fewer parallel builds than slots, less disk and memory
 
 Examples:
   tmux new -s hst tools/parallel.sh 5 p      5 agents, strict TODO order
   tools/parallel.sh 3                        3 agents on different files
-  tools/parallel.sh 5 p f m                  all options
-  tools/parallel.sh 5 p m 2                  5 agents on 2 build dirs
+  tools/parallel.sh 5 p f                    all options
 
 While it runs: type s + Enter to stop starting new tasks (again to undo). Log: context/notes/overnight.log
 """
-_args = re.sub(r'\bm\s+(\d+)\b', r'm\1', ' '.join(sys.argv[1:])).split()  # 'm 2' = 'm2'
+_args = sys.argv[1:]
 if not _args or any(a in ('-h', '--help', 'help') for a in _args):
     raise SystemExit(HELP)
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
 MODE = next((a for a in _args if a in ('p', 'd')), 'd')
 FORCE = 'f' in _args
-MULTI = 'm' in _args
-BUILDS = int(next((a[1:] for a in _args if re.fullmatch(r'm\d+', a)), 0))  # 0: one shared, or one per slot with m
-if any(not re.fullmatch(r'[pdf]|m\d*|\d+', a) for a in _args) or SLOTS < 1 or (BUILDS < 1 and any(a.startswith('m') and a != 'm' for a in _args)):
+if any(not re.fullmatch(r'[pdf]|\d+', a) for a in _args) or SLOTS < 1:
     raise SystemExit(f'unknown option: {" ".join(_args)}\n\n{HELP}')
 WEEKLY_MAX = 94  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
@@ -226,12 +219,6 @@ def panes():
     return out
 
 
-def target(n):
-    """The build dir slot n shares: target/, or with m B the round-robin target-k/ (k > 1)."""
-    k = (n - 1) % BUILDS + 1 if BUILDS else 1
-    return f'{ROOT}/target' + (f'-{k}' if k > 1 else '')
-
-
 def start(n, task):
     tid = task[0]
     d = slot(n)
@@ -250,8 +237,11 @@ def start(n, task):
              f"don't gather it again.\n\n{brief}"
     cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
-    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1']
-                    + ([] if MULTI else [f'CARGO_TARGET_DIR={target(n)}']))
+    p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1',
+                    # each slot builds in its own worktree's target/: cargo names a workspace crate's output by its
+                    # repo-relative path, so slots sharing one linked each other's crates. sccache shares the dependency
+                    # builds instead; no CARGO_TARGET_DIR, sccache hashes CARGO_* env and would never hit across slots
+                    'RUSTC_WRAPPER=sccache', 'SCCACHE_CACHE_SIZE=60G'])
     log(f'slot {n}: {tid} ({task[1]}; {", ".join(sorted(task[2])) or "no files listed"})')
     return p, sid, since
 
