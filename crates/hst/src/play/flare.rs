@@ -160,6 +160,11 @@ fn draw(
     for (part, mesh, mut vis) in &mut parts {
         let Some(b) = built[part.0 as usize].take() else { continue };
         *vis = if on && !b.pos.is_empty() { Visibility::Inherited } else { Visibility::Hidden };
+        // an empty one stays as it was, hidden: Bevy's mesh allocator logs a use-after-free for a mesh with no
+        // vertices, twice a frame while the sun is out of the picture (B163)
+        if b.pos.is_empty() {
+            continue;
+        }
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             *m = b.mesh();
         }

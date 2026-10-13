@@ -821,6 +821,12 @@ mod tests {
         /// The two apps with rollback sessions; their datagrams reach the other `lag` rounds (ticks) later. `bad`:
         /// the guest's tick 300 comes out differently.
         fn play_rollback(lag: u32, limit: u32, bad: bool) -> [App; 2] {
+            play_rollback_with(lag, limit, bad, 0..0, |_, _| {})
+        }
+
+        /// `play_rollback`, the guest frozen for the rounds in `hitch` (a hiccup: nothing runs, sent or heard), and
+        /// `each(round, apps)` after every round.
+        fn play_rollback_with(lag: u32, limit: u32, bad: bool, hitch: std::ops::Range<u32>, mut each: impl FnMut(u32, &[App; 2])) -> [App; 2] {
             let room = room(0);
             let mut apps = ["host", "g"].map(|me| {
                 let mut a = app(&room, me);
@@ -831,13 +837,16 @@ mod tests {
             let mut wire: Vec<(usize, u32, String, Vec<u8>)> = Vec::new();
             for round in 0..limit {
                 for (to, at, from, d) in std::mem::take(&mut wire) {
-                    if at <= round {
+                    if at <= round && !(to == 1 && hitch.contains(&round)) {
                         take(apps[to].world_mut(), Event::Datagram(from, d));
                     } else {
                         wire.push((to, at, from, d));
                     }
                 }
                 for i in 0..2 {
+                    if i == 1 && hitch.contains(&round) {
+                        continue;
+                    }
                     let w = apps[i].world_mut();
                     rollback::gate(w);
                     let me = w.resource::<Netplay>().me.clone();
@@ -847,6 +856,7 @@ mod tests {
                         take(apps[1 - i].world_mut(), Event::Match(m));
                     }
                 }
+                each(round, &apps);
                 let over = |a: &App| a.world().resource::<Game>().match_stats.result.is_some() || a.world().resource::<Netplay>().end.is_some();
                 if apps.iter().all(over) {
                     break;
@@ -895,6 +905,31 @@ mod tests {
             let replays = apps[0].world().resource::<Game>().instant.replays;
             assert!(to_the_end || replays > 1, "{replays} instant replays");
             eprintln!("in sync over {n} ticks, {reruns:?} ticks re-run, {replays} instant replays, {:.0?}", t0.elapsed());
+        }
+
+        /// B163: after the guest freezes for 20 ticks the host runs ahead; it catches the guest up by sitting out one
+        /// tick at a time (never two in a row once it's running again: ggrs' own advice froze 3+ at once), and the
+        /// two end up within a tick of each other.
+        #[test]
+        fn rollback_time_sync_spreads_the_waits() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let frame = |a: &App| a.world().resource::<Rollback>().frame();
+            let (mut last, mut idle, mut longest) = (0, 0, 0);
+            let apps = play_rollback_with(3, 900, false, 300..320, |round, apps| {
+                let f = frame(&apps[0]);
+                // the host waits on the guest's pads until a little after it's back
+                if round > 340 {
+                    idle = if f == last { idle + 1 } else { 0 };
+                    longest = longest.max(idle);
+                }
+                last = f;
+            });
+            assert_eq!(longest, 1, "the host sat out {longest} ticks in a row");
+            let [a, b] = apps.each_ref().map(frame);
+            assert!(a.abs_diff(b) <= 2, "host at tick {a}, guest at {b}");
+            assert!(apps[0].world().resource::<Rollback>().sess.frames_ahead() <= 1);
         }
 
         /// A tick that runs differently on one machine: both stop at the next checksum and save their inputs.
