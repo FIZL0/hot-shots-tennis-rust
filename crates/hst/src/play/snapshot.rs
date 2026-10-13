@@ -302,4 +302,50 @@ mod tests {
         assert!(approaches > 0, "round1.bin ran no approach");
         eprintln!("{approaches} approaches");
     }
+
+    /// B173: the human's serve touches the net and drops on its own half: the computer receiver gives the ball up
+    /// (no path for it, and the net-touch message holds it) and stands still until the next serve, as the original,
+    /// instead of running on to the stand spot and locking a contact. The human's pads are a fixed random walk; its
+    /// only net-touched serve comes at tick ~11245.
+    #[test]
+    fn receiver_gives_up_a_net_touched_serve() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = app();
+        let mut r = 0x9e3779b97f4a7c15u64;
+        let mut next = move || {
+            (r ^= r << 13, r ^= r >> 7, r ^= r << 17);
+            r
+        };
+        let (mut stick, mut held) = ((0x80, 0x80), None);
+        for _ in 0..12000 {
+            let n = next();
+            if n % 30 == 0 {
+                stick = ((next() % 256) as u8, (next() % 256) as u8);
+            }
+            if n % 5 == 0 {
+                stick = (0x80, 0x80);
+            }
+            let buttons = match next() % 12 {
+                0 | 1 => 0x2000,
+                2 => 0x8000,
+                _ => 0,
+            };
+            let pad = hst_sim::replay::Pad { buttons, lx: stick.0, ly: stick.1, ..tick_input::IDLE };
+            run(&mut app, &[[pad, tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]]);
+            let g = app.world().resource::<Game>();
+            let b = g.players[1];
+            if held.is_none() && g.shots == 1 && g.last_hitter == 0 && g.flight.special_contacts > 0 {
+                held = Some(b.pos);
+            }
+            let Some(at) = held else { continue };
+            if g.shots == 0 {
+                return;
+            }
+            assert_eq!(b.pos, at, "the receiver chased a net-touched serve");
+            assert!(b.contact.is_none() && b.pending.is_none() && b.swing.is_none(), "the receiver went for it");
+        }
+        panic!("no net-touched serve by the human");
+    }
 }

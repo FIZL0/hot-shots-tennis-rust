@@ -44,7 +44,8 @@ pub struct World {
     /// The last hitter's slot (−1 none) and the shot count.
     pub hitter: i32,
     pub shots: i32,
-    /// The ball's position and its two hit counters (equal once the hit is settled).
+    /// The ball's position (y down, unlike the path) and its bounces and court contacts (a net touch counts only as
+    /// a bounce, so they differ once the ball has touched the net).
     pub ball: [f32; 4],
     pub hits: [i32; 2],
     pub gravity: f32,
@@ -321,7 +322,9 @@ impl Rally {
         c.balls.iter().map(|b| PathBall { pos: [b.pos[0], b.pos[1], b.pos[2]], bounces: b.bounces }).collect()
     }
 
-    /// Copies the predicted path (once a frame, shared) unless the ball isn't coming its way; the entries copied.
+    /// Copies the predicted path (once a frame, shared) unless the ball isn't coming its way (no hitter, its own team's
+    /// hit, the serve before its return for a non-receiver, a serve that touched the net, a ball that touched the net
+    /// and is below its top on the hitter's half); the entries copied. With none it gives the ball up, chase too.
     pub fn copy_path(&mut self, b: &Body, w: &World, c: &mut PathCopy, seen: &mut [bool], check: bool) -> i32 {
         seen.fill(false);
         if check {
