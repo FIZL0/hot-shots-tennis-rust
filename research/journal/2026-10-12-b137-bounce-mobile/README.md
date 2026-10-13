@@ -54,3 +54,23 @@ which on desktop is what it already was in practice.
   bounce look itself was already checked when B13/bounce effects landed.
 - Bevy's mesh allocator logs "Use-after-free: attempted to copy element data for an unallocated key" every frame
   (native and web alike). It is not related to the bounce look; noted only.
+
+## B137a (2026-10-13): reopened, still no description
+The task asks for the user's description or a phone screenshot first; this was an unattended run, with no answer
+possible, and `context/inbox.md` has nothing on it. Tried a reproduction on a GPU path not used before:
+- web WebGL2 on SwiftShader (`CHROME_FLAGS="--use-angle=swiftshader --enable-unsafe-swiftshader"`, a GLES 3.0
+  software driver, not ANGLE-on-Vulkan as before), `MOBILE=1` 844×390 touch viewport, Low preset
+  (`webgl2&play&singles&stage=1&pads=-,-`, 120 s, a shot every 2 s, `context/b137a/ss1/`). The red landing
+  marker, the fleck ring, the marks and the puffs look as on desktop. No errors in the console besides the known
+  downlevel-plugin warnings.
+- Only visible oddity: at SwiftShader's low frame rate the match's 25 % frame persistence (B31d, `hud_gamma.rs`
+  `persist`) leaves a strong ghost of everything that moves (umpire, ball ribbon) while the camera pans. A phone that
+  renders below 60 fps would show the same on the bounce puffs. It affects the whole scene, not just the bounce
+  effects, so it is only a lead, not a fix.
+
+Blocked: needs what the user sees (missing / flickering / ghosted / through players / wrong colour), ideally a phone
+screenshot or screen recording of a bounce, plus the phone model and browser (Safari = WebGPU on Metal, else WebGL2).
+
+## Not verified / not 1:1 (B137a)
+- The bug itself: not reproduced on any profile available here (no phone, no Metal/mobile GPU, no adb device).
+- No comparison with the original via `tools/screenshot.sh`: nothing was changed, desktop rendering is as B137 left it.
