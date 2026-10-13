@@ -1,11 +1,17 @@
 # The browser build (`tools/web.sh`) on GitHub Pages: the page and the wasm only, no game data (players pick their ISO).
 # Each run also replaces the rolling "Latest alpha" release (tag `alpha`, marked latest) with Linux + Windows builds of
-# the same commit, as tools/build.sh makes them.
+# the same commit, as tools/build.sh makes them. tools/ship-local.sh builds both on the dev machine and runs this with
+# `prebuilt`: that run only deploys the uploaded web/ (the build jobs are skipped).
 name: pages
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      prebuilt:
+        description: deploy the web/ that tools/ship-local.sh uploaded (release web-prebuilt) instead of building
+        type: boolean
+        default: false
 permissions:
   contents: read
   pages: write
@@ -18,20 +24,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - if: ${{ inputs.prebuilt }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mkdir web && gh release download web-prebuilt -R "${{ github.repository }}" -p web.tar.gz -O - | tar xz -C web
+      - if: ${{ !inputs.prebuilt }}
+        uses: actions/checkout@v4
+      - if: ${{ !inputs.prebuilt }}
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - if: ${{ !inputs.prebuilt }}
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target-wasm"  # tools/web.sh builds there, not in target/
-      - name: Tools
+      - if: ${{ !inputs.prebuilt }}
+        name: Tools
         run: |
           cargo install wasm-bindgen-cli --locked --version "$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
           # Ubuntu's binaryen is too old for rustc's wasm features
           curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz | tar xz
           echo "$PWD/binaryen-version_123/bin" >> "$GITHUB_PATH"
-      - run: tools/web.sh
+      - if: ${{ !inputs.prebuilt }}
+        run: tools/web.sh
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
@@ -44,7 +59,9 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+  # tools/ship-local.sh uploads its own Linux + Windows builds to the alpha release
   linux:
+    if: ${{ !inputs.prebuilt }}
     runs-on: ubuntu-latest
     # Steam Runtime sniper (glibc 2.31) like tools/build.sh, so it runs on every SteamOS / Steam Deck
     container: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
@@ -66,6 +83,7 @@ jobs:
           name: linux
           path: hst-linux-x86_64.tar.gz
   windows:
+    if: ${{ !inputs.prebuilt }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
