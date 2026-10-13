@@ -790,6 +790,10 @@ fn gs_models_anim(
         for (mi, packets) in model.materials.iter().enumerate() {
             let Some(mat) = mats.materials.get(mi) else { continue };
             let wrap = model.wrap.get(mi).copied().unwrap_or([0, 0]);
+            // B161: see-through texels blended rather than cut (the hole, TEST 20..29) and no GS levels: our own
+            let own_mips = (stem.contains("_h01_") || (20..=29).contains(&i16::from_le_bytes([mat.header[0x1e], mat.header[0x1f]])))
+                .then(|| mat.texture.and_then(|t| cutout_mips(&mats.textures[t])))
+                .flatten();
             let texture = mat.texture.map(|t| {
                 let mut img = image(&mats.textures[t]);
                 img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
@@ -798,6 +802,9 @@ fn gs_models_anim(
                 if !t.mips.is_empty() && !t.rgba.is_empty() {
                     img.texture_descriptor.mip_level_count = 1 + t.mips.len() as u32;
                     img.data.as_mut().unwrap().extend(t.mips.iter().flatten());
+                } else if let Some(levels) = &own_mips {
+                    img.texture_descriptor.mip_level_count = 1 + levels.len() as u32;
+                    img.data.as_mut().unwrap().extend(levels.iter().flatten());
                 }
                 // GS CLAMP: 0 repeat; 1 clamp; 2 region clamp over the whole texture (as the game sets it) = clamp
                 let mode = |w: u8| if w == 0 { ImageAddressMode::Repeat } else { ImageAddressMode::ClampToEdge };
@@ -819,6 +826,9 @@ fn gs_models_anim(
                 // ponytail: 1 km per material outweighs any view-depth gap on a court
                 if stem.contains("_h01_") { draws.iter_mut().for_each(|g| g.order = -1.0e6 + mi as f32 * 1.0e3); }
                 draws.iter_mut().for_each(|g| (g.uniform.lod_k, g.uniform.unlit) = (model.lod_k.get(mi).copied().unwrap_or(0.0), (k.3 != 0) as u8 as f32));
+                if own_mips.is_some() {
+                    draws.iter_mut().for_each(|g| g.uniform.screen_lod = 1.0);
+                }
                 parts.push((mesh, draws, (mi, first)));
             }
         }
@@ -837,6 +847,40 @@ fn shift_colours(parts: &[(Handle<Mesh>, Handle<gs::GsMaterial>)], meshes: &mut 
             c[..3].copy_from_slice(&rgb.map(|x| x as f32 / 128.0));
         }
     }
+}
+
+/// B161: a see-through texture the GS samples at its top level only (no MXL levels), such as Academy Grounds'
+/// chain-link fence (1-texel wires): its own mip chain, colour weighted by alpha, so wires thinner than a pixel fade
+/// out evenly instead of popping in and out as the camera moves (gs.wgsl `screen_lod`). `None` for opaque textures
+/// and ones that have levels.
+/// ponytail: only for draws that blend their see-through texels (an averaged alpha just reads as fainter); a pure
+/// cut-out (TEST 10..19, the trees' leaves) would thin out, so those keep the GS's single level
+fn cutout_mips(t: &mtl::Texture) -> Option<Vec<Vec<u8>>> {
+    if !t.mips.is_empty() || t.rgba.is_empty() || t.rgba.chunks(4).all(|c| c[3] == 255) {
+        return None;
+    }
+    let (mut w, mut h, mut prev) = (t.width as usize, t.height as usize, t.rgba.clone());
+    let mut out = Vec::new();
+    while w > 1 || h > 1 {
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0u8; nw * nh * 4];
+        for y in 0..nh {
+            for x in 0..nw {
+                let mut acc = [0u32; 4];
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let p = &prev[(((2 * y + dy).min(h - 1)) * w + (2 * x + dx).min(w - 1)) * 4..][..4];
+                    (0..3).for_each(|i| acc[i] += p[i] as u32 * p[3] as u32);
+                    acc[3] += p[3] as u32;
+                }
+                let o = &mut next[(y * nw + x) * 4..][..4];
+                (0..3).for_each(|i| o[i] = if acc[3] == 0 { 0 } else { ((acc[i] + acc[3] / 2) / acc[3]) as u8 });
+                o[3] = ((acc[3] + 2) / 4) as u8;
+            }
+        }
+        out.push(next.clone());
+        (w, h, prev) = (nw, nh, next);
+    }
+    Some(out)
 }
 
 fn image(t: &mtl::Texture) -> Image {
