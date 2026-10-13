@@ -82,12 +82,25 @@ const KEYS: usize = SYMBOLS.len();
 const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
 const ROWS: [&str; 7] = ["Quickplay", "Host", "Find", "Join by Code", "Name", "Relay", "Back"];
-/// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby.
+/// B214: the Online screen's pills as the confirm screen's grid: Quickplay wide on top, then two columns.
+const ROW_RECTS: [[f32; 4]; 7] = [
+    [170.0, 84.0, 300.0, 38.0],
+    [100.0, 140.0, 210.0, 38.0],
+    [330.0, 140.0, 210.0, 38.0],
+    [100.0, 184.0, 210.0, 38.0],
+    [330.0, 184.0, 210.0, 38.0],
+    [100.0, 228.0, 210.0, 38.0],
+    [330.0, 228.0, 210.0, 38.0],
+];
+/// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby. B214:
+/// no Vote button (B226 removes lobby voting).
 const HOST_BUTTONS: [&str; 5] = ["Start", "Characters", "Court", "Copy Link", "Leave"];
 const GUEST_BUTTONS: [&str; 3] = ["Ready", "Characters", "Leave"];
-/// The lobby's buttons along the bottom: their pitch and width (the host's five fit 4:3).
-const BUTTON_STEP: f32 = 88.0;
-const BUTTON_W: f32 = 82.0;
+/// B214: the lobby's buttons as a grid under the seats, three to a row: their pitch, width and rows' top and pitch.
+const BUTTON_STEP: f32 = 176.0;
+const BUTTON_W: f32 = 168.0;
+const BUTTON_Y: f32 = 322.0;
+const BUTTON_ROW: f32 = 42.0;
 
 /// What a lobby selection is: a guest's seat (the host can take them out) or a button.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,6 +169,21 @@ impl Menu {
         }
     }
 
+    /// B214: where `items` are drawn (640×448): a guest's seat on its row, the buttons three to a row under the seats.
+    fn lobby_rects(&self) -> Vec<[f32; 4]> {
+        let mut b = 0;
+        self.items()
+            .iter()
+            .map(|it| match it {
+                Item::Seat(i) => [60.0, 140.0 + 44.0 * *i as f32, 340.0, 38.0],
+                Item::Button(_) => {
+                    b += 1;
+                    [60.0 + BUTTON_STEP * ((b - 1) % 3) as f32, BUTTON_Y + BUTTON_ROW * ((b - 1) / 3) as f32, BUTTON_W, 38.0]
+                }
+            })
+            .collect()
+    }
+
     /// A guest's seat's peer and name.
     fn guest(&self, seat: usize) -> Option<(String, String)> {
         let r = self.net.room.as_ref()?;
@@ -214,9 +242,13 @@ impl Menu {
         };
         match self.screen {
             Screen::Online => {
-                rows(ROWS.len(), &mut self.sel, out);
+                let to = pill_step(&ROW_RECTS, self.sel, k);
+                if to != self.sel {
+                    self.sel = to;
+                    out.push(Sound(0));
+                }
                 let cfg = self.net.cfg.get_or_insert_with(Online::default);
-                if self.sel == 5 && (k.ok || k.left || k.right) {
+                if self.sel == 5 && k.ok {
                     cfg.next_relay();
                     out.extend([Sound(0), Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
                 } else if k.ok && (self.sel == 3 || self.sel == 4) {
@@ -319,9 +351,9 @@ impl Menu {
             }
             Screen::Lobby => {
                 let items = self.items();
-                if k.up || k.down || k.left || k.right {
-                    let n = items.len();
-                    self.sel = if k.down || k.right { (self.sel + 1) % n } else { (self.sel + n - 1) % n };
+                let to = pill_step(&self.lobby_rects(), self.sel, k);
+                if to != self.sel {
+                    self.sel = to;
                     self.net.status.clear();
                     out.push(Sound(0));
                 }
@@ -548,7 +580,14 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.frame(0, 5);
             let relay = relay_name(m.net.cfg.as_ref().unwrap_or(&Online::default()));
             let labels: Vec<String> = ROWS.iter().map(|r| if *r == "Relay" { format!("Relay: {relay}") } else { r.to_string() }).collect();
-            d.rows(&labels, m.sel, 170.0, 84.0, 300.0, hand_x);
+            for (i, (l, [x, y, w, _])) in labels.iter().zip(ROW_RECTS).enumerate() {
+                let on = i == m.sel;
+                d.pill(x, y, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
+                let k = ((w - 24.0) / d.width(l, 24.0)).min(1.0);
+                d.centred(l, x + w / 2.0, y + 7.0 + 12.0 * (1.0 - k), 24.0 * k, if on { WHITE } else { [100.0; 3] });
+            }
+            let [x, y, ..] = ROW_RECTS[m.sel.min(6)];
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + 3.0, 64.0, 32.0], WHITE, 128.0);
             let info = match m.sel {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 1 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".into(),
@@ -691,20 +730,21 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             if m.net.ask.is_none() {
                 // the buttons along the bottom
+                let rects = m.lobby_rects();
                 let buttons: Vec<(usize, &str)> = items.iter().enumerate().filter_map(|(i, it)| if let Item::Button(b) = it { Some((i, *b)) } else { None }).collect();
                 let open = room.map_or(0, Room::open);
-                for (k, (i, b)) in buttons.iter().enumerate() {
-                    let (x, on) = (60.0 + BUTTON_STEP * k as f32, m.sel == *i);
+                for (i, b) in &buttons {
+                    let ([x, y, ..], on) = (rects[*i], m.sel == *i);
                     let label = match *b {
                         "Start" if open > 0 => format!("Start +{open} COM"),
                         "Ready" if m.net.prepared => "Not Ready".to_string(),
                         b => b.to_string(),
                     };
                     let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && m.net.code.is_empty());
-                    d.pill(x, 330.0, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
-                    d.hit([x, 330.0, BUTTON_W, 38.0], Act::Row(*i, OK));
+                    d.pill(x, y, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
+                    d.hit([x, y, BUTTON_W, 38.0], Act::Row(*i, OK));
                     let k = ((BUTTON_W - 20.0) / d.width(&label, 20.0)).min(1.0);
-                    d.centred(&label, x + BUTTON_W / 2.0, 339.0 + 10.0 * (1.0 - k), 20.0 * k, if on && !dim { WHITE } else if dim { [60.0; 3] } else { DIM });
+                    d.centred(&label, x + BUTTON_W / 2.0, y + 9.0 + 10.0 * (1.0 - k), 20.0 * k, if on && !dim { WHITE } else if dim { [60.0; 3] } else { DIM });
                 }
             }
             if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
@@ -807,6 +847,22 @@ pub(super) fn poll(
     {
         commands.insert_resource(QrImage(images.add(img), code.clone()));
     }
+}
+
+/// B214: a pill grid's cursor moved by ←→↑↓: the nearest pill that way (sideways distance counted double, as the
+/// select's `grid_step`; ←→ only along its row); none that way, it stays (the grids don't wrap).
+fn pill_step(rects: &[[f32; 4]], from: usize, k: Press) -> usize {
+    let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
+    let centre = |[x, y, w, h]: [f32; 4]| (x + w / 2.0, y + h / 2.0);
+    let Some(&f) = rects.get(from) else { return 0 };
+    let (fx, fy) = centre(f);
+    let cost = |&(i, &r): &(usize, &[f32; 4])| {
+        let (ax, ay) = (centre(r).0 - fx, centre(r).1 - fy);
+        let along = ax * dx + ay * dy;
+        // ←→ keep to the row
+        (along > 1.0 && (dx == 0.0 || ay.abs() < r[3])).then_some((along + 2.0 * (ax * dy - ay * dx).abs(), i))
+    };
+    rects.iter().enumerate().filter_map(|e| cost(&e)).min_by(|a, b| a.0.total_cmp(&b.0)).map_or(from, |c| c.1)
 }
 
 /// Started from a lobby link (the browser's `?code=`, or `HST_CODE`): straight to joining that lobby as one player
@@ -1095,14 +1151,14 @@ mod tests {
             Some(Act::Row(i, _)) => Some(i),
             _ => None,
         };
-        // the host: seats 1, 2 (guests), then Start, Characters, Court, Copy Link, Leave along the bottom
+        // the host: seats 1, 2 (guests), then Start, Characters, Court / Copy Link, Leave under them
         assert_eq!(at(&m, 200.0, 140.0 + 44.0 + 10.0), Some(0));
         assert_eq!(at(&m, 200.0, 150.0), None, "the host's own seat");
-        assert_eq!(at(&m, 70.0, 340.0), Some(2), "Start");
-        assert_eq!(at(&m, 60.0 + 4.0 * BUTTON_STEP + 50.0, 360.0), Some(6), "Leave");
-        assert_eq!(at(&m, 60.0 + BUTTON_W + 4.0, 340.0), Some(3), "between pills: the nearer");
+        assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(2), "Start");
+        assert_eq!(at(&m, 60.0 + BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(6), "Leave");
+        assert_eq!(at(&m, 60.0 + BUTTON_W + 2.0, BUTTON_Y + 10.0), Some(2), "between pills: the nearer");
         m.net.hosting = false;
-        assert_eq!(at(&m, 70.0, 340.0), Some(0), "a guest's Ready");
+        assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(0), "a guest's Ready");
     }
 
     #[test]
@@ -1152,6 +1208,35 @@ mod tests {
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::SaveCfg)), "{fx:?}");
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
+    }
+
+    /// B214: ←→↑↓ walk the Online screen's grid and the host's lobby grid (seats, then the buttons three to a row).
+    #[test]
+    fn cursor_walks_the_grids() {
+        let dev = super::super::Dev::Keys;
+        let [l, r, u, d] = [0, 1, 2, 3].map(|i| Press { left: i == 0, right: i == 1, up: i == 2, down: i == 3, ..default() });
+        let walk = |m: &mut Menu, steps: &[(Press, usize)]| {
+            for (n, (k, to)) in steps.iter().enumerate() {
+                m.step(dev, *k);
+                assert_eq!(m.sel, *to, "step {n} on {:?}", m.screen);
+            }
+        };
+        // Quickplay; Host Find; Join by Code Name; Relay Back
+        let mut m = Menu { screen: Screen::Online, sel: 0, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        walk(&mut m, &[(l, 0), (d, 1), (r, 2), (r, 2), (d, 4), (l, 3), (d, 5), (r, 6), (d, 6), (u, 4), (u, 2), (u, 0)]);
+        let relay = m.net.cfg.clone();
+        m.sel = 5;
+        m.step(dev, r);
+        assert_eq!((m.sel, &m.net.cfg), (6, &relay), "←→ move off Relay, they don't change it");
+        // the host's lobby: guest seats 1 and 2 (items 0, 1); Start Characters Court (2–4); Copy Link Leave (5, 6)
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        (m.net.hosting, m.sel) = (true, 0);
+        walk(&mut m, &[(d, 1), (d, 2), (r, 3), (r, 4), (r, 4), (d, 6), (l, 5), (u, 2), (u, 1), (u, 0), (u, 0)]);
+        // a guest: Ready Characters Leave in a row
+        m.net.hosting = false;
+        m.sel = 0;
+        walk(&mut m, &[(r, 1), (r, 2), (d, 2), (l, 1)]);
     }
 
     /// B195: Find lists every open lobby before any pick; choosing one takes this machine's controllers (no more
