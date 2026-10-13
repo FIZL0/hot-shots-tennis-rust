@@ -29,6 +29,10 @@ fn every_court_figure_loads() {
             let m = mdl::parse(&find(&format!("{stem}.mdl")).unwrap_or_else(|| panic!("court {court}: {stem}.mdl"))).unwrap();
             assert!(!m.skinned().is_empty() && m.node_count > 0, "court {court}: {stem} not skinned");
             assert!(find(&format!("{stem}.mtl")).is_some(), "court {court}: {stem}.mtl");
+            // a walker's cheer mark hangs from its neck node
+            if stem.contains("/gallery/") {
+                assert!(m.node_names.iter().any(|n| n == "Bip01Neck"), "court {court}: {stem} has no Bip01Neck");
+            }
             models += 1;
             for a in anims {
                 let a = ani::parse(&find(&a).unwrap_or_else(|| panic!("court {court}: {a}"))).unwrap();

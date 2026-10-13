@@ -59,8 +59,10 @@ pub(super) struct Npcs {
     fade: Vec<(Handle<StandardMaterial>, f32, AlphaMode)>,
     /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
     uncull: Vec<Entity>,
-    /// The gallery's cheer marks (where a walker started cheering); stepped after the walkers.
+    /// The gallery's cheer marks (at a walker's neck when it started cheering); stepped after the walkers.
     cheers: npc::Cheers,
+    /// Each walker's last cheer mark (`npc::Cheers::follow`).
+    mark: Vec<usize>,
     /// Court 5's own cheer marks about its stands (empty on the other courts).
     marks: Vec<[f32; 4]>,
     /// The trigger creatures and the sound emitters (`Game::emitters`, `None`) in spawn order.
@@ -123,7 +125,7 @@ fn setup(
     let walkers = game.walkers(n as u32);
     let mut hidden = Vec::new();
     let mut crowd = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), mark: Vec::new(), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new() };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -144,7 +146,9 @@ fn setup(
                 let mut w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens, ..Default::default() };
                 // the match's start: its cheer, and a mark where it stands
                 w.start(players, &mut roll);
-                npcs.cheers.add([c.world[3][0], c.world[3][1], c.world[3][2]], slot);
+                // ponytail: its feet, not its neck (no pose yet); the manager's match start zeroes it straight after
+                let mark = npcs.cheers.add([c.world[3][0], c.world[3][1], c.world[3][2]], slot);
+                npcs.mark.push(mark);
                 // the serve placement before the first point turns it to the court centre
                 let world = npc::walker_facing(c.world[3], 0.0);
                 w.wander = npc::Wander::new(c.world[3], &[], &[]);
@@ -254,6 +258,7 @@ fn step(
     bank: Option<Res<crate::audio::CourtBank>>,
     (ticks, mut once): (Res<super::heard::Heard>, ResMut<super::heard::Played>),
     (mats, mut materials): (Query<&MeshMaterial3d<StandardMaterial>>, ResMut<Assets<StandardMaterial>>),
+    globals: Query<&GlobalTransform>,
 ) {
     let Some(mut npcs) = npcs else {
         // no court figures: the gallery and the emitters still step
@@ -439,9 +444,18 @@ fn step(
                 *t = Transform::from_matrix(Mat4::from_cols_array_2d(&w.wander.world)).with_scale(scale);
             }
         }
-        // a walker breaking into its cheer leaves a mark where it stands
+        // a walker breaking into its cheer leaves a mark at its neck (as last drawn), and the mark's base follows the
+        // neck while it cheers
+        let neck = q.get(*e).ok().and_then(|(r, _)| Some(r.joints[r.data.joint("Bip01Neck")?])).and_then(|j| globals.get(j).ok());
+        let neck = neck.map_or([home[0], home[1], home[2]], |t| {
+            let v = t.translation();
+            [v.x, -v.y, -v.z]
+        });
         if react && w.anim == 5 {
-            npcs.cheers.add([home[0], home[1], home[2]], w.slot);
+            npcs.mark[k] = npcs.cheers.add(neck, w.slot);
+        }
+        if !raining && w.anim == 5 {
+            npcs.cheers.follow(npcs.mark[k], neck);
         }
         if let Ok((_, mut m)) = q.get_mut(*e) {
             show(&mut m, w.anim as usize, w.frame, w.looping);
