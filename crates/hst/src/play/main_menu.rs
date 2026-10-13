@@ -1314,8 +1314,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "chars-online" => Screen::Chars,
         "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
-        "lobbies" => Screen::Lobbies,
-        "lobby" | "lobby-ask" | "lobby-guest" => Screen::Lobby,
+        "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
+        "lobby" | "lobby-ask" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" => Screen::Mods,
         _ => Screen::Main,
@@ -1699,7 +1699,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.rows(&labels, m.sel, 200.0, 120.0, 240.0, hand_x);
             let info = match m.sel {
                 0 => text.msg(188).to_string(),
-                1 => "Play over the internet (coming later).".into(),
+                1 => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
                 2 => text.msg(190).to_string(),
                 3 => "Add, remove, browse and share custom characters (mods).".into(),
                 _ => "Close the game.".into(),

@@ -63,6 +63,11 @@ pub struct View {
     /// select's places last sent.
     pub me: String,
     pub sent: Option<Vec<Live>>,
+    /// B236: Find's lists still to come (two a search: the LAN's, then the DHT's), what the last failure stopped (its
+    /// panel's title), and the spinner's clock (seconds).
+    pub finding: u8,
+    pub fail: Option<&'static str>,
+    pub spin: f32,
 }
 
 /// What an Online press asks of the app.
@@ -292,6 +297,7 @@ impl Menu {
         (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared) = (None, None, false, false);
         self.net.wanted.clear();
         self.net.pick_next = true;
+        self.net.fail = None;
         (self.net.me, self.net.sent) = (if go == Go::Host { "host".into() } else { String::new() }, None);
         self.go(Screen::Lobby, out);
         let cmd = match go {
@@ -354,6 +360,7 @@ impl Menu {
                     self.net.list.clear();
                     self.net.fit = 0;
                     self.go(Screen::Lobbies, out);
+                    (self.net.finding, self.net.fail) = (2, None);
                     out.push(Effect::Online(Fx::Net(Cmd::Find)));
                 } else if k.ok && self.sel < 3 {
                     self.net.go = Some([Go::Quick, Go::Host, Go::Find][self.sel]);
@@ -377,6 +384,7 @@ impl Menu {
                     self.go(Screen::Assign, out);
                 } else if k.ok && self.sel == n {
                     self.net.list.clear();
+                    (self.net.finding, self.net.fail) = (self.net.finding.saturating_add(2), None);
                     out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Find))]);
                 } else if k.ok || k.back {
                     self.back_to_online(out);
@@ -593,6 +601,14 @@ impl Menu {
             // the lobby's gone (refused, taken out, the host left, or it couldn't open): only Leave is left
             Event::Failed(s) => {
                 v.status = s;
+                v.fail = Some(match v.go {
+                    _ if v.finding > 0 => "Couldn't search for lobbies",
+                    Some(Go::Host) if v.pick_next => "Couldn't create the lobby",
+                    Some(Go::Quick) if v.pick_next => "Couldn't find or create a lobby",
+                    _ if v.pick_next => "Couldn't join the lobby",
+                    _ => "The lobby closed",
+                });
+                v.finding = 0;
                 if !v.started {
                     (v.room, v.hosting, v.prepared, v.pick_next) = (None, false, false, false);
                     self.sel = 0;
@@ -607,7 +623,12 @@ impl Menu {
             Event::Code(c) => v.code = c,
             Event::Short(c) => v.short = c,
             Event::Found(l) => {
-                v.status = format!("{} open lobb{}.", l.len(), if l.len() == 1 { "y" } else { "ies" });
+                v.finding = v.finding.saturating_sub(1);
+                v.status = match l.len() {
+                    0 if v.finding > 0 => "None on this network: looking on the internet...".into(),
+                    0 => "No open lobbies found: Refresh to look again, or Host one from Online.".into(),
+                    n => format!("{n} open lobb{}.", if n == 1 { "y" } else { "ies" }),
+                };
                 v.list = l;
             }
             Event::Room(r) => {
@@ -743,6 +764,18 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 d.centred(&format!("{} open", l.open()), x + 440.0, y + 9.0, 20.0, rgb);
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, 76.0 + 44.0 * (m.sel - first) as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
+            // B236: searching, nothing found or failed, under Refresh / Back; still searching with some listed, a
+            // spinner up by the title
+            match (n, m.net.finding > 0, m.net.fail) {
+                (0, true, _) => busy(d, m.net.spin, 250.0, "Searching for lobbies...", "This network first, then the internet."),
+                (0, false, Some(t)) => failed(d, 250.0, t, "Refresh to try again (the reason is below)."),
+                (0, false, None) => notice(d, 250.0, "No open lobbies found", "Refresh to look again, or Host one from Online."),
+                (_, true, _) => {
+                    spinner(d, m.net.spin, 596.0, 44.0, 12.0);
+                    d.outlined(|d| d.text("Searching...", 452.0, 34.0, 20.0, WHITE));
+                }
+                _ => {}
+            }
             let info = match m.net.list.get(m.sel) {
                 Some(l) => format!("{}'s {} lobby on {}: {} of {} seats open. OK joins, then you pick your characters.", l.name, if l.doubles { "doubles" } else { "singles" }, court_name(text, l.court), l.open(), l.seats),
                 None if m.net.status.is_empty() => "Looking for lobbies...".into(),
@@ -903,8 +936,19 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [430.0, 100.0, 170.0, 170.0], WHITE, 128.0);
                 // the short code, big enough to read out (the QR is its link)
                 d.outlined(|d| d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD));
-            } else if m.net.hosting {
+            } else if m.net.hosting && room.is_some() {
+                spinner(d, m.net.spin, 515.0, 150.0, 14.0);
                 d.outlined(|d| d.centred("Getting the code...", 515.0, 176.0, 18.0, WHITE));
+            }
+            // B236: no lobby yet: what's happening, the spinner turning; or why it stopped
+            if room.is_none() {
+                let sub = "The steps show below; it gives up by itself if nothing answers.";
+                match (m.net.pick_next, m.net.go) {
+                    (true, _) if m.net.hosting => busy(d, m.net.spin, 230.0, "Creating lobby...", sub),
+                    (true, Some(Go::Quick)) => busy(d, m.net.spin, 230.0, "Finding a lobby...", sub),
+                    (true, _) => busy(d, m.net.spin, 230.0, "Joining...", sub),
+                    _ => failed(d, 230.0, m.net.fail.unwrap_or("The lobby closed"), "Leave to go back (the reason is below)."),
+                }
             }
             let info = match items.get(m.sel) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
@@ -929,6 +973,41 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
         _ => {}
     }
+}
+
+/// B236: dots in a ring, the bright one going round (once a second) with a fading tail, centred on (cx, cy).
+fn spinner(d: &mut Draw, t: f32, cx: f32, cy: f32, r: f32) {
+    let lead = (t * 8.0).floor() as i32;
+    let dot = r * 0.32;
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::FRAC_PI_4;
+        let age = (lead - i).rem_euclid(8) as f32;
+        let (x, y) = (cx + r * a.sin(), cy - r * a.cos());
+        d.box3([x - dot, y - dot, 2.0 * dot, 2.0 * dot], dot, [None, None, Some(super::GOLD)], 128.0 * (1.0 - age / 9.0));
+    }
+}
+
+/// B236: a box across the middle at `y` (its centre) with a title and a line under it (`room` above them for the
+/// spinner).
+fn panel(d: &mut Draw, y: f32, title: &str, rgb: [f32; 3], line: &str, room: bool) {
+    let top = if room { 56.0 } else { 36.0 };
+    d.box3([120.0, y - top, 400.0, top + 56.0], 16.0, [Some(super::INK), Some(WHITE), Some([40.0, 40.0, 50.0])], 120.0);
+    d.outlined(|d| d.label(title, 320.0, y - 10.0, 26.0, 360.0, rgb));
+    d.label(line, 320.0, y + 24.0, 16.0, 372.0, [100.0; 3]);
+}
+
+/// Something under way: its words, the spinner turning above them.
+fn busy(d: &mut Draw, t: f32, y: f32, title: &str, line: &str) {
+    panel(d, y, title, WHITE, line, true);
+    spinner(d, t, 320.0, y - 30.0, 14.0);
+}
+
+fn notice(d: &mut Draw, y: f32, title: &str, line: &str) {
+    panel(d, y, title, super::GOLD, line, false);
+}
+
+fn failed(d: &mut Draw, y: f32, title: &str, line: &str) {
+    panel(d, y, title, [128.0, 50.0, 40.0], line, false);
 }
 
 /// What the lobby's QR and Copy Link share: the short code's link, or the browser's LAN offer (scanned, nothing else
@@ -971,8 +1050,10 @@ pub(super) fn poll(
     made: Option<Res<QrImage>>,
     gamepads: Query<(Entity, &Gamepad)>,
     args: Res<crate::Args>,
+    time: Res<Time>,
     mut commands: Commands,
 ) {
+    menu.net.spin = (menu.net.spin + time.delta_secs()) % 60.0;
     if let Some(net) = net {
         for e in net.poll() {
             if let Event::Start(r, me) = &e {
@@ -1110,6 +1191,23 @@ pub(super) fn sample(m: &mut Menu) {
     }
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
     m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
+    // B236: the loading, empty and failed states
+    match menu.as_str() {
+        "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
+        "lobby-hosting" | "lobby-joining" | "lobby-failed" => (m.net.room, m.net.short, m.net.go, m.net.pick_next) = (None, String::new(), Some(Go::Code), true),
+        _ => {}
+    }
+    match menu.as_str() {
+        "lobbies-searching" | "lobbies-more" => (m.net.finding, m.net.status) = (1, "Looking for lobbies...".into()),
+        "lobby-hosting" => (m.net.go, m.net.status) = (Some(Go::Host), "Connecting...".into()),
+        "lobby-joining" => (m.net.hosting, m.net.status) = (false, "Looking up K7QX...".into()),
+        "lobbies-failed" | "lobby-failed" => {
+            m.net.finding = (menu == "lobbies-failed") as u8;
+            m.heard(Event::Failed("Couldn't reach the host (timed out).".into()));
+        }
+        "lobbies-none" => m.heard(Event::Found(vec![])),
+        _ => {}
+    }
 }
 
 /// Everyone's in: the online match (`netplay`), this machine's players on their devices; it ends back in the menu.
@@ -1455,6 +1553,26 @@ mod tests {
     /// B195: Find lists every open lobby before any pick; choosing one takes this machine's controllers (no more
     /// than its open seats), joins on placeholder picks, and the seat opens the character select.
     #[test]
+    fn loading_states_end() {
+        // B236: Find spins until both lists are in (or it fails); a join spins until seated or refused
+        let dev = super::super::Dev::Keys;
+        let ok = Press { ok: true, ..default() };
+        let mut m = Menu { screen: Screen::Online, sel: 2, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        m.step(dev, ok);
+        assert_eq!(m.net.finding, 2);
+        m.heard(Event::Found(vec![]));
+        assert_eq!(m.net.finding, 1);
+        m.heard(Event::Found(vec![]));
+        assert_eq!((m.net.finding, m.net.fail), (0, None));
+        assert!(m.net.status.starts_with("No open lobbies"), "{}", m.net.status);
+        m.net.finding = 2;
+        m.heard(Event::Failed("DHT: down".into()));
+        assert_eq!((m.net.finding, m.net.fail), (0, Some("Couldn't search for lobbies")));
+        (m.net.go, m.net.pick_next, m.screen) = (Some(Go::Code), true, Screen::Lobby);
+        m.heard(Event::Failed("timed out".into()));
+        assert_eq!((m.net.pick_next, m.net.fail), (false, Some("Couldn't join the lobby")));
+    }
+
     fn find_first_then_pick_in_the_lobby() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
