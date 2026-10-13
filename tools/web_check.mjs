@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -105,6 +105,18 @@ async function visit(n, pick) {
   if (stallMs) log.push(`[${n}] buffers started [when, context time, length]: ${await evaluate('JSON.stringify(__starts)')}`);
   log.push(`[${n}] canvas: ${await evaluate("JSON.stringify([...document.querySelectorAll('canvas')].map(c => [c.width, c.height]))")}`);
   log.push(`[${n}] opfs: ${await evaluate("navigator.storage.getDirectory().then(async d => { const r = []; for await (const [k, h] of d) r.push(k + ' ' + (await h.getFile()).size); return r.join(', '); })")}`);
+  // WEB_CARDS=1: the select cards baked into OPFS `previews/` go to OUT/cards/ (B167: compare with the native bake)
+  if (process.env.WEB_CARDS) {
+    mkdirSync(resolve(out, 'cards'), { recursive: true });
+    const dir = "navigator.storage.getDirectory().then(d => d.getDirectoryHandle('previews'))";
+    const names = JSON.parse(await evaluate(`${dir}.then(async d => { const r = []; for await (const k of d.keys()) r.push(k); return JSON.stringify(r); })`) ?? '[]');
+    for (const k of names) {
+      const b = await evaluate(`${dir}.then(d => d.getFileHandle(${JSON.stringify(k)})).then(h => h.getFile()).then(f => f.arrayBuffer()).then(a => { const b = new Uint8Array(a); let s = ''; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); })`);
+      if (b) writeFileSync(resolve(out, 'cards', k), Buffer.from(b, 'base64'));
+    }
+    const cards = names;
+    log.push(`[${n}] cards: ${cards.length}`);
+  }
   ws.close();
   chrome.kill();
   await sleep(1000);

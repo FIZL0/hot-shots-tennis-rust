@@ -123,7 +123,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand:
     let layers = RenderLayers::layer(layer);
     // game space, as `GameSpace`: the GS shader lights in it
     // B120: hidden until `character::animate` has posed it (else its first frame can draw the rest T-pose)
-    let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(PI)), Visibility::Hidden, Unposed(false), Propagate(layers.clone()))).id();
+    let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(PI)), Visibility::Hidden, Unposed(0), Propagate(layers.clone()))).id();
     let rig = character::spawn(commands, data, space);
     let t = character::pose_frame(n, data.motions.get(&POSE).map_or(0.0, |c| c.length));
     let uv = uv_held(t, data);
@@ -147,18 +147,29 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, n: usize, hand:
         .id()
 }
 
-/// A preview's game space not shown yet: true once a [`reveal`] has seen it, so `character::animate` has run on it
-/// since (its spawn's commands may land after that frame's `animate`).
+/// A preview's game space not shown yet: how many [`reveal`]s have seen it. Shown on the second, once
+/// `character::animate` has run on it (its spawn's commands may land after that frame's `animate`).
 #[derive(Component)]
-struct Unposed(bool);
+struct Unposed(u8);
 
-fn reveal(mut commands: Commands, mut spaces: Query<(Entity, &mut Unposed, &mut Visibility)>) {
+/// B167: on the frame after it shows, its meshes are marked changed: with storage buffers (native, WebGPU) a mesh's
+/// morph descriptor only exists while it is visible, and its mesh uniform kept the hidden frames' "no morphs", so
+/// the faces drew without their expression (WebGL2's per-draw weights were right).
+fn reveal(mut commands: Commands, mut spaces: Query<(Entity, &mut Unposed, &mut Visibility)>, children: Query<&Children>, mut meshes: Query<&mut Mesh3d>) {
     for (e, mut seen, mut vis) in &mut spaces {
-        if seen.0 {
-            *vis = Visibility::Inherited;
-            commands.entity(e).remove::<Unposed>();
+        match seen.0 {
+            1 => *vis = Visibility::Inherited,
+            2 => {
+                for c in children.iter_descendants(e) {
+                    if let Ok(mut m) = meshes.get_mut(c) {
+                        m.set_changed();
+                    }
+                }
+                commands.entity(e).remove::<Unposed>();
+            }
+            _ => {}
         }
-        seen.0 = true;
+        seen.0 += 1;
     }
 }
 
