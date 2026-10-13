@@ -316,10 +316,15 @@ pub(super) mod tests {
     pub(in crate::play) const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
     pub(in crate::play) fn app(human: bool) -> App {
+        app_rules(human, true, 1, 2)
+    }
+
+    /// A bot match of `sets` sets to win and `games` games a set, singles or doubles.
+    fn app_rules(human: bool, singles: bool, sets: i32, games: i32) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 2, pads: None });
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles, chars: vec![6, 1, 2, 5], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets, games, pads: None });
         app.insert_resource(Pads { seats: Some([false; 4]), autoplay: true, ..default() });
         app.init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
@@ -349,6 +354,37 @@ pub(super) mod tests {
             was_post = post;
         }
         out
+    }
+
+    /// B188: bot matches at every sets × games the menu offers play to the match's end (`HST_LENGTHS=2x1,3x1` picks
+    /// others). ~10 min, so run by hand: `tools/check.sh -p hst every_match_length -- --ignored`; hst-sim's
+    /// `every_match_length_ends` checks the score rules over the same lengths every run.
+    #[test]
+    #[ignore]
+    fn every_match_length_plays_out() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let lengths: Vec<(i32, i32)> = std::env::var("HST_LENGTHS").ok().map_or_else(
+            || [1, 2, 3].into_iter().flat_map(|s| [2, 4, 6].map(|g| (s, g))).collect(),
+            |v| v.split(',').filter_map(|x| x.split_once('x')).map(|(s, g)| (s.parse().unwrap(), g.parse().unwrap())).collect(),
+        );
+        for singles in [true, false] {
+            for &(sets, games) in &lengths {
+                let mut app = app_rules(false, singles, sets, games);
+                let mut done = false;
+                for _ in 0..60 * 60 * 120 {
+                    app.world_mut().run_schedule(FixedUpdate);
+                    if app.world().resource::<Game>().score.match_over {
+                        done = true;
+                        break;
+                    }
+                }
+                let s = &app.world().resource::<Game>().score;
+                eprintln!("singles {singles} sets {sets} games {games}: {:?} sets, games by set {:?}", s.sets, s.set_games);
+                assert!(done, "sets {sets} games {games} didn't finish");
+            }
+        }
     }
 
     #[test]
