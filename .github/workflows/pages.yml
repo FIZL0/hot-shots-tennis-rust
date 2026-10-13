@@ -1,7 +1,7 @@
 # The browser build (`tools/web.sh`) on GitHub Pages: the page and the wasm only, no game data (players pick their ISO).
 # Each run also replaces the rolling "Latest alpha" release (tag `alpha`, marked latest) with Linux + Windows builds of
-# the same commit, as tools/build.sh makes them. tools/ship-local.sh builds both on the dev machine and runs this with
-# `prebuilt`: that run only deploys the uploaded web/ (the build jobs are skipped).
+# the same commit, as tools/build.sh makes them. tools/ship-local.sh builds the website on the dev machine and runs this
+# with `prebuilt`: that run only deploys the uploaded web/ (the build jobs are skipped).
 name: pages
 on:
   push:
@@ -17,8 +17,9 @@ permissions:
   pages: write
   id-token: write
 # a running deploy always finishes (builds take ~20 min, merges come faster); GitHub keeps only the newest queued one
+# tools/ship-local.sh's prebuilt deploys have their own group, so they don't wait behind a build
 concurrency:
-  group: pages
+  group: pages${{ inputs.prebuilt && '-prebuilt' || '' }}
   cancel-in-progress: false
 jobs:
   build:
@@ -57,9 +58,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
+      # a stale run doesn't put an older site back over a newer one (e.g. one tools/ship-local.sh deployed)
+      - id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)" = "$GITHUB_SHA" ] && echo ok=1 >> "$GITHUB_OUTPUT" || echo "main moved on, skipping"
+      - if: ${{ steps.fresh.outputs.ok }}
+        id: deployment
         uses: actions/deploy-pages@v4
-  # tools/ship-local.sh uploads its own Linux + Windows builds to the alpha release
+  # executables are only built by Actions: tools/ship-local.sh ships the website alone
   linux:
     if: ${{ !inputs.prebuilt }}
     runs-on: ubuntu-latest
