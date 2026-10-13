@@ -656,7 +656,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Seat(i)) => format!("OK takes {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 Some(Item::Button("Start")) => "Start the match now: open seats are played by the computer.".into(),
                 Some(Item::Button("Copy Link")) => "Copy the lobby's link, or read out the code: friends type it in Join by Code.".into(),
-                Some(Item::Button("Ready")) => "Tell the host you're ready to play.".into(),
+                Some(Item::Button("Ready")) => "Tell the host you're ready: they start when everyone in is, open seats played by the computer.".into(),
+                _ if room.is_some() && !m.net.hosting => "Leave the lobby. The host starts when everyone in is ready: open seats are played by the computer.".into(),
                 _ if room.is_none() => "The lobby's closed.".into(),
                 _ => "Leave the lobby.".into(),
             };
@@ -719,6 +720,42 @@ pub(super) fn poll(
         && let Some(img) = qr(code)
     {
         commands.insert_resource(QrImage(images.add(img), code.clone()));
+    }
+}
+
+/// The lobby item under `p` (640×448) as `layout` draws it: a mod question's row, a guest's seat (host), a button.
+fn item_at(m: &Menu, p: Vec2) -> Option<usize> {
+    let inside = |x: f32, y: f32, w: f32| p.x >= x && p.x < x + w && p.y >= y && p.y < y + 38.0;
+    if m.net.ask.is_some() {
+        return (0..ASK_ROWS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
+    }
+    let mut buttons = 0;
+    m.items().iter().position(|it| match it {
+        Item::Seat(i) => inside(60.0, 140.0 + 44.0 * *i as f32, 340.0),
+        Item::Button(_) => {
+            buttons += 1;
+            inside(60.0 + 116.0 * (buttons - 1) as f32, 330.0, 108.0)
+        }
+    })
+}
+
+/// A click or tap on a lobby button or seat chooses it (as ✕ would), the right button is Back.
+pub(super) fn pointer(
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
+    mut menu: ResMut<Menu>,
+    mut click: ResMut<super::pause::Click>,
+) {
+    if menu.screen != Screen::Lobby {
+        return;
+    }
+    let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
+    if let Some(i) = at.and_then(|p| item_at(&menu, p)) {
+        menu.sel = i;
+        click.0 = Some(Press { ok: true, ..default() });
+    } else if back {
+        click.0 = Some(Press { back: true, ..default() });
     }
 }
 
@@ -971,6 +1008,21 @@ mod tests {
         let mut out = Vec::new();
         m.pasted(Some(crate::net::link("K7QX")), &mut out);
         assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Mode, "K7QX"));
+    }
+
+    #[test]
+    fn lobby_taps_hit_items() {
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        m.net.hosting = true;
+        // the host: seats 1, 2 (guests), then Start, Copy Link, Leave along the bottom
+        assert_eq!(item_at(&m, Vec2::new(200.0, 140.0 + 44.0 + 10.0)), Some(0));
+        assert_eq!(item_at(&m, Vec2::new(200.0, 150.0)), None, "the host's own seat");
+        assert_eq!(item_at(&m, Vec2::new(70.0, 340.0)), Some(2), "Start");
+        assert_eq!(item_at(&m, Vec2::new(60.0 + 232.0 + 50.0, 360.0)), Some(4), "Leave");
+        assert_eq!(item_at(&m, Vec2::new(170.0, 340.0)), None, "between pills");
+        m.net.hosting = false;
+        assert_eq!(item_at(&m, Vec2::new(70.0, 340.0)), Some(0), "a guest's Ready");
     }
 
     #[test]
