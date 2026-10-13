@@ -10,6 +10,9 @@
 //! Input waits 5 ticks after it opens. Up/down move with wrap-around (repeat after 32 ticks held, then every 8;
 //! sound 0, the hand starts its swing again), ✕ chooses (sound 2), ○ does nothing, Start closes it (sound 2).
 //! "Return to the Menu" fades to black over 60 ticks; the port has no menu, so it then quits.
+//! B68 (ours: the original fades out at once): once any point has been scored it first asks "Leave the match?" in
+//! the same dialog, Yes / No on its pills (No chosen; up/down, ✕ chooses, ○ or Start is No, sound 1); No goes back
+//! to the pause menu, Yes fades out.
 //! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`), with `HST_PAUSE_SETTINGS=settings|graphics|controls`
 //! on that Settings screen.
 
@@ -64,6 +67,10 @@ const RESUME: Tex = Tex::Own(12);
 const RETURN: Tex = Tex::Own(13);
 /// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills.
 const PILL: Tex = Tex::Own(14);
+/// B68: the confirm's rows, set as `RESUME`: "Leave the match?", "Yes", "No".
+const ASK: Tex = Tex::Own(15);
+const YES: Tex = Tex::Own(16);
+const NO: Tex = Tex::Own(17);
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
 const INK: [f32; 3] = [15.0; 3];
 const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
@@ -145,6 +152,16 @@ struct Menu {
     acc: f32,
     /// "Settings" chosen: `step` opens them.
     settings: bool,
+    /// B68: a point has been scored (set by `step`), so "Return to the Menu" asks first.
+    scored: bool,
+    /// B68: the confirm is up, 0 = Yes, 1 = No chosen; ○ pressed since the last tick.
+    ask: Option<usize>,
+    cancel: bool,
+}
+
+/// B68: any point scored so far in the match.
+fn scored(s: &hst_sim::score::Score) -> bool {
+    s.points != [0; 2] || s.games != [0; 2] || s.sets != [0; 2] || s.set > 0
 }
 
 impl Menu {
@@ -158,6 +175,10 @@ impl Menu {
             self.quitting = self.quitting.map(|t| t + 1);
             return None;
         }
+        if let Some(a) = self.ask {
+            return self.tick_ask(a, up, down);
+        }
+        self.cancel = false;
         if std::mem::take(&mut self.start) {
             *self = Menu::default();
             return Some(2);
@@ -181,6 +202,7 @@ impl Menu {
                 match OPTIONS[self.sel] {
                     6 => *self = Menu::default(),
                     SETTINGS => self.settings = true,
+                    _ if self.scored => (self.ask, self.hand) = (Some(1), Hand::default()),
                     _ => self.quitting = Some(0),
                 }
             }
@@ -188,6 +210,32 @@ impl Menu {
             self.delay -= 1;
         }
         self.confirm = false;
+        self.hand.step();
+        sound
+    }
+
+    /// B68: one tick of the confirm with `a` chosen: the menu's up/down repeat over Yes/No, ✕ chooses, ○ or Start is
+    /// No; a direction held keeps its count across the switch.
+    fn tick_ask(&mut self, a: usize, up: bool, down: bool) -> Option<usize> {
+        let (start, cancel, confirm) =
+            (std::mem::take(&mut self.start), std::mem::take(&mut self.cancel), std::mem::take(&mut self.confirm));
+        let repeat = |on: bool, n: &mut u32| {
+            *n = if on { *n + 1 } else { 0 };
+            *n == 1 || (*n >= 32 && (*n - 32) % 8 == 0)
+        };
+        let u = self.held[1] == 0 && repeat(up, &mut self.held[0]);
+        let d = self.held[0] == 0 && repeat(down, &mut self.held[1]);
+        let mut sound = None;
+        if u || d {
+            (self.ask, self.hand) = (Some(a ^ 1), Hand::default());
+            sound = Some(0);
+        } else if start || cancel || (confirm && a == 1) {
+            (self.ask, self.hand) = (None, Hand::default());
+            sound = Some(if confirm { 2 } else { 1 });
+        } else if confirm {
+            self.quitting = Some(0);
+            sound = Some(2);
+        }
         self.hand.step();
         sound
     }
@@ -211,6 +259,8 @@ struct View {
     sel: usize,
     hand_x: f32,
     fade: Option<i32>,
+    /// B68: the confirm is up with Yes (0) or No (1) chosen.
+    ask: Option<usize>,
 }
 
 fn layout(v: &View) -> Vec<Quad> {
@@ -311,8 +361,24 @@ fn layout(v: &View) -> Vec<Quad> {
         }
     }
     let y0 = pill_y(v.sets_to_win, 0);
-    for (k, _) in OPTIONS.iter().enumerate() {
-        let fill = if k == v.sel { CHOSEN } else { UNCHOSEN };
+    // the rows: the options, or (B68) the question without a pill over Yes and No
+    let rows: Vec<Tex> = match v.ask {
+        Some(_) => vec![ASK, YES, NO],
+        None => OPTIONS
+            .iter()
+            .map(|&text| match text {
+                SETTINGS => LABEL,
+                6 => RESUME,
+                _ => RETURN,
+            })
+            .collect(),
+    };
+    let sel = v.ask.map_or(v.sel, |a| a + 1);
+    for (k, &tex) in rows.iter().enumerate() {
+        if tex == ASK {
+            continue;
+        }
+        let fill = if k == sel { CHOSEN } else { UNCHOSEN };
         for (i, rgb) in [INK, WHITE, fill].into_iter().enumerate() {
             for (src, dst) in super::menu_art::pill_quads(i, r(176, y0 + 40 * k as i32, 288, 32)) {
                 out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
@@ -322,18 +388,13 @@ fn layout(v: &View) -> Vec<Quad> {
     let mut q = |tex, src: [i32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| {
         out.push(Quad { tex, src: src.map(|c| c as f32), dst, rgb, alpha: alpha as f32 })
     };
-    for (k, &text) in OPTIONS.iter().enumerate() {
-        let (rgb, alpha) = if k == v.sel { (WHITE, 128) } else { (UNCHOSEN, 64) };
-        let tex = match text {
-            SETTINGS => LABEL,
-            6 => RESUME,
-            _ => RETURN,
-        };
+    for (k, &tex) in rows.iter().enumerate() {
+        let (rgb, alpha) = if k == sel || tex == ASK { (WHITE, 128) } else { (UNCHOSEN, 64) };
         // B171: the 256×32 row's ink is as tall as the pill; drawn at `FIT` and centred it sits inside the rims
         let (w, h) = (256.0 * FIT, 32.0 * FIT);
         q(tex, [0, 0, 256, 32], [320.0 - w / 2.0, (y0 + 40 * k as i32) as f32 + (32.0 - h) / 2.0, w, h], rgb, alpha);
     }
-    let hy = (y0 + v.sel as i32 * 40 + 8) as f32;
+    let hy = (y0 + sel as i32 * 40 + 8) as f32;
     out.push(Quad { tex: HAND, src: [0.0, 0.0, 64.0, 32.0], dst: [v.hand_x + 128.0, hy, 64.0, 32.0], rgb: WHITE, alpha: 128.0 });
     if let Some(t) = v.fade {
         let a = (128 * t / 60).min(128) as f32;
@@ -398,7 +459,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             super::menu_art::image(&mut images, &arc.read(e).expect("INPANE bytes"), name)
         })
         .collect::<Vec<_>>();
-    for s in ["Settings", "Resume the Match", "Return to the Menu"] {
+    for s in ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No"] {
         art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
     }
     art.push(super::menu_art::pill_layers(&mut images));
@@ -441,6 +502,7 @@ fn step(
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(b));
     let start = keys.just_pressed(KeyCode::Escape) || any(GamepadButton::Start);
     let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South);
+    let cancel = keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyK]) || any(GamepadButton::East);
     // the stick as the original's menus read it: its byte's held direction (|48| of 127, past the driver's deadzone)
     let stick = |g: &Gamepad| -hst_sim::player::pad_held(super::stick_byte(-g.left_stick().y)) as f32 + g.dpad().y;
     let up = keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) || gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| stick(g) > 0.5);
@@ -481,11 +543,25 @@ fn step(
         && (176.0..464.0).contains(&p.x)
         && let Some(k) = (0..OPTIONS.len()).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(g.rules.sets.clamp(1, 3), k) as f32)))
     {
-        if k != menu.sel {
-            (menu.sel, menu.hand) = (k, Hand::default());
+        match menu.ask {
+            // the question's row isn't a pill
+            Some(_) if k == 0 => {}
+            Some(a) => {
+                if a != k - 1 {
+                    (menu.ask, menu.hand) = (Some(k - 1), Hand::default());
+                }
+                menu.confirm = true;
+            }
+            None => {
+                if k != menu.sel {
+                    (menu.sel, menu.hand) = (k, Hand::default());
+                }
+                menu.confirm = true;
+            }
         }
-        menu.confirm = true;
     }
+    menu.scored = scored(&g.score);
+    menu.cancel |= cancel;
     menu.start |= start;
     menu.confirm |= confirm;
     menu.acc += time.delta_secs() * 60.0;
@@ -556,6 +632,7 @@ fn draw(
             sel: menu.sel,
             hand_x: menu.hand.x,
             fade: menu.quitting,
+            ask: menu.ask,
         })
     } else {
         Vec::new()
@@ -608,6 +685,7 @@ mod tests {
             sel: 0,
             hand_x: 0.0,
             fade: None,
+            ask: None,
         }
     }
 
@@ -689,5 +767,56 @@ mod tests {
         m.start = true;
         m.tick(false, false);
         assert!(m.open && m.quitting == Some(1));
+    }
+
+    /// B68: "Return to the Menu" at 0-0 fades out at once; after a point it asks, No (chosen first, or ○) goes back to
+    /// the pause menu on the same row, Yes fades out.
+    #[test]
+    fn confirm_return() {
+        let ret = |scored: bool| {
+            let mut m = Menu { sel: 2, scored, ..Menu::opened() };
+            for _ in 0..5 {
+                m.tick(false, false);
+            }
+            m.confirm = true;
+            assert_eq!(m.tick(false, false), Some(2));
+            m
+        };
+        let mut s = hst_sim::score::Score::new();
+        assert!(!scored(&s));
+        assert_eq!(ret(scored(&s)).quitting, Some(0));
+        s.points[1] = 1;
+        assert!(scored(&s));
+        s.points[1] = 0;
+        s.games[0] = 1;
+        assert!(scored(&s));
+
+        let mut m = ret(true);
+        assert_eq!((m.ask, m.quitting), (Some(1), None));
+        m.confirm = true;
+        assert_eq!(m.tick(false, false), Some(2));
+        assert!(m.open && m.ask.is_none() && m.quitting.is_none() && m.sel == 2);
+        // ○ is No too
+        let mut m = ret(true);
+        m.cancel = true;
+        assert_eq!(m.tick(false, false), Some(1));
+        assert!(m.open && m.ask.is_none() && m.quitting.is_none());
+        // up to Yes, ✕: the fade
+        let mut m = ret(true);
+        assert_eq!(m.tick(true, false), Some(0));
+        assert_eq!(m.ask, Some(0));
+        m.tick(false, false);
+        m.confirm = true;
+        assert_eq!(m.tick(false, false), Some(2));
+        assert_eq!(m.quitting, Some(0));
+
+        // drawn in the dialog: the question without a pill, the hand by No
+        let qs = layout(&View { ask: Some(1), ..view() });
+        assert!(qs.iter().any(|q| q.tex == ASK && q.dst[1] == 146.0 && q.alpha == 128.0));
+        assert!(qs.iter().any(|q| q.tex == NO && q.dst[1] == 226.0 && q.alpha == 128.0));
+        assert!(qs.iter().any(|q| q.tex == YES && q.alpha == 64.0));
+        assert!(!qs.iter().any(|q| q.tex == RESUME || q.tex == RETURN));
+        assert!(!qs.iter().any(|q| q.tex == PILL && q.dst[1] == 140.0));
+        assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst[1], 228.0);
     }
 }
