@@ -712,6 +712,7 @@ fn page(
     mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut was: Local<Option<[f32; 4]>>,
     mut on: Local<bool>,
+    (mut card, mut baked): (ResMut<super::previews::ModCard>, Local<u32>),
 ) {
     if (menu.screen == Screen::Mods) != *on {
         *on = !*on;
@@ -840,24 +841,37 @@ fn page(
     menu.sel = menu.sel.min(n - 1);
     let on = menu.screen == Screen::Mods;
     let png = |b: Vec<u8>| Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok();
-    shelf.shown = if let Some(e) = menu.add.hovered(menu.sel).filter(|_| on) {
-        // a store mod's preview, fetched once
-        shelf.shots.get(&e.meta.id).cloned().unwrap_or_else(|| {
-            modstore::preview(e);
-            shelf.shots.insert(e.meta.id.clone(), None);
-            None
-        })
-    } else if let Some(m) = menu.add.local(menu.sel).filter(|_| on) {
-        // an installed mod's: the select's picture of it, read once
+    // B229: a drawing came back: the pictures that weren't there are read again
+    if card.baked != *baked {
+        *baked = card.baked;
+        shelf.shots.retain(|k, h| !k.starts_with("local/") || h.is_some());
+    }
+    // an installed store mod shows the installed one's picture
+    let local = menu.add.hovered(menu.sel).and_then(|e| menu.add.have.contains_key(&e.meta.id).then(|| menu.add.list.iter().find(|m| m.id == e.meta.id)).flatten());
+    let local = local.or_else(|| menu.add.local(menu.sel)).filter(|_| on);
+    card.want = None;
+    shelf.shown = if let Some(m) = local {
+        // an installed mod's: the select's picture of it, read once; none yet: drawn (B229)
         let key = format!("local/{}", m.id);
-        match shelf.shots.get(&key) {
+        let h = match shelf.shots.get(&key) {
             Some(h) => h.clone(),
             None => {
                 let h = super::previews::card(&menu.add.iso, m).and_then(png).map(|i| images.add(i));
                 shelf.shots.insert(key, h.clone());
                 h
             }
+        };
+        if h.is_none() {
+            card.want = Some(m.clone());
         }
+        h
+    } else if let Some(e) = menu.add.hovered(menu.sel).filter(|_| on) {
+        // a store mod's preview, fetched once
+        shelf.shots.get(&e.meta.id).cloned().unwrap_or_else(|| {
+            modstore::preview(e);
+            shelf.shots.insert(e.meta.id.clone(), None);
+            None
+        })
     } else {
         None
     };
