@@ -87,7 +87,7 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
 /// one walker per tick after a new point. Animations: 0 idle, 1 its variant, 2 (a quiet reaction), 3/5 loop
 /// (5 the cheer), 4 shown frozen.
 /// Its moves (dodging, turning back, collisions) are [`Wander`], stepped by [`Walker::step_around`].
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Walker {
     pub slot: u32,
     /// 0 idle, 1 a point to react to (taken on the next tick), 2 reacted.
@@ -263,7 +263,7 @@ pub struct Around<'a> {
 /// or the ball coming at it, sliding along the court's edges and whatever it walks into, and turns back to the
 /// court centre over 10 ticks once nothing is near; something near on 3 ticks of a 5-tick window stops it
 /// (animation 4) until nothing is.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Wander {
     pub home: V4,
     /// The drawn matrix (rows, position).
@@ -660,7 +660,7 @@ pub fn cheerers(count: usize, roll: &mut impl FnMut() -> u32) -> [bool; 6] {
 /// it steps and draws the marks 6 slots on from the ones counted: court 5's while they are set, and after the count
 /// is cleared, as many of court 5's (from where they stopped) as walkers have cheered since. A walker cheering
 /// while court 5's 93 are set writes over the 88th and switches the sprite to the walkers'.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Cheers {
     pub slots: Vec<Cheer>,
     pub count: usize,
@@ -670,7 +670,7 @@ pub struct Cheers {
     pub court5: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Cheer {
     pub pos: [f32; 3],
     pub base: [f32; 3],
@@ -771,7 +771,7 @@ pub fn court5_again(call: u8, game: bool, shots: i32, hitter_won: bool) -> bool 
 /// figure whose texture is a 4×4 atlas picked by its UV-animation frame. Its column (`base`) is drawn once when
 /// made; its row is the cheer level (0 seated, 1..3 standing up), which ping-pongs between 1 and 3 every other tick
 /// while it cheers.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Crowd {
     pub base: i32,
     pub on: bool,
@@ -830,7 +830,7 @@ pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36
 const SWEEPER: u8 = 36;
 
 /// An ambient sound emitter: counts down to its next play, then draws a new gap.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Emitter {
     pub ty: u8,
     pub row: EmitterRow,
@@ -905,7 +905,7 @@ impl Emitter {
 /// ponytail: the turn eased through a pause, spline legs, random points about the area, ground snapping, start
 /// modes 2–3 and start mode 1's random point about the node (rows without `exact`) are not ported: no recorded
 /// creature needs them (they are taken as the plain node / left alone). Add with P14c3–5's recordings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Trigger {
     pub ty: u8,
     /// The last message the figures were sent (6: a reset skips the pause).
@@ -1010,9 +1010,10 @@ pub struct Trigger {
 
 /// What the startled creatures watch: the players' positions then the ball's, and the per-type "startled" flags
 /// all creatures of a type share (set by the first one startled, cleared by the type's reset).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Near {
     pub pos: Vec<[f32; 4]>,
+    #[serde(with = "crate::big")]
     pub flags: [bool; 64],
     /// The match is changing ends (its state 1; type 15 only rolls then) and how many play.
     pub ends: bool,

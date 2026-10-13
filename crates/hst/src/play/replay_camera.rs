@@ -13,7 +13,7 @@ use crate::Args;
 use crate::character::Motion;
 
 /// A shot of the point, as the game's shot recorder keeps it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct Rec {
     tick: i32,
     hitter: usize,
@@ -25,7 +25,7 @@ struct Rec {
     lead: i32,
 }
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct ReplayCamera {
     shots: Vec<CameraShot>,
     picks: ReplayPicks,
@@ -324,3 +324,5 @@ mod tests {
         assert!(lists.end.iter().flatten().any(|&e| Some(e) == *cams.last().unwrap()), "didn't close on an end shot");
     }
 }
+
+impl super::snapshot::Wire for ReplayCamera {}

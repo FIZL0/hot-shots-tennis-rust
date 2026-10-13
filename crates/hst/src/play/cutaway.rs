@@ -11,7 +11,7 @@ use super::{Figure, Game, Phase, Player, player_matrix};
 use crate::Args;
 use crate::character::{CharacterData, Motion};
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Director {
     shots: Vec<CameraShot>,
     lists: [Vec<u8>; 3],
@@ -170,3 +170,5 @@ fn show(g: &mut Game, d: &mut Director, q: &Query<(&Figure, &Motion)>) {
         g.prev_view = g.cam.view; // a cut doesn't blend
     }
 }
+
+impl super::snapshot::Wire for Director {}

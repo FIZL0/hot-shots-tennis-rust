@@ -52,7 +52,7 @@ pub fn stereo(volume: i32, angle: i32, tables: &[Vec<i32>; 2]) -> [i32; 2] {
 }
 
 /// One sound the game asks for: bank slot, program and key, volume before falloff, play speed (1 = as recorded).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Play {
     pub slot: u8,
     pub program: u8,
@@ -288,7 +288,7 @@ pub fn hit_cry(player: usize) -> Play {
 
 /// The last key of each of the player's six key-memory slots (programs 1 and 2's shouts in 0 and 1, the reaction
 /// voices in 3–5).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Voice([i32; 6]);
 
 impl Default for Voice {
@@ -341,7 +341,7 @@ pub fn speed_word(speed: f32) -> u32 {
 /// material holds the next 4 frames' material sounds off.
 /// ponytail: the rolling scrape (key 3) needs a ball flag (+0x264) never set in the recordings; the menu option
 /// that swaps key 0 for 0xd and the 10-effect cap (effects expire too fast to reach it) are left out.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Bounces {
     /// Frames the material sounds are held off (+0x840).
     cooldown: i32,
@@ -392,7 +392,7 @@ pub fn kmh(vel: [f32; 3]) -> f32 {
 pub const FLIGHT: Play = play(0, 5, 2, 0x80);
 
 /// The sound a hit sends with the ball, on the court bank program 5, until its first bounce or the next hit.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Flight {
     /// `FLIGHT`'s whistle with key `key`; its start speed is `flight_speed(height, low, top)`.
     Whistle { key: u8, low: f32, top: f32 },
@@ -573,7 +573,7 @@ const SHOUT: i32 = 0x66;
 /// event's shout has had its time), `event` (0 applause, 1 groan; at the match's end 3 the shown side won, 4 it
 /// lost) and `chain` (a shout follows: 5 after the applause, 6 after the groan; after the match-end 3 two cheers
 /// (program 7 keys 0, 1), after 4 a sigh (program 8)).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reaction {
     pub cheer: bool,
     pub event: Option<u8>,
@@ -625,7 +625,7 @@ pub fn favoured(human: &[bool]) -> [bool; 2] {
 /// ponytail: the match-start cheer, the shout when a player runs
 /// near the stands on courts 1, 4 and 6 (program 9) are left out; a shout's end is not waited on. The manager that
 /// skips `step` while paused or raining is `play::npcs`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Gallery {
     cheering: bool,
     pending: bool,

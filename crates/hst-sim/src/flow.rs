@@ -28,7 +28,7 @@ pub enum Next {
 
 /// The point-over phase: the umpire's call sprite (if any), the scoreboard's pause, wait and score show, and
 /// the match deciding what's next.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PostPoint {
     /// Ticks run in this phase.
     pub tick: u32,
@@ -45,7 +45,7 @@ pub struct PostPoint {
     pub before: Option<Score>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 enum Board {
     Call(CallShow),
     Pause(i32),
@@ -56,7 +56,7 @@ enum Board {
 
 /// The umpire's call model: up once its animation has ended and its voice line ends (or its countdown runs out),
 /// held, faded out.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct CallShow {
     /// The judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out after net).
     call: u8,
@@ -73,7 +73,7 @@ struct CallShow {
 }
 
 /// One score show. `step` counts the show's own stages; `held` the frames since the new score settled.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct Show {
     event: Event,
     step: u8,

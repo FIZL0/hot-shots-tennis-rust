@@ -31,7 +31,7 @@ pub fn hit(ball: [f32; 3], head: &M4, spine: [f32; 3], neck: [f32; 3], r: f32) -
 }
 
 /// The words, as their textures.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Word {
     Conk,
     Smack,
@@ -52,7 +52,7 @@ const SIZE: [f32; 3] = [0.45, 0.16, 0.3];
 const HOLD: i32 = 30;
 const FADE_OUT: i32 = 5;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Popup {
     pub word: Word,
     /// Game space; it rises from the ball where it hit.

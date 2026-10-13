@@ -16,7 +16,7 @@ use crate::character::Rig;
 use crate::Args;
 
 /// Live pop-ups, and whether the point was over last tick.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Pops(Vec<Pop>, bool);
 
 /// Pop-up quad `.0` of the list (its own material).
@@ -220,3 +220,5 @@ mod tests {
         assert!((half_width(0.35, 2.0, 1.0) - 0.35 * 0.6).abs() < 1e-6);
     }
 }
+
+impl super::snapshot::Wire for Pops {}

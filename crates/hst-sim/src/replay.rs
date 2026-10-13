@@ -20,7 +20,7 @@ pub const RALLY_ADDR: usize = 0x3165f0;
 /// 0x80 Left, 0x400 L1, 0x800 R1; the face buttons are not libpad's: 0x1000 Triangle, 0x2000 Cross, 0x4000 Circle,
 /// 0x8000 Square, checked by pressing each over the virtual pad).
 /// Sticks are 0..255 with 0x80 centre (the game's deadzone 0x51..0xae already applied).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pad {
     pub buttons: u16,
     pub rx: u8,

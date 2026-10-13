@@ -9,7 +9,7 @@ use crate::ps2;
 pub const ROWS: usize = 168;
 
 /// One AIParam.csv row as the game stores it (0x118 bytes; frame counts, percentages, metres, degrees).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AiParams {
     /// 段位 (rank) modulo 17.
     pub rank: u8,
@@ -279,7 +279,7 @@ impl Choice {
 
 /// An opponent's shot as the AI remembers it: its kind (0 serve, 1 ground stroke, 2 volley, 3 smash, …) and the
 /// ball's velocity off the racket (m/frame).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Seen {
     pub kind: i32,
     pub vel: [f32; 3],
@@ -295,7 +295,7 @@ pub struct Shots {
 }
 
 /// The timing errors an AI draws for its next hit (frames; positive presses late), and what the ball's pace added.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Timing {
     pub stroke: i32,
     pub volley: i32,
@@ -398,7 +398,7 @@ impl AiParams {
 
 /// Which way an AI guesses (ヤマ張り) the serve will come before reading it, as its draw leaves it: `Wide` the
 /// half on its side sign's +x, `Other` the opposite one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Guess {
     Wide,
     Other,
@@ -414,7 +414,7 @@ pub enum Verdict {
 }
 
 /// The shot-choice picks an AI draws right after its timing errors (and before the reaction on an opponent's hit).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Picks {
     pub quick_serve: bool,
     /// Drawn only at a reset or after the AI's own dive (`picks`' `dive`); kept otherwise.
@@ -606,7 +606,7 @@ pub const NET_RATE: (i32, i32) = (15, 85);
 /// What an AI's per-frame update runs: its top-level state. A point starts it at `Start`; on the first update it
 /// becomes `Serve` (the server), `Receive` (the receiver) or `Rally` (the partners), and the serve and receive
 /// states hand over to `Rally` once their stroke is done.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Phase {
     #[default]
     Start,
@@ -624,7 +624,7 @@ pub enum Play {
 
 /// The per-player AI object (the singles and doubles classes share all of this): its state, whether it drives
 /// its stick at all this point, and the ALL-style player's choice between net and baseline play.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Mind {
     pub phase: Phase,
     /// Off, it stands still: at each point's end a coin flip, back on at the next point.

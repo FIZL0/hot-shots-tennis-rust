@@ -11,7 +11,7 @@ pub fn plugin(app: &mut App) {
 }
 
 /// Frames since the reactions started.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Frames(u32);
 
 fn step(mut g: ResMut<Game>, mut frames: ResMut<Frames>) {
@@ -73,3 +73,5 @@ mod tests {
         assert!((0..3).all(|k| (got[k] - want[k]).abs() < 1e-5), "{got:?} {want:?}");
     }
 }
+
+impl super::snapshot::Wire for Frames {}

@@ -357,12 +357,16 @@ pub enum Msg {
     Ready(u32),
     /// In the lobby: a guest is ready to play (or not any more).
     Prepared(bool),
+    /// After a desync (B154b, `play/resync.rs`): the host's match state before a tick in pieces (`last` ends it; a
+    /// browser's data channel takes ~256 KB a message), and a peer having taken it (the tick it's in sync from).
+    State { tick: u32, data: Vec<u8>, last: bool },
+    Resynced(u32),
 }
 
 impl Msg {
     /// A match message (relayed to every peer).
     fn in_match(&self) -> bool {
-        matches!(self, Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_))
+        matches!(self, Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_))
     }
 }
 

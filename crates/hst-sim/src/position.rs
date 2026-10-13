@@ -14,7 +14,7 @@ const WIDTH: f32 = 5.485;
 const HALF: f32 = 2.7425;
 
 /// The bot's place in the formation (lane 0: not placed yet).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Formation {
     /// 1: the half on the side sign's +x, 2: the other half.
     pub lane: u8,
@@ -176,7 +176,7 @@ impl Formation {
 }
 
 /// The walk back to the spot (or to the centre in singles).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Return {
     /// Frames waited since a failed roll.
     pub wait: i32,
@@ -270,7 +270,7 @@ pub fn zone_in(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u
 
 /// A singles bot between its shots: the centre spot it walks back to, the spot it dashes in to instead when it
 /// means to take the net, and the walk (`Return`, rolled afresh after each of its shots).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Single {
     /// Plays the net style's after-hit and dash spots (NET, or ALL on its coin), not the baseline one's.
     pub net: bool,

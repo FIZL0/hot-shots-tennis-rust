@@ -6,7 +6,7 @@
 /// (else), keeps that as `sampled`, then adds the speed — so `time` is a frame ahead of the pose. While a
 /// crossfade holds the new motion (`hold`, the soft follow-through) the time stays put and the countdown runs;
 /// the frame it passes zero the speed is added once.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Clock {
     pub time: f32,
     pub sampled: f32,
@@ -48,7 +48,7 @@ impl Clock {
 /// with `weight`, from (n−1)/n down to 0; with `hold`, its pose stays frozen at the last sampled time while the new
 /// motion, held at frame 0, is mixed in with `weight` rising to 1 (the new clock's `hold` counts the same frames).
 /// A switch mid-fade keeps whichever pose is more than half in and rescales the countdown to the new length.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fade {
     /// The outgoing motion (−1 none) and whether it has a clip to sample.
     pub id: i32,
@@ -189,7 +189,7 @@ pub const WHIFF_RECOVERY: u32 = 30;
 /// into its miss motion (with a shout unless `quiet`) and a new press is taken from a short lock after it (2
 /// frames, 30 after a smash 0x1f); with no ball for the player (`!miss`) the swing just plays on until its
 /// recovery is over.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Whiff {
     pub anim: i32,
     pub miss: bool,

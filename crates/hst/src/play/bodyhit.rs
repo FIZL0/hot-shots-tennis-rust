@@ -16,7 +16,7 @@ use crate::character::Motion;
 
 /// Per player its character's collision size (m); the point's pop-up, and whether it has been made; the ball's
 /// position a tick ago (its last move is the way it came); the pop-up's alpha a tick ago (drawn between the two).
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Hits {
     radius: Vec<f32>,
     pop: Option<Popup>,
@@ -137,7 +137,7 @@ fn place_ball(mut g: ResMut<Game>) {
 }
 
 /// Per player (by figure) the clip bound to its nodes and the nodes as the motion player last posed them.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Posed(Vec<Option<(usize, Nodes)>>);
 
 impl Posed {
@@ -316,3 +316,7 @@ fn draw_words(
         *vis = Visibility::Visible;
     }
 }
+
+impl super::snapshot::Wire for Hits {}
+
+impl super::snapshot::Wire for Posed {}

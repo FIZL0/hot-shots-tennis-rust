@@ -22,7 +22,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (draw.after(super::camera), draw_dash, draw_bits.after(super::camera)));
 }
 
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct FootFx {
     table: Foot,
     feet: Feet,
@@ -32,14 +32,18 @@ pub(super) struct FootFx {
     /// Last tick was in the serve, to clear everything as a point starts.
     serving: bool,
     wet: bool,
+    #[serde(skip)]
     dry_puffs: Handle<Mesh>,
+    #[serde(skip)]
     wet_puffs: Handle<Mesh>,
+    #[serde(skip)]
     prints: Handle<Mesh>,
     /// One `run/dash` per player.
     dash: Vec<(Effect, Shown)>,
     /// Each player's dive as the run object sees it.
     dives: [DiveWatch; 4],
     /// Debris: clods, blades.
+    #[serde(skip)]
     bits: [Handle<Mesh>; 2],
     /// Each player's state byte (`state`), held once the point is over.
     states: [u8; 4],
@@ -361,5 +365,13 @@ mod tests {
         }
         eprintln!("{replays} replay ticks, {close} on close-ups, {steps} footsteps");
         assert!(close > 0 && steps > 0, "no footstep on a close-up");
+    }
+}
+
+// a resync's state (`snapshot::encode`) keeps this machine's drawing entities and handles
+impl super::snapshot::Wire for FootFx {
+    fn local(&mut self, l: &Self) {
+        (self.dry_puffs, self.wet_puffs, self.prints, self.bits) = (l.dry_puffs.clone(), l.wet_puffs.clone(), l.prints.clone(), l.bits.clone());
+        self.dash.iter_mut().zip(&l.dash).for_each(|(d, l)| d.1 = l.1.clone());
     }
 }

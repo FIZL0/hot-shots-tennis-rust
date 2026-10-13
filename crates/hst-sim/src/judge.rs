@@ -5,7 +5,7 @@
 use crate::ps2::{add, sub};
 
 /// A ball's line call (+0xa5 of the ball object).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Call {
     /// Not landed yet.
     #[default]
@@ -21,7 +21,7 @@ pub enum Call {
 }
 
 /// What the line call needs to know about the shot in play.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lines {
     /// Shots this rally (1 = the serve, 0 = no shot yet).
     pub shots: i32,
@@ -113,7 +113,7 @@ pub struct BallState {
 
 /// The rally state the umpire judges from (the original keeps it in one block, snapshotted when the point
 /// ends). Fields at the end persist across points.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rally {
     /// Ball call, shots, last hitter and server when the point ended.
     pub call: Call,

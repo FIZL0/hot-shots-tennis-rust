@@ -24,7 +24,7 @@ const SHOTS: [(u16, i32); 3] = [(CROSS, 0), (CIRCLE, 1), (TRIANGLE, 3)];
 pub const IDLE: Pad = Pad { buttons: 0, rx: 0x80, ry: 0x80, lx: 0x80, ly: 0x80 };
 
 /// This tick's pads and the last tick's (for the presses).
-#[derive(Resource, Clone, Debug)]
+#[derive(Resource, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TickPads {
     now: [Pad; 4],
     last: [Pad; 4],
@@ -61,7 +61,7 @@ impl TickPads {
 }
 
 /// Pads to play back, one entry per tick, in place of the local devices; idle once it runs out.
-#[derive(Resource, Clone)]
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Replay(pub VecDeque<[Pad; 4]>);
 
 fn encode(s: &SlotPad) -> Pad {

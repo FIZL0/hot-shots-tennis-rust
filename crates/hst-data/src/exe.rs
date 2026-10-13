@@ -518,7 +518,7 @@ pub struct NpcEntry {
 }
 
 /// A trigger creature type's ambient sound: `sound` played every `base`·(1 − `jitter`·r) ticks, r uniform in [0, 1).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EmitterRow {
     pub sound: i32,
     pub base: i16,
@@ -526,7 +526,7 @@ pub struct EmitterRow {
 }
 
 /// A trigger creature type's parameters. Pairs are (ticks, jitter): the ticks are scaled by 1 − jitter·random.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TriggerRow {
     /// Where a reset puts it: 0 home, 1 its start node, 2 a random point, 3 circling a node.
     pub start: u8,
@@ -572,7 +572,7 @@ pub struct TriggerRow {
 }
 
 /// Scoreboard timing after a point (frames unless noted).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScoreboardTiming {
     /// Ticks the umpire's call sprite stays up at most, by the judge's call (1 out, 2 fault, 3 double fault,
     /// 4 let; 5 out after net reads past this umpire's row, as the game does); it settles earlier when her
@@ -649,7 +649,7 @@ pub struct BounceLook {
 }
 
 /// See [`Game::foot`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Foot {
     pub steps: Vec<FootStep>,
     /// Puff rows: dusty court, wet court.
@@ -665,7 +665,7 @@ pub struct Foot {
 /// The instant replay's dive debris: rows for clods (clay courts) and blades (grass courts), each bit's texture
 /// cell (x, y pixels, 32 square) per kind, a clod's least fall speed (game space is Y-down: −0.03 is up) and a
 /// blade's sink per frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Debris {
     pub rows: [DebrisRow; 2],
     pub cells: [[[i32; 2]; 4]; 2],
@@ -677,7 +677,7 @@ pub struct Debris {
 /// (times the dive's push, raised to `power` when that is positive), slowed by `decay` and shrunk by `shrink` per frame, falling
 /// `fall`; size in `size`. Blades start offset in x and y (`offset`), spin per frame in `spin` (x, y, z degrees)
 /// and take `push` of the dive's push.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DebrisRow {
     pub reach: f32,
     pub spread: f32,
@@ -694,7 +694,7 @@ pub struct DebrisRow {
 
 /// A character's footstep rule: a foot lifted above 0.08 m lands at `lift`; then it can't step again for `cooldown`
 /// frames. Per motion whether it steps at all, its puff scale and whether it throws a burst as the hips hit the court.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FootStep {
     pub cooldown: i32,
     pub lift: f32,
@@ -706,7 +706,7 @@ pub struct FootStep {
 /// A footstep puff's look: frames to fade in and out, peak alpha, start size, growth over its life, drift speed,
 /// rise per frame. Bursts and dive rings fade out over `fade_out2` from `alpha2`; a dive ring's start size and
 /// outward speed are drawn in their ranges, and it rises `ring_rise` per frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FootPuff {
     pub fade_in: i32,
     pub fade_out: i32,
@@ -723,7 +723,7 @@ pub struct FootPuff {
 }
 
 /// A court's footstep look: dust puffs rise, footprints stay; footprint colour, alpha and life (frames) dry, wet.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FootCourt {
     pub dusty: bool,
     pub prints: bool,
@@ -742,7 +742,7 @@ pub struct FootCourt {
 pub const CAMERA_SHOTS: usize = 108;
 
 /// The instant replay's camera shot lists.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReplayCameras {
     /// A recorded shot's camera by its shot type: 0 (the serve), 1–2 (strokes; any other type shares this list
     /// under its own counter), 3, 5, 6 (a dive).
@@ -758,7 +758,7 @@ pub struct ReplayCameras {
 }
 
 /// One scripted camera shot.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CameraShot {
     pub record: Vec<u8>,
     pub script: Vec<(u8, f32)>,

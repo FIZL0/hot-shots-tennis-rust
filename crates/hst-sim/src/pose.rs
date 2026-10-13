@@ -8,7 +8,7 @@ use crate::{libm, ps2};
 pub type M4 = [[f32; 4]; 4];
 
 /// A skeleton: node names, parents (index before child) and rest local matrices.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Skeleton {
     pub names: Vec<String>,
     pub parent: Vec<Option<usize>>,
@@ -58,7 +58,7 @@ pub fn first_frame(sk: &Skeleton, anim: &Anim) -> Vec<M4> {
 
 /// A motion bound to a skeleton as the game's ANI player holds it: per keyed track its node, position scale and
 /// key lists with the interpolation tangents worked out at load.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Clip {
     pub ticks_per_frame: f32,
     /// Length in game frames: the last key over all tracks.
@@ -66,7 +66,7 @@ pub struct Clip {
     pub tracks: Vec<ClipTrack>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClipTrack {
     pub node: usize,
     /// Position keys × this: the skeleton's bone length over the motion's (1 for the pelvis and unknown lengths).
@@ -77,7 +77,7 @@ pub struct ClipTrack {
 
 /// Keys of one list: tick, value and tangents (rotation: squad control quaternion in `[0]`; position: incoming
 /// tangent `[0]`, outgoing `[1]`).
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Keys {
     tick: Vec<i32>,
     value: Vec<[f32; 4]>,
@@ -294,7 +294,7 @@ impl Clip {
 /// A skeleton's nodes as the motion player keeps them from frame to frame: each node's local rows, and the
 /// rotation and position a clip last sampled into it. A crossfade mixes from the sampled values and writes only
 /// the rows, so a node the playing clip doesn't key mixes from whatever clip last keyed it.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Nodes {
     pub local: Vec<M4>,
     q: Vec<[f32; 4]>,
@@ -623,7 +623,7 @@ pub(crate) const TIP: [f32; 4] = [0.0, 0.7, 0.0, 1.0];
 
 /// What the contact solve leaves for the swing: the body's step (x sideways, z forward; player units) and the
 /// turn of right hand, right forearm, right upper arm and left upper arm from the stroke's frame-8 pose.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ArmSolve {
     pub step: [f32; 4],
     pub quats: [[f32; 4]; 4],
@@ -802,7 +802,7 @@ pub fn ik_frames(to_contact: i32) -> (i32, i32) {
 /// `frames` (negative: still waiting), the arm weight ramps up n/frames, then back down to 0 over half as many
 /// frames, when the IK ends (from the contact frame on, the ramp is 8 frames long). While ramping up the body is moved to the solve position plus step·weight, until
 /// something else moves it or the mover clamps it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ArmIk {
     pub solve: ArmSolve,
     pub frames: i32,

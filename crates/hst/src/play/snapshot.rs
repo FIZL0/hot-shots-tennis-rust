@@ -19,9 +19,14 @@ use std::fmt::{self, Write};
 use std::sync::Arc;
 
 /// A per-match constant inside `Game`: copies share it, the hash skips it. Only setup (and a mod's overrides) write
-/// it, before any copy exists.
-#[derive(Default)]
-pub(super) struct Const<T>(Arc<T>);
+/// it, before any copy exists. A resync's state goes without them (`None` until `decode` puts the local ones in).
+pub(super) struct Const<T>(Option<Arc<T>>);
+
+impl<T: Default> Default for Const<T> {
+    fn default() -> Self {
+        Const(Some(Arc::default()))
+    }
+}
 
 impl<T> Clone for Const<T> {
     fn clone(&self) -> Self {
@@ -32,13 +37,13 @@ impl<T> Clone for Const<T> {
 impl<T> std::ops::Deref for Const<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        &self.0
+        self.0.as_deref().expect("a per-match constant left out of a resync (snapshot::decode)")
     }
 }
 
 impl<T> std::ops::DerefMut for Const<T> {
     fn deref_mut(&mut self) -> &mut T {
-        Arc::get_mut(&mut self.0).expect("a per-match constant written after a snapshot was taken")
+        Arc::get_mut(self.0.as_mut().expect("a per-match constant")).expect("a per-match constant written after a snapshot was taken")
     }
 }
 
@@ -50,7 +55,19 @@ impl<T> fmt::Debug for Const<T> {
 
 impl<T> From<T> for Const<T> {
     fn from(t: T) -> Self {
-        Const(Arc::new(t))
+        Const(Some(Arc::new(t)))
+    }
+}
+
+impl<T> serde::Serialize for Const<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_unit()
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for Const<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        <()>::deserialize(d).map(|()| Const(None))
     }
 }
 
@@ -94,40 +111,55 @@ pub struct Snapshot {
     modules: Vec<Box<dyn Fn(&mut World) + Send + Sync>>,
 }
 
-/// The `play/` modules' tick state: each resource copied back as it was, if the match has it.
-fn modules(w: &World) -> Vec<Box<dyn Fn(&mut World) + Send + Sync>> {
-    fn keep<R: Resource + Clone>(w: &World, out: &mut Vec<Box<dyn Fn(&mut World) + Send + Sync>>) {
-        if let Some(r) = w.get_resource::<R>().cloned() {
-            out.push(Box::new(move |w| w.insert_resource(r.clone())));
+/// A `play/` module's tick state for a resync (`encode`): as bytes, then this machine's own entities and handles
+/// put back (`local`; the handles go as their defaults).
+pub(crate) trait Wire: Resource + Clone + serde::Serialize + serde::de::DeserializeOwned {
+    fn local(&mut self, _local: &Self) {}
+}
+
+/// A walk over the `play/` modules' tick state, a resource at a time (`save` copies, `encode`/`decode` bytes).
+trait Each {
+    fn one<R: Wire>(&mut self);
+}
+
+/// The `play/` modules' tick state.
+fn modules(e: &mut impl Each) {
+    // the instant replay's recorder and cameras
+    e.one::<super::instant_replay::Recorder>();
+    e.one::<super::replay_camera::ReplayCamera>();
+    e.one::<super::cutaway::Director>();
+    e.one::<super::foot_fx::FootFx>();
+    e.one::<super::match_stats::Serving>();
+    e.one::<super::panel::Clock>();
+    e.one::<super::surprise::Pops>();
+    e.one::<crate::weather::Weather>();
+    e.one::<super::reaction_voices::Frames>();
+    e.one::<super::bodyhit::Hits>();
+    e.one::<super::npcs::Npcs>();
+    e.one::<super::popups::Calls>();
+    // the change-ends glide writes the camera (in the hash) from its last view: a rollback mid-glide desynced (B154)
+    e.one::<super::change_ends::Swing>();
+    e.one::<super::replay_pace::Pace>();
+    e.one::<super::bodyhit::Posed>();
+    // the effects: the hit sparks draw the sound generator while they live
+    e.one::<crate::effects::Impacts>();
+    e.one::<crate::effects::HitSparks>();
+    e.one::<crate::effects::BallFlight>();
+    e.one::<crate::effects::BallBounce>();
+    e.one::<crate::effects::LandingMarks>();
+    // the sounds' tick number and timers (what was played stays: `heard`)
+    e.one::<super::heard::Heard>();
+}
+
+/// Each resource the match has, to be copied back as it was.
+struct Keep<'a>(&'a World, Vec<Box<dyn Fn(&mut World) + Send + Sync>>);
+
+impl Each for Keep<'_> {
+    fn one<R: Wire>(&mut self) {
+        if let Some(r) = self.0.get_resource::<R>().cloned() {
+            self.1.push(Box::new(move |w| w.insert_resource(r.clone())));
         }
     }
-    let mut out = Vec::new();
-    // the instant replay's recorder and cameras
-    keep::<super::instant_replay::Recorder>(w, &mut out);
-    keep::<super::replay_camera::ReplayCamera>(w, &mut out);
-    keep::<super::cutaway::Director>(w, &mut out);
-    keep::<super::foot_fx::FootFx>(w, &mut out);
-    keep::<super::match_stats::Serving>(w, &mut out);
-    keep::<super::panel::Clock>(w, &mut out);
-    keep::<super::surprise::Pops>(w, &mut out);
-    keep::<crate::weather::Weather>(w, &mut out);
-    keep::<super::reaction_voices::Frames>(w, &mut out);
-    keep::<super::bodyhit::Hits>(w, &mut out);
-    keep::<super::npcs::Npcs>(w, &mut out);
-    keep::<super::popups::Calls>(w, &mut out);
-    // the change-ends glide writes the camera (in the hash) from its last view: a rollback mid-glide desynced (B154)
-    keep::<super::change_ends::Swing>(w, &mut out);
-    keep::<super::replay_pace::Pace>(w, &mut out);
-    keep::<super::bodyhit::Posed>(w, &mut out);
-    // the effects: the hit sparks draw the sound generator while they live
-    keep::<crate::effects::Impacts>(w, &mut out);
-    keep::<crate::effects::HitSparks>(w, &mut out);
-    keep::<crate::effects::BallFlight>(w, &mut out);
-    keep::<crate::effects::BallBounce>(w, &mut out);
-    keep::<crate::effects::LandingMarks>(w, &mut out);
-    // the sounds' tick number and timers (what was played stays: `heard`)
-    keep::<super::heard::Heard>(w, &mut out);
-    out
 }
 
 pub fn save(w: &mut World) -> Snapshot {
@@ -136,7 +168,11 @@ pub fn save(w: &mut World) -> Snapshot {
         pads: w.get_resource::<Pads>().cloned(),
         tick: w.get_resource::<TickPads>().cloned(),
         motions: w.query_filtered::<(Entity, &Motion), With<Rig>>().iter(w).map(|(e, m)| (e, *m)).collect(),
-        modules: modules(w),
+        modules: {
+            let mut k = Keep(w, Vec::new());
+            modules(&mut k);
+            k.1
+        },
     }
 }
 
@@ -156,6 +192,115 @@ pub fn restore(w: &mut World, s: &Snapshot) {
         }
     }
     s.modules.iter().for_each(|put| put(w));
+}
+
+/// Each resource as bincode (`None`: the match hasn't it).
+struct Enc<'a>(&'a World, Vec<Option<Vec<u8>>>);
+
+impl Each for Enc<'_> {
+    fn one<R: Wire>(&mut self) {
+        self.1.push(self.0.get_resource::<R>().map(|r| bincode::serialize(r).unwrap()));
+    }
+}
+
+/// `Enc`'s parts back into the world.
+struct Dec<'a>(&'a mut World, std::vec::IntoIter<Option<Vec<u8>>>, Result<(), String>);
+
+impl Each for Dec<'_> {
+    fn one<R: Wire>(&mut self) {
+        match self.1.next().flatten().map(|b| bincode::deserialize::<R>(&b)) {
+            Some(Ok(mut r)) => {
+                if let Some(l) = self.0.get_resource::<R>() {
+                    r.local(l);
+                }
+                self.0.insert_resource(r)
+            }
+            Some(Err(e)) => self.2 = Err(format!("{}: {e}", std::any::type_name::<R>())),
+            None => drop(self.0.remove_resource::<R>()),
+        }
+    }
+}
+
+/// The match state for another machine (B154b's resync): what `save` keeps, as bytes, the entities by `Figure` (the
+/// players' motions; the umpire's, walkers' and creatures' stay as they are) and the devices' latches (`Pads`) left
+/// out. An instant replay's pads still to play go along (only while one plays: else each tick brings its own), and the
+/// state its serve set-up kept (the replay puts it back), encoded the same way.
+pub fn encode(w: &mut World) -> Vec<u8> {
+    let serve = super::instant_replay::serve(w).map(|s| {
+        let now = save(w);
+        restore(w, &s);
+        let b = encode_now(w);
+        restore(w, &now);
+        b
+    });
+    bincode::serialize(&(encode_now(w), serve)).unwrap()
+}
+
+/// `encode`'s state into this match: the per-match constants (`Const`) stay this machine's own.
+pub fn decode(w: &mut World, bytes: &[u8]) -> Result<(), String> {
+    let (now, serve): (Vec<u8>, Option<Vec<u8>>) = bincode::deserialize(bytes).map_err(|e| e.to_string())?;
+    let serve = match serve {
+        Some(b) => {
+            let here = save(w);
+            decode_now(w, &b)?;
+            let s = save(w);
+            restore(w, &here);
+            Some(Arc::new(s))
+        }
+        None => None,
+    };
+    decode_now(w, &now)?;
+    super::instant_replay::set_serve(w, serve);
+    Ok(())
+}
+
+fn encode_now(w: &mut World) -> Vec<u8> {
+    let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, *m)).collect();
+    figures.sort_by_key(|f| f.0);
+    let replay = super::instant_replay::playing(w).then(|| w.get_resource::<super::tick_input::Replay>()).flatten();
+    let mut e = Enc(w, vec![
+        w.get_resource::<Game>().map(|g| bincode::serialize(g).unwrap()),
+        w.get_resource::<TickPads>().map(|t| bincode::serialize(t).unwrap()),
+        Some(bincode::serialize(&figures).unwrap()),
+        replay.map(|r| bincode::serialize(r).unwrap()),
+    ]);
+    modules(&mut e);
+    bincode::serialize(&e.1).unwrap()
+}
+
+fn decode_now(w: &mut World, bytes: &[u8]) -> Result<(), String> {
+    let parts: Vec<Option<Vec<u8>>> = bincode::deserialize(bytes).map_err(|e| e.to_string())?;
+    let mut parts = parts.into_iter();
+    let mut next = || parts.next().flatten().ok_or("a part missing");
+    let mut g: Game = bincode::deserialize(&next()?).map_err(|e| format!("Game: {e}"))?;
+    let tick: TickPads = bincode::deserialize(&next()?).map_err(|e| format!("TickPads: {e}"))?;
+    let figures: Vec<(usize, Motion)> = bincode::deserialize(&next()?).map_err(|e| format!("motions: {e}"))?;
+    let replay = parts.next().flatten();
+    let local = w.get_resource::<Game>().ok_or("no match")?;
+    g.serve_tables = local.serve_tables.clone();
+    g.specials = local.specials.clone();
+    g.smash_tables = local.smash_tables.clone();
+    g.rally_tables = local.rally_tables.clone();
+    g.rally_records = local.rally_records.clone();
+    g.timing = local.timing.clone();
+    g.serve_data = local.serve_data.clone();
+    g.world = local.world.clone();
+    g.pelvis = local.pelvis.clone();
+    g.data = local.data.clone();
+    w.insert_resource(g);
+    w.insert_resource(tick);
+    for (f, mut m) in w.query::<(&Figure, &mut Motion)>().iter_mut(w) {
+        if let Some((_, theirs)) = figures.iter().find(|t| t.0 == f.0) {
+            *m = *theirs;
+        }
+    }
+    let mut d = Dec(w, parts.collect::<Vec<_>>().into_iter(), Ok(()));
+    modules(&mut d);
+    d.2?;
+    if let Some(r) = replay {
+        w.insert_resource(bincode::deserialize::<super::tick_input::Replay>(&r).map_err(|e| format!("Replay: {e}"))?);
+    }
+    Ok(())
 }
 
 /// Save → 300 ticks → restore → the same 300 ticks: the same hash every tick, on the app's singles match driven by

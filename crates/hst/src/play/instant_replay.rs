@@ -29,7 +29,7 @@ const SQUARE: u16 = 0x8000;
 const LONG_RALLY: i32 = 1800;
 
 /// The decision's own state across a point.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Instant {
     /// Match-handler ticks since the serve was set up (gm+0x36c).
     pub ticks: i32,
@@ -59,8 +59,9 @@ pub(super) struct Instant {
 
 /// The run's state outside `Game`: the match as the last serve set-up left it and the pads since. In the snapshot
 /// (a rollback puts it back with the match).
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Recorder {
+    #[serde(skip)]
     serve: Option<Arc<snapshot::Snapshot>>,
     pads: Vec<[hst_sim::replay::Pad; 4]>,
     /// Pads an outside replay source still had queued when ours took over (given back after ours).
@@ -422,5 +423,23 @@ pub(super) mod tests {
         assert!(!back.score.match_over && back.phase == Phase::Post);
         assert!(now.instant.replays == 1 && now.instant.asked == 1);
         same(back, &now);
+    }
+}
+
+// a resync (`snapshot::encode`) keeps this machine's serve snapshot (the replay's start)
+/// The state the last serve set-up kept (B154b's resync sends it along).
+pub(super) fn serve(w: &World) -> Option<Arc<snapshot::Snapshot>> {
+    w.get_resource::<Recorder>().and_then(|r| r.serve.clone())
+}
+
+pub(super) fn set_serve(w: &mut World, s: Option<Arc<snapshot::Snapshot>>) {
+    if let Some(mut r) = w.get_resource_mut::<Recorder>() {
+        r.serve = s;
+    }
+}
+
+impl snapshot::Wire for Recorder {
+    fn local(&mut self, l: &Self) {
+        self.serve = l.serve.clone();
     }
 }

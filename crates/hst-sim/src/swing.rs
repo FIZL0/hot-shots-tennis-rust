@@ -13,7 +13,7 @@ pub struct PathPoint {
 
 /// A player's reach for the search. Character data (TParam.csv) except `ahead`, `smash_ahead` and the body-shot
 /// widths, which the game measures on the character's swing animations at their contact frame.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Reach {
     /// Height of the reach centre (m).
     pub base: f32,
@@ -40,7 +40,7 @@ pub struct Reach {
     pub tip: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Branch {
     Ground,
     Volley,
@@ -48,7 +48,7 @@ pub enum Branch {
 }
 
 /// The swing a press locked onto.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Swing {
     pub branch: Branch,
     /// Path index of the contact (frames from now).
@@ -136,7 +136,7 @@ pub const DIVE_HORIZON: usize = 16;
 pub const DIVE_RECOVERY: usize = 50;
 
 /// A dive: what a running player does when the press finds no stroke, a lunge toward the ball along `dir`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Dive {
     /// Path index the slide ends on (the contact, if `contact`).
     pub frame: usize,
@@ -489,7 +489,7 @@ pub fn smash_scale(plain: bool, offset: i32, from_z: f32) -> f32 {
 }
 
 /// See `timing_error`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TimingError {
     pub side: i32,
     pub depth: i32,
@@ -582,7 +582,7 @@ pub fn lob_variant(s: &crate::player::ReachStats, grade: u8) -> Option<usize> {
 }
 
 /// A grade-4 (SLOW) contact's mis-hit roll at the launch, as the original.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MisHit {
     /// The table elevation's scale.
     pub scale: f32,

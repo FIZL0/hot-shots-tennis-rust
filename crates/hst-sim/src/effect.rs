@@ -17,7 +17,7 @@ use crate::{
     ps2, world,
 };
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Track {
     /// Morph target or material index.
     target: usize,
@@ -26,7 +26,7 @@ pub(crate) struct Track {
     cursor: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Channel {
     tracks: Vec<Track>,
     ticks_per_frame: f32,
@@ -55,7 +55,7 @@ impl Channel {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Effect {
     pub skeleton: Skeleton,
     pub clip: Clip,
@@ -140,7 +140,7 @@ impl Effect {
 
 /// One entry of the landing marker's predicted ball path (y up, as the game stores it): position, velocity and
 /// bounces so far.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PathEntry {
     pub pos: [f32; 3],
     pub vel: [f32; 3],
@@ -151,7 +151,7 @@ pub struct PathEntry {
 /// predicted ball, having risen to that player's smash top, comes back down below the middle of the smash window
 /// moving away from the net at least 1.5 m from it. Searched a frame's worth of new path entries at a time; two
 /// players' points are drawn at their midpoint.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SmashSearch {
     /// Per candidate: smash top, middle height, state (0 rising, 1 falling, 2 placed, −1 gave up).
     cands: Vec<(f32, f32, i32)>,
@@ -293,7 +293,7 @@ pub const SPARKS: usize = 25;
 pub const SPARK_FADE: i32 = 20;
 
 /// One pre-rolled spark: a turn about the shot direction and three uniforms in [0, 1) (spread, speed, life).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Roll {
     pub turn: M4,
     pub u: [f32; 3],
@@ -322,7 +322,7 @@ impl Roll {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Spark {
     pub pos: [f32; 4],
     pub vel: [f32; 4],
@@ -351,7 +351,7 @@ const BURSTS: [Burst; 5] = {
 };
 const LIFE: [i32; 2] = [10, 40];
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Sparks {
     pub sparks: [Spark; SPARKS],
     pub rolls: [Roll; SPARKS],
@@ -558,8 +558,9 @@ pub const FLIGHT_POINTS: usize = 50;
 // ponytail: the game also has a second smash colour (128, 116, 34, 128) for a mode flag the port doesn't have
 pub const FLIGHT_COLOURS: [u32; 6] = [0x3e0e7f46, 0x80300846, 0x33338046, 0x27802746, 0x800c8046, 0x757d4146];
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Flight {
+    #[serde(with = "crate::big")]
     pub points: [[f32; 4]; FLIGHT_POINTS],
     /// Samples held, the oldest and the next slot to write.
     pub count: usize,
@@ -631,7 +632,7 @@ impl Flight {
 /// out over the last 15.
 pub const GLOW_FRAMES: i32 = 30;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Glow {
     pub life: i32,
     /// `impactef_*` by shot kind: flat shows top's and drop shows slice's.
@@ -649,7 +650,7 @@ impl Glow {
 }
 
 /// What a bounce effect needs of one of the ball's contacts this frame (its contact record).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Contact {
     pub point: [f32; 4],
     pub vel: [f32; 4],
@@ -665,7 +666,7 @@ const PUFFS: usize = 2;
 const PUFF_LIFE: i32 = 20;
 
 /// A ball mark on the court: a ground quad stretched along the bounce by the ball's level speed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mark {
     /// Rows side, up, along the bounce, centre (0.01 below the court).
     pub m: [[f32; 4]; 4],
@@ -677,7 +678,7 @@ pub struct Mark {
 }
 
 /// A dust puff (court colour): a camera-facing quad growing and fading out over 20 frames.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Puff {
     pub pos: [f32; 4],
     pub life: i32,
@@ -711,7 +712,7 @@ impl Puff {
 /// The ball's bounce effects: on the first bounce off the court a mark and a puff of dust, and the `ballbound` ring
 /// model lying in the bounce; a second bounce puffs again. A smash landing (more than one player, 85 km/h or more)
 /// plays the court's `chakudan` crater model instead, with a drifting dust cloud and no mark.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bounce {
     pub marks: Vec<Mark>,
     pub puffs: Vec<Puff>,

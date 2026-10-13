@@ -16,7 +16,7 @@
 //! All are camera-facing quads drawn like the timing balloons: same anchor over the head, the swirl a little bigger.
 
 /// Which pop-up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Popup {
     Bang,
     Sweat,
@@ -50,7 +50,7 @@ impl Popup {
 }
 
 /// A live pop-up: the original's stage machine (0 fade-in, 1 hold, 2 fade-out) and its alpha (0..=128, 128 opaque).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pop {
     pub popup: Popup,
     pub player: usize,

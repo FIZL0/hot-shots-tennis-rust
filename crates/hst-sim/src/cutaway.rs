@@ -15,7 +15,7 @@ pub type M4 = [[f32; 4]; 4];
 const CHANNELS: usize = 17;
 const END: u8 = 6;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Key {
     value: f32,
     /// 0: `time` frames; other kinds are event-relative times (not used by the cut-aways).
@@ -25,7 +25,7 @@ struct Key {
     ease_out: f32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Channel {
     keys: Vec<Key>,
     /// The key being moved toward, its duration and frames left, and the value now.
@@ -243,7 +243,7 @@ fn diff(a: f32, b: f32) -> f32 {
 }
 
 /// A running shot.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Shot {
     pub number: u8,
     record: Vec<u8>,
@@ -597,7 +597,7 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
 }
 
 /// The instant replay's camera picks (`hst_data::exe::Game::replay_cameras`), each list with its own counter.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReplayPicks {
     pub lists: ReplayCameras,
     /// Per shot-type list (the last: other types on the stroke list), the closing lists, the tracking pairs.
@@ -713,7 +713,7 @@ impl ReplayPicks {
 }
 
 /// The reference frames the post-point shots look at, set when the cut-away starts.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Frames {
     /// The court corner view (frame 6).
     pub corner: M4,

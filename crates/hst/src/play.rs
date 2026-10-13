@@ -65,6 +65,7 @@ mod match_stats;
 mod menu;
 pub mod netplay;
 mod rollback;
+mod resync;
 mod npcs;
 mod panel;
 pub(crate) mod menu_art;
@@ -72,7 +73,7 @@ mod popups;
 mod reaction_voices;
 mod replay_camera;
 mod surprise;
-mod snapshot;
+pub(crate) mod snapshot;
 mod serve_check;
 mod tick_input;
 mod timing;
@@ -110,7 +111,7 @@ const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 /// of it (measured on the court lines against the real game).
 const SHOWN_ASPECT: f32 = 0.75;
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, serde::Serialize, serde::Deserialize)]
 struct Player {
     pos: V3,
     prev: V3,
@@ -235,7 +236,7 @@ struct Player {
 
 /// A reaction's root motion: its motion number, the spot it started from and the accumulated spot (game space,
 /// w carried as the game's), and the frames it has run.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, serde::Serialize, serde::Deserialize)]
 struct Root {
     motion: usize,
     base: [f32; 4],
@@ -244,7 +245,7 @@ struct Root {
 }
 
 /// A motion set by the game's code (the motion setter): number, speed, looping, crossfade hold.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, serde::Serialize, serde::Deserialize)]
 struct Cmd {
     id: usize,
     speed: f32,
@@ -269,7 +270,7 @@ fn set_motion(p: &mut Player, id: i32, speed: f32, looping: bool, hold: Option<i
 
 /// A pressed swing locked onto the ball: frames until contact, the game's contact search result, the grade
 /// and the body's step into the shot.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct Contact {
     frames: u32,
     swing: swing::Swing,
@@ -279,7 +280,7 @@ struct Contact {
     cancelled: bool,
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, serde::Serialize, serde::Deserialize)]
 enum Phase {
     Serve,
     Rally,
@@ -288,7 +289,7 @@ enum Phase {
     ChangeEnds(u32),
 }
 
-#[derive(Resource, Clone, Debug)]
+#[derive(Resource, Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Game {
     rules: Rules,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
@@ -434,7 +435,7 @@ struct Game {
 
 /// The landing markers, as the original: the red one at the shot's aim (from the serve return on), the yellow one
 /// where a receiving human can smash the ball, searched along a predicted path grown 15 entries a frame.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Marks {
     red: Option<[f32; 2]>,
     /// The smash search, its path so far (y up) and the predictor's flight at the path's end.
@@ -459,7 +460,7 @@ fn path_entry(f: &Flight) -> PathEntry {
 
 /// The serve being set up, as the original's server sub-states: standing or walking the baseline, toss
 /// (ball in the hand until the toss animation releases it), and the swing locked onto a contact frame.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, serde::Serialize, serde::Deserialize)]
 struct Serving {
     toss: Option<Toss>,
     /// Frames since the toss press (or, before it, since the serve was set up).
@@ -476,7 +477,7 @@ struct Serving {
     scatter: V3,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct ServeSwing {
     left: u32,
     frames: u32,

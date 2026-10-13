@@ -27,7 +27,7 @@ pub const BITS: usize = 20;
 /// A replay dive's clod or blade: at `m[3]`, `size` half wide, texture cell `cell` (pixels). A blade lies in `m`'s
 /// rows 0 and 2, turned by `spin` (x, y, z radians) a frame, coloured `rgb`; a clod faces the camera (its rows 0..2,
 /// spin and colour are stale).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Bit {
     pub alive: bool,
     pub m: world::M4,
@@ -39,7 +39,7 @@ pub struct Bit {
 }
 
 /// A camera-facing puff, anchored at its bottom: `pos`, `size` half wide and twice that tall, `alpha` 0..128.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Puff {
     /// 0 a step, 1 a dive ring, 2 a sit-down burst.
     pub kind: u8,
@@ -67,7 +67,7 @@ pub struct Puff {
 }
 
 /// A footprint: a ground quad turned with the player, 0.2 m across `m[0]` and 0.4 m along `m[2]`, at `m[3]`.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Print {
     pub m: world::M4,
     pub alpha: f32,
@@ -102,7 +102,7 @@ pub struct Runner {
 /// A player's dive as the run object reads it from the player: the hit event's dive branch fires on the frame a
 /// dive starts, the slide length and the cut-short flag are the player's own and outlive the dive (the flag is
 /// cleared only by the next dive's start).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct DiveWatch {
     live: bool,
     lunge: f32,
@@ -121,7 +121,7 @@ impl DiveWatch {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Feet {
     pub armed: [[bool; 2]; 4],
     pub cooldown: [[i32; 2]; 4],

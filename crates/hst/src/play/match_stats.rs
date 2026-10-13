@@ -503,7 +503,7 @@ fn setup(
 }
 
 /// The last tick was in the serve.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Serving(bool);
 
 /// A frame of the match: its time, a new serve, the serve's speed the frame after it is struck.
@@ -901,3 +901,5 @@ mod tests {
         assert_eq!((a[0], a[20], a[21], a[41], a[42]), (0, 102, 102, 0, 0));
     }
 }
+
+impl super::snapshot::Wire for Serving {}

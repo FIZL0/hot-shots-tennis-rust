@@ -11,7 +11,7 @@ use hst_data::{ani::{self, Anim}, iso::Iso, xb::Archive};
 
 /// The C library's `rand()`: a 64-bit LCG whose state is 1 at boot (the game never reseeds it); each call returns
 /// bits 32..62 of the stepped state.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rand(pub u64);
 
 impl Default for Rand {
@@ -28,8 +28,9 @@ impl Rand {
 }
 
 /// An MT19937: 624 words and the next word's index (624: regenerate first).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Mt(pub [u32; 624], pub usize);
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Mt(#[serde(with = "crate::big")] pub [u32; 624], pub usize);
+
 
 impl Mt {
     pub fn new(seed: u32) -> Mt {
@@ -104,7 +105,7 @@ impl Seed {
 }
 
 /// The match's generators.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rngs {
     pub rand: Rand,
     pub shared: Mt,
@@ -118,7 +119,7 @@ pub struct Rngs {
 /// The lens flare's 24 rays: each one's brightness (0.25..1 once stepped) and angle on screen (radians, x right,
 /// y down: ray `i` points near (i + 1)·15°).
 // ponytail: plain f32, the flare only has to look right; its draws are exact
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Flare {
     pub bright: [f32; 24],
     pub angle: [f32; 24],

@@ -14,7 +14,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 
 /// The sounds' tick state, restored with the match (`snapshot`).
-#[derive(Resource, Clone, Default, Debug)]
+#[derive(Resource, Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Heard {
     /// Match ticks so far.
     pub tick: u32,
@@ -84,3 +84,5 @@ fn a_rerun_tick_plays_nothing_again() {
     p.hear(9);
     assert!(p.fresh && p.first(9, "cheer"));
 }
+
+impl super::snapshot::Wire for Heard {}

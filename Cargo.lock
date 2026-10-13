@@ -3625,6 +3625,7 @@ name = "hst-data"
 version = "0.1.0"
 dependencies = [
  "png",
+ "serde",
  "twox-hash",
 ]
 
@@ -3652,6 +3653,7 @@ version = "0.1.0"
 dependencies = [
  "hst-data",
  "libm",
+ "serde",
 ]
 
 [[package]]
