@@ -80,9 +80,13 @@ impl UiMaterial for PreviewMaterial {
     }
 }
 
-/// A float image of `size` physical pixels for [`spawn_into`].
+/// A float image of `size` physical pixels for [`spawn_into`], filled with alpha −1 (nothing drawn): B140, a card
+/// showing it before its camera's first clear drew opaque black (zeroes) for a frame.
 pub fn target(images: &mut Assets<Image>, size: UVec2) -> Handle<Image> {
-    images.add(Image::new_target_texture(size.x.max(1), size.y.max(1), TextureFormat::Rgba16Float, None))
+    let mut image = Image::new_target_texture(size.x.max(1), size.y.max(1), TextureFormat::Rgba16Float, None);
+    // half floats (0, 0, 0, −1)
+    image.data = image.data.map(|d| [0u8, 0, 0, 0, 0, 0, 0x00, 0xbc].repeat(d.len() / 8));
+    images.add(image)
 }
 
 /// [`spawn`] drawing into `image` ([`target`]) instead of the window, cleared to alpha −1 (see [`PreviewMaterial`]).
@@ -232,7 +236,7 @@ fn centre(time: Res<Time<Fixed>>, cams: Query<&Preview>, mut rigs: Query<(&chara
 
 /// Each preview's viewport and crop for its rectangle; a preview camera clears nothing (`hud_gamma` gives every scene
 /// camera its clear colour, which would wipe the others). One drawing into its own image fills it, cleared to −1 alpha.
-fn place(window: Query<&Window, With<PrimaryWindow>>, images: Res<Assets<Image>>, mut cams: Query<(&Preview, &mut Camera, &RenderTarget)>) {
+pub(crate) fn place(window: Query<&Window, With<PrimaryWindow>>, images: Res<Assets<Image>>, mut cams: Query<(&Preview, &mut Camera, &RenderTarget)>) {
     let Ok(w) = window.single() else { return };
     let s = w.scale_factor();
     for (p, mut cam, target) in &mut cams {

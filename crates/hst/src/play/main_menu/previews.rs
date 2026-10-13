@@ -4,7 +4,8 @@
 //!
 //! B86: a card shows a PNG of the preview (character × costume) while its player scrolls, and the live model only once
 //! the hover has held [`SETTLE`] seconds (B99: or at once when there is no PNG yet; the PNG is read on the frame its
-//! key is hovered, and stays over the live model its first [`COVER`] frames) (the live one is what R2/L2 act on). The PNGs are drawn here, once, by an
+//! key is hovered, and stays over the live model, kept hidden under it, for [`COVER`] frames and [`SETTLE_TICKS`] fixed
+//! ticks, B140: the live node shows a frame before the PNG goes, as its first shown frame draws nothing) (the live one is what R2/L2 act on). The PNGs are drawn here, once, by an
 //! off-screen preview (the baker: [`BAKE`] pixels, the cards' crop and lighting) and read back into a local cache
 //! beside settings.txt (`cache/previews/<disc boot file>-r<RENDER>/`): disc characters' images are made from the
 //! user's disc, so they are never shipped, and are all baked in the background from the first launch on (the hovered
@@ -52,10 +53,12 @@ use crate::Args;
 use crate::play::controls::Bindings;
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 4;
+const RENDER: u32 = 5;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
 /// row, so the read-back has no row padding.
 const BAKE: UVec2 = UVec2::new(384, 480);
+/// `FixedUpdate` ticks (60 Hz) a baked preview draws before its read-back.
+const SETTLE_TICKS: u32 = 6;
 /// The baker's render layer (the cards use 1–4).
 const BAKE_LAYER: usize = 6;
 /// Loaded characters kept (four live cards, the baker's, one spare) and PNGs kept.
@@ -71,13 +74,15 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Startup, start_loader)
         .add_systems(PostStartup, (hover_all, start_baker))
         .add_systems(FixedUpdate, character::tick)
-        .add_systems(Update, ((receive, sync, bake, buttons).chain().after(super::draw), character::animate, icons))
+        // B140: before `inspect::place` (its clear and crop), so a camera spawned this frame renders cleared, not black
+        .add_systems(Update, ((receive, sync, bake, buttons).chain().after(super::draw).before(inspect::place), character::animate, icons))
         .add_systems(Last, despawn);
     if let Some(secs) = std::env::var("HST_STRESS").ok().and_then(|s| s.parse::<f32>().ok()) {
         app.add_systems(Update, stress(secs).before(super::step));
-        if let Ok(dir) = std::env::var("HST_SHOTS") {
-            app.add_systems(Last, shots(dir));
-        }
+    }
+    if let Ok(dir) = std::env::var("HST_SHOTS") {
+        let from = if std::env::var("HST_STRESS").is_ok() { 60 } else { 1 };
+        app.add_systems(Last, shots(dir, from));
     }
 }
 
@@ -89,11 +94,12 @@ struct Shown {
     key: Key,
     cam: Option<Entity>,
     node: Entity,
-    cover: Option<(Entity, u32)>,
+    cover: Option<(Entity, u32, f32)>,
 }
 
 /// Frames a PNG stays over the live model that replaced it, while that model's first frames draw (its textures and
-/// pipelines can land a few frames late: a blank or part-drawn card otherwise).
+/// pipelines can land a few frames late: a blank or part-drawn card otherwise), and at least [`SETTLE_TICKS`] (B140: its
+/// face settles on the fixed clock, which a fast menu frame outruns: the mouth popped at the swap).
 // ponytail: a fixed count; a check of the live target's first full draw if a slow GPU still shows a gap
 const COVER: u32 = 10;
 
@@ -418,7 +424,7 @@ fn sync(
     mut cards: Local<([Option<Shown>; 4], [Option<(Key, f32)>; 4])>,
     mut loader: ResMut<Loader>,
     mut gone: ResMut<Gone>,
-    (baker, mut pending, slide): (Res<Baker>, ResMut<Pending>, Res<super::slide::Slide>),
+    (baker, mut pending, slide, fixed, mut shows): (Res<Baker>, ResMut<Pending>, Res<super::slide::Slide>, Res<Time<Fixed>>, Query<&mut Visibility, With<Shot>>),
 ) {
     let Some(art) = art else { return };
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
@@ -475,14 +481,16 @@ fn sync(
             node.height = Val::Percent(h / 4.48);
         };
         if !same || upgrade {
-            // the PNG a live model replaces stays on top of it a few frames
+            // the PNG a live model replaces stays a few frames, the live node hidden until then (B140: shown under the
+            // PNG it darkened the PNG's see-through parts, the racket strings)
             let mut cover = None;
             if let Some(s) = slot.take() {
+                gone.0.extend(s.cover.map(|c| c.0));
                 if let Some(cam) = s.cam {
                     gone.0.extend(preview_entities(cam, &cams, &parents));
                 }
                 if same && s.cam.is_none() {
-                    cover = Some((s.node, COVER));
+                    cover = Some((s.node, COVER, fixed.elapsed_secs()));
                 } else {
                     gone.0.push(s.node);
                 }
@@ -491,7 +499,9 @@ fn sync(
                 // placed as it spawns (else it draws one frame at the image's own size, top left)
                 let mut node = Node { position_type: PositionType::Absolute, ..default() };
                 place(&mut node, q.dst, q.anchor);
-                let node = (node, ZIndex(i as i32));
+                // B140: flipped as it spawns (else its first frame, and the PNG it covers, draws the other hand)
+                let flip = UiTransform { scale: Vec2::new(if menu.players[p].swap { -1.0 } else { 1.0 }, 1.0), ..default() };
+                let node = (node, ZIndex(i as i32), flip);
                 if let Some((data, hand)) = live {
                     // a mod poses with its donor's timing and yaws
                     let c = match w {
@@ -501,34 +511,38 @@ fn sync(
                     let image = inspect::target(&mut images, (Vec2::new(q.dst[2], q.dst[3]) * scale).as_uvec2());
                     let cam = inspect::spawn_into(&mut commands, &data, c, hand, 1 + p, image.clone());
                     commands.entity(cam).insert(Card(p));
-                    let node = commands.spawn((Shot, node, MaterialNode(ui.add(PreviewMaterial { image })))).id();
+                    let shown = if cover.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+                    let node = commands.spawn((Shot, node, shown, MaterialNode(ui.add(PreviewMaterial { image })))).id();
                     commands.entity(root).add_child(node);
-                    if let Some((c, _)) = cover {
-                        let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-                        commands.entity(c).insert((full, ZIndex(0)));
-                        commands.entity(node).add_child(c);
-                    }
                     *slot = Some(Shown { key: (w, costume), cam: Some(cam), node, cover });
                 } else if let Some(png) = png {
-                    let node = commands.spawn((Shot, node, ImageNode::new(png))).id();
+                    let node = commands.spawn((Shot, node, ImageNode { image: png, image_mode: NodeImageMode::Stretch, ..default() })).id();
                     commands.entity(root).add_child(node);
                     *slot = Some(Shown { key: (w, costume), cam: None, node, cover: None });
                 }
-            } else if let Some((c, _)) = cover {
+            } else if let Some((c, ..)) = cover {
                 gone.0.push(c);
             }
         }
-        if let Some(Shown { cover: cover @ Some(_), .. }) = slot.as_mut() {
-            let (c, n) = cover.as_mut().unwrap();
-            *n -= 1;
-            if *n == 0 {
-                gone.0.push(*c);
-                *cover = None;
+        if let Some(Shown { cover: cover @ Some(_), node, .. }) = slot.as_mut() {
+            let (c, n, t) = cover.as_mut().unwrap();
+            if *n > 0 {
+                *n -= 1;
+            } else if fixed.elapsed_secs() - *t >= SETTLE_TICKS as f32 / 60.0
+                && let Ok(mut v) = shows.get_mut(*node)
+            {
+                // the live node shows a frame before its cover goes (its first shown frame draws nothing)
+                if *v == Visibility::Hidden {
+                    *v = Visibility::Inherited;
+                } else {
+                    gone.0.push(*c);
+                    *cover = None;
+                }
             }
         }
-        if let (Some(s), Some((i, q))) = (slot.as_ref(), want)
-            && let Ok((mut node, mut z, mut flip)) = nodes.get_mut(s.node)
-        {
+        for e in slot.iter().flat_map(|s| [Some(s.node), s.cover.map(|c| c.0)]).flatten() {
+            let Some((i, q)) = want else { break };
+            let Ok((mut node, mut z, mut flip)) = nodes.get_mut(e) else { continue };
             place(&mut node, q.dst, q.anchor);
             z.0 = i as i32;
             // the hand toggle: the drawing mirrored (the model faces the camera, so its mirror is the picture's)
@@ -569,6 +583,9 @@ struct Job {
     cam: Entity,
     image: Handle<Image>,
     frames: u32,
+    /// The fixed clock at its spawn: the pose and face settle on `FixedUpdate` ticks, which a fast menu frame
+    /// outruns (B140: a read-back 4 frames in caught the face before its mouth).
+    start: f32,
     /// The read-back's entity, once asked; the result lands in `done`.
     reading: Option<Entity>,
     done: Arc<Mutex<Option<Vec<u8>>>>,
@@ -602,6 +619,7 @@ fn bake(
     mut gone: ResMut<Gone>,
     mut exit: MessageWriter<AppExit>,
     mut hovered: Local<Vec<Key>>,
+    fixed: Res<Time<Fixed>>,
     cams: Query<&Preview>,
     parents: Query<&ChildOf, Without<Slot>>,
 ) {
@@ -620,6 +638,7 @@ fn bake(
     if let Some(job) = &mut baker.job {
         job.frames += 1;
         let wait = if baker.jobs == 0 { 30 } else { 4 };
+        let ticked = fixed.elapsed_secs() - job.start >= SETTLE_TICKS as f32 / 60.0;
         let data = job.done.lock().unwrap().take();
         if let Some(saving) = &mut job.saving {
             // Z1: the PNG encode (~20 ms) runs on the IO pool; the next job waits for the file
@@ -639,7 +658,7 @@ fn bake(
             gone.0.extend(preview_entities(job.cam, &cams, &parents));
             let path = job.path.clone();
             job.saving = Some(IoTaskPool::get().spawn(async move { save(&data, &path) }));
-        } else if job.frames >= wait && job.reading.is_none() {
+        } else if job.frames >= wait && ticked && job.reading.is_none() {
             let done = job.done.clone();
             let r = commands
                 .spawn(Readback::texture(job.image.clone()))
@@ -679,7 +698,7 @@ fn bake(
                 let image = inspect::target(&mut images, BAKE);
                 images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
                 let cam = inspect::spawn_into(&mut commands, &data, c, hand, BAKE_LAYER, image.clone());
-                baker.job = Some(Job { key, path, cam, image, frames: 0, reading: None, done: default(), saving: None });
+                baker.job = Some(Job { key, path, cam, image, frames: 0, start: fixed.elapsed_secs(), reading: None, done: default(), saving: None });
                 return;
             }
         }
@@ -858,10 +877,12 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
 struct Pending([Option<Act>; 4]);
 
 /// `HST_SELECT=c,c,c,c`: every player seated on the keyboard, hovering those characters (grid order is not
-/// character order: each is looked up); `c/k` on costume `k`.
+/// character order: each is looked up); `c/k` on costume `k`; a trailing `!` swaps the hand (B140).
 fn hover_all(mut menu: ResMut<Menu>) {
     let Ok(list) = std::env::var("HST_SELECT") else { return };
     for (p, c) in list.split(',').map(str::trim).take(4).enumerate() {
+        let (c, swap) = c.strip_suffix('!').map_or((c, false), |c| (c, true));
+        menu.players[p].swap = swap;
         let (c, k) = c.split_once('/').unwrap_or((c, "0"));
         menu.players[p].costume = k.parse().unwrap_or(0);
         if let Some(i) = c.strip_prefix('m').and_then(|i| i.parse::<usize>().ok()).filter(|&i| i < menu.mods.len()) {
@@ -931,12 +952,12 @@ fn stress(secs: f32) -> impl FnMut(ResMut<Menu>, Res<Time>, MessageWriter<AppExi
     }
 }
 
-/// `HST_SHOTS=<dir>` (with `HST_STRESS`): every frame's window as `<dir>/NNNN.png`, frames 60–299 (after the stress
-/// run's first second).
-fn shots(dir: String) -> impl FnMut(Commands, Local<u32>) {
+/// `HST_SHOTS=<dir>`: every frame's window as `<dir>/NNNN.png`, frames 1–299 (with `HST_STRESS` 60–299: after the
+/// stress run's first second; B140: alone, a card's PNG → live swap).
+fn shots(dir: String, from: u32) -> impl FnMut(Commands, Local<u32>) {
     move |mut commands, mut n| {
         *n += 1;
-        if (60..300).contains(&*n) {
+        if (from..300).contains(&*n) {
             let path = format!("{dir}/{:04}.png", *n);
             commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
         }
