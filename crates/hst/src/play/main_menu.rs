@@ -13,7 +13,7 @@
 //! computer's. Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character; the computer's players are picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), mods = the custom page, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', [`ICON_COLS`]
@@ -1096,7 +1096,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "mods" | "attrs" | "coms" => Screen::Chars,
+        "chars" | "mods" | "attrs" | "mods-attrs" | "coms" => Screen::Chars,
         "confirm" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" => Screen::Lobbies,
@@ -1113,8 +1113,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
         menu.players[0].cursor = 6;
-        menu.custom = screen == "mods" && !menu.mods.is_empty();
-        menu.players[0].card = screen == "attrs";
+        menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
+        menu.players[0].card = screen.ends_with("attrs");
         menu.players[0].ready = screen == "coms";
         menu.players.iter_mut().for_each(|p| p.modded = menu.custom);
         if matches!(menu.screen, Screen::Lobby | Screen::Lobbies) {
@@ -1507,7 +1507,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                 d.anchor = Anchor::Sides;
             }
             // the card's title box takes the top: no player/costume tag over it
-            if !(pl.card && modded.is_none()) {
+            if !pl.card {
                 d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
                 // the costume number on a shirt in the player's colour, under the COM tag on a computer's card
                 let sy = if human { y + 26.0 } else { y + 50.0 };
