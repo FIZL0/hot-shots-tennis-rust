@@ -91,6 +91,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # a stale run leaves it to the newer one: tagging a commit whose workflow files differ from main's is a
+          # workflow change, which github.token may not make (HTTP 403), and the delete below would leave no release
+          [ "$(gh api "repos/$GH_REPO/commits/main" -q .sha)" = "$GITHUB_SHA" ] || { echo "main moved on, skipping"; exit 0; }
           # recreated each time so the tag moves to this commit; the download links stay the same
           gh release delete alpha --cleanup-tag -y || true
           printf '%s\n\n%s\n\n%s\n' "**Rolling alpha: rebuilt on every change to main (${GITHUB_SHA::7}). Expect bugs.**" \
