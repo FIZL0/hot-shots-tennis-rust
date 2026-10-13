@@ -689,47 +689,6 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x0 - 60.0 + hand_x, 140.0 + 44.0 * *i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
                 }
             }
-<<<<<<< HEAD
-=======
-            if m.net.ask.is_none() && m.net.topics {
-                // B221: a tap off the topics is their Cancel
-                d.popup(Some(Act::Row(TOPICS.len() - 1, OK)));
-                d.outlined(|d| d.text("Put to a vote:", 410.0, 120.0, 18.0, WHITE));
-                for (i, (t, _)) in TOPICS.iter().enumerate() {
-                    let y = 156.0 + 44.0 * i as f32;
-                    d.pill(420.0, y, 200.0, if m.sel == i { GOLD } else { [70.0, 70.0, 80.0] });
-                    d.hit([420.0, y, 200.0, 38.0], Act::Row(i, OK));
-                    d.centred(t, 520.0, y + 8.0, 22.0, if m.sel == i { WHITE } else { DIM });
-                }
-                d.info("Everyone in the lobby votes; it closes when all have voted, after 30 s, or when you end it.");
-                return;
-            }
-            if let (None, Some(v)) = (m.net.ask, room.and_then(|r| r.vote.as_ref())) {
-                // the options with their ballots so far, live; the host's End Vote last
-                let what = TOPICS.iter().find(|t| t.1 == Some(v.topic)).map_or("", |t| t.0);
-                d.outlined(|d| d.text(&format!("Vote: {what}  {} s", v.left), 410.0, 82.0, 18.0, WHITE));
-                let tally = v.tally();
-                let rows = v.options.iter().map(|&o| Some(o)).chain(m.net.hosting.then_some(None));
-                for (i, o) in rows.enumerate() {
-                    let y = 104.0 + 18.0 * i as f32;
-                    let on = m.sel == i;
-                    let fill = if on { GOLD } else if o.is_some() && o == m.net.ballot { [60.0, 90.0, 60.0] } else { [70.0, 70.0, 80.0] };
-                    d.pill_at([410.0, y, 220.0, 17.0], [[30.0; 3], WHITE, fill], 128.0);
-                    d.hit([410.0, y, 220.0, 18.0], Act::Row(i, OK));
-                    let rgb = if on { WHITE } else { DIM };
-                    match o {
-                        Some(o) => {
-                            d.fitted(&option_name(text, v.topic, o), 505.0, y + 2.0, 13.0, 170.0);
-                            d.centred(&tally[i].to_string(), 612.0, y + 2.0, 13.0, rgb);
-                        }
-                        None => d.centred("End Vote", 520.0, y + 2.0, 13.0, rgb),
-                    }
-                }
-                let voted = v.ballots.len();
-                d.info(&format!("Choose with OK (you can change it): {voted} of {} voted. Most votes wins; a tie is drawn.", r_names(room)));
-                return;
-            }
->>>>>>> task/B221
             if m.net.ask.is_none() {
                 // the buttons along the bottom
                 let buttons: Vec<(usize, &str)> = items.iter().enumerate().filter_map(|(i, it)| if let Item::Button(b) = it { Some((i, *b)) } else { None }).collect();
@@ -850,45 +809,6 @@ pub(super) fn poll(
     }
 }
 
-<<<<<<< HEAD
-/// The lobby item under `p` (640×448) as `layout` draws it: a mod question's row, a guest's seat (host), a button.
-fn item_at(m: &Menu, p: Vec2) -> Option<usize> {
-    let inside = |x: f32, y: f32, w: f32| p.x >= x && p.x < x + w && p.y >= y && p.y < y + 38.0;
-    if m.net.ask.is_some() {
-        return (0..ASK_ROWS.len()).find(|&i| inside(420.0, 156.0 + 44.0 * i as f32, 200.0));
-    }
-    let mut buttons = 0;
-    m.items().iter().position(|it| match it {
-        Item::Seat(i) => inside(60.0, 140.0 + 44.0 * *i as f32, 340.0),
-        Item::Button(_) => {
-            buttons += 1;
-            inside(60.0 + BUTTON_STEP * (buttons - 1) as f32, 330.0, BUTTON_W)
-        }
-    })
-}
-
-/// A click or tap on a lobby button or seat chooses it (as ✕ would), the right button is Back.
-pub(super) fn pointer(
-    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touches: Res<Touches>,
-    mut menu: ResMut<Menu>,
-    mut click: ResMut<super::pause::Click>,
-) {
-    if menu.screen != Screen::Lobby {
-        return;
-    }
-    let (at, back) = super::pause::pointer_press(&window, &mouse, &touches);
-    if let Some(i) = at.and_then(|p| item_at(&menu, p)) {
-        menu.sel = i;
-        click.0 = Some(Press { ok: true, ..default() });
-    } else if back {
-        click.0 = Some(Press { back: true, ..default() });
-    }
-}
-
-=======
->>>>>>> task/B221
 /// Started from a lobby link (the browser's `?code=`, or `HST_CODE`): straight to joining that lobby as one player
 /// (the first device to press anything is it, `Menu::step`), then its character select.
 pub(super) fn linked(m: &mut Menu) {
@@ -1171,25 +1091,16 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = true;
-<<<<<<< HEAD
-        // the host: seats 1, 2 (guests), then Start, Characters, Court, Copy Link, Leave along the bottom
-        assert_eq!(item_at(&m, Vec2::new(200.0, 140.0 + 44.0 + 10.0)), Some(0));
-        assert_eq!(item_at(&m, Vec2::new(200.0, 150.0)), None, "the host's own seat");
-        assert_eq!(item_at(&m, Vec2::new(70.0, 340.0)), Some(2), "Start");
-        assert_eq!(item_at(&m, Vec2::new(60.0 + 4.0 * BUTTON_STEP + 50.0, 360.0)), Some(6), "Leave");
-        assert_eq!(item_at(&m, Vec2::new(60.0 + BUTTON_W + 4.0, 340.0)), None, "between pills");
-=======
         let at = |m: &Menu, x: f32, y: f32| match super::super::pointer::tests::act_at(m, x, y) {
             Some(Act::Row(i, _)) => Some(i),
             _ => None,
         };
-        // the host: seats 1, 2 (guests), then Start, Copy Link, Leave along the bottom
+        // the host: seats 1, 2 (guests), then Start, Characters, Court, Copy Link, Leave along the bottom
         assert_eq!(at(&m, 200.0, 140.0 + 44.0 + 10.0), Some(0));
         assert_eq!(at(&m, 200.0, 150.0), None, "the host's own seat");
         assert_eq!(at(&m, 70.0, 340.0), Some(2), "Start");
-        assert_eq!(at(&m, 60.0 + 5.0 * BUTTON_STEP + 50.0, 360.0), Some(7), "Leave");
+        assert_eq!(at(&m, 60.0 + 4.0 * BUTTON_STEP + 50.0, 360.0), Some(6), "Leave");
         assert_eq!(at(&m, 60.0 + BUTTON_W + 4.0, 340.0), Some(3), "between pills: the nearer");
->>>>>>> task/B221
         m.net.hosting = false;
         assert_eq!(at(&m, 70.0, 340.0), Some(0), "a guest's Ready");
     }

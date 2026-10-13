@@ -2285,21 +2285,15 @@ fn draw(
     let hand_x = 0.0;
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
-<<<<<<< HEAD
-    let (quads, said) = layout(&menu, &art.2, &bind, &pads, hand_x);
+    let d = drawn(&menu, &art.2, &bind, &pads, hand_x);
+    *hits = pointer::Hits(d.hits, d.outside);
+    let (quads, said) = (d.out, d.said);
     // the text flies in when a page opens, not on every new selection or status line
     let page = Some((menu.screen, menu.add.page));
     if page != ticker.2 {
         *ticker = Ticker(said, 0.0, page);
     } else {
         ticker.0 = said;
-=======
-    let d = drawn(&menu, &art.2, &bind, &pads, hand_x);
-    *hits = pointer::Hits(d.hits, d.outside);
-    let (quads, said) = (d.out, d.said);
-    if said != ticker.0 {
-        *ticker = Ticker(said, 0.0);
->>>>>>> task/B221
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
     let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
