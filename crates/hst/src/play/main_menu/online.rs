@@ -163,7 +163,7 @@ impl Menu {
     }
 
     /// The code screen's keys: the short code's symbols, or the name's.
-    fn keys(&self) -> &'static [u8] {
+    pub(super) fn keys(&self) -> &'static [u8] {
         if self.net.naming { NAME_KEYS } else { SYMBOLS }
     }
 
@@ -195,6 +195,36 @@ impl Menu {
                 }
             })
             .collect()
+    }
+
+    /// M14: the chosen lobby item is a computer player's seat (←→ and L1 / R1 change its pick).
+    /// M14: on Online or the lobby, whether ↑↓ and ←→ reach another pill from the chosen one.
+    pub(super) fn pill_axes(&self) -> (bool, bool) {
+        let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { ROW_RECTS.to_vec() };
+        let to = |f: fn(&mut Press) -> &mut bool| {
+            let mut k = Press::default();
+            *f(&mut k) = true;
+            pill_step(&rects, self.sel, k) != self.sel
+        };
+        (to(|k| &mut k.up) || to(|k| &mut k.down), to(|k| &mut k.left) || to(|k| &mut k.right))
+    }
+
+    pub(super) fn lobby_bot(&self) -> bool {
+        matches!(self.items().get(self.sel), Some(Item::Seat(i)) if self.net.room.as_ref().is_some_and(|r| r.seats[*i].as_ref().is_some_and(|s| !s.human())))
+    }
+
+    /// M14: what ✕ does on the chosen lobby item, as `online_step` takes it (None: nothing).
+    pub(super) fn lobby_ok(&self) -> Option<&'static str> {
+        Some(match self.items().get(self.sel).copied().unwrap_or(Item::Button("Leave")) {
+            Item::Seat(i) if self.guest(i).is_some() => "Take Out",
+            Item::Seat(_) if self.lobby_bot() => "Remove",
+            Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add Computer"),
+            Item::Mode => "Singles / Doubles",
+            Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
+            Item::Button("Ready") if self.net.prepared => "Not Ready",
+            Item::Button(b @ ("Start" | "Characters" | "Court" | "Ready" | "Leave")) => b,
+            Item::Button(_) => return None,
+        })
     }
 
     /// A guest's seat's peer and name.

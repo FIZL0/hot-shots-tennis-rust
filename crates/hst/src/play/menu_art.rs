@@ -27,7 +27,7 @@ pub(crate) fn wall_k() -> f32 {
 }
 
 static HEAVY: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
-static BOLD: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-Bold.ttf");
+pub(crate) static BOLD: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-Bold.ttf");
 
 /// A label: its ink box on the disc sheet (x, y, w, h) and its words.
 type Label<'a> = (u16, u16, u16, u16, &'a str);
@@ -525,7 +525,7 @@ pub(crate) fn relabel(images: &mut Assets<Image>, w: usize, h: usize, rgba: &[u8
     Some(handle)
 }
 
-fn unpremultiply(p: Pixmap) -> Vec<u8> {
+pub(crate) fn unpremultiply(p: Pixmap) -> Vec<u8> {
     p.pixels().iter().map(|c| c.demultiply()).flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()]).collect()
 }
 
@@ -681,13 +681,13 @@ fn ball(out: &mut Pixmap, cx: f32, cy: f32, r: f32, fill: [u8; 3], rim: [u8; 3])
     stroke_rgb(out, &pb.finish().expect("seam"), seam, r * 0.13, t);
 }
 
-fn fill_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], t: Transform) {
+pub(crate) fn fill_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], t: Transform) {
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     paint.set_color_rgba8(c[0], c[1], c[2], 255);
     out.fill_path(path, &paint, FillRule::Winding, t, None);
 }
 
-fn stroke_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], w: f32, t: Transform) {
+pub(crate) fn stroke_rgb(out: &mut Pixmap, path: &tiny_skia::Path, c: [u8; 3], w: f32, t: Transform) {
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     paint.set_color_rgba8(c[0], c[1], c[2], 255);
     out.stroke_path(path, &paint, &Stroke { width: w, line_join: LineJoin::Round, line_cap: LineCap::Round, ..Stroke::default() }, t, None);
@@ -844,7 +844,7 @@ fn info_icons(out: &mut Pixmap) {
 }
 
 /// A box with rounded corners of radius `r`.
-fn rounded(l: f32, t: f32, rr: f32, b: f32, r: f32) -> tiny_skia::Path {
+pub(crate) fn rounded(l: f32, t: f32, rr: f32, b: f32, r: f32) -> tiny_skia::Path {
     let c = r * 0.5523;
     let mut pb = PathBuilder::new();
     pb.move_to(l + r, t);
@@ -1023,7 +1023,7 @@ fn upscale(px: &[[f32; 4]], w: usize, h: usize) -> Pixmap {
 }
 
 /// `s` as one path in font units (y down), and its advance.
-fn text_path(font: &ab_glyph::FontRef, s: &str) -> Option<tiny_skia::Path> {
+pub(crate) fn text_path(font: &ab_glyph::FontRef, s: &str) -> Option<tiny_skia::Path> {
     use ab_glyph::{Font, OutlineCurve};
     let mut pb = PathBuilder::new();
     let (mut pen, mut prev) = (0.0, None);

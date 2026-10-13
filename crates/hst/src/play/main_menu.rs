@@ -44,6 +44,7 @@ pub(crate) use previews::face;
 
 pub(super) mod cursor;
 pub(crate) mod flame;
+pub(crate) mod legend;
 mod online;
 mod mods_screen;
 mod pointer;
@@ -2595,6 +2596,9 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
         .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
+    // M14: the button legend
+    legend::plugin(app);
+    app.add_systems(Update, legend::fill.after(step));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
         (online::poll.after(step).before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),

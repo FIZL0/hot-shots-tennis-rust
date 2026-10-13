@@ -456,6 +456,23 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, super::main_menu::cursor::setup)
         .add_systems(Update, super::main_menu::cursor::tick.after(draw));
     super::main_menu::pause::plugin(app);
+    super::main_menu::legend::plugin(app);
+    app.add_systems(Update, legend.after(step));
+}
+
+/// M14: the pause menu's legend (its Settings screens fill their own, `pause.rs`): `step`'s keys and buttons.
+fn legend(menu: Res<Menu>, settings: Res<PauseSettings>, last: Res<super::main_menu::legend::Last>, mut out: ResMut<super::main_menu::legend::Legend>) {
+    use super::main_menu::legend::{Act, item};
+    if !menu.open || settings.open || menu.quitting.is_some() {
+        return;
+    }
+    let mut v = vec![item(Act::UpDown, "Move", &["W", "S"]), item(Act::Ok, "Choose", &["Enter", "J"])];
+    if menu.ask.is_some() {
+        v.extend([item(Act::Back, "No", &["Backspace", "K"]), item(Act::Start, "No", &["Esc"])]);
+    } else {
+        v.push(item(Act::Start, "Resume", &["Esc"]));
+    }
+    out.one(*last, v);
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
