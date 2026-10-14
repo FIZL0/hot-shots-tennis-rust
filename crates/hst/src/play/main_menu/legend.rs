@@ -168,6 +168,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.droppable(m.sel.min(m.players() - 1)) {
                 v.push((Act::Page, "Remove"));
             }
+            if m.can_bot(m.sel.min(m.players() - 1)) {
+                let p = m.sel.min(m.players() - 1);
+                v.push((Act::Card, if m.bots[p] { "Remove COM" } else { "Add COM" }));
+            }
             v.extend([(Act::Ok, "Start"), (Act::Back, "Back")]);
         }
         Screen::Assign => {
@@ -199,6 +203,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             if me.ready {
                 v.push((Act::Back, "Cancel"));
+            } else if m.online() && m.net.edit == Some(p) {
+                v.push((Act::Back, "Back"));
             } else if m.seats[p].is_none() && m.players.iter().take(m.players()).any(|q| q.ready) {
                 v.push((Act::Back, "Back"));
             } else if m.seats[p] == Some(dev) && m.droppable(p) {
@@ -248,7 +254,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let (ud, lr) = m.pill_axes();
             if m.lobby_bot() {
                 moves(&mut v, (ud, false));
-                v.extend([(Act::LeftRight, "Character"), (Act::Costume, "Costume")]);
+                v.extend([(Act::LeftRight, "Character"), (Act::Costume, "Costume"), (Act::Card, "Remove")]);
             } else {
                 moves(&mut v, (ud, lr));
             }

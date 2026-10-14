@@ -1024,8 +1024,9 @@ fn want(to: &str, h: u64, room: &Room, joined: &[(String, Link, Conn)], packs: &
         return Some(b.clone());
     }
     let (seat, _) = room.mods().find(|(_, w)| w.looks == h)?;
-    if seat.peer == "host" {
-        let b = std::sync::Arc::new(own_pack(room.seats.iter().flatten().filter(|s| s.peer == "host").map(|s| s.pick.clone()), h)?);
+    // B216: the host's computer players' mods are the host's own
+    if seat.peer == "host" || seat.peer == CPU {
+        let b = std::sync::Arc::new(own_pack(room.seats.iter().flatten().filter(|s| s.peer == "host" || s.peer == CPU).map(|s| s.pick.clone()), h)?);
         packs.insert(h, b.clone());
         return Some(b);
     }
@@ -2527,6 +2528,65 @@ mod tests {
             hcmd.send(Cmd::Ready(seen.ver)).unwrap();
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             assert_eq!(r.seats[0].as_ref().unwrap().pick.r#mod.as_ref().unwrap().looks, h);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B216 on loopback: the host's computer player on a mod (in costume 2): the guest sees its wire, gets its looks
+    /// from the host (the host's own mod, though the seat is the computer's) and the match starts with it.
+    #[test]
+    fn a_hosts_computer_player_on_a_mod_reaches_the_guest() {
+        let dir = std::env::temp_dir().join(format!("hst-b216-net-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), "{}").unwrap();
+        let pack = crate::mods_online::pack(&dir).unwrap();
+        let h = crate::mods_online::hash(&pack);
+        let wire = crate::mods_online::Wire {
+            id: "x".into(), name: "X".into(), donor: 3, hand: 1.0, base: 3, overrides: vec![], ai_row: 3,
+            names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: h, dir: Some(dir.clone()),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(0, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 2)).await;
+            hcmd.send(Cmd::Bot(3, Some(Pick { r#mod: Some(Box::new(wire.clone())), ..Pick::disc(3, 2) }))).unwrap();
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.seats[3].is_some())).await else { unreachable!() };
+            let s = seen.seats[3].as_ref().unwrap();
+            assert_eq!((s.human(), s.pick.costume, s.pick.r#mod.as_ref().map(|w| w.looks)), (false, 2, Some(h)));
+            gcmd.send(Cmd::Want(h)).unwrap();
+            assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(h, pack));
+            gcmd.send(Cmd::Prepared(true)).unwrap();
+            gcmd.send(Cmd::Ready(seen.ver)).unwrap();
+            hcmd.send(Cmd::Ready(seen.ver)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.len() == 1)).await;
+            hcmd.send(Cmd::Start).unwrap();
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            let s = r.seats[3].as_ref().unwrap();
+            assert_eq!((s.peer.as_str(), s.pick.char, s.pick.costume, s.pick.r#mod.as_ref().map(|w| w.id.as_str())), (CPU, 3, 2, Some("x")));
         });
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -10,13 +10,14 @@
 //!
 //! Who plays: the device that chose Local is player 1; in the assignment the other pads and the keyboard join with ✕
 //! (the first free seat, ←/→ to change seat, ○ or its seat's ✕ to leave; on the character select ✕ holds the seat open
-//! for the next device's ✕, B238), up to four humans, any device on any seat; the rest are the
-//! computer's. Player slots in the match: singles 1P→0, 2P→1;
+//! for the next device's ✕, B238), up to four humans, any device on any seat; 1P's ←→ and △ add a computer player
+//! to a free seat (or take it off, B216), and the seats left empty are filled at Start like an online lobby's (the
+//! first characters nobody has). Player slots in the match: singles 1P→0, 2P→1;
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
-//! it, and a character with none free is drawn dark and passed over by the cursor); the computer's players are
+//! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars-random = 1P on the Random card, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -395,6 +396,9 @@ struct Menu {
     doubles: bool,
     /// The device driving each player (menu order 1P..4P); `None` is the computer.
     seats: [Option<Dev>; 4],
+    /// B216: the seats 1P added a computer player to (picked on the select by 1P); a seat with no device and no bot
+    /// fills at Start ([`Menu::fill_open`]). Online, the room's computer seats (`align`).
+    bots: [bool; 4],
     players: [Player; 4],
     court: usize,
     sets: usize,
@@ -430,6 +434,7 @@ impl Default for Menu {
             settings: Settings::default(),
             doubles: false,
             seats: [None; 4],
+            bots: [false; 4],
             players: [Player::default(); 4],
             court: COURTS, // Random
             sets: 0,
@@ -582,12 +587,47 @@ impl Menu {
         let n = self.players();
         if let Some(p) = (0..n).find(|&p| self.seats[p] == Some(dev)) {
             let humans_ready = (0..n).all(|q| self.seats[q].is_none() || self.players[q].ready);
-            if !self.players[p].ready || p != 0 || !humans_ready || self.online() {
+            if self.online() {
+                return self.online_driven(dev, p);
+            }
+            if !self.players[p].ready || p != 0 || !humans_ready {
                 return Some(p);
             }
-            return (0..n).find(|&q| self.seats[q].is_none() && !self.players[q].ready).or(Some(p));
+            return (0..n).find(|&q| self.bot(q) && !self.players[q].ready).or(Some(p));
         }
         None
+    }
+
+    /// B216: seat `p` has a computer player added (no device on it).
+    fn bot(&self, p: usize) -> bool {
+        self.bots[p] && self.seats[p].is_none()
+    }
+
+    /// B216: seat `p` has nobody: no device, no computer player added; it fills at Start.
+    fn open(&self, p: usize) -> bool {
+        !self.bots[p] && self.seats[p].is_none()
+    }
+
+    /// B216: whether 1P's △ on the seat assignment adds or removes a computer player on seat `p` (local only).
+    fn can_bot(&self, p: usize) -> bool {
+        !self.online() && (1..self.players()).contains(&p) && self.seats[p].is_none()
+    }
+
+    /// B216: the seats nobody took and no computer player was added to, as an online lobby's at Start: the disc
+    /// characters nobody picked, in number order, on their first free costume (B66), ready.
+    fn fill_open(&mut self) {
+        for q in (0..self.players()).filter(|&q| self.open(q)).collect::<Vec<_>>() {
+            let taken: Vec<usize> = (0..self.players())
+                .filter(|&o| o != q && (self.players[o].ready || !self.open(o)))
+                .map(|o| match self.pick(o).0 {
+                    Who::Disc(c) => c,
+                    Who::Mod(i) => self.mods[i].donor,
+                })
+                .collect();
+            let c = (0..CHARS).find(|c| !taken.contains(c)).unwrap_or(0);
+            let costume = self.next_free(q, Who::Disc(c), 0, false).unwrap_or(0);
+            self.players[q] = Player { cursor: GRID.iter().position(|g| g.0 == c).unwrap_or(0), costume, ready: true, ..default() };
+        }
     }
 
     /// B247: on a phone 1P is the screen (taps, or the on-screen pad), and the on-screen pad hides once a real one is in:
@@ -743,6 +783,7 @@ impl Menu {
                     out.push(Sound(0));
                 }
                 if k.ok {
+                    self.bots = [false; 4];
                     self.go(Screen::Assign, &mut out);
                 } else if k.back && self.online() {
                     self.back_to_online(&mut out);
@@ -774,13 +815,20 @@ impl Menu {
                         // the focused seat's device trades places with the next seat that way (1P is never left empty)
                         if let Some((p, q)) = self.host_swap(k.right) {
                             self.seats.swap(p, q);
+                            self.bots.swap(p, q);
                             self.sel = q;
                             out.push(Sound(0));
                         }
                     } else if k.page && self.drop_seat(self.sel.min(n - 1)) {
                         out.push(Sound(1));
+                    } else if k.card && self.can_bot(self.sel.min(n - 1)) {
+                        // B216: △ adds a computer player to the focused empty seat (or takes it off)
+                        let p = self.sel.min(n - 1);
+                        self.bots[p] = !self.bots[p];
+                        out.push(Sound(if self.bots[p] { 2 } else { 1 }));
                     } else if k.back {
                         self.seats[1..].fill(None);
+                        self.bots = [false; 4];
                         self.screen = match self.net.go {
                             Some(online::Go::Find) => Screen::Lobbies,
                             Some(online::Go::Code) => Screen::Code,
@@ -790,14 +838,14 @@ impl Menu {
                     }
                 } else if k.ok && seated.is_none() {
                     let n = if self.online() { self.local_max() } else { n };
-                    if let Some(p) = (0..n).find(|&p| self.seats[p].is_none()) {
+                    if let Some(p) = (0..n).find(|&p| self.seats[p].is_none() && !self.bots[p]) {
                         self.seats[p] = Some(dev);
                         out.push(Sound(2));
                     }
                 } else if (k.left || k.right || k.up || k.down) && let Some(p) = seated {
                     // the next free seat that way (1P stays the host's)
                     let d = if k.right || k.down { 1 } else { n - 2 };
-                    let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none() && !(self.online() && q >= self.local_max()));
+                    let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none() && !self.bots[q] && !(self.online() && q >= self.local_max()));
                     if let Some(q) = to {
                         self.seats.swap(p, q);
                         out.push(Sound(0));
@@ -905,15 +953,23 @@ impl Menu {
                         self.players[p].ready = true;
                         self.skip_taken();
                         out.push(Sound(2));
-                        if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
+                        if self.online() && self.net.edit == Some(p) {
+                            self.online_bot_ready(p, &mut out);
+                        } else if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
                             self.online_ready(&mut out);
-                        } else if (0..self.players()).all(|q| self.players[q].ready) {
+                        } else if (0..self.players()).all(|q| self.players[q].ready || self.open(q)) {
+                            self.fill_open();
                             self.go(Screen::Confirm, &mut out);
                         }
                     }
                 } else if k.back {
                     if self.players[p].ready {
                         self.unready(p);
+                        out.push(Sound(1));
+                    } else if self.online() && self.net.edit == Some(p) {
+                        // B216: the host leaves its computer player as it was in the lobby
+                        self.net.edit = None;
+                        self.go(Screen::Lobby, &mut out);
                         out.push(Sound(1));
                     } else if self.seats[p].is_none() {
                         // player 1 driving a computer player: back to the last one readied
@@ -1426,7 +1482,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
-        "lobby" | "lobby-ask" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
+        "lobby" | "lobby-bot" | "lobby-ask" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" => Screen::Mods,
         _ => Screen::Main,
@@ -1442,6 +1498,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
+        // B216: 2P and 3P computer players added, 4P left open
+        menu.bots = [false, true, true, false];
         menu.players[0].cursor = 6;
         menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
         menu.players[0].card = screen.ends_with("attrs");
@@ -1929,13 +1987,21 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
                 d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
-                d.text(&dev_name(m.seats[p], pads), 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else { [60.0, 110.0, 40.0] });
+                // B216: a seat with nobody is open (filled at Start) until 1P adds a computer player to it
+                let name = if m.open(p) && !m.online() { "Open".to_string() } else { dev_name(m.seats[p], pads) };
+                d.text(&name, 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else if m.bots[p] { [60.0, 110.0, 40.0] } else { [70.0; 3] });
                 if m.droppable(p) {
                     drop_button(&mut d, p, 482.0, y + 14.0);
                 }
+                if m.can_bot(p) {
+                    let (label, fill) = if m.bots[p] { ("- COM", [120.0, 30.0, 30.0]) } else { ("+ COM", [40.0, 100.0, 40.0]) };
+                    d.pill_at([430.0, y + 14.0, 76.0, 28.0], [INK, WHITE, fill], 128.0);
+                    d.centred(label, 468.0, y + 18.0, 20.0, WHITE);
+                    d.hit([430.0, y + 14.0, 76.0, 28.0], pointer::Act::Row(p, Press { card: true, ..default() }));
+                }
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
-            d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off. Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
+            d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
         }
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
@@ -1996,12 +2062,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
     hints(d);
     let n = m.players();
     mode_bar(d, m.doubles as usize, true, [192.0, 54.0, 256.0, 32.0], if m.doubles { "Doubles" } else { "Singles" });
-    let picking = |p: usize| m.seats[p].is_some() || (0..n).filter(|&q| m.seats[q].is_none()).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
+    let picking = |p: usize| m.seats[p].is_some() || m.bot(p) && (0..n).filter(|&q| m.bot(q)).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
     let lead = (0..n).find(|&p| !m.players[p].ready).unwrap_or(0);
     // B201: online, every taken seat shows its player's place (this machine's own lead), an open one stays dark
     let online = m.net.room.is_some() && !m.net.me.is_empty() && !m.net.started;
-    let picking = |p: usize| if online { m.seats[p].is_some() || m.remote(p).is_some() } else { picking(p) };
-    let lead = if online { (0..n).find(|&p| m.seats[p].is_some() && !m.players[p].ready).or((0..n).find(|&p| m.seats[p].is_some())).unwrap_or(lead) } else { lead };
+    let picking = |p: usize| if online { m.seats[p].is_some() || m.remote(p).is_some() || m.net.edit == Some(p) } else { picking(p) };
+    let lead = if online { m.net.edit.or((0..n).find(|&p| m.seats[p].is_some() && !m.players[p].ready)).or((0..n).find(|&p| m.seats[p].is_some())).unwrap_or(lead) } else { lead };
     if m.custom {
         custom_list(d, m, (0..n).filter(|&p| picking(p) && !m.players[p].ready && m.players[p].modded), lead);
     } else {
@@ -2113,7 +2179,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
         }
         if !human {
-            d.text(if online && !picking { "Open" } else { "COM" }, x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
+            d.text(if (online && !picking) || (!online && m.open(p) && !pl.ready) { "Open" } else { "COM" }, x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
         }
         // B201: another machine's player: whose it is
         if let Some(s) = m.remote(p).filter(|s| s.human() && online) {
@@ -2852,6 +2918,34 @@ mod tests {
         }
     }
 
+    /// B216: on the seat assignment, 1P adds a computer player on 2P.
+    fn add_com(m: &mut Menu) {
+        assert_eq!(m.screen, Screen::Assign);
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        m.step(Dev::Keys, press(|p| &mut p.card));
+        assert!(m.bots[1]);
+    }
+
+    /// B216: a singles match with nobody on 2P: 1P readies and the match has 2P filled with the first character
+    /// nobody has, on its first costume.
+    #[test]
+    fn an_open_seat_fills_at_start() {
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu::default();
+        for _ in 0..3 {
+            m.step(Dev::Keys, ok);
+        }
+        assert_eq!(m.screen, Screen::Chars);
+        assert_eq!(m.driven(Dev::Keys), Some(0));
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Confirm);
+        assert!(m.players[1].ready);
+        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
+        // back to the select: 2P open again
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert!(m.screen == Screen::Chars && !m.players[1].ready && m.open(1));
+    }
+
     #[test]
     fn locked_costumes_and_match_order() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
@@ -2864,6 +2958,21 @@ mod tests {
         assert_eq!(m.screen, Screen::Assign);
         m.step(pad, ok); // the pad joins as 2P
         assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(pad)]);
+        // B216: 1P adds a computer player on 3P (△ on its seat, twice takes it off, three times back on); 4P stays open
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        m.step(Dev::Keys, press(|p| &mut p.card));
+        assert!(!m.bots[1], "2P has a device");
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        for _ in 0..3 {
+            m.step(Dev::Keys, press(|p| &mut p.card));
+        }
+        assert_eq!(m.bots, [false, false, true, false]);
+        // a device joining passes over the computer's seat
+        let pad2 = Dev::Pad(Entity::from_raw_u32(11).unwrap());
+        m.step(pad2, ok);
+        assert_eq!(m.seats[3], Some(pad2));
+        m.step(pad2, press(|p| &mut p.back));
+        assert_eq!(m.seats[3], None);
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         // B66: both on Ashley costume 1: 1P locks it in, 2P moves on to costume 2; leaving Ashley and coming back
@@ -2881,10 +2990,8 @@ mod tests {
         assert_eq!(m.players[1].costume, 1, "10 → 2, past 1");
         m.step(pad, ok);
         assert!(m.players[1].ready);
-        // 1P now picks the computer's 3P and 4P: Cody, then Jun
-        m.step(Dev::Keys, press(|p| &mut p.right));
-        m.step(Dev::Keys, ok);
-        m.step(Dev::Keys, press(|p| &mut p.right));
+        // 1P now picks the computer's 3P: Cody; the open 4P fills at Start with the first character nobody has (Jun)
+        assert_eq!(m.driven(Dev::Keys), Some(2));
         m.step(Dev::Keys, press(|p| &mut p.right));
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Confirm);
@@ -2923,7 +3030,8 @@ mod tests {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let three = |i: usize| crate::mods::Mod { id: format!("m{i}"), costumes: vec!["a".into(), "b".into(), "c".into()], ..fake_mod(i) };
         let pack = crate::mods::Mod { id: "pack".into(), costumes: vec!["a".into(), "b".into()], costume_of: Some(0), ..fake_mod(0) };
-        let mut m = Menu { screen: Screen::Chars, doubles: true, mods: vec![three(1), three(2), pack], seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        let mut m = Menu { screen: Screen::Chars, doubles: true, mods: vec![three(1), three(2), pack], seats: [Some(Dev::Keys), Some(pad), None, None], bots: [false, false, true, true], ..default() };
+        // B216: 3P and 4P are added computer players (a seat with nobody would be filled at Start)
         // taken: 2P ready on Jun's costume 4, the computer's 3P on the first mod's costume 2
         m.players[1] = Player { cursor: GRID.iter().position(|g| g.0 == 2).unwrap(), costume: 3, ready: true, ..default() };
         m.players[2] = Player { modded: true, pick: 0, costume: 1, ready: true, ..default() };
@@ -3170,6 +3278,7 @@ mod tests {
         let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };
         m.step(Dev::Keys, ok); // Local, singles
         m.step(Dev::Keys, ok);
+        add_com(&mut m);
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         m.step(Dev::Keys, press(|p| &mut p.page));
@@ -3249,9 +3358,11 @@ mod tests {
         assert_eq!(m.resolve(Who::Disc(0), 12), (Who::Mod(2), 0));
         let ok = press(|p| &mut p.ok);
         let mut m = m;
-        for _ in 0..3 {
+        for _ in 0..2 {
             m.step(Dev::Keys, ok);
         }
+        add_com(&mut m);
+        m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         m.step(Dev::Keys, press(|p| &mut p.prev)); // 0 → 12: pack z's only costume
         assert_eq!(m.pick(0), (Who::Mod(2), 0));
@@ -3276,9 +3387,11 @@ mod tests {
         let ok = press(|p| &mut p.ok);
         let hand = press(|p| &mut p.hand);
         let mut m = Menu::default();
-        for _ in 0..3 {
+        for _ in 0..2 {
             m.step(Dev::Keys, ok);
         }
+        add_com(&mut m);
+        m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         assert_eq!(m.who(0), Who::Disc(0), "Ashley");
         m.step(Dev::Keys, hand);

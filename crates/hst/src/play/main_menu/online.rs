@@ -5,7 +5,9 @@
 //! placeholder picks, which holds their seats while they pick on the same character select as Local (B195; no
 //! computer players: the open seats are for the other peers). The lobby: its seats (who, their name, picking or
 //! ready), the code and QR to share, Start (the open seats to the computer), Ready, Characters (pick again), Court
-//! (the host's confirm screen: court, sets, games, umpire, until Start), Leave and taking a player out. The player's
+//! (the host's confirm screen: court, sets, games, umpire, until Start), Leave and taking a player out. The host adds a
+//! computer player to an open seat and picks its character, costume and level on the select with its own cursor
+//! (B216; △ removes it); its pick goes into the room like a person's. The player's
 //! name (Name, `online.txt`'s `name`) is typed on Join by Code's keys.
 
 use bevy::prelude::*;
@@ -68,6 +70,8 @@ pub struct View {
     pub finding: u8,
     pub fail: Option<&'static str>,
     pub spin: f32,
+    /// B216: the host's computer player (its seat) whose character it's picking on the select.
+    pub edit: Option<usize>,
 }
 
 /// What an Online press asks of the app.
@@ -137,17 +141,50 @@ impl Menu {
 
     /// This machine's players' picks, in seat order.
     fn picks(&self) -> Vec<Pick> {
-        let pick = |p: usize| {
-            match self.pick(p) {
-                // a mod: its donor, and its gameplay data for every peer
-                (super::Who::Mod(i), costume) => {
-                    let m = &self.mods[i];
-                    Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new) }
-                }
-                (super::Who::Disc(c), costume) => Pick::disc(c, costume),
+        (0..self.players()).filter(|&p| self.seats[p].is_some()).map(|p| self.wire(p)).collect()
+    }
+
+    /// Player `p`'s pick as it travels.
+    fn wire(&self, p: usize) -> Pick {
+        match self.pick(p) {
+            // a mod: its donor, and its gameplay data for every peer
+            (super::Who::Mod(i), costume) => {
+                let m = &self.mods[i];
+                Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new) }
             }
-        };
-        (0..self.players()).filter(|&p| self.seats[p].is_some()).map(pick).collect()
+            (super::Who::Disc(c), costume) => Pick::disc(c, costume),
+        }
+    }
+
+    /// B216: online, the player `dev` drives on the select (it sits in seat `p`): the host's first device drives the
+    /// computer player it's picking for, every other its own.
+    pub(super) fn online_driven(&self, dev: super::Dev, p: usize) -> Option<usize> {
+        let first = (0..4).find(|&q| self.seats[q].is_some()).and_then(|q| self.seats[q]);
+        match self.net.edit {
+            Some(i) if self.net.hosting && first == Some(dev) => Some(i),
+            _ => Some(p),
+        }
+    }
+
+    /// B216: the host's lobby into the select to pick seat `i`'s computer player (`new`: the one just added).
+    fn edit_bot(&mut self, i: usize, new: Option<&Pick>, out: &mut Vec<Effect>) {
+        self.align();
+        if let Some(p) = new {
+            self.players[i] = super::Player { cursor: super::GRID.iter().position(|g| g.0 == p.char).unwrap_or(0), costume: p.costume, ..default() };
+        }
+        self.players[i].ready = false;
+        self.custom = self.players[i].modded;
+        self.net.edit = Some(i);
+        self.net.status.clear();
+        self.go(Screen::Chars, out);
+    }
+
+    /// B216: the host's computer player in seat `p` ready on the select: its pick to the lobby, which carries it to
+    /// everyone and into the handshake at Start like a person's.
+    pub(super) fn online_bot_ready(&mut self, p: usize, out: &mut Vec<Effect>) {
+        self.net.edit = None;
+        self.go(Screen::Lobby, out);
+        out.push(Effect::Online(Fx::Net(Cmd::Bot(p, Some(self.wire(p))))));
     }
 
     /// The lobby this machine would host: its players in the first seats, the rest open.
@@ -218,7 +255,7 @@ impl Menu {
     pub(super) fn lobby_ok(&self) -> Option<&'static str> {
         Some(match self.items().get(self.sel).copied().unwrap_or(Item::Button("Leave")) {
             Item::Seat(i) if self.guest(i).is_some() => "Take Out",
-            Item::Seat(_) if self.lobby_bot() => "Remove",
+            Item::Seat(_) if self.lobby_bot() => "Pick",
             Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add Computer"),
             Item::Mode => "Singles / Doubles",
             Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
@@ -276,7 +313,7 @@ impl Menu {
         for (&i, (d, pl)) in mine.iter().zip(local) {
             (self.seats[i], self.players[i]) = (Some(d), pl);
         }
-        for i in (0..4).filter(|i| !mine.contains(i)) {
+        for i in (0..4).filter(|i| !mine.contains(i) && self.net.edit != Some(*i)) {
             let Some(s) = r.seats.get(i).cloned().flatten() else {
                 self.players[i] = default();
                 continue;
@@ -543,7 +580,10 @@ impl Menu {
                     out.push(Sound(0));
                 }
                 let item = items.get(self.sel).copied().unwrap_or(Item::Button("Leave"));
-                if k.back || (k.ok && item == Item::Button("Leave")) {
+                if let Some(i) = bot.filter(|_| k.card) {
+                    // B216: △ takes the computer player off its seat
+                    out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
+                } else if k.back || (k.ok && item == Item::Button("Leave")) {
                     out.push(Effect::Online(Fx::Net(Cmd::Leave)));
                     self.back_to_online(out);
                 } else if !k.ok {
@@ -552,9 +592,12 @@ impl Menu {
                         self.net.status = format!("Taking {name} out...");
                         out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Kick(peer)))]);
                     } else if bot.is_some() {
-                        out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
+                        // B216: its character, costume and level on the select
+                        self.edit_bot(i, None, out);
                     } else if let Some(p) = self.bot_random(i, super::dice()) {
-                        out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Bot(i, Some(p))))]);
+                        // B217's random pick, then B216's select on it
+                        out.push(Effect::Online(Fx::Net(Cmd::Bot(i, Some(p.clone())))));
+                        self.edit_bot(i, Some(&p), out);
                     }
                 } else if item == Item::Mode {
                     let r = self.net.room.as_ref();
@@ -638,7 +681,7 @@ impl Menu {
         self.net.short.clear();
         self.net.room = None;
         (self.net.hosting, self.net.prepared, self.net.pick_next, self.net.fit) = (false, false, false, 0);
-        (self.net.me, self.net.sent) = (String::new(), None);
+        (self.net.me, self.net.sent, self.net.edit) = (String::new(), None, None);
         self.screen = Screen::Online;
         out.push(Effect::Sound(1));
     }
@@ -965,6 +1008,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     };
                     d.fitted(&who, x0 + 200.0, y + 9.0, 20.0, 96.0);
                     d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
+                    // B216: the host's ✕ that takes a computer player off (△ on its row)
+                    if let Some(k) = items.iter().position(|it| *it == Item::Seat(i)).filter(|_| !s.human()) {
+                        d.pill_at([x0 + w + 2.0, y + 5.0, 28.0, 28.0], [super::INK, WHITE, [120.0, 30.0, 30.0]], 128.0);
+                        d.centred("X", x0 + w + 16.0, y + 9.0, 20.0, WHITE);
+                        d.hit([x0 + w + 2.0, y + 5.0, 28.0, 28.0], Act::Row(k, Press { card: true, ..default() }));
+                    }
                 }
                 // the host's hand on the guest seat it would take out
                 if let (None, Some(Item::Seat(i))) = (m.net.ask, items.get(m.sel)) {
@@ -1035,9 +1084,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 // B201: the host's open and computer seats, and the singles / doubles switch
                 Some(Item::Seat(i)) if m.guest(*i).is_none() && room.is_some_and(|r| r.seats.get(*i).is_some_and(|s| s.is_some())) => {
-                    "Left / right: its character, L1 / R1: its costume (its level). OK: open the seat again.".into()
+                    "OK: pick its character, costume and level on the select (left / right, L1 / R1 here). Triangle: remove it.".into()
                 }
-                Some(Item::Seat(i)) if m.guest(*i).is_none() => "OK: a computer player in this seat (you choose its character and level).".into(),
+                Some(Item::Seat(i)) if m.guest(*i).is_none() => "OK: add a computer player to this seat and pick its character, costume and level. Left empty, Start fills it.".into(),
                 Some(Item::Mode) => "OK: switch between singles and doubles (everyone readies again).".into(),
                 Some(Item::Seat(i)) => format!("OK takes {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 Some(Item::Button("Start")) => "Start a 4 second countdown, ready or not: open seats are played by the computer.".into(),
@@ -1256,6 +1305,11 @@ pub(super) fn sample(m: &mut Menu) {
     // B201: ACE-42 on Kaoru's second costume, live; as 2P (Sunny Day) on the shared select, the host ready beside them
     let r = m.net.room.as_mut().unwrap();
     r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new() }]);
+    // B216: a computer player on 4P, the host's hand on it
+    if menu == "lobby-bot" {
+        r.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
+        m.sel = 2;
+    }
     if menu == "chars-online" {
         r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new() }]);
         r.ready.clear();
@@ -1626,10 +1680,11 @@ mod tests {
         m.players[1].costume = 2;
         assert!(m.blocked(1));
         assert_eq!(m.lives(), vec![Live { char: 6, costume: 2, ready: false, r#mod: None, name: String::new() }]);
-        // the host: OK on the open seat adds a computer player nobody has, ←→ / L1 R1 change it, OK clears it
+        // the host: OK on the open seat adds a computer player nobody has and opens the select on it (B216): the
+        // host's device drives its cursor; ready, its pick goes to the lobby
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
-        (m.net.me, m.sel) = ("host".into(), 2);
+        (m.net.me, m.sel, m.net.go, m.seats[0]) = ("host".into(), 2, Some(Go::Host), Some(dev));
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };
         assert!(!m.bot_taken(3).unwrap().contains(&(p.char, p.costume)));
         // B217: added on Random: every character and costume comes up, never a taken one
@@ -1638,12 +1693,27 @@ mod tests {
         let drawn: HashSet<(usize, usize)> = (0..20_000u64).map(|s| m.bot_random(3, s.wrapping_mul(0x9e37_79b9_7f4a_7c15))).map(|p| p.map(|p| (p.char, p.costume)).unwrap()).collect();
         assert_eq!(drawn.len(), super::super::CHARS * super::super::COSTUMES - taken.len());
         assert!(drawn.iter().all(|t| !taken.contains(t)));
+        assert_eq!((m.screen, m.net.edit, m.driven(dev), m.players[3].ready), (Screen::Chars, Some(3), Some(3), false));
+        m.align();
+        assert_eq!(m.players[3].char(), p.char, "the seat being picked isn't overwritten by the room");
+        m.step(dev, Press { right: true, ..default() });
+        m.step(dev, Press { next: true, ..default() });
+        let c = m.players[3].char();
+        let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };
+        assert_eq!((p.char, m.screen, m.net.edit), (c, Screen::Lobby, None));
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
+        // OK on a computer's seat: its pick on the select again; ○ back to the lobby as it was
+        m.sel = 2;
+        assert_eq!(net(&m.step(dev, ok)), None);
+        assert_eq!((m.screen, m.players[3].char(), m.players[3].ready), (Screen::Chars, 6, false));
+        assert_eq!(net(&m.step(dev, Press { back: true, ..default() })), None);
+        assert_eq!((m.screen, m.net.edit), (Screen::Lobby, None));
+        m.sel = 2;
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert_eq!((p.char, p.costume, m.sel), (6, 1, 2), "the host's costume 0 of the same character taken");
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { right: true, ..default() })) else { panic!() };
         assert_ne!(p.char, 6);
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Bot(3, None)));
+        assert_eq!(net(&m.step(dev, Press { card: true, ..default() })), Some(Cmd::Bot(3, None)));
         // singles only once the taken seats fit
         m.sel = m.items().iter().position(|it| *it == Item::Mode).unwrap();
         assert_eq!(net(&m.step(dev, ok)), None);

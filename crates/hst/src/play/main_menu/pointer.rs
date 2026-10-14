@@ -357,6 +357,8 @@ pub(super) mod tests {
         assert_eq!(m.screen, Screen::Mode);
         tap(&mut m, 320.0, 170.0); // Singles
         assert_eq!((m.screen, m.doubles), (Screen::Assign, false));
+        tap(&mut m, 468.0, 188.0); // B216: 2P's + COM
+        assert!(m.bots[1]);
         tap(&mut m, 320.0, 118.0); // 1P's card
         assert_eq!(m.screen, Screen::Chars);
         // a face: 1P moves there and is ready; then the face for the computer's pick
