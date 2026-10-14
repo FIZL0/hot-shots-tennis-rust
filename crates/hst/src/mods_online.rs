@@ -130,27 +130,29 @@ pub fn hash(b: &[u8]) -> u64 {
 /// A mod folder's data files (sorted, `/`-separated, upscaled textures left out) as one blob: per file the path's
 /// length (u32 LE), the path, the size (u64 LE), the bytes.
 pub fn pack(dir: &Path) -> Result<Vec<u8>, String> {
-    fn walk(root: &Path, d: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
-        for e in std::fs::read_dir(d)? {
-            let p = e?.path();
+    // B285: through `modfs`, so the browser's mods (held in memory, not on a file system) pack too
+    fn walk(root: &Path, d: &Path, out: &mut Vec<String>) {
+        for p in crate::modfs::read_dir(d) {
             let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
-            if p.is_dir() {
-                // ponytail: the optional upscaled set stays home (standard §3); the receiver draws the mod's own textures
-                if rel != "textures/upscaled" {
-                    walk(root, &p, out)?;
+            if crate::modfs::is_file(&p) {
+                if allowed(&rel) {
+                    out.push(rel);
                 }
-            } else if allowed(&rel) {
-                out.push(rel);
+            } else if rel != "textures/upscaled" {
+                // ponytail: the optional upscaled set stays home (standard §3); the receiver draws the mod's own textures
+                walk(root, &p, out);
             }
         }
-        Ok(())
     }
     let mut files = Vec::new();
-    walk(dir, dir, &mut files).map_err(|e| format!("{}: {e}", dir.display()))?;
+    walk(dir, dir, &mut files);
+    if files.is_empty() {
+        return Err(format!("{}: no mod files", dir.display()));
+    }
     files.sort();
     let mut out = Vec::new();
     for f in files {
-        let b = std::fs::read(dir.join(&f)).map_err(|e| format!("{f}: {e}"))?;
+        let b = crate::modfs::read(&dir.join(&f)).map_err(|e| format!("{f}: {e}"))?;
         out.extend((f.len() as u32).to_le_bytes());
         out.extend(f.as_bytes());
         out.extend((b.len() as u64).to_le_bytes());
@@ -201,19 +203,26 @@ fn files(pack: &[u8], looks: u64) -> Result<Vec<(String, &[u8])>, String> {
 pub fn unpack(pack: &[u8], looks: u64, cache: &Path) -> Result<Mod, String> {
     let files = files(pack, looks)?;
     let dir = cache.join(format!("{looks:016x}"));
-    let _ = std::fs::remove_dir_all(&dir);
+    let gone = || {
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::modfs::remove(&dir);
+    };
+    gone();
     let got = (|| {
         for (name, b) in &files {
             let p = dir.join(name);
-            std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-            std::fs::write(&p, b).map_err(|e| e.to_string())?;
+            // the browser keeps them in memory for the session (`modfs::write`)
+            if !cfg!(target_arch = "wasm32") {
+                std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+            }
+            crate::modfs::write(&p, b.to_vec())?;
         }
         let m = mods::read(&dir)?;
         mods::check(&m)?;
         Ok(m)
     })();
     if got.is_err() {
-        let _ = std::fs::remove_dir_all(&dir);
+        gone();
     }
     got
 }
@@ -228,7 +237,7 @@ pub fn cache(iso: &str) -> PathBuf {
 /// same.
 pub fn find(w: &Wire, roster: &[Mod], cache: &Path) -> Option<PathBuf> {
     let got = cache.join(format!("{:016x}", w.looks));
-    if got.join("mod.json").is_file() {
+    if crate::modfs::is_file(&got.join("mod.json")) {
         return Some(got);
     }
     roster.iter().filter(|m| m.id == w.id).find(|m| pack(&m.dir).is_ok_and(|p| hash(&p) == w.looks)).map(|m| m.dir.clone())
@@ -341,6 +350,12 @@ mod tests {
         let p = pack(&src).unwrap();
         let names: Vec<_> = files(&p, hash(&p)).unwrap().into_iter().map(|f| f.0).collect();
         assert_eq!(names, ["mod.json", "voice/0_0.wav"]);
+        // B285: the browser's mods are in memory (`modfs`), not on disk: the same pack
+        let mem = tmp.join("mem");
+        for f in ["mod.json", "voice/0_0.wav", "run.sh", "textures/upscaled/a.png"] {
+            crate::modfs::add(&mem.join(f), std::fs::read(src.join(f)).unwrap().into());
+        }
+        assert_eq!(pack(&mem).unwrap(), p);
         // a changed byte, a path out of the folder, a cut-off pack: refused
         let mut q = p.clone();
         *q.last_mut().unwrap() ^= 1;

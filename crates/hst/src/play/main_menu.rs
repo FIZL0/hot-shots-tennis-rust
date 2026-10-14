@@ -541,7 +541,7 @@ impl Menu {
     /// B217: a character open to player `p` (any disc character or custom one, a costume pack's costumes going with
     /// its disc character) and one of its open costumes, each at random by `seed`; `None` if nothing's open.
     fn draw(&self, p: usize, seed: u64) -> Option<(Who, usize)> {
-        let whos = (0..CHARS).map(Who::Disc).chain((0..self.mods.len()).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
+        let whos = (0..CHARS).map(Who::Disc).chain((0..self.own_mods()).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
         let open: Vec<(Who, Vec<usize>)> =
             whos.map(|w| (w, (0..self.costumes(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
         let n = open.len() as u64;
@@ -570,14 +570,14 @@ impl Menu {
     /// B296: how many filters □ / Tab cycles: everyone, the disc's, the mods (B304: no per-game ones; one with no
     /// mods).
     fn filters(&self) -> usize {
-        if self.mods.is_empty() { 1 } else { 3 }
+        if self.own_mods() == 0 { 1 } else { 3 }
     }
 
     /// B296: the select's roster under the filter: the Random card (`None`) first, then the disc characters in the
     /// original's grid order (beginner, intermediate, expert), then the custom ones in folder order.
     fn roster(&self) -> Vec<Option<Who>> {
-        let disc = self.filter <= 1 || self.mods.is_empty();
-        let mods = (0..self.mods.len()).filter(|_| self.filter != 1);
+        let disc = self.filter <= 1 || self.own_mods() == 0;
+        let mods = (0..self.own_mods()).filter(|_| self.filter != 1);
         let disc = GRID.iter().map(|g| Who::Disc(g.0)).filter(|_| disc);
         std::iter::once(None).chain(disc.chain(mods.map(Who::Mod)).map(Some)).collect()
     }
@@ -2077,8 +2077,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
     let [rx, ry, rw, rh] = g.roster;
     d.box3([rx, ry, rw, rh], 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
     let mut px = rx + 10.0;
-    let mut pills = vec![("All".to_string(), CHARS + m.mods.len()), ("Hot Shots Tennis".into(), CHARS), ("Mods".into(), m.mods.len())];
-    if m.mods.is_empty() {
+    let mut pills = vec![("All".to_string(), CHARS + m.own_mods()), ("Hot Shots Tennis".into(), CHARS), ("Mods".into(), m.own_mods())];
+    if m.own_mods() == 0 {
         pills.truncate(1);
         pills[0].0 = "Hot Shots Tennis".into();
     }
@@ -2193,7 +2193,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
     d.centred(&format!("<  Costume {} / {costumes}  >", pl.costume + 1), chip[0] + 65.0, chip[1] + 4.0, 14.0, WHITE);
     d.hit([chip[0], chip[1], 65.0, 22.0], pointer::press(|k| k.prev = true));
     d.hit([chip[0] + 65.0, chip[1], 65.0, 22.0], pointer::press(|k| k.next = true));
-    let filter = if m.mods.is_empty() { "" } else { " Tab / Square: the roster's filter." };
+    let filter = if m.own_mods() == 0 { "" } else { " Tab / Square: the roster's filter." };
     match who {
         Who::Mod(i) => {
             let md = &m.mods[i];
