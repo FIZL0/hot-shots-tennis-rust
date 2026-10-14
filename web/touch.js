@@ -60,10 +60,18 @@ const pad = {
 const realPads = navigator.getGamepads?.bind(navigator) ?? (() => []);
 const anyReal = () => [...realPads()].some(g => g && g.connected);
 let shown = false;
+// B165: the game's polls, counted in animation frames. A tap shorter than a frame (or one that lands while the page is
+// busy, its down and up queued together) would come and go between two polls and never be seen: a button stays down
+// until a poll has seen it and a later frame has started, so every tap counts once.
+let tick = 0;
+const seenAt = {}; // button -> the frame a poll first saw it down
+const held = Object.fromEntries(Object.keys(B).map(k => [k, new Set()])); // button -> the pointers on it
 // B247: never listed next to a real pad, even before `update` hides the controls: a controller picked up between two
 // frames would otherwise take 2P's slot while the touch pad holds 1P's, and keep it after the touch pad goes (1P left
 // with none)
 navigator.getGamepads = () => {
+  for (const k in B) settle(k);
+  for (const k in B) if (buttons[B[k]].pressed) seenAt[k] ??= tick;
   const list = [...realPads()];
   if (shown && !list.some(g => g && g.connected)) list.push(pad);
   return list;
@@ -82,6 +90,8 @@ const css = `
 #touch button { position: absolute; pointer-events: auto; touch-action: none; border: 2px solid #fff5; background: #0004;
   color: inherit; font: inherit; border-radius: 50%; width: calc(var(--u) * 1.25); height: calc(var(--u) * 1.25); padding: 0; }
 #touch button.on { background: #fff6; }
+/* B165: a touch just past a button's edge still hits it (the face buttons' extended circles just don't overlap) */
+#touch button::after { content: ''; position: absolute; inset: calc(var(--u) * -.2); border-radius: inherit; }
 #touch button.small { border-radius: calc(var(--u) * .3); width: calc(var(--u) * 1.5); height: calc(var(--u) * .7);
   font-size: calc(var(--u) * .3); opacity: .7; }
 #rotate { display: none; position: fixed; inset: 0; z-index: 20; background: #000; color: #eee; align-items: center;
@@ -119,14 +129,35 @@ const set = (k, on) => {
   b.value = on ? 1 : 0;
   root.querySelector(`[data-b="${k}"]`).classList.toggle('on', on);
   if (on) navigator.vibrate?.(8);
+  else delete seenAt[k];
   stamp();
 };
+// up once no pointer holds it and the game has had it down for a frame
+const settle = k => {
+  if (!held[k].size && buttons[B[k]].pressed && seenAt[k] !== undefined && tick > seenAt[k]) set(k, false);
+};
+// each pointer tracked on its own (B165): a second finger on a button neither re-presses it nor lets it go when it lifts
 for (const el of root.querySelectorAll('button')) {
   const k = el.dataset.b;
-  el.addEventListener('pointerdown', e => { e.preventDefault(); el.setPointerCapture(e.pointerId); set(k, true); });
-  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, () => buttons[B[k]].pressed && set(k, false));
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    held[k].add(e.pointerId);
+    // ponytail: a tap landing while the last one still waits on its frame merges with it (taps < 2 frames apart)
+    if (!buttons[B[k]].pressed) set(k, true);
+    else el.classList.add('on');
+  });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, e => {
+    held[k].delete(e.pointerId);
+    if (!held[k].size) el.classList.remove('on');
+    settle(k);
+  });
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
+// B165: no browser gesture (pinch zoom, double-tap zoom, scroll) out of two fingers on the controls; iOS Safari can
+// start one despite `touch-action: none` and cancel both pointers
+for (const t of ['touchstart', 'touchmove']) root.addEventListener(t, e => e.cancelable && e.preventDefault(), { passive: false });
+addEventListener('gesturestart', e => e.preventDefault());
 
 // the stick appears where the left thumb lands; full tilt at the base's radius
 const zone = root.querySelector('.zone');
@@ -190,10 +221,11 @@ const update = () => {
   if (want !== shown) {
     shown = want;
     root.hidden = !want;
-    if (!want) for (const k in B) buttons[B[k]].pressed && set(k, false);
+    if (!want) for (const k in B) held[k].clear(), buttons[B[k]].pressed && set(k, false);
   }
 };
 const frame = () => {
+  tick++;
   update();
   requestAnimationFrame(frame);
 };
@@ -207,7 +239,9 @@ for (const e of ['gamepadconnected', 'gamepaddisconnected']) addEventListener(e,
 // spare history entry that a back gesture getting through only pops. Not on the ISO import page.
 const inGame = () => !document.getElementById('disc')?.offsetParent;
 addEventListener('touchstart', e => {
-  const x = e.touches[0]?.clientX;
+  // the touch that just landed (B165: `touches[0]` is the first one still held, so a stick thumb near the edge used to
+  // swallow every other finger's touches too)
+  const x = e.changedTouches[0]?.clientX;
   if (inGame() && (x < 20 || x > innerWidth - 20)) e.preventDefault();
 }, { passive: false, capture: true });
 // B113: iOS starts a text selection, the magnifier or the long-press callout from a drag on the stick or the canvas,
