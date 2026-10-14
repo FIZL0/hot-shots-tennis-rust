@@ -61,6 +61,16 @@ fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>, d: Option<Res<super::cutaway:
     s.last = Some(g.cam.view);
 }
 
+/// The player who serves next, through the change of ends (B262): the placement put everyone where the next point
+/// has them, but the score only moves on when the phase ends. The original shows that player in the serve stance
+/// (motion 0x20), bouncing the ball in hand, over the whole move.
+pub(super) fn server(g: &Game) -> Option<usize> {
+    let Phase::ChangeEnds(_) = g.phase else { return None };
+    let mut s = g.score.clone();
+    s.next_point(&g.rules);
+    Some(s.server as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -119,6 +129,15 @@ mod tests {
                 // B193: the last shot's landing markers went with the players' reaction (the original's 0x19)
                 assert!(!landing_shown(g), "landing markers hidden at change-ends tick {n}");
                 aimed |= g.marks.red.is_some();
+                // B262: the next server plays the serve stance at the new end with the ball in hand
+                let i = super::server(g).expect("a server through the change of ends");
+                let (at, ball) = (g.players[i].pos, g.flight.ball.pos);
+                // (y points down: the stance bounces it between about 0.06 and 0.6 m up)
+                assert!(ball[1] < -0.05 && (ball[0] - at[0]).hypot(ball[2] - at[2]) < 1.0, "tick {n}: ball {ball:?} not in the hand of {at:?}");
+                let w = app.world_mut();
+                let m = w.query::<(&Figure, &Motion)>().iter(w).find(|(f, _)| f.0 == i).map(|(_, m)| m.id);
+                assert_eq!(m, Some(0x20), "tick {n}: server's motion");
+                let g = app.world().resource::<Game>();
                 views.push((n, g.prev_view, g.cam.view));
                 to = app.world().resource::<Swing>().run.map(|r| r.1);
             } else if !views.is_empty() {
