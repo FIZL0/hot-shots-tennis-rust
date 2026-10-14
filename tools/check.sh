@@ -12,6 +12,14 @@ n=${HST_CHECK_SLOTS:-2} jobs=$(( $(nproc) / ${HST_CHECK_SLOTS:-2} )); [ "$jobs" 
 lock="$(git rev-parse --git-common-dir)/check.lock"
 until for i in $(seq 0 $((n - 1))); do exec 9>"$lock.$i"; flock -n 9 && break 2; done; false; do sleep 5; done
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$jobs}
+# cargo never deletes stale artifacts (target/ reached 230 GB, 1.2 TB across the slots): any target dir of this
+# checkout (target/, target-wasm/, ...) past HST_TARGET_CAP_GB is started over; sccache makes the rebuild cheap.
+# cargo clean waits on cargo's own build lock, so it never pulls files from under a running build.
+# ponytail: whole-dir wipe, cargo-sweep by age if the rebuilds get annoying
+for t in target target-*; do
+  [ -d "$t" ] && [ "$(du -s --block-size=1G "$t" | cut -f1)" -gt "${HST_TARGET_CAP_GB:-80}" ] &&
+    { echo "$t over ${HST_TARGET_CAP_GB:-80} GB, cleaning it"; cargo clean -q --target-dir "$t" 9>&-; }
+done
 # 9>&-: cargo mustn't inherit the lock, or the sccache server it starts holds it forever
 cargo test -j "$jobs" -q --message-format=short "$@" >"$log" 2>&1 9>&- && {
   echo "TESTS PASSED: $(grep -ao '[0-9]* passed' "$log" | awk '{s+=$1} END{print s+0}') tests"; exit 0; }
