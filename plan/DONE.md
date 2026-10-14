@@ -483,6 +483,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B339** Mods: asynchronous (parallel) store downloads for Download all / several installs, with a Settings → Mods option for how many at once and a lower max on browser/mobile (user 2026-10-14) — files: crates/hst/src/modstore.rs, crates/hst/src/play/main_menu/mods_screen.rs, web/index.html
 - [x] **B354** Verify B347 by eye (its run had no desktop; after B347): `tools/shot.sh` the new character select with △ held/toggled; the stats card shows, matches the old select's panel and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · play.rs character_stats
 - [x] **B353** Verify B348 by eye (its run had no desktop): `tools/shot.sh` the character select with 1, 2 and 4 humans; the shared hint bar replaces the per-panel hints and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · main_menu/legend.rs
+- [x] **B352** Verify B351 by eye (its run had no desktop): on a phone-sized window/browser build, check the phone defaults pick shadows Low at 100 % scale, the Low caster list looks right on each court, and note the fps vs before; fix what's off → play/graphics.rs · main.rs · shadow.rs
 
 
 ### Shots
