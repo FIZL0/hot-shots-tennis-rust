@@ -982,6 +982,10 @@ impl Menu {
             Event::Room(r) => {
                 // the lobby's singles or doubles is everyone's (a code join didn't choose)
                 self.doubles = r.doubles;
+                // B322: a guest shows the host's short code and its QR (the host's own comes as `Event::Short`)
+                if !v.hosting && !r.short.is_empty() {
+                    v.short = r.short.clone();
+                }
                 v.room = Some(r);
                 // seated (or the lobby open): on to its character select, the seats held meanwhile
                 if v.pick_next && self.screen == Screen::Lobby {
@@ -2082,6 +2086,10 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobby);
         m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], ..Default::default() }));
         assert_eq!((m.screen, m.doubles, m.players()), (Screen::Chars, false, 2));
+        // B322: the guest shows the host's short code and its QR once the host's code is online
+        assert_eq!(shared(&m.net), None);
+        m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], short: "K7QX".into(), ..Default::default() }));
+        assert_eq!((m.net.short.as_str(), shared(&m.net)), ("K7QX", Some(crate::net::link("K7QX"))));
         // B239: □ deletes one character, ○ leaves at once
         let mut m = Menu { screen: Screen::Code, net: View { entry: "AB".into(), ..default() }, ..default() };
         m.step(dev, Press { page: true, ..default() });
