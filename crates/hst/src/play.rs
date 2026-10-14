@@ -592,6 +592,7 @@ pub fn plugin(app: &mut App) {
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .init_resource::<Pads>()
         .add_systems(PostStartup, setup) // after the court's game-space root exists
+        .add_systems(PostUpdate, effects::collapse_hidden.before(bevy::transform::TransformSystems::Propagate))
         .add_systems(
             Update,
             (
