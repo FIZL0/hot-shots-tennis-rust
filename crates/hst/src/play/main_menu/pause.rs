@@ -130,6 +130,16 @@ pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str)
     images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))
 }
 
+/// B293: the pause screen's venue caption, from `message0.dat` as the confirm screen names them: the match's court
+/// (`--court`/`--stage` 1–11, none for a viewer court) and its umpire (`--umpire`), e.g. "Umpire Anna".
+pub(in crate::play) fn venue(iso: &mut Iso, court: usize, umpire: u8) -> (String, String) {
+    let msg = super::messages(&sheet(iso, "MENU/MENU00B.XB0", "/message0.dat"));
+    let at = |i: usize| msg.get(i).map_or("", String::as_str).trim();
+    let court = if (1..=11).contains(&court) { format!("{} {}", at(276 + 2 * (court - 1)), at(277 + 2 * (court - 1))).trim().to_string() } else { String::new() };
+    let name = at(669 + 2 * umpire as usize).trim_start_matches("Umpire ");
+    (court, if name.is_empty() { String::new() } else { format!("Umpire {name}") })
+}
+
 /// A `wide`×`h` coverage row scaled by `w / wide` both ways (box filter), centred on a `w`×`h` one.
 fn shrink(ink: &[f32], wide: usize, w: usize, h: usize) -> Vec<f32> {
     if wide == w {
