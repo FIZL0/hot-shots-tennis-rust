@@ -381,8 +381,17 @@ fn gs_of(model: &mdl::Model, mats: &mtl::Mtl, handles: &[Handle<StandardMaterial
 }
 
 /// A skinned model's parts, one mesh per material (joints = the model's nodes), with its morph targets; `true`
-/// where a part carries them.
+/// where a part carries them. A character's or a court figure's: at Graphics → Mesh's share of triangles (B364).
 pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut impl Store<Mesh>) -> Vec<(Handle<Mesh>, Handle<M>, bool)> {
+    parts_at(model, handles, meshes, true)
+}
+
+/// [`skinned_parts`] with every triangle whatever the Mesh setting (an effect's).
+pub fn skinned_parts_whole<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut impl Store<Mesh>) -> Vec<(Handle<Mesh>, Handle<M>, bool)> {
+    parts_at(model, handles, meshes, false)
+}
+
+fn parts_at<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut impl Store<Mesh>, detail: bool) -> Vec<(Handle<Mesh>, Handle<M>, bool)> {
     #[allow(clippy::type_complexity)]
     let mut by_material: HashMap<usize, (Vec<[f32; 3]>, Vec<[[f32; 3]; 2]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<[u16; 4]>, Vec<[f32; 4]>, Vec<u32>, Vec<Vec<[f32; 3]>>)> = HashMap::new();
     let targets = model.morph_names.len();
@@ -414,6 +423,8 @@ pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes
             continue;
         }
         let n = pos.len();
+        // B364: fewer triangles at Graphics → Mesh below 100 %, the faces' morphing vertices kept
+        let moving: Vec<bool> = (0..n).map(|v| morph.iter().any(|t| t.get(v).is_some_and(|d| *d != [0.0; 3]))).collect();
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
             // VU1's per-bone normals (gs.wgsl): the first joint's as the normal, the second's in the tangent slot
@@ -424,6 +435,9 @@ pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, bevy::mesh::VertexAttributeValues::Uint16x4(joint))
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weight)
             .with_inserted_indices(Indices::U32(idx));
+        if detail {
+            crate::lod::detail(&mut mesh, &moving);
+        }
         let morphed = morph.iter().flatten().any(|d| *d != [0.0; 3]);
         if morphed {
             let attrs = morph.iter().flat_map(|t| (0..n).map(|v| bevy::mesh::morph::MorphAttributes::new(Vec3::from(t.get(v).copied().unwrap_or_default()), Vec3::ZERO, Vec3::ZERO)));
@@ -670,12 +684,13 @@ pub fn disc_racket(
             if idx.is_empty() {
                 continue;
             }
-            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
                 .with_inserted_indices(Indices::U32(idx));
+            crate::lod::detail(&mut mesh, &[]);
             racket.push((meshes.add(mesh), rh.get(mi).cloned().unwrap_or_default()));
         }
     }

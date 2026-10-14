@@ -7,7 +7,7 @@
 use super::super::widescreen::ASPECTS;
 use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
-use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
+use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
 
 /// One option row.
@@ -47,6 +47,8 @@ pub(super) enum Opt {
     FewerShadows,
     BatchCrowd,
     MergeMeshes,
+    /// B364: the characters' share of triangles (`Graphics::mesh`, `lod.rs`).
+    Mesh,
 }
 use Opt::*;
 
@@ -72,7 +74,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = &[Downloads, AtOnce, OnlineMods, Chat];
 /// B118: phone-only options (later: control size and opacity).
@@ -130,6 +132,7 @@ fn label(o: Opt) -> &'static str {
         FewerShadows => "Fewer Shadows",
         BatchCrowd => "Batch Crowd",
         MergeMeshes => "Merge Court Meshes",
+        Mesh => "Mesh",
     }
 }
 
@@ -147,6 +150,7 @@ fn about(o: Opt) -> &'static str {
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
+        Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
         Upscaled => "Use the upscaled textures in mods/texture-replacements.",
@@ -199,6 +203,7 @@ fn choices(o: Opt) -> Vec<String> {
         MenuSize => MENU_SIZES.iter().map(|&t| menu_size_name(t)).collect(),
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
+        Mesh => MESHES.iter().map(|s| format!("{s} %")).collect(),
         Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
         ShowFps => words(&["Off", "On", "Detailed"]),
         Fps => FPS.map(fps_name).to_vec(),
@@ -268,6 +273,7 @@ impl Settings {
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
             BatchCrowd => g.batch_crowd = !g.batch_crowd,
             MergeMeshes => g.merge_meshes = !g.merge_meshes,
+            Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
         }
     }
 
@@ -289,6 +295,7 @@ impl Settings {
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
             MergeMeshes => on_off(g.merge_meshes),
+            Mesh => format!("{} %", g.mesh),
             Upscaled => on_off(self.0[0]),
             Volume(i) => self.2 .0[i].to_string(),
             MenuMusic => on_off(self.0[1]),

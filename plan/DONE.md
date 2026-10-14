@@ -492,6 +492,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B330** Mobile Safari: on the disc-image prompt (first visit), tapping Safari's Share button makes the page say 'the game stopped: script error' — find which handler throws (visibilitychange/pagehide/blur while the import screen is up; Web Inspector console) and keep the page alive — web/index.html, web/touch.js
 - [x] **B329** Mobile: vibration doesn't work (user 2026-10-14, browser build on a phone; Settings vibration is on): find why the rumble never reaches the phone (navigator.vibrate is absent on iOS Safari: if so, say so in the setting and check Android Chrome works) — crates/hst/src/play/main_menu.rs (vibration), web/touch.js, web/index.html
 - [x] **B332** Online: our own lobby must not show in Find's list (or the Online screen's open-lobbies card) and Quickplay must never pick it to join; filter it out by our own endpoint/lobby id (user 2026-10-14) — crates/hst/src/net.rs, crates/hst/src/play/main_menu/online.rs
+- [x] **B364** Mesh detail graphics setting: add a polygon scale option in the graphics settings called "mesh" that lets players render models at lower poly counts, especially modded characters (user 2026-10-14) → crates/hst/src/graphics.rs · crates/hst/src/character.rs · crates/hst/src/play/main_menu/options.rs
 
 
 ### Shots
