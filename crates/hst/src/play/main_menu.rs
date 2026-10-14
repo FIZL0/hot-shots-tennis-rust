@@ -48,6 +48,7 @@ pub(super) mod cursor;
 pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
+mod home;
 mod online;
 mod options;
 mod mods_screen;
@@ -105,6 +106,8 @@ struct Grid {
     x: f32,
     /// The frame's bottom (centred 448 space): 384 at 4:3 or wider, lower in a tall window (B251).
     foot: f32,
+    /// B297: the view's aspect (the main menu lays out by it).
+    aspect: f32,
 }
 
 impl Default for Grid {
@@ -127,7 +130,7 @@ impl Grid {
         let foot = 384.0 + (448.0 / super::widescreen::vshare(aspect) - 448.0) / 2.0;
         let rows = ((((foot - ICON_BOX) - 10.0) / ICON_PITCH) as usize).max(1);
         let w = Self::width(cols);
-        Grid { cols, rows, x: l + (r - l - w) / 2.0, foot }
+        Grid { cols, rows, x: l + (r - l - w) / 2.0, foot, aspect }
     }
 
     fn width(cols: usize) -> f32 {
@@ -391,6 +394,8 @@ struct Menu {
     /// B254: the assignment screen over a paused match (`pause.rs`): `bots` are the match's computer players, fixed
     /// (no △, never swapped); ✕ takes any device off its seat (1P too, without moving the others up).
     paused: bool,
+    /// B297: the main menu's disc id, last match (Rematch) and store news.
+    home: home::Home,
 }
 
 impl Default for Menu {
@@ -418,16 +423,17 @@ impl Default for Menu {
             grid: Grid::default(),
             add: default(),
             paused: false,
+            home: default(),
         }
     }
 }
 
 /// Rows per screen.
 #[cfg(not(target_arch = "wasm32"))]
-const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods", "Quit"];
+const MAIN: &[&str] = &["Local", "Online", "Mods", "Settings", "Quit"];
 /// A web page can't close itself (an `AppExit` there only freezes it), so the browser build has no Quit.
 #[cfg(target_arch = "wasm32")]
-const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods"];
+const MAIN: &[&str] = &["Local", "Online", "Mods", "Settings"];
 const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
@@ -438,6 +444,8 @@ enum Effect {
     Launch,
     Quit,
     Online(online::Fx),
+    /// B297: the last match's setup back, on the confirm screen (the app knows the pads).
+    Rematch(Dev),
 }
 
 impl Menu {
@@ -694,21 +702,23 @@ impl Menu {
         }
         match self.screen {
             Screen::Main => {
-                rows(MAIN.len(), &mut self.sel, &mut out);
+                let names = self.main_rows();
+                rows(names.len(), &mut self.sel, &mut out);
                 if k.ok {
-                    match self.sel {
-                        0 => {
+                    match names[self.sel] {
+                        "Rematch" => out.push(Effect::Rematch(dev)),
+                        "Local" => {
                             self.seats = [Some(dev), None, None, None];
                             self.go(Screen::Mode, &mut out);
                         }
-                        1 => {
+                        "Online" => {
                             self.seats = [Some(dev), None, None, None];
                             self.net.status.clear();
                             out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
                         }
-                        2 => self.go(Screen::Settings, &mut out),
-                        3 => self.mods_open(&mut out),
+                        "Settings" => self.go(Screen::Settings, &mut out),
+                        "Mods" => self.mods_open(&mut out),
                         _ => out.push(Quit),
                     }
                 }
@@ -1199,6 +1209,9 @@ const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
 const INFO: Tex = Tex::Sheet(EXTRA);
 const C00: Tex = Tex::Sheet(EXTRA + 3);
 const C02: Tex = Tex::Sheet(EXTRA + 5);
+/// B297: the main menu's clouds and stars (`MENU10A`'s `sky2`, `sky3`).
+const SKY2: Tex = Tex::Sheet(EXTRA + 6);
+const SKY3: Tex = Tex::Sheet(EXTRA + 7);
 /// The "?" court tile on `C02` (a random court; B217's Random card).
 const RANDOM_TILE: [f32; 4] = [96.0, 360.0, 92.0, 68.0];
 
@@ -1389,6 +1402,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         ("MENU/MENU03.XB0", "confirmation_00"),
         ("MENU/MENU03.XB0", "confirmation_01"),
         ("MENU/MENU03.XB0", "confirmation_02"),
+        ("MENU/MENU10A.XB0", "sky2"),
+        ("MENU/MENU10A.XB0", "sky3"),
     ] {
         sheets.push((name.into(), read(&mut iso, xb, &format!("/{name}.tm2"))));
     }
@@ -1461,6 +1476,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     };
     if fresh && menu.screen == Screen::Main {
         online::linked(&mut menu);
+    }
+    menu.home = home::Home::load(&args.iso, &cnf, &menu);
+    if screen == "rematch" {
+        home::sample(&mut menu);
     }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
@@ -1840,20 +1859,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
 fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> Draw<'a> {
     let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
-        Screen::Main => {
-            d.frame(0, 5);
-            let labels: Vec<String> = MAIN.iter().map(|s| s.to_string()).collect();
-            d.rows(&labels, m.sel, 200.0, 120.0, 240.0, hand_x);
-            let info = match m.sel {
-                0 => text.msg(188).to_string(),
-                1 => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
-                2 => text.msg(190).to_string(),
-                3 => "Add, remove, browse and share custom characters (mods).".into(),
-                _ => "Close the game.".into(),
-            };
-            d.info(&info);
-            mods_screen::ask_layout(&mut d, m, hand_x);
-        }
+        Screen::Main => home::layout(&mut d, m, text, pads, hand_x),
         Screen::Settings => options::hub_layout(&mut d, m, hand_x),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => {
@@ -2522,7 +2528,12 @@ fn step(
                 Effect::Quit => {
                     exit.write(AppExit::Success);
                 }
+                Effect::Rematch(dev) => {
+                    menu.rematch(dev, &pads);
+                    play(2);
+                }
                 Effect::Launch => {
+                    menu.keep_rematch(&args.iso);
                     let a = menu.args(&pads);
                     info!("starting the match: {}", a.join(" "));
                     // the match in this app; its quit comes back to this menu as it is now
