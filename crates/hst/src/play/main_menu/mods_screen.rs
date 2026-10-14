@@ -12,7 +12,7 @@
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
 //! inside a real tap).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::RenderAssetUsages;
@@ -49,6 +49,10 @@ const PITCH: f32 = 44.0;
 const H: f32 = 38.0;
 /// The rows above the installed mods on the main page.
 const TOP: usize = 3;
+
+/// B255: Browse's child buttons on a store mod.
+const INSTALL: &str = "Install";
+const BY: &str = "By author";
 
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
 
@@ -95,10 +99,24 @@ pub(super) struct View {
     changed: bool,
     fresh: bool,
     pub(super) ask: Option<usize>,
+    /// B255: Browse narrowed to one author's mods (whose list it is, and the row to go back to on the whole list).
+    by: Option<By>,
+    /// B255: the installs waiting (Download all, or a press while one runs), the one under way, and each one's tag
+    /// by [`Entry::key`] (Queued, Downloading, Installed, Error) with what to say of it.
+    queue: VecDeque<Entry>,
+    doing: Option<Entry>,
+    jobs: HashMap<String, (&'static str, String)>,
     /// B208: the web build on a touch device (no file picker, no sign-in): Add mod and Upload my mod are greyed, and
     /// choosing one puts up the "use the desktop app" popup (its row while up).
     phone: bool,
     nophone: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct By {
+    author: String,
+    list: Vec<Entry>,
+    from: usize,
 }
 
 impl View {
@@ -114,7 +132,47 @@ impl View {
     }
 
     fn entries(&self) -> &[Entry] {
-        if self.page == Page::Mine { &self.mine } else { &self.store }.as_deref().unwrap_or_default()
+        match (&self.page, &self.by) {
+            (Page::Mine, _) => self.mine.as_deref().unwrap_or_default(),
+            (_, Some(b)) => &b.list,
+            _ => self.store.as_deref().unwrap_or_default(),
+        }
+    }
+
+    /// B255: Browse narrowed to `author`'s mods from the store's list (None: the whole list again, on row `sel`).
+    fn narrow(&mut self, author: Option<String>, from: usize) {
+        self.by = author.map(|a| {
+            let list = self.store.iter().flatten().filter(|e| e.meta.author == a).cloned().collect();
+            By { author: a, list, from }
+        });
+    }
+
+    /// B255: whether Download all leaves `e` out: installed as listed, or installed at the same or a newer version
+    /// (its `mod.json`'s), or already queued or under way.
+    fn skips(&self, e: &Entry) -> bool {
+        let k = e.key();
+        self.queue.iter().chain(&self.doing).any(|q| q.key() == k)
+            || self.installed(e).is_some_and(|(sha, dir)| *sha == e.meta.sha256 || !modstore::newer(&e.meta.version, &modstore::version(dir)))
+    }
+
+    /// B255: queues `e`'s install, starting it if nothing else is under way.
+    fn enqueue(&mut self, e: Entry, upscaled: bool) {
+        self.jobs.insert(e.key(), ("Queued", format!("{} is waiting its turn.", e.meta.name)));
+        self.queue.push_back(e);
+        self.next(upscaled);
+    }
+
+    /// B255: starts the next queued install when none is under way.
+    fn next(&mut self, upscaled: bool) {
+        if self.doing.is_some() {
+            return;
+        }
+        let Some(e) = self.queue.pop_front() else { return };
+        self.busy = true;
+        self.status = format!("Downloading {} ({})...", e.meta.name, mb(e.meta.size));
+        self.jobs.insert(e.key(), ("Downloading", format!("Downloading {}...", e.meta.name)));
+        modstore::install(&e, root(), upscaled);
+        self.doing = Some(e);
     }
 
     /// Installed: Browse mods, Add mod, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
@@ -175,6 +233,7 @@ impl Menu {
     fn mods_page(&mut self, p: Page, sel: usize) {
         self.add.page = p;
         self.add.child = None;
+        self.add.by = None;
         self.add.top = 0;
         self.sel = sel;
         self.add.status = match p {
@@ -309,8 +368,49 @@ impl Menu {
                     }
                 }
             }
-            Page::Browse => {}
+            Page::Browse => {
+                let e = self.add.entries()[s].clone();
+                if c.opts[i] == BY {
+                    self.add.narrow(Some(e.meta.author.clone()), s);
+                    self.sel = 0;
+                    self.add.top = 0;
+                    self.add.status = format!("{} mods by {}.", self.add.entries().len(), e.meta.author);
+                    out.push(Sound(2));
+                } else {
+                    self.install(e, out);
+                }
+            }
         }
+    }
+
+    /// B255: installs store mod `e` (queued behind any under way).
+    fn install(&mut self, e: Entry, out: &mut Vec<Effect>) {
+        let up = self.settings.0[super::UPSCALED_DOWNLOADS];
+        let queued = self.add.doing.is_some();
+        let name = e.meta.name.clone();
+        self.add.enqueue(e, up);
+        if queued {
+            self.add.status = format!("{name} is queued: it installs after the ones before it.");
+        }
+        out.push(Effect::Sound(2));
+    }
+
+    /// B255: Download all on an author's list: queues every one of their mods not installed at the same or a newer
+    /// version.
+    fn download_all(&mut self, out: &mut Vec<Effect>) {
+        let Some(b) = self.add.by.clone() else { return };
+        let up = self.settings.0[super::UPSCALED_DOWNLOADS];
+        let todo: Vec<Entry> = b.list.iter().filter(|e| !self.add.skips(e)).cloned().collect();
+        let (n, skipped) = (todo.len(), b.list.len() - todo.len());
+        for e in todo {
+            self.add.enqueue(e, up);
+        }
+        self.add.status = match (n, skipped) {
+            (0, _) => format!("All of {}'s mods are installed or queued already.", b.author),
+            (n, 0) => format!("Downloading {n} mods by {}, one after another.", b.author),
+            (n, k) => format!("Downloading {n} mods by {} ({k} installed or queued already).", b.author),
+        };
+        out.push(Effect::Sound(if n == 0 { 1 } else { 2 }));
     }
 
     /// The list's own press (no child open).
@@ -327,9 +427,17 @@ impl Menu {
         match self.add.page {
             Page::Installed => self.installed_step(k, s, n, out),
             Page::Browse => {
-                if k.back || (k.ok && s == n - 1) {
+                if let Some(b) = self.add.by.as_ref().filter(|_| k.back || (k.ok && s == n - 1)) {
+                    // B255: back to the whole list, on the mod it was opened from
+                    self.sel = b.from;
+                    self.add.narrow(None, 0);
+                    self.add.status.clear();
+                    out.push(Sound(1));
+                } else if k.back || (k.ok && s == n - 1) {
                     self.mods_page(Page::Installed, 0);
                     out.push(Sound(1));
+                } else if k.ok && s == n - 2 && self.add.by.is_some() {
+                    self.download_all(out);
                 } else if k.ok && s == n - 2 {
                     if !self.add.busy {
                         self.add.busy = true;
@@ -337,17 +445,20 @@ impl Menu {
                         modstore::list(true);
                     }
                     out.push(Sound(2));
-                } else if k.ok && self.add.busy {
+                } else if k.ok && self.add.busy && self.add.doing.is_none() {
                     self.add.status = "Wait for the store to finish first.".into();
                 } else if k.ok {
                     let e = self.add.entries()[s].clone();
-                    if self.add.state(&e) == Some("Installed") {
+                    let installed = self.add.state(&e) == Some("Installed");
+                    if self.add.by.is_none() && !e.meta.author.is_empty() {
+                        // B255: install it, or list its author's mods
+                        let opts: &[&'static str] = if installed { &[BY] } else { &[INSTALL, BY] };
+                        let what = if installed { format!("{} is installed already", e.meta.name) } else { format!("Install {}", e.meta.name) };
+                        self.open_child(opts, format!("{what}. By author lists every mod {} shared.", e.meta.author), out);
+                    } else if installed {
                         self.add.status = format!("{} is installed already.", e.meta.name);
                     } else {
-                        self.add.busy = true;
-                        self.add.status = format!("Downloading {} ({})...", e.meta.name, mb(e.meta.size));
-                        modstore::install(&e, root(), self.settings.0[super::UPSCALED_DOWNLOADS]);
-                        out.push(Sound(2));
+                        self.install(e, out);
                     }
                 }
             }
@@ -573,6 +684,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             },
             Page::Browse | Page::Mine => match v.entries().get(r) {
                 Some(e) => short(&e.meta.name, 14),
+                None if r == v.entries().len() && v.by.is_some() => "Download all".into(),
                 None if r == v.entries().len() => "Refresh".into(),
                 None => "Back".into(),
             },
@@ -596,6 +708,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             *r += v.top;
         }
     }
+    if let Some(b) = v.by.as_ref().filter(|_| v.page == Page::Browse) {
+        // B255: whose mods these are
+        d.outlined(|d| d.label(&format!("Mods by {}", b.author), X + W / 2.0, Y - 26.0, 18.0, W + 60.0, GOLD));
+    }
     if matches!(v.page, Page::Browse | Page::Mine) {
         for r in v.top..end {
             let Some(e) = v.entries().get(r) else { continue };
@@ -603,7 +719,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             if e.verified {
                 d.outlined(|d| d.text("Verified", X + W + 6.0, y + 2.0, 15.0, GOLD));
             }
-            if let Some(t) = v.state(e) {
+            if let Some(t) = v.jobs.get(&e.key()).map(|j| j.0).or_else(|| v.state(e)) {
                 d.outlined(|d| d.text(t, X + W + 6.0, y + 20.0, 15.0, WHITE));
             }
         }
@@ -640,12 +756,15 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ => "Back to the main menu.".into(),
             },
             Page::Browse => match v.entries().get(m.sel) {
+                Some(e) if v.jobs.contains_key(&e.key()) => v.jobs[&e.key()].1.clone(),
                 Some(e) => match v.state(e) {
                     Some("Installed") => format!("{} is installed.", e.meta.name),
                     Some(_) => format!("Press to update {}.", e.meta.name),
                     _ => format!("Press to install {}.", e.meta.name),
                 },
+                None if m.sel == v.entries().len() && let Some(b) = &v.by => format!("Install every mod by {} you don't have yet.", b.author),
                 None if m.sel == v.entries().len() => "Read the store's list again.".into(),
+                None if v.by.is_some() => "Back to every mod in the store.".into(),
                 None if v.store.as_ref().is_some_and(|s| s.is_empty()) => "Nobody has shared a mod yet.".into(),
                 None => "Back to your mods.".into(),
             },
@@ -743,7 +862,7 @@ fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(St
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, one mod's
+/// shown; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, one mod's
 /// Upload open) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
 /// mod's Remove open) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
@@ -772,6 +891,14 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         );
         v.have = v.store.iter().flatten().zip(&v.list).take(4).map(|(e, md)| (e.key(), (format!("{:064}", 0), md.dir.clone()))).collect();
         m.sel = 1;
+        if screen == "browsemods" && std::env::var("HST_CHILD").is_ok() {
+            // B255: FIZL0's mods, Download all under way: one each of Installed, Downloading, Queued, Error
+            v.narrow(Some("FIZL0".into()), 0);
+            let tags = [("Installed", "Installed {}."), ("Downloading", "Downloading {}..."), ("Queued", "{} is waiting its turn."), ("Error", "{} not installed: the download doesn't match its sha256")];
+            v.jobs = v.entries().iter().zip(tags).map(|(e, (t, s))| (e.key(), (t, s.replace("{}", &e.meta.name)))).collect();
+            m.sel = v.entries().len();
+            v.status = "Downloading 3 mods by FIZL0, one after another.".into();
+        }
         if screen == "mymods" {
             (v.page, v.mine, v.account, v.child) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(Child::new(1, &["Take down"])));
             v.status = format!("Take {} off the store (closes its pull request)?", v.mine.as_ref().and_then(|l| l.get(1)).map_or("", |e| &e.meta.name));
@@ -879,6 +1006,7 @@ fn page(
         }
         menu.add.status = s;
     }
+    let up = menu.settings.0[super::UPSCALED_DOWNLOADS];
     for e in modstore::take() {
         let v = &mut menu.add;
         match e {
@@ -888,6 +1016,9 @@ fn page(
                     Ok(list) => {
                         v.status = format!("{} mods in the store.", list.len());
                         v.store = Some(list);
+                        if let Some(b) = v.by.take() {
+                            v.narrow(Some(b.author), b.from);
+                        }
                     }
                     Err(e) => {
                         v.status = e;
@@ -897,6 +1028,14 @@ fn page(
             }
             Event::Installed(r) => {
                 v.busy = false;
+                // B255: the queued install's tag, then the next one
+                if let Some(e) = v.doing.take() {
+                    let job = match &r {
+                        Ok(_) => ("Installed", format!("Installed {}. Restart the game to play it.", e.meta.name)),
+                        Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
+                    };
+                    v.jobs.insert(e.key(), job);
+                }
                 v.refresh();
                 if r.is_ok() {
                     v.changed();
@@ -907,6 +1046,7 @@ fn page(
                     Ok(name) => format!("Installed {name}. Restart the game to play it."),
                     Err(e) => format!("Not installed: {e}"),
                 };
+                v.next(up);
             }
             Event::Progress(s) => v.status = s,
             Event::Mine(r) => {
@@ -1257,5 +1397,61 @@ mod tests {
         assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Upload, 1));
+    }
+
+    /// B255: a store mod's press opens Install / By author; By author lists only that author's mods with Download all,
+    /// which queues each one not installed at the same or a newer version (tagged Queued) and leaves the rest; Back
+    /// returns to the whole list on the mod it came from.
+    #[test]
+    fn browse_by_author() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let e = |id: &str, who: &str, ver: &str| Entry {
+            meta: Meta { id: id.into(), name: id.to_uppercase(), author: who.into(), version: ver.into(), sha256: id.repeat(32), size: 1, ..Default::default() },
+            rev: "main".into(),
+            verified: true,
+        };
+        m.add.store = Some(vec![e("a1", "ann", "1"), e("b1", "bob", "1"), e("a2", "ann", "2"), e("a3", "ann", "1.1"), e("a4", "ann", "3")]);
+        // a1 installed as listed; a2 at its version (2.0), a3 at an older one, a4 at a newer one (another zip each)
+        let mut have = vec![("ann/a1".to_string(), ("a1".repeat(32), PathBuf::from("mods/a1")))];
+        for (id, ver) in [("a2", "2.0"), ("a3", "1.0"), ("a4", "4")] {
+            let dir = root().join(format!("t_b255_{id}"));
+            crate::modfs::add(&dir.join("mod.json"), format!(r#"{{"version":"{ver}"}}"#).into_bytes().into());
+            have.push((format!("ann/{id}"), ("x".into(), dir)));
+        }
+        m.add.have = have.into_iter().collect();
+        m.mods_page(Page::Browse, 3);
+        let mut out = Vec::new();
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec![INSTALL, BY, "Cancel"]));
+        m.mods_step(Press { down: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        let ids = |l: &[Entry]| l.iter().map(|x| x.meta.id.clone()).collect::<Vec<_>>();
+        assert_eq!((ids(m.add.entries()), m.sel, m.add.rows()), (vec!["a1".to_string(), "a2".into(), "a3".into(), "a4".into()], 0, 6));
+        assert_eq!(m.add.status, "4 mods by ann.");
+        // an installed one's press offers By author only; in the author's list it says so
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.contains("installed already") && m.add.child.is_none());
+        // (something under way: Download all only queues, nothing is fetched here)
+        let busy = e("zz", "zed", "1");
+        m.add.doing = Some(busy.clone());
+        m.sel = 4;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(ids(&Vec::from(m.add.queue.clone())), ["a3"]);
+        assert_eq!(m.add.jobs.get("ann/a3").map(|j| j.0), Some("Queued"));
+        assert!(m.add.status.starts_with("Downloading 1 mods by ann (3 installed"), "{}", m.add.status);
+        // again: nothing left to queue
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.starts_with("All of ann's mods") && m.add.queue.len() == 1);
+        // a press on a mod outside Download all queues it too
+        m.add.have.remove("ann/a1");
+        m.sel = 0;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(ids(&Vec::from(m.add.queue.clone())), ["a3", "a1"]);
+        assert!(m.add.status.contains("is queued"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.add.page, m.sel, m.add.entries().len()), (Page::Browse, 3, 5));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!(m.add.page, Page::Installed);
+        assert!(modstore::newer("1.10", "1.9") && !modstore::newer("1.0", "1") && !modstore::newer("", "1") && modstore::newer("2", ""));
     }
 }
