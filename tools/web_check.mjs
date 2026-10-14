@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader). WEB_CPUPROFILE=s:n records the page's CPU profile from second s for n seconds of visit 2 into OUT/visit2.cpuprofile (B273; summed by research/b273_profile.py).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -97,6 +97,11 @@ async function visit(n, pick) {
         await send('Input.dispatchKeyEvent', { type, key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, windowsVirtualKeyCode: { Enter: 13, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Escape: 27, Space: 32 }[key] ?? key.toUpperCase().charCodeAt(0) });
         await sleep(80);
       }
+    }
+    if (!pick && process.env.WEB_CPUPROFILE) {
+      const [at, len] = process.env.WEB_CPUPROFILE.split(':').map(Number);
+      if (t === at) { await send('Profiler.enable'); await send('Profiler.setSamplingInterval', { interval: 1000 }); await send('Profiler.start'); }
+      if (t === at + len) { const r = await send('Profiler.stop'); if (r.result?.profile) writeFileSync(resolve(out, 'visit2.cpuprofile'), JSON.stringify(r.result.profile)); else log.push(`[${n}] cpu profile: ${JSON.stringify(r).slice(0, 300)}`); }
     }
     if (t === stallAt) {
       await evaluate(`{ const end = performance.now() + ${stallMs}; while (performance.now() < end); }`);
