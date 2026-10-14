@@ -484,6 +484,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B354** Verify B347 by eye (its run had no desktop; after B347): `tools/shot.sh` the new character select with △ held/toggled; the stats card shows, matches the old select's panel and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · play.rs character_stats
 - [x] **B356** Random umpire missing circle: the random umpire is drawn without the circle that the other umpires have; it should show the same circle as the other umpires (user 2026-10-14) → hst-sim/umpire.rs · play/npcs.rs · hst-sim/npc.rs
 - [x] **B353** Verify B348 by eye (its run had no desktop): `tools/shot.sh` the character select with 1, 2 and 4 humans; the shared hint bar replaces the per-panel hints and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · main_menu/legend.rs
+- [x] **B358** Mod download fails on iPhone Safari home-screen webapp: on iOS 18.6 (iPhone 13 Pro, Safari webapp added to the home screen) downloading a mod fails with "Couldn't save Wendy in this browser's storage: TypeError: (await d.getFileHandle(parts.at(-1), { create: true })).createWritable is not a function"; Safari does not support createWritable on the origin private file system handles, so mods should save and download successfully on iOS Safari instead of erroring (user 2026-10-14) → modfs.rs · modstore.rs · mods.rs
 
 
 ### Shots

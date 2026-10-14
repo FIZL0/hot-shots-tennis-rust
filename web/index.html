@@ -276,6 +276,45 @@ async function wasm() {
   return new Response(r.body.pipeThrough(count), { headers: { 'Content-Type': 'application/wasm' } });
 }
 
+// B358: `data` (bytes or text) into OPFS at `path` ('a/b/c', folders made as needed). Safari before 26 (iOS 18) has
+// no createWritable on the page ("createWritable is not a function"): its writes go through a worker's sync access
+// handle (opfs.js), one file a message
+let writer;
+const writes = new Map();
+let writeId = 0;
+const writeFile = async (path, data) => {
+  if (data === undefined) throw new Error(`nothing to write for ${path}`);
+  const parts = path.split('/');
+  if ('createWritable' in FileSystemFileHandle.prototype) {
+    let d = dir;
+    for (const s of parts.slice(0, -1)) d = await d.getDirectoryHandle(s, { create: true });
+    const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable();
+    await w.write(data);
+    await w.close();
+    return;
+  }
+  if (!writer) {
+    writer = new Worker('./opfs.js');
+    writer.onmessage = ({ data: { id, error } }) => {
+      const p = writes.get(id);
+      writes.delete(id);
+      error ? p.reject(new Error(error)) : p.resolve();
+    };
+    writer.onerror = e => {
+      for (const p of writes.values()) p.reject(new Error(`OPFS writer: ${e.message ?? e}`));
+      writes.clear();
+      writer = undefined;
+    };
+  }
+  // a copy of its own, handed over to the worker (the caller's array is never left empty)
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
+  const id = writeId++;
+  return new Promise((resolve, reject) => {
+    writes.set(id, { resolve, reject });
+    writer.postMessage({ id, path, bytes }, [bytes.buffer]);
+  });
+};
+
 async function start() {
   const pack = await dir.getFileHandle('disc.pack');
   boot.hidden = false;
@@ -288,11 +327,11 @@ async function start() {
   // the select's baked cards (web.rs add_card): read now, written back as the game bakes them
   const cards = await dir.getDirectoryHandle('previews', { create: true });
   for await (const [name, h] of cards.entries()) if (h.kind === 'file') add_card(name, new Uint8Array(await (await h.getFile()).arrayBuffer()));
-  window.hstCard = (name, bytes) => cards.getFileHandle(name, { create: true }).then(async h => { const w = await h.createWritable(); await w.write(bytes); await w.close(); }).catch(e => console.warn(`hst: card ${name}: ${e}`));
+  window.hstCard = (name, bytes) => writeFile(`previews/${name}`, bytes).catch(e => console.warn(`hst: card ${name}: ${e}`));
   window.hstCardDrop = name => cards.removeEntry(name).catch(() => {});
   // a file for the player (web.rs save_file: a desync's report): kept in OPFS reports/ and downloaded
   window.hstSaveFile = (name, text) => {
-    dir.getDirectoryHandle('reports', { create: true }).then(d => d.getFileHandle(name, { create: true })).then(async h => { const w = await h.createWritable(); await w.write(text); await w.close(); }).catch(e => console.warn(`hst: ${name}: ${e}`));
+    writeFile(`reports/${name}`, text).catch(e => console.warn(`hst: ${name}: ${e}`));
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
@@ -367,15 +406,8 @@ async function start() {
     mod_status(`Saving ${name}...`);
     try {
       await mods.removeEntry(id, { recursive: true }).catch(() => {});
-      const top = await mods.getDirectoryHandle(id, { create: true });
-      const put = async ([p, bytes]) => {
-        const parts = p.split('/');
-        let d = top;
-        for (const s of parts.slice(0, -1)) d = await d.getDirectoryHandle(s, { create: true });
-        const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable();
-        await w.write(bytes);
-        await w.close();
-      };
+      await mods.getDirectoryHandle(id, { create: true });
+      const put = ([p, bytes]) => writeFile(`mods/${id}/${p}`, bytes);
       // eight at a time (a write is slow on its own; all at once held the whole mod twice, B204), mod.json
       // (mod_paths' last) after the rest is in
       const paths = mod_paths(id), json = paths.pop();
