@@ -8,6 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B355** Local menu back button picks CPU player: in the local menu, when P1 has selected their player and presses ○ (circle) to go back, it selects the CPU player instead of going back to the previous step; seen on mobile (touch); ○ should undo P1's selection / return to the previous screen, not confirm a pick for the CPU (user 2026-10-14) → play/main_menu.rs · main_menu/cursor.rs · main_menu/pointer.rs
 - [ ] **B354** Verify B347 by eye (its run had no desktop; after B347): `tools/shot.sh` the new character select with △ held/toggled; the stats card shows, matches the old select's panel and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · play.rs character_stats
 - [ ] **B353** Verify B348 by eye (its run had no desktop): `tools/shot.sh` the character select with 1, 2 and 4 humans; the shared hint bar replaces the per-panel hints and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · main_menu/legend.rs
 - [ ] **B352** Verify B351 by eye (its run had no desktop): on a phone-sized window/browser build, check the phone defaults pick shadows Low at 100 % scale, the Low caster list looks right on each court, and note the fps vs before; fix what's off → play/graphics.rs · main.rs · shadow.rs
