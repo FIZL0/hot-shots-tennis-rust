@@ -472,6 +472,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B350** Court select umpire: label reads 'Umpire Anna', should be just 'Anna'; and its icon looks like an icon inside an icon (nested frame), draw a single icon (user 2026-10-14) → play/main_menu.rs · play/menu_art.rs
 - [x] **B349** Character select: the handedness-swap button hint says 'View'; it should say 'Select' (user 2026-10-14) → play/main_menu.rs · play/main_menu/legend.rs
 - [x] **B340** Pause menu: Circle (back) doesn't close the pause menu and resume the match (user 2026-10-14); it should, like Start → play/main_menu/pause.rs · play/menu.rs
+- [x] **B346** Character select: the default cursor still starts on Ashley; and for a CPU seat the next choice still moves to the next character when it should stay on the same one (in a different costume, already implemented) (user 2026-10-14) → play/main_menu.rs · play/main_menu/previews.rs
 
 
 ### Shots
