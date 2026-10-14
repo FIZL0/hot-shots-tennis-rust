@@ -1360,7 +1360,7 @@ pub(super) fn poll(
 
 /// B214: a pill grid's cursor moved by ←→↑↓: the nearest pill that way (sideways distance counted double, as the
 /// select's `grid_step`; ←→ only along its row); none that way, it stays (the grids don't wrap).
-fn pill_step(rects: &[[f32; 4]], from: usize, k: Press) -> usize {
+pub(super) fn pill_step(rects: &[[f32; 4]], from: usize, k: Press) -> usize {
     let (dx, dy) = ((k.right as i32 - k.left as i32) as f32, (k.down as i32 - k.up as i32) as f32);
     let centre = |[x, y, w, h]: [f32; 4]| (x + w / 2.0, y + h / 2.0);
     let Some(&f) = rects.get(from) else { return 0 };
