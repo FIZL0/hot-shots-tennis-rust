@@ -1544,9 +1544,9 @@ fn page(
 ) {
     if (menu.screen == Screen::Mods) != *on {
         *on = !*on;
-        // every page (B334: it opens on Browse, whose Installed tags need it too); a `sample` screen opens with its
-        // child open
-        if *on && menu.add.child.is_none() {
+        // B334: it opens on Browse (whose Installed tags need it too; the other pages keep it); a `sample` screen
+        // opens on its own page, already read, or with its child open
+        if *on && matches!(menu.add.page, Page::Browse | Page::Installed) && menu.add.child.is_none() {
             menu.add.refresh();
         }
         // B208: a touch device stays one (`web/touch.js` never forgets a touch)
