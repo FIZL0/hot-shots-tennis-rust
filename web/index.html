@@ -229,8 +229,8 @@ const adapter = renderer !== 'webgl2' && (!gecko || renderer === 'webgpu') && na
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'} (renderer setting: ${renderer})`);
 if (!webgpu) document.getElementById('gl').hidden = true;
-// the setting changed in the game: the page reloads into that build (without a `?webgl2`) once it's been left alone
-// for 1.5 s, so stepping past a value doesn't reload; back on the value it started with, nothing happens
+// the setting changed in the game (after its confirm popup, B327): the page reloads into that build (without a
+// `?webgl2`) once the game has written settings.txt; back on the value it started with, nothing happens
 let reloading;
 window.hstRenderer = word => {
   clearTimeout(reloading);
@@ -240,7 +240,7 @@ window.hstRenderer = word => {
     if (!q.has('webgl2')) return location.reload();
     q.delete('webgl2');
     location.search = q.toString();
-  }, 1500);
+  }, 100);
 };
 window.hstWebGL2 = why => {
   if (!webgpu || renderer === 'webgpu') return false;

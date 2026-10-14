@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -543,6 +543,8 @@ struct Menu {
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
     calls: usize,
+    /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
+    switch: Option<(u8, usize)>,
 }
 
 impl Default for Menu {
@@ -576,6 +578,7 @@ impl Default for Menu {
             duo: false,
             rematch: false,
             calls: 0,
+            switch: None,
         }
     }
 }
@@ -962,6 +965,9 @@ impl Menu {
         }
         let host = self.seats[0];
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
+            return out;
+        }
+        if self.switch_step(k, &mut out) {
             return out;
         }
         match self.screen {
@@ -1760,7 +1766,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
-        "settings" | "display" => Screen::Display,
+        "settings" | "display" | "renderer" => Screen::Display,
         "graphics" => Screen::Graphics,
         "sound" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
@@ -1795,6 +1801,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
+    }
+    // B327: the Renderer switch's popup up, on WebGL2
+    if fresh && screen == "renderer" {
+        menu.switch = Some((2, 0));
     }
     if !fresh && menu.screen != Screen::Lobby {
         (menu.screen, menu.sel) = (Screen::Main, 0);

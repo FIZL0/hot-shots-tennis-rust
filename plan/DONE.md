@@ -487,6 +487,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B358** Mod download fails on iPhone Safari home-screen webapp: on iOS 18.6 (iPhone 13 Pro, Safari webapp added to the home screen) downloading a mod fails with "Couldn't save Wendy in this browser's storage: TypeError: (await d.getFileHandle(parts.at(-1), { create: true })).createWritable is not a function"; Safari does not support createWritable on the origin private file system handles, so mods should save and download successfully on iOS Safari instead of erroring (user 2026-10-14) → modfs.rs · modstore.rs · mods.rs
 - [x] **B353** Verify B348 by eye (its run had no desktop): `tools/shot.sh` the character select with 1, 2 and 4 humans; the shared hint bar replaces the per-panel hints and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · main_menu/legend.rs
 - [x] **B352** Verify B351 by eye (its run had no desktop): on a phone-sized window/browser build, check the phone defaults pick shadows Low at 100 % scale, the Low caster list looks right on each court, and note the fps vs before; fix what's off → play/graphics.rs · main.rs · shadow.rs
+- [x] **B327** Renderer switch (Settings → Display, WebGPU ↔ WebGL2) asks first with a confirm pop-up like the mods-change warning (it reloads the page) before switching — crates/hst/src/play/main_menu/options.rs, crates/hst/src/play/main_menu.rs
 
 
 ### Shots
