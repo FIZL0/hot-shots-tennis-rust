@@ -39,6 +39,7 @@
     "lua-lsp@claude-plugins-official": false
   },
   "env": {
-    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    "BASH_MAX_TIMEOUT_MS": "3600000"
   }
 }
