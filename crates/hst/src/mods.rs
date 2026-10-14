@@ -123,7 +123,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
             serde_json::Value::Number(n) => n.to_string(),
             _ => return Err(err(format!("params.override `{k}` must be a number or a string"))),
         };
-        column(k).ok_or_else(|| err(format!("params.override `{k}` is not a TParam.csv column")))?;
+        override_ok(k, &v).map_err(err)?;
         overrides.push((k.clone(), v));
     }
     let texture_face = match j["face"].as_str() {
@@ -211,8 +211,17 @@ fn column(name: &str) -> Option<usize> {
     COLUMNS.iter().position(|c| squash(c) == squash(name))
 }
 
-pub fn is_column(name: &str) -> bool {
-    column(name).is_some()
+/// B275: one `params.override` a mod may have — `read` and a peer's `mods_online::Wire::check` both ask this, so a
+/// mod that loads here is never refused online. A TParam.csv column and a cell up to 64 characters (TParam has text
+/// cells too, e.g. `タイプ` = `オール`); no comma or control character, as the row is re-joined with commas for parsing.
+pub fn override_ok(k: &str, v: &str) -> Result<(), String> {
+    if column(k).is_none() {
+        return Err(format!("params.override `{k}` is not a TParam.csv column"));
+    }
+    if v.chars().count() > 64 || v.chars().any(|c| c == ',' || c.is_control()) {
+        return Err(format!("params.override `{k}` = {v:?} must be up to 64 characters, no commas"));
+    }
+    Ok(())
 }
 
 /// The mod's TParam.csv row as cells: row `base` with the overrides (`play.rs` reads rows the same way).
@@ -1484,6 +1493,9 @@ mod tests {
         let ok = r#"{"standard":1,"id":"x","name":"X","costumes":["model/c00.glb"],"donor":3,"hand":"right","params":{"base":3,"override":{"Strk POW":5}},"ai_row":3,"face":"morph","voice":"voice/"}"#;
         let m = try_(ok).unwrap();
         assert_eq!((m.donor, m.hand, m.overrides.clone()), (3, 1.0, vec![("Strk POW".to_string(), "5".to_string())]));
+        // B275: TParam text cells load (and pass a peer's `Wire::check`, both `override_ok`); a comma is refused at read
+        assert_eq!(try_(&ok.replace("\"Strk POW\":5", "\"タイプ\":\"オール\"")).unwrap().overrides, [("タイプ".to_string(), "オール".to_string())]);
+        assert!(try_(&ok.replace("\"Strk POW\":5", "\"Strk POW\":\"1,2\"")).is_err());
         // M1n: a listed costume with no file is left out, the rest kept
         assert_eq!(try_(&ok.replace("[\"model/c00.glb\"]", "[\"model/c00.glb\",\"model/c01.glb\"]")).unwrap().costumes, ["model/c00.glb"]);
         assert_eq!((m.source.as_str(), try_(&ok.replace("\"id\"", "\"source\":\"Hot Shots Tennis: Get a Grip (PSP) pc03\",\"id\"")).unwrap().source.as_str()), ("", "Hot Shots Tennis: Get a Grip"));

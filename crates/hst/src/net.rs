@@ -1218,6 +1218,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut joined: Vec<(String, Link, Conn)> = Vec::new();
     let mut tick = n0_future::time::interval(REPUBLISH);
     let mut dirty = true;
+    // B275: the code's record goes out every REPUBLISH, not on every lobby change (the pkarr relay allows 10 puts)
+    let mut republish = true;
     let mut listed = false;
     // the board slot this lobby is listed in (B116; SLOTS: none yet)
     let slot = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(SLOTS));
@@ -1274,9 +1276,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep));
                 let (id, slot) = (ep.id(), slot.clone());
+                let again = std::mem::take(&mut republish);
                 n0_future::task::spawn(async move {
                     if let Some(c) = code {
-                        publish(&cx2.dht, &c, &ticket).await;
+                        if again {
+                            publish(&cx2.dht, &c, &ticket).await;
+                        }
                         if put {
                             // B213: a private lobby's board slot is overwritten as full, like its DHT listing
                             let full = Listing::of(id, &l);
@@ -1344,7 +1349,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Guest::In { peer, name, picks, build, link, conn } => {
                     let why = if build != BUILD {
                         Some(format!("different version (host {BUILD}, you {build})"))
-                    } else if let Err(e) = picks.iter().filter_map(|p| p.r#mod.as_deref()).try_for_each(crate::mods_online::Wire::check) {
+                    } else if let Err(e) = picks_ok(&picks) {
                         Some(e)
                     } else if starting.is_some() || !room.take(&peer, &picks) {
                         Some(format!("not enough open seats ({} open, you bring {})", room.open(), picks.len()))
@@ -1379,8 +1384,16 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                 }
                 Guest::Said(peer, Msg::Picks(p)) => {
-                    let ok = p.iter().filter_map(|p| p.r#mod.as_deref()).try_for_each(crate::mods_online::Wire::check).is_ok();
-                    if starting.is_none() && ok && room.repick(&peer, &p) {
+                    let ok = picks_ok(&p);
+                    // B275: a refused pick is a message to both, not a seat change (the guest stays)
+                    if let Err(why) = &ok {
+                        let name = room.names.get(&peer).cloned().unwrap_or_else(|| short(&peer).into());
+                        cx.say(Event::Status(format!("{name}'s pick was refused: {why}")));
+                        if let Some((_, l, _)) = joined.iter().find(|(p, ..)| *p == peer) {
+                            l.send(&Msg::Chat { from: "host".into(), name: "Lobby".into(), text: format!("Your pick was refused: {why}") });
+                        }
+                    }
+                    if starting.is_none() && ok.is_ok() && room.repick(&peer, &p) {
                         ready.clear();
                         broadcast(&joined, &Msg::Room(room.clone()));
                         cx.say(Event::Room(room.clone()));
@@ -1447,7 +1460,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 broadcast(&joined, &Msg::Room(room.clone()));
                 cx.say(Event::Room(room.clone()));
             }
-            _ = tick.tick() => dirty = true,
+            _ = tick.tick() => (dirty, republish) = (true, true),
             Some(c) = rolled.recv() => {
                 code = c;
                 cx.say(Event::Short(code.clone().unwrap_or_default()));
@@ -1467,6 +1480,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     room.count = 0;
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
+                }
+                Some(Cmd::Picks(p)) if picks_ok(&p).is_err() => cx.say(Event::Status(format!("Pick refused: {}", picks_ok(&p).unwrap_err()))),
+                Some(Cmd::Bot(_, Some(p))) if picks_ok(std::slice::from_ref(&p)).is_err() => {
+                    cx.say(Event::Status(format!("Pick refused: {}", picks_ok(std::slice::from_ref(&p)).unwrap_err())));
                 }
                 Some(Cmd::Picks(p)) if starting.is_none() && room.repick("host", &p) => {
                     auto = true;
@@ -1835,6 +1852,11 @@ fn unreachable(addr: &EndpointAddr, relays: bool, ticket: bool) -> Option<&'stat
         .then_some("That lobby can only be reached through a relay (a browser's?): set Relay (Online) to n0 to join it.")
 }
 
+/// B275: every mod in a seat's picks one this game can play.
+fn picks_ok(p: &[Pick]) -> Result<(), String> {
+    p.iter().filter_map(|p| p.r#mod.as_deref()).try_for_each(crate::mods_online::Wire::check)
+}
+
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
 async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
     // a home relay first, as when bind waited for it (B224 moved that here; bounded: a dead relay still leaves LAN)
@@ -1861,7 +1883,13 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 return false;
             }
             m = inbox.recv() => match m.unwrap_or_else(|| Err("closed".into())) {
-                Ok(Msg::Room(r)) | Ok(Msg::Start(r)) if r.check().is_err() => {
+                // B275: a pick this game can't play only ends the link at the start; in the lobby it's a message
+                Ok(Msg::Room(r)) if r.check().is_err() => {
+                    cx.say(Event::Status(format!("A pick this game can't play: {}", r.check().unwrap_err())));
+                    seated = true;
+                    cx.say(Event::Room(r));
+                }
+                Ok(Msg::Start(r)) if r.check().is_err() => {
                     cx.say(Event::Failed(format!("Left: {}", r.check().unwrap_err())));
                     conn.close(b"left");
                     return seated;
@@ -2128,7 +2156,9 @@ async fn lookup(_: &Dht, code: &str) -> Option<(String, i64)> {
 async fn relay_get(code: &str) -> Option<(String, i64)> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let r = reqwest::get(format!("{PKARR}/{}", code_key(code).public().to_z32())).await.ok()?;
+    // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by then
+    // older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
+    let r = reqwest::get(format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros())).await.ok()?;
     let b = r.error_for_status().ok()?.bytes().await.ok()?;
     // the relay's payload: signature, seq (big-endian), the packet
     Some((txt_of(b.get(72..)?)?, i64::from_be_bytes(b.get(64..72)?.try_into().ok()?)))
@@ -2705,6 +2735,51 @@ mod tests {
             accept.await.unwrap();
             // stopped hosting: off the list once its record updates
             host.set_user_data_for_address_lookup(None);
+        });
+    }
+
+    /// B275 on loopback: a mod pick this game can't play is a message, not a dropped guest. A host's (an older
+    /// build's) bad COM pick: the guest stays seated with a status; a guest's bad pick: the host says so to both.
+    #[test]
+    fn a_refused_mod_pick_keeps_the_guest() {
+        let bad = crate::mods_online::Wire {
+            id: "x".into(), name: "X".into(), donor: 3, hand: 1.0, base: 3, overrides: vec![("nope".into(), "1".into())], ai_row: 3,
+            names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: 1, dir: None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(3, 0), Pick { r#mod: Some(Box::new(bad.clone())), ..Pick::disc(3, 0) }]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        assert!(!matches!(e, Event::Failed(_)), "{e:?}");
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let Event::Status(s) = next(&gev, |e| matches!(e, Event::Status(s) if s.contains("can't play"))).await else { unreachable!() };
+            assert!(s.contains("nope"), "{s}");
+            next(&gev, |e| matches!(e, Event::Room(_))).await;
+            gcmd.send(Cmd::Picks(vec![Pick { r#mod: Some(Box::new(bad)), ..Pick::disc(1, 0) }])).unwrap();
+            next(&hev, |e| matches!(e, Event::Status(s) if s.contains("pick was refused"))).await;
+            next(&gev, |e| matches!(e, Event::Chat { text, .. } if text.starts_with("Your pick was refused"))).await;
         });
     }
 

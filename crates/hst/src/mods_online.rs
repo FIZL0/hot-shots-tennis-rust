@@ -64,7 +64,7 @@ impl Wire {
     }
 
     /// Whether a peer's pick is one this game can play (else it's refused): the ranges `mods::read` allows, real
-    /// TParam columns with numbers in them, and a skeleton that is a tree.
+    /// TParam overrides `mods::read` loads (`mods::override_ok`), and a skeleton that is a tree.
     pub fn check(&self) -> Result<(), String> {
         let bad = |what: &str| Err(format!("mod {:?}: bad {what}", self.id));
         if self.donor > 13 || self.base > 13 || self.ai_row > 13 {
@@ -73,8 +73,8 @@ impl Wire {
         if self.hand != 1.0 && self.hand != -1.0 {
             return bad("hand");
         }
-        if self.overrides.iter().any(|(k, v)| !mods::is_column(k) || !v.chars().all(|c| c.is_ascii_digit() || " ./-+".contains(c))) {
-            return bad("params override");
+        for (k, v) in &self.overrides {
+            mods::override_ok(k, v).map_err(|e| format!("mod {:?}: {e}", self.id))?;
         }
         let n = self.names.len();
         if n == 0 || n > MAX_JOINTS || self.parent.len() != n || self.rest.len() != n {
@@ -311,7 +311,9 @@ mod tests {
         bad(Wire { donor: 14, ..wire() });
         bad(Wire { hand: 0.5, ..wire() });
         bad(Wire { overrides: vec![("nope".into(), "1".into())], ..wire() });
-        bad(Wire { overrides: vec![("Strk POW".into(), "x".into())], ..wire() });
+        bad(Wire { overrides: vec![("Strk POW".into(), "1,2".into())], ..wire() });
+        // B275: TParam's text cells (Get a Grip / Out of Bounds mods set their play style) pass, as `mods::read` loads them
+        assert_eq!(Wire { overrides: vec![("タイプ".into(), "オール".into()), ("Strk POW".into(), "1e-3".into())], ..wire() }.check(), Ok(()));
         bad(Wire { parent: vec![Some(1), Some(0)], ..wire() });
         bad(Wire { parent: vec![None, Some(9)], ..wire() });
         bad(Wire { rest: vec![], ..wire() });
