@@ -1852,6 +1852,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 _ => "Close the game.".into(),
             };
             d.info(&info);
+            version_corner(&mut d);
             mods_screen::ask_layout(&mut d, m, hand_x);
         }
         Screen::Settings => options::hub_layout(&mut d, m, hand_x),
@@ -1924,6 +1925,14 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
         d.anchor = Anchor::Centre;
     }
     d
+}
+
+/// B302: the build's version and commit (`v0.1.0 - abc1234`, `+` if built with local changes; the font has no `·`), small in the window's top-right corner under the title bar (the bottom one holds the key legend; pinned to it at any aspect).
+fn version_corner(d: &mut Draw) {
+    let s = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
+    d.anchor = Anchor::Sides;
+    d.outlined(|d| d.text(s, 634.0 - d.width(s, 14.0), 22.0, 14.0, WHITE));
+    d.anchor = Anchor::Centre;
 }
 
 fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
