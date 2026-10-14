@@ -156,8 +156,9 @@ pub fn plugin(app: &mut App) {
             }
         })
         .add_systems(FixedPostUpdate, |w: &mut World| run(w, FixedPostUpdate))
-        // before the base's `texture_faces` (after the match's `animate`) and the UI layout (after `widescreen`'s fit)
-        .add_systems(Update, (|w: &mut World| run(w, Update)).before(crate::character::texture_faces))
+        // before the base's `texture_faces` (after the match's `animate`) and the UI layout (after `widescreen`'s fit);
+        // after the base's `orbit`, or its rig transform could land over the intro's and the ceremony's camera (B288)
+        .add_systems(Update, (|w: &mut World| run(w, Update)).before(crate::character::texture_faces).after(crate::orbit))
         .add_systems(PostUpdate, (|w: &mut World| run(w, PostUpdate)).before(bevy::ui::UiSystems::Layout).before(warm))
         // before winit drops the windows on an `AppExit`
         .add_systems(Last, ((|w: &mut World| run(w, Last)), back).chain().before(bevy::window::ExitSystems));

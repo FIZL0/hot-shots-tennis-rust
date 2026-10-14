@@ -992,8 +992,15 @@ fn orbit(
             o.pitch = (o.pitch - motion.delta.y * 0.005).clamp(-1.5, 1.5);
         }
         o.radius *= 1.0 - scroll.delta.y * 0.1;
-        let rot = Quat::from_euler(EulerRot::YXZ, o.yaw, o.pitch, 0.0);
-        *t = Transform::from_translation(o.focus + rot * Vec3::Z * o.radius).looking_at(o.focus, Vec3::Y);
+        *t = o.transform();
+    }
+}
+
+impl Orbit {
+    /// The camera's transform on this rig.
+    fn transform(&self) -> Transform {
+        let rot = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+        Transform::from_translation(self.focus + rot * Vec3::Z * self.radius).looking_at(self.focus, Vec3::Y)
     }
 }
 
