@@ -68,7 +68,7 @@ fn setup(
     let mut mesh = |tex: &str| {
         let m = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
         let material = look(&mut iso, tex, &mut materials, &mut images).expect("footstep texture");
-        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(material), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(material), Transform::default(), crate::cull::Cullable)).id();
         commands.entity(root).add_child(view);
         m
     };

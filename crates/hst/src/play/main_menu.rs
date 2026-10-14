@@ -1757,6 +1757,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if let Ok(s) = saved {
         menu.settings = s;
     }
+    menu.settings.1.cull = crate::cull::forced().unwrap_or(menu.settings.1.cull);
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {

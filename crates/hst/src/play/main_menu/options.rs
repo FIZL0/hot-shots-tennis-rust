@@ -28,6 +28,8 @@ pub(super) enum Opt {
     Vsync,
     Original,
     Upscaled,
+    /// B345: leave off-screen characters and effects undrawn (`cull.rs`).
+    Cull,
     /// `Volumes`' slider `i`, 0..=10.
     Volume(usize),
     MenuMusic,
@@ -68,7 +70,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = &[Downloads, AtOnce, OnlineMods, Chat];
 /// B118: phone-only options (later: control size and opacity).
@@ -114,6 +116,7 @@ fn label(o: Opt) -> &'static str {
         Vsync => "VSync",
         Original => "Original Mode",
         Upscaled => "Upscaled Textures",
+        Cull => "Skip Off-Screen",
         Volume(i) => ["Master", "Music", "Sound Effects", "Voices"][i],
         MenuMusic => "Menu Music",
         MatchMusic => "Match Music",
@@ -142,6 +145,7 @@ fn about(o: Opt) -> &'static str {
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
         Upscaled => "Use the upscaled textures in mods/texture-replacements.",
+        Cull => "Don't draw players, figures and effects that are out of view (or their shadows out of the light's). Looks the same; turn it off if it makes this device slower.",
         Volume(0) => "The volume of everything.",
         Volume(1) => "The menu and match music and the jingles.",
         Volume(2) => "The court, the crowd, the weather and the menu sounds.",
@@ -214,7 +218,7 @@ impl Settings {
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
-                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
+                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, cull: g.cull, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
             }
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
@@ -222,6 +226,7 @@ impl Settings {
             Fps => g.fps = cycle(&FPS, g.fps, d),
             Vsync => g.vsync = !g.vsync,
             Original => g.original = !g.original,
+            Cull => g.cull = !g.cull,
             // Upscaled Downloads follows Upscaled Textures (B227)
             Upscaled => {
                 self.0[0] = !self.0[0];
@@ -262,6 +267,7 @@ impl Settings {
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
+            Cull => on_off(g.cull),
             Upscaled => on_off(self.0[0]),
             Volume(i) => self.2 .0[i].to_string(),
             MenuMusic => on_off(self.0[1]),

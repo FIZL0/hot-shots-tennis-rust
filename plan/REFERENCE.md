@@ -95,6 +95,7 @@ Button legend (M14): every menu, the pause menu and the result screen list their
 
 ## Done (ported and verified against the original)
 
+- B345: characters, shade copies and effects are frustum-culled with skinned/morphed bounds (`cull.rs`; Settings → Graphics → Skip Off-Screen, `--cull off`, `?cull=off`; `HST_CULL_CHECK=1` proves the boxes); native bench faster, browser unchanged; occlusion culling tried and dropped (journal 2026-10-14-b328-mobile-fps/3-CULL-FINAL).
 - B351: Graphics preset Phone (100 % scale, shadows Low) picked on a touch screen's first run; at Shadows Low only the players, the umpire and props whose shadow reaches the court cast (`shadow::Minor`, `reaches_court`; journal 2026-10-14-b351-phone-defaults).
 - B24a: court 4's passing ball (trigger type 15): rolled once a match at a change of ends, route, animation, bounce sounds and fade bit-exact against a recording (route 0); drawn in play (journal 2026-10-08-b24-court-events).
 - B31: the 3D scene blends on gamma-encoded values as the GS (HDR scene cameras into a raw target, gs.wgsl and Bevy's PBR output encoded; hud_gamma.rs); court `@add` lines now add the same to each channel (journal 2026-10-08-p17q-tornado/3).

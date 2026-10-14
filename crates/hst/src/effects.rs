@@ -138,10 +138,11 @@ pub(crate) fn model<M: EffectMaterial>(
     }
     let skin = SkinnedMesh { inverse_bindposes: binds, joints: joints.clone() };
     for (mesh, material, morphed) in parts {
-        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
+        // culled by bounds that follow its joints (B345, `cull.rs`)
+        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material), skin.clone(), Transform::default(), crate::cull::Cullable)).id();
         if morphed {
-            // always drawn, collapsed while hidden (`Collapse`)
-            commands.entity(part).insert((cpu_morph(&mesh, root, meshes), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
+            // always drawn (when in view), collapsed while hidden (`Collapse`)
+            commands.entity(part).insert((cpu_morph(&mesh, root, meshes), Visibility::Visible));
         }
         commands.entity(holder).add_child(part);
     }
@@ -171,6 +172,8 @@ fn cpu_morph(mesh: &Handle<Mesh>, root: Entity, meshes: &mut Assets<Mesh>) -> Cp
     if let Some(i) = old.indices() {
         new.insert_indices(i.clone());
     }
+    // its joints' boxes, widened by the targets' reach (`cull::bound`)
+    new.set_skinned_mesh_bounds(old.skinned_mesh_bounds().cloned());
     let base: Vec<Vec3> = old.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|v| v.as_float3()).unwrap_or_default().iter().map(|p| Vec3::from(*p)).collect();
     let attrs = old.morph_targets().cloned().unwrap_or_default();
     let n = base.len().max(1);
@@ -386,7 +389,7 @@ pub fn load_sparks(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshe
         looks.push(look(iso, &format!("{k}tubu00"), materials, images)?);
     }
     let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling)).id();
+    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden, crate::cull::Cullable)).id();
     commands.entity(parent).add_child(view);
     // the table is rolled by the match start's reseed (`HitSparks::restart`)
     let rolls = [Roll::new(0.0, [0.0; 3]); SPARKS];
@@ -454,7 +457,7 @@ pub struct Trails {
 
 pub fn load_trails(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<Trails, String> {
     let mesh = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(look(iso, "zanzou", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+    let view = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(look(iso, "zanzou", materials, images)?), Transform::default(), crate::cull::Cullable)).id();
     commands.entity(parent).add_child(view);
     Ok(Trails { mesh })
 }
@@ -520,7 +523,7 @@ pub struct BallFlight {
 
 pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<BallFlight, String> {
     let ribbon = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-    let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+    let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), crate::cull::Cullable)).id();
     let mut looks = Vec::new();
     for k in ["slice", "top", "flat", "lob", "drop"] {
         looks.push(look(iso, &format!("impactef_{k}"), materials, images)?);
@@ -669,7 +672,7 @@ pub fn load_bounce(
     let (crater, crater_view) = model(&arc, &format!("smash_bnd/c{c:02}/c{c:02}_chakudan"), commands, parent, meshes, materials, images, bindposes)?;
     let mut mesh = |tex: &str, commands: &mut Commands| -> Result<Handle<Mesh>, String> {
         let m = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
-        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(look(iso, tex, materials, images)?), Transform::default(), bevy::camera::visibility::NoFrustumCulling)).id();
+        let view = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(look(iso, tex, materials, images)?), Transform::default(), crate::cull::Cullable)).id();
         commands.entity(parent).add_child(view);
         Ok(m)
     };

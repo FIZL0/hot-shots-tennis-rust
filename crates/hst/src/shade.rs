@@ -77,6 +77,7 @@ fn own_materials(
     parts: Query<(&MeshMaterial3d<StandardMaterial>, &Mesh3d, Option<&bevy::mesh::skinning::SkinnedMesh>, Option<&bevy::mesh::morph::MeshMorphWeights>, &Transform, &ChildOf)>,
     materials: Res<Assets<StandardMaterial>>,
     mut gs: ResMut<Assets<GsMaterial>>,
+    cullable: Query<(), With<crate::cull::Cullable>>,
 ) {
     for (root, rig) in &rigs {
         let mut own = Vec::new();
@@ -93,9 +94,15 @@ fn own_materials(
                     commands.entity(e).try_remove::<MeshMaterial3d<StandardMaterial>>().try_insert(MeshMaterial3d(h));
                     continue;
                 }
-                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), bevy::camera::visibility::NoFrustumCulling));
+                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h)));
                 if let Some(s) = skin {
                     c.insert(s.clone());
+                }
+                // culled as its first draw is (B345; after its skin)
+                if cullable.contains(e) {
+                    c.insert(crate::cull::Cullable);
+                } else {
+                    c.insert(bevy::camera::visibility::NoFrustumCulling);
                 }
                 if let Some(w) = morph {
                     c.insert(w.clone());

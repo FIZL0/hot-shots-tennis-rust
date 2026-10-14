@@ -19,6 +19,7 @@
 mod audio;
 mod character;
 mod court_anim;
+mod cull;
 #[cfg(not(target_arch = "wasm32"))]
 mod disc;
 mod effects;
@@ -171,6 +172,11 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
             "--fps" | "--scale" | "--shadows" | "--msaa" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--cull" => {
+                let v = a.next().unwrap_or_default();
+                gfx.set("cull", &v);
+                cull::force(&v);
+            }
             // borderless fullscreen is the default (B96); `--fullscreen` stays for older launch scripts
             "--windowed" => gfx.windowed = true,
             "--fullscreen" => gfx.windowed = false,
@@ -266,6 +272,8 @@ fn start(argv: Vec<String>) {
             gfx.set(k, v);
         }
     }
+    gfx.cull = cull::forced().unwrap_or(gfx.cull);
+    cull::set(gfx.cull);
     // B222: settings.txt's `original = on` too: the disc's own textures, no texture pack (its 4× walls would tile 4× big)
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
     if upscale && !gfx.original {
@@ -296,6 +304,7 @@ fn start(argv: Vec<String>) {
     }
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
+    app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
