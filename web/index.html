@@ -157,6 +157,17 @@ addEventListener('unhandledrejection', e => fail(e.reason));
 }
 // web.rs: the game's first frames are on screen
 window.hstShown = () => { shown = true; clearTimeout(stuck); if (!boot.classList.contains('err')) boot.hidden = true; };
+// B108: the screen never dims or locks while the game is open (a pad never touches it, touch play pauses between
+// taps). The browser drops the lock when the tab is hidden: take it again on return; some (Safari) only grant it
+// after a tap or key, so those try again too. No API (older browsers): the device's own sleep applies.
+let wake = null;
+const awake = () => {
+  if (wake || document.visibilityState !== 'visible' || !navigator.wakeLock) return;
+  wake = navigator.wakeLock.request('screen').then(l => l.addEventListener('release', () => wake = null), () => wake = null);
+};
+awake();
+document.addEventListener('visibilitychange', awake);
+for (const e of ['pointerdown', 'keydown', 'gamepadconnected']) addEventListener(e, awake);
 </script>
 <script type="module" src="touch.js"></script>
 <script type="module">
