@@ -470,6 +470,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B335** Mods: store mods' select picture is the store's preview.png (web stopped baking every installed mod: phone crash at 40 mods); Installed gets Remove all; Browse ← folds an uploader's mods; Download all says done/total; Play with removed
 - [x] **B336** Browser mods: find a better way to hold installed mods than every file in memory (modfs MEM, ≈10–40 MB a mod; 40 mods may outgrow a phone tab): read a picked character's files from OPFS on demand, or similar — j: 2026-10-14-b335-mod-previews
 - [x] **B350** Court select umpire: label reads 'Umpire Anna', should be just 'Anna'; and its icon looks like an icon inside an icon (nested frame), draw a single icon (user 2026-10-14) → play/main_menu.rs · play/menu_art.rs
+- [x] **B351** Phone defaults: phones run 15–20 fps partly because they start at shadows High. Detect a phone and default to shadows Low (or Off) at render scale 100%; at Low, only the players, ball, net, umpire chair and perhaps big props cast (about 20 casters, down from 182; coordinate with B343's small-prop cut). Mesh merging, crowd draws, sway and culling stay in B342–B345 (user 2026-10-14) → graphics.rs · shadow.rs · main.rs
 
 
 ### Shots

@@ -134,6 +134,8 @@ fn setup(
     let mut place = |data: &Arc<CharacterData>, world: &[[f32; 4]; 4], scale: f32| {
         let e = character::spawn(&mut commands, data, root);
         commands.entity(e).insert(Transform::from_matrix(Mat4::from_cols_array_2d(world)).with_scale(Vec3::splat(scale)));
+        // B351: no shadow at Shadows Low (the umpire's comes back below)
+        commands.entity(e).insert(crate::shadow::Minor);
         e
     };
     let players = g.rules.players as u32;
@@ -236,6 +238,9 @@ fn setup(
     }
     for &e in hidden.iter().chain(&off) {
         commands.entity(e).insert(Visibility::Hidden);
+    }
+    if let Some((e, _)) = &npcs.umpire {
+        commands.entity(*e).remove::<crate::shadow::Minor>();
     }
     npcs.uncull = hidden;
     if let Ok(look) = crate::effects::look(&mut iso, "npc/clap", &mut materials, &mut images) {

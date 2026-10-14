@@ -23,6 +23,36 @@ use hst_data::{iso::Iso, xb::Archive};
 #[derive(Component)]
 pub struct Caster;
 
+/// B351: a caster that stops casting at Shadows Low (on the root of a small [`Caster`] prop or of an NPC rig other
+/// than the umpire): each caster is another draw in the shadow pass, too many for a phone. The players, the umpire
+/// and the props whose shadow reaches the court ([`reaches_court`]: the net, the umpire's stand, the trees and
+/// buildings by it) keep theirs; the ball has its own shadow model either way.
+#[derive(Component)]
+pub struct Minor;
+
+/// A mesh under a [`Minor`] root that would cast: `NotShadowCaster` while the shadows are Low (`low`).
+#[derive(Component)]
+struct Dropped;
+
+/// B351: whether a [`Caster`] prop's shadow can fall on the court or its run-off (game space, metres): its placed
+/// bounding box `lo`..`hi` swept along the sun `dir` (sun → ground) down to the ground (y 0) overlaps the
+/// doubles court's 11.9 × 5.5 m half-extents plus 3 m behind the baselines and 2 m beside the sidelines. At Shadows
+/// Low only those keep casting: 4 to 37 prop draws a court instead of 21 to 144 (all 11 courts' plant records); the
+/// rest land where the match camera hardly looks.
+pub fn reaches_court(lo: Vec3, hi: Vec3, dir: Vec3) -> bool {
+    let (mut a, mut b) = (Vec2::MAX, Vec2::MIN);
+    for i in 0..8 {
+        let p = Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][i >> 1 & 1], [lo.z, hi.z][i >> 2]);
+        // the corner itself and where the sun takes it on the ground (above it: y < 0, Y down)
+        let g = if dir.y > 1e-3 { p - dir * (p.y / dir.y) } else { p };
+        for q in [p, g] {
+            (a, b) = (a.min(q.xz()), b.max(q.xz()));
+        }
+    }
+    let court = Vec2::new(5.5 + 2.0, 11.9 + 3.0);
+    a.cmple(court).all() && b.cmpge(-court).all()
+}
+
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct Sun {
     /// Shadow direction in game space (Y down), sun → ground: `light` raised to at least 50°.
@@ -36,7 +66,7 @@ pub struct Sun {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (casters, aim));
+    app.add_systems(Update, (casters, low.after(casters), aim));
 }
 
 impl Sun {
@@ -76,10 +106,26 @@ pub fn darken_s(s: u32) -> f32 {
 }
 
 /// Only players (skinned rigs and what they carry) and [`Caster`] props cast.
-fn casters(mut commands: Commands, new: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, cast: Query<(), Or<(With<Caster>, With<crate::character::Rig>)>>) {
+fn casters(mut commands: Commands, new: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, cast: Query<(), Or<(With<Caster>, With<crate::character::Rig>)>>, minor: Query<(), With<Minor>>) {
     for e in &new {
         if !parents.iter_ancestors(e).any(|a| cast.contains(a)) {
             commands.entity(e).try_insert(NotShadowCaster);
+        } else if parents.iter_ancestors(e).any(|a| minor.contains(a)) {
+            commands.entity(e).try_insert(Dropped);
+        }
+    }
+}
+
+/// Shadows Low: the [`Minor`] casters' meshes don't cast; Off and High give them back (Off draws none anyway, and
+/// switching on again needs no rebuild).
+fn low(mut commands: Commands, g: Option<Res<crate::graphics::Graphics>>, all: Query<Entity, With<Dropped>>, new: Query<Entity, Added<Dropped>>) {
+    let on = g.as_ref().is_some_and(|g| g.shadows == crate::graphics::Shadows::Low);
+    let changed = g.as_ref().is_some_and(|g| g.is_changed());
+    for e in if changed { all.iter().collect::<Vec<_>>() } else { new.iter().collect() } {
+        if on {
+            commands.entity(e).try_insert(NotShadowCaster);
+        } else {
+            commands.entity(e).try_remove::<NotShadowCaster>();
         }
     }
 }
@@ -98,6 +144,18 @@ fn aim(sun: Option<Res<Sun>>, mut lights: Query<&mut Transform, Added<Directiona
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low_keeps_the_shadows_on_the_court() {
+        let sun = Vec3::new(-0.5877856, 0.7694209, 0.2499991);
+        let b = |lo: [f32; 3], hi: [f32; 3]| reaches_court(Vec3::from(lo), Vec3::from(hi), sun);
+        // the net, the umpire's stand beside it (game Y down: above the ground is y < 0)
+        assert!(b([-6.6, -1.1, -0.1], [6.6, 0.0, 0.1]) && b([-7.7, -2.3, -0.3], [-6.2, 0.0, 0.3]));
+        // a 15 m tree 6 m past the sideline: its shadow falls across the court, a bench there doesn't reach
+        assert!(b([10.0, -15.0, -2.0], [14.0, 0.0, 2.0]) && !b([10.0, -0.8, -2.0], [11.0, 0.0, 2.0]));
+        // a spare net 17 m off to the side, a clubhouse far behind a baseline
+        assert!(!b([16.9, -1.1, -6.6], [17.1, 0.0, 6.6]) && !b([-20.0, -6.0, -50.0], [-14.0, 0.0, -40.0]));
+    }
 
     #[test]
     fn sun_matches_game_ram() {

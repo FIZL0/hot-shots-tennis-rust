@@ -647,6 +647,11 @@ fn load(
             }
             if p.code[3] != b'0' && (17..=19).contains(&p.category) {
                 commands.entity(e).insert(shadow::Caster);
+                // B351: one whose shadow can't reach the court drops it at Shadows Low
+                let (lo, hi) = parts.iter().filter_map(|(m, _)| bevy::camera::primitives::MeshAabb::compute_aabb(meshes.get(m)?)).flat_map(|a| (0..8).map(move |i| Vec3::from(a.center) + Vec3::from(a.half_extents) * Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][i >> 1 & 1], [-1.0, 1.0][i >> 2]))).map(|c| t.transform_point(c)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), c| (lo.min(c), hi.max(c)));
+                if !sun.as_ref().is_some_and(|sun| lo.cmple(hi).all() && shadow::reaches_court(lo, hi, sun.dir)) {
+                    commands.entity(e).insert(shadow::Minor);
+                }
                 if let Some(sun) = &sun {
                     shade_casters.push(hst_sim::shade::Caster::new(&shape, p, &sun.axes));
                 }
