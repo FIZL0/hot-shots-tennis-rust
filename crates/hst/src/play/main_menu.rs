@@ -204,12 +204,12 @@ pub(super) const FONT: [&str; 15] = [
 /// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage) and the confirm screen's last umpire
 /// pick (B191: `UMPIRES` is Random, the first-time and fallback choice), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 6], Graphics, Volumes, u8, Ask, u8, u8);
+pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8);
 /// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
 const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
-const SETTING_NAMES: [&str; 6] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat"];
+const SETTING_NAMES: [&str; 7] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
@@ -217,9 +217,12 @@ const UPSCALED_DOWNLOADS: usize = 3;
 const KEY_HINTS: usize = 4;
 /// M20: online chat shown (`crate::chat`).
 const CHAT: usize = 5;
+/// B118: the on-screen pad's buzz on each press (`web/touch.js`).
+const VIBRATION: usize = 6;
 
-/// Upscaled textures and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20).
-const SETTING_DEFAULTS: [bool; 6] = [true, true, false, true, true, true];
+/// Upscaled textures and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20);
+/// vibration on (B118).
+const SETTING_DEFAULTS: [bool; 7] = [true, true, false, true, true, true, true];
 
 /// Auto, but 16:9 on a phone (B117: the browser played by touch).
 fn default_aspect() -> u8 {
@@ -331,6 +334,8 @@ enum Screen {
     Controls,
     /// Online & Mods: what the mod store and online lobbies download.
     ModSettings,
+    /// B118: phone-only options (on a touch screen).
+    Mobile,
     Mode,
     Assign,
     Chars,
@@ -420,6 +425,9 @@ struct Menu {
     /// B269: the roster cell the last pick readied on (`None` inside: the Random card); the next computer player's
     /// cursor starts there.
     last: Option<Option<Who>>,
+    /// B118: a 1v1 on this phone (the main menu's touch-only row): the on-screen pad doubled, the far player's at
+    /// the top turned to face them, until the menu is back.
+    duo: bool,
 }
 
 impl Default for Menu {
@@ -449,6 +457,7 @@ impl Default for Menu {
             add: default(),
             paused: false,
             last: None,
+            duo: false,
         }
     }
 }
@@ -460,6 +469,17 @@ const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods", "Quit"];
 #[cfg(target_arch = "wasm32")]
 const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods"];
 const CONFIRM_ROWS: usize = 5;
+/// B118: the main menu's last row on a touch screen.
+const DUO_ROW: &str = "1v1 on this phone";
+
+/// The main menu's rows: `MAIN`, and on a touch screen the two-player phone match.
+fn main_rows() -> Vec<&'static str> {
+    let mut r = MAIN.to_vec();
+    if touch_page() {
+        r.push(DUO_ROW);
+    }
+    r
+}
 
 /// What a step asks of the app.
 #[derive(Debug, PartialEq)]
@@ -806,7 +826,7 @@ impl Menu {
         }
         match self.screen {
             Screen::Main => {
-                rows(MAIN.len(), &mut self.sel, &mut out);
+                rows(main_rows().len(), &mut self.sel, &mut out);
                 if k.ok {
                     match self.sel {
                         0 => {
@@ -821,11 +841,12 @@ impl Menu {
                         }
                         2 => self.go(Screen::Display, &mut out),
                         3 => self.mods_open(&mut out),
+                        s if main_rows().get(s) == Some(&DUO_ROW) => self.duo_start(dev, &mut out),
                         _ => out.push(Quit),
                     }
                 }
             }
-            Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
+            Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
                 rows(options::page(self.screen).len(), &mut self.sel, &mut out);
                 self.step_page(k, &mut out);
             }
@@ -1111,6 +1132,29 @@ impl Menu {
         self.screen = s;
         self.sel = 0;
         out.push(Effect::Sound(2));
+    }
+
+    /// B118: straight to the character select of a singles match of two humans on this phone: `dev` (the screen's
+    /// pad) is 1P, 2P's seat held open for the far end's pad (its ✕ takes it, B238).
+    fn duo_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
+        self.duo = true;
+        self.doubles = false;
+        self.seats = [Some(dev), Some(Dev::Open), None, None];
+        self.bots = [false; 4];
+        self.players = [Player::default(); 4];
+        self.filter = 0;
+        self.go(Screen::Chars, out);
+    }
+
+    /// B118: the duo ends when the menu leaves its select and confirmation (back past them, or a match over); while
+    /// on, 1P is the screen's own pad (a tap's `Keys` seat moved onto it).
+    fn duo_sync(&mut self, pads: &[Entity]) {
+        if self.duo && !matches!(self.screen, Screen::Chars | Screen::Confirm | Screen::Playing) {
+            self.duo = false;
+        }
+        if self.duo && self.seats[0] == Some(Dev::Keys) && let Some(&e) = pads.first() {
+            self.seats[0] = Some(Dev::Pad(e));
+        }
     }
 
     /// The court and umpire the match gets: a random choice resolved by `roll`.
@@ -1518,6 +1562,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "graphics" => Screen::Graphics,
         "sound" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
+        "mobile" => Screen::Mobile,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
@@ -1919,20 +1964,21 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
     match m.screen {
         Screen::Main => {
             d.frame(0, 5);
-            let labels: Vec<String> = MAIN.iter().map(|s| s.to_string()).collect();
+            let labels: Vec<String> = main_rows().iter().map(|s| s.to_string()).collect();
             d.rows(&labels, m.sel, 200.0, 120.0, 240.0, hand_x);
             let info = match m.sel {
                 0 => text.msg(188).to_string(),
                 1 => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
                 2 => text.msg(190).to_string(),
                 3 => "Add, remove, browse and share custom characters (mods).".into(),
+                s if main_rows().get(s) == Some(&DUO_ROW) => "Two players, one phone: lay it flat between you, each plays from their own end.".into(),
                 _ => "Close the game.".into(),
             };
             d.info(&info);
             version_corner(&mut d);
             mods_screen::ask_layout(&mut d, m, hand_x);
         }
-        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => options::page_layout(&mut d, m, hand_x),
+        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
         Screen::Mode => {
             d.frame(2, 5);
@@ -2740,6 +2786,9 @@ fn step(
         }
         return;
     }
+    menu.duo_sync(&pads);
+    #[cfg(target_arch = "wasm32")]
+    crate::web::touch_pads(menu.duo, menu.settings.0[VIBRATION]);
     let dt = time.delta_secs();
     // B221: the pointer's acts (`pointer.rs`), as its device's
     let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();
@@ -2782,7 +2831,7 @@ fn step(
             dirs[i] = repeat.entry((id, i)).or_default().step(h, dt);
         }
         [k.up, k.down, k.left, k.right] = dirs;
-        if k != Press::default() && touch_page() {
+        if k != Press::default() && touch_page() && !menu.duo {
             menu.pad_takes_touch_seat(dev, &pads);
         }
         let mut fx = Vec::new();
@@ -2821,6 +2870,7 @@ fn step(
                 }
                 Effect::Launch => {
                     let a = menu.args(&pads);
+                    super::widescreen::SIDEWAYS.store(menu.duo, std::sync::atomic::Ordering::Relaxed);
                     info!("starting the match: {}", a.join(" "));
                     // the match in this app; its quit comes back to this menu as it is now
                     let (base, kept) = (args.clone(), menu.clone());
@@ -2954,7 +3004,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Display | Screen::Graphics | Screen::Sound | Screen::Controls | Screen::ModSettings => Some(0),
+            Screen::Main | Screen::Display | Screen::Graphics | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
@@ -3007,12 +3057,34 @@ pub fn plugin(app: &mut App) {
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));
+    // B118: a two-player phone match's turned HUD ends with it
+    app.add_systems(Startup, || super::widescreen::SIDEWAYS.store(false, std::sync::atomic::Ordering::Relaxed));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use Effect::*;
+
+    /// B118: 1v1 on this phone seats the tap's device as 1P (moved onto the screen's pad) and holds 2P open for the
+    /// far pad's ✕; backing out of the select ends it.
+    #[test]
+    fn phone_duo() {
+        let mut w = World::new();
+        let (near, far) = (w.spawn_empty().id(), w.spawn_empty().id());
+        let mut m = Menu::default();
+        let mut out = Vec::new();
+        m.duo_start(Dev::Keys, &mut out);
+        m.duo_sync(&[near, far]);
+        assert!(m.duo && !m.doubles && m.screen == Screen::Chars);
+        assert_eq!(m.seats, [Some(Dev::Pad(near)), Some(Dev::Open), None, None]);
+        let ok = Press { ok: true, ..default() };
+        m.step(Dev::Pad(far), ok);
+        assert_eq!(m.seats[1], Some(Dev::Pad(far)));
+        m.screen = Screen::Main;
+        m.duo_sync(&[near, far]);
+        assert!(!m.duo);
+    }
 
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]
@@ -3086,13 +3158,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8);
+        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -3100,10 +3172,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -3113,7 +3185,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]

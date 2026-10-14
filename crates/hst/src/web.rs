@@ -221,6 +221,18 @@ pub fn touch_menu(on: bool) {
     }
 }
 
+/// B118: the page's on-screen pads: `duo` doubles them for two players on one phone (the second at the top, turned
+/// to face its player, both listed as pads), `buzz` the press vibration (Settings → Mobile). Sent when it changes.
+pub fn touch_pads(duo: bool, buzz: bool) {
+    static SENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+    let v = duo as u8 | (buzz as u8) << 1;
+    if SENT.swap(v, std::sync::atomic::Ordering::Relaxed) != v
+        && let Some(f) = page_fn("hstTouchPads")
+    {
+        let _ = f.call2(&JsValue::NULL, &duo.into(), &buzz.into());
+    }
+}
+
 /// B273: the renderer setting saved (`auto`, `webgpu`, `webgl2`): the page reloads into that build once it's left
 /// alone for a moment (a no-op when it's the one running).
 pub fn renderer(word: &str) {

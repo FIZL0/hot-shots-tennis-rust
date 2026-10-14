@@ -54,7 +54,21 @@ fn cam_of(peers: &[Option<&str>]) -> Vec<usize> {
     (0..n).map(|i| peer(i).and_then(|p| (0..n).find(|&j| peer(j) == Some(p))).unwrap_or(i)).collect()
 }
 
-fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, mut commands: Commands) {
+fn link(np: Option<Res<Netplay>>, mut g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, mut commands: Commands) {
+    // B118: two players on one phone, at its ends: the picture keeps 1P's end at the bottom (turned with it at a
+    // change of ends), and both sticks are screen-relative to it
+    if np.is_none()
+        && let Some(g) = g.as_mut().filter(|g| g.players.len() == 2)
+        && super::widescreen::SIDEWAYS.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        if g.cam_of != [0, 0] {
+            g.cam_of = vec![0, 0];
+        }
+        if own.is_none() {
+            commands.insert_resource(own_cam(&g, 0));
+        }
+        return;
+    }
     let (Some(np), Some(mut g)) = (np, g) else { return };
     let n = g.players.len();
     let peers: Vec<_> =
@@ -67,12 +81,16 @@ fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCa
     if own.is_none()
         && let Some(owner) = (0..n).find(|&i| peers[seat(i, n)] == Some(np.me.as_str()))
     {
-        let view = g.cam.view;
-        let mut cam = Camera::from_view(view);
-        cam.turned = g.players[owner].end < 0.0;
-        cam.cut();
-        commands.insert_resource(OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false, plain: true, fresh: false });
+        commands.insert_resource(own_cam(&g, owner));
     }
+}
+
+fn own_cam(g: &Game, owner: usize) -> OwnCam {
+    let view = g.cam.view;
+    let mut cam = Camera::from_view(view);
+    cam.turned = g.players[owner].end < 0.0;
+    cam.cut();
+    OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false, plain: true, fresh: false }
 }
 
 /// Whether player `i`'s stick is turned round: online, its machine's camera looks from the +z end; else the
@@ -85,13 +103,16 @@ pub(super) fn flipped(g: &Game, i: usize) -> bool {
 }
 
 fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netplay>>) {
-    let (Some(g), Some(mut o), Some(np)) = (g, own, np) else { return };
+    let (Some(g), Some(mut o)) = (g, own) else { return };
     o.cut |= g.cam_cut;
-    let tick = np.lock.log.len();
-    if tick <= o.tick {
-        return;
+    // locally (B118) every tick is new
+    if let Some(np) = np {
+        let tick = np.lock.log.len();
+        if tick <= o.tick {
+            return;
+        }
+        o.tick = tick;
     }
-    o.tick = tick;
     o.fresh = true;
     let players: Vec<_> = g.players.iter().map(|p| p.pos).collect();
     let scene = Scene { players: &players, ball: g.flight.ball.pos };

@@ -139,7 +139,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
-        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
+        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
             v.push((Act::UpDown, "Option"));
             if let Some(&o) = options::page(m.screen).get(s).filter(|o| !options::locked(**o)) {
                 v.push((Act::LeftRight, "Change"));
