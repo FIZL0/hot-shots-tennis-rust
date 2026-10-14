@@ -28,10 +28,15 @@ pub(super) struct OwnCam {
     /// though a placement's cut among them is kept for the next new tick.
     tick: usize,
     cut: bool,
+    /// B299: whether the shared camera showed the plain match view after the newest tick. Kept from that tick, not
+    /// compared each frame: a rollback that re-runs ticks without a new one (catching up after a tab-out, a resync)
+    /// leaves the shared camera on corrected scenes this one hasn't stepped, and the picture flipped to it.
+    plain: bool,
+    fresh: bool,
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate)))
+    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate), plain.after(super::simulate)))
         // B230: made with the match, so the intro (which holds the fixed ticks) already shows this machine's side
         .add_systems(PostStartup, link.after(super::setup))
         .add_systems(Update, listener);
@@ -66,7 +71,7 @@ fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCa
         let mut cam = Camera::from_view(view);
         cam.turned = g.players[owner].end < 0.0;
         cam.cut();
-        commands.insert_resource(OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false });
+        commands.insert_resource(OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false, plain: true, fresh: false });
     }
 }
 
@@ -87,6 +92,7 @@ fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netpla
         return;
     }
     o.tick = tick;
+    o.fresh = true;
     let players: Vec<_> = g.players.iter().map(|p| p.pos).collect();
     let scene = Scene { players: &players, ball: g.flight.ball.pos };
     let mut shared = g.cam;
@@ -106,6 +112,14 @@ fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netpla
     }
 }
 
+/// After the tick `step` stepped: does the shared camera still show the plain match view?
+fn plain(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>) {
+    let (Some(g), Some(mut o)) = (g, own) else { return };
+    if std::mem::take(&mut o.fresh) {
+        o.plain = g.cam.view == o.expect;
+    }
+}
+
 /// The views the picture blends between this frame: this machine's own camera's while the shared one shows the
 /// plain match view, else the shared camera's (`g.prev_view`, `g.cam.view`).
 pub(super) fn shown(g: &Game, own: Option<&OwnCam>) -> (View, View) {
@@ -117,7 +131,7 @@ pub(super) fn shown(g: &Game, own: Option<&OwnCam>) -> (View, View) {
         return (c.view, c.view);
     }
     match own {
-        Some(o) if g.cam.view == o.expect => (o.prev, o.cam.view),
+        Some(o) if o.plain => (o.prev, o.cam.view),
         _ => (g.prev_view, g.cam.view),
     }
 }
