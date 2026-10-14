@@ -11,6 +11,9 @@
 //! - **LAN** (M2j): every endpoint also advertises itself by mDNS (service [`MDNS`]), so bare IDs resolve on a shared
 //!   network with no internet (a router, or one phone's hotspot with no mobile data); a host puts its listing in the
 //!   mDNS record's user data too, and Find lists those first, before the DHT has answered (or with no internet at all).
+//! - **Board slots** (B116), which the browser reaches too: [`SLOTS`] well-known keys (public seeds, like the short
+//!   codes') each hold one listing with its short code, read and written on the DHT natively and through the pkarr
+//!   relay in the browser. A host takes the first slot that's free, stale or its own; Find reads them all.
 //! - **Relay** for when hole punching fails: n0's public relays, your own `iroh-relay`, or none (LAN only).
 //! - **Code / QR**: the host's [`EndpointTicket`] (ID + relay + direct addresses, its LAN ones included), needs no
 //!   discovery at all.
@@ -373,16 +376,25 @@ pub struct Listing {
     pub seats: usize,
     /// Unix seconds when the host wrote it.
     pub time: u64,
+    /// Its short code, on a lobby only the board slots list (B116: a browser host has no DHT or mDNS address, so
+    /// it's joined by the code); empty where the ID is dialled.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code: String,
 }
 
 impl Listing {
     fn of(id: EndpointId, room: &Room) -> Listing {
         let seats = room.seats.len();
-        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now() }
+        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now(), code: String::new() }
     }
 
     pub fn open(&self) -> usize {
         self.seats - self.taken
+    }
+
+    /// What to join it by: its ID, or a slot-only lobby's (a browser's) short code (B116).
+    pub fn dial(&self) -> &str {
+        if self.code.is_empty() { &self.id } else { &self.code }
     }
 }
 
@@ -423,7 +435,7 @@ fn unseal(n: u16, value: &[u8]) -> Option<Listing> {
 
 /// A listing as mDNS user data (≤ 245 bytes: the ID is the record's own, the time the finder's clock).
 fn lan_data(l: &Listing) -> Option<UserData> {
-    let json = serde_json::to_string(&Listing { id: String::new(), time: 0, ..l.clone() }).ok()?;
+    let json = serde_json::to_string(&Listing { id: String::new(), time: 0, code: String::new(), ..l.clone() }).ok()?;
     format!("{LAN_TAG}{json}").parse().ok()
 }
 
@@ -821,8 +833,8 @@ fn watch_lan(_: ()) -> Lan {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn find_all(_: &Ctx) -> Vec<Listing> {
-    vec![]
+async fn find_all(cx: &Ctx) -> Vec<Listing> {
+    find_slots(&cx.dht).await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -893,7 +905,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                 let mut joined = false;
                 n0_future::time::sleep(LAN_WAIT).await;
                 for l in quick_pick(&find_all(&cx).await, room.doubles, mine.len()) {
-                    if join(&cx, &l.id, mine.clone(), &mut cmds).await {
+                    if join(&cx, l.dial(), mine.clone(), &mut cmds).await {
                         joined = true;
                         break;
                     }
@@ -918,8 +930,16 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
 /// The open lobbies on the LAN and the DHT (the LAN's copy of one listed on both).
 async fn find_all(cx: &Ctx) -> Vec<Listing> {
     let mut list = lan_list(&cx.lan);
-    let dht = find(&cx.dht).await;
-    list.extend(dht.into_iter().filter(|l| !cx.lan.lock().unwrap().keys().any(|id| id.to_string() == l.id)));
+    let (dht, slots) = n0_future::future::zip(find(&cx.dht), find_slots(&cx.dht)).await;
+    // the first copy of each: the LAN's (its full lobbies too), then the DHT board's (dialled by ID: a native host
+    // may have no code, relays off), then a slot's (a browser's, joined by its code)
+    let mut seen: Vec<String> = cx.lan.lock().unwrap().keys().map(|id| id.to_string()).collect();
+    for l in dht.into_iter().chain(slots) {
+        if !seen.contains(&l.id) {
+            seen.push(l.id.clone());
+            list.push(l);
+        }
+    }
     list
 }
 
@@ -1143,6 +1163,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut joined: Vec<(String, Link, Conn)> = Vec::new();
     let mut tick = n0_future::time::interval(REPUBLISH);
     let mut dirty = true;
+    // the board slot this lobby is listed in (B116; SLOTS: none yet)
+    let slot = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(SLOTS));
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
@@ -1191,9 +1213,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep));
+                let (id, slot) = (ep.id(), slot.clone());
                 n0_future::task::spawn(async move {
                     if let Some(c) = code {
                         publish(&cx2.dht, &c, &ticket).await;
+                        list_in_slot(&cx2.dht, &slot, &Listing { code: c, ..Listing::of(id, &l) }).await;
                     }
                     announce(&cx2, n, &l).await
                 });
@@ -1987,6 +2011,14 @@ async fn lookup(dht: &Dht, code: &str) -> Option<(String, i64)> {
 
 #[cfg(target_arch = "wasm32")]
 async fn lookup(_: &Dht, code: &str) -> Option<(String, i64)> {
+    relay_get(code).await
+}
+
+/// The record under `code` on the pkarr relay (the browser's [`lookup`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+async fn relay_get(code: &str) -> Option<(String, i64)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let r = reqwest::get(format!("{PKARR}/{}", code_key(code).public().to_z32())).await.ok()?;
     let b = r.error_for_status().ok()?.bytes().await.ok()?;
     // the relay's payload: signature, seq (big-endian), the packet
@@ -2000,7 +2032,8 @@ async fn publish(dht: &Dht, code: &str, ticket: &str) -> bool {
     let put = dht.put_mutable(item, None).await.map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok();
     // ponytail: the relay's own DHT lookup misses our put now and then, so browsers read it from the relay directly;
     // its put takes 5-20 s (B151), so after a DHT put it goes on in the background (native joiners read the DHT)
-    if put {
+    // (not from the tests: their DHT is a local testnet)
+    if put && !cfg!(test) {
         let (code, ticket) = (code.to_string(), ticket.to_string());
         n0_future::task::spawn(async move { drop(relay_put(&code, &ticket).await) });
         return true;
@@ -2039,6 +2072,59 @@ async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) ->
         }
     }
     None
+}
+
+/// How many board slots there are: the browser reads every one through the pkarr relay, which answers about 10
+/// requests at once before it rate-limits (HTTP 429), and a slot nobody wrote takes it ~7 s.
+// ponytail: 8 lobbies listed in the browser (native Find also has the DHT board, unbounded); a bigger board needs
+// a server of ours or paced reads
+const SLOTS: usize = 8;
+
+/// Board slot `i`'s record name (its key's seed, as a short code's); the tests' own, as a testnet's items can
+/// reach the real DHT.
+fn slot_name(i: usize) -> String {
+    format!("{}{i}", if cfg!(test) { "tslot" } else { "slot" })
+}
+
+/// The listing in board slot `i` and when it was written.
+async fn read_slot(dht: &Dht, i: usize) -> Option<(Listing, i64)> {
+    let (t, seq) = n0_future::time::timeout(Duration::from_secs(12), lookup(dht, &slot_name(i))).await.ok()??;
+    Some((serde_json::from_str(&t).ok()?, seq))
+}
+
+async fn read_slots(dht: &Dht) -> Vec<Option<(Listing, i64)>> {
+    n0_future::join_all((0..SLOTS).map(|i| read_slot(dht, i))).await
+}
+
+/// The open lobbies in the board slots, each with its short code.
+async fn find_slots(dht: &Dht) -> Vec<Listing> {
+    let mut list: Vec<Listing> =
+        read_slots(dht).await.into_iter().flatten().filter(|(l, seq)| fresh(*seq) && l.open() > 0 && is_short(&l.code)).map(|(l, _)| l).collect();
+    // one host in two slots (it moved to a freed one): its newest
+    list.sort_by(|a, b| (&a.id, b.time).cmp(&(&b.id, a.time)));
+    list.dedup_by(|a, b| a.id == b.id);
+    list
+}
+
+/// Put `l` (with its short code) in a board slot: `slot`'s if it's still ours, else the first free, stale or ours
+/// from the one its ID picks; `slot` remembers it (`SLOTS`: the board is full, listed again next time).
+async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &Listing) {
+    use std::sync::atomic::Ordering::Relaxed;
+    // ponytail: a slot that didn't answer (timeout, 429) counts as free, and two hosts claiming one at once both
+    // write it; the next republish's check moves the loser on
+    let ours = |r: &Option<(Listing, i64)>| r.as_ref().is_none_or(|(o, seq)| o.id == l.id || !fresh(*seq));
+    let mut i = slot.load(Relaxed);
+    if i >= SLOTS || !ours(&read_slot(dht, i).await) {
+        let all = read_slots(dht).await;
+        let start = l.id.parse().map_or(0, |id| lobby_number(id) as usize);
+        i = (0..SLOTS).map(|k| (start + k) % SLOTS).find(|&k| ours(&all[k])).unwrap_or(SLOTS);
+        slot.store(i, Relaxed);
+    }
+    if i < SLOTS {
+        publish(dht, &slot_name(i), &serde_json::to_string(l).unwrap()).await;
+    } else {
+        bevy::log::warn!("lobby board full: listed on the DHT only");
+    }
 }
 
 /// The ticket the short code `code` stands for, if its lobby is open.
@@ -2271,7 +2357,7 @@ mod tests {
 
     #[test]
     fn quickplay_takes_the_busiest_that_fits() {
-        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time };
+        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time, code: String::new() };
         let list = [l("a", 1, 4, 5), l("b", 2, 4, 1), l("c", 3, 4, 9), l("d", 1, 2, 9)];
         assert_eq!(quick_pick(&list, true, 2).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(quick_pick(&list, true, 1)[0].id, "c");
@@ -2296,6 +2382,59 @@ mod tests {
         assert_eq!(o.relay, Relay::Own("https://relay.example.org".into()));
         assert_eq!(Online::parse(&o.text()), o);
         assert_eq!(Online::parse("").relay, Relay::N0);
+    }
+
+    /// B116: the board slots on a local DHT testnet: two hosts take different slots, keep theirs on republish,
+    /// and a third node finds both with their codes; a full board lists no more.
+    #[test]
+    fn slots_on_a_testnet() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let net = n0_mainline::Testnet::new(10).await.unwrap();
+            let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
+            let (a, b, c) = (dht(&net.bootstrap), dht(&net.bootstrap), dht(&net.bootstrap));
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(0, 0)]);
+            let listing = |code: &str| Listing { code: code.into(), ..Listing::of(SecretKey::generate().public(), &r) };
+            let (la, lb) = (listing("AAAA"), listing("BBBB"));
+            let (sa, sb) = (AtomicUsize::new(SLOTS), AtomicUsize::new(SLOTS));
+            list_in_slot(&a, &sa, &la).await;
+            list_in_slot(&b, &sb, &lb).await;
+            let first = sa.load(Relaxed);
+            assert!(first < SLOTS && sb.load(Relaxed) < SLOTS && first != sb.load(Relaxed));
+            list_in_slot(&a, &sa, &la).await;
+            assert_eq!(sa.load(Relaxed), first);
+            let mut found: Vec<String> = find_slots(&c).await.into_iter().map(|l| l.code).collect();
+            found.sort();
+            assert_eq!(found, ["AAAA", "BBBB"]);
+            // the rest of the board taken: one more host isn't listed
+            let json = serde_json::to_string(&listing("CCCC")).unwrap();
+            let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(|i| slot_name(i)).collect::<Vec<_>>();
+            n0_future::join_all(free.iter().map(|n| publish(&c, n, &json))).await;
+            let full = AtomicUsize::new(SLOTS);
+            list_in_slot(&c, &full, &listing("DDDD")).await;
+            assert_eq!(full.load(Relaxed), SLOTS);
+        });
+    }
+
+    /// B116: a listing through the pkarr relay, as the browser reads and writes the board (a test name, not a real
+    /// slot: no fake lobby on the live board). Needs the internet: `tools/check.sh -p hst slot_through_the_pkarr_relay -- --ignored`.
+    #[test]
+    #[ignore]
+    fn slot_through_the_pkarr_relay() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut r = room(true);
+            r.name = "🎾".repeat(24);
+            r.take("host", &[Pick::disc(0, 0)]);
+            let l = Listing { code: "TEST".into(), ..Listing::of(SecretKey::generate().public(), &r) };
+            let name = format!("t{}", now() % 1_000_000_000);
+            assert!(relay_put(&name, &serde_json::to_string(&l).unwrap()).await);
+            let (t, seq) = relay_get(&name).await.expect("read back");
+            assert!(fresh(seq));
+            assert_eq!(serde_json::from_str::<Listing>(&t).unwrap(), l);
+        });
     }
 
     /// The lobby list on a local DHT testnet: a host's announce + listing, found and verified.
