@@ -384,6 +384,9 @@ struct Menu {
     grid: Grid,
     /// M16: the Mods screen's state.
     add: mods_screen::View,
+    /// B254: the assignment screen over a paused match (`pause.rs`): `bots` are the match's computer players, fixed
+    /// (no △, never swapped); ✕ takes any device off its seat (1P too, without moving the others up).
+    paused: bool,
 }
 
 impl Default for Menu {
@@ -410,6 +413,7 @@ impl Default for Menu {
             picking: None,
             grid: Grid::default(),
             add: default(),
+            paused: false,
         }
     }
 }
@@ -572,7 +576,7 @@ impl Menu {
 
     /// B216: whether 1P's △ on the seat assignment adds or removes a computer player on seat `p` (local only).
     fn can_bot(&self, p: usize) -> bool {
-        !self.online() && (1..self.players()).contains(&p) && self.seats[p].is_none()
+        !self.online() && !self.paused && (1..self.players()).contains(&p) && self.seats[p].is_none()
     }
 
     /// B216: the pick of a seat nobody took and no computer player was added to, as an online lobby's at Start: the
@@ -624,7 +628,7 @@ impl Menu {
     fn droppable(&self, p: usize) -> bool {
         let dev = |s: &Option<Dev>| matches!(s, Some(Dev::Keys | Dev::Pad(_)));
         let first = self.seats.iter().position(Option::is_some) == Some(p);
-        dev(&self.seats[p]) && (!first || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
+        dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
     }
 
     /// The seats 1P's ←/→ (`right`) trades on the assignment screen: the focused one and its neighbour that way,
@@ -632,7 +636,17 @@ impl Menu {
     fn host_swap(&self, right: bool) -> Option<(usize, usize)> {
         let n = self.players();
         let p = self.sel.min(n - 1);
-        let q = if right { (p + 1) % n } else { (p + n - 1) % n };
+        let next = |q: usize| if right { (q + 1) % n } else { (q + n - 1) % n };
+        let mut q = next(p);
+        // B254: over a match the computer's seats stay put
+        if self.paused {
+            if self.bots[p] {
+                return None;
+            }
+            while self.bots[q] {
+                q = next(q);
+            }
+        }
         let empties_1p = q == 0 && self.seats[p].is_none() || p == 0 && self.seats[q].is_none();
         (!empties_1p && self.seats[p] != self.seats[q]).then_some((p, q))
     }
@@ -642,7 +656,7 @@ impl Menu {
         if !self.droppable(p) {
             return false;
         }
-        if p == 0 && self.screen == Screen::Assign {
+        if p == 0 && self.screen == Screen::Assign && !self.paused {
             // the next seated device becomes 1P (the menu's driver)
             let n = self.players();
             self.seats[..n].rotate_left(1);
@@ -754,7 +768,9 @@ impl Menu {
                         // the focused seat's device trades places with the next seat that way (1P is never left empty)
                         if let Some((p, q)) = self.host_swap(k.right) {
                             self.seats.swap(p, q);
-                            self.bots.swap(p, q);
+                            if !self.paused {
+                                self.bots.swap(p, q);
+                            }
                             self.sel = q;
                             out.push(Sound(0));
                         }
@@ -1885,7 +1901,11 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 }
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
+            if m.paused {
+                d.info("1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves.");
+            } else {
             d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
+            }
         }
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
