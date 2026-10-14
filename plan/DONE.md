@@ -472,6 +472,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B350** Court select umpire: label reads 'Umpire Anna', should be just 'Anna'; and its icon looks like an icon inside an icon (nested frame), draw a single icon (user 2026-10-14) → play/main_menu.rs · play/menu_art.rs
 - [x] **B349** Character select: the handedness-swap button hint says 'View'; it should say 'Select' (user 2026-10-14) → play/main_menu.rs · play/main_menu/legend.rs
 - [x] **B340** Pause menu: Circle (back) doesn't close the pause menu and resume the match (user 2026-10-14); it should, like Start → play/main_menu/pause.rs · play/menu.rs
+- [x] **B341** Paused, tabbing the pause menu with L1/R1 queues emotes that play once the match resumes (user 2026-10-14): match input (play.rs gather → SlotPad.emote, emote::touch/flick) must ignore pad presses while paused and clear any latched emote on resume → play.rs (input gather) · play/emote.rs · play/main_menu/pause.rs
 
 
 ### Shots
