@@ -153,7 +153,20 @@ fn about(o: Opt) -> &'static str {
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
-        Vibration => "Buzz briefly on each press of the on-screen controls (where the phone can).",
+        Vibration => vibration_about(),
+    }
+}
+
+/// B329: the Vibration row's text, by what this browser can do (`web/touch.js`).
+fn vibration_about() -> &'static str {
+    #[cfg(target_arch = "wasm32")]
+    let can = crate::web::vibration();
+    #[cfg(not(target_arch = "wasm32"))]
+    let can = "vibrate";
+    match &*can {
+        "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",
+        "ios" => "iPhone: Safari has no vibration, so each press gives the light haptic tick of iOS 18 and later instead (nothing on older iOS).",
+        _ => "This browser can't vibrate, so this does nothing here.",
     }
 }
 
