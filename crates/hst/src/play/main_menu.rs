@@ -3069,6 +3069,8 @@ fn step(
     (net, mut clipboard, mut pending): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pointer::Pending>>),
     // Preview Voice: each umpire's voice bank once read, and the call playing
     mut voice: Local<(std::collections::HashMap<u8, Option<Arc<crate::audio::SoundBank>>>, Option<u64>)>,
+    // B336: a launch waiting for the browser to read its mods in
+    mut launching: Local<bool>,
 ) {
     let play = |key: u8| {
         if let (Some(s), Some(Art(_, Some(b), _))) = (&sound, art.as_deref()) {
@@ -3159,6 +3161,9 @@ fn step(
         if trace::on() && (k != Press::default() || !fx.is_empty()) {
             eprintln!("{:9.3} step {dev:?} {k:?} pointer fx {fx:?}", time.elapsed_secs());
         }
+        if dev == Dev::Keys && std::mem::take(&mut *launching) {
+            fx.push(Effect::Launch);
+        }
         if k == Press::default() && fx.is_empty() {
             continue;
         }
@@ -3192,6 +3197,11 @@ fn step(
                 }
                 Effect::Launch => {
                     let a = menu.args(&pads);
+                    // every one asked at once (no short-circuit), then tried again next frame
+                    if !a.windows(3).filter(|w| w[0] == "--slot-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[2])) && ok) {
+                        *launching = true;
+                        continue;
+                    }
                     super::widescreen::SIDEWAYS.store(menu.duo, std::sync::atomic::Ordering::Relaxed);
                     info!("starting the match: {}", a.join(" "));
                     // the match in this app; its quit comes back to this menu as it is now

@@ -318,6 +318,34 @@ pub fn add_mod_file(path: String, bytes: js_sys::Uint8Array) {
     }
 }
 
+/// Page: an installed mod file left in OPFS (B336, `modfs::add_lazy`): read in when the game wants the mod (`mod_load`).
+#[wasm_bindgen]
+pub fn add_mod_lazy(path: String, size: f64) {
+    if crate::modfs::plain(&path) {
+        crate::modfs::add_lazy(std::path::Path::new(&path), size as u64);
+    }
+}
+
+/// Asks the page to read mod folder `dir`'s files in from OPFS (`add_mod_file` each, then `mod_loaded`).
+pub fn mod_load(dir: &str) {
+    match page_fn("hstModLoad") {
+        Some(f) => drop(f.call1(&JsValue::NULL, &dir.into())),
+        None => crate::modfs::loaded(dir),
+    }
+}
+
+/// Page: done reading folder `dir` in (`mod_load`).
+#[wasm_bindgen]
+pub fn mod_loaded(dir: String) {
+    crate::modfs::loaded(&dir);
+}
+
+/// Page: mod `id` is stored in OPFS: its big files out of memory again until it's wanted (B336: Download all's 40).
+#[wasm_bindgen]
+pub fn mod_saved(id: String) {
+    crate::modfs::unload(&crate::play::main_menu::mods_root().join(id));
+}
+
 /// `b` copied once, straight into a shared buffer (B204: `to_vec().into()` held every mod file twice on the way).
 fn shared(b: &js_sys::Uint8Array) -> Arc<[u8]> {
     let mut out = Arc::<[u8]>::new_uninit_slice(b.length() as usize);

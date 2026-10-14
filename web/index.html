@@ -223,7 +223,7 @@ window.hstWebGL2 = why => {
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
-const { default: init, run, paste, typed_code, add_card, add_mod_file, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
+const { default: init, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
 say('Opening this browser\'s storage…');
 const dir = await navigator.storage.getDirectory();
 const status = document.getElementById('status');
@@ -285,8 +285,31 @@ async function start() {
     const files = await walk(h, `mods/${id}/`, []);
     if (!files.some(f => f[0] === `mods/${id}/mod.json`)) { await mods.removeEntry(id, { recursive: true }).catch(() => {}); continue; }
     say(`Reading mod ${id}…`);
-    for (const [p, fh] of files) { const b = new Uint8Array(await (await fh.getFile()).arrayBuffer()); modBytes += b.length; add_mod_file(p, b); }
+    // B336: only the manifests and select pictures now (modfs.rs small); models, textures and voices when the game wants the mod (hstModLoad)
+    for (const [p, fh] of files) {
+      const f = await fh.getFile();
+      if (!p.endsWith('.json') && !p.includes('/previews/')) { add_mod_lazy(p, f.size); continue; }
+      const b = new Uint8Array(await f.arrayBuffer());
+      modBytes += b.length;
+      add_mod_file(p, b);
+    }
   }
+  // a mod folder (`mods/<id>`) in from OPFS, a file at a time (modfs.rs ready); a file that fails is left out
+  window.hstModLoad = async dir => {
+    const from = performance.now();
+    let n = 0;
+    try {
+      let d = mods;
+      for (const s of dir.split('/').slice(1)) d = await d.getDirectoryHandle(s);
+      for (const [p, fh] of await walk(d, `${dir}/`, [])) {
+        if (p.endsWith('.json') || p.includes('/previews/')) continue;
+        try { const b = new Uint8Array(await (await fh.getFile()).arrayBuffer()); n += b.length; add_mod_file(p, b); }
+        catch (e) { console.warn(`hst: ${p}: ${e}`); }
+      }
+    } catch (e) { console.warn(`hst: reading ${dir}: ${e}`); }
+    console.info(`hst: ${dir} read in (${(n / 1048576).toFixed(1)} MB) in ${Math.round(performance.now() - from)} ms`);
+    mod_loaded(dir);
+  };
   console.info(`hst: mods read from OPFS (${(modBytes / 1048576).toFixed(1)} MB) in ${Math.round(performance.now() - modsFrom)} ms`);
   // the Mods screen's picker (web.rs): over the Add mod row while it's up, or opened by a key or pad
   const pick = document.getElementById('modzip');
@@ -326,6 +349,7 @@ async function start() {
       const next = async () => { for (let p; (p = paths.shift()) !== undefined;) await one(p); };
       await Promise.all(Array.from({ length: 8 }, next));
       await one(json);
+      mod_saved(id);
       mod_status(`Added ${name}. Reload to play it.`);
     } catch (e) {
       await mods.removeEntry(id, { recursive: true }).catch(() => {});

@@ -153,6 +153,10 @@ struct Loader {
 impl Loader {
     /// Load `key` (`m`: the mod, for a custom one).
     fn want(&mut self, key: Key, m: Option<&Mod>) {
+        // B336: a browser mod's files are read in first (asked again each frame until they are)
+        if m.is_some_and(|m| !crate::modfs::ready(&m.dir)) {
+            return;
+        }
         if self.asked.insert(key) {
             let _ = self.ask.send((key, m.cloned()));
         }
@@ -1122,7 +1126,7 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
     let (c, costume) = match who {
         Who::Disc(c) => (c, costume),
         Who::Mod(i) => {
-            let m = mods.get(i)?;
+            let m = mods.get(i).filter(|m| crate::modfs::ready(&m.dir))?;
             let own = banks.entry(format!("mod {}", m.dir.join(&m.voice).display())).or_insert_with(|| crate::mods::voice(m).map(Arc::new)).clone();
             let program: u8 = match act { Act::Win => 9, Act::Loss => 10, Act::Pose => return None };
             if let Some(own) = own.filter(|o| o.wav.contains_key(&(program as usize))) {

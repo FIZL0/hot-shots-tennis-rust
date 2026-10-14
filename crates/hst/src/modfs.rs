@@ -10,10 +10,84 @@ use std::sync::{Arc, Mutex};
 
 use crate::mods::{self, Mod};
 
-// ponytail: every mod file of the browser build (never an upscaled set, `upscaled`) is held in memory (the main
-// thread can't read OPFS synchronously): ≈ 10–40 MB a store mod beside the 171 MB pack. Reading a picked
-// character's models on demand (async, before the select/match loads them) if many installed mods outgrow a phone.
+// Every mod file the browser build holds (never an upscaled set, `upscaled`); the main thread can't read OPFS
+// synchronously, so the page reads them in before `run` (only the small `.json`s, B336) or when `ready` asks.
 static MEM: Mutex<BTreeMap<String, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
+
+/// B336: the browser's mod files known by path and size but not in memory (a phone tab died holding 40 mods, ≈ 10–40
+/// MB each): the page reads a mod folder's in from OPFS when [`ready`] asks, and [`unload`] puts them back.
+static LAZY: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+/// Folders [`ready`] asked the page for (not in yet), and the ones read in, most recently wanted last.
+static ASKED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+static WANTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// How many read-in mods stay in memory; wanting one more unloads the least recently wanted.
+// ponytail: a count, not bytes; 6 covers a doubles match's 4 picks and two hovers
+const RESIDENT: usize = 6;
+
+/// Whether file `n` of a mod stays in memory when the mod is [`unload`]ed: its manifests (`mod.json`, `store.json`,
+/// …) and own select pictures (`previews/`) are read while listing mods; models, textures and voices only when it's
+/// played or drawn. `web/index.html` reads the same ones in at the start.
+pub fn small(n: &str) -> bool {
+    n.ends_with(".json") || n.contains("/previews/")
+}
+
+/// A browser mod file the page left in OPFS (`size` bytes): it reads as missing data until [`ready`] has it in.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub fn add_lazy(path: &Path, size: u64) {
+    LAZY.lock().unwrap().insert(key(path), size);
+}
+
+fn under<'a, V>(m: &'a BTreeMap<String, V>, pre: &'a str) -> impl Iterator<Item = (&'a String, &'a V)> {
+    m.range(pre.to_string()..).take_while(move |(k, _)| k.starts_with(pre))
+}
+
+/// Whether mod folder `dir`'s files are all in memory; if not, asks the page to read them in (`web::mod_load`; it
+/// then calls [`loaded`]) and the caller tries again on a later frame. Marks `dir` as just wanted; one wanted past
+/// [`RESIDENT`] unloads the oldest. Always true outside the browser (nothing's ever lazy there).
+pub fn ready(dir: &Path) -> bool {
+    !cfg!(target_arch = "wasm32") || want(dir)
+}
+
+fn want(dir: &Path) -> bool {
+    let d = key(dir);
+    let pre = format!("{d}/");
+    let mut wanted = WANTED.lock().unwrap();
+    wanted.retain(|w| *w != d);
+    wanted.push(d.clone());
+    let over = wanted.len().saturating_sub(RESIDENT);
+    let old: Vec<String> = wanted.drain(..over).collect();
+    drop(wanted);
+    for o in old {
+        unload(Path::new(&o));
+    }
+    if under(&LAZY.lock().unwrap(), &pre).next().is_none() {
+        return true;
+    }
+    if ASKED.lock().unwrap().insert(d.clone()) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::mod_load(&d);
+    }
+    false
+}
+
+/// The page is done reading folder `dir` in: a file it couldn't read is dropped (it then reads as missing, and the
+/// mod fails to load as a broken one would instead of waiting forever).
+pub fn loaded(dir: &str) {
+    let pre = format!("{}/", key(Path::new(dir)));
+    ASKED.lock().unwrap().remove(&key(Path::new(dir)));
+    LAZY.lock().unwrap().retain(|k, _| !k.starts_with(&pre));
+}
+
+/// Mod folder `dir`'s files out of memory again but its [`small`] ones (the browser: the page has them in OPFS).
+pub fn unload(dir: &Path) {
+    let pre = format!("{}/", key(dir));
+    let mut mem = MEM.lock().unwrap();
+    let big: Vec<(String, u64)> = under(&mem, &pre).filter(|(k, _)| !small(k)).map(|(k, b)| (k.clone(), b.len() as u64)).collect();
+    for (k, _) in &big {
+        mem.remove(k);
+    }
+    LAZY.lock().unwrap().extend(big);
+}
 
 /// `p` as a `MEM` key: `/`-separated, without `.` parts (`./mods/x` and `mods/x` are one file).
 pub(crate) fn key(p: &Path) -> String {
@@ -21,12 +95,14 @@ pub(crate) fn key(p: &Path) -> String {
 }
 
 pub fn add(path: &Path, bytes: Arc<[u8]>) {
+    LAZY.lock().unwrap().remove(&key(path));
     MEM.lock().unwrap().insert(key(path), bytes);
 }
 
 pub fn read(p: &Path) -> io::Result<Vec<u8>> {
     match MEM.lock().unwrap().get(&key(p)) {
         Some(b) => Ok(b.to_vec()),
+        None if LAZY.lock().unwrap().contains_key(&key(p)) => Err(io::Error::new(io::ErrorKind::WouldBlock, "still in the browser's storage (the mod is being read in)")),
         None => std::fs::read(p),
     }
 }
@@ -36,13 +112,16 @@ pub fn read_to_string(p: &Path) -> io::Result<String> {
 }
 
 pub fn is_file(p: &Path) -> bool {
-    MEM.lock().unwrap().contains_key(&key(p)) || p.is_file()
+    MEM.lock().unwrap().contains_key(&key(p)) || LAZY.lock().unwrap().contains_key(&key(p)) || p.is_file()
 }
 
 /// File `p`'s size and (on disk) modified time; None for a folder or nothing.
 pub fn size(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     if let Some(b) = MEM.lock().unwrap().get(&key(p)) {
         return Some((b.len() as u64, None));
+    }
+    if let Some(&n) = LAZY.lock().unwrap().get(&key(p)) {
+        return Some((n, None));
     }
     std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| (m.len(), m.modified().ok()))
 }
@@ -51,8 +130,9 @@ pub fn size(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
 pub fn read_dir(p: &Path) -> Vec<PathBuf> {
     let pre = format!("{}/", key(p));
     let mut out: BTreeSet<PathBuf> = std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| e.path()).collect();
-    let mem = MEM.lock().unwrap();
-    out.extend(mem.range(pre.clone()..).take_while(|(k, _)| k.starts_with(&pre)).map(|(k, _)| p.join(k[pre.len()..].split('/').next().unwrap())));
+    let first = |k: &String| p.join(k[pre.len()..].split('/').next().unwrap());
+    out.extend(under(&MEM.lock().unwrap(), &pre).map(|(k, _)| first(k)));
+    out.extend(under(&LAZY.lock().unwrap(), &pre).map(|(k, _)| first(k)));
     out.into_iter().collect()
 }
 
@@ -71,10 +151,12 @@ pub fn write(p: &Path, b: Vec<u8>) -> Result<(), String> {
     std::fs::write(p, b).map_err(|e| format!("can't write {}: {e}", p.display()))
 }
 
-/// Drops every in-memory file under folder `p`.
+/// Drops every in-memory (or [`LAZY`]) file under folder `p`.
 pub fn remove(p: &Path) {
     let pre = format!("{}/", key(p));
     MEM.lock().unwrap().retain(|k, _| !k.starts_with(&pre));
+    LAZY.lock().unwrap().retain(|k, _| !k.starts_with(&pre));
+    WANTED.lock().unwrap().retain(|w| *w != key(p) && !w.starts_with(&pre));
 }
 
 /// The extensions a mod's files may have (`plan/M17.md`): models, manifests, textures, audio.
@@ -724,6 +806,32 @@ pub(crate) mod tests {
         assert!(!installed_by_game(root, &root.join(format!("{id}-x")), &id) && !installed_by_game(root, &root.join(format!("{id}-1")), &id));
         assert!(!installed_by_game(root, &root.join("pack").join(&id), &id));
         remove(Path::new("t_same"));
+    }
+
+    #[test]
+    fn a_lazy_mod_is_read_in_when_wanted_and_unloaded_past_the_budget() {
+        let d = |n: usize| PathBuf::from(format!("t_lazy/m{n}"));
+        add(&d(0).join("mod.json"), b"{}".to_vec().into());
+        add_lazy(&d(0).join("model/c00.glb"), 3);
+        // listed and sized as a file, but no data until the page reads it in
+        assert!(is_file(&d(0).join("model/c00.glb")) && size(&d(0).join("model/c00.glb")).unwrap().0 == 3);
+        assert_eq!(read_dir(&d(0)), [d(0).join("mod.json"), d(0).join("model")]);
+        assert_eq!(read(&d(0).join("model/c00.glb")).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(!want(&d(0)) && ASKED.lock().unwrap().contains(&key(&d(0))));
+        add(&d(0).join("model/c00.glb"), vec![1, 2, 3].into());
+        loaded(&key(&d(0)));
+        assert!(want(&d(0)) && read(&d(0).join("model/c00.glb")).unwrap() == [1, 2, 3]);
+        // RESIDENT more wanted: m0 unloads, its mod.json stays
+        for n in 1..=RESIDENT {
+            assert!(want(&d(n)));
+        }
+        assert!(read(&d(0).join("model/c00.glb")).is_err() && read(&d(0).join("mod.json")).is_ok());
+        // a file the page couldn't read: missing, not waited on
+        assert!(!want(&d(0)));
+        loaded(&key(&d(0)));
+        assert!(want(&d(0)) && !is_file(&d(0).join("model/c00.glb")));
+        remove(Path::new("t_lazy"));
+        assert!(read_dir(Path::new("t_lazy")).is_empty());
     }
 
     #[test]

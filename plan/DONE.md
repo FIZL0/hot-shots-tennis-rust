@@ -468,6 +468,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B334** Mods screen opens on Browse, now the first tab (user 2026-10-14) → play/main_menu/mods_screen.rs
 - [x] **B331** Combine the Singles/Doubles choice with adding controllers on the character-select roster, Smash style (user 2026-10-14): drop the separate mode/controller step; each device joins by pressing a button on the roster and gets its own hovering cursor (P1–P4 coloured tokens, like Smash Ultimate) that it moves over the grid to pick its character; a button on the screen swaps Singles ↔ Doubles (seats/teams follow). Concept artifact first, then port → play/main_menu.rs (roster, B306), play/main_menu/cursor.rs, play/main_menu/previews.rs — Swap shortcut: a pad button toggles Singles ↔ Doubles from anywhere on the roster, likely □ (Xbox X), unused on that screen since B306 dropped the filter cycling; show it in the legend (legend.rs) — user 2026-10-14
 - [x] **B335** Mods: store mods' select picture is the store's preview.png (web stopped baking every installed mod: phone crash at 40 mods); Installed gets Remove all; Browse ← folds an uploader's mods; Download all says done/total; Play with removed
+- [x] **B336** Browser mods: find a better way to hold installed mods than every file in memory (modfs MEM, ≈10–40 MB a mod; 40 mods may outgrow a phone tab): read a picked character's files from OPFS on demand, or similar — j: 2026-10-14-b335-mod-previews
 
 
 ### Shots

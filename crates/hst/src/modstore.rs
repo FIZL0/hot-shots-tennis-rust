@@ -592,6 +592,9 @@ fn keep(m: &Mod) -> Result<String, String> {
 
 /// Every file of the mod in `dir` (path inside it, bytes), sorted; Install's `store.json` left out.
 fn mod_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if !modfs::ready(dir) {
+        return Err("reading the mod in from this browser's storage: press again in a moment".into());
+    }
     fn walk(d: &Path, pre: &str, out: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
         for p in modfs::read_dir(d) {
             let name = format!("{pre}{}", p.file_name().unwrap_or_default().to_string_lossy());

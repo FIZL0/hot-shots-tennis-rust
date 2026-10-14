@@ -161,6 +161,8 @@ impl Menu {
             // a mod: its donor, and its gameplay data for every peer
             (super::Who::Mod(i), costume) => {
                 let m = &self.mods[i];
+                // ponytail: B336's read-in is asked here but not waited for; a hover in the select has read it already
+                crate::modfs::ready(&m.dir);
                 Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new), random: false }
             }
             (super::Who::Disc(c), costume) => Pick::disc(c, costume),
