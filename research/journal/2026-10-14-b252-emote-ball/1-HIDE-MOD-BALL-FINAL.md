@@ -4,7 +4,7 @@
 
 `held_ball` puts the held ball at `Bip01LFinger21` of the server's current motion — during an emote the emote's
 clip, sampled at the drawn time. For a disc character that is the clip that's drawn, so the ball stays in the hand:
-seen in `--shot`s of Ryo's `gu` emote (char 6, `context/b252/run2/`) the ball rides the raised hand the whole emote.
+seen in `--shot`s of disc character 6's `gu` emote (`context/b252/run2/`) the ball rides the raised hand the whole emote.
 (Sim check: ball 0.21 m from `Bip01LFinger21`'s hand bone through the emote vs 0.08–0.16 m in the stance.)
 
 A mod with its own clips (standard §6 `motions`, `CharacterData::visual`) draws its own emote, but the ball is
