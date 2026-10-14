@@ -154,8 +154,10 @@ pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut me
         }
         let mut rot = |j: usize| Mat3::from_mat4(posed(j, rig, &joints, &mut pose));
         for ((_, moved), h) in c.parts.iter().zip(&s.meshes) {
-            let Some(mut mesh) = meshes.get_mut(h) else { continue };
-            let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) else { continue };
+            // worked on a copy: a frame with nothing moved (no tick since the last) leaves the mesh unmarked, as each
+            // `get_mut` re-uploads the whole mesh (B328)
+            let Some(VertexAttributeValues::Float32x3(old)) = meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)) else { continue };
+            let mut pos = old.clone();
             for m in moved {
                 let mut off = Vec3::ZERO;
                 for e in &m.entries {
@@ -167,6 +169,10 @@ pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut me
                 if skin.determinant() != 0.0 {
                     pos[m.v] = (Vec3::from(m.base) + skin.inverse() * off).into();
                 }
+            }
+            let changed = !matches!(meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)), Some(VertexAttributeValues::Float32x3(o)) if *o == pos);
+            if changed && let Some(mut mesh) = meshes.get_mut(h) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             }
         }
     }

@@ -716,7 +716,7 @@ fn draw(
     if cover && hidden.is_empty() {
         for (e, mut vis) in &mut others {
             hidden.push((e, *vis));
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
         }
     } else if !cover {
         for (e, vis) in hidden.drain(..) {
@@ -752,7 +752,7 @@ fn draw(
     let aspect = super::widescreen::window_aspect(&window);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         let three_d = cursor.as_ref().filter(|_| quad.tex == HAND);
@@ -786,11 +786,8 @@ fn draw(
         };
         let (left, width) = super::widescreen::place(x, w, share, anchor);
         let (top, height) = super::widescreen::vplace(y, h, aspect, anchor);
-        node.left = Val::Percent(left);
-        node.top = Val::Percent(top);
-        node.width = Val::Percent(width);
-        node.height = Val::Percent(height);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, left, top, width, height);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 

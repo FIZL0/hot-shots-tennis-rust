@@ -618,7 +618,7 @@ fn draw(
     let share = super::widescreen::share(aspect);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         let tex = match quad.tex {
@@ -648,12 +648,9 @@ fn draw(
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
         let (left, width) = super::widescreen::pin(x, w, share);
-        node.left = Val::Percent(left);
         let (top, height) = super::widescreen::vplace(y, h, aspect, super::widescreen::Anchor::Sides);
-        node.top = Val::Percent(top);
-        node.width = Val::Percent(width);
-        node.height = Val::Percent(height);
-        *vis = Visibility::Inherited;
+        super::widescreen::put(&mut node, left, top, width, height);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 

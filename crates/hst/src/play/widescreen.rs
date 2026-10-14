@@ -289,3 +289,10 @@ fn legend_strip_under_the_description_bar() {
         assert!((bt + bh - lt).abs() < 1e-3 && (lt + lh - 100.0).abs() < 1e-3, "{a}");
     }
 }
+
+/// Places a HUD quad (percent of the view); only a real change marks the node, since a changed `Node` relayouts the
+/// whole UI tree (B328: every frame otherwise).
+pub(crate) fn put(node: &mut Mut<Node>, left: f32, top: f32, width: f32, height: f32) {
+    let placed = Node { left: Val::Percent(left), top: Val::Percent(top), width: Val::Percent(width), height: Val::Percent(height), ..(**node).clone() };
+    node.set_if_neq(placed);
+}

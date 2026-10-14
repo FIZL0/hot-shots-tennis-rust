@@ -423,7 +423,7 @@ fn draw_plate(
     let share = widescreen::window_share(&window);
     for (PlateSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&(sheet, [u, v, w, h], [x, y, dw, dh], [r, g, b, a], anchor)) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         img.image = art.0[sheet].clone();
@@ -431,11 +431,8 @@ fn draw_plate(
         img.color = Color::srgba(r as f32 / 128.0, g as f32 / 128.0, b as f32 / 128.0, a as f32 / 128.0);
         let (left, width) = widescreen::place(x, dw, share, anchor);
         let (top, height) = widescreen::vplace(y, dh, widescreen::window_aspect(&window), anchor);
-        node.left = Val::Percent(left);
-        node.top = Val::Percent(top);
-        node.width = Val::Percent(width);
-        node.height = Val::Percent(height);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, left, top, width, height);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 
@@ -466,7 +463,7 @@ fn draw_banner(
     let edge = |x: f32| widescreen::place(x, 0.0, share, Anchor::Sides).0;
     for (BannerSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&(sheet, [u, v, w, h], [x, y, dw, dh], rgb)) = quads.get(*i).filter(|_| alpha > 0.0) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         img.image = b.sheets[sheet].clone();
@@ -481,11 +478,8 @@ fn draw_banner(
             _ => widescreen::place(x, dw, share, Anchor::Centre),
         };
         let (top, height) = widescreen::vplace(y, dh, widescreen::window_aspect(&window), Anchor::Centre);
-        node.left = Val::Percent(left);
-        node.top = Val::Percent(top);
-        node.width = Val::Percent(width);
-        node.height = Val::Percent(height);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, left, top, width, height);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 

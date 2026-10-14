@@ -687,7 +687,7 @@ fn draw(
     }
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         // the panel's texture order: pill, slot, …, points (3), …, rank (6), …, then the faces
@@ -713,11 +713,8 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        node.left = Val::Percent(x / 6.4);
-        node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(w / 6.4);
-        node.height = Val::Percent(h / 4.48);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, x / 6.4, y / 4.48, w / 6.4, h / 4.48);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 
@@ -1342,7 +1339,7 @@ fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&Banner
     let quads = banners(&g.finish);
     for (BannerSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&(tex, [u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         let k = match tex {
@@ -1355,11 +1352,8 @@ fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&Banner
         img.image = art.0[k].clone();
         img.rect = Some(Rect::new(u, v, u + w, v + h));
         img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
-        node.left = Val::Percent(x / 6.4);
-        node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(dw / 6.4);
-        node.height = Val::Percent(dh / 4.48);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, x / 6.4, y / 4.48, dw / 6.4, dh / 4.48);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 
@@ -1613,7 +1607,7 @@ fn draw_speed(
     let aspect = super::widescreen::window_aspect(&window);
     for (SpeedSlot(i), mut img, mut node, mut vis) in &mut q {
         let Some(&([u, v, w, h], [x, y, dw, dh], alpha)) = quads.get(*i).filter(|q| q.2 > 0) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         img.image = art.0.clone();
@@ -1621,12 +1615,9 @@ fn draw_speed(
         img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
         // every quad of a readout is on its side of the centre, so they all pin to the same edge
         let (left, width) = super::widescreen::pin(x, dw, share);
-        node.left = Val::Percent(left);
         let (top, height) = super::widescreen::vplace(y, dh, aspect, super::widescreen::Anchor::Sides);
-        node.top = Val::Percent(top);
-        node.width = Val::Percent(width);
-        node.height = Val::Percent(height);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, left, top, width, height);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 

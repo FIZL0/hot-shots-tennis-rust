@@ -757,7 +757,7 @@ fn draw(
     }
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
-            *vis = Visibility::Hidden;
+            vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         img.image = match quad.tex {
@@ -779,11 +779,8 @@ fn draw(
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
         let [x, y, w, h] = quad.dst;
-        node.left = Val::Percent(x / 6.4);
-        node.top = Val::Percent(y / 4.48);
-        node.width = Val::Percent(w / 6.4);
-        node.height = Val::Percent(h / 4.48);
-        *vis = Visibility::Inherited;
+        crate::play::widescreen::put(&mut node, x / 6.4, y / 4.48, w / 6.4, h / 4.48);
+        vis.set_if_neq(Visibility::Inherited);
     }
 }
 

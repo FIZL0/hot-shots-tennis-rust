@@ -170,9 +170,10 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
     #[cfg(all(target_arch = "wasm32", not(feature = "webgpu")))]
     let (size, cascades, far) = (2048, 1, 60.0);
     // B287: the first cascade covers the whole court from either baseline camera; past it the jungle's tall canopy
-    // shadows on the far half faded out
+    // shadows on the far half faded out. Low is one 2048 cascade to 120 m (still more texels a metre than the old
+    // 1024-to-80 m first cascade): each cascade draws every caster again, too many draws for a phone (B328)
     #[cfg(not(all(target_arch = "wasm32", not(feature = "webgpu"))))]
-    let (size, cascades, far) = if g.shadows == Shadows::Low { (1024, 2, 120.0) } else { (2048, 4, 120.0) };
+    let (size, cascades, far) = if g.shadows == Shadows::Low { (2048, 1, 120.0) } else { (2048, 4, 120.0) };
     if map.size != size {
         map.size = size;
     }

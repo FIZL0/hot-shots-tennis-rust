@@ -670,7 +670,6 @@ fn match_news(near: &mut npc::Near, g: &Game) {
 // ponytail: the original also needs a flag (never set in any dump) to be clear on courts other than 5
 fn draw_cheers(npcs: Option<Res<Npcs>>, g: Res<Game>, cam: Query<&Transform, With<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>) {
     let (Some(npcs), Ok(cam)) = (npcs, cam.single()) else { return };
-    let Some(mut mesh) = meshes.get_mut(&npcs.sprites) else { return };
     let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
     let (right, up, ahead, eye) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y), game(cam.rotation * Vec3::NEG_Z), game(cam.translation));
     let t = &npcs.sizes[npcs.cheers.kind.min(1) as usize];
@@ -695,7 +694,7 @@ fn draw_cheers(npcs: Option<Res<Npcs>>, g: Res<Game>, cam: Query<&Transform, Wit
             index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
         }
     }
-    crate::effects::fill(&mut mesh, pos, uv, colour, index);
+    crate::effects::fill(&mut meshes, &npcs.sprites, pos, uv, colour, index);
 }
 
 /// The decided point's gallery reaction (`simulate` leaves it for the cheerers to come first).

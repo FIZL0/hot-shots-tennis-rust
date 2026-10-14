@@ -462,9 +462,7 @@ fn draw(fx: Option<Res<Particles>>, w: Option<Res<Weather>>, cam: Query<&Transfo
         }
     }
     for (mesh, q) in fx.views.iter().zip(sets) {
-        if let Some(mut m) = meshes.get_mut(mesh) {
-            fill(&mut m, q.pos, q.uv, q.colour, q.index);
-        }
+        fill(&mut meshes, mesh, q.pos, q.uv, q.colour, q.index);
     }
 }
 

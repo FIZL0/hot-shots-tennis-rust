@@ -211,7 +211,7 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera
     let [ax, ay, az] = super::own_camera::shown(&g, own.as_deref()).1.rot[2];
     let basis = hst_sim::effect::impact_matrix([-ax, -ay, -az, -0.0], [0.0; 3]);
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
-    let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 4])>| {
+    let mut put = |h: &Handle<Mesh>, quads: Vec<([Vec3; 4], [f32; 4])>| {
         let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
         for (corners, c) in quads {
             let n = pos.len() as u32;
@@ -220,7 +220,7 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera
             colour.extend([c; 4]);
             index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
         }
-        fill(mesh, pos, uv, colour, index);
+        fill(&mut meshes, h, pos, uv, colour, index);
     };
     let [r, g, b] = if fx.wet { [1.0; 3] } else { fx.dust };
     let puffs = fx
@@ -242,12 +242,8 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera
         })
         .collect();
     let (shown, empty) = if fx.wet { (&fx.wet_puffs, &fx.dry_puffs) } else { (&fx.dry_puffs, &fx.wet_puffs) };
-    if let Some(mut mesh) = meshes.get_mut(shown) {
-        put(&mut mesh, puffs);
-    }
-    if let Some(mut mesh) = meshes.get_mut(empty) {
-        put(&mut mesh, vec![]);
-    }
+    put(shown, puffs);
+    put(empty, vec![]);
     let c = fx.table.courts.get(fx.court).unwrap_or(&fx.table.courts[10]);
     let [r, g, b] = c.print_rgb[fx.wet as usize].map(lin);
     let prints = fx
@@ -259,9 +255,7 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera
             ([at - s - f, at + s - f, at - s + f, at + s + f], [r, g, b, p.alpha / 128.0])
         })
         .collect();
-    if let Some(mut mesh) = meshes.get_mut(&fx.prints) {
-        put(&mut mesh, prints);
-    }
+    put(&fx.prints, prints);
 }
 
 /// Each player's `run/dash` streak at the yaw and position of the hips as its dive started.
@@ -317,12 +311,8 @@ fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>
         }
     }
     let [shown, empty] = if blades { [&fx.bits[1], &fx.bits[0]] } else { [&fx.bits[0], &fx.bits[1]] };
-    if let Some(mut mesh) = meshes.get_mut(shown) {
-        fill(&mut mesh, pos, uv, colour, index);
-    }
-    if let Some(mut mesh) = meshes.get_mut(empty) {
-        fill(&mut mesh, vec![], vec![], vec![], vec![]);
-    }
+    fill(&mut meshes, shown, pos, uv, colour, index);
+    fill(&mut meshes, empty, vec![], vec![], vec![], vec![]);
 }
 
 #[cfg(test)]

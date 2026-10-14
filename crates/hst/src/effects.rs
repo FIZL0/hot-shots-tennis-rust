@@ -358,10 +358,22 @@ impl EffectMaterial for Fx {
 
 /// Write a frame's quads into a dynamic mesh. Nothing to draw still writes one invisible degenerate triangle: Bevy's
 /// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
-pub(crate) fn fill(mesh: &mut Mesh, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
+/// Sets an effect mesh's quads; one that's unchanged (mostly empty → empty) isn't touched, since a `get_mut` makes
+/// Bevy repack and re-upload the whole mesh (B328).
+pub(crate) fn fill(meshes: &mut Assets<Mesh>, h: &Handle<Mesh>, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
+    use bevy::mesh::{Indices, VertexAttributeValues as V};
     if pos.is_empty() {
         (pos, uv, colour, index) = (vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[0.0; 4]; 3], vec![0, 0, 0]);
     }
+    if let Some(m) = meshes.get(h)
+        && matches!(m.attribute(Mesh::ATTRIBUTE_POSITION), Some(V::Float32x3(v)) if *v == pos)
+        && matches!(m.attribute(Mesh::ATTRIBUTE_UV_0), Some(V::Float32x2(v)) if *v == uv)
+        && matches!(m.attribute(Mesh::ATTRIBUTE_COLOR), Some(V::Float32x4(v)) if *v == colour)
+        && matches!(m.indices(), Some(Indices::U32(v)) if *v == index)
+    {
+        return;
+    }
+    let Some(mut mesh) = meshes.get_mut(h) else { return };
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
@@ -409,7 +421,6 @@ impl HitSparks {
 pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<crate::Orbit>>, mut vis: Query<&mut Visibility>, mut meshes: ResMut<Assets<Mesh>>) {
     let (Ok(cam), Ok(mut v)) = (cam.single(), vis.get_mut(fx.view)) else { return };
     *v = if fx.sparks.live { Visibility::Visible } else { Visibility::Hidden };
-    let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
     // world → game space: (x, −y, −z)
     let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
     let (right, down) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::NEG_Y));
@@ -425,7 +436,7 @@ pub fn draw_sparks(fx: Res<HitSparks>, cam: Query<&Transform, With<crate::Orbit>
         index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
     }
     debug_assert!(pos.len() <= 4 * SPARKS);
-    fill(&mut mesh, pos, uv, colour, index);
+    fill(&mut meshes, &fx.mesh, pos, uv, colour, index);
 }
 
 /// A player's swing trail and the motion (id, serial) last seen, to catch a swing's start.
@@ -474,7 +485,6 @@ pub fn tick_trails(mut q: Query<(&crate::character::Rig, &crate::character::Moti
 
 /// Every live trail as one ribbon mesh: inner edge u = 1, outer u = 0, v along the swing, alpha fading to the tail.
 pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<Assets<Mesh>>) {
-    let Some(mut mesh) = meshes.get_mut(&fx.mesh) else { return };
     let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
     for t in &q {
         let rows = t.trail.ribbon();
@@ -488,7 +498,7 @@ pub fn draw_trails(fx: Res<Trails>, q: Query<&SwingTrail>, mut meshes: ResMut<As
             }
         }
     }
-    fill(&mut mesh, pos, uv, colour, index);
+    fill(&mut meshes, &fx.mesh, pos, uv, colour, index);
 }
 
 /// The ball's flight ribbon and glow, each one mesh.
@@ -566,7 +576,6 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
             m.base.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
         }
     }
-    let Some(mut mesh) = meshes.get_mut(&fx.ribbon) else { return };
     let f = &fx.flight;
     let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
     if f.live && f.count >= 2 {
@@ -601,7 +610,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
             }
         }
     }
-    fill(&mut mesh, pos, uv, colour, index);
+    fill(&mut meshes, &fx.ribbon, pos, uv, colour, index);
 }
 
 /// The glow's orientation (game space): a frame facing the flight (side = up × flight, then flight × side); a flight
@@ -717,7 +726,7 @@ pub fn draw_bounce(
     let Ok(cam) = cam.single() else { return };
     let game = |v: Vec3| Vec3::new(v.x, -v.y, -v.z);
     let (right, up) = (game(cam.rotation * Vec3::X), game(cam.rotation * Vec3::Y));
-    let put = |mesh: &mut Mesh, quads: Vec<([Vec3; 4], [f32; 2], [f32; 4])>| {
+    let mut put = |h: &Handle<Mesh>, quads: Vec<([Vec3; 4], [f32; 2], [f32; 4])>| {
         let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
         for (corners, [v0, v1], c) in quads {
             let n = pos.len() as u32;
@@ -726,7 +735,7 @@ pub fn draw_bounce(
             colour.extend([c; 4]);
             index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
         }
-        fill(mesh, pos, uv, colour, index);
+        fill(&mut meshes, h, pos, uv, colour, index);
     };
     let v3 = |r: [f32; 4]| Vec3::new(r[0], r[1], r[2]);
     let mut quads = vec![];
@@ -740,20 +749,14 @@ pub fn draw_bounce(
             quads.push(([rows[k] - s, rows[k] + s, rows[k + 1] - s, rows[k + 1] + s], v, colour));
         }
     }
-    if let Some(mut mesh) = meshes.get_mut(&fx.marks) {
-        put(&mut mesh, quads);
-    }
+    put(&fx.marks, quads);
     let [r, g, bl] = fx.look.0;
     let billboard = |p: &Puff| {
         let (foot, w, h) = (v3(p.pos), right * p.size, up * 2.0 * p.size);
         ([foot - w + h, foot + w + h, foot - w, foot + w], [0.0, 1.0], [r, g, bl, p.alpha / 128.0])
     };
-    if let Some(mut mesh) = meshes.get_mut(&fx.puffs) {
-        put(&mut mesh, b.puffs.iter().filter(|p| p.life > 0).map(billboard).collect());
-    }
-    if let Some(mut mesh) = meshes.get_mut(&fx.dust) {
-        put(&mut mesh, b.dust.iter().map(|(p, _, _)| billboard(p)).collect());
-    }
+    put(&fx.puffs, b.puffs.iter().filter(|p| p.life > 0).map(billboard).collect());
+    put(&fx.dust, b.dust.iter().map(|(p, _, _)| billboard(p)).collect());
 }
 
 /// The landing markers: `chakudan_p` (red, a looping pulse) at the shot's aim and `smash_p` (yellow, one 120-frame
