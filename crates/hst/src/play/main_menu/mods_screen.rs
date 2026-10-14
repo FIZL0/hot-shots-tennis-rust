@@ -2000,7 +2000,8 @@ mod tests {
         app.init_asset::<Image>().init_resource::<Shelf>().init_resource::<super::super::previews::ModCard>();
         app.insert_resource(m);
         app.add_systems(Update, page);
-        for _ in 0..500 {
+        // ponytail: up to 30 s for the packing threads, which run late when the whole suite shares the CPU
+        for _ in 0..3000 {
             app.update();
             let v = &app.world().resource::<Menu>().add;
             if v.list.iter().all(|x| matches!(v.ups.get(&x.dir), Some(Up::Failed(_)))) {
