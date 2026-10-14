@@ -1267,3 +1267,37 @@ fn ball_model_and_last_move_match_the_game() {
         assert!(steps > 300 && doubles >= 5 && still > 50 && new >= 2 && struck >= 2);
     }
 }
+
+/// The beach plane (trigger 6 on court 2): a named game win sets it off with its engine sound; it then flies at
+/// y = -60 about 4 units a tick from the sea end to the far end, as the game's RAM shows (z 343.77, then 335.78,
+/// 327.79 ... at -60 every other tick), its volume (|z| over 550, squared) loudest overhead.
+#[test]
+fn beach_plane_flies_over() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let mut iso = Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")).unwrap();
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let game = Game::new(&cnf, &bin).unwrap();
+    let (entries, plants) = court_layout(&mut iso, 2);
+    let c = npc::spawn(&entries, &plants, &game.npc_roster(2), &game.walkers(2), 2)
+        .into_iter()
+        .find(|c| matches!(c.kind, npc::Kind::Trigger(6)))
+        .unwrap();
+    let row = game.trigger(6);
+    assert_eq!(row.sound, 30);
+    let mut t = npc::Trigger { ty: 6, anchor: c.world[3], home: c.world, world: c.world, path: c.path.clone(), radii: c.radii.clone(), start: c.start, len: 30.0, ..Default::default() };
+    t.reset(&row, &mut || 0);
+    let mut near = npc::Near { game: true, named: false, ..Default::default() };
+    assert!(t.message(&row, 7, &mut near, &mut || 0).is_empty(), "an unnamed point leaves it home");
+    near.named = true;
+    assert_eq!(t.message(&row, 7, &mut near, &mut || 0), [30]);
+    let (mut z, mut loudest) = (t.world[3][2], 0);
+    for _ in 0..180 {
+        t.step_near(&row, &mut near, &mut || 0);
+        assert!(t.on && t.world[3][1] == -60.0 && (z - t.world[3][2] - 3.9857666).abs() < 1e-3);
+        z = t.world[3][2];
+        loudest = loudest.max(t.volume);
+    }
+    assert!(z < -370.0 && loudest >= 127 && t.volume < 70);
+    t.message(&row, 4, &mut near, &mut || 0);
+    assert!(!t.on && t.world == t.home && t.volume == -1);
+}

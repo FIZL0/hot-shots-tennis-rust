@@ -359,6 +359,12 @@ impl<'a> Game<'a> {
         (ty < 53 && mdl != 0).then(|| (s(0).split('.').next().unwrap_or_default().into(), s(4), if r[8] != 0 { r[9] } else { 0 }))
     }
 
+    /// Court 2's surf (trigger type 8): each of its four stereo loops' starting bearing (whole degrees), by spawn.
+    pub fn surf_bearings(&self) -> [i32; 4] {
+        let r = self.at(0x41_cbe0, 16);
+        std::array::from_fn(|k| i32::from_le_bytes(r[4 * k..4 * k + 4].try_into().unwrap()))
+    }
+
     /// A trigger creature type's parameter row (the part the creature engine uses).
     pub fn trigger(&self, ty: u8) -> TriggerRow {
         let r = self.at(0x41_aec0 + 0x74 * ty as u32, 0x74);

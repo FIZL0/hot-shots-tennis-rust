@@ -35,7 +35,8 @@ use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace};
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, setup.after(super::setup))
+    app.init_resource::<Ambience>()
+        .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
         .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)));
 }
@@ -83,6 +84,11 @@ pub(super) struct Npcs {
     /// offset at each atlas frame.
     #[serde(with = "crowd_state")]
     crowd: Vec<(npc::Crowd, Vec<(Handle<StandardMaterial>, Vec<[f32; 2]>)>)>,
+    /// B261: court 2's surf loops (`Surf`) and the games count court 3's type 10 last sounded at.
+    #[serde(default)]
+    surf: Surf,
+    #[serde(default)]
+    games: u32,
 }
 
 /// The umpire's animation controller: `frame` shown, `next` the one after.
@@ -107,7 +113,9 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    mut ambience: ResMut<Ambience>,
 ) {
+    *ambience = default();
     let Ok(root) = root.single() else { return };
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let n = g.stage as usize;
@@ -129,7 +137,7 @@ fn setup(
     let walkers = game.walkers(n as u32);
     let (mut hidden, mut off) = (Vec::new(), Vec::new());
     let mut crowd = Vec::new();
-    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), mark: Vec::new(), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new() };
+    let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), mark: Vec::new(), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new(), surf: default(), games: 0 };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
     let mut roll = || rng.next();
@@ -162,9 +170,14 @@ fn setup(
                 if npc::EMITTERS.contains(&t) {
                     npcs.figures.push(None);
                 }
-                // courts 5's and 9's sound-only creatures (19, 40) have no model but still hear the match
+                // B261: court 2's surf loops start at their spawn, from their bearings; a coin sets each one's sweep
+                if t == 8 {
+                    npcs.surf.add(game.surf_bearings().get(npcs.surf.loops.len()).copied().unwrap_or(0), &mut roll);
+                }
+                // the sound-only creatures (courts 5's and 9's 19, 40; B261: courts 1's, 2's, 3's and 7's 3, 8, 10,
+                // 30, and 49) have no model but still hear the match
                 let Some((model, base, clips)) = game.trigger_model(t) else {
-                    if matches!(t, 19 | 40) {
+                    if matches!(t, 19 | 40 | 3 | 8 | 10 | 30 | 49) {
                         let row = game.trigger(t);
                         let mut tr = npc::Trigger { ty: t, anchor: c.world[3], home: c.world, world: c.world, ..default() };
                         tr.reset(&row, &mut roll);
@@ -274,7 +287,7 @@ fn step(
     children: Query<&Children>,
     audio: Option<Res<crate::audio::Sound>>,
     bank: Option<Res<crate::audio::CourtBank>>,
-    (ticks, mut once): (Res<super::heard::Heard>, ResMut<super::heard::Played>),
+    (ticks, mut once, mut ambience): (Res<super::heard::Heard>, ResMut<super::heard::Played>, ResMut<Ambience>),
     (mats, mut materials): (Query<&MeshMaterial3d<StandardMaterial>>, ResMut<Assets<StandardMaterial>>),
     globals: Query<&GlobalTransform>,
     args: Res<Args>,
@@ -411,8 +424,16 @@ fn step(
     if serve && !npcs.serving {
         let phase = if first { 0 } else if npcs.ends { 1 } else { 4 };
         (npcs.near.ends, npcs.near.players) = (phase == 1, players);
+        let games = g.match_stats.games;
         for (_, t, row) in &mut npcs.triggers {
             heard.extend(t.hear(row, 0xe, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+            // B261: court 3's type 10 sounds at its reset here once every second game (the games so far even)
+            if t.ty == 10 && phase == 4 && games != 0 && games % 2 == 0 && games != npcs.games {
+                heard.push((row.sound, t.ty, t.pos3()));
+            }
+        }
+        if phase == 4 {
+            npcs.games = games;
         }
         npcs.near.ends = false;
     }
@@ -493,6 +514,7 @@ fn step(
     }
     let mut emitters = 0..g.emitters.len();
     let mut flyover = None;
+    let mut surf = Vec::new();
     for &f in &npcs.figures {
         let Some(k) = f else {
             if let Some(k) = emitters.next() {
@@ -554,6 +576,9 @@ fn step(
         if t.ty == 6 {
             flyover = Some((t.on, t.volume, t.pos3()));
         }
+        if t.ty == 8 && surf.len() < npcs.surf.loops.len() {
+            surf.push(npcs.surf.tick(surf.len(), &mut roll));
+        }
     }
     let (Some(audio), Some(Some(bank))) = (audio, bank.map(|b| b.0.clone())) else { return };
     let play = |key: i32, volume: i32| sound::Play { slot: 0, program: 7, key: key as u8, volume, speed: 1.0 };
@@ -566,14 +591,30 @@ fn step(
         match (ty, t) {
             // 19's sweep: from its bearing at its volume
             (19, Some(t)) => _ = audio.play_toward(&bank, play(s, t.volume), t.bearing),
-            (6, Some(t)) => once.flyover = Some(audio.play_at(&bank, play(s, t.volume), at)),
+            // the flyover's volume is set straight from its |z| (no distance falloff), panned by its bearing
+            (6, Some(t)) => once.flyover = Some(audio.play_toward(&bank, play(s, t.volume), sound::place(at).0)),
             _ => _ = audio.play_at(&bank, play(s, 0x80), at),
         }
     }
-    // the flyover's sound follows it, fading with |z|; its reset stops it (as of the last tick heard)
+    // B261: the surf loops, started once (their spawn), re-levelled and re-panned while they sound
+    // ponytail: the game also restarts them when an instant replay restarts (no replay restart here)
+    if once.fresh {
+        if ambience.surf.is_empty() && !surf.is_empty() {
+            ambience.surf = surf.iter().map(|&(volume, angle)| audio.play_toward(&bank, play(npcs.surf.key, volume), angle)).collect();
+        }
+        for (&id, (volume, angle)) in ambience.surf.iter().zip(surf) {
+            audio.turn(id, volume, angle);
+        }
+        // courts 1's and 7's chime (3, 30; 49 on no court) every 14400 ticks of match time; 30 and 49 ring it 1, 2,
+        // 3, 4 times in turn
+        for (_, t, row) in npcs.triggers.iter().filter(|(_, t, _)| matches!(t.ty, 3 | 30 | 49)) {
+            ambience.chime(t.ty, row.sound, g.match_stats.frames, |key| audio.play_centre(&bank, play(key, 0x40)), |id| audio.playing(id));
+        }
+    }
+    // the flyover's sound follows it, re-panned and fading with |z| only; its reset stops it (as of the last tick heard)
     match (once.flyover, flyover) {
         _ if !once.fresh => {}
-        (Some(id), Some((true, volume, at))) => audio.update(id, play(30, volume), at),
+        (Some(id), Some((true, volume, at))) => audio.turn(id, volume, sound::place(at).0),
         (Some(id), _) => {
             audio.stop(id);
             once.flyover = None;
@@ -762,3 +803,159 @@ fn look(g: Res<Game>, npcs: Option<Res<Npcs>>, rigs: Query<(&character::Rig, &Tr
         *tf = rest.with_rotation(rest.rotation * Quat::from_rotation_x(yaw) * Quat::from_rotation_y(tilt));
     }
 }
+
+/// B261: court 2's surf (trigger type 8), four stereo plays (started once, at its spawn) each from its own bearing, swept a degree every 5 ticks
+/// (45 steps, then 90 back and forth). Every 1200 ticks a coin may pick one (not the last one again: 0 → 1, 3 → 2)
+/// to dip: 19.2 under its volume over 300 ticks, held 300, then back up (from just short of full, as the game's
+/// off-by-10 count has it) till 900 ends the dip. In the snapshot: its coins are the court RNG's.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct Surf {
+    loops: Vec<SurfLoop>,
+    key: i32,
+    count: i32,
+    dip: bool,
+    channel: i32,
+    last: i32,
+    phase: i32,
+}
+
+/// A surf loop: its volume, bearing, sweep (down when `back`), ticks into its step and steps to its turn.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct SurfLoop {
+    volume: i32,
+    angle: i32,
+    back: bool,
+    step: i32,
+    left: i32,
+}
+
+impl Surf {
+    /// A loop's spawn (from `angle`): the first and last loud (38 · 1.15), the middle two soft (38 − 15 %); the
+    /// cycle starts over.
+    fn add(&mut self, angle: i32, roll: &mut impl FnMut() -> u32) {
+        let k = self.loops.len();
+        let volume = if k == 0 || k == 3 { (38.0f32 * 1.15) as i32 } else { (38.0f32 + 0.0 - 38.0 * 0.15) as i32 };
+        self.loops.push(SurfLoop { volume, angle, back: roll() >> 16 & 1 != 0, step: 0, left: 45 });
+        (self.key, self.count, self.dip, self.channel, self.last, self.phase) = (25, 0, false, 0, 0, 0);
+    }
+
+    /// Loop `k`'s tick (the first runs the cycle): its volume and bearing.
+    // ponytail: the game's settings word has the sweep on and no loop soloed (its debug switches): taken as fixed
+    fn tick(&mut self, k: usize, roll: &mut impl FnMut() -> u32) -> (i32, i32) {
+        if k == 0 {
+            self.count += 1;
+            if self.count % 1200 == 0 {
+                self.count = 0;
+                if roll() >> 16 & 1 == 0 {
+                    self.dip = true;
+                    let c = (roll() >> 16 & 3) as i32;
+                    let c = if c != self.last { c } else { [1, 1, 2, 2][c as usize] };
+                    (self.phase, self.channel, self.last) = (0, c, c);
+                }
+            } else if self.count % 900 == 0 {
+                self.dip = false;
+            } else if self.count % 600 == 0 {
+                self.phase = 2;
+            } else if self.count % 300 == 0 {
+                self.phase = 1;
+            }
+        }
+        let (dip, phase, count, channel) = (self.dip, self.phase, self.count, self.channel);
+        let l = &mut self.loops[k];
+        let v = l.volume as f32;
+        let volume = match phase {
+            _ if !dip || channel != k as i32 => l.volume,
+            0 => (v - (count % 300) as f32 * 0.064) as i32,
+            1 => (v - 19.2) as i32,
+            _ => (v - (300 - (count - 10) % 300) as f32 * 0.064) as i32,
+        };
+        l.step += 1;
+        if l.step % 5 == 0 {
+            l.step = 0;
+            l.angle = (l.angle + if l.back { -1 } else { 1 }).rem_euclid(360);
+            l.left -= 1;
+            if l.left <= 0 {
+                (l.left, l.back) = (90, !l.back);
+            }
+        }
+        (volume, l.angle)
+    }
+}
+
+/// B261: the court sounds that follow the mixer, not the tick (never in the snapshot, reset with each match): the
+/// surf's play ids and the chime's (`chime`).
+#[derive(Resource)]
+pub(super) struct Ambience {
+    surf: Vec<u64>,
+    chime: Option<u64>,
+    rung: i32,
+    rings: i32,
+}
+
+impl Default for Ambience {
+    fn default() -> Self {
+        Ambience { surf: Vec::new(), chime: None, rung: 0, rings: 1 }
+    }
+}
+
+impl Ambience {
+    /// A chime creature's tick at match time `frames`: it rings once every 14400 (not at 0) unless already ringing;
+    /// type 30's and 49's ring again as each ends until rung `rings` times, then the next ringing rings once more
+    /// (1 to 4, round again).
+    fn chime(&mut self, ty: u8, key: i32, frames: u32, mut play: impl FnMut(i32) -> u64, playing: impl Fn(u64) -> bool) {
+        if frames % 14400 == 0 && frames != 0 && self.chime.is_none() {
+            (self.chime, self.rung) = (Some(play(key)), 1);
+        }
+        let Some(id) = self.chime else { return };
+        if playing(id) || !matches!(ty, 30 | 49) {
+            if !playing(id) {
+                self.chime = None;
+            }
+            return;
+        }
+        self.chime = None;
+        if self.rung < self.rings {
+            self.rung += 1;
+            self.chime = Some(play(key));
+        } else {
+            self.rings = if self.rings < 4 { self.rings + 1 } else { 1 };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chimes_ring_one_to_four_times_in_turn() {
+        let mut a = Ambience::default();
+        let mut rang = Vec::new();
+        for cycle in 1..=5u32 {
+            let mut n = 0;
+            for f in 0..100 {
+                // each ring lasts 3 ticks
+                a.chime(30, 16, if f == 0 { 14400 * cycle } else { 1 }, |_| { n += 1; f as u64 }, |id| f < id as u32 + 3);
+            }
+            rang.push(n);
+        }
+        assert_eq!(rang, [1, 2, 3, 4, 1]);
+    }
+
+    #[test]
+    fn surf_dips_one_loop_at_a_time() {
+        let mut s = Surf::default();
+        let mut zero = || 0u32;
+        (0..4).for_each(|k| s.add([90, 135, 225, 270][k], &mut zero));
+        // a 0 coin dips; the second draw's 0 is the last loop picked again, so 1
+        let ticks: Vec<_> = (0..1200 + 450).map(|_| (0..4).map(|k| s.tick(k, &mut zero)).collect::<Vec<_>>()).collect();
+        assert_eq!(ticks[4], [(43, 91), (32, 136), (32, 226), (43, 271)]);
+        assert_eq!(ticks[1199 + 150][1].0, (32.0f32 - 150.0 * 0.064) as i32);
+        assert_eq!(ticks[1199 + 400][1].0, 12);
+        assert!(ticks[1199 + 400].iter().enumerate().all(|(k, t)| k == 1 || t.0 == [43, 32, 32, 43][k]));
+        // 45 steps up, then back
+        assert_eq!(ticks[45 * 5 - 1][0].1, 135);
+        assert_eq!(ticks[46 * 5 - 1][0].1, 134);
+    }
+}
+
