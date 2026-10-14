@@ -481,6 +481,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B337** Mods Browse: mouse/touch way to fold and unfold an uploader (a tap on the heading is Download all today; ← / → only on keys and pads, B335) — e.g. a fold toggle on the heading beside its Download all chip
 - [x] **B333** Mobile: the page sometimes opens cropped with an empty bar ("chin") along one edge; rotating to portrait and back to landscape fixes it (user 2026-10-14). Likely the canvas sized from a stale viewport on load (iOS Safari's dynamic toolbar / visualViewport not settled): resize on visualViewport resize/orientationchange and after load, use dvh/100% instead of vh — web/index.html, web/touch.js, crates/hst/src/web.rs
 - [x] **B339** Mods: asynchronous (parallel) store downloads for Download all / several installs, with a Settings → Mods option for how many at once and a lower max on browser/mobile (user 2026-10-14) — files: crates/hst/src/modstore.rs, crates/hst/src/play/main_menu/mods_screen.rs, web/index.html
+- [x] **B358** Mod download fails on iPhone Safari home-screen webapp: on iOS 18.6 (iPhone 13 Pro, Safari webapp added to the home screen) downloading a mod fails with "Couldn't save Wendy in this browser's storage: TypeError: (await d.getFileHandle(parts.at(-1), { create: true })).createWritable is not a function"; Safari does not support createWritable on the origin private file system handles, so mods should save and download successfully on iOS Safari instead of erroring (user 2026-10-14) → modfs.rs · modstore.rs · mods.rs
 
 
 ### Shots
