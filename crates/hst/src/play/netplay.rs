@@ -175,6 +175,9 @@ pub struct Netplay {
     /// The states went apart (a report is saved for the first mismatch; until a resync, B154b), and the note on
     /// screen with its seconds left.
     pub desynced: bool,
+    /// Where the match's one desync report went (B276: a match that keeps going out of sync and back saved its whole
+    /// input log again each time, until the browser ran out of memory).
+    report: Option<String>,
     note: Option<(String, f32)>,
     paused: bool,
     /// The last hashed tick and its state's text (`snapshot::state_text`), for a desync's report.
@@ -206,6 +209,7 @@ impl Netplay {
             out: Vec::new(),
             end: None,
             desynced: false,
+            report: None,
             note: None,
             paused: false,
             state: (0, String::new()),
@@ -248,8 +252,11 @@ impl Netplay {
     }
 }
 
-/// Every seat's pads, every tick, and the line-up: written when hashes differ.
-fn save_desync(w: &World, why: &str) -> String {
+/// Every seat's pads, every tick, and the line-up: written when hashes differ, once a match (later calls say where).
+fn save_desync(w: &mut World, why: &str) -> String {
+    if let Some(at) = &w.resource::<Netplay>().report {
+        return at.clone();
+    }
     let np = w.resource::<Netplay>();
     let iso = w.get_resource::<crate::Args>().map_or(String::new(), |a| a.iso.clone());
     let unix = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -261,10 +268,12 @@ fn save_desync(w: &World, why: &str) -> String {
     let saved = crate::web::save_file(&path.file_name().unwrap().to_string_lossy(), &json.to_string());
     #[cfg(not(target_arch = "wasm32"))]
     let saved = std::fs::write(&path, json.to_string()).map(|()| path.display().to_string());
-    match saved {
+    let at = match saved {
         Ok(at) => at,
         Err(e) => format!("(not saved: {e})"),
-    }
+    };
+    w.resource_mut::<Netplay>().report = Some(at.clone());
+    at
 }
 
 /// The states differ at tick `t`: logged every time, the first time also the report and a note on screen; the match
@@ -888,11 +897,17 @@ mod tests {
                 return eprintln!("no ISO, skipped");
             }
             // tick 119's pads are in the state hashed before tick 120
-            for a in &play(6, 400, Some(119)) {
-                let path = reported(a, 120);
+            for mut a in play(6, 400, Some(119)) {
+                let path = reported(&a, 120);
                 let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("saved")).unwrap();
                 assert!(saved["pads"].as_array().unwrap().len() >= 120);
-                std::fs::remove_file(path).unwrap();
+                std::fs::remove_file(&path).unwrap();
+                // B276: going out of sync again after the note is down notes it, but the match's report isn't saved again
+                let t = a.world().resource::<Netplay>().state.0 + 30;
+                a.world_mut().resource_mut::<Netplay>().note = None;
+                super::super::desync(a.world_mut(), (t, 1, 2));
+                let (say, _) = a.world().resource::<Netplay>().note.clone().expect("the second desync's note");
+                assert!(say.ends_with(&format!("Inputs saved to {path}")) && !Path::new(&path).exists(), "{say}");
             }
         }
 
