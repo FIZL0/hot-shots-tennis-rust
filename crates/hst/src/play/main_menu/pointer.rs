@@ -67,12 +67,14 @@ pub(super) fn hit_at(hits: &[Hit], p: Vec2, aspect: f32, slop: f32) -> Option<Ac
     for h in hits.iter().rev() {
         let [x, y, w, hh] = h.rect;
         let (left, width) = widescreen::place(x, w, share, h.anchor);
-        // to 640×448 units: across at the 4:3 screen's scale, down as is
-        let to_x = 6.4 / share;
+        let (top, height) = widescreen::vplace(y, hh, aspect, h.anchor);
+        // to 640×448 units at the 4:3 screen's scale
+        let (to_x, to_y) = (6.4 / share, 4.48 / widescreen::vshare(aspect));
         let (x0, x1) = (left * to_x, (left + width) * to_x);
-        let (px, py) = (p.x * 100.0 * to_x, p.y * 448.0);
+        let (y0, y1) = (top * to_y, (top + height) * to_y);
+        let (px, py) = (p.x * 100.0 * to_x, p.y * 100.0 * to_y);
         let dx = (x0 - px).max(px - x1).max(0.0);
-        let dy = (y - py).max(py - y - hh).max(0.0);
+        let dy = (y0 - py).max(py - y1).max(0.0);
         let d = dx.hypot(dy);
         if d == 0.0 {
             return Some(h.act);

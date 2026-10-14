@@ -614,9 +614,8 @@ fn draw(
         clock: *clock,
     };
     let quads = layout(&view);
-    let share = window
-        .single()
-        .map_or(1.0, |w| super::widescreen::share(w.width() / w.height().max(1.0)));
+    let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+    let share = super::widescreen::share(aspect);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             *vis = Visibility::Hidden;
@@ -650,9 +649,10 @@ fn draw(
         let [x, y, w, h] = quad.dst;
         let (left, width) = super::widescreen::pin(x, w, share);
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        let (top, height) = super::widescreen::vplace(y, h, aspect, super::widescreen::Anchor::Sides);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(h / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }

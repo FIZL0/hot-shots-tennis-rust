@@ -464,7 +464,7 @@ fn sync(
         }
     }
     let Some(root) = root else { return };
-    let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0);
+    let scale = window.single().map_or(1.0, |w| crate::play::widescreen::unit_px(w) * w.scale_factor());
     let now = time.elapsed_secs();
     let (shown, since) = &mut *cards;
     for (p, slot) in shown.iter_mut().enumerate() {
@@ -498,9 +498,10 @@ fn sync(
         let place = |node: &mut Node, [x, y, w, h]: [f32; 4], anchor| {
             let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), anchor);
             node.left = Val::Percent(left);
-            node.top = Val::Percent(y / 4.48);
+            let (top, height) = crate::play::widescreen::vplace(y, h, crate::play::widescreen::window_aspect(&window), anchor);
+            node.top = Val::Percent(top);
             node.width = Val::Percent(width);
-            node.height = Val::Percent(h / 4.48);
+            node.height = Val::Percent(height);
         };
         if !same || upgrade {
             // the PNG a live model replaces stays a few frames, the live node hidden until then (B140: shown under the

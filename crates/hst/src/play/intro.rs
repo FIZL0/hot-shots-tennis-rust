@@ -429,10 +429,11 @@ fn draw_plate(
         img.rect = Some(Rect::new(u, v, u + w, v + h));
         img.color = Color::srgba(r as f32 / 128.0, g as f32 / 128.0, b as f32 / 128.0, a as f32 / 128.0);
         let (left, width) = widescreen::place(x, dw, share, anchor);
+        let (top, height) = widescreen::vplace(y, dh, widescreen::window_aspect(&window), anchor);
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(dh / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }
@@ -478,10 +479,11 @@ fn draw_banner(
             }
             _ => widescreen::place(x, dw, share, Anchor::Centre),
         };
+        let (top, height) = widescreen::vplace(y, dh, widescreen::window_aspect(&window), Anchor::Centre);
         node.left = Val::Percent(left);
-        node.top = Val::Percent(y / 4.48);
+        node.top = Val::Percent(top);
         node.width = Val::Percent(width);
-        node.height = Val::Percent(dh / 4.48);
+        node.height = Val::Percent(height);
         *vis = Visibility::Inherited;
     }
 }

@@ -83,16 +83,13 @@ const ICON_PITCH: f32 = 72.0;
 const ICON_BOX: f32 = 86.0;
 
 /// B190: the custom grid's fit to the window: as many columns as fit between the player cards (pinned to the window's
-/// sides) and as many rows as the frame's height holds, the cells kept their 4:3 shape on a tall window.
+/// sides) and as many rows as the frame's height holds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Grid {
     cols: usize,
     rows: usize,
     /// The frame's left edge (centred 640 space).
     x: f32,
-    /// How much taller than at 4:3 a 448-space unit is on screen (1 at 4:3 or wider): the cells are drawn squashed
-    /// by it, so they keep their shape and more rows fit.
-    tall: f32,
 }
 
 impl Default for Grid {
@@ -110,11 +107,10 @@ impl Grid {
         // from 40 past the left cards (room for a hand left of the first face) to 13 short of the right ones
         let (l, r) = (200.0 - extra, 467.0 + extra);
         let cols = (((r - l + 5.0) / ICON_STEP) as usize).max(1);
-        let tall = (4.0 / 3.0 / aspect).max(1.0);
-        // the frame ends at 384, over the page count
-        let rows = ((((384.0 - ICON_BOX) * tall - 10.0) / ICON_PITCH) as usize).max(1);
+        // the frame ends at 384, over the page count (B232: a tall window letterboxes the 4:3 screen, no extra rows)
+        let rows = ((((384.0 - ICON_BOX) - 10.0) / ICON_PITCH) as usize).max(1);
         let w = Self::width(cols);
-        Grid { cols, rows, x: l + (r - l - w) / 2.0, tall }
+        Grid { cols, rows, x: l + (r - l - w) / 2.0 }
     }
 
     fn width(cols: usize) -> f32 {
@@ -1702,10 +1698,11 @@ fn ticker_text(
     let share = super::widescreen::window_share(&window);
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
     (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
-    (cnode.top, cnode.height) = (Val::Percent(404.0 / 4.48), Val::Percent(32.0 / 4.48));
+    let (top, height) = super::widescreen::vplace(404.0, 32.0, super::widescreen::window_aspect(&window), Anchor::Span);
+    (cnode.top, cnode.height) = (Val::Percent(top), Val::Percent(height));
     // one 640-space unit in logical px
     let unit = share * win.width() / 640.0;
-    let (bar_w, bar_h) = (width / 100.0 * win.width(), 32.0 / 448.0 * win.height());
+    let (bar_w, bar_h) = (width / 100.0 * win.width(), height / 100.0 * win.height());
     // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
     let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
     let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 2.0 * unit, cap);
@@ -2100,7 +2097,6 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
 fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lead: usize) {
     let g = m.grid;
     let page = custom_page(m);
-    let start = d.out.len();
     d.box3([g.x, ICON_BOX, Grid::width(g.cols), g.rows as f32 * ICON_PITCH + 10.0], 10.0, [Some(INK), Some(WHITE), None], 128.0);
     for i in page.clone() {
         let (x, y) = g.cell(i);
@@ -2114,15 +2110,6 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lea
         let (fx, fy) = g.cell(m.players[p].pick);
         d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
         d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
-    }
-    // a tall window stretches the 448 space: squash the frame back to its 4:3 shape (the extra rows fill it)
-    for q in &mut d.out[start..] {
-        q.dst[1] = ICON_BOX + (q.dst[1] - ICON_BOX) / g.tall;
-        q.dst[3] /= g.tall;
-    }
-    for h in d.hits.iter_mut().filter(|h| matches!(h.act, pointer::Act::Cell(_))) {
-        h.rect[1] = ICON_BOX + (h.rect[1] - ICON_BOX) / g.tall;
-        h.rect[3] /= g.tall;
     }
     let per = g.per();
     let pages = m.mods.len().div_ceil(per);
@@ -2478,7 +2465,7 @@ fn draw(
         ticker.0 = said;
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
-    let scale = window.single().map_or(1.0, |w| w.physical_height() as f32 / 448.0 / w.scale_factor());
+    let scale = window.single().map_or(1.0, |w| super::widescreen::unit_px(w));
     let share = super::widescreen::window_share(&window);
     for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
@@ -2531,7 +2518,7 @@ fn draw(
             (x, y, w, h) = (x - w * (cursor::PAD - 1.0) / 2.0, y - h * (cursor::PAD - 1.0) / 2.0, w * cursor::PAD, h * cursor::PAD);
         }
         let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
-        let (mut top, mut height) = (y / 4.48, h / 4.48);
+        let (mut top, mut height) = super::widescreen::vplace(y, h, super::widescreen::window_aspect(&window), quad.anchor);
         if quad.tex == Tex::Qr
             && let Ok(win) = window.single()
         {
@@ -2957,19 +2944,19 @@ mod tests {
     #[test]
     fn custom_grid_fits_the_window() {
         let g = Grid::fit(4.0 / 3.0, true);
-        assert_eq!((g.cols, g.rows, g.x, g.tall), (4, 4, 200.0, 1.0));
+        assert_eq!((g.cols, g.rows, g.x), (4, 4, 200.0));
         assert_eq!(g.cell(5), (300.0, 190.0));
         let fit = |a: f32, wide| (Grid::fit(a, wide).cols, Grid::fit(a, wide).rows);
         assert_eq!(fit(16.0 / 9.0, true), (7, 4));
         assert_eq!(fit(21.0 / 9.0, true), (11, 4));
         assert_eq!(fit(21.0 / 9.0, false), (4, 4));
-        assert_eq!(fit(9.0 / 16.0, true), (4, 9));
+        assert_eq!(fit(9.0 / 16.0, true), (4, 4));
         // the frame stays clear of the cards and over the page count
         for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
             let g = Grid::fit(a, true);
             let extra = (640.0 / super::super::widescreen::share(a) - 640.0) / 2.0;
             assert!(g.x >= 200.0 - extra - 1e-3 && g.x + Grid::width(g.cols) <= 467.0 + extra + 1e-3, "{a}");
-            assert!(ICON_BOX + (g.rows as f32 * ICON_PITCH + 10.0) / g.tall <= 384.0 + 1e-3, "{a}");
+            assert!(ICON_BOX + g.rows as f32 * ICON_PITCH + 10.0 <= 384.0 + 1e-3, "{a}");
         }
     }
 
