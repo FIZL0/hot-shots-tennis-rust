@@ -39,7 +39,20 @@ use hst_sim::weather::Look;
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "gs.wgsl");
     bevy::asset::embedded_asset!(app, "gs_prepass.wgsl");
-    app.add_plugins(MaterialPlugin::<GsMaterial>::default());
+    app.add_plugins(MaterialPlugin::<GsMaterial>::default())
+        .add_systems(PostUpdate, reextract_morphed.after(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
+}
+
+/// B277: Bevy (0.19, WebGPU path) builds a morphed mesh's instance before its morph descriptor on the frame it shows
+/// again, and keeps that "no descriptor" until the mesh is extracted again (a changed transform, ...). In a frozen
+/// match (the online wait pop-up) that is never, and browsers read another mesh's morphs in its place. Marking every
+/// shown morphed mesh changed re-extracts it each frame, so it has its descriptor from its second frame on.
+fn reextract_morphed(mut q: Query<(&mut GlobalTransform, &ViewVisibility), With<bevy::mesh::morph::MeshMorphWeights>>) {
+    for (mut t, v) in &mut q {
+        if v.get() {
+            t.set_changed();
+        }
+    }
 }
 
 /// Which pixels pass the alpha test, and what a failing one writes.

@@ -52,6 +52,14 @@ struct VertexOutput {
 fn morph_vertex(vertex_in: Vertex, instance_index: u32) -> Vertex {
     var vertex = vertex_in;
     let vertex_index = vertex.index - mesh[instance_index].first_vertex_index;
+#ifndef SKINS_USE_UNIFORM_BUFFERS
+    // B277: Bevy 0.19 builds a mesh instance that just became visible before its morph descriptor, so it has none
+    // (u32::MAX) until it is extracted again. Browsers' WebGPU clamps that read to the last descriptor, another mesh's
+    // weights and targets, which flung a face's vertices across the screen: draw it unmorphed instead.
+    if mesh[instance_index].morph_descriptor_index == 0xffffffffu {
+        return vertex;
+    }
+#endif
     for (var i = 0u; i < morph::layer_count(instance_index); i++) {
         let weight = morph::weight_at(i, instance_index);
         if weight != 0.0 {
