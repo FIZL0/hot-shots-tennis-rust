@@ -7,12 +7,12 @@
 use std::sync::{Arc, LazyLock};
 
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use hst_data::{mdl, noi};
 use hst_sim::noise::{self, Noise};
 
 use crate::character::{Motion, Rig};
+use crate::vertex_patch::{self, Patched, Queued};
 use crate::weather::Weather;
 
 static TABLE: LazyLock<[f32; 32]> = LazyLock::new(noise::table);
@@ -87,7 +87,8 @@ pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<St
 #[derive(Component)]
 pub struct Sway {
     noise: Vec<Noise>,
-    meshes: Vec<Handle<Mesh>>,
+    /// Each copy's handle (kept alive) and its vertices as the GPU holds them (B357: patched, never `get_mut`).
+    meshes: Vec<(Handle<Mesh>, Option<Patched>)>,
     sets: Option<u32>,
 }
 
@@ -103,7 +104,9 @@ pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Childre
         for (part, _) in &c.parts {
             let shared = rig.data.parts[*part].0.clone();
             let Some(copy) = meshes.get(&shared).cloned() else { continue };
+            let patched = Patched::new(&copy);
             let copy = meshes.add(copy);
+            let patched = patched.map(|p| p.of(copy.id()));
             for &child in children {
                 if let Ok(mut m) = parts.get_mut(child)
                     && m.0 == shared
@@ -111,7 +114,7 @@ pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Childre
                     m.0 = copy.clone();
                 }
             }
-            own.push(copy);
+            own.push((copy, patched));
         }
         let noise = c.deformers.iter().map(|d| Noise::new(d.period)).collect();
         // the select may have despawned a preview rig in the same frame (B84)
@@ -138,8 +141,9 @@ fn step(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway
 
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut meshes: ResMut<Assets<Mesh>>) {
-    for (rig, s) in &rigs {
+pub(crate) fn draw(mut rigs: Query<(&Rig, &mut Sway)>, joints: Query<&Transform>, mut queued: ResMut<Queued>) {
+    let mut changed = Vec::new();
+    for (rig, mut s) in &mut rigs {
         let Some(c) = &rig.data.noise else { continue };
         // each joint's posed model matrix (its parents' first)
         let mut pose: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
@@ -153,11 +157,12 @@ pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut me
             m
         }
         let mut rot = |j: usize| Mat3::from_mat4(posed(j, rig, &joints, &mut pose));
-        for ((_, moved), h) in c.parts.iter().zip(&s.meshes) {
-            // worked on a copy: a frame with nothing moved (no tick since the last) leaves the mesh unmarked, as each
-            // `get_mut` re-uploads the whole mesh (B328)
-            let Some(VertexAttributeValues::Float32x3(old)) = meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)) else { continue };
-            let mut pos = old.clone();
+        let s = &mut *s;
+        for ((_, moved), (_, patched)) in c.parts.iter().zip(&mut s.meshes) {
+            // only the moved vertices go to the GPU, written over the mesh's place in the vertex buffer: `get_mut`
+            // re-uploads the whole mesh (B328, B357)
+            let Some(patched) = patched else { continue };
+            changed.clear();
             for m in moved {
                 let mut off = Vec3::ZERO;
                 for e in &m.entries {
@@ -166,14 +171,12 @@ pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut me
                     off += rot(e.node) * (Vec3::from(q) - Vec3::from(e.p));
                 }
                 let skin: Mat3 = m.skin.iter().map(|&(j, w)| rot(j) * Mat3::from_mat4(rig.data.joints[j].inverse_bind) * w).sum();
-                if skin.determinant() != 0.0 {
-                    pos[m.v] = (Vec3::from(m.base) + skin.inverse() * off).into();
+                if skin.determinant() != 0.0 && patched.set(m.v, (Vec3::from(m.base) + skin.inverse() * off).into()) {
+                    changed.push(m.v);
                 }
             }
-            let changed = !matches!(meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)), Some(VertexAttributeValues::Float32x3(o)) if *o == pos);
-            if changed && let Some(mut mesh) = meshes.get_mut(h) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-            }
+            changed.sort_unstable();
+            vertex_patch::send(patched, &changed, &mut queued);
         }
     }
 }

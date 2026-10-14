@@ -43,6 +43,7 @@ mod shade;
 mod shadow;
 mod spring;
 mod textures;
+mod vertex_patch;
 mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -300,7 +301,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
-    app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin));
+    app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, (log_fps, log_assets));

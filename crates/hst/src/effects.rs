@@ -247,6 +247,10 @@ pub(crate) fn pose<F: bevy::ecs::query::QueryFilter, M: EffectMaterial>(effect: 
         }
     }
     for (h, a) in view.materials.iter().zip(&effect.alphas) {
+        // an unchanged alpha leaves the material unmarked: each `get_mut` prepares its bind group again (B357)
+        if materials.get(h).is_some_and(|m| m.base().base_color.alpha() == *a) {
+            continue;
+        }
         if let Some(mut mat) = materials.get_mut(h) {
             mat.std().base_color.set_alpha(*a);
         }
@@ -336,6 +340,7 @@ impl bevy::pbr::MaterialExtension for SortOnly {
 pub(crate) trait EffectMaterial: Material {
     fn new(m: StandardMaterial) -> Self;
     fn std(&mut self) -> &mut StandardMaterial;
+    fn base(&self) -> &StandardMaterial;
 }
 
 impl EffectMaterial for StandardMaterial {
@@ -343,6 +348,9 @@ impl EffectMaterial for StandardMaterial {
         m
     }
     fn std(&mut self) -> &mut StandardMaterial {
+        self
+    }
+    fn base(&self) -> &StandardMaterial {
         self
     }
 }
@@ -353,6 +361,9 @@ impl EffectMaterial for Fx {
     }
     fn std(&mut self) -> &mut StandardMaterial {
         &mut self.base
+    }
+    fn base(&self) -> &StandardMaterial {
+        &self.base
     }
 }
 

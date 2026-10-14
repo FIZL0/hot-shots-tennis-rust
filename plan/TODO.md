@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B357** Mobile FPS dips and frame cost: on mobile (Apple, BrowserWebGpu, 2556x1179, shadows off, msaa off) the game shows 58 FPS at 16.8 ms (worst 23.0), and this does not include some bad fps dips; cpu 11.6 (idle 5.2), game 5.0 (sim 1.2), render 6.5 (prep 5.6, enc 0.9, submit 0.1), meshes 322 drawn with 103 casting shadows; the bad fps dips should be reduced so mobile holds a steady frame rate (user 2026-10-14) → graphics.rs · shadow.rs · play.rs
 - [ ] **B356** Random umpire missing circle: the random umpire is drawn without the circle that the other umpires have; it should show the same circle as the other umpires (user 2026-10-14) → hst-sim/umpire.rs · play/npcs.rs · hst-sim/npc.rs
 - [ ] **B355** Local menu back button picks CPU player: in the local menu, when P1 has selected their player and presses ○ (circle) to go back, it selects the CPU player instead of going back to the previous step; seen on mobile (touch); ○ should undo P1's selection / return to the previous screen, not confirm a pick for the CPU (user 2026-10-14) → play/main_menu.rs · main_menu/cursor.rs · main_menu/pointer.rs
 - [ ] **B354** Verify B347 by eye (its run had no desktop; after B347): `tools/shot.sh` the new character select with △ held/toggled; the stats card shows, matches the old select's panel and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · play.rs character_stats

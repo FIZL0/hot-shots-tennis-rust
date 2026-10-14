@@ -108,12 +108,16 @@ fn draw(
         tr.translation = anchor;
         tr.rotation = cam.rotation;
         tr.scale = Vec3::new(2.0 * s, 2.0 * 0.84 * s, 1.0);
-        if let Some(mut mat) = materials.get_mut(m) {
-            let slot = pads.slot_of(*i, n).unwrap_or(4);
-            // cell `slot` of five: u from slot·0.156 to (slot+1)·0.156, the full height
-            mat.uv_transform = bevy::math::Affine2::from_scale_angle_translation(Vec2::new(0.156, 1.0), 0.0, Vec2::new(slot as f32 * 0.156, 0.0));
-            let [r, gg, b] = colours.0[*i].map(|c| c as f32 / 128.0);
-            mat.base_color = Color::srgb(r, gg, b);
+        let slot = pads.slot_of(*i, n).unwrap_or(4);
+        // cell `slot` of five: u from slot·0.156 to (slot+1)·0.156, the full height
+        let uv = bevy::math::Affine2::from_scale_angle_translation(Vec2::new(0.156, 1.0), 0.0, Vec2::new(slot as f32 * 0.156, 0.0));
+        let [r, gg, b] = colours.0[*i].map(|c| c as f32 / 128.0);
+        let colour = Color::srgb(r, gg, b);
+        // only when it changes: each `get_mut` prepares the material's bind group again (B357)
+        if materials.get(m).is_some_and(|mat| mat.uv_transform != uv || mat.base_color != colour)
+            && let Some(mut mat) = materials.get_mut(m)
+        {
+            (mat.uv_transform, mat.base_color) = (uv, colour);
         }
         *vis = Visibility::Visible;
     }
