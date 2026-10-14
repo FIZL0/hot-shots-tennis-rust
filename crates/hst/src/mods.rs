@@ -73,6 +73,14 @@ impl MatchMod {
     }
 }
 
+impl Mod {
+    /// B248: the mod's unique id among the installed ones: its folder's name (`modfs::folder_for` gives two mods
+    /// sharing an `id` their own folders). Two mods in packs (`list`) may share one; tell those apart by `dir`.
+    pub fn folder(&self) -> String {
+        self.dir.file_name().map_or_else(|| self.id.clone(), |n| n.to_string_lossy().to_string())
+    }
+}
+
 /// Reads and checks `dir/mod.json`.
 pub fn read(dir: &Path) -> Result<Mod, String> {
     let at = dir.join("mod.json");

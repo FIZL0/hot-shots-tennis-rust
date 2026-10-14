@@ -319,12 +319,13 @@ fn image_ok(b: &[u8], ext: &str) -> Result<(), String> {
 /// A mod zip installed into `root` (the `mods/` folder) as `root/<id>/`, in memory ([`install_with`]).
 #[cfg(test)]
 pub fn install(zip: &[u8], root: &Path) -> Result<Mod, String> {
-    now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, false, false))
+    now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, None, false, false))
 }
 
-/// The mod zip file `zip` installed into `root/<id>/` on disk ([`install_with`]); `want` is the id it must hold.
+/// The mod zip file `zip` installed into `root/<id>/` on disk ([`install_with`]); `want` is the id it must hold and
+/// `owner` its store author (a store download's; both `None` for a local zip).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, String> {
+pub fn install_file(zip: &Path, root: &Path, want: Option<&str>, owner: Option<&str>) -> Result<Mod, String> {
     use io::{Read, Seek};
     let mut f = std::fs::File::open(zip).map_err(|e| format!("can't open the zip: {e}"))?;
     let len = f.metadata().map_err(|e| e.to_string())?.len();
@@ -332,7 +333,29 @@ pub fn install_file(zip: &Path, root: &Path, want: Option<&str>) -> Result<Mod, 
         let mut b = vec![0; n];
         std::future::ready(f.seek(io::SeekFrom::Start(at)).and_then(|_| f.read_exact(&mut b)).map(|_| b).map_err(|e| format!("can't read the zip: {e}")))
     };
-    now(install_with(len, read, root, want, true, true))
+    now(install_with(len, read, root, want, owner, true, true))
+}
+
+/// B248: the folder under `root` mod `id` (staged in `stage`) installs into: the first of `<id>`, `<id>-2`, `<id>-3`, …
+/// that's free or holds this same mod (replaced: an update). The same mod is a store download of the same id by the
+/// same `owner` (store author; an install from before B248 has none and counts as anyone's), or with no `owner` a
+/// local zip whose `mod.json` is byte for byte the installed one's. So two mods sharing an id (or a name) both stay.
+pub fn folder_for(root: &Path, id: &str, stage: &Path, owner: Option<&str>) -> PathBuf {
+    let same = |d: &Path| {
+        let stamp = crate::modstore::stamp(d);
+        mods::read(d).is_ok_and(|m| m.id == id)
+            && match owner {
+                Some(o) => stamp.is_some_and(|s| s.author.is_empty() || s.author == o),
+                None => stamp.is_none() && read(&d.join("mod.json")).ok() == read(&stage.join("mod.json")).ok(),
+            }
+    };
+    (1..).map(|n| root.join(if n == 1 { id.to_string() } else { format!("{id}-{n}") })).find(|d| !is_file(&d.join("mod.json")) || same(d)).unwrap()
+}
+
+/// Whether `dir` is a folder Install made under `root` (`<id>` or `<id>-<n>`, [`folder_for`]), not one put in by hand.
+pub fn installed_by_game(root: &Path, dir: &Path, id: &str) -> bool {
+    let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    dir.parent() == Some(root) && (name == id || name.strip_prefix(&format!("{id}-")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n >= 2)))
 }
 
 /// Whether a mod's file `n` (inside its folder) is in its upscaled set (B227): ≈ 90% of the store mods' bytes (512
@@ -347,13 +370,15 @@ pub fn upscaled(n: &str) -> bool {
 /// A mod zip (`len` bytes, read as [`unpack_with`] reads it) installed into `root` (the `mods/` folder) as
 /// `root/<id>/`: unpacked a file at a time under `root/.import/` (on disk, or in memory: the browser's page then
 /// stores [`files_under`] `root/<id>`), checked whole ([`check_all`]), then put in place of an installed mod with the
-/// same id. `want` is the id it must hold (a store download's). `upscaled` false leaves the mod's upscaled set
+/// same id ([`folder_for`]; else beside it). `want` is the id it must hold (a store download's), `owner` its store
+/// author. `upscaled` false leaves the mod's upscaled set
 /// ([`upscaled`]) out, unread. On any failure nothing of it is kept.
 pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
     len: u64,
     zip: impl FnMut(u64, usize) -> F,
     root: &Path,
     want: Option<&str>,
+    owner: Option<&str>,
     disk: bool,
     with_upscaled: bool,
 ) -> Result<Mod, String> {
@@ -400,7 +425,7 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
             return Err(e.replace(&format!("{}/", stage.display()), ""));
         }
     };
-    let dir = root.join(&id);
+    let dir = folder_for(root, &id, &stage, owner);
     if disk {
         let _ = std::fs::remove_dir_all(&dir);
         if let Err(e) = std::fs::rename(&stage, &dir) {
@@ -647,6 +672,50 @@ pub(crate) mod tests {
         assert_eq!(kept.len(), files.len() - 1);
         assert!(kept.iter().all(|f| !f.0.contains("/textures/upscaled/")));
         remove(Path::new("t_upscaled"));
+    }
+
+    /// B248: two mods sharing an id both install (`<id>`, `<id>-2`); the same mod again replaces its own copy: a
+    /// local zip byte for byte the same `mod.json`, a store download by the same author (or an install from before
+    /// the author was kept). Only the game's own folders count as installed by it.
+    #[test]
+    fn same_id_mods_both_install() {
+        let dir = Path::new(MODS).join("test_pc00");
+        if !dir.is_dir() {
+            return eprintln!("no context/mods/test_pc00, skipped");
+        }
+        let files = dir_files(&dir);
+        let renamed = |name: &str| -> Files {
+            let j = |b: &[u8]| {
+                let mut j: serde_json::Value = serde_json::from_slice(b).unwrap();
+                j["name"] = name.into();
+                serde_json::to_vec(&j).unwrap()
+            };
+            files.iter().map(|f| (f.0.clone(), if f.0 == "mod.json" { j(&f.1) } else { f.1.clone() })).collect()
+        };
+        let (a, b) = (zip_of(&renamed("Same")), zip_of(&renamed("Same ")));
+        let root = Path::new("t_same/mods");
+        let folder = |m: Mod| m.dir.file_name().unwrap().to_string_lossy().to_string();
+        let id = mods::read(&dir).unwrap().id;
+        assert_eq!(folder(install(&a, root).unwrap()), id);
+        assert_eq!(folder(install(&b, root).unwrap()), format!("{id}-2"));
+        assert_eq!(folder(install(&a, root).unwrap()), id);
+        assert_eq!(mods::list(root).len(), 2);
+        // store downloads: by author
+        let store = |zip: &[u8], who: &str| {
+            let m = now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, Some(&id), Some(who), false, false)).unwrap();
+            add(&m.dir.join("store.json"), serde_json::to_vec(&serde_json::json!({ "sha256": "", "rev": "main", "verified": true, "author": who })).unwrap().into());
+            folder(m)
+        };
+        assert_eq!(store(&a, "x"), format!("{id}-3"));
+        assert_eq!(store(&b, "y"), format!("{id}-4"));
+        assert_eq!(store(&b, "x"), format!("{id}-3"));
+        assert_eq!(mods::list(root).len(), 4);
+        add(&root.join(format!("{id}-4/store.json")), br#"{"sha256":"","rev":"main","verified":true}"#.to_vec().into());
+        assert_eq!(store(&a, "z"), format!("{id}-4"));
+        assert!(installed_by_game(root, &root.join(format!("{id}-4")), &id) && installed_by_game(root, &root.join(&id), &id));
+        assert!(!installed_by_game(root, &root.join(format!("{id}-x")), &id) && !installed_by_game(root, &root.join(format!("{id}-1")), &id));
+        assert!(!installed_by_game(root, &root.join("pack").join(&id), &id));
+        remove(Path::new("t_same"));
     }
 
     #[test]
