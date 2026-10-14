@@ -116,6 +116,8 @@ struct Shown {
     cam: Option<Entity>,
     node: Entity,
     cover: Option<(Entity, u32, f32)>,
+    /// B192: its rectangle's size (a new size, the select's card to the confirm screen's stage, draws it again)
+    wh: [f32; 2],
 }
 
 /// Frames a PNG stays over the live model that replaced it, while that model's first frames draw (its textures and
@@ -485,7 +487,8 @@ fn sync(
     let Some(art) = art else { return };
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
     let mut quads = match slide.incoming() {
-        Some(_) if menu.screen == Screen::Chars => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        // B192: and the confirm screen's players
+        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm) => layout(&menu, &art.2, &bind, &[], 0.0).0,
         _ => Vec::new(),
     };
     let dx = slide.incoming().map_or(0.0, |s| s.0);
@@ -527,7 +530,7 @@ fn sync(
         }
         let live = key.filter(|_| settled).and_then(|k| loader.model(k).cloned().flatten());
         // a new key: its live model, else its PNG, else nothing yet; a PNG gives way to the live model once loaded
-        let same = slot.as_ref().is_some_and(|s| Some(s.key) == key);
+        let same = slot.as_ref().is_some_and(|s| Some(s.key) == key && want.is_some_and(|(_, q)| s.wh == [q.dst[2], q.dst[3]]));
         let upgrade = live.is_some() && slot.as_ref().is_some_and(|s| s.cam.is_none());
         let place = |node: &mut Node, [x, y, w, h]: [f32; 4], anchor| {
             let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), anchor);
@@ -571,11 +574,11 @@ fn sync(
                     let shown = if cover.is_some() { Visibility::Hidden } else { Visibility::Inherited };
                     let node = commands.spawn((Shot, node, shown, MaterialNode(ui.add(PreviewMaterial { image })))).id();
                     commands.entity(root).add_child(node);
-                    *slot = Some(Shown { key: (w, costume), cam: Some(cam), node, cover });
+                    *slot = Some(Shown { key: (w, costume), cam: Some(cam), node, cover, wh: [q.dst[2], q.dst[3]] });
                 } else if let Some(png) = png {
                     let node = commands.spawn((Shot, node, ImageNode { image: png, image_mode: NodeImageMode::Stretch, ..default() })).id();
                     commands.entity(root).add_child(node);
-                    *slot = Some(Shown { key: (w, costume), cam: None, node, cover: None });
+                    *slot = Some(Shown { key: (w, costume), cam: None, node, cover: None, wh: [q.dst[2], q.dst[3]] });
                 }
             } else if let Some((c, ..)) = cover {
                 gone.0.push(c);
