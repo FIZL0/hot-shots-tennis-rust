@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -173,7 +173,7 @@ const UMPIRES: usize = 5;
 const STRIP: [usize; COURTS] = [0, 3, 5, 1, 7, 8, 10, 9, 2, 6, 4];
 /// Sets on the confirm screen (sets played; to win: (n + 1) / 2).
 const SETS: [i32; 3] = [1, 3, 5];
-/// Games to win a set on the confirm screen: the original's 2, 4 or 6 (its option steps by 2; ours wraps round like Sets).
+/// Games to win a set on the confirm screen: the original's 2, 4 or 6 (its option steps by 2 and stops at the ends, B212).
 const GAMES: [i32; 3] = [2, 4, 6];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
@@ -1066,9 +1066,15 @@ impl Menu {
                         out.push(Sound(0));
                     }
                 } else if d != 0 {
-                    let u = (self.umpire as i32 + d).clamp(0, UMPIRES as i32) as u8;
-                    if u != self.umpire {
-                        self.umpire = u;
+                    // B212: Sets and Games stop at the ends like the umpire cards (the original's ◀ ▶ go there)
+                    let was = (self.umpire, self.sets, self.games);
+                    let step = |v: usize, n: usize| (v as i32 + d).clamp(0, n as i32 - 1) as usize;
+                    match self.sel {
+                        2 => self.sets = step(self.sets, SETS.len()),
+                        3 => self.games = GAMES[step(GAMES.iter().position(|&n| n >= self.games).unwrap_or(1), GAMES.len())],
+                        _ => self.umpire = step(self.umpire as usize, UMPIRES + 1) as u8,
+                    }
+                    if was != (self.umpire, self.sets, self.games) {
                         out.push(Sound(0));
                     }
                 }
@@ -1082,25 +1088,21 @@ impl Menu {
                     }
                 } else if k.back {
                     let v = self.picking.take().unwrap_or_default();
-                    if self.sel == 1 { self.court = v } else { self.umpire = v as u8 }
+                    match self.sel {
+                        1 => self.court = v,
+                        2 => self.sets = v,
+                        3 => self.games = v as i32,
+                        _ => self.umpire = v as u8,
+                    }
                     out.push(Sound(1));
                 }
             }
             Screen::Confirm if host == Some(dev) => {
                 rows(CONFIRM_ROWS, &mut self.sel, &mut out);
-                if k.ok && matches!(self.sel, 1 | 4) {
-                    self.picking = Some(if self.sel == 1 { self.court } else { self.umpire as usize });
+                // B212: every row but Start opens its picker on ✕ (the value it puts back on ○); ←→ here do nothing
+                if k.ok && self.sel != 0 {
+                    self.picking = Some([0, self.court, self.sets, self.games as usize, self.umpire as usize][self.sel]);
                     out.push(Sound(2));
-                }
-                let d = if matches!(self.sel, 2 | 3) { k.right as i32 - k.left as i32 + k.ok as i32 } else { 0 };
-                if d != 0 {
-                    let wrap = |v: usize, n: usize| (v as i32 + d).rem_euclid(n as i32) as usize;
-                    match self.sel {
-                        2 => self.sets = wrap(self.sets, SETS.len()),
-                        3 => self.games = GAMES[wrap(GAMES.iter().position(|&n| n >= self.games).unwrap_or(1), GAMES.len())],
-                        _ => {}
-                    }
-                    out.push(Sound(0));
                 }
                 if k.ok && self.sel == 0 {
                     // ponytail: std's per-call hasher keys as the dice (not the match's RNG, which this never touches)
@@ -1567,7 +1569,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
         "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
-        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" => Screen::Confirm,
+        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "sets" | "games" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
@@ -1595,6 +1597,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
         menu.players[1].ready |= menu.players[1].random;
         // B64: the court / umpire picker open on Nakagawa River Courts / Lily, as the PCSX2 shots (`context/b64`)
+        // B212: the Sets / Games pill picked
+        if let Some(sel) = [("sets", 2), ("games", 3)].iter().find(|r| r.0 == screen).map(|r| r.1) {
+            menu.sel = sel;
+            menu.picking = Some(if sel == 2 { menu.sets } else { menu.games as usize });
+        }
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
             menu.picking = Some(if sel == 1 { 8 } else { 2 });
@@ -2491,7 +2498,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     };
     face_frame(d, face, sx + 22.0, sy + 106.0, 24.0, WHITE);
     left(d, &format!("Umpire {uname}"), sx + 40.0, sy + 99.0, 14.0, sw - 50.0, BROWN);
-    if m.picking.is_some() {
+    if m.picking.is_some() && matches!(m.sel, 1 | 4) {
         return picker(d, m, text, hand_x);
     }
     let rects = confirm_rects(m);
@@ -2500,6 +2507,26 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
         let on = i == m.sel;
         d.hit(r, pointer::Act::Row(i, pointer::OK));
         side_button(d, r, label, on, i == 0);
+    }
+    if m.picking.is_some() {
+        // B212: Sets / Games picked: ◀ ▶ on its pill, each gone at its end as the original's; the pill's thirds step it
+        // and keep it, a tap off puts it back (as ○)
+        let [x, y, w, h] = rects[m.sel];
+        let (at, n) = if m.sel == 2 { (m.sets, SETS.len()) } else { (GAMES.iter().position(|&g| g >= m.games).unwrap_or(1), GAMES.len()) };
+        let size = (h * 0.55).min(24.0);
+        // the picked pill blue, as the original's
+        d.pill_at([x, y, w, h], [INK, WHITE, [40.0, 90.0, 128.0]], 128.0);
+        d.label(&[format!("Sets  {}", SETS[m.sets]), format!("Games  {}", m.games)][m.sel - 2], x + w / 2.0, y + (h - size) / 2.0, size, w - h * 0.6, WHITE);
+        if at > 0 {
+            d.text("<", x + 14.0, y + (h - size) / 2.0, size, WHITE);
+        }
+        if at + 1 < n {
+            d.text(">", x + w - 14.0 - d.width(">", size), y + (h - size) / 2.0, size, WHITE);
+        }
+        d.popup(Some(pointer::press(|k| k.back = true)));
+        d.hit([x, y, w, h], pointer::Act::Row(m.sel, pointer::OK));
+        d.hit([x, y, w / 3.0, h], pointer::Act::Row(m.sel, Press { left: true, ..default() }));
+        d.hit([x + w * 2.0 / 3.0, y, w / 3.0, h], pointer::Act::Row(m.sel, Press { right: true, ..default() }));
     }
     let [hx, hy, _, hh] = rects[m.sel];
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hx - 22.0 + hand_x, hy + hh / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
@@ -3491,6 +3518,51 @@ mod tests {
         }
         m.step(Dev::Keys, ok);
         assert_eq!((m.umpire as usize, m.picking), (UMPIRES, None));
+    }
+
+    /// B212: Sets and Games are picked like the court and umpire: ←→ on the unpicked row do nothing, ✕ picks the pill,
+    /// ←→ step it and stop at the ends (the original's 1/3/5 and 2/4/6), ✕ keeps, ○ puts back; a tap picks it too,
+    /// its thirds step it and keep it, a tap off puts it back.
+    #[test]
+    fn sets_and_games_pickers() {
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], sel: 2, sets: 0, games: 4, ..default() };
+        let [down, left, right, ok, back] = [press(|p| &mut p.down), press(|p| &mut p.left), press(|p| &mut p.right), press(|p| &mut p.ok), press(|p| &mut p.back)];
+        assert_eq!(m.step(Dev::Keys, right), []);
+        assert_eq!((m.sets, m.picking), (0, None));
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.picking, Some(0));
+        assert_eq!(m.step(Dev::Keys, left), [], "1 set is the end");
+        let walk: Vec<usize> = (0..3).map(|_| (m.step(Dev::Keys, right), m.sets).1).collect();
+        assert_eq!(walk, [1, 2, 2]);
+        m.step(Dev::Keys, ok);
+        assert_eq!((m.sets, m.picking, m.screen), (2, None, Screen::Confirm));
+        m.step(Dev::Keys, down);
+        m.step(Dev::Keys, ok);
+        let walk: Vec<i32> = (0..3).map(|_| (m.step(Dev::Keys, right), m.games).1).collect();
+        assert_eq!(walk, [6, 6, 6]);
+        let walk: Vec<i32> = (0..3).map(|_| (m.step(Dev::Keys, left), m.games).1).collect();
+        assert_eq!(walk, [4, 2, 2]);
+        m.step(Dev::Keys, back);
+        assert_eq!((m.games, m.picking, m.screen), (4, None, Screen::Confirm));
+        // pointer: a tap on Sets picks it, its left third steps down, a tap off puts it back; the middle keeps
+        let act = |m: &Menu, x: f32| {
+            let [rx, ry, rw, rh] = confirm_rects(m)[2];
+            pointer::tests::act_at(m, rx + rw * x, ry + rh / 2.0)
+        };
+        let tap = |m: &mut Menu, x: f32| {
+            let a = act(m, x).unwrap_or(pointer::press(|k| k.back = true));
+            m.point(Dev::Keys, a, true)
+        };
+        tap(&mut m, 0.1);
+        assert_eq!((m.sel, m.picking, m.sets), (2, Some(2), 2), "the first tap only picks it");
+        tap(&mut m, 0.1);
+        assert_eq!(m.sets, 1);
+        tap(&mut m, 2.0); // off the pill
+        assert_eq!((m.sets, m.picking), (2, None));
+        tap(&mut m, 0.5);
+        tap(&mut m, 0.1);
+        tap(&mut m, 0.5);
+        assert_eq!((m.sets, m.picking), (1, None));
     }
 
     #[test]
