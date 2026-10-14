@@ -482,6 +482,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B333** Mobile: the page sometimes opens cropped with an empty bar ("chin") along one edge; rotating to portrait and back to landscape fixes it (user 2026-10-14). Likely the canvas sized from a stale viewport on load (iOS Safari's dynamic toolbar / visualViewport not settled): resize on visualViewport resize/orientationchange and after load, use dvh/100% instead of vh — web/index.html, web/touch.js, crates/hst/src/web.rs
 - [x] **B339** Mods: asynchronous (parallel) store downloads for Download all / several installs, with a Settings → Mods option for how many at once and a lower max on browser/mobile (user 2026-10-14) — files: crates/hst/src/modstore.rs, crates/hst/src/play/main_menu/mods_screen.rs, web/index.html
 - [x] **B354** Verify B347 by eye (its run had no desktop; after B347): `tools/shot.sh` the new character select with △ held/toggled; the stats card shows, matches the old select's panel and fits at 4:3, 16:9 and 21:9; fix what's off → play/main_menu.rs · play.rs character_stats
+- [x] **B356** Random umpire missing circle: the random umpire is drawn without the circle that the other umpires have; it should show the same circle as the other umpires (user 2026-10-14) → hst-sim/umpire.rs · play/npcs.rs · hst-sim/npc.rs
 
 
 ### Shots
