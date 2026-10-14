@@ -253,12 +253,7 @@ async function start() {
   say('Reading the disc pack…');
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
   document.getElementById('disc').hidden = true;
-  // first visit on a phone or tablet: the Low graphics preset (graphics.rs; changeable in Settings → Graphics).
-  // settings.txt lives in localStorage under its path beside the pack (web.rs)
-  try {
-    if (matchMedia('(pointer: coarse)').matches && localStorage.getItem('./settings.txt') === null)
-      localStorage.setItem('./settings.txt', 'frame_limit = 60\nvsync = off\nrender_scale = 67\nshadows = low\noriginal = off\n');
-  } catch {}
+  // (a phone's first run picks its graphics preset in the game: main_menu.rs `first`, graphics.rs PHONE)
   await init({ module_or_path: wasm() });
   say('Starting…');
   // the select's baked cards (web.rs add_card): read now, written back as the game bakes them

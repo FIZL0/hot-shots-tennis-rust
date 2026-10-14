@@ -474,6 +474,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B340** Pause menu: Circle (back) doesn't close the pause menu and resume the match (user 2026-10-14); it should, like Start → play/main_menu/pause.rs · play/menu.rs
 - [x] **B346** Character select: the default cursor still starts on Ashley; and for a CPU seat the next choice still moves to the next character when it should stay on the same one (in a different costume, already implemented) (user 2026-10-14) → play/main_menu.rs · play/main_menu/previews.rs
 - [x] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
+- [x] **B351** Phone defaults: phones run 15–20 fps partly because they start at shadows High. Detect a phone and default to shadows Low (or Off) at render scale 100%; at Low, only the players, ball, net, umpire chair and perhaps big props cast (about 20 casters, down from 182; coordinate with B343's small-prop cut). Mesh merging, crowd draws, sway and culling stay in B342–B345 (user 2026-10-14) → graphics.rs · shadow.rs · main.rs
 
 
 ### Shots
