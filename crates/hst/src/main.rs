@@ -302,7 +302,11 @@ fn start(argv: Vec<String>) {
                 use play::controls::Seat;
                 let devices: Vec<_> = (0..4).map(|j| Some(if j == 0 { Seat::Keys } else { Seat::Pad(j - 1) })).collect();
                 let flags = play::netplay::flags(&room, &me, &devices, &[]);
-                play::netplay::mode(&args.iso, &flags, mode::Mode::new(menu_mode), net, room, me)
+                play::netplay::mode(&args.iso, &flags, mode::Mode::new(|app| {
+                    // no lobby screen to go back to from here (B279's hand-over): the connection ends
+                    play::netplay::LOBBY.lock().unwrap().take();
+                    menu_mode(app)
+                }), net, room, me)
             }
             None => mode::Mode::new(menu_mode),
         };

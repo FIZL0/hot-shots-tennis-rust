@@ -293,6 +293,7 @@ pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
 
 /// A network event into the match.
 pub fn take(w: &mut World, e: Event) {
+    let over = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
     let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
     np.recover.heard_from(&e);
     match e {
@@ -313,6 +314,8 @@ pub fn take(w: &mut World, e: Event) {
         }
         Event::Datagram(from, data) => super::rollback::heard(w, from, &data),
         Event::Match(m @ (Msg::State { .. } | Msg::Resynced(_))) => super::resync::heard(&mut np, m),
+        // B279: the host left the result screen: its lobby once this machine leaves it too (`again`)
+        Event::Match(Msg::Lobby(room)) if over => np.recover.lobby = Some(room),
         Event::Match(m @ (Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Rejoined { .. } | Msg::Lobby(_))) => super::recover::heard(&mut np, m),
         Event::Match(Msg::Bye(why)) | Event::Dropped(why) => {
             if why.starts_with(DESYNC) && np.end.is_none() {
@@ -520,14 +523,37 @@ fn watch(w: &mut World) {
         if let Some(room) = w.resource_mut::<Netplay>().recover.lobby.take()
             && let Some(net) = w.remove_resource::<Net>()
         {
-            *LOBBY.lock().unwrap() = Some((net, room));
+            *LOBBY.lock().unwrap() = Some((net, room, false));
         }
         w.write_message(AppExit::Success);
     }
 }
 
+/// B279: the result screen left (its Continue): back to the same lobby, seats, picks and court as they were. The host
+/// takes everyone there (`Msg::Lobby`; its relay goes back to its lobby loop); a guest takes the lobby the host sent,
+/// or, ahead of the host, waits in this one for it (`main_menu/online.rs`).
+fn again(w: &mut World) {
+    let over = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
+    if !over || w.resource::<Messages<AppExit>>().is_empty() || w.resource::<Netplay>().end.is_some() || !w.contains_resource::<Net>() {
+        return;
+    }
+    let mut np = w.resource_mut::<Netplay>();
+    let wait = np.me != "host" && np.recover.lobby.is_none();
+    let room = np.recover.lobby.take().unwrap_or_else(|| {
+        let mut r = np.room.clone();
+        r.again();
+        r
+    });
+    let net = w.remove_resource::<Net>().expect("checked");
+    if w.resource::<Netplay>().me == "host" {
+        info!("online: back to the lobby after the match");
+        net.send(Cmd::Send(Msg::Lobby(room.clone())));
+    }
+    *LOBBY.lock().unwrap() = Some((net, room, wait));
+}
+
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, setup).add_systems(Update, watch.run_if(resource_exists::<Netplay>));
+    app.add_systems(Startup, setup).add_systems(Update, watch.run_if(resource_exists::<Netplay>)).add_systems(Last, again.run_if(resource_exists::<Netplay>));
     #[cfg(not(target_arch = "wasm32"))]
     if std::env::var_os("HST_NET_THROTTLE").is_some() {
         app.add_systems(Last, super::rollback::throttle.run_if(resource_exists::<Netplay>));
@@ -581,8 +607,9 @@ pub fn mode(iso: &str, flags: &[String], back: crate::mode::Mode, net: Net, room
     })
 }
 
-/// B196: the lobby an ended match goes back to, with its connection.
-pub static LOBBY: Mutex<Option<(Net, Room)>> = Mutex::new(None);
+/// B196: the lobby an ended match goes back to, with its connection; B279: true for a guest whose host hasn't left
+/// the result screen yet (its `Msg::Lobby` to come).
+pub static LOBBY: Mutex<Option<(Net, Room, bool)>> = Mutex::new(None);
 
 /// `hst net … --play`: the match `main` starts instead of the menu (it was waiting for the lobby).
 pub static PENDING: Mutex<Option<(Net, Room, String)>> = Mutex::new(None);
@@ -1546,6 +1573,53 @@ mod tests {
                 assert_eq!(peers, [Some("host"), Some("h"), None, Some("h")]);
                 assert!(lobby.ready.is_empty() && !lobby.names.contains_key("g"));
             }
+        }
+
+        /// B279: the match over, nobody waits for anybody on the result screen (the host gone quiet there is it in the
+        /// lobby); leaving it, the host takes everyone to the same lobby, nobody ready, and a guest goes to the lobby
+        /// the host sent, or ahead of it to this one, waiting.
+        #[test]
+        fn the_result_screen_leads_back_to_the_lobby() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let over = 120;
+            let mut apps = peers(true, over + ((recover::SILENT + 12.0) * 60.0) as u32, |round, apps, live| {
+                if round == over {
+                    for a in apps.iter_mut() {
+                        let mut g = a.world_mut().resource_mut::<Game>();
+                        g.match_stats.result = Some(g.match_stats.finish(0));
+                    }
+                    live[0] = false;
+                }
+            });
+            let g = &mut apps[1];
+            assert_eq!((notice(g), g.world().resource::<Netplay>().end.clone()), (String::new(), None));
+            let mut room = g.world().resource::<Netplay>().room.clone();
+            room.ready.insert("g".into());
+            g.world_mut().resource_mut::<Netplay>().room = room.clone();
+            let leave = |a: &mut App| {
+                let (net, rx) = crate::net::Net::wired();
+                a.insert_resource(net);
+                a.world_mut().write_message(AppExit::Success);
+                super::super::again(a.world_mut());
+                assert!(!a.world().contains_resource::<crate::net::Net>());
+                (super::super::LOBBY.lock().unwrap().take().map(|(_, r, wait)| (r, wait)).expect("a lobby"), rx)
+            };
+            // the guest ahead of the host: this lobby, nobody ready, waiting
+            let ((r, wait), _) = leave(g);
+            assert!(wait && r.ready.is_empty() && r.seats == room.seats && r.court == room.court);
+            // the host: everyone told
+            let ((r, wait), mut rx) = leave(&mut apps[0]);
+            assert!(!wait && r.ready.is_empty() && r.seats == room.seats);
+            let Ok(crate::net::Cmd::Send(Msg::Lobby(sent))) = rx.try_recv() else { panic!("no Lobby sent") };
+            assert_eq!(sent.ver, r.ver);
+            // the guest still on the results when the host's lobby comes: that one once it leaves too
+            let g = &mut apps[1];
+            take(g.world_mut(), Event::Match(Msg::Lobby(sent.clone())));
+            assert_eq!(g.world().resource::<Netplay>().end, None);
+            let ((r, wait), _) = leave(g);
+            assert!(!wait && r.ver == sent.ver);
         }
 
         /// B196: `g` killed, then a new process for it joins (the relay gives it `g`'s seat as `g2`): the host restarts

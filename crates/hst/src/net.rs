@@ -361,6 +361,12 @@ impl Room {
         (self.rejoin, self.ver) = (false, self.ver + 1);
     }
 
+    /// B279: the lobby again after a finished match: everyone's seats, picks and the court as they were, nobody ready.
+    pub fn again(&mut self) {
+        self.ready.clear();
+        (self.rejoin, self.ver) = (false, self.ver + 1);
+    }
+
     fn leave(&mut self, peer: &str) {
         self.ver += 1;
         self.names.remove(peer);
@@ -743,6 +749,14 @@ impl Net {
         #[cfg(target_arch = "wasm32")]
         n0_future::task::spawn(run(cfg, cmd_rx, ev));
         Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }
+    }
+
+    /// A `Net` with no network behind it: what it's told to send comes out of the receiver (tests).
+    #[cfg(test)]
+    pub fn wired() -> (Net, amp::UnboundedReceiver<Cmd>) {
+        let (cmd, rx) = amp::unbounded_channel();
+        let (_, events) = mpsc::channel();
+        (Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }, rx)
     }
 
     pub fn send(&self, c: Cmd) {
