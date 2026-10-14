@@ -1941,8 +1941,6 @@ fn ticker_text(
     let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
     *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
     let share = super::widescreen::window_share(&window);
-    // the quads' parent (the view) in physical pixels
-    let px = window.single().map_or(Vec2::ZERO, |w| super::widescreen::view_size(w) * w.scale_factor());
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
     (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
     let (top, height) = super::widescreen::vplace(404.0, 32.0, super::widescreen::window_aspect(&window), Anchor::Span);
@@ -2935,6 +2933,8 @@ fn draw(
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
     let scale = window.single().map_or(1.0, |w| super::widescreen::unit_px(w));
     let share = super::widescreen::window_share(&window);
+    // the quads' parent (the view) in physical pixels
+    let px = window.single().map_or(Vec2::ZERO, |w| super::widescreen::view_size(w) * w.scale_factor());
     for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
