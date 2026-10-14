@@ -63,6 +63,21 @@ const BAKE: UVec2 = UVec2::new(384, 480);
 /// 60-px face is ~290 px on a 2160-line window.
 // ponytail: one fixed size; bake at the window's icon pixels if 8K windows show it soft
 const FACE: UVec2 = UVec2::new(320, 320);
+/// B187: this device's bake and face close-up sizes: [`BAKE`] and [`FACE`] natively; in the browser the card's 128×160
+/// at the page's lines (its shorter side in CSS px: the canvas's pixels) over 448, rounded up to 1×–3× (a phone's 390-line
+/// page bakes 1×: 9× fewer pixels to draw, read back, convert and encode), the face to match (a multiple of 32 px, so its
+/// read-back rows have no padding either). Its own cache folder ([`cache_name`]), so a desktop's cards stay as they were.
+fn sizes() -> (UVec2, UVec2) {
+    static SIZES: std::sync::LazyLock<(UVec2, UVec2)> = std::sync::LazyLock::new(|| {
+        #[cfg(target_arch = "wasm32")]
+        let lines = crate::web::page_size().map_or(1080.0, |p| p.min_element());
+        #[cfg(not(target_arch = "wasm32"))]
+        let lines = 1344.0_f32;
+        let s = ((lines / 448.0).ceil() as u32).clamp(1, 3);
+        if s == 3 { (BAKE, FACE) } else { (BAKE / 3 * s, UVec2::splat((FACE.x * s / 3).div_ceil(32) * 32)) }
+    });
+    *SIZES
+}
 /// `FixedUpdate` ticks (60 Hz) a baked preview draws before its read-back.
 const SETTLE_TICKS: u32 = 6;
 /// The baker's render layer (the cards use 1–4).
@@ -217,7 +232,8 @@ fn mod_png(dir: &Path, m: &Mod, k: usize, stamp: &str) -> PathBuf {
 /// The cache folder's name: the disc's boot file and [`RENDER`].
 fn cache_name(iso: &str) -> String {
     let boot = Iso::open(iso).ok().as_mut().and_then(boot_file).unwrap_or_else(|| "disc".into());
-    format!("{boot}-r{RENDER}")
+    let size = sizes().0;
+    if size == BAKE { format!("{boot}-r{RENDER}") } else { format!("{boot}-r{RENDER}-{}", size.y) }
 }
 
 /// The cache folder (natively beside settings.txt; in the browser the OPFS names' prefix, B120).
@@ -615,6 +631,9 @@ struct Baker {
     failed: HashSet<Key>,
     /// Frames the first job waits (pipelines compiling), then each.
     jobs: u32,
+    /// B187: a first drawing has started (the menu's start draws one under its loading screen, so the previews'
+    /// pipelines compile there, not on the select's first frame: a 0.7–1.8 s freeze on a 6×-throttled browser).
+    warmed: bool,
 }
 
 struct Job {
@@ -635,16 +654,32 @@ struct Job {
     face: bool,
     /// Every drawing read back; waiting for `saving`.
     drawn: bool,
+    /// B187: only drawn for its pipelines (every card was cached): thrown away, not saved.
+    warm: bool,
+}
+
+impl Job {
+    /// Draw `key` (`data`, its rig's `hand`, posed with disc character `c`'s timing) off screen.
+    #[allow(clippy::too_many_arguments)]
+    fn start(commands: &mut Commands, images: &mut Assets<Image>, key: Key, path: PathBuf, data: &Arc<CharacterData>, c: usize, hand: f32, start: f32, warm: bool) -> Job {
+        let image = inspect::target(images, sizes().0);
+        images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let cam = inspect::spawn_into(commands, data, c, hand, BAKE_LAYER, image.clone());
+        Job { key, path, cam, image, frames: 0, start, reading: None, done: default(), saving: Vec::new(), face: false, drawn: false, warm }
+    }
 }
 
 fn start_baker(mut commands: Commands, menu: Res<Menu>) {
     // every mod's costumes after the disc's (B99: an unbaked one is blank until its live model loads)
     let mut queue = Vec::new();
-    for (i, m) in menu.mods.iter().enumerate().rev() {
+    // B187: in the browser (a load and a drawing's read-back inside a frame, a hitch on a phone) only the icons'
+    // costume 0 in the background; any other costume is drawn when it's hovered
+    let costumes = if cfg!(target_arch = "wasm32") { 1 } else { super::COSTUMES };
+    for (i, m) in menu.mods.iter().enumerate().rev().filter(|_| costumes > 1) {
         queue.extend((1..m.costumes.len()).rev().map(|k| (Who::Mod(i), k)));
     }
     // costume 0 of every character first (popped last-in first), then each mod's (B133: the custom page's icons)
-    for k in (0..super::COSTUMES).rev() {
+    for k in (0..costumes).rev() {
         if k == 0 {
             queue.extend((0..menu.mods.len()).rev().map(|i| (Who::Mod(i), 0)));
         }
@@ -670,6 +705,7 @@ fn bake(
     rigs: Query<&crate::character::Rig>,
     globals: Query<&GlobalTransform>,
     mut card: ResMut<ModCard>,
+    mut loaded: Local<Option<Key>>,
 ) {
     // B229: on the Mods page only its hovered mod's costume 0 draws
     let asked = card.want.as_ref().filter(|_| menu.screen == Screen::Mods).map(|m| {
@@ -679,7 +715,7 @@ fn bake(
             menu.mods.len() + loader.extra.len() - 1
         })), 0)
     });
-    if menu.screen != Screen::Chars && asked.is_none() && baker.job.is_none() {
+    if menu.screen != Screen::Chars && asked.is_none() && baker.job.is_none() && baker.warmed {
         return;
     }
     // a hovered card without a PNG jumps the queue
@@ -701,7 +737,12 @@ fn bake(
         let wait = if baker.jobs == 0 { 30 } else { 4 };
         let ticked = fixed.elapsed_secs() - job.start >= SETTLE_TICKS as f32 / 60.0;
         let data = job.done.lock().unwrap().take();
-        if job.drawn {
+        if job.warm && data.is_some() {
+            gone.0.extend(preview_entities(job.cam, &cams, &parents));
+            gone.0.extend(job.reading.take());
+            baker.job = None;
+            baker.jobs += 1;
+        } else if job.drawn {
             // Z1: the PNG encodes (~20 ms) run on the IO pool; the next job waits for the files
             if job.saving.iter().all(|t| t.is_finished()) {
                 let ok: Vec<bool> = job.saving.drain(..).map(|t| bevy::tasks::block_on(t)).collect();
@@ -718,18 +759,19 @@ fn bake(
             if let Some(r) = job.reading.take() {
                 gone.0.push(r);
             }
-            let size = if job.face { FACE } else { BAKE };
+            let (bake, face) = sizes();
+            let size = if job.face { face } else { bake };
             let rgba = straight(&data, size);
             let path = if job.face { face_path(&job.path) } else { job.path.clone() };
             // B176: framed on the rig's head bone
-            let head = cams.get(job.cam).ok().and_then(|p| inspect::head_px(p, BAKE.as_vec2(), &rigs, &globals));
+            let head = cams.get(job.cam).ok().and_then(|p| inspect::head_px(p, bake.as_vec2(), &rigs, &globals));
             let square = (!job.face).then(|| image::RgbaImage::from_raw(size.x, size.y, rgba.clone())).flatten().and_then(|i| inspect::face_square(&i, head))
                 .map(|sq| if job.key.0 == Who::Disc(0) { inspect::grow_square(sq, ASHLEY_ZOOM, size.x, size.y) } else { sq });
             job.saving.push(IoTaskPool::get().spawn(async move { save(rgba, size, &path) }));
             // B160: the same drawing's head square again at [`FACE`]
             if let (Some(sq), Ok(p)) = (square, cams.get(job.cam)) {
-                let crop = inspect::sub_crop(p.crop, BAKE.as_vec2(), sq.as_rect());
-                let image = inspect::target(&mut images, FACE);
+                let crop = inspect::sub_crop(p.crop, bake.as_vec2(), sq.as_rect());
+                let image = inspect::target(&mut images, face);
                 images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
                 commands.entity(job.cam).insert((
                     Preview { rect: p.rect, crop, n: p.n, rig: p.rig, centre: p.centre },
@@ -755,7 +797,7 @@ fn bake(
     }
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
-        if menu.screen != Screen::Chars && Some(key) != asked {
+        if menu.screen != Screen::Chars && Some(key) != asked && baker.warmed {
             return;
         }
         let path = loader.path(key, &menu);
@@ -777,15 +819,32 @@ fn bake(
                 baker.queue.pop();
             }
             Some(Some((data, hand))) => {
+                // B187: drawn from the frame after its load (in the browser a load runs inside a frame), not on top
+                if *loaded != Some(key) {
+                    *loaded = Some(key);
+                    return;
+                }
                 baker.queue.pop();
                 let c = match key.0 {
                     Who::Disc(c) => c,
                     Who::Mod(i) => loader.mod_at(&menu, i).map_or(0, |m| m.donor),
                 };
-                let image = inspect::target(&mut images, BAKE);
-                images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
-                let cam = inspect::spawn_into(&mut commands, &data, c, hand, BAKE_LAYER, image.clone());
-                baker.job = Some(Job { key, path, cam, image, frames: 0, start: fixed.elapsed_secs(), reading: None, done: default(), saving: Vec::new(), face: false, drawn: false });
+                baker.job = Some(Job::start(&mut commands, &mut images, key, path, &data, c, hand, fixed.elapsed_secs(), false));
+                baker.warmed = true;
+                return;
+            }
+        }
+    }
+    // B187: every card cached: the first one drawn anyway at the menu's start, for its pipelines
+    if !baker.warmed {
+        let key = (Who::Disc(GRID[0].0), 0);
+        loader.want(key, None);
+        match loader.model(key).cloned() {
+            None => return,
+            Some(None) => baker.warmed = true,
+            Some(Some((data, hand))) => {
+                baker.job = Some(Job::start(&mut commands, &mut images, key, PathBuf::new(), &data, GRID[0].0, hand, fixed.elapsed_secs(), true));
+                baker.warmed = true;
                 return;
             }
         }

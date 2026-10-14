@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
+// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -13,6 +13,7 @@ import { resolve } from 'node:path';
 const [iso, out, query = 'play', secs = '60'] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
 const log = [];
+let t0 = 0;
 const web = process.env.WEB_PORT ?? 8765, cdp = process.env.CDP_PORT ?? 9333;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // every chromium we start dies with this script (a crash, timeout or kill would otherwise leave a hidden hst playing music)
@@ -36,7 +37,7 @@ async function visit(n, pick) {
   ws.onmessage = ({ data }) => {
     const m = JSON.parse(data);
     if (m.id && waiting.has(m.id)) waiting.get(m.id)(m), waiting.delete(m.id);
-    if (m.method === 'Runtime.consoleAPICalled') log.push(`[${n}] ${m.params.type}: ${m.params.args.map(a => a.value ?? a.description).join(' ')}`);
+    if (m.method === 'Runtime.consoleAPICalled') log.push(`[${n}]${t0 ? ' ' + (Date.now() - t0) + 'ms' : ''} ${m.params.type}: ${m.params.args.map(a => a.value ?? a.description).join(' ')}`);
     if (m.method === 'Runtime.exceptionThrown') log.push(`[${n}] exception: ${m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text}`);
   };
   const send = (method, params = {}) => new Promise(r => { waiting.set(++id, r); ws.send(JSON.stringify({ id, method, params })); });
@@ -68,6 +69,8 @@ async function visit(n, pick) {
   const turn = () => send('Emulation.setDeviceMetricsOverride', turned ? { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'portraitPrimary', angle: 0 } } : { width: 844, height: 390, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } }).then(() => { turned = !turned; turns++; });
   if (rotate) { await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }); await send('Emulation.setEmitTouchEventsForMouse', { enabled: true }); await turn(); }
   const rotating = rotate && setInterval(turn, rotate);
+  if (process.env.THROTTLE && !pick) await send('Emulation.setCPUThrottlingRate', { rate: +process.env.THROTTLE });
+  t0 = process.env.THROTTLE ? Date.now() : 0;
   await send('Page.navigate', { url: `http://localhost:${web}/?${query}` });
   if (pick) {
     for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden")); i++) await sleep(200);
