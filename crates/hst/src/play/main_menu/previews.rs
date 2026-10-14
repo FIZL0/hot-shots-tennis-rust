@@ -276,7 +276,8 @@ fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::I
         return;
     }
     let mut reads = 0;
-    let page: Vec<Who> = if menu.custom { super::custom_page(&menu).map(Who::Mod).collect() } else { GRID.iter().map(|&(c, ..)| Who::Disc(c)).collect() };
+    let (start, roster) = menu.page();
+    let page: Vec<Who> = roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect();
     for w in page {
         if reads == ICON_READS || icons.0.contains_key(&w) || failed.contains(&w) {
             continue;
@@ -1053,7 +1054,6 @@ fn hover_all(mut menu: ResMut<Menu>) {
         let (c, k) = c.split_once('/').unwrap_or((c, "0"));
         menu.players[p].costume = k.parse().unwrap_or(0);
         if let Some(i) = c.strip_prefix('m').and_then(|i| i.parse::<usize>().ok()).filter(|&i| i < menu.mods.len()) {
-            menu.custom = true;
             menu.players[p].pick = i;
             menu.players[p].modded = true;
             menu.seats[p] = Some(Dev::Keys);
@@ -1107,7 +1107,7 @@ fn stress(secs: f32) -> impl FnMut(ResMut<Menu>, Res<Time>, MessageWriter<AppExi
         for p in 1..m.players() {
             m.seats[p] = Some(Dev::Keys);
             let pl = &mut m.players[p];
-            pl.modded = m.custom && !m.mods.is_empty();
+            pl.modded = !m.mods.is_empty() && rnd(2) == 1;
             if pl.modded {
                 pl.pick = rnd(m.mods.len());
             } else {
