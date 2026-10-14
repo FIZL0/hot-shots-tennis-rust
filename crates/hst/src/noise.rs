@@ -4,9 +4,13 @@
 //! the drawn vertex gets the bind-space offset its skin maps onto that: (Σ w·R·bind⁻¹)⁻¹ · Σ R·d, in the rig's own
 //! copy of the part's mesh.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::primitives::{Frustum, Sphere};
+use bevy::camera::visibility::RenderLayers;
+use bevy::diagnostic::FrameCount;
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use hst_data::{mdl, noi};
@@ -83,12 +87,34 @@ pub fn costume(model: &mdl::Model, noi: &[u8], parts: &[(Handle<Mesh>, Handle<St
     (!out.is_empty()).then(|| Arc::new(Costume { deformers, parts: out, springs: Vec::new() }))
 }
 
-/// A rig's deformers and its own copies of the swaying parts' meshes; the motion set last seen.
+/// A rig's deformers and its own copies of the swaying parts' meshes; the motion set last seen. B344: the deformers
+/// step once a tick, the pose every drawn frame, and the drawn vertices of a strip share position entries, so each
+/// distinct entry (deformer, position, weight) is moved once per step: per swaying part, each moved vertex's
+/// entries' indices (in order) into `distinct`, and their bone-space offsets as the deformers stood at `offsets_at`.
 #[derive(Component)]
 pub struct Sway {
     noise: Vec<Noise>,
     meshes: Vec<Handle<Mesh>>,
     sets: Option<u32>,
+    slots: Vec<Vec<u32>>,
+    distinct: Vec<(usize, [f32; 3], f32)>,
+    offsets: Vec<Vec3>,
+    offsets_at: Vec<Noise>,
+}
+
+/// The costume's distinct entries, and per swaying part its moved vertices' entries' indices into them.
+fn distinct(c: &Costume) -> (Vec<Vec<u32>>, Vec<(usize, [f32; 3], f32)>) {
+    let mut at = std::collections::HashMap::new();
+    let mut distinct = Vec::new();
+    let slots = c.parts.iter().map(|(_, moved)| {
+        moved.iter().flat_map(|m| &m.entries).map(|e| {
+            *at.entry((e.deformer, e.p.map(f32::to_bits), e.weight.to_bits())).or_insert_with(|| {
+                distinct.push((e.deformer, e.p, e.weight));
+                distinct.len() as u32 - 1
+            })
+        }).collect()
+    }).collect();
+    (slots, distinct)
 }
 
 pub fn plugin(app: &mut App) {
@@ -115,7 +141,8 @@ pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Childre
         }
         let noise = c.deformers.iter().map(|d| Noise::new(d.period)).collect();
         // the select may have despawned a preview rig in the same frame (B84)
-        commands.entity(root).try_insert(Sway { noise, meshes: own, sets: None });
+        let (slots, distinct) = distinct(c);
+        commands.entity(root).try_insert(Sway { noise, meshes: own, sets: None, slots, distinct, offsets: Vec::new(), offsets_at: Vec::new() });
     }
 }
 
@@ -136,11 +163,64 @@ fn step(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway
     }
 }
 
+/// B344, Settings → Display → Sway LOD (`sway_lod`, `--sway-lod on|off`, the browser's `?sway_lod=on`): a rig no camera
+/// sees keeps its last sway, a far one (under a sixth of the view tall) moves its sway every other frame. Off (the
+/// default: no frame-rate gain measured, research/journal/2026-10-14-b344-sway-lod): every rig every frame.
+pub static LOD: AtomicBool = AtomicBool::new(false);
+/// The command line's `--sway-lod` holds for the run, over settings.txt.
+static LOD_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// Sway LOD as settings.txt says (unless the command line said), or as the command line says (`flag`).
+pub fn set_lod(on: bool, flag: bool) {
+    if flag || !LOD_FLAG.load(Ordering::Relaxed) {
+        LOD.store(on, Ordering::Relaxed);
+    }
+    if flag {
+        LOD_FLAG.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Whether the rig at `at` (its root, last frame) on `layers` redraws its sway in frame `frame`: in the view of some
+/// active camera on its layers (a 2.5 m ball round the root, as last frame's frustum has it), and big enough there
+/// (or the view orthographic) or on its turn (every other frame, rigs alternating by entity).
+fn due(e: Entity, at: Vec3, layers: &RenderLayers, cams: &Cams, frame: u32) -> bool {
+    let ball = Sphere { center: at.into(), radius: 2.5 };
+    let mut seen = false;
+    for (cam, eye, frustum, projection, on) in cams {
+        if !cam.is_active || !on.unwrap_or_default().intersects(layers) || !frustum.intersects_sphere(&ball, true) {
+            continue;
+        }
+        let Projection::Perspective(p) = projection else { return true };
+        // its 2 m height's share of the view's height
+        let share = 2.0 / (2.0 * (p.fov / 2.0).tan() * eye.translation().distance(at)).max(1e-3);
+        if share >= 1.0 / 6.0 {
+            return true;
+        }
+        seen = true;
+    }
+    seen && (frame + e.index_u32()) % 2 == 0
+}
+
+type Cams<'w, 's> = Query<'w, 's, (&'static Camera, &'static GlobalTransform, &'static Frustum, &'static Projection, Option<&'static RenderLayers>), With<Camera3d>>;
+
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut meshes: ResMut<Assets<Mesh>>) {
-    for (rig, s) in &rigs {
+pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, &mut Sway, &GlobalTransform, Option<&RenderLayers>)>, joints: Query<&Transform>, mut meshes: ResMut<Assets<Mesh>>, cams: Cams, frame: Res<FrameCount>) {
+    let lod = LOD.load(Ordering::Relaxed);
+    for (e, rig, mut s, at, layers) in &mut rigs {
         let Some(c) = &rig.data.noise else { continue };
+        if lod && !due(e, at.translation(), layers.unwrap_or_default(), &cams, frame.0) {
+            continue;
+        }
+        // the entries' offsets from the previous phase, again only after a step
+        if s.offsets_at != s.noise {
+            let s = &mut *s;
+            s.offsets = s.distinct.iter().map(|&(d, p, weight)| {
+                let n = &s.noise[d];
+                Vec3::from(noise::deform(&TABLE, p, weight, n.freq, n.prev, n.amp)) - Vec3::from(p)
+            }).collect();
+            s.offsets_at.clone_from(&s.noise);
+        }
         // each joint's posed model matrix (its parents' first)
         let mut pose: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
         fn posed(j: usize, rig: &Rig, joints: &Query<&Transform>, pose: &mut [Option<Mat4>]) -> Mat4 {
@@ -153,26 +233,32 @@ pub(crate) fn draw(rigs: Query<(&Rig, &Sway)>, joints: Query<&Transform>, mut me
             m
         }
         let mut rot = |j: usize| Mat3::from_mat4(posed(j, rig, &joints, &mut pose));
-        for ((_, moved), h) in c.parts.iter().zip(&s.meshes) {
-            // worked on a copy: a frame with nothing moved (no tick since the last) leaves the mesh unmarked, as each
-            // `get_mut` re-uploads the whole mesh (B328)
+        for (((_, moved), h), slots) in c.parts.iter().zip(&s.meshes).zip(&s.slots) {
+            // only the moved vertices, checked against the mesh first: a frame with nothing moved (no tick since the
+            // last) leaves the mesh unmarked, as each `get_mut` re-uploads the whole mesh (B328)
             let Some(VertexAttributeValues::Float32x3(old)) = meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)) else { continue };
-            let mut pos = old.clone();
+            let mut slots = slots.iter();
+            let mut new = Vec::with_capacity(moved.len());
             for m in moved {
                 let mut off = Vec3::ZERO;
-                for e in &m.entries {
-                    let n = &s.noise[e.deformer];
-                    let q = noise::deform(&TABLE, e.p, e.weight, n.freq, n.prev, n.amp);
-                    off += rot(e.node) * (Vec3::from(q) - Vec3::from(e.p));
+                for (e, &k) in m.entries.iter().zip(&mut slots) {
+                    off += rot(e.node) * s.offsets[k as usize];
                 }
                 let skin: Mat3 = m.skin.iter().map(|&(j, w)| rot(j) * Mat3::from_mat4(rig.data.joints[j].inverse_bind) * w).sum();
                 if skin.determinant() != 0.0 {
-                    pos[m.v] = (Vec3::from(m.base) + skin.inverse() * off).into();
+                    let p: [f32; 3] = (Vec3::from(m.base) + skin.inverse() * off).into();
+                    if old.get(m.v).is_some_and(|o| *o != p) {
+                        new.push((m.v, p));
+                    }
                 }
             }
-            let changed = !matches!(meshes.get(h).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION)), Some(VertexAttributeValues::Float32x3(o)) if *o == pos);
-            if changed && let Some(mut mesh) = meshes.get_mut(h) {
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+            if !new.is_empty()
+                && let Some(mut mesh) = meshes.get_mut(h)
+                && let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+            {
+                for (v, p) in new {
+                    pos[v] = p;
+                }
             }
         }
     }

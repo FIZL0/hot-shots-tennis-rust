@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, SWAY_LOD, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -43,6 +43,8 @@ pub(super) enum Opt {
     Renderer,
     /// B118: the on-screen pad buzzes on each press.
     Vibration,
+    /// B344: far/unseen characters' sway less often.
+    SwayLod,
 }
 use Opt::*;
 
@@ -66,7 +68,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, SwayLod] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -123,6 +125,7 @@ fn label(o: Opt) -> &'static str {
         Chat => "Chat",
         Renderer => "Renderer",
         Vibration => "Vibration",
+        SwayLod => "Sway LOD",
     }
 }
 
@@ -154,6 +157,7 @@ fn about(o: Opt) -> &'static str {
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
         Vibration => "Buzz briefly on each press of the on-screen controls (where the phone can).",
+        SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
     }
 }
 
@@ -242,6 +246,10 @@ impl Settings {
             }
             Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
             Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
+            SwayLod => {
+                self.0[SWAY_LOD] = !self.0[SWAY_LOD];
+                crate::noise::set_lod(self.0[SWAY_LOD], false);
+            }
         }
     }
 
@@ -272,6 +280,7 @@ impl Settings {
             Chat => on_off(self.0[CHAT]),
             Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
             Vibration => on_off(self.0[VIBRATION]),
+            SwayLod => on_off(self.0[SWAY_LOD]),
         }
     }
 }
@@ -679,5 +688,9 @@ mod tests {
         s.step(AtOnce, 1);
         s.step(AtOnce, 1);
         assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once(), Settings::parse(&s.text()) == s), ("1", 1, true));
+        // B344: Sway LOD, off by default, saved
+        assert_eq!(s.value(SwayLod), "Off");
+        s.step(SwayLod, 1);
+        assert!(s.0[SWAY_LOD] && s.text().contains("sway_lod = on") && Settings::parse(&s.text()) == s);
     }
 }
