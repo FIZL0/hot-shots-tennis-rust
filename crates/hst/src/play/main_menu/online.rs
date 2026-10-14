@@ -778,7 +778,7 @@ impl Menu {
                 v.started = true;
                 v.status = "Starting the match...".into();
             }
-            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) => {}
+            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Chat { .. } => {}
         }
     }
 

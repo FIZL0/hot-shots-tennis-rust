@@ -509,6 +509,10 @@ pub enum Msg {
     Lobby(Room),
     /// B200: a peer's match is past its loading screen (the match starts once every peer's is).
     Loaded(String),
+    /// M20: a chat line (`chat.rs`), in the lobby and the match alike; never in the match's input. A guest's goes to
+    /// the host with `from` and `name` empty; the host fills them in (the sender's peer and lobby name), cleans and
+    /// rate-limits it and passes it to everyone else.
+    Chat { from: String, name: String, text: String },
 }
 
 impl Msg {
@@ -674,6 +678,8 @@ pub enum Cmd {
     Doubles(bool),
     /// B213: the host's lobby private (unlisted) or public.
     Private(bool),
+    /// M20: a chat line to everyone else in the lobby or match.
+    Chat(String),
 }
 
 /// What the network tells the app.
@@ -703,6 +709,9 @@ pub enum Event {
     Datagram(String, Vec<u8>),
     /// In the lobby: a mod's looks (`Cmd::Want`): its hash and the pack, as received (unchecked).
     Pack(u64, Vec<u8>),
+    /// M20: another peer's chat line (sender's peer, name, text), cleaned by the host. `Net::poll` keeps these for
+    /// `Net::chats`.
+    Chat { from: String, name: String, text: String },
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
@@ -710,6 +719,9 @@ pub enum Event {
 pub struct Net {
     cmd: amp::UnboundedSender<Cmd>,
     events: std::sync::Mutex<mpsc::Receiver<Event>>,
+    /// M20: the chat lines `poll` took out, for `chats`; whether this machine is in a lobby or match (chat is open).
+    chats: std::sync::Mutex<Vec<(String, String, String)>>,
+    in_room: std::sync::atomic::AtomicBool,
 }
 
 impl Net {
@@ -730,11 +742,24 @@ impl Net {
         // the browser: a task on the page's event loop
         #[cfg(target_arch = "wasm32")]
         n0_future::task::spawn(run(cfg, cmd_rx, ev));
-        Net { cmd, events: events.into() }
+        Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }
     }
 
     pub fn send(&self, c: Cmd) {
+        if matches!(c, Cmd::Leave | Cmd::Find | Cmd::Join(..) | Cmd::Quick(_)) {
+            self.in_room.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
         let _ = self.cmd.send(c);
+    }
+
+    /// M20: the chat lines heard since the last call (`poll` takes them out of the events).
+    pub fn chats(&self) -> Vec<(String, String, String)> {
+        std::mem::take(&mut self.chats.lock().unwrap())
+    }
+
+    /// M20: this machine is in a lobby or its match (seated or hosting).
+    pub fn in_room(&self) -> bool {
+        self.in_room.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// What came in, up to a `Start` (what follows it is the match's: B196, a rejoin's state right behind it).
@@ -743,6 +768,15 @@ impl Net {
         let mut v = Vec::new();
         while let Ok(e) = rx.try_recv() {
             let start = matches!(e, Event::Start(..));
+            match &e {
+                Event::Room(_) | Event::Start(..) | Event::Hosting => self.in_room.store(true, std::sync::atomic::Ordering::Relaxed),
+                Event::Failed(_) | Event::Dropped(_) => self.in_room.store(false, std::sync::atomic::Ordering::Relaxed),
+                _ => {}
+            }
+            if let Event::Chat { from, name, text } = e {
+                self.chats.lock().unwrap().push((from, name, text));
+                continue;
+            }
             v.push(e);
             if start {
                 break;
@@ -1202,6 +1236,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut packs: Packs = Default::default();
     let mut wants: std::collections::HashMap<u64, Vec<String>> = Default::default();
     let mut ready: std::collections::HashSet<String> = Default::default();
+    let mut rates = Rates::default();
     let deliver = |to: &str, h: u64, b: &std::sync::Arc<Vec<u8>>, joined: &[(String, Link, Conn)]| {
         if to == "host" {
             cx.say(Event::Pack(h, b.to_vec()));
@@ -1377,6 +1412,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                     packs.insert(h, b);
                 }
+                Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
                 Guest::Said(peer, Msg::Pong(sent)) => {
                     rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
                     if let Some((waiting, _)) = &mut starting {
@@ -1483,6 +1519,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         dirty = true;
                     }
                 }
+                Some(Cmd::Chat(t)) => chat(cx, "host", &t, &room.names, &joined, &mut rates),
                 Some(Cmd::Want(h)) => {
                     if let Some(b) = want("host", h, &room, &joined, &mut packs, &mut wants) {
                         deliver("host", h, &b, &joined);
@@ -1525,6 +1562,7 @@ type Back = (Room, Vec<(String, Link, Conn)>, amp::UnboundedReceiver<Guest>);
 
 async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, gtx: amp::UnboundedSender<Guest>, mut guests: amp::UnboundedReceiver<Guest>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> Option<Back> {
     let mut away: Vec<String> = Vec::new();
+    let mut rates = Rates::default();
     loop {
         let to = |peer: &str| joined.iter().find(|(p, ..)| p == peer).map(|(_, _, c)| c.clone());
         tokio::select! {
@@ -1539,6 +1577,7 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                 });
             }
             Some(g) = guests.recv() => match g {
+                Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
                 // only the host says who's away and restarts the match
                 Guest::Said(peer, m) if m.in_match() && !matches!(m, Msg::Away { .. } | Msg::Restart { .. }) => {
                     joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&m));
@@ -1595,6 +1634,7 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                         send_datagram(&c, "host", &data);
                     }
                 }
+                Some(Cmd::Chat(t)) => chat(cx, "host", &t, &room.names, &joined, &mut rates),
                 Some(Cmd::Leave) | None => {
                     // the goodbyes go out with the lag, then the connections close
                     n0_future::time::sleep(Duration::from_millis(LAG_MS.load(std::sync::atomic::Ordering::Relaxed) + 200)).await;
@@ -1644,6 +1684,26 @@ fn send_datagram(c: &Conn, peer: &str, data: &[u8]) {
             n0_future::time::sleep(Duration::from_millis(lag)).await;
             c.send_datagram(d);
         });
+    }
+}
+
+/// M20: each peer's recent chat lines, for the rate limit.
+type Rates = std::collections::HashMap<String, Vec<n0_future::time::Instant>>;
+
+/// M20: peer `from`'s chat line (`"host"`: this machine's), cleaned and rate-limited (`chat::clean`, `chat::allow`;
+/// one over the limit is dropped), to every other peer with the sender's lobby name, and a guest's to this app too.
+fn chat(cx: &Ctx, from: &str, text: &str, names: &std::collections::BTreeMap<String, String>, joined: &[(String, Link, Conn)], rates: &mut Rates) {
+    let Some(text) = crate::chat::clean(text) else { return };
+    if !crate::chat::allow(rates.entry(from.into()).or_default(), n0_future::time::Instant::now()) {
+        return;
+    }
+    let name = names.get(from).and_then(|n| crate::chat::clean(n)).unwrap_or_else(|| short(from).into());
+    let m = Msg::Chat { from: from.into(), name, text };
+    joined.iter().filter(|(p, ..)| p != from).for_each(|(_, l, _)| l.send(&m));
+    if from != "host"
+        && let Msg::Chat { from, name, text } = m
+    {
+        cx.say(Event::Chat { from, name, text });
     }
 }
 
@@ -1833,6 +1893,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                     cx.say(Event::Start(r, me.clone()));
                 }
                 Ok(Msg::Ping(t)) => link.send(&Msg::Pong(t)),
+                Ok(Msg::Chat { from, name, text }) if seated => cx.say(Event::Chat { from, name, text }),
                 Ok(m) if playing && m.in_match() => cx.say(Event::Match(m)),
                 Ok(Msg::Refused(why)) => {
                     cx.say(Event::Failed(format!("Refused: {why}")));
@@ -1860,6 +1921,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
                 Some(Cmd::Cancel) => link.send(&Msg::Cancel),
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
+                Some(Cmd::Chat(text)) => link.send(&Msg::Chat { from: String::new(), name: String::new(), text }),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -2811,6 +2873,85 @@ mod tests {
                 let Event::Start(r, _) = next(ev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
                 assert_eq!(r.court, 7);
             }
+        });
+    }
+
+    /// M20: chat through the host in the lobby and in the match: everyone else hears a line with the sender's lobby
+    /// name (a guest can't say it's someone else), cleaned, and a burst past the limit is dropped.
+    #[test]
+    fn chat_in_the_lobby_and_the_match() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = |name: &str| {
+                let name = name.to_string();
+                let bootstrap = testnet.bootstrap.clone();
+                async move {
+                    let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                    let (tx, rx) = mpsc::channel();
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, relays: false }, rx)
+                }
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            /// The chat lines heard within `ms` (name, text).
+            async fn heard(ev: &mpsc::Receiver<Event>, ms: u64) -> Vec<(String, String)> {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                // two senders' lines can cross on the way: order doesn't matter here
+                let mut v: Vec<_> = ev.try_iter().filter_map(|e| if let Event::Chat { name, text, .. } = e { Some((name, text)) } else { None }).collect();
+                v.sort();
+                v
+            }
+            let ((hcx, hev), (acx, aev), (bcx, bev)) = (cx("Host").await, cx("Ann").await, cx("Bob").await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (acmd, mut arx) = amp::unbounded_channel();
+            let (bcmd, mut brx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(0, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            let c2 = code.clone();
+            tokio::spawn(async move { join(&acx, &code, vec![Pick::disc(1, 0)], &mut arx).await });
+            next(&aev, |e| matches!(e, Event::Room(_))).await;
+            tokio::spawn(async move { join(&bcx, &c2, vec![Pick::disc(2, 0)], &mut brx).await });
+            next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 1)).await;
+            next(&bev, |e| matches!(e, Event::Room(_))).await;
+            // the lobby: a guest's line (claiming to be the host, with a bell and a newline) and the host's
+            acmd.send(Cmd::Send(Msg::Chat { from: "host".into(), name: "Host".into(), text: "hi\u{7} all\n".into() })).unwrap();
+            hcmd.send(Cmd::Chat("welcome".into())).unwrap();
+            let ann = ("Ann".to_string(), "hi all".to_string());
+            let host = ("Host".to_string(), "welcome".to_string());
+            assert_eq!(heard(&bev, 1500).await, [ann.clone(), host.clone()]);
+            assert_eq!(heard(&hev, 0).await, [ann.clone()]);
+            assert_eq!(heard(&aev, 0).await, [host.clone()]);
+            // a burst: only the first few get through
+            for i in 0..8 {
+                bcmd.send(Cmd::Chat(format!("spam {i}"))).unwrap();
+            }
+            assert_eq!(heard(&aev, 1500).await.len(), crate::chat::BURST);
+            // the match
+            acmd.send(Cmd::Prepared(true)).unwrap();
+            bcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.len() == 2)).await;
+            hcmd.send(Cmd::Start).unwrap();
+            for ev in [&hev, &aev, &bev] {
+                next(ev, |e| matches!(e, Event::Start(..))).await;
+            }
+            acmd.send(Cmd::Chat("good luck".into())).unwrap();
+            hcmd.send(Cmd::Chat("you too".into())).unwrap();
+            let (ann, host) = (("Ann".to_string(), "good luck".to_string()), ("Host".to_string(), "you too".to_string()));
+            assert_eq!(heard(&bev, 1500).await, [ann.clone(), host.clone()]);
+            assert_eq!(heard(&hev, 0).await, [ann]);
+            assert_eq!(heard(&aev, 0).await, [host]);
         });
     }
 
