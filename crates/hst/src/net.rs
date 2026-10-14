@@ -17,8 +17,9 @@
 //!
 //! The lobby protocol (ALPN [`ALPN`]): the joiner opens a stream and sends [`Msg::Hello`] (build, its 1–3 local
 //! players' picks, its player's name); the host answers [`Msg::Room`] (seated) or [`Msg::Refused`], sends `Room` again
-//! on every change (a guest's [`Msg::Prepared`] marks it ready) and [`Msg::Start`] once the host starts with every guest
-//! ready (the open seats then go to the computer, [`CPU`]). Mid-match, a joiner with the same build takes a seat whose
+//! on every change (a guest's [`Msg::Prepared`] marks it ready) and [`Msg::Start`] at the end of a countdown (B215,
+//! `Room::count`: every guest ready, or the host's Start; a peer's [`Msg::Cancel`] or un-ready stops it), the open
+//! seats then to the computer ([`CPU`]). Mid-match, a joiner with the same build takes a seat whose
 //! peer went silent ([`Msg::Away`]) and gets `Start` with `rejoin` set (B196, `play/recover.rs`). Messages are JSON, a u32 length before each.
 //!
 //! The app talks to this through [`Net`]: commands in, [`Event`]s out; the network runs on its own tokio thread (in the browser: a task on the page's event loop, relays only).
@@ -210,6 +211,9 @@ pub struct Room {
     /// B201: each peer's players on the lobby's character select as they choose, in the order of the seats it holds.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub live: std::collections::BTreeMap<String, Vec<Live>>,
+    /// B215: the start's countdown, seconds left (0: none running), as the host counts it.
+    #[serde(default)]
+    pub count: u32,
 }
 
 /// B201: one player's place on the character select, live: the disc character hovered (a mod's donor, with the mod's
@@ -305,6 +309,11 @@ impl Room {
     /// Every guest in the seats has said they're ready.
     pub fn all_ready(&self) -> bool {
         self.seats.iter().flatten().all(|s| s.peer == "host" || !s.human() || self.ready.contains(&s.peer))
+    }
+
+    /// B215: a guest in, every person's seat picked and ready: the countdown starts by itself.
+    fn all_set(&self) -> bool {
+        self.picking.is_empty() && self.all_ready() && self.seats.iter().flatten().any(|s| s.peer != "host" && s.human())
     }
 
     /// The open seats to the computer: disc characters nobody picked, in grid order.
@@ -454,6 +463,8 @@ pub enum Msg {
     Ready(u32),
     /// In the lobby: a guest is ready to play (or not any more).
     Prepared(bool),
+    /// B215: a guest stops the start's countdown.
+    Cancel,
     /// In the lobby (B195): a guest's chosen picks for the seats it holds (it joined on placeholders).
     Picks(Vec<Pick>),
     /// B201: a guest's players' places on the select, as they move (`Room::live`).
@@ -488,6 +499,9 @@ impl Msg {
 
 /// `HST_NET_LAG=ms`: every message waits this long before it goes out (simulated one-way latency, for tests).
 pub static LAG_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// B215: the start's countdown (ms; tests shorten it).
+pub static COUNTDOWN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4000);
 
 /// The input delay for a round trip of `rtt`: enough ticks to cover one way, plus one for jitter (2..=15).
 pub fn delay_for(rtt: Duration) -> u32 {
@@ -624,6 +638,8 @@ pub enum Cmd {
     Prepared(bool),
     Start,
     Kick(String),
+    /// B215: stop the start's countdown (Start begins it; the host's or a guest's).
+    Cancel,
     /// In the lobby (B195): this machine's chosen picks for the seats it holds; the host's court, sets, games, umpire.
     Picks(Vec<Pick>),
     Venue(usize, usize, i32, u8),
@@ -1132,8 +1148,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
     // a host with every seat (`HST_NET_SYNCTEST`) starts at once
     let mut starting: Option<(Vec<String>, n0_future::time::Instant)> = room.seats.iter().all(Option::is_some).then(|| (Vec::new(), t0));
-    // the host pressed Start: the match starts once every guest is ready and (with mods) settled
+    // B215: the countdown's end (Start, or everyone ready), then the match starts once (with mods) everyone's settled;
+    // `auto`: everyone being ready may start one (not again after a cancel until someone readies)
     let mut go = false;
+    let mut count: Option<n0_future::time::Instant> = None;
+    let mut auto = true;
     let mut ping = n0_future::time::interval(Duration::from_secs(1));
     // mods (M2i): the packs passed through, who waits for which, who has settled every mod's looks for this line-up
     let mut packs: Packs = Default::default();
@@ -1148,9 +1167,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     };
     loop {
         // started, everyone ready, and with mods everyone has their looks or stand-ins: a last round trip first
+        if starting.is_none() && count.is_none() && !go && auto && room.all_set() {
+            auto = false;
+            count = Some(n0_future::time::Instant::now() + Duration::from_millis(COUNTDOWN_MS.load(std::sync::atomic::Ordering::Relaxed)));
+            room.count = left(count);
+            broadcast(&joined, &Msg::Room(room.clone()));
+            cx.say(Event::Room(room.clone()));
+        }
         if starting.is_none()
             && go
-            && room.all_ready()
             && (room.mods().next().is_none() || std::iter::once("host").chain(joined.iter().map(|(p, ..)| p.as_str())).all(|p| ready.contains(p)))
         {
             // a fresh round trip from everyone before the input delay is picked (3 s at most)
@@ -1191,7 +1216,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             }
             // B196: back from the match to this lobby with the players still in
             let Some((r, j, g)) = relay(cx, room, joined, gtx.clone(), guests, cmds).await else { return };
-            (room, joined, guests, starting, go) = (r, j, g, None, false);
+            (room, joined, guests, starting, go, count, auto) = (r, j, g, None, false, None, true);
             ready.clear();
             dirty = true;
             continue;
@@ -1253,6 +1278,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Guest::Said(peer, Msg::Ready(v)) if v == room.ver => drop(ready.insert(peer)),
                 Guest::Said(peer, Msg::Prepared(p)) => {
                     let changed = if p { room.ready.insert(peer) } else { room.ready.remove(&peer) };
+                    auto |= p;
+                    if changed && !p && count.take().is_some() {
+                        room.count = 0;
+                    }
                     if changed {
                         broadcast(&joined, &Msg::Room(room.clone()));
                         cx.say(Event::Room(room.clone()));
@@ -1274,6 +1303,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         broadcast(&joined, &Msg::Room(room.clone()));
                         cx.say(Event::Room(room.clone()));
                     }
+                }
+                Guest::Said(_, Msg::Cancel) if count.take().is_some() => {
+                    room.count = 0;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
                 }
                 Guest::Said(peer, Msg::Want(h)) => {
                     if let Some(b) = want(&peer, h, &room, &joined, &mut packs, &mut wants) {
@@ -1302,7 +1336,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     let name = room.names.get(&peer).cloned().unwrap_or_else(|| short(&peer).into());
                     room.leave(&peer);
                     joined.retain(|(p, ..)| *p != peer);
-                    (starting, go) = (None, false);
+                    (starting, go, count, room.count) = (None, false, None, 0);
                     cx.say(Event::Status(format!("{name} left.")));
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
@@ -1311,6 +1345,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => {
                 broadcast(&joined, &Msg::Ping(micros(t0)));
+            }
+            // B215: the countdown's next second (shown on every peer), and at 0 the start
+            _ = n0_future::time::sleep(next_second(count)), if count.is_some() => {
+                room.count = left(count);
+                if room.count == 0 {
+                    (count, go) = (None, true);
+                }
+                broadcast(&joined, &Msg::Room(room.clone()));
+                cx.say(Event::Room(room.clone()));
             }
             _ = tick.tick() => dirty = true,
             Some(c) = rolled.recv() => {
@@ -1321,8 +1364,20 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             }
             c = cmds.recv() => match c {
                 Some(Cmd::Ready(v)) if v == room.ver => drop(ready.insert("host".into())),
-                Some(Cmd::Start) => go = true,
+                Some(Cmd::Start) if count.is_none() && !go && starting.is_none() => {
+                    auto = false;
+                    count = Some(n0_future::time::Instant::now() + Duration::from_millis(COUNTDOWN_MS.load(std::sync::atomic::Ordering::Relaxed)));
+                    room.count = left(count);
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
+                Some(Cmd::Cancel) if count.take().is_some() => {
+                    room.count = 0;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
                 Some(Cmd::Picks(p)) if starting.is_none() && room.repick("host", &p) => {
+                    auto = true;
                     ready.clear();
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
@@ -1359,7 +1414,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         ready.clear();
                         room.leave(&peer);
                         joined.retain(|(p, ..)| *p != peer);
-                        (starting, go) = (None, false);
+                        (starting, go, count, room.count) = (None, false, None, 0);
                         cx.say(Event::Status(format!("{name} was taken out.")));
                         broadcast(&joined, &Msg::Room(room.clone()));
                         cx.say(Event::Room(room.clone()));
@@ -1385,6 +1440,17 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
         }
     }
+}
+
+/// B215: the countdown ending at `end`: whole seconds left (rounded up; 0 when over or none).
+fn left(end: Option<n0_future::time::Instant>) -> u32 {
+    end.map_or(0, |e| e.saturating_duration_since(n0_future::time::Instant::now()).as_millis().div_ceil(1000) as u32)
+}
+
+/// B215: how long until the countdown's shown seconds drop (its end within the last second).
+fn next_second(end: Option<n0_future::time::Instant>) -> Duration {
+    let rest = end.map_or(Duration::ZERO, |e| e.saturating_duration_since(n0_future::time::Instant::now()));
+    rest.saturating_sub(Duration::from_secs(left(end).saturating_sub(1) as u64))
 }
 
 /// The host in the match: every guest's match messages go to the app and the other guests, the app's to every guest;
@@ -1721,6 +1787,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
                 Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
+                Some(Cmd::Cancel) => link.send(&Msg::Cancel),
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
@@ -2013,6 +2080,8 @@ mod tests {
     use super::*;
 
     fn room(doubles: bool) -> Room {
+        // B215: a shorter start countdown for the tests (each starts one)
+        COUNTDOWN_MS.store(1000, std::sync::atomic::Ordering::Relaxed);
         Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() }
     }
 
@@ -2128,6 +2197,75 @@ mod tests {
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             let seats: Vec<_> = r.seats.iter().flatten().map(|s| (s.pick.char, s.pick.costume)).collect();
             assert_eq!(seats[..3], [(0, 0), (6, 3), (9, 4)], "the match has the lobby's picks and the host's computer player");
+        });
+    }
+
+    /// B215 over a local connection: the host's Start counts down with the guest not ready and the guest's Cancel
+    /// stops it for both; everyone ready counts down by itself to the start; un-ready during it cancels (~4 s).
+    #[test]
+    fn ready_up_countdown() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let started = |ev: &mpsc::Receiver<Event>| ev.try_iter().any(|e| matches!(e, Event::Start(..)));
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(0, 0)]);
+            r.picking.clear();
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            next(&gev, |e| matches!(e, Event::Room(r) if r.open() == 0)).await;
+            gcmd.send(Cmd::Picks(vec![Pick::disc(1, 0)])).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.picking.is_empty())).await;
+            // the host's Start with the guest not ready: a countdown on both; the guest's Cancel stops it for both
+            hcmd.send(Cmd::Start).unwrap();
+            next(&gev, |e| matches!(e, Event::Room(r) if r.count > 0)).await;
+            gcmd.send(Cmd::Cancel).unwrap();
+            next(&gev, |e| matches!(e, Event::Room(r) if r.count == 0)).await;
+            next(&hev, |e| matches!(e, Event::Room(r) if r.count == 0)).await;
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(!started(&gev) && !started(&hev), "started after the guest's cancel");
+            // the guest ready: everyone is, the countdown starts by itself; un-ready during it cancels
+            gcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&gev, |e| matches!(e, Event::Room(r) if r.count > 0)).await;
+            gcmd.send(Cmd::Prepared(false)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.count == 0 && r.ready.is_empty())).await;
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(!started(&gev) && !started(&hev), "started after the guest un-readied");
+            // the host's Start with the guest still not ready runs out and starts on both, no countdown in the line-up
+            hcmd.send(Cmd::Start).unwrap();
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            assert!(matches!(next(&hev, |e| matches!(e, Event::Start(..))).await, Event::Start(h, _) if h == r));
+            assert_eq!((r.count, r.ready.len(), r.seats[1].as_ref().map(|s| s.pick.char)), (0, 0, Some(1)));
+            // back in the lobby (B196): the guest ready makes everyone ready, and that counts down to the start by itself
+            let mut back = r.clone();
+            back.back_to_lobby(&[]);
+            hcmd.send(Cmd::Send(Msg::Lobby(back))).unwrap();
+            next(&gev, |e| matches!(e, Event::Match(Msg::Lobby(_)))).await;
+            gcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&gev, |e| matches!(e, Event::Room(r) if r.count > 0)).await;
+            let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
+            assert!(matches!(next(&hev, |e| matches!(e, Event::Start(..))).await, Event::Start(h, _) if h == r));
+            assert_eq!((r.count, r.ready.len()), (0, 1));
         });
     }
 
@@ -2410,7 +2548,7 @@ mod tests {
             assert!(connect(&gcx, other, &mut nrx).await.is_none());
             assert!(matches!(next(&gev, |e| matches!(e, Event::Failed(_))).await, Event::Failed(f) if f.contains(other)));
             tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
-            // doubles with two seats open: Start waits for the guest's ready, then the computer takes the open seats
+            // doubles with two seats open: the guest's ready starts it, the computer takes the open seats
             let Event::Room(seen) = next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 2)).await else { unreachable!() };
             let guest = seen.seats[1].as_ref().unwrap().peer.clone();
             // B114: seated, the guest's status moves on from "Joining..."
@@ -2422,9 +2560,7 @@ mod tests {
             hcmd.send(Cmd::Venue(2, 1, 4, 3)).unwrap();
             let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 2 && r.picking.is_empty())).await else { unreachable!() };
             assert_eq!((seen.seats[1].as_ref().unwrap().pick.char, seen.seats[1].as_ref().unwrap().pick.costume, seen.umpire), (5, 1, 3));
-            hcmd.send(Cmd::Start).unwrap();
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            assert!(gev.try_iter().all(|e| !matches!(e, Event::Start(..))), "started before the guest was ready");
+            // B215: everyone ready counts down to the start by itself
             gcmd.send(Cmd::Prepared(true)).unwrap();
             let Event::Start(r, me) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             assert_eq!(me, guest);
@@ -2440,8 +2576,6 @@ mod tests {
             let Event::Match(Msg::Lobby(l)) = next(&gev, |e| matches!(e, Event::Match(Msg::Lobby(_)))).await else { unreachable!() };
             assert_eq!(l.open(), 2);
             gcmd.send(Cmd::Prepared(true)).unwrap();
-            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.contains(&guest))).await;
-            hcmd.send(Cmd::Start).unwrap();
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             assert_eq!(r.open(), 0);
         });

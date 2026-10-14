@@ -221,10 +221,16 @@ impl Menu {
             Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add Computer"),
             Item::Mode => "Singles / Doubles",
             Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
+            Item::Button("Start" | "Ready") if self.counting() > 0 => "Cancel",
             Item::Button("Ready") if self.net.prepared => "Not Ready",
             Item::Button(b @ ("Start" | "Characters" | "Court" | "Ready" | "Leave")) => b,
             Item::Button(_) => return None,
         })
+    }
+
+    /// B215: the start's countdown, seconds left (0: none).
+    fn counting(&self) -> u32 {
+        self.net.room.as_ref().map_or(0, |r| r.count)
     }
 
     /// A guest's seat's peer and name.
@@ -536,18 +542,14 @@ impl Menu {
                     }
                 } else if item == Item::Button("Copy Link") && shared(&self.net).is_some() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
+                } else if matches!(item, Item::Button("Start" | "Ready")) && self.counting() > 0 {
+                    // B215: stop the countdown for everyone
+                    self.net.status.clear();
+                    out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Cancel))]);
                 } else if item == Item::Button("Start") {
-                    match self.net.room.as_ref().map(waiting_for) {
-                        Some(None) => {
-                            self.net.status = "Starting...".into();
-                            out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Start))]);
-                        }
-                        Some(Some(who)) => {
-                            self.net.status = format!("Waiting for {who} to get ready.");
-                            out.push(Sound(1));
-                        }
-                        None => out.push(Sound(1)),
-                    }
+                    // B215: a countdown, ready or not
+                    self.net.status.clear();
+                    out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Start))]);
                 } else if item == Item::Button("Characters") {
                     // pick again: not ready meanwhile
                     for p in 0..4 {
@@ -744,12 +746,6 @@ fn relay_name(cfg: &Online) -> String {
 /// The name `peer`'s player gave (its ID's start if none).
 fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
-}
-
-/// The first guest in `r` not ready yet, by name (None: everyone is).
-fn waiting_for(r: &Room) -> Option<String> {
-    let s = r.seats.iter().flatten().find(|s| s.peer != "host" && s.human() && !r.ready.contains(&s.peer))?;
-    Some(name_of(r, &s.peer))
 }
 
 fn court_name(text: &super::Text, c: usize) -> String {
@@ -953,11 +949,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 for (i, b) in &buttons {
                     let ([x, y, ..], on) = (rects[*i], m.sel == *i);
                     let label = match *b {
+                        "Start" | "Ready" if m.counting() > 0 => format!("Cancel ({})", m.counting()),
                         "Start" if open > 0 => format!("Start +{open} COM"),
                         "Ready" if m.net.prepared => "Not Ready".to_string(),
                         b => b.to_string(),
                     };
-                    let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && shared(&m.net).is_none());
+                    let dim = *b == "Copy Link" && shared(&m.net).is_none();
                     d.pill(x, y, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
                     d.hit([x, y, BUTTON_W, 38.0], Act::Row(*i, OK));
                     let k = ((BUTTON_W - 20.0) / d.width(&label, 20.0)).min(1.0);
@@ -999,6 +996,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 }
             }
             let info = match items.get(m.sel) {
+                _ if m.counting() > 0 => format!("The match starts in {}... Cancel stops it for everyone.", m.counting()),
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 // B201: the host's open and computer seats, and the singles / doubles switch
                 Some(Item::Seat(i)) if m.guest(*i).is_none() && room.is_some_and(|r| r.seats.get(*i).is_some_and(|s| s.is_some())) => {
@@ -1007,13 +1005,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Seat(i)) if m.guest(*i).is_none() => "OK: a computer player in this seat (you choose its character and level).".into(),
                 Some(Item::Mode) => "OK: switch between singles and doubles (everyone readies again).".into(),
                 Some(Item::Seat(i)) => format!("OK takes {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
-                Some(Item::Button("Start")) => "Start the match now: open seats are played by the computer.".into(),
+                Some(Item::Button("Start")) => "Start a 4 second countdown, ready or not: open seats are played by the computer.".into(),
                 Some(Item::Button("Copy Link")) => "Copy the lobby's link, or read out the code: friends type it in Join by Code.".into(),
                 Some(Item::Button("Characters")) => "Pick your characters again (not ready meanwhile); your seats stay yours.".into(),
                 Some(Item::Button("Court")) => "Change the court, sets, games and umpire: everyone sees it, and Find lists the court.".into(),
                 _ if m.net.pick_next => "Joining: your seats are held while you pick your characters.".into(),
-                Some(Item::Button("Ready")) => "Tell the host you're ready: they start when everyone in is, open seats played by the computer.".into(),
-                _ if room.is_some() && !m.net.hosting => "Leave the lobby. The host starts when everyone in is ready: open seats are played by the computer.".into(),
+                Some(Item::Button("Ready")) => "Ready up: when everyone in is, the match starts after 4 seconds, open seats played by the computer.".into(),
+                _ if room.is_some() && !m.net.hosting => "Leave the lobby. The match starts once everyone in is ready (or the host starts it).".into(),
                 _ if room.is_none() => "The lobby's closed.".into(),
                 _ => "Leave the lobby.".into(),
             };
@@ -1478,23 +1476,26 @@ mod tests {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
         let net = |fx: &[Effect]| fx.iter().find_map(|e| if let Effect::Online(Fx::Net(c)) = e { Some(c.clone()) } else { None });
-        // the host: a guest's seat first (OK takes them out), then Start, which waits for them to be ready
+        // the host: a guest's seat first (OK takes them out), then Start (a countdown, ready or not), which Cancel stops
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = true;
         assert_eq!(m.items(), vec![Item::Seat(1), Item::Seat(2), Item::Seat(3), Item::Button("Start"), Item::Button("Characters"), Item::Button("Court"), Item::Button("Copy Link"), Item::Button("Leave"), Item::Mode]);
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("k51qzi5uqu5d".into())));
         m.sel = 3;
-        assert_eq!(net(&m.step(dev, ok)), None, "ACE-42 isn't ready");
-        assert!(m.net.status.contains("ACE-42"), "{}", m.net.status);
-        m.net.room.as_mut().unwrap().ready.insert("r8mxw2pa0c1e".into());
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Start));
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Start), "ACE-42 isn't ready: B215 starts the countdown anyway");
+        m.net.room.as_mut().unwrap().count = 4;
+        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok))), (Some("Cancel"), Some(Cmd::Cancel)));
         // a guest: Ready toggles; Leave leaves
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = false;
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Prepared(true)));
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Prepared(false)));
+        // B215: a countdown running: Ready is Cancel
+        m.net.room.as_mut().unwrap().count = 3;
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Cancel));
+        m.net.room.as_mut().unwrap().count = 0;
         // Characters: unready (it was), back to the select
         m.net.prepared = true;
         m.step(dev, Press { right: true, ..default() });
