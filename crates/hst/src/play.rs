@@ -2297,10 +2297,12 @@ fn player_matrix(p: &Player) -> [[f32; 4]; 4] {
 }
 
 fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
-    if g.phase != Phase::Serve || g.serving.tossed {
-        return;
-    }
-    let i = g.score.server as usize;
+    // B262: through the change of ends the next server stands at the new end bouncing the ball
+    let i = match change_ends::server(&g) {
+        Some(i) => i,
+        None if g.phase != Phase::Serve || g.serving.tossed => return,
+        None => g.score.server as usize,
+    };
     let Some((_, m)) = q.iter().find(|(f, _)| f.0 == i) else {
         return;
     };
@@ -4230,7 +4232,8 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         let p = &g.players[i];
         m.arm = p.arm;
         // a whiffed serve's miss motion plays on through the fault's call
-        let serving = (g.phase == Phase::Serve || g.serving.whiffed) && g.score.server == i as i32;
+        let serving = (g.phase == Phase::Serve || g.serving.whiffed) && g.score.server == i as i32
+            || change_ends::server(&g) == Some(i);
         // an emote before the toss (B231) plays its own motion, then the stance comes back
         if serving && p.emote == 0 {
             let s = g.serving;
