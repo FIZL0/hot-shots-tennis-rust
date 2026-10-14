@@ -13,7 +13,7 @@
 //! their own end (1P's at the bottom). `view_size`/`aspect`/`in_view` are the HUD's; the 3D cameras take `scene_aspect`.
 
 use bevy::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 /// B118: a two-player phone match is on (set by the main menu at its start, cleared when the menu is back).
 pub static SIDEWAYS: AtomicBool = AtomicBool::new(false);
@@ -89,6 +89,26 @@ pub fn screen_43() -> (Node, Screen43) {
     (node, Screen43)
 }
 
+/// Settings › Display › Menu Size (`main_menu`, f32 bits): a factor on the menus' uniform scale, so their whole
+/// layout shrinks or grows together on the view (the extra room goes around it); the match's HUD doesn't take it.
+pub static MENU_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+/// The Menu Size factor in force.
+pub(super) fn menu_scale() -> f32 {
+    f32::from_bits(MENU_SCALE.load(Ordering::Relaxed))
+}
+
+/// The menus' `share` and `vshare` on a view `aspect` wide at Menu Size `k`: the 640×448 screen's share of the view's
+/// width and height (over 1 when it's bigger than the view).
+pub(super) fn menu_shares(aspect: f32, k: f32) -> (f32, f32) {
+    (share(aspect) * k, vshare(aspect) * k)
+}
+
+/// The menus' `menu_shares` on the primary window's view at the Menu Size in force ((1, 1) without one).
+pub(super) fn window_menu_shares(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> (f32, f32) {
+    window.single().map_or((1.0, 1.0), |w| menu_shares(aspect(w), menu_scale()))
+}
+
 /// Share of the window's width the 4:3 screen covers: all of it at 4:3 or narrower (narrower windows letterbox it
 /// top and bottom, `vshare`).
 pub(super) fn share(aspect: f32) -> f32 {
@@ -139,7 +159,11 @@ pub(super) fn vshare(aspect: f32) -> f32 {
 /// `Sides`/`Span` keep to the window's top or bottom edge (by which half the rect's centre is in), and a full-height
 /// rect (a wall, a dim) fills it.
 pub(super) fn vplace(y: f32, h: f32, aspect: f32, a: Anchor) -> (f32, f32) {
-    let s = vshare(aspect);
+    vplace_in(y, h, vshare(aspect), a)
+}
+
+/// `vplace` with the 448-high screen covering `s` of the view's height (the menus' `menu_shares`).
+pub(super) fn vplace_in(y: f32, h: f32, s: f32, a: Anchor) -> (f32, f32) {
     let height = h / 4.48 * s;
     match a {
         Anchor::Centre => (50.0 * (1.0 - s) + y / 4.48 * s, height),

@@ -242,10 +242,17 @@ fn opened(
     }
 }
 
-/// B294: the Settings pages lay out on the whole view, as the main menu's (`fit_grid`, less its live settings).
-fn fit(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
+/// B294: the Settings pages lay out on the whole view, as the main menu's (`fit_grid`, less its live settings), at the
+/// Menu Size while they're up; the match's HUD and legend (key hints, the pause dialog's) keep 100% otherwise.
+fn fit(window: Query<&Window, With<PrimaryWindow>>, ps: Res<PauseSettings>, mut menu: ResMut<Menu>) {
     let Ok(w) = window.single() else { return };
-    let g = super::Grid::fit(widescreen::aspect(w));
+    let k = if ps.open {
+        menu.settings.apply_menu_scale(w)
+    } else {
+        widescreen::MENU_SCALE.store(1.0f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        1.0
+    };
+    let g = super::Grid::fit_at(widescreen::aspect(w), k);
     if menu.grid != g {
         menu.grid = g;
     }

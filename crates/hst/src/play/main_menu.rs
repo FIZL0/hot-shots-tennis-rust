@@ -115,10 +115,15 @@ impl Default for Grid {
 impl Grid {
     /// The layout on a view `aspect` wide.
     fn fit(aspect: f32) -> Self {
-        use super::widescreen::{share, vshare};
+        Grid::fit_at(aspect, 1.0)
+    }
+
+    /// The layout on a view `aspect` wide at Menu Size `k` (the view `1 / k` as many units across and down).
+    fn fit_at(aspect: f32, k: f32) -> Self {
+        let (share, vshare) = super::widescreen::menu_shares(aspect, k);
         // how far the view reaches past the 4:3 screen on each side, in its units
-        let ex = (640.0 / share(aspect) - 640.0) / 2.0;
-        let ey = (448.0 / vshare(aspect) - 448.0) / 2.0;
+        let ex = (640.0 / share - 640.0) / 2.0;
+        let ey = (448.0 / vshare - 448.0) / 2.0;
         let (left, right, top, bottom) = (12.0 - ex, 628.0 + ex, -ey, 398.0 + ey);
         let w = right - left;
         // under the title tab, over the description bar (pinned to the window's bottom)
@@ -159,7 +164,7 @@ fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>)
     super::widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
     super::key_hints::ON.store(menu.settings.0[KEY_HINTS], std::sync::atomic::Ordering::Relaxed);
     let Ok(w) = window.single() else { return };
-    let g = Grid::fit(super::widescreen::aspect(w));
+    let g = Grid::fit_at(super::widescreen::aspect(w), menu.settings.apply_menu_scale(w));
     if menu.grid != g {
         menu.grid = g;
     }
@@ -209,11 +214,14 @@ pub(super) const FONT: [&str; 15] = [
 /// ratio (B117, a `widescreen::ASPECTS` index) and what to do with an online lobby's mods (B289: the lobby's
 /// prompt asks, or its "Download, always" / "Never download" answer) and the browser build's renderer (B273, a
 /// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage) and the confirm screen's last umpire
-/// pick (B191: `UMPIRES` is Random, the first-time and fallback choice), saved in `settings.txt`.
+/// pick (B191: `UMPIRES` is Random, the first-time and fallback choice) and the Menu Size (`MENU_SIZES`: 0 Auto,
+/// else tenths), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8);
+pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8, u8);
 /// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
 const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
+/// The Menu Size setting's values: Auto (0), then 50% to 150% in tenths.
+const MENU_SIZES: [u8; 12] = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
 const SETTING_NAMES: [&str; 7] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration"];
@@ -238,7 +246,7 @@ fn default_aspect() -> u8 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8)
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0)
     }
 }
 
@@ -251,6 +259,8 @@ impl Settings {
                 s.4 = Ask::parse(v).unwrap_or(s.4);
             } else if k.trim() == "umpire" {
                 s.6 = v.trim().parse().ok().filter(|&u| u as usize <= UMPIRES).unwrap_or(UMPIRES as u8);
+            } else if k.trim() == "menu_size" {
+                s.7 = v.trim().trim_end_matches('%').parse::<u8>().ok().map(|p| p / 10).filter(|t| MENU_SIZES.contains(t)).unwrap_or(0);
             } else if k.trim() == "renderer" {
                 s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
@@ -277,7 +287,24 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6)
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6) + &format!("menu_size = {}\n", if self.7 == 0 { "auto".into() } else { format!("{}", self.7 as u32 * 10) })
+    }
+
+    /// The Menu Size factor on a window `physical_h` px tall: Auto is 100%, 80% on a window taller than 1440 px.
+    fn menu_scale(&self, physical_h: u32) -> f32 {
+        match self.7 {
+            0 if physical_h > 1440 => 0.8,
+            0 => 1.0,
+            t => t as f32 / 10.0,
+        }
+    }
+
+    /// Puts the Menu Size factor for window `w` in force (`widescreen::MENU_SCALE`, which the menus' drawing and
+    /// pointer read) and returns it.
+    pub(super) fn apply_menu_scale(&self, w: &Window) -> f32 {
+        let k = self.menu_scale(w.physical_height());
+        super::widescreen::MENU_SCALE.store(k.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        k
     }
 
     /// B273: the renderer is the browser build's alone.
@@ -1547,7 +1574,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8);
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0);
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
         let mut s = Settings::parse(&t);
         // B289: an older build kept the lobby prompt's answer in the online mod cache
@@ -1938,10 +1965,10 @@ fn ticker_text(
     let (Ok(win), Ok((mut cnode, mut vis, kids))) = (window.single(), clip.single_mut()) else { return };
     let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
     *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
-    let share = super::widescreen::window_share(&window);
+    let (share, vshare) = super::widescreen::window_menu_shares(&window);
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
     (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
-    let (top, height) = super::widescreen::vplace(404.0, 32.0, super::widescreen::window_aspect(&window), Anchor::Span);
+    let (top, height) = super::widescreen::vplace_in(404.0, 32.0, vshare, Anchor::Span);
     (cnode.top, cnode.height) = (Val::Percent(top), Val::Percent(height));
     // one 640-space unit in logical px
     let vs = super::widescreen::view_size(win);
@@ -2937,8 +2964,8 @@ fn draw(
         ticker.0 = said;
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
-    let scale = window.single().map_or(1.0, |w| super::widescreen::unit_px(w));
-    let share = super::widescreen::window_share(&window);
+    let scale = window.single().map_or(1.0, |w| super::widescreen::unit_px(w)) * super::widescreen::menu_scale();
+    let (share, vshare) = super::widescreen::window_menu_shares(&window);
     for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
@@ -2989,7 +3016,7 @@ fn draw(
             (x, y, w, h) = (x - w * (cursor::PAD - 1.0) / 2.0, y - h * (cursor::PAD - 1.0) / 2.0, w * cursor::PAD, h * cursor::PAD);
         }
         let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
-        let (mut top, mut height) = super::widescreen::vplace(y, h, super::widescreen::window_aspect(&window), quad.anchor);
+        let (mut top, mut height) = super::widescreen::vplace_in(y, h, vshare, quad.anchor);
         if quad.tex == Tex::Qr
             && let Ok(win) = window.single()
         {
@@ -3170,13 +3197,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8);
+        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -3184,10 +3211,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -3197,7 +3224,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]

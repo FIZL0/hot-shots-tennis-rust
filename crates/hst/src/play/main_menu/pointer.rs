@@ -65,17 +65,17 @@ const SLOP_TOUCH: f32 = 12.0;
 /// A drag's step (448-high px).
 const DRAG: f32 = 40.0;
 
-/// The act under `p` (fractions of the window, 0..1) on a window of aspect `aspect`: the rect it's in (the last drawn
+/// The act under `p` (fractions of the window, 0..1) on a window of aspect `aspect` at Menu Size `k`: the rect it's in (the last drawn
 /// on top), else the nearest within `slop`.
-pub(super) fn hit_at(hits: &[Hit], p: Vec2, aspect: f32, slop: f32) -> Option<Act> {
-    let share = widescreen::share(aspect);
+pub(super) fn hit_at(hits: &[Hit], p: Vec2, aspect: f32, k: f32, slop: f32) -> Option<Act> {
+    let (share, vshare) = widescreen::menu_shares(aspect, k);
     let mut best: Option<(f32, Act)> = None;
     for h in hits.iter().rev() {
         let [x, y, w, hh] = h.rect;
         let (left, width) = widescreen::place(x, w, share, h.anchor);
-        let (top, height) = widescreen::vplace(y, hh, aspect, h.anchor);
+        let (top, height) = widescreen::vplace_in(y, hh, vshare, h.anchor);
         // to 640×448 units at the 4:3 screen's scale
-        let (to_x, to_y) = (6.4 / share, 4.48 / widescreen::vshare(aspect));
+        let (to_x, to_y) = (6.4 / share, 4.48 / vshare);
         let (x0, x1) = (left * to_x, (left + width) * to_x);
         let (y0, y1) = (top * to_y, (top + height) * to_y);
         let (px, py) = (p.x * 100.0 * to_x, p.y * 100.0 * to_y);
@@ -238,7 +238,7 @@ pub(in crate::play) fn pointer(
     let off = widescreen::view(size).min;
     let size = widescreen::in_view(size, off).0;
     let aspect = size.x / size.y;
-    let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, slop);
+    let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, widescreen::menu_scale(), slop);
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
     let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_)));
@@ -343,13 +343,13 @@ pub(super) mod tests {
 
     /// The act under the 640×448 point (x, y) on a 4:3 window.
     pub(in crate::play::main_menu) fn act_at(m: &Menu, x: f32, y: f32) -> Option<Act> {
-        hit_at(&hits(m).0, Vec2::new(x / 640.0, y / 448.0), 4.0 / 3.0, SLOP)
+        hit_at(&hits(m).0, Vec2::new(x / 640.0, y / 448.0), 4.0 / 3.0, 1.0, SLOP)
     }
 
     /// A tap at (x, y), or outside: what `pointer` sends `step`.
     fn tap(m: &mut Menu, x: f32, y: f32) -> Vec<Effect> {
         let (h, outside) = hits(m);
-        let a = hit_at(&h, Vec2::new(x / 640.0, y / 448.0), 4.0 / 3.0, SLOP_TOUCH).or(outside).unwrap_or_else(|| panic!("nothing at {x},{y} on {:?}", m.screen));
+        let a = hit_at(&h, Vec2::new(x / 640.0, y / 448.0), 4.0 / 3.0, 1.0, SLOP_TOUCH).or(outside).unwrap_or_else(|| panic!("nothing at {x},{y} on {:?}", m.screen));
         m.point(Dev::Keys, a, true)
     }
 
@@ -436,7 +436,7 @@ pub(super) mod tests {
     fn wide_window_hits() {
         let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let h = hits(&m).0;
-        let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, SLOP);
+        let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, 1.0, SLOP);
         for k in [0, 10] {
             let [x, y, w, hh] = m.grid.cell(k);
             assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(k)));
