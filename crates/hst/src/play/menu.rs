@@ -497,7 +497,7 @@ pub fn plugin(app: &mut App) {
         // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
         .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(Update, (step, draw).chain().before(super::main_menu::pause::Systems))
+        .add_systems(Update, (step.after(super::read_input), draw).chain().before(super::main_menu::pause::Systems))
         // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match
         .add_systems(Startup, super::main_menu::cursor::setup)
         .add_systems(Update, super::main_menu::cursor::tick.after(draw));
@@ -565,6 +565,16 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
 
 /// Reads Start/✕/up/down (and clicks or taps on the pills), steps the menu at 60 Hz and holds the match's fixed clock
 /// while it is open; with its Settings screens up, they have the input.
+/// Presses made in the menu never reach the match: an emote neither (B341: the touch pad's L1/R1 tab Settings).
+/// `step` runs after `read_input`, so the frame that resumes the match drops them too.
+fn spent(pads: &mut Pads) {
+    for s in &mut pads.slots {
+        s.shot = None;
+        s.serve = false;
+        s.emote = None;
+    }
+}
+
 fn step(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
@@ -620,13 +630,6 @@ fn step(
         }
         return;
     }
-    // presses made in the menu never reach the match
-    let spent = |pads: &mut Pads| {
-        for s in &mut pads.slots {
-            s.shot = None;
-            s.serve = false;
-        }
-    };
     if settings.open {
         spent(&mut pads);
         return;
@@ -829,6 +832,16 @@ mod tests {
         let n = TEXTURES.len();
         assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, SEATS, PILL, COURT, UMPIRE], std::array::from_fn(|i| Tex::Own(n + i)));
         assert_eq!(HAND, Tex::Own(n - 1));
+    }
+
+    /// B341: a press latched while paused, an emote included, is spent before the match resumes.
+    #[test]
+    fn paused_presses_are_spent() {
+        let mut pads = Pads::default();
+        pads.slots[1] = super::super::SlotPad { shot: Some(1), serve: true, emote: Some(3), ..default() };
+        spent(&mut pads);
+        let s = &pads.slots[1];
+        assert_eq!((s.shot, s.serve, s.emote), (None, false, None));
     }
 
     #[test]
