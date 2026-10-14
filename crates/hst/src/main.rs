@@ -171,7 +171,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--original" => gfx.original = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             // borderless fullscreen is the default (B96); `--fullscreen` stays for older launch scripts
             "--windowed" => gfx.windowed = true,
             "--fullscreen" => gfx.windowed = false,
@@ -247,6 +247,7 @@ fn main() {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
+    let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
     let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
@@ -261,6 +262,10 @@ fn start(argv: Vec<String>) {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
     let windowed = gfx.windowed;
+    // so does `--merge-meshes` (the browser's `?merge-meshes=off`, B342), over the menu's setting and a match's flags
+    if merge_flag {
+        graphics::MERGE_FORCED.store(1 + gfx.merge_meshes as u8, std::sync::atomic::Ordering::Relaxed);
+    }
     // the menu opens the window as settings.txt's graphics say, so it doesn't start fullscreen and then shrink
     if menu && let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
         for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
@@ -423,6 +428,7 @@ fn load(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
     (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
+    gfx: Option<Res<graphics::Graphics>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
@@ -609,8 +615,8 @@ fn load(
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
-        // B328: the props' unblended parts drawn one mesh per material
-        let mut merger = merge::Merger::new();
+        // B328: the props' unblended parts drawn one mesh per material (B342: while Merge Court Meshes is on)
+        let mut merger = merge::Merger::new(gfx.as_deref().is_some_and(graphics::Graphics::merged));
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {

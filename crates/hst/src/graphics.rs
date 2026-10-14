@@ -40,7 +40,13 @@ pub struct Graphics {
     /// B343: identical court creatures share their meshes and materials (each one's shade rides in its draw's
     /// `MeshTag`, `shade::Shared`) so the renderer can draw them as one instanced draw. Not part of a preset.
     pub batch_crowd: bool,
+    /// B342: the court props' unblended parts drawn as one mesh per material (`merge.rs`) instead of one per part.
+    /// Off by default: no gain measured (Bevy already batches the copies' draws). Not part of a preset.
+    pub merge_meshes: bool,
 }
+
+/// `--merge-meshes` given at launch: 0 not given, 1 off, 2 on; it holds over `Graphics::merge_meshes` (B342).
+pub static MERGE_FORCED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
 pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
@@ -49,25 +55,26 @@ pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
-/// The speed-up switches' defaults (`Graphics::fewer_shadows`, `batch_crowd`).
+/// The speed-up switches' defaults (`Graphics::fewer_shadows`, `batch_crowd`, `merge_meshes`).
 const FEWER_SHADOWS: bool = true;
 const BATCH_CROWD: bool = false;
+const MERGE_MESHES: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
     /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -80,6 +87,7 @@ impl Graphics {
             "original" => self.original = v != "off",
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
+            "merge_meshes" | "merge-meshes" => self.merge_meshes = v != "off",
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             "fewer_shadows" | "fewer-shadows" => self.fewer_shadows = v != "off",
             "batch_crowd" | "batch-crowd" => self.batch_crowd = v != "off",
@@ -93,7 +101,7 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
@@ -102,7 +110,8 @@ impl Graphics {
             on(self.windowed),
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
             on(self.fewer_shadows),
-            on(self.batch_crowd)
+            on(self.batch_crowd),
+            on(self.merge_meshes)
         )
     }
 
@@ -124,7 +133,7 @@ impl Graphics {
             _ => f.push("--show-fps-detailed".into()),
         }
         // the speed-up switches only when not at their defaults (also the browser's `?fewer-shadows=off` etc.)
-        for (flag, on, default) in [("--fewer-shadows", self.fewer_shadows, FEWER_SHADOWS), ("--batch-crowd", self.batch_crowd, BATCH_CROWD)] {
+        for (flag, on, default) in [("--fewer-shadows", self.fewer_shadows, FEWER_SHADOWS), ("--batch-crowd", self.batch_crowd, BATCH_CROWD), ("--merge-meshes", self.merge_meshes, MERGE_MESHES)] {
             if on != default {
                 f.extend([flag.into(), if on { "on" } else { "off" }.into()]);
             }
@@ -138,7 +147,15 @@ impl Graphics {
 
     /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, the speed-up switches).
     pub fn keep(&self, p: Graphics) -> Graphics {
-        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, ..p }
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, merge_meshes: self.merge_meshes, ..p }
+    }
+
+    /// Whether court meshes are drawn merged (`merge.rs`): the setting, unless `--merge-meshes` said otherwise.
+    pub fn merged(&self) -> bool {
+        match MERGE_FORCED.load(Ordering::Relaxed) {
+            0 => self.merge_meshes,
+            f => f == 2,
+        }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -412,7 +429,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -422,6 +439,8 @@ mod tests {
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
         assert_eq!(Graphics { windowed: true, ..default() }.preset(), "Default");
         assert_eq!(Graphics { show_fps: 1, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { merge_meshes: true, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { merge_meshes: true, ..default() }.flags().last().unwrap(), "on");
         assert_eq!(Graphics { show_fps: 1, ..default() }.flags().last().unwrap(), "--show-fps");
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "100", "--shadows", "low", "--msaa", "4x"]);

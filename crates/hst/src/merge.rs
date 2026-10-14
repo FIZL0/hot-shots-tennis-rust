@@ -10,7 +10,8 @@
 //! - Hiding: each plant keeps its entity (and `Visibility`) for `net_hide`/`HideInside`; when one is hidden or shown
 //!   again, the groups holding its parts are rebuilt without it (`rebuild`, only on a change).
 //!
-//! `HST_NO_MERGE=1` spawns every part on its own as before (for comparing).
+//! Off by default (B342: no gain measured, GPU draws the same as Bevy already instances the copies): Settings →
+//! Display → Merge Court Meshes, `--merge-meshes on`, `?merge-meshes=on`. `HST_NO_MERGE=1` forces it off.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
@@ -54,8 +55,9 @@ pub struct Merger {
 }
 
 impl Merger {
-    pub fn new() -> Self {
-        Merger { off: std::env::var_os("HST_NO_MERGE").is_some(), ..default() }
+    /// `on`: Settings → Display → Merge Court Meshes (`Graphics::merged`, B342).
+    pub fn new(on: bool) -> Self {
+        Merger { off: !on || std::env::var_os("HST_NO_MERGE").is_some(), ..default() }
     }
 
     /// Spawns the plant at `t` under `root` with the parts that can't be merged as children (as the court's own

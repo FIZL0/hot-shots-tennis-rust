@@ -43,9 +43,10 @@ pub(super) enum Opt {
     Renderer,
     /// B118: the on-screen pad buzzes on each press.
     Vibration,
-    /// B343: the speed-up switches (`Graphics::fewer_shadows`, `batch_crowd`).
+    /// B343: the speed-up switches (`Graphics::fewer_shadows`, `batch_crowd`; B342: `merge_meshes`).
     FewerShadows,
     BatchCrowd,
+    MergeMeshes,
 }
 use Opt::*;
 
@@ -69,7 +70,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -128,6 +129,7 @@ fn label(o: Opt) -> &'static str {
         Vibration => "Vibration",
         FewerShadows => "Fewer Shadows",
         BatchCrowd => "Batch Crowd",
+        MergeMeshes => "Merge Court Meshes",
     }
 }
 
@@ -144,6 +146,7 @@ fn about(o: Opt) -> &'static str {
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
+        MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
         Upscaled => "Use the upscaled textures in mods/texture-replacements.",
@@ -251,6 +254,7 @@ impl Settings {
             Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
             BatchCrowd => g.batch_crowd = !g.batch_crowd,
+            MergeMeshes => g.merge_meshes = !g.merge_meshes,
         }
     }
 
@@ -271,6 +275,7 @@ impl Settings {
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
+            MergeMeshes => on_off(g.merge_meshes),
             Upscaled => on_off(self.0[0]),
             Volume(i) => self.2 .0[i].to_string(),
             MenuMusic => on_off(self.0[1]),
