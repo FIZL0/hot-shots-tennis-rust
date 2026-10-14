@@ -120,6 +120,8 @@ const BUTTON_ROW: f32 = 42.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Item {
     Seat(usize),
+    /// the ✕ beside a computer player's seat: takes it off.
+    Remove(usize),
     Button(&'static str),
     /// B201: the host's singles / doubles switch (the title).
     Mode,
@@ -146,14 +148,16 @@ impl Menu {
 
     /// Player `p`'s pick as it travels.
     fn wire(&self, p: usize) -> Pick {
-        match self.pick(p) {
+        let random = self.players[p].random;
+        let pick = match self.pick(p) {
             // a mod: its donor, and its gameplay data for every peer
             (super::Who::Mod(i), costume) => {
                 let m = &self.mods[i];
-                Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new) }
+                Pick { char: m.donor, costume, r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new), random: false }
             }
             (super::Who::Disc(c), costume) => Pick::disc(c, costume),
-        }
+        };
+        Pick { random, ..pick }
     }
 
     /// B216: online, the player `dev` drives on the select (it sits in seat `p`): the host's first device drives the
@@ -211,7 +215,8 @@ impl Menu {
         if self.net.hosting {
             // B201: every seat but its own: a guest's (take out), an open one (add a computer player), a computer's
             let seats = room.map_or(vec![], |r| (0..r.seats.len()).filter(|&i| r.seats[i].as_ref().is_none_or(|s| s.peer != "host")).collect());
-            seats.into_iter().map(Item::Seat).chain(HOST_BUTTONS.map(Item::Button)).chain([Item::Mode]).collect()
+            let bot = |i: usize| room.is_some_and(|r| r.seats[i].as_ref().is_some_and(|s| !s.human()));
+            seats.into_iter().flat_map(|i| [Some(Item::Seat(i)), bot(i).then_some(Item::Remove(i))]).flatten().chain(HOST_BUTTONS.map(Item::Button)).chain([Item::Mode]).collect()
         } else if room.is_some() && !self.net.started && !self.net.pick_next {
             GUEST_BUTTONS.map(Item::Button).to_vec()
         } else {
@@ -226,6 +231,7 @@ impl Menu {
             .iter()
             .map(|it| match it {
                 Item::Seat(i) => [60.0, 140.0 + 44.0 * *i as f32, 340.0, 38.0],
+                Item::Remove(i) => [402.0, 145.0 + 44.0 * *i as f32, 28.0, 28.0],
                 Item::Mode => [32.0, 72.0, 300.0, 38.0],
                 Item::Button(_) => {
                     b += 1;
@@ -257,6 +263,7 @@ impl Menu {
             Item::Seat(i) if self.guest(i).is_some() => "Take Out",
             Item::Seat(_) if self.lobby_bot() => "Pick",
             Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add Computer"),
+            Item::Remove(_) => "Remove",
             Item::Mode => "Singles / Doubles",
             Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
             Item::Button("Start" | "Ready") if self.counting() > 0 => "Cancel",
@@ -329,6 +336,8 @@ impl Menu {
                 Some(None) => pl.costume = 0,
                 None => {}
             }
+            // a computer added on Random stays on it when the host picks for it again
+            pl.random = !s.human() && s.pick.random;
             self.players[i] = pl;
         }
     }
@@ -376,7 +385,7 @@ impl Menu {
             .collect();
         let n = open.len() as u64;
         let (c, ks) = open.get((seed % n.max(1)) as usize)?;
-        Some(Pick::disc(*c, ks[(seed / n % ks.len() as u64) as usize]))
+        Some(Pick { random: true, ..Pick::disc(*c, ks[(seed / n % ks.len() as u64) as usize]) })
     }
 
     /// B66: the disc characters and costumes the lobby's other seats hold (the readied ones), as `bot_pick` skips them.
@@ -567,10 +576,9 @@ impl Menu {
                     _ => None,
                 };
                 let to = pill_step(&self.lobby_rects(), self.sel, k);
-                // B201: on a computer's seat ←→ change its character and L1 / R1 its costume (and so its level)
-                if let Some(i) = bot.filter(|_| k.left || k.right || k.prev || k.next) {
-                    let (dc, dk) = ((k.right as isize - k.left as isize), (k.next as isize - k.prev as isize));
-                    match self.bot_pick(i, dc, dk) {
+                // B201: on a computer's seat L1 / R1 change its costume (and so its level); ←→ reach its ✕
+                if let Some(i) = bot.filter(|_| k.prev || k.next) {
+                    match self.bot_pick(i, 0, k.next as isize - k.prev as isize) {
                         Some(p) => out.extend([Sound(0), Effect::Online(Fx::Net(Cmd::Bot(i, Some(p))))]),
                         None => out.push(Sound(1)),
                     }
@@ -582,6 +590,10 @@ impl Menu {
                 let item = items.get(self.sel).copied().unwrap_or(Item::Button("Leave"));
                 if let Some(i) = bot.filter(|_| k.card) {
                     // B216: △ takes the computer player off its seat
+                    out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
+                } else if let (true, Item::Remove(i)) = (k.ok, item) {
+                    // back onto the seat, as the ✕ goes with the computer
+                    self.sel -= 1;
                     out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
                 } else if k.back || (k.ok && item == Item::Button("Leave")) {
                     out.push(Effect::Online(Fx::Net(Cmd::Leave)));
@@ -993,6 +1005,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         }
                         // B195: still choosing, the seat held
                         _ if live.is_some() || r.picking.contains(&s.peer) => d.centred("Picking...", x0 + 110.0, y + 9.0, 20.0, DIM),
+                        // B217: who Random drew stays hidden until the match
+                        _ if s.pick.random => d.centred("Random", x0 + 110.0, y + 9.0, 20.0, WHITE),
                         // the name from the select's name sheet (a mod's in text)
                         Some(w) => d.fitted(&w.name, x0 + 110.0, y + 9.0, 20.0, 100.0),
                         None => d.q(super::NAMES, [23.0, 24.0 * s.pick.char as f32, 105.0, 24.0], [x0 + 58.0, y + 7.0, 105.0, 24.0], WHITE, 128.0),
@@ -1010,16 +1024,22 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         (name_of(r, &s.peer), "Waiting", DIM)
                     };
                     d.fitted(&who, x0 + 200.0, y + 9.0, 20.0, 96.0);
-                    d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
-                    // B216: the host's ✕ that takes a computer player off (△ on its row)
-                    if let Some(k) = items.iter().position(|it| *it == Item::Seat(i)).filter(|_| !s.human()) {
-                        d.pill_at([x0 + w + 2.0, y + 5.0, 28.0, 28.0], [super::INK, WHITE, [120.0, 30.0, 30.0]], 128.0);
+                    if s.human() {
+                        d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
+                    } else {
+                        // a level's name can be long: shrunk to the pill's end, in white to read on the seat's colour
+                        d.fitted(state, x0 + 318.0, y + 10.0, 18.0, 120.0);
+                    }
+                    // B216: the host's ✕ that takes a computer player off (△ on its row, or ✕ on it)
+                    if let Some(k) = items.iter().position(|it| *it == Item::Remove(i)) {
+                        let ring = if m.sel == k { GOLD } else { WHITE };
+                        d.pill_at([x0 + w + 2.0, y + 5.0, 28.0, 28.0], [super::INK, ring, [120.0, 30.0, 30.0]], 128.0);
                         d.centred("X", x0 + w + 16.0, y + 9.0, 20.0, WHITE);
-                        d.hit([x0 + w + 2.0, y + 5.0, 28.0, 28.0], Act::Row(k, Press { card: true, ..default() }));
+                        d.hit([x0 + w + 2.0, y + 5.0, 28.0, 28.0], Act::Row(k, OK));
                     }
                 }
                 // the host's hand on the guest seat it would take out
-                if let (None, Some(Item::Seat(i))) = (m.net.ask, items.get(m.sel)) {
+                if let (None, Some(Item::Seat(i) | Item::Remove(i))) = (m.net.ask, items.get(m.sel)) {
                     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x0 - 60.0 + hand_x, 140.0 + 44.0 * *i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
                 }
             }
@@ -1087,9 +1107,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 // B201: the host's open and computer seats, and the singles / doubles switch
                 Some(Item::Seat(i)) if m.guest(*i).is_none() && room.is_some_and(|r| r.seats.get(*i).is_some_and(|s| s.is_some())) => {
-                    "OK: pick its character, costume and level on the select (left / right, L1 / R1 here). Triangle: remove it.".into()
+                    "OK: pick its character, costume and level on the select (L1 / R1: costume here). Right or Triangle: remove it.".into()
                 }
                 Some(Item::Seat(i)) if m.guest(*i).is_none() => "OK: add a computer player to this seat and pick its character, costume and level. Left empty, Start fills it.".into(),
+                Some(Item::Remove(_)) => "OK: take this computer player off its seat.".into(),
                 Some(Item::Mode) => "OK: switch between singles and doubles (everyone readies again).".into(),
                 Some(Item::Seat(i)) => format!("OK takes {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 Some(Item::Button("Start")) => "Start a 4 second countdown, ready or not: open seats are played by the computer.".into(),
@@ -1749,15 +1770,18 @@ mod tests {
         m.sel = 2;
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert_eq!((p.char, p.costume, m.sel), (6, 1, 2), "the host's costume 0 of the same character taken");
-        let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { right: true, ..default() })) else { panic!() };
-        assert_ne!(p.char, 6);
-        assert_eq!(net(&m.step(dev, Press { card: true, ..default() })), Some(Cmd::Bot(3, None)));
+        // ←→ don't change its character: → reaches its ✕, OK on that takes it off
+        assert_eq!(net(&m.step(dev, Press { right: true, ..default() })), None);
+        assert_eq!(m.items()[m.sel], Item::Remove(3));
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Bot(3, None)));
+        assert_eq!((m.items()[m.sel], net(&m.step(dev, Press { card: true, ..default() }))), (Item::Seat(3), Some(Cmd::Bot(3, None))));
         // singles only once the taken seats fit
         m.sel = m.items().iter().position(|it| *it == Item::Mode).unwrap();
         assert_eq!(net(&m.step(dev, ok)), None);
         assert!(m.net.status.starts_with("Singles"), "{}", m.net.status);
         m.net.room.as_mut().unwrap().seats[2] = None;
         m.net.room.as_mut().unwrap().seats[3] = None;
+        m.sel = m.items().iter().position(|it| *it == Item::Mode).unwrap();
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Doubles(false)));
     }
 

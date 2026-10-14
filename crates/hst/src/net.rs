@@ -153,11 +153,14 @@ pub struct Pick {
     pub costume: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#mod: Option<Box<crate::mods_online::Wire>>,
+    /// Drawn by the Random card: the lobby shows "Random", not who it drew (the mod still streams as any).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub random: bool,
 }
 
 impl Pick {
     pub fn disc(char: usize, costume: usize) -> Pick {
-        Pick { char, costume, r#mod: None }
+        Pick { char, costume, r#mod: None, random: false }
     }
 }
 

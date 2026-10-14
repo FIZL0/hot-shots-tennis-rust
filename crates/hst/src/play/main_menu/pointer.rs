@@ -94,12 +94,7 @@ impl Menu {
         let was = match self.screen {
             Screen::Main if self.add.ask.is_some() => self.add.ask.replace(i),
             Screen::Mode => Some(std::mem::replace(&mut self.doubles, i == 1) as usize),
-            Screen::Mods => {
-                if i != self.sel {
-                    self.mods_choose();
-                }
-                Some(std::mem::replace(&mut self.sel, i))
-            }
+            Screen::Mods => Some(std::mem::replace(self.mods_cursor(), i)),
             Screen::Lobby => {
                 if i != self.sel {
                     self.net.status.clear();
@@ -327,7 +322,7 @@ pub(super) mod tests {
     }
 
     /// The screen's hits as drawn, and what a press outside them does.
-    fn hits(m: &Menu) -> (Vec<Hit>, Option<Act>) {
+    pub(in crate::play::main_menu) fn hits(m: &Menu) -> (Vec<Hit>, Option<Act>) {
         let t = text();
         let d = drawn(m, &t, &Bindings::default(), &[], 0.0);
         (d.hits, d.outside)

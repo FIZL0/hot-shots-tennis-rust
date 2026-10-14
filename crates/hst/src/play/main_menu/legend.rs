@@ -255,12 +255,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
         Screen::Lobby => {
-            let (ud, lr) = m.pill_axes();
+            moves(&mut v, m.pill_axes());
             if m.lobby_bot() {
-                moves(&mut v, (ud, false));
-                v.extend([(Act::LeftRight, "Character"), (Act::Costume, "Costume"), (Act::Card, "Remove")]);
-            } else {
-                moves(&mut v, (ud, lr));
+                v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
             }
             if let Some(ok) = m.lobby_ok() {
                 v.push((Act::Ok, ok));

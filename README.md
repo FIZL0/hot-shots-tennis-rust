@@ -124,10 +124,10 @@ Face repo [`FIZL0/opentennis-mods`](https://huggingface.co/FIZL0/opentennis-mods
   download streams to disk with a progress line, is checked against its sha256 and the same mod checks as a local
   install, then appears in the character select. The listing is cached for an hour; *Refresh* fetches it again.
 - **Upload my mod** sends one of your installed mods to the store as a pull request. Sign in once with your own
-  Hugging Face *Write* token: *Sign in* opens the token page, copy the token, press *Sign in* again (the game reads
+  Hugging Face *Write* token: *Sign in* → *Open token page*, copy the token, then *Paste token* (the game reads
   it from the clipboard; in the browser, paste it into the page with Ctrl+V first). The token is kept in
-  `hf-token.txt` beside the ISO (browser: local storage); press *Sign in* twice to sign out. Then press a mod twice
-  to upload it: the game packs it, adds its preview and stats, and reports the pull request's URL. Other players see
+  `hf-token.txt` beside the ISO (browser: local storage); *Signed in* → *Sign out* signs out. Then a mod → *Upload*
+  uploads it: the game packs it, adds its preview and stats, and reports the pull request's URL. Other players see
   it in Browse straight away as *Not reviewed* until it is merged.
 
 ## Online play
