@@ -498,7 +498,7 @@ impl Menu {
                 if k.ok && self.sel < n {
                     // the lobby's kind and room: this machine's controllers next, then join it
                     let l = &self.net.list[self.sel];
-                    (self.net.paste, self.doubles, self.net.fit) = (l.id.clone(), l.doubles, l.open());
+                    (self.net.paste, self.doubles, self.net.fit) = (l.dial().into(), l.doubles, l.open());
                     self.seats[1..].fill(None);
                     self.go(Screen::Assign, out);
                 } else if k.ok && self.sel == n {
@@ -1383,7 +1383,7 @@ pub(super) fn sample(m: &mut Menu) {
         m.net.entry = "K7".into();
     }
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
-    m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0 }).collect();
+    m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0, code: String::new() }).collect();
     // B236: the loading, empty and failed states
     match menu.as_str() {
         "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
@@ -1859,7 +1859,7 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobbies);
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Find))), "{fx:?}");
         // a singles and a doubles lobby side by side
-        let l = |id: &str, doubles, taken| Listing { id: id.into(), name: id.into(), doubles, court: 1, taken, seats: if doubles { 4 } else { 2 }, time: 0 };
+        let l = |id: &str, doubles, taken| Listing { id: id.into(), name: id.into(), doubles, court: 1, taken, seats: if doubles { 4 } else { 2 }, time: 0, code: String::new() };
         m.heard(Event::Found(vec![l("S", false, 1), l("D", true, 2)]));
         assert_eq!(m.net.list.len(), 2);
         for (sel, id, doubles, fit) in [(0, "S", false, 1), (1, "D", true, 2)] {
