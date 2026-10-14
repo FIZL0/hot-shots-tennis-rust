@@ -506,7 +506,8 @@ fn trigger_engine_matches_the_game() {
                             *it.next().unwrap_or(&0)
                         });
                     }
-                    let want = npc::Trigger { counter: t.counter, ..state(b, 0) };
+                    // the model's weight lives off the object: not recorded
+                    let want = npc::Trigger { counter: t.counter, weight: t.weight, ..state(b, 0) };
                     (t == want && j + used <= out.len()).then_some((t, used, steps))
                 })
             });
@@ -623,7 +624,8 @@ fn startled_creatures_match_the_game() {
                         for _ in 0..steps {
                             heard.extend(t.step_near(&row, &mut seen, &mut || *it.next().unwrap_or(&0)));
                         }
-                        let want = npc::Trigger { struck: t.struck, path: t.path.clone(), anchor: t.anchor, ..after.clone() };
+                        // the model's weight lives off the object: not recorded
+                        let want = npc::Trigger { struck: t.struck, path: t.path.clone(), anchor: t.anchor, weight: t.weight, ..after.clone() };
                         (t == want).then_some((t, seen, heard))
                     })
                 });

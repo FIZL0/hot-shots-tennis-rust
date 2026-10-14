@@ -989,8 +989,8 @@ pub struct Trigger {
     /// and pause left: a replay's start puts them back ([`Trigger::serve_setup`]); resets keep them.
     pub kept_done: bool,
     pub kept: (M4, i16, i16, i16, i16),
-    /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others (it scales the
-    /// model's sub-meshes when drawn).
+    /// The startled types' model weight, set at their reset: 1 for type 32, 0 for the others; then `speed` at each
+    /// change of it. Drawn as the model's alpha (it fades in and out at a path's ends).
     pub weight: f32,
     /// Type 38's animation restarted on its other clip (a ball faster than its row's `hit_kmh`); kept through resets.
     pub alt: bool,
@@ -1467,8 +1467,9 @@ impl Trigger {
                 if !changed && self.speed != 1.0 {
                     (speed, changed) = (1.0, true);
                 }
+                // the model's weight (its alpha) follows each change
                 if changed {
-                    self.speed = speed;
+                    (self.speed, self.weight) = (speed, speed);
                 }
             }
             if self.animating {
@@ -2018,6 +2019,36 @@ mod tests {
         let mut c = super::Cheers::new(1);
         c.add([-2.0; 3], 0);
         assert_eq!(c.shown()[0].pos, [-2.0; 3]);
+    }
+
+    /// Court 8's crocodile (type 31, its row): unseen (weight 0) through its startle at home, then its weight follows
+    /// its fade in over the first 0.5 m and out over the last before it is gone (B280).
+    #[test]
+    fn startled_weight_fades() {
+        let row = hst_data::exe::TriggerRow {
+            start: 0, mode: 5, stage: 0, exact: true, reverse_roll: false, reset_wait: (0, 0.0), end_wait: (0, 0.0), retarget: false,
+            speed: 0.06, steer: 0.1, every: (0, 0.0), pause: (0, 0.0), snap: -1, wake: false, repeat: (0, 0.0), orient: 1,
+            near: [0.5, 0.5], stages: 0, idle: (0, 0.0), sound: 34, rearm: false, hit_kmh: 0.0,
+        };
+        let home = [[-0.2822, 0.0, 0.9594, 0.0], [0.0, 1.0, 0.0, 0.0], [-0.9594, 0.0, -0.2822, 0.0], [5.0, 0.0, 18.0, 1.0]]; // facing its walk
+        let path = vec![home[3], [-12.0, 0.0, 13.0, 1.0]];
+        let mut t = super::Trigger { ty: 31, anchor: home[3], home, world: home, path, radii: vec![0.0; 2], len: 60.0, ..Default::default() };
+        let mut roll = || 0x8000_0000u32;
+        t.reset(&row, &mut roll);
+        let mut near = super::Near { pos: vec![[5.5, 0.0, 18.0, 1.0]], ..Default::default() };
+        let mut seen = Vec::new();
+        while t.active && seen.len() < 2000 {
+            t.step_near(&row, &mut near, &mut roll);
+            near.pos.clear();
+            assert!(t.weight == t.speed || t.weight == 0.0 && t.speed == 1.0);
+            seen.push(t.weight);
+        }
+        assert!(!t.active);
+        let (rise, full) = (seen.iter().position(|&w| w != 0.0).unwrap(), seen.iter().position(|&w| w == 1.0).unwrap());
+        assert!(rise > 30 && seen[rise..=full].windows(2).all(|w| w[0] < w[1]), "{seen:?}");
+        // out over the last 0.5 m (its last step overshoots the end a little)
+        let last = seen.len() - 1;
+        assert!(seen[last - 8..last].windows(2).all(|w| w[0] > w[1]) && seen[last] < 0.1, "{seen:?}");
     }
 
     /// Recorded at a doubles match's start (court 4): the four walkers register marks 0–3 (delays 0, 3, 6, 9)
