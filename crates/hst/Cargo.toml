@@ -43,7 +43,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 ggrs = { version = "0.13", features = ["wasm-bindgen"] }
-web-sys = { version = "0.3", features = ["Blob", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "Storage", "UrlSearchParams", "Window", "MessageEvent", "RtcPeerConnection", "RtcPeerConnectionState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelState", "RtcDataChannelType", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "RtcIceGatheringState"] }
+web-sys = { version = "0.3", features = ["Blob", "Document", "DomRect", "Element", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "Storage", "UrlSearchParams", "Window", "MessageEvent", "RtcPeerConnection", "RtcPeerConnectionState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelState", "RtcDataChannelType", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "RtcIceGatheringState"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # the window icon (`main.rs` window_icon), on bevy's own winit

@@ -474,6 +474,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B340** Pause menu: Circle (back) doesn't close the pause menu and resume the match (user 2026-10-14); it should, like Start → play/main_menu/pause.rs · play/menu.rs
 - [x] **B346** Character select: the default cursor still starts on Ashley; and for a CPU seat the next choice still moves to the next character when it should stay on the same one (in a different costume, already implemented) (user 2026-10-14) → play/main_menu.rs · play/main_menu/previews.rs
 - [x] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
+- [x] **B333** Mobile: the page sometimes opens cropped with an empty bar ("chin") along one edge; rotating to portrait and back to landscape fixes it (user 2026-10-14). Likely the canvas sized from a stale viewport on load (iOS Safari's dynamic toolbar / visualViewport not settled): resize on visualViewport resize/orientationchange and after load, use dvh/100% instead of vh — web/index.html, web/touch.js, crates/hst/src/web.rs
 
 
 ### Shots
