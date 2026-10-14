@@ -35,7 +35,7 @@ pub(crate) enum Act {
     Back,
     /// △: the attribute card.
     Card,
-    /// L1 / R1: the costume.
+    /// L1 / R1: the costume; the Settings tab (B294).
     Costume,
     /// □ / Tab: the disc or custom page.
     Page,
@@ -139,25 +139,19 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
-        Screen::Settings => v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < options::HUB.len() { "Open" } else { "Back" }), (Act::Back, "Back")]),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
-            v.push((Act::UpDown, "Move"));
-            match options::page(m.screen).get(s) {
-                Some(&o) if !options::locked(o) => {
-                    v.push((Act::LeftRight, "Change"));
-                    if options::ok_changes(o) {
-                        v.push((Act::Ok, "Change"));
-                    }
+            v.push((Act::UpDown, "Option"));
+            if let Some(&o) = options::page(m.screen).get(s).filter(|o| !options::locked(**o)) {
+                v.push((Act::LeftRight, "Change"));
+                if options::ok_changes(o) {
+                    v.push((Act::Ok, "Change"));
                 }
-                Some(_) => {}
-                None => v.push((Act::Ok, "Back")),
             }
-            v.push((Act::Back, "Back"));
+            v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Controls if m.rebinding.is_some() => v.extend([(Act::Type, "Press the new key or button"), (Act::Cancel, "Cancel")]),
         Screen::Controls => {
-            let n = controls::action_names().count();
-            v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Rebind" } else { "Back" }), (Act::Back, "Back")]);
+            v.extend([(Act::UpDown, "Action"), (Act::Ok, "Rebind"), (Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
         Screen::Assign if host => {
@@ -746,7 +740,7 @@ mod tests {
             m
         };
         let mut starts: Vec<(Menu, Dev)> = vec![(Menu::default(), Dev::Keys)];
-        for s in [Screen::Settings, Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
+        for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
             starts.push((base(s), Dev::Keys));
         }
         let mut m = base(Screen::Main);

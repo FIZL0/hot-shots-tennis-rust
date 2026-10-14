@@ -1,9 +1,11 @@
-//! B290: the Settings screen's pages. Settings is a list of pages (Display, Graphics, Sound, Controls, Online & Mods);
-//! every page but Controls is a column of options, each a row with its value (or volume slider) between ◀ ▶ arrows,
-//! and Back.
+//! B290: the Settings screen's pages (Display, Graphics, Sound, Controls, Online & Mods); every page but Controls is a
+//! column of options, each a row with its value (or volume slider) between ◀ ▶ arrows.
+//! B294 (user's mockup, 2026-10-14): the pages are tabs across the title band (L1 / R1), the rows compact in a list
+//! panel, a side panel with the chosen option's name, description and choices; no description bar (the legend
+//! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{Draw, Effect, GOLD, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, pointer};
+use super::{BROWN, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -34,12 +36,12 @@ pub(super) enum Opt {
 }
 use Opt::*;
 
-/// The Settings screen's rows (Back after them) and the pages they open.
-pub(super) const HUB: [(&str, Screen); 5] =
+/// The Settings tabs, in order, and the pages they open.
+pub(super) const TABS: [(&str, Screen); 5] =
     [("Display", Screen::Display), ("Graphics", Screen::Graphics), ("Sound", Screen::Sound), ("Controls", Screen::Controls), ("Online & Mods", Screen::ModSettings)];
-/// The Settings screen's row for `page`, where Back from it lands.
-pub(super) fn hub_row(page: Screen) -> usize {
-    HUB.iter().position(|(_, s)| *s == page).unwrap_or(0)
+/// `page`'s tab.
+pub(super) fn tab(page: Screen) -> usize {
+    TABS.iter().position(|(_, s)| *s == page).unwrap_or(0)
 }
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row.
@@ -121,6 +123,27 @@ fn about(o: Opt) -> &'static str {
     }
 }
 
+fn fps_name(fps: u32) -> String {
+    if fps == 0 { "Uncapped".into() } else { format!("{fps} fps") }
+}
+
+/// B294: every value `o` can take, in order, as [`Settings::value`] words it (the side panel's choices).
+fn choices(o: Opt) -> Vec<String> {
+    let words = |v: &[&str]| v.iter().map(|w| w.to_string()).collect();
+    match o {
+        _ if locked(o) => words(&["Off"]),
+        Display => words(&["Fullscreen", "Window"]),
+        Aspect => words(&ASPECTS),
+        Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
+        Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
+        Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
+        Fps => FPS.map(fps_name).to_vec(),
+        Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
+        OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
+        _ => words(&["Off", "On"]),
+    }
+}
+
 fn on_off(on: bool) -> String {
     if on { "On" } else { "Off" }.into()
 }
@@ -180,8 +203,7 @@ impl Settings {
             Scale => format!("{} %", g.scale),
             Shadows => ["Off", "Low", "High"][g.shadows as usize].into(),
             Msaa => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
-            Fps if g.fps == 0 => "Uncapped".into(),
-            Fps => format!("{} fps", g.fps),
+            Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
             Upscaled => on_off(self.0[0]),
@@ -195,86 +217,203 @@ impl Settings {
 }
 
 impl Menu {
-    /// The Settings screen: ✕ opens a page, Back (or ○) returns to the main menu.
-    pub(super) fn step_hub(&mut self, k: Press, out: &mut Vec<Effect>) {
-        if k.ok && let Some((_, s)) = HUB.get(self.sel) {
-            self.go(*s, out);
-        } else if k.ok || k.back {
+    /// An options page: ◀ ▶ (and ✕, but on a slider) change the row's option and save; L1 / R1 and ○ as [`Self::step_tabs`].
+    pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
+        if let Some(&o) = page(self.screen).get(self.sel)
+            && !locked(o)
+            && (k.left || k.right || (k.ok && ok_changes(o)))
+        {
+            self.settings.step(o, if k.left { -1 } else { 1 });
+            out.extend([Effect::Sound(0), Effect::SaveSettings]);
+            return;
+        }
+        self.step_tabs(k, out);
+    }
+
+    /// Any Settings page: L1 / R1 open the tab before / after it (wrapping), ○ goes back to the main menu's
+    /// Settings row (closes the pause overlay).
+    pub(super) fn step_tabs(&mut self, k: Press, out: &mut Vec<Effect>) {
+        if k.prev || k.next {
+            let n = TABS.len();
+            self.go(TABS[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
+        } else if k.back {
             self.sel = 2;
             self.screen = Screen::Main;
             out.push(Effect::Sound(1));
         }
     }
+}
 
-    /// An options page: ◀ ▶ (and ✕, but on a slider) change the row's option and save; Back returns to Settings.
-    pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
-        let opts = page(self.screen);
-        if let Some(&o) = opts.get(self.sel) {
-            if !locked(o) && (k.left || k.right || (k.ok && ok_changes(o))) {
-                self.settings.step(o, if k.left { -1 } else { 1 });
-                out.extend([Effect::Sound(0), Effect::SaveSettings]);
-                return;
+/// Words' purple-grey (the mockup's #7a4a5c): footnotes and headings.
+const MUTED: [f32; 3] = [61.0, 37.0, 46.0];
+
+/// B294: the Settings pages' list (of `n` rows) and side panel on the view `g` fits (the side panel under the list in a portrait
+/// window), from under the tabs down to the legend strip.
+pub(super) fn boxes(g: &Grid, n: usize) -> ([f32; 4], [f32; 4]) {
+    let [l, y, w, _] = g.strip;
+    let bottom = g.detail[1] + g.detail[3] + 32.0;
+    if g.detail[1] > g.roster[1] {
+        // portrait: the list as tall as the page's `n` rows want, the panel the rest
+        let h = 30.0 + 32.0 * n as f32;
+        ([l, y, w, h], [l, y + h + 8.0, w, bottom - y - h - 8.0])
+    } else {
+        let dw = 220.0f32.min(w * 0.4);
+        ([l, y, w - dw - 8.0, bottom - y], [l + w - dw, y, dw, bottom - y])
+    }
+}
+
+/// Row `i` of `n` in the list `list`: 36 apart, closer when they'd run past the footnote.
+pub(super) fn row(list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
+    let pitch = ((list[3] - 30.0) / n as f32).min(36.0);
+    [list[0] + 8.0, list[1] + 8.0 + pitch * i as f32, list[2] - 16.0, pitch - 4.0]
+}
+
+/// The tabs across the title band, right of the title's tab (shrunk to fit a narrow window); a tap opens one.
+fn tabs(d: &mut Draw, m: &Menu) {
+    // right of the title's tab (`Draw::frame`), to the window's right edge (the strip spans the view less 12 a side)
+    let x0 = d.width(super::TITLES[1].0, 30.0) + 88.0;
+    let room = m.grid.strip[2] + 24.0 - x0 - 8.0;
+    let ws: Vec<f32> = TABS.iter().map(|(l, _)| d.width(l, 15.0) + 22.0).collect();
+    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (TABS.len() - 1) as f32)).min(1.0);
+    d.anchor = super::super::widescreen::Anchor::Span;
+    let mut x = x0;
+    for (i, ((words, s), w)) in TABS.iter().zip(&ws).enumerate() {
+        let on = *s == m.screen;
+        let b = [x, 3.0, w * k, 24.0];
+        d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
+        d.label(words, x + w * k / 2.0, 7.5, 15.0, (w - 18.0) * k, if on { WHITE } else { BROWN });
+        d.hit(b, pointer::Act::Tab(i));
+        x += (w + 6.0) * k;
+    }
+    d.anchor = super::super::widescreen::Anchor::Centre;
+}
+
+/// `s` broken at spaces to lines `w` wide at `size` from (x, y), `gap` px apart; the y under its last line.
+fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, gap: f32, rgb: [f32; 3]) -> f32 {
+    let mut lines: Vec<String> = Vec::new();
+    for word in s.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if d.width(&format!("{l} {word}"), size) <= w => *l = format!("{l} {word}"),
+            _ => lines.push(word.into()),
+        }
+    }
+    for (i, l) in lines.iter().enumerate() {
+        d.text(l, x, y + gap * i as f32, size, rgb);
+    }
+    y + gap * lines.len() as f32
+}
+
+/// The frame, tabs, list panel and side panel every page shares; the list box.
+fn chrome(d: &mut Draw, m: &Menu, n: usize) -> ([f32; 4], [f32; 4]) {
+    d.frame(1, 6);
+    tabs(d, m);
+    let (list, side) = boxes(&m.grid, n);
+    for b in [list, side] {
+        d.box3(b, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+    }
+    (list, side)
+}
+
+/// The chosen row's highlight and the hand beside it.
+fn chosen(d: &mut Draw, r: [f32; 4], hand_x: f32) {
+    d.box3(r, 10.0, [Some(INK), None, Some(CELL_ON)], 128.0);
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 16.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
+}
+
+/// The side panel: a name, what it does, its choices as chips (the current one dark) and a footnote.
+fn side_panel(d: &mut Draw, side: [f32; 4], name: &str, about: &str, heading: &str, chips: &[String], now: Option<&str>, note: &str) {
+    let [x, y, w, _] = side;
+    let (x, w) = (x + 14.0, w - 28.0);
+    let mut y = para(d, name, x, y + 12.0, w, 22.0, 26.0, BROWN) + 4.0;
+    y = para(d, about, x, y, w, 14.0, 18.0, BROWN) + 10.0;
+    if !chips.is_empty() {
+        d.text(heading, x, y, 12.0, MUTED);
+        y += 18.0;
+        let mut cx = x;
+        for c in chips {
+            let cw = d.width(c, 13.0) + 16.0;
+            if cx + cw > x + w && cx > x {
+                (cx, y) = (x, y + 24.0);
             }
-        } else if k.ok {
-            return self.back_to_hub(out);
+            let on = now == Some(c.as_str());
+            d.pill_at([cx, y, cw, 20.0], [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
+            d.centred(c, cx + cw / 2.0, y + 3.5, 13.0, if on { WHITE } else { BROWN });
+            cx += cw + 5.0;
         }
-        if k.back {
-            self.back_to_hub(out);
-        }
+        y += 32.0;
     }
-
-    /// Back from a page to its row on the Settings screen.
-    pub(super) fn back_to_hub(&mut self, out: &mut Vec<Effect>) {
-        self.sel = hub_row(self.screen);
-        self.screen = Screen::Settings;
-        out.push(Effect::Sound(1));
-    }
+    para(d, note, x, y, w, 12.0, 16.0, MUTED);
 }
 
-/// The rows' first y and pitch (640×448): Graphics' nine rows, Back included, end above the description bar (y 404).
-pub(super) const TOP: f32 = 46.0;
-pub(super) const PITCH: f32 = 39.5;
-
-/// The Settings screen.
-pub(super) fn hub_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
-    d.frame(1, 6);
-    let labels: Vec<String> = HUB.iter().map(|(l, _)| l.to_string()).chain(["Back".into()]).collect();
-    d.rows_at(&labels, m.sel, 170.0, TOP, 300.0, hand_x, PITCH);
-    d.info(match m.sel {
-        0 => "Fullscreen or a window, the aspect ratio and the frame-rate counter.",
-        1 => "Quality preset, resolution, shadows, anti-aliasing, frame limit, vsync and textures.",
-        2 => "The volumes, and music in the menus and in a match.",
-        3 => "Change the keys and buttons (controls.txt).",
-        4 => "What the mod store and online lobbies download.",
-        _ => "Back to the main menu.",
-    });
-}
-
-/// An options page: the rows on the left, each value between its arrows on the right (a tap on the value's left half
-/// steps back, on its right half on, B221), a slider as a gold bar.
+/// An options page: the rows in the list, each label on the left and its value between ◀ ▶ on the right (a tap on
+/// the value's left half steps back, on its right half on, B221), a volume as a bar beside its number; the chosen
+/// one's name, description and choices in the side panel.
 pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
-    d.frame(1, 6);
     let opts = page(m.screen);
-    let labels: Vec<String> = opts.iter().map(|o| label(*o).to_string()).chain(["Back".into()]).collect();
-    d.rows_locked(&labels, m.sel, 120.0, TOP, 300.0, hand_x, PITCH, |i| opts.get(i).is_some_and(|o| locked(*o)));
+    let (list, side) = chrome(d, m, opts.len());
     for (i, &o) in opts.iter().enumerate() {
-        let y = TOP + PITCH * i as f32;
-        let rgb = if locked(o) { [50.0; 3] } else if i == m.sel { WHITE } else { [40.0; 3] };
+        let r @ [x, y, w, h] = row(list, opts.len(), i);
+        let on = i == m.sel;
+        if on {
+            chosen(d, r, hand_x);
+        }
+        let ink = if locked(o) { [80.0; 3] } else { BROWN };
+        let size = (h * 0.6).min(18.0);
+        let vw = 130.0f32.min(w * 0.36);
+        let vx = x + w - vw - 4.0;
+        d.text(label(o), x + 14.0, y + (h - size) / 2.0, size, ink);
+        d.hit([x, y, vx - x, h], pointer::Act::Row(i, pointer::OK));
+        d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
+        let value = m.settings.value(o);
+        d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, if value == "Off" { MUTED } else { ink });
         if let Volume(s) = o {
-            d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 160.0, 10.0], [15.0; 3], 128.0);
-            d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 16.0 * m.settings.2 .0[s] as f32, 10.0], if i == m.sel { GOLD } else { [100.0, 90.0, 40.0] }, 128.0);
-        } else {
-            d.centred(&m.settings.value(o), 527.0, y + 7.0, 24.0, rgb);
+            let sw = 110.0f32.min(w * 0.22);
+            let bar = [vx - sw - 12.0, y + h / 2.0 - 3.0, sw, 6.0];
+            d.box3(bar, 3.0, [None, None, Some([118.0, 105.0, 110.0])], 128.0);
+            d.box3([bar[0], bar[1], (sw * m.settings.2 .0[s] as f32 / 10.0).max(6.0), 6.0], 3.0, [None, None, Some([109.0, 58.0, 72.0])], 128.0);
         }
         if locked(o) {
             continue;
         }
-        d.text("<", 424.0, y + 7.0, 24.0, rgb);
-        d.text(">", 614.0, y + 7.0, 24.0, rgb);
-        d.hit([420.0, y, 100.0, PITCH], pointer::Act::Row(i, Press { left: true, ..default() }));
-        d.hit([520.0, y, 115.0, PITCH], pointer::Act::Row(i, Press { right: true, ..default() }));
+        d.text("<", vx + 8.0, y + (h - size) / 2.0, size, BROWN);
+        d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, BROWN);
+        d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
+        d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
     }
-    d.info(opts.get(m.sel).map_or("Back to the settings.", |o| about(*o)));
+    d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
+    if let Some(&o) = opts.get(m.sel) {
+        let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
+        let note = if preset { "Set by Preset. Changing it switches Preset to Custom." } else { "" };
+        let now = m.settings.value(o);
+        side_panel(d, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
+    }
+}
+
+/// The Controls page: each action and its keys and buttons (✕ rebinds: the next key or button pressed); the chosen
+/// one's bindings in the side panel.
+pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings, hand_x: f32) {
+    let names: Vec<String> = controls::action_names().map(|n| n[..1].to_uppercase() + &n[1..].replace('_', " ")).collect();
+    let (list, side) = chrome(d, m, names.len());
+    let waiting = m.rebinding.is_some();
+    for (i, n) in names.iter().enumerate() {
+        let r @ [x, y, w, h] = row(list, names.len(), i);
+        let on = i == m.sel;
+        if on {
+            chosen(d, r, hand_x);
+        }
+        let size = (h * 0.6).min(18.0);
+        d.text(n, x + 14.0, y + (h - size) / 2.0, size, BROWN);
+        let keys = if on && waiting { "press a key or button...".to_string() } else { bind.names(i).join("  ") };
+        let vw = w * 0.6;
+        d.box3([x + w - vw - 4.0, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
+        d.label(&keys, x + w - vw / 2.0 - 4.0, y + (h - size * 0.85) / 2.0, size * 0.85, vw - 16.0, if on && waiting { MUTED } else { BROWN });
+        d.hit(r, pointer::Act::Row(i, pointer::OK));
+    }
+    d.text("Saved to controls.txt", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
+    if let Some(n) = names.get(m.sel) {
+        let about = if waiting { "Press the new key or button for it (Escape cancels). A key replaces its keys, a button its buttons." } else { "Choose it to rebind it: the next key or button you press." };
+        side_panel(d, side, n, about, "Bound to", &bind.names(m.sel), None, "");
+    }
 }
 
 #[cfg(test)]
@@ -288,25 +427,22 @@ mod tests {
         p
     }
 
-    /// Every page: ↓ walks each row to Back and wraps (changing nothing), every row ends above the description bar,
-    /// ◀ ▶ on each option change it and save (◀ undoing ▶ on a cycle), Back lands on the page's Settings row.
+    /// Every tab: ✕ on the main menu's Settings opens the first, R1 walks them in order and wraps, L1 back; ↓ walks each
+    /// page's rows and wraps (changing nothing); ◀ ▶ on each option change it and save (◀ undoing ▶ on a cycle), each
+    /// value it takes one of its side panel's choices; ○ lands on the main menu's Settings row.
     #[test]
     fn every_page() {
-        for (row, (_, s)) in HUB.iter().enumerate() {
-            let mut m = Menu { screen: Screen::Settings, sel: row, ..default() };
-            m.step(Dev::Keys, press(|k| &mut k.ok));
-            assert_eq!((m.screen, m.sel), (*s, 0));
-            if *s == Screen::Controls {
-                continue;
-            }
-            let n = page(*s).len() + 1;
-            assert!(TOP + PITCH * (n - 1) as f32 + 38.0 <= 404.0, "{s:?}");
+        let mut m = Menu { sel: 2, ..default() };
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        for (_, s) in TABS {
+            assert_eq!((m.screen, m.sel), (s, 0));
+            let n = if s == Screen::Controls { controls::action_names().count() } else { page(s).len() };
             for want in (1..n).chain([0]) {
                 m.step(Dev::Keys, press(|k| &mut k.down));
                 assert_eq!(m.sel, want);
             }
             assert_eq!(m.settings, Settings::default());
-            for (i, &o) in page(*s).iter().enumerate() {
+            for (i, &o) in page(s).iter().enumerate() {
                 m.sel = i;
                 let was = m.settings;
                 let fx = m.step(Dev::Keys, press(|k| &mut k.right));
@@ -319,15 +455,42 @@ mod tests {
                     m.step(Dev::Keys, press(|k| &mut k.left));
                     assert_eq!(m.settings, was, "{o:?}");
                 }
+                for _ in 0..12 {
+                    assert!(choices(o).contains(&m.settings.value(o)), "{o:?} {}", m.settings.value(o));
+                    m.settings.step(o, -1);
+                }
                 m.settings = was;
             }
-            m.step(Dev::Keys, press(|k| &mut k.back));
-            assert_eq!((m.screen, m.sel), (Screen::Settings, row));
+            m.sel = 0;
+            m.step(Dev::Keys, press(|k| &mut k.next));
         }
-        // Back on Settings: the main menu, on its Settings row
-        let mut m = Menu { screen: Screen::Settings, sel: HUB.len(), ..default() };
-        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!(m.screen, TABS[0].1);
+        m.step(Dev::Keys, press(|k| &mut k.prev));
+        assert_eq!(m.screen, TABS[4].1);
+        m.step(Dev::Keys, press(|k| &mut k.back));
         assert_eq!((m.screen, m.sel), (Screen::Main, 2));
+    }
+
+    /// B294: at any aspect every page's rows sit in its list over the footnote, the side panel has room, and the
+    /// busiest page draws within the pause overlay's quad pool.
+    #[test]
+    fn pages_fit() {
+        let t = super::super::pointer::tests::text_with_mods(0);
+        for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 5.0 / 4.0, 9.0 / 16.0, 0.4] {
+            let grid = Grid::fit(a);
+            for (_, s) in TABS {
+                let n = if s == Screen::Controls { controls::action_names().count() } else { page(s).len() };
+                let (list, side) = boxes(&grid, n);
+                assert!(side[2] >= 150.0 && side[3] >= 150.0 && list[0] + list[2] <= side[0] + side[2], "{a}: {list:?} {side:?}");
+                let r = row(list, n, n - 1);
+                assert!(r[1] + r[3] <= list[1] + list[3] - 24.0 && r[3] >= 20.0, "{a} {s:?}");
+                for sel in 0..n {
+                    let m = Menu { screen: s, sel, grid, ..default() };
+                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0.0).out.len();
+                    assert!(q < super::super::pause::POOL_HERE, "{a} {s:?} {sel}: {q} quads");
+                }
+            }
+        }
     }
 
     /// B235: the sliders clamp to 0..=10 and the volumes round-trip settings.txt.

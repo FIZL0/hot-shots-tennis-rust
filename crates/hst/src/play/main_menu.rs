@@ -307,8 +307,7 @@ enum Screen {
     /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
     /// switch, measured per screen).
     Main,
-    /// B290: the list of pages, and the option pages (`options.rs`).
-    Settings,
+    /// B290/B294: the Settings tabs (`options.rs`).
     Display,
     Graphics,
     /// B235: the volume sliders.
@@ -798,31 +797,26 @@ impl Menu {
                             out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
                         }
-                        2 => self.go(Screen::Settings, &mut out),
+                        2 => self.go(Screen::Display, &mut out),
                         3 => self.mods_open(&mut out),
                         _ => out.push(Quit),
                     }
                 }
             }
-            Screen::Settings => {
-                rows(options::HUB.len() + 1, &mut self.sel, &mut out);
-                self.step_hub(k, &mut out);
-            }
             Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
-                rows(options::page(self.screen).len() + 1, &mut self.sel, &mut out);
+                rows(options::page(self.screen).len(), &mut self.sel, &mut out);
                 self.step_page(k, &mut out);
             }
             Screen::Controls => {
                 if self.rebinding.is_some() {
                     return out;
                 }
-                let n = controls::action_names().count();
-                rows(n + 1, &mut self.sel, &mut out);
-                if k.ok && self.sel < n {
+                rows(controls::action_names().count(), &mut self.sel, &mut out);
+                if k.ok {
                     self.rebinding = Some(self.sel);
                     out.push(Sound(2));
-                } else if (k.ok && self.sel == n) || k.back {
-                    self.back_to_hub(&mut out);
+                } else {
+                    self.step_tabs(k, &mut out);
                 }
             }
             Screen::Mode if host == Some(dev) => {
@@ -1479,8 +1473,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
-        "settings" => Screen::Settings,
-        "display" => Screen::Display,
+        "settings" | "display" => Screen::Display,
         "graphics" => Screen::Graphics,
         "sound" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
@@ -1568,7 +1561,7 @@ const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
 const TITLES: [(&str, [f32; 3]); 6] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
-    ("Options", [110.0, 65.0, 75.0]),
+    ("Settings", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
     ("Character Selection", [102.0, 70.0, 40.0]),
     ("Confirm Settings", [55.0, 80.0, 42.0]),
@@ -1891,25 +1884,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.info(&info);
             mods_screen::ask_layout(&mut d, m, hand_x);
         }
-        Screen::Settings => options::hub_layout(&mut d, m, hand_x),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => options::page_layout(&mut d, m, hand_x),
-        Screen::Controls => {
-            d.frame(1, 6);
-            let names: Vec<_> = controls::action_names().collect();
-            for (i, n) in names.iter().chain(&["back"]).enumerate() {
-                let y = 62.0 + 21.0 * i as f32;
-                let on = i == m.sel;
-                let rgb = if on { WHITE } else { [40.0; 3] };
-                d.text(&n.replace('_', " "), 120.0, y, 19.0, rgb);
-                d.hit([120.0, y, 500.0, 21.0], pointer::Act::Row(i, pointer::OK));
-                if i < names.len() {
-                    let s = if on && m.rebinding.is_some() { "press a key or button...".to_string() } else { bind.names(i).join("  ") };
-                    d.text(&s, 300.0, y, 19.0, if on && m.rebinding.is_some() { [128.0, 110.0, 40.0] } else { rgb });
-                }
-            }
-            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [56.0 + hand_x, 56.0 + 21.0 * m.sel as f32, 64.0, 32.0], WHITE, 128.0);
-            d.info(if m.rebinding.is_some() { "Press the new key or button (Escape cancels)." } else { "Choose an action to rebind." });
-        }
+        Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
         Screen::Mode => {
             d.frame(2, 5);
             // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
@@ -2724,7 +2700,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Settings | Screen::Display | Screen::Graphics | Screen::Sound | Screen::Controls | Screen::ModSettings => Some(0),
+            Screen::Main | Screen::Display | Screen::Graphics | Screen::Sound | Screen::Controls | Screen::ModSettings => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
@@ -2825,7 +2801,7 @@ mod tests {
 
     #[test]
     fn bgm_per_screen() {
-        let t = [Screen::Main, Screen::Settings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
+        let t = [Screen::Main, Screen::Display, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
         assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
     }
 

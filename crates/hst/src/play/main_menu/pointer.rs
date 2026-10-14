@@ -31,6 +31,8 @@ pub(super) enum Act {
     Press(Press),
     /// B238: a seat's ✕: a tap takes its device off it.
     Drop(usize),
+    /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
+    Tab(usize),
 }
 
 /// ✕.
@@ -165,6 +167,8 @@ impl Menu {
             Act::Pick(_) => {}
             Act::Drop(p) if tap && self.drop_seat(p) => out.push(Effect::Sound(1)),
             Act::Drop(_) => {}
+            Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
+            Act::Tab(_) => {}
         }
         out
     }
@@ -398,21 +402,24 @@ pub(super) mod tests {
         assert_eq!(m.point(Dev::Keys, a, false), [Effect::Sound(0)]);
         assert_eq!((m.screen, m.sel), (Screen::Main, 2));
         m.point(Dev::Keys, a, true);
-        assert_eq!(m.screen, Screen::Settings);
-        // Settings → Graphics → its first value's arrows
-        use super::super::options::{Opt, PITCH, TOP};
-        tap(&mut m, 270.0, TOP + PITCH + 19.0);
+        assert_eq!(m.screen, Screen::Display);
+        // B294: the Graphics tab, then its Anti-aliasing value's arrows
+        use super::super::options::{Opt, boxes, row, page};
+        let tab = hits(&m).0.into_iter().find(|h| h.act == Act::Tab(1)).unwrap().rect;
+        tap(&mut m, tab[0] + tab[2] / 2.0, tab[1] + tab[3] / 2.0);
         assert_eq!(m.screen, Screen::Graphics);
         let v = m.settings.value(Opt::Msaa);
-        let y = TOP + PITCH * 3.0 + 19.0;
-        tap(&mut m, 600.0, y);
+        let n = page(Screen::Graphics).len();
+        let [x, y, w, h] = row(boxes(&m.grid, n).0, n, 3);
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
         assert_eq!(m.sel, 3);
         assert_ne!(m.settings.value(Opt::Msaa), v);
-        tap(&mut m, 440.0, y);
+        tap(&mut m, x + w - 120.0, y + h / 2.0);
         assert_eq!(m.settings.value(Opt::Msaa), v);
         // Controls: a row starts a rebind
         let mut c = Menu { screen: Screen::Controls, ..default() };
-        tap(&mut c, 200.0, 62.0 + 21.0 * 2.0 + 10.0);
+        let [x, y, _, h] = super::super::options::row(boxes(&c.grid, 13).0, 13, 2);
+        tap(&mut c, x + 40.0, y + h / 2.0);
         assert_eq!(c.rebinding, Some(2));
     }
 
