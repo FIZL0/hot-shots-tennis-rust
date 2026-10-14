@@ -76,7 +76,7 @@ const SETTLE: f32 = 0.3;
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(inspect::plugin)
         .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .init_resource::<Gone>().init_resource::<Pending>().init_resource::<Voices>()
+        .init_resource::<Gone>().init_resource::<Pending>().init_resource::<Voices>().init_resource::<ModCard>()
         .add_systems(Startup, start_loader)
         .add_systems(PostStartup, (hover_all, start_baker))
         .add_systems(FixedUpdate, character::tick)
@@ -128,6 +128,9 @@ struct Loader {
     /// The cache folder, and per mod its folder name and newest file time (its PNGs' stamp).
     dir: PathBuf,
     stamps: HashMap<usize, String>,
+    /// B229: mods the Mods page asked a picture of that aren't in the select's roster (installed since the game
+    /// started): `Who::Mod(menu.mods.len() + n)`.
+    extra: Vec<Mod>,
 }
 
 impl Loader {
@@ -176,11 +179,16 @@ impl Loader {
         match w {
             Who::Disc(c) => Some(self.dir.join(format!("d{c:02}-{k}.png"))),
             Who::Mod(i) => {
-                let m = menu.mods.get(i)?;
+                let m = menu.mods.get(i).or_else(|| self.extra.get(i.checked_sub(menu.mods.len())?))?;
                 let stamp = self.stamps.entry(i).or_insert_with(|| stamp(m));
                 Some(mod_png(&self.dir, m, k, stamp))
             }
         }
+    }
+
+    /// Mod index `i` (the roster's, else [`Loader::extra`]'s).
+    fn mod_at<'a>(&'a self, menu: &'a Menu, i: usize) -> Option<&'a Mod> {
+        menu.mods.get(i).or_else(|| self.extra.get(i.checked_sub(menu.mods.len())?))
     }
 
     /// Drop the least recently used characters over the budget, except `keep`'s.
@@ -229,6 +237,14 @@ pub(crate) fn face(iso: &str, m: Option<&Mod>, c: usize, k: usize) -> Option<Ima
         None => dir.join(format!("d{c:02}-{k}.png")),
     };
     face_from(&path, 40)
+}
+
+/// B229: the Mods page's hovered mod without a picture (`want`), whose costume 0 the baker draws on that page as the
+/// select would (the same cache: `card` reads it); `baked` counts finished drawings, so the page reads again.
+#[derive(Resource, Default)]
+pub(super) struct ModCard {
+    pub want: Option<Mod>,
+    pub baked: u32,
 }
 
 /// M17: mod `m`'s select picture (costume 0) as PNG bytes, once the select has baked it (or it ships its own).
@@ -369,6 +385,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
         png_order: VecDeque::new(),
         dir,
         stamps: HashMap::new(),
+        extra: Vec::new(),
     });
 }
 
@@ -652,12 +669,21 @@ fn bake(
     compiling: Option<Res<crate::mode::Compiling>>,
     rigs: Query<&crate::character::Rig>,
     globals: Query<&GlobalTransform>,
+    mut card: ResMut<ModCard>,
 ) {
-    if menu.screen != Screen::Chars && baker.job.is_none() {
+    // B229: on the Mods page only its hovered mod's costume 0 draws
+    let asked = card.want.as_ref().filter(|_| menu.screen == Screen::Mods).map(|m| {
+        let i = menu.mods.iter().position(|o| o.dir == m.dir).or_else(|| loader.extra.iter().position(|o| o.dir == m.dir).map(|n| menu.mods.len() + n));
+        (Who::Mod(i.unwrap_or_else(|| {
+            loader.extra.push(m.clone());
+            menu.mods.len() + loader.extra.len() - 1
+        })), 0)
+    });
+    if menu.screen != Screen::Chars && asked.is_none() && baker.job.is_none() {
         return;
     }
     // a hovered card without a PNG jumps the queue
-    let now: Vec<Key> = (0..menu.players()).map(|p| menu.pick(p)).collect();
+    let now: Vec<Key> = if menu.screen == Screen::Chars { (0..menu.players()).map(|p| menu.pick(p)).collect() } else { asked.into_iter().collect() };
     for k in &now {
         if !hovered.contains(k) && !baker.failed.contains(k) {
             baker.queue.push(*k);
@@ -684,6 +710,7 @@ fn bake(
                 } else {
                     baker.failed.insert(job.key);
                 }
+                card.baked += 1;
                 baker.job = None;
                 baker.jobs += 1;
             }
@@ -728,6 +755,9 @@ fn bake(
     }
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
+        if menu.screen != Screen::Chars && Some(key) != asked {
+            return;
+        }
         let path = loader.path(key, &menu);
         // B160: a baked one without its face close-up (a run quit between the two) is drawn again
         let done = |p: &PathBuf| cached(p) && (!p.starts_with(&loader.dir) || cached(&face_path(p)));
@@ -736,10 +766,10 @@ fn bake(
             continue;
         };
         let m = match key.0 {
-            Who::Mod(i) => Some(&menu.mods[i]),
+            Who::Mod(i) => loader.mod_at(&menu, i).cloned(),
             Who::Disc(_) => None,
         };
-        loader.want(key, m);
+        loader.want(key, m.as_ref());
         match loader.model(key).cloned() {
             None => return,
             Some(None) => {
@@ -750,7 +780,7 @@ fn bake(
                 baker.queue.pop();
                 let c = match key.0 {
                     Who::Disc(c) => c,
-                    Who::Mod(i) => menu.mods[i].donor,
+                    Who::Mod(i) => loader.mod_at(&menu, i).map_or(0, |m| m.donor),
                 };
                 let image = inspect::target(&mut images, BAKE);
                 images.get_mut(&image).unwrap().texture_descriptor.usage |= TextureUsages::COPY_SRC;
