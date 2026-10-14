@@ -579,12 +579,13 @@ def main():
                     log(f'weekly usage {weekly()}%: below the cap again, starting tasks')
                     cap_logged = False
                 procs[n], running[n] = start(n, task), task
-        if not done and not procs and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
+        merging = [t for t in merging if t.is_alive()]
+        # merges still queued (they wait on each other and the master's reports): RUN DONE only once they're in
+        if not done and not procs and not merging and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
             done = True
             if 'master' in panes() or queued():
                 report('RUN DONE')
             log(f'parallel run done; tried tonight: {", ".join(sorted(tried)) or "none"}')
-        merging = [t for t in merging if t.is_alive()]
         flush()
         if done and not queued() and not merging:
             return  # the master stays up for the next run
