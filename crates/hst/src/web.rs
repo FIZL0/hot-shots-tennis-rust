@@ -198,11 +198,12 @@ pub fn save_file(name: &str, text: &str) -> io::Result<String> {
     Ok(format!("{name} (downloaded; also in the console)"))
 }
 
-/// Join by Code's code entry shown or gone: the page puts a tap target up that opens the phone's keyboard.
-pub fn code_entry(on: bool) {
+/// Join by Code's code entry shown or gone: the page puts a tap target up that opens the phone's keyboard (B323: a
+/// URL keyboard, no capitals, for the relay's URL).
+pub fn code_entry(on: bool, url: bool) {
     let f = js_sys::Reflect::get(&web_sys::window().unwrap(), &"hstCodeEntry".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok());
     if let Some(f) = f {
-        let _ = f.call1(&JsValue::NULL, &on.into());
+        let _ = f.call2(&JsValue::NULL, &on.into(), &url.into());
     }
 }
 

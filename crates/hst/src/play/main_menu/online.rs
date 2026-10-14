@@ -59,6 +59,10 @@ pub struct View {
     pub prepared: bool,
     /// The code screen types this player's name, not a code.
     pub naming: bool,
+    /// B323: the Relay row on its last choice, Custom... (OK types a relay URL); the code screen types that URL
+    /// (`naming` too: Save, not Join).
+    pub custom: bool,
+    pub url: bool,
     /// Find: the chosen lobby's open seats, the most players this machine may bring (0: no lobby chosen).
     pub fit: usize,
     /// Joining or opening a lobby: its first line-up opens the character select (B195).
@@ -96,6 +100,9 @@ const KEYS: usize = SYMBOLS.len();
 /// The name's keys on the same grid, and its longest.
 const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
+/// B323: a relay URL's keys (the rest typed or pasted), and its longest.
+const URL_KEYS: &[u8; 40] = b"abcdefghijklmnopqrstuvwxyz0123456789.-:/";
+const URL_MAX: usize = 120;
 const ROWS: [&str; 7] = ["Quickplay", "Host", "Find", "Join by Code", "Name", "Relay", "Back"];
 /// The Online screen as the home screen (`home::columns`): Quickplay, Host, Find and Join by Code as its list's
 /// pills, Name and Relay small under them; the preview card right of them (no store column: the card centred).
@@ -221,7 +228,13 @@ impl Menu {
 
     /// The code screen's keys: the short code's symbols, or the name's.
     pub(super) fn keys(&self) -> &'static [u8] {
-        if self.net.naming { NAME_KEYS } else { SYMBOLS }
+        if self.net.url {
+            URL_KEYS
+        } else if self.net.naming {
+            NAME_KEYS
+        } else {
+            SYMBOLS
+        }
     }
 
     /// The lobby's selectable things: the guests' seats (host), then the buttons.
@@ -658,8 +671,20 @@ impl Menu {
                     self.sel = to;
                     out.push(Sound(0));
                 }
+                // B323: off the Relay row, Custom... is the relay it's on again
+                self.net.custom &= self.sel == 5 && !k.back;
                 let cfg = self.net.cfg.get_or_insert_with(Online::default);
-                if self.sel == 5 && k.ok {
+                if self.sel == 5 && k.ok && self.net.custom {
+                    // B323: type a relay URL (the last one to start from)
+                    (self.net.naming, self.net.url) = (true, true);
+                    self.net.entry = if cfg.relay_url.is_empty() { "https://".into() } else { cfg.relay_url.clone() };
+                    self.net.status.clear();
+                    self.go(Screen::Code, out);
+                } else if self.sel == 5 && k.ok && matches!(cfg.relay, Relay::Own(_)) || self.sel == 5 && k.ok && cfg.relay == Relay::Off && cfg.relay_url.is_empty() {
+                    // B323: the cycle's last choice, for advanced players: their own relay's URL
+                    self.net.custom = true;
+                    out.push(Sound(0));
+                } else if self.sel == 5 && k.ok {
                     cfg.next_relay();
                     (self.net.list, self.net.finding) = (vec![], 0);
                     out.extend([Sound(0), Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
@@ -726,11 +751,25 @@ impl Menu {
                             out.push(Sound(0));
                         }
                         Some(0) => out.push(Sound(if self.net.entry.pop().is_some() { 1 } else { 0 })),
-                        Some(1) if self.net.naming => {
+                        Some(1) if self.net.naming && !self.net.url => {
                             self.net.entry.clear();
                             out.push(Sound(1));
                         }
                         Some(1) => out.push(Effect::Online(Fx::Paste)),
+                        // B323: Save a relay URL that parses: Host, Find and Join use it from now on (the network
+                        // restarts on it), and online.txt keeps it
+                        Some(2) if self.net.url => match crate::net::relay_url(&self.net.entry) {
+                            Ok(url) => {
+                                self.net.cfg.get_or_insert_with(Online::default).set_own(url);
+                                (self.net.list, self.net.finding, self.net.custom) = (vec![], 0, false);
+                                out.extend([Sound(2), Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
+                                self.code_back(out);
+                            }
+                            Err(e) => {
+                                self.net.status = format!("Not a relay URL ({e}): type it as https://your.relay");
+                                out.push(Sound(1));
+                            }
+                        },
                         Some(2) if self.net.naming && !self.net.entry.trim().is_empty() => {
                             self.net.cfg.get_or_insert_with(Online::default).name = self.net.entry.trim().to_string();
                             out.extend([Sound(2), Effect::Online(Fx::SaveCfg)]);
@@ -874,7 +913,13 @@ impl Menu {
     }
 
     fn code_back(&mut self, out: &mut Vec<Effect>) {
-        (self.screen, self.sel) = (Screen::Online, if self.net.naming { 4 } else { 3 });
+        (self.screen, self.sel) = (Screen::Online, if self.net.url { 5 } else if self.net.naming { 4 } else { 3 });
+        // B323: leaving the relay URL unsaved goes on round the cycle, to n0
+        if std::mem::take(&mut self.net.url) && std::mem::take(&mut self.net.custom) {
+            self.net.cfg.get_or_insert_with(Online::default).relay = Relay::N0;
+            (self.net.list, self.net.finding) = (vec![], 0);
+            out.extend([Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
+        }
         self.net.naming = false;
         self.net.status.clear();
         out.push(Effect::Sound(1));
@@ -883,6 +928,13 @@ impl Menu {
     /// A symbol typed into Join by Code (any case; others ignored); the code full: the cursor to Join. Naming: any
     /// character the menu font has, up to `NAME_MAX`.
     pub(super) fn type_char(&mut self, c: char) {
+        if self.net.url {
+            // B323: a URL's characters (no spaces), up to `URL_MAX`
+            if self.net.entry.len() < URL_MAX && c.is_ascii_graphic() {
+                self.net.entry.push(c);
+            }
+            return;
+        }
         if self.net.naming {
             if self.net.entry.chars().count() < NAME_MAX && (c == ' ' || super::FONT.iter().any(|r| r.contains(c))) {
                 self.net.entry.push(c);
@@ -920,7 +972,22 @@ impl Menu {
 
     /// The pasted text as Join by Code's code: on to the picks if it parses.
     pub(super) fn pasted(&mut self, text: Option<String>, out: &mut Vec<Effect>) {
-        if let Some(code) = text.as_deref().and_then(crate::net::code_in) {
+        if self.net.url {
+            // B323: a relay URL replaces what's typed
+            match text.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) => {
+                    self.net.entry.clear();
+                    t.chars().for_each(|c| self.type_char(c));
+                    self.net.status.clear();
+                    self.sel = URL_KEYS.len() + 2;
+                    out.push(Effect::Sound(0));
+                }
+                None => {
+                    self.net.status = "Copy the relay's URL first, then choose Paste.".into();
+                    out.push(Effect::Sound(1));
+                }
+            }
+        } else if let Some(code) = text.as_deref().and_then(crate::net::code_in) {
             self.net.paste = code;
             self.join_code(out);
         } else {
@@ -1135,7 +1202,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             const OFF: [f32; 3] = [70.0, 70.0, 80.0];
             let keys = m.keys();
             let (top, rows) = if m.net.naming { (124.0, keys.len() / 8) } else { (132.0, 4) };
-            if m.net.naming {
+            if m.net.url {
+                // B323: the URL so far in the long pill, shrunk to fit, the cursor after it
+                d.pill(320.0 - 232.0 + 3.0, 72.0, 458.0, [40.0, 40.0, 50.0]);
+                let cursor = if m.net.entry.len() < URL_MAX { "_" } else { "" };
+                d.fitted(&format!("{}{cursor}", m.net.entry), 320.0, 78.0, 26.0, 420.0);
+            } else if m.net.naming {
                 // the name so far in one long pill, the cursor after it
                 d.pill(320.0 - 232.0 + 3.0, 72.0, 458.0, [40.0, 40.0, 50.0]);
                 let w = d.width(&m.net.entry, 26.0);
@@ -1165,16 +1237,24 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     d.centred(&(*c as char).to_string(), x + 26.0, y + 7.0, 24.0, rgb);
                 }
             }
-            let buttons = if m.net.naming { ["Delete", "Clear", "Save", "Back"] } else { ["Delete", "Paste", "Join", "Back"] };
+            let buttons = if m.net.url {
+                ["Delete", "Paste", "Save", "Back"]
+            } else if m.net.naming {
+                ["Delete", "Clear", "Save", "Back"]
+            } else {
+                ["Delete", "Paste", "Join", "Back"]
+            };
             for (i, l) in buttons.iter().enumerate().filter(|_| grid) {
                 let (x, y, on) = (320.0 - 232.0 + 116.0 * i as f32 + 2.0, top + 44.0 * rows as f32 + 8.0, m.sel == keys.len() + i);
-                let dim = i == 2 && if m.net.naming { m.net.entry.trim().is_empty() } else { !is_short(&m.net.entry) };
+                let dim = i == 2 && if m.net.url { crate::net::relay_url(&m.net.entry).is_err() } else if m.net.naming { m.net.entry.trim().is_empty() } else { !is_short(&m.net.entry) };
                 d.pill(x, y, 112.0, if on { ON } else { OFF });
                 d.hit([x, y, 112.0, 38.0], Act::Row(keys.len() + i, OK));
                 d.centred(l, x + 56.0, y + 7.0, 24.0, if on && !dim { WHITE } else if dim { [60.0; 3] } else { [100.0; 3] });
             }
             let info = match () {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
+                _ if !grid && m.net.url => "Tap to type your relay's URL (https://...); Return saves it, Back goes on to n0's relays.".into(),
+                _ if m.net.url => "Your own iroh-relay's URL (https://...): type or Paste it; Save uses it, Back goes on to n0's relays.".into(),
                 _ if !grid && m.net.naming => "Tap to type your name; Return saves it.".into(),
                 _ if !grid => "Tap to type the host's code (or paste their link or code); Return joins.".into(),
                 _ if m.net.naming => "Type your name, or pick each letter; Save keeps it.".into(),
@@ -1401,7 +1481,8 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
     d.anchor = super::Anchor::Centre;
     let cfg = m.net.cfg.clone().unwrap_or_default();
-    let relay = relay_name(&cfg);
+    // B323: the cycle's last choice, until OK types its URL
+    let relay = if m.net.custom { "Custom...".into() } else { relay_name(&cfg) };
     let sel = m.sel.min(5);
     let rects = row_rects(m.grid.extra);
     for (i, &r) in rects.iter().enumerate() {
@@ -1478,8 +1559,9 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
         0 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
         3 => "Type the host's 4-character code, or paste their link or code.".into(),
         4 => format!("Your name on your lobby seats (now {}).", cfg.name),
-        _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
-        _ => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
+        _ if m.net.custom => "Advanced, for self-hosted relays: OK types your own iroh-relay's URL (kept in online.txt). Every player needs the same one.".into(),
+        _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (Custom...) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
+        _ => "Relay for when a direct connection fails: n0's public relays, none, or your own (Custom...).".into(),
     };
     para(d, &words, x + 18.0, y + pic_h + 16.0, w - 36.0, 17.0, 4, INK);
     let open = match m.net.list.len() {
@@ -1740,7 +1822,7 @@ pub(super) fn typing(
     if on != *was {
         *was = on;
         #[cfg(target_arch = "wasm32")]
-        crate::web::code_entry(on);
+        crate::web::code_entry(on, menu.net.url);
     }
     if !on {
         typed.clear();
@@ -1812,9 +1894,16 @@ pub(super) fn sample(m: &mut Menu) {
     m.net.hosting = menu != "lobby-guest";
     // the host's settings as its lobby has them
     (m.court, m.sets, m.games, m.umpire) = (0, 1, 4, 4);
-    m.net.naming = menu == "name";
+    m.net.naming = menu == "name" || menu == "relay-url";
     if m.net.naming {
         m.net.entry = "SUNNY DAY".into();
+    }
+    // B323: the relay URL being typed
+    if menu == "relay-url" {
+        (m.net.url, m.net.custom, m.net.entry) = (true, true, "https://relay.example.org".into());
+    }
+    if menu == "online-custom" {
+        (m.net.custom, m.sel) = (true, 5);
     }
     // B201: ACE-42 on Kaoru's second costume, live; as 2P (Sunny Day) on the shared select, the host ready beside them
     let r = m.net.room.as_mut().unwrap();
@@ -1851,7 +1940,7 @@ pub(super) fn sample(m: &mut Menu) {
     // B236: the loading, empty and failed states
     match menu.as_str() {
         "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
-        "online" => m.net.room = None,
+        "online" | "online-custom" => m.net.room = None,
         "lobby-hosting" | "lobby-joining" | "lobby-failed" => (m.net.room, m.net.short, m.net.go, m.net.pick_next) = (None, String::new(), Some(Go::Code), true),
         _ => {}
     }
@@ -2184,6 +2273,56 @@ mod tests {
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::SaveCfg)), "{fx:?}");
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
+    }
+
+    /// B323: Relay cycles n0, Off, then Custom... (no URL yet); OK there types one, Save keeps a URL that parses (the
+    /// network restarts on it: Host and Join start from this `cfg`) and Own then sits before Custom... in the cycle;
+    /// Back from typing goes on to n0.
+    #[test]
+    fn relay_custom_url() {
+        let (dev, ok) = (super::super::Dev::Keys, Press { ok: true, ..default() });
+        let mut m = Menu { screen: Screen::Online, sel: 5, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        let relay = |m: &Menu| m.net.cfg.as_ref().unwrap().relay.clone();
+        assert!(m.step(dev, ok).contains(&Effect::Online(Fx::Off)));
+        assert_eq!(relay(&m), Relay::Off);
+        let fx = m.step(dev, ok);
+        assert!(m.net.custom && relay(&m) == Relay::Off && !fx.contains(&Effect::Online(Fx::Off)), "Custom... changes nothing yet");
+        // moving off the row: the relay it's on again
+        m.step(dev, Press { up: true, ..default() });
+        assert!(!m.net.custom);
+        m.sel = 5;
+        m.step(dev, ok);
+        m.step(dev, ok);
+        assert_eq!((m.screen, m.net.url, m.net.entry.as_str(), m.keys().len()), (Screen::Code, true, "https://", URL_KEYS.len()));
+        // a bad one isn't saved
+        m.net.entry = "relay.example.org".into();
+        m.sel = URL_KEYS.len() + 2;
+        assert!(!m.step(dev, ok).contains(&Effect::Online(Fx::SaveCfg)) && m.screen == Screen::Code && !m.net.status.is_empty());
+        m.net.entry.clear();
+        m.pasted(Some(" https://Relay.Example.org:8443 \n".into()), &mut vec![]);
+        assert_eq!((m.net.entry.as_str(), m.sel), ("https://Relay.Example.org:8443", URL_KEYS.len() + 2));
+        let fx = m.step(dev, ok);
+        assert!(fx.contains(&Effect::Online(Fx::SaveCfg)) && fx.contains(&Effect::Online(Fx::Off)), "{fx:?}");
+        let url = "https://relay.example.org:8443/";
+        assert_eq!((m.screen, m.sel, m.net.url, m.net.custom, relay(&m)), (Screen::Online, 5, false, false, Relay::Own(url.into())));
+        let cfg = m.net.cfg.clone().unwrap();
+        assert_eq!((Online::parse(&cfg.text()), relay_name(&cfg).as_str()), (cfg.clone(), "relay.example.org:"));
+        // own, Custom...: typing again starts from the saved URL; Back goes on to n0, then Off, own again
+        m.step(dev, ok);
+        assert!(m.net.custom);
+        m.step(dev, ok);
+        assert_eq!(m.net.entry, url);
+        let fx = m.step(dev, Press { back: true, ..default() });
+        assert!(fx.contains(&Effect::Online(Fx::SaveCfg)) && fx.contains(&Effect::Online(Fx::Off)), "{fx:?}");
+        assert_eq!((m.screen, m.sel, m.net.custom, relay(&m), m.net.cfg.as_ref().unwrap().relay_url.as_str()), (Screen::Online, 5, false, Relay::N0, url));
+        for want in [Relay::Off, Relay::Own(url.into())] {
+            m.step(dev, ok);
+            assert_eq!(relay(&m), want);
+        }
+        // the name's entry is untouched by it
+        let mut m = Menu { screen: Screen::Online, sel: 4, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        m.step(dev, ok);
+        assert_eq!((m.net.url, m.keys().len()), (false, NAME_KEYS.len()));
     }
 
     /// B234: a mod pick is named by the mod, not its donor, on the peer that has it and on one that doesn't (the

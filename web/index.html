@@ -435,7 +435,7 @@ async function start() {
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
   // to the game one at a time (a space kept in it so Backspace always fires)
   const keys = document.getElementById('codekeys');
-  window.hstCodeEntry = on => { keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  window.hstCodeEntry = (on, url) => { keys.autocapitalize = url ? 'none' : 'characters'; keys.inputMode = url ? 'url' : 'text'; keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
   // B207: Return / Go finishes the entry (as Save / Join) and closes the keyboard
   keys.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); typed_code('\n'); keys.blur(); } };
   keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };
