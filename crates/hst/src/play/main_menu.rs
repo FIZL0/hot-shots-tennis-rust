@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -441,6 +441,8 @@ struct Player {
     swap: bool,
     /// B217: on the Random card (the ? card until ready; readying draws the pick, `Menu::draw`).
     random: bool,
+    /// B347: △ shows the pick's attribute card in place of its render (kept across characters, as the old select's).
+    card: bool,
 }
 
 impl Player {
@@ -1086,6 +1088,11 @@ impl Menu {
                 let (next_c, prev_c) = (costume_to(false), costume_to(true));
                 if k.hand && !self.players[p].ready {
                     self.players[p].swap = !self.players[p].swap;
+                    out.push(Sound(0));
+                }
+                // B347: △ the attribute card (none for Random, whose pick stays hidden)
+                if k.card && !self.players[p].random {
+                    self.players[p].card = !self.players[p].card;
                     out.push(Sound(0));
                 }
                 if !self.players[p].ready {
@@ -1774,6 +1781,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.players[0].ready = screen.starts_with("coms");
         menu.players[0].random = screen == "chars-random";
+        // B347: 1P's △ card up (`attrs`, `mods-attrs`)
+        menu.players[0].card = screen.ends_with("attrs");
         // B264: 2P's computer readied on Random (`coms-random`, `confirm-random`)
         menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
         menu.players[1].ready |= menu.players[1].random;
@@ -2213,15 +2222,25 @@ fn mode_bar(d: &mut Draw, i: usize, on: bool, [x, y, w, h]: [f32; 4], words: &st
 }
 
 /// The △ card as the original draws it over panel `p`: the title box in the player's colour with the play style,
-/// the five stat labels and each grade's letter (A at grade 5, F at 0).
-fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], x: f32, y: f32) {
+/// the five stat labels and each grade's letter (A at grade 5, F at 0); top-left at `[x, y]`, `s` times the
+/// original's size (144 × 160).
+fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], [x, y]: [f32; 2], s: f32) {
     const TINT: [[f32; 3]; 4] = [[100.0, 39.0, 39.0], [82.0, 63.0, 27.0], [23.0, 69.0, 79.0], [67.0, 72.0, 25.0]];
-    d.q(ATTRS, [0.0, 0.0, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], TINT[p], 128.0);
-    d.q(ATTRS, [0.0, 40.0, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], WHITE, 128.0);
-    d.q(ATTRS, [0.0, 80.0 + 40.0 * style as f32, 144.0, 40.0], [x, y + 2.0, 144.0, 40.0], WHITE, 128.0);
-    d.q(ATTRS, [0.0, 248.0, 112.0, 120.0], [x + 14.0, y + 40.0, 112.0, 120.0], WHITE, 128.0);
+    let at = |dx: f32, dy: f32, w: f32, h: f32| [x + dx * s, y + dy * s, w * s, h * s];
+    d.q(ATTRS, [0.0, 0.0, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), TINT[p], 128.0);
+    d.q(ATTRS, [0.0, 40.0, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), WHITE, 128.0);
+    d.q(ATTRS, [0.0, 80.0 + 40.0 * style as f32, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), WHITE, 128.0);
+    d.q(ATTRS, [0.0, 248.0, 112.0, 120.0], at(14.0, 40.0, 112.0, 120.0), WHITE, 128.0);
     for (k, &g) in grades.iter().enumerate() {
-        d.q(ATTRS, [232.0, 24.0 * (5 - g.min(5)) as f32, 24.0, 24.0], [x + 102.0, y + 40.0 + 24.0 * k as f32, 24.0, 24.0], WHITE, 128.0);
+        d.q(ATTRS, [232.0, 24.0 * (5 - g.min(5)) as f32, 24.0, 24.0], at(102.0, 40.0 + 24.0 * k as f32, 24.0, 24.0), WHITE, 128.0);
+    }
+}
+
+/// B347: a pick's △ grades: the disc character's from the MENU overlay, a mod's from its TParam.csv row (`mod_grades`).
+fn grades_of(text: &Text, w: Who) -> [u8; 5] {
+    match w {
+        Who::Mod(i) => text.mods[i].1,
+        Who::Disc(c) => text.grades[c],
     }
 }
 
@@ -2382,8 +2401,19 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
         if pl.random {
             let fw = rw.min(rh * 92.0 / 68.0);
             d.q(C02, RANDOM_TILE, [x + cw - fw - 8.0, cy + (ch - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
+        } else if pl.card {
+            // B347: the △ card in the render's place, as large as the card's height and half its width allow
+            let s = (rh / 158.0).min(cw * 0.6 / 144.0).min(1.0);
+            attribute_card(d, p, style_of(m.who(p)), &grades_of(text, m.who(p)), [x + cw - 144.0 * s - 6.0, cy + (ch - 158.0 * s) / 2.0 - 2.0 * s], s);
         } else {
             d.q(Tex::Preview(p), [0.0; 4], [x + cw - rw - 4.0, cy + 4.0, rw, rh], WHITE, 128.0);
+        }
+        if !pl.random {
+            // B347: a Stats / Picture pill on the render's foot swaps them, as △
+            let sb = [x + cw - 60.0, cy + ch - 24.0, 54.0, 18.0];
+            d.pill_at(sb, [INK, WHITE, [70.0, 64.0, 80.0]], 128.0);
+            d.label(if pl.card { "Picture" } else { "Stats" }, sb[0] + 27.0, sb[1] + 2.0, 13.0, 46.0, WHITE);
+            d.hit(sb, pointer::press(|k| k.card = true));
         }
         // whose seat: the device, the online player, or a computer with its rank
         let whose = match m.remote(p).filter(|s| s.human() && online) {
@@ -3909,6 +3939,27 @@ mod tests {
         assert!(seen.len() > 20, "the dice should vary: {seen:?}");
         // the pick stays Random for the next match
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
+    }
+
+    /// B347: △ on the select swaps the player's render for the attribute card and back, ready or not, and stays up
+    /// across characters; on Random it does nothing (the pick stays hidden).
+    #[test]
+    fn triangle_shows_the_attribute_card() {
+        // 2P a human too, so a ready 1P's keys stay 1P's (not on to the computer's pick)
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        m.players[0].cursor = 6;
+        let card = press(|p| &mut p.card);
+        assert_eq!(m.step(Dev::Keys, card), [Sound(0)]);
+        assert!(m.players[0].card);
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        assert!(m.players[0].card, "kept on the next character");
+        m.players[0].ready = true;
+        m.step(Dev::Keys, card);
+        assert!(!m.players[0].card);
+        m.players[0] = Player { random: true, ..default() };
+        assert_eq!(m.step(Dev::Keys, card), []);
+        assert!(!m.players[0].card);
     }
 
     /// B64: ✕ on Select Court / Select Umpire opens its picker; B257: ←→↑↓ walk the court grid (three to a row, no wrap),

@@ -476,6 +476,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
 - [x] **B351** Phone defaults: phones run 15–20 fps partly because they start at shadows High. Detect a phone and default to shadows Low (or Off) at render scale 100%; at Low, only the players, ball, net, umpire chair and perhaps big props cast (about 20 casters, down from 182; coordinate with B343's small-prop cut). Mesh merging, crowd draws, sway and culling stay in B342–B345 (user 2026-10-14) → graphics.rs · shadow.rs · main.rs
 - [x] **B341** Paused, tabbing the pause menu with L1/R1 queues emotes that play once the match resumes (user 2026-10-14): match input (play.rs gather → SlotPad.emote, emote::touch/flick) must ignore pad presses while paused and clear any latched emote on resume → play.rs (input gather) · play/emote.rs · play/main_menu/pause.rs
+- [x] **B347** New character select: △ doesn't open the character's stats (user 2026-10-14); wire it like the old select's stats panel → play/main_menu.rs · play.rs character_stats
 
 
 ### Shots

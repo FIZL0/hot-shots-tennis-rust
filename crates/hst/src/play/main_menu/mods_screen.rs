@@ -1298,7 +1298,7 @@ fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
         let ax = pic[0] + pic[2] + 6.0;
         let card = !wide || w >= 560.0;
         match stats.filter(|_| card) {
-            Some((style, grades)) if ph >= 150.0 => attribute_card(d, 2, style, &grades, ax, ty - 4.0),
+            Some((style, grades)) if ph >= 150.0 => attribute_card(d, 2, style, &grades, [ax, ty - 4.0], 1.0),
             Some((style, _)) => super::left(d, super::STYLE_NAMES[style.min(3)], ax, ty + 4.0, 13.0, 144.0, BROWN),
             None => d.text("No stats", ax + 40.0, ty + ph / 2.0 - 7.0, 13.0, super::options::MUTED),
         }

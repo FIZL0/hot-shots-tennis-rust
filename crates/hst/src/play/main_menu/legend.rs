@@ -196,6 +196,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
+            if !me.random {
+                v.push((Act::Card, if me.card { "Picture" } else { "Stats" }));
+            }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
