@@ -508,6 +508,7 @@ struct SlotPad {
     dpad: u16,
     /// Latched shot press (kind), so a press between fixed steps is never lost.
     shot: Option<i32>,
+    /// Latched □ (`controls::Action::Replay`, the wire's SQUARE): the post-point's replay request; serves take `shot`.
     serve: bool,
     /// The right stick flicked fully (0 up, 1 down, 2 left, 3 right) or keys 1–4: latched as `shot`; a new
     /// direction on the wire is an emote (`emote`).
@@ -1698,7 +1699,7 @@ fn read_input(
         .into_iter()
         .find(|(a, _)| bind.key_just_pressed(&keys, *a))
         .map(|(_, kind)| kind);
-    kb.serve = bind.key_just_pressed(&keys, A::Serve);
+    kb.serve = bind.key_just_pressed(&keys, A::Replay);
     kb.emote = emote::KEYS.iter().position(|a| bind.key_pressed(&keys, *a)).map(|d| d as u8);
     if let Some(k) = held.keys() {
         now[k] = kb;
@@ -1726,7 +1727,7 @@ fn read_input(
             .into_iter()
             .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
-        s.serve |= bind.pad_just_pressed(g, A::Serve);
+        s.serve |= bind.pad_just_pressed(g, A::Replay);
         s.emote = s.emote.or(emote::flick(g.right_stick())).or(emote::touch(g, name));
     }
     pads.connected = held.connected();
