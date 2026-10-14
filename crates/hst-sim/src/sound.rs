@@ -287,7 +287,7 @@ pub fn hit_cry(player: usize) -> Play {
 }
 
 /// The last key of each of the player's six key-memory slots (programs 1 and 2's shouts in 0 and 1, the reaction
-/// voices in 3–5).
+/// voices in 3–5; slot 2 is the remaster's emotes', `play::emote`).
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Voice([i32; 6]);
 
