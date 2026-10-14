@@ -146,10 +146,12 @@ if (answer) await new Promise(() => {});
 navigator.serviceWorker?.register('sw.js').catch(() => {});
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
-// (`?webgl2` forces it).
+// (`?webgl2` forces it). Gecko (Firefox, Zen) always gets WebGL2 (B298): its WebGPU (Windows, D3D12) draws skinned
+// and indexed meshes broken (exploded skinning, holes in the court) and WebGL2 draws them right.
 say('Checking graphics…');
 // an adapter request that never answers counts as none (WebGL2) after 5 s
-const adapter = navigator.gpu && Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]);
+const gecko = navigator.userAgent.includes('Firefox');
+const adapter = !gecko && navigator.gpu ? Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]) : null;
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
 if (!webgpu) document.getElementById('gl').hidden = true;
