@@ -154,7 +154,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
             _ => {
                 let rect = [x, y, LIST_W, PILL_H];
                 d.pill_at(rect, [INK, WHITE, if on { ON } else { OFF }], 128.0);
-                d.text(name(r), x + 20.0, y + 7.0, 24.0, if on { INK } else { [100.0; 3] });
+                // B318: squeezed to stay clear of the chosen row's `>` (the words keep their height)
+                fit_text(d, name(r), x + 20.0, y + 7.0, 24.0, LIST_W - 56.0, if on { INK } else { [100.0; 3] });
                 if on {
                     d.text(">", x + LIST_W - 28.0, y + 7.0, 24.0, INK);
                 }
@@ -186,7 +187,7 @@ fn name(r: Row) -> &'static str {
         Row::Online => "Online",
         Row::Mods => "Mods",
         Row::Settings => "Settings",
-        Row::Duo => "1v1 on this phone",
+        Row::Duo => "1v1 Here",
         Row::Quit => "Quit",
     }
 }
