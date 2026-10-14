@@ -340,10 +340,44 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
         }
     }
     out.retain(|g| !g.items.is_empty());
+    if m.screen == Screen::Chars {
+        out = shared(out);
+    }
     if out.len() == 1 {
         out[0].tag = None;
     }
     out
+}
+
+/// B348: the select's players all do the same things, so its legend is one bar for every device instead of a tagged
+/// group per player: each action once, in the select's order, its labels where players differ joined ("Cancel /
+/// Leave").
+fn shared(groups: Vec<Group>) -> Vec<Group> {
+    const ORDER: [Act; 7] = [Act::Page, Act::Move, Act::Costume, Act::Hand, Act::Ok, Act::Back, Act::Chat];
+    let rank = |a: Act| ORDER.iter().position(|&o| o == a).unwrap_or(ORDER.len());
+    if groups.is_empty() {
+        return groups;
+    }
+    let mut one = Group { tag: None, devs: Vec::new(), items: Vec::new() };
+    let mut labels: Vec<Vec<String>> = Vec::new();
+    for g in groups {
+        one.devs.extend(g.devs);
+        for it in g.items {
+            match one.items.iter().position(|x| x.act == it.act) {
+                Some(i) if !labels[i].contains(&it.label) => labels[i].push(it.label),
+                Some(_) => {}
+                None => {
+                    labels.push(vec![it.label.clone()]);
+                    one.items.push(it);
+                }
+            }
+        }
+    }
+    for (it, l) in one.items.iter_mut().zip(labels) {
+        it.label = l.join(" / ");
+    }
+    one.items.sort_by_key(|it| rank(it.act));
+    vec![one]
 }
 
 /// Fills the legend from the main menu (and its Settings screens over a paused match).
@@ -858,5 +892,31 @@ mod tests {
             }
         }
         assert!(checked > 200, "{checked}");
+    }
+
+    /// B348: the select's legend is one untagged bar for every player's device, each action once.
+    #[test]
+    fn select_legend_is_one_shared_bar() {
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        m.players[0].cursor = 6;
+        let bind = Bindings::default();
+        for ready in [false, true] {
+            m.players[1].ready = ready;
+            let g = groups(&m, Dev::Keys, &bind);
+            assert_eq!(g.len(), 1, "{g:?}");
+            assert_eq!(g[0].tag, None);
+            assert_eq!(g[0].devs.len(), 2);
+            let shown: Vec<Act> = g[0].items.iter().map(|it| it.act).collect();
+            let mut once = shown.clone();
+            once.dedup();
+            assert_eq!(shown, once, "{shown:?}");
+            for dev in [Dev::Keys, pad] {
+                for (a, l) in acts(&m, dev) {
+                    let it = g[0].items.iter().find(|it| it.act == a).expect("every player's action");
+                    assert!(it.label.contains(&l), "{l} in {}", it.label);
+                }
+            }
+        }
     }
 }

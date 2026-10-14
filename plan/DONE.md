@@ -470,6 +470,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B335** Mods: store mods' select picture is the store's preview.png (web stopped baking every installed mod: phone crash at 40 mods); Installed gets Remove all; Browse ← folds an uploader's mods; Download all says done/total; Play with removed
 - [x] **B336** Browser mods: find a better way to hold installed mods than every file in memory (modfs MEM, ≈10–40 MB a mod; 40 mods may outgrow a phone tab): read a picked character's files from OPFS on demand, or similar — j: 2026-10-14-b335-mod-previews
 - [x] **B350** Court select umpire: label reads 'Umpire Anna', should be just 'Anna'; and its icon looks like an icon inside an icon (nested frame), draw a single icon (user 2026-10-14) → play/main_menu.rs · play/menu_art.rs
+- [x] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
 
 
 ### Shots
