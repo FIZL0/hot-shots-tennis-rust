@@ -370,6 +370,25 @@ pub fn stamp(dir: &Path) -> Option<Stamp> {
     serde_json::from_slice(&modfs::read(&dir.join("store.json")).ok()?).ok()
 }
 
+/// B255: the installed mod in `dir`'s `mod.json` version, as an upload writes it into [`Meta::version`].
+pub fn version(dir: &Path) -> String {
+    let j: serde_json::Value = modfs::read(&dir.join("mod.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    j["version"].as_str().map_or_else(|| j["version"].to_string(), str::to_string).replace("null", "1")
+}
+
+/// B255: version `a` is newer than `b`: dot-separated numbers compared in turn ("1.10" > "1.9"; empty is "1").
+pub fn newer(a: &str, b: &str) -> bool {
+    let v = |s: &str| {
+        let mut n: Vec<u64> = (if s.is_empty() { "1" } else { s }).split('.').map(|p| p.trim().parse().unwrap_or(0)).collect();
+        // "1.0" is "1"
+        while n.last() == Some(&0) {
+            n.pop();
+        }
+        n
+    };
+    v(a) > v(b)
+}
+
 /// Downloads, checks and installs `e` into `root` ([`Event::Installed`]), saying how far it's got
 /// ([`Event::Progress`]). The zip streams to a file (B204: never whole in memory) and is hashed as it arrives; only
 /// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards.
