@@ -417,6 +417,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B251** Tall windows (aspect < 4:3) stretch the custom characters roster to show more columns instead of letterboxing it at the 4:3 width (B232); wide windows already do (B190) — crates/hst/src/play/main_menu.rs Grid::fit, play/widescreen.rs
 - [x] **B253** Ball-hit effect stretches into place oddly when it appears (user 2026-10-13): compare its first frames (scale/stretch, position, timing) with the original via tools/screenshot.sh vs --shot at the same contact and match by eye — crates/hst/src/effects.rs (hit_fx.rs is its test)
 - [x] **B292** Lobby: don't autostart a match while seats are still open, even when every joined player is ready (wait for the host's Start or a full lobby)
+- [x] **B301** In-match key hints (addition, user 2026-10-14): during a match show the keyboard binds (from controls.txt: move, shots, lob/smash, emotes 1–4, pause, …) as a small hint strip like the menus' bottom-right key chips (keycap glyph + action), only when the player is on keyboard (hidden with a pad/touch, switching live), with a setting to turn it off (on by default; persisted in settings.txt). Presentation only: no sim effect (replay tests bit-exact). Lay it out at any aspect ratio, pinned like the HUD panels (play/widescreen.rs), clear of the score and player panels → play/controls.rs · play/panel.rs · play/widescreen.rs · play/main_menu.rs (settings, existing key chips)
 
 
 ### Shots

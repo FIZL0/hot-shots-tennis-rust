@@ -148,6 +148,7 @@ impl Grid {
 /// Keeps `Menu::grid` fitted to the window, live on resize; applies the Aspect Ratio setting live (B117).
 fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
     super::widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
+    super::key_hints::ON.store(menu.settings.0[KEY_HINTS], std::sync::atomic::Ordering::Relaxed);
     let Ok(w) = window.single() else { return };
     let g = Grid::fit(super::widescreen::aspect(w));
     if menu.grid != g {
@@ -195,16 +196,18 @@ pub(super) const FONT: [&str; 15] = [
 /// ratio (B117, a `widescreen::ASPECTS` index) and what to do with an online lobby's mods (B289: the lobby's
 /// prompt asks, or its "Download, always" / "Never download" answer), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 4], Graphics, Volumes, u8, Ask);
+pub struct Settings([bool; 5], Graphics, Volumes, u8, Ask);
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
-const SETTING_NAMES: [&str; 4] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads"];
+const SETTING_NAMES: [&str; 5] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
+/// B301: the match's keyboard hints (`play::key_hints`).
+const KEY_HINTS: usize = 4;
 
-/// Upscaled textures and menu music on, match music off (user 2026-10-12).
-const SETTING_DEFAULTS: [bool; 4] = [true, true, false, true];
+/// Upscaled textures and menu music on, match music off (user 2026-10-12); key hints on (B301).
+const SETTING_DEFAULTS: [bool; 5] = [true, true, false, true, true];
 
 /// Auto, but 16:9 on a phone (B117: the browser played by touch).
 fn default_aspect() -> u8 {
@@ -256,7 +259,7 @@ impl Settings {
 
     /// The match's flags for these settings.
     fn flags(&self) -> Vec<String> {
-        let [upscale, _, music, _] = self.0;
+        let [upscale, _, music, ..] = self.0;
         let on = [(!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
         on.chain(self.1.flags()).collect()
     }
@@ -2771,13 +2774,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true], Graphics::LOW, Volumes::default(), 3, Ask::Each);
+        let s = Settings([true, false, false, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true], d, Volumes::default(), 0, Ask::Each));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true], d, Volumes::default(), 0, Ask::Each));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -2785,10 +2788,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true], d, Volumes::default(), 0, Ask::Each));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -2796,7 +2799,7 @@ mod tests {
         assert_eq!(Settings::parse("online_mods = maybe\n").4, Ask::Each);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false], d, Volumes::default(), 1, Ask::Each).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true], d, Volumes::default(), 1, Ask::Each).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]
