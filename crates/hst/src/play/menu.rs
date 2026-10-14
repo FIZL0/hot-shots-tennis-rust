@@ -8,7 +8,8 @@
 //! menu's Settings screens over the paused match (`main_menu/pause.rs`); a click or tap on a pill chooses it.
 //!
 //! Input waits 5 ticks after it opens. Up/down move with wrap-around (repeat after 32 ticks held, then every 8;
-//! sound 0, the hand starts its swing again), ✕ chooses (sound 2), ○ does nothing, Start closes it (sound 2).
+//! sound 0, the hand starts its swing again), ✕ chooses (sound 2), Start closes it (sound 2). ○ does nothing in the
+//! original; here (B340) it is Back and closes it too (sound 1), as do a right click and a click or tap off the pills.
 //! "Return to the Menu" fades to black over 60 ticks; the port has no menu, so it then quits.
 //! B68 (ours: the original fades out at once): once any point has been scored it first asks "Leave the match?" in
 //! the same dialog, Yes / No on its pills (No chosen; up/down, ✕ chooses, ○ or Start is No, sound 1); No goes back
@@ -204,10 +205,15 @@ impl Menu {
         if let Some(a) = self.ask {
             return self.tick_ask(a, up, down);
         }
-        self.cancel = false;
+        // B340 (ours: the original's ○ does nothing here): ○ is Back, closing the menu like Start (with the back sound)
+        let cancel = std::mem::take(&mut self.cancel);
         if std::mem::take(&mut self.start) {
             *self = Menu::default();
             return Some(2);
+        }
+        if cancel {
+            *self = Menu::default();
+            return Some(1);
         }
         let mut sound = None;
         if self.delay < 1 {
@@ -510,7 +516,7 @@ fn legend(menu: Res<Menu>, settings: Res<PauseSettings>, last: Res<super::main_m
     if menu.ask.is_some() {
         v.extend([item(Act::Back, "No", &["Backspace", "K"]), item(Act::Start, "No", &["Esc"])]);
     } else {
-        v.push(item(Act::Start, "Resume", &["Esc"]));
+        v.extend([item(Act::Back, "Resume", &["Backspace", "K"]), item(Act::Start, "Resume", &["Esc"])]);
     }
     out.one(*last, v);
 }
@@ -926,6 +932,15 @@ mod tests {
         m.start = true;
         m.tick(false, false);
         assert!(m.open && m.quitting == Some(1));
+        // B340: ○ resumes the match like Start, even before input is read
+        let mut m = Menu::opened();
+        m.cancel = true;
+        assert_eq!(m.tick(false, false), Some(1));
+        assert!(!m.open);
+        let mut m = Menu::opened();
+        m.start = true;
+        assert_eq!(m.tick(false, false), Some(2));
+        assert!(!m.open);
     }
 
     /// B68: "Return to the Menu" at 0-0 fades out at once; after a point it asks, No (chosen first, or ○) goes back to
