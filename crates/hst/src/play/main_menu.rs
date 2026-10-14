@@ -560,6 +560,7 @@ enum Effect {
     SaveSettings,
     Launch,
     Quit,
+    ResetControls,
     Online(online::Fx),
     /// The umpire picker's "Hear a call": umpire, voice program, key (`hst_sim::umpire`'s banks).
     Hear(u8, u8, u8),
@@ -928,8 +929,12 @@ impl Menu {
                 if self.rebinding.is_some() {
                     return out;
                 }
-                rows(controls::action_names().count(), &mut self.sel, &mut out);
-                if k.ok {
+                // the last row resets every binding (a stick on a phone's pad can't be bound back)
+                let n = controls::action_names().count();
+                rows(n + 1, &mut self.sel, &mut out);
+                if k.ok && self.sel == n {
+                    out.extend([ResetControls, Sound(2)]);
+                } else if k.ok {
                     self.rebinding = Some(self.sel);
                     out.push(Sound(2));
                 } else {
@@ -3106,6 +3111,12 @@ fn step(
                 }
                 Effect::Quit => {
                     exit.write(AppExit::Success);
+                }
+                Effect::ResetControls => {
+                    *bind = Bindings::default();
+                    if let Err(e) = bind.save(&args.iso) {
+                        warn!("controls.txt: {e}");
+                    }
                 }
                 Effect::Launch => {
                     let a = menu.args(&pads);

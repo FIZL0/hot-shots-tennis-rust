@@ -434,9 +434,14 @@ pub(super) mod tests {
         assert_eq!(m.settings.value(Opt::Msaa), v);
         // Controls: a row starts a rebind
         let mut c = Menu { screen: Screen::Controls, ..default() };
-        let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 13, 2);
+        let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 14, 2);
         tap(&mut c, x + 40.0, y + h / 2.0);
         assert_eq!(c.rebinding, Some(2));
+        // the last row resets them all instead
+        c.rebinding = None;
+        let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 14, 13);
+        assert!(tap(&mut c, x + 40.0, y + h / 2.0).contains(&Effect::ResetControls));
+        assert_eq!(c.rebinding, None);
     }
 
     /// Hit rects follow their quads: on 16:9 the select (B296) reaches past the middle 4:3 to the window's sides,
