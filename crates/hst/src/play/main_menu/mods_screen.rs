@@ -13,7 +13,7 @@
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
 //! inside a real tap).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::RenderAssetUsages;
@@ -39,8 +39,9 @@ pub(crate) fn set_root(dir: std::path::PathBuf) {
 pub(crate) fn root() -> &'static Path {
     ROOT.get().map(|p| p.as_path()).unwrap_or(Path::new("mods"))
 }
-/// The pills above the list on Installed (Add mod, Reload) and Upload (Sign in, Upload all): the rows before the mods.
-const TOP: usize = 2;
+/// The pills above the list on Installed (Add mod, Reload, Remove all) and Upload (Sign in, Upload all): the rows
+/// before the mods.
+const TOP: usize = 3;
 const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
 const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
@@ -51,8 +52,6 @@ const CARD_PITCH: f32 = 45.0;
 /// B255: Browse's child buttons on a store mod.
 const INSTALL: &str = "Install";
 const BY: &str = "By author";
-/// An installed mod's child button: a local match as it.
-const PLAY: &str = "Play with";
 
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
 
@@ -112,9 +111,10 @@ pub(super) struct View {
     /// choosing one puts up the "use the desktop app" popup (its row while up).
     phone: bool,
     nophone: Option<usize>,
-    /// "Play with" on an installed mod: its place in the select's roster, put on player 1's cursor when the local
-    /// select opens (the mode choice comes first; `Menu::step` takes it there).
-    pub(super) play: Option<usize>,
+    /// B335: the uploaders whose mods Browse hides under their heading (←, → shows them again).
+    folded: HashSet<String>,
+    /// B335: the installs since the queue was last empty: done, all (the status's "3/50").
+    batch: (usize, usize),
 }
 
 /// A row under Browse's pills: an uploader's heading (who, how many of their mods) or one of their mods.
@@ -169,6 +169,10 @@ impl View {
 
     /// B255: queues `e`'s install, starting it if nothing else is under way.
     fn enqueue(&mut self, e: Entry, upscaled: bool) {
+        if self.doing.is_none() && self.queue.is_empty() {
+            self.batch = (0, 0);
+        }
+        self.batch.1 += 1;
         self.jobs.insert(e.key(), ("Queued", format!("{} is waiting its turn.", e.meta.name)));
         self.queue.push_back(e);
         self.next(upscaled);
@@ -181,10 +185,25 @@ impl View {
         }
         let Some(e) = self.queue.pop_front() else { return };
         self.busy = true;
-        self.status = format!("Downloading {} ({})...", e.meta.name, mb(e.meta.size));
+        self.status = format!("{}Downloading {} ({})...", self.count(), e.meta.name, mb(e.meta.size));
         self.jobs.insert(e.key(), ("Downloading", format!("Downloading {}...", e.meta.name)));
         modstore::install(&e, root(), upscaled);
         self.doing = Some(e);
+    }
+
+    /// B335: "3/50 done. " while a batch of installs (Download all) is under way.
+    fn count(&self) -> String {
+        if self.batch.1 > 1 { format!("{}/{} done. ", self.batch.0, self.batch.1) } else { String::new() }
+    }
+
+    /// B335: the uploader row `sel` folds or unfolds on Browse's whole list (its heading, or one of their mods), and
+    /// whether they're folded.
+    pub(super) fn fold_at(&self, sel: usize) -> Option<(String, bool)> {
+        if self.page != Page::Browse || self.by.is_some() {
+            return None;
+        }
+        let a = self.head(sel).map(|h| h.0).or_else(|| self.hovered(sel).map(|e| e.meta.author.as_str()))?;
+        Some((a.to_string(), self.folded.contains(a)))
     }
 
     /// Whether ←→ move from row `sel` (between pills side by side), for the legend.
@@ -196,7 +215,8 @@ impl View {
     /// list: Download all and All mods); Upload, the account and Upload all; Mine, Refresh.
     fn acts(&self) -> usize {
         match self.page {
-            Page::Installed | Page::Upload => TOP,
+            Page::Installed => TOP,
+            Page::Upload => UP_TOP,
             Page::Browse if self.by.is_some() => 2,
             Page::Browse | Page::Mine => 1,
         }
@@ -232,7 +252,9 @@ impl View {
         for a in who {
             let theirs: Vec<&Entry> = all.iter().filter(|e| e.meta.author == a).collect();
             out.push(Item::Head(a, theirs.len()));
-            out.extend(theirs.into_iter().map(Item::Mod));
+            if !self.folded.contains(a) {
+                out.extend(theirs.into_iter().map(Item::Mod));
+            }
         }
         out
     }
@@ -438,7 +460,7 @@ impl Menu {
         use Effect::Sound;
         let s = c.row;
         match self.add.page {
-            Page::Installed if c.opts[i] == PLAY => self.play_with(s - TOP, out),
+            Page::Installed if s < TOP => self.remove_all(out),
             Page::Installed => self.remove(s - TOP, out),
             Page::Upload if s == 0 => {
                 let v = &mut self.add;
@@ -571,6 +593,18 @@ impl Menu {
         }
         if k.back {
             return self.mods_back(out);
+        }
+        // B335: ← folds an uploader's mods under their heading (from it or one of theirs), → shows them again
+        if (k.left || k.right) && let Some((a, folded)) = self.add.fold_at(self.sel) {
+            if k.left && !folded {
+                self.add.folded.insert(a.clone());
+                self.sel = self.add.acts() + self.add.items().iter().position(|it| matches!(it, Item::Head(h, _) if *h == a)).unwrap_or(0);
+                out.push(Sound(0));
+            } else if k.right && folded {
+                self.add.folded.remove(&a);
+                out.push(Sound(0));
+            }
+            return;
         }
         if !k.ok {
             return;
@@ -714,49 +748,63 @@ impl Menu {
             if let Err(e) = reload(out) {
                 self.add.status = e;
             }
-        } else {
-            let i = s - TOP;
-            let (id, name, dir) = (&self.add.list[i].id, self.add.list[i].name.clone(), self.add.list[i].dir.clone());
-            // desktop: only a store download / Add mod install (`mods/<id>`) is the game's to delete; a folder put in
-            // by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put it there
-            if cfg!(not(target_arch = "wasm32")) && !crate::modfs::installed_by_game(root(), &dir, &id) {
-                self.open_child(&[PLAY], format!("Play a match as {name}? (Added by hand: delete {} to remove it.)", dir.display()), out);
+        } else if s == 2 {
+            let n = self.add.list.iter().filter(|m| ours(m)).count();
+            if n == 0 {
+                self.add.status = "No mods the game installed to remove.".into();
+                out.push(Sound(1));
             } else {
-                self.open_child(&[PLAY, "Remove"], format!("Play a match as {name}, or remove it (Reload then takes it out of the select)?"), out);
+                self.open_child(&["Remove all"], format!("Remove all {n} mods the game installed (Reload then takes them out of the select)?"), out);
+            }
+        } else {
+            let m = &self.add.list[s - TOP];
+            let (name, dir) = (m.name.clone(), m.dir.clone());
+            if ours(m) {
+                self.open_child(&["Remove"], format!("Remove {name} (Reload then takes it out of the select)?"), out);
+            } else {
+                self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
+                out.push(Sound(1));
             }
         }
     }
 
-    /// Play with on installed mod `i`: a local match with it on player 1's cursor, from the mode choice; one added
-    /// since the game started isn't in the select yet (Reload first).
-    fn play_with(&mut self, i: usize, out: &mut Vec<Effect>) {
-        let md = &self.add.list[i];
-        match mod_of(self, &md.dir).filter(|&j| j < self.own_mods()) {
-            // (`Menu::step` goes to the mode choice, with its sound)
-            Some(j) => self.add.play = Some(j),
-            None => {
-                self.add.status = format!("{} isn't in the select yet: Reload first.", md.name);
-                out.push(Effect::Sound(1));
-            }
-        }
+    /// B335: Remove all: every installed mod the game put in ([`ours`]).
+    fn remove_all(&mut self, out: &mut Vec<Effect>) {
+        self.add.list.iter().filter(|m| ours(m)).for_each(delete);
+        self.add.refresh();
+        self.add.changed();
+        self.add.status = "Removed every mod the game installed. Reload to take them out of the select.".into();
+        out.push(Effect::Sound(1));
     }
 
     /// Removes installed mod `i` (its child's Remove).
     fn remove(&mut self, i: usize, out: &mut Vec<Effect>) {
-        let (id, name, dir) = (self.add.list[i].id.clone(), self.add.list[i].name.clone(), self.add.list[i].dir.clone());
-        crate::modfs::remove(&dir);
-        #[cfg(target_arch = "wasm32")]
-        crate::web::mod_drop(&self.add.list[i].folder());
-        // a store download's own folder (`mods/<id>`, `mods/<id>-2`, …); a pack's mods are left to their pack
-        #[cfg(not(target_arch = "wasm32"))]
-        if crate::modfs::installed_by_game(root(), &dir, &id) {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
+        let name = self.add.list[i].name.clone();
+        delete(&self.add.list[i]);
         self.add.refresh();
         self.add.changed();
         self.add.status = format!("Removed {name}. Reload to take it out of the select.");
         out.push(Effect::Sound(1));
     }
+}
+
+/// Deletes installed mod `m`: from memory, the browser's storage, and (a store download's own folder, `mods/<id>`,
+/// `mods/<id>-2`, …; a pack's mods are left to their pack) the disk.
+fn delete(m: &Mod) {
+    crate::modfs::remove(&m.dir);
+    #[cfg(target_arch = "wasm32")]
+    crate::web::mod_drop(&m.folder());
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::modfs::installed_by_game(root(), &m.dir, &m.id) {
+        let _ = std::fs::remove_dir_all(&m.dir);
+    }
+}
+
+/// Whether installed mod `m` is the game's to delete: on desktop only a store download / Add mod install
+/// (`mods/<id>`); a folder put in by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put
+/// it there. Every mod in the browser.
+fn ours(m: &Mod) -> bool {
+    cfg!(target_arch = "wasm32") || crate::modfs::installed_by_game(root(), &m.dir, &m.id)
 }
 
 /// Reload: the browser reloads the page; the desktop game starts itself again with the same arguments and closes (the
@@ -943,7 +991,7 @@ fn row_rect(v: &View, list: [f32; 4], shown: usize, r: usize) -> Option<[f32; 4]
 /// The pills' widths.
 fn pill_ws(v: &View) -> &'static [f32] {
     match v.page {
-        Page::Installed => &[120.0, 110.0],
+        Page::Installed => &[100.0, 84.0, 110.0],
         Page::Browse if v.by.is_some() => &[140.0, 110.0],
         Page::Browse | Page::Mine => &[110.0],
         Page::Upload => &[170.0, 120.0],
@@ -953,7 +1001,7 @@ fn pill_ws(v: &View) -> &'static [f32] {
 /// The page's pills over its list.
 fn pill_words(v: &View) -> Vec<String> {
     match v.page {
-        Page::Installed => vec!["Add mod".into(), "Reload".into()],
+        Page::Installed => vec!["Add mod".into(), "Reload".into(), "Remove all".into()],
         Page::Browse if v.by.is_some() => vec!["Download all".into(), "All mods".into()],
         Page::Browse | Page::Mine => vec!["Refresh".into()],
         Page::Upload => vec![v.account.as_ref().map_or("Sign in".into(), |a| format!("Signed in: {}", short(a, 14))), "Upload all".into()],
@@ -1068,13 +1116,14 @@ fn card(d: &mut Draw, [x, y, w, h]: [f32; 4], c: &Card, on: bool) {
 
 /// An uploader's heading over their mods: "BY <name> · N mods" with a thin line to its "Download all N" chip (gold
 /// while chosen: a press downloads them all).
-fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: bool) {
+/// (B335: "+" before it while their mods are folded away.)
+fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: bool, folded: bool) {
     use super::options::MUTED;
     let chip = format!("Download all {n}");
     let cw = d.width(&chip, 12.0) + 20.0;
     let cx = x + w - cw - 6.0;
     let ty = y + h - 22.0;
-    let title = format!("BY {} - {n} mod{}", who(author).to_uppercase(), if n == 1 { "" } else { "s" });
+    let title = format!("{}BY {} - {n} mod{}", if folded { "+ " } else { "" }, who(author).to_uppercase(), if n == 1 { "" } else { "s" });
     let size = 14.0 * ((cx - x - 30.0) / d.width(&title, 14.0).max(1.0)).min(1.0);
     super::left(d, &title, x + 4.0, ty + (14.0 - size) / 2.0 + 2.0, size, cx - x - 30.0, if on { BROWN } else { MUTED });
     let lx = x + 12.0 + d.width(&title, size);
@@ -1113,7 +1162,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         } else if let Some(c) = card_of(m, r) {
             card(d, rect, &c, on);
         } else if let Some((a, n)) = v.head(r) {
-            heading(d, rect, a, n, on);
+            heading(d, rect, a, n, on, v.folded.contains(a));
         }
         d.hit(rect, super::pointer::Act::Row(r, super::pointer::OK));
         if on {
@@ -1380,7 +1429,7 @@ fn nophone(d: &mut Draw, row: &str) {
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, Upload
+/// shown, someone's folded; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, Upload
 /// all open, the first mods tagged with each upload state; `HST_CHILD=0`: none open, the first mod hovered) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
 /// mod's Remove open) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
@@ -1409,13 +1458,16 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         );
         v.have = v.store.iter().flatten().zip(&v.list).take(4).map(|(e, md)| (e.key(), (format!("{:064}", 0), md.dir.clone()))).collect();
         m.sel = 2;
+        // B335: someone's mods folded under their heading
+        v.folded.insert("someone".into());
         if screen == "browsemods" && std::env::var("HST_CHILD").is_ok() {
             // B255: FIZL0's mods, Download all under way: one each of Installed, Downloading, Queued, Error
             v.narrow(Some("FIZL0".into()), 0);
             let tags = [("Installed", "Installed {}."), ("Downloading", "Downloading {}..."), ("Queued", "{} is waiting its turn."), ("Error", "{} not installed: the download doesn't match its sha256")];
             v.jobs = v.entries().iter().zip(tags).map(|(e, (t, s))| (e.key(), (t, s.replace("{}", &e.meta.name)))).collect();
             m.sel = 0;
-            v.status = "Downloading 3 mods by FIZL0, one after another.".into();
+            v.batch = (1, 3);
+            v.status = format!("{}Downloading {}...", v.count(), v.entries()[1].meta.name);
         }
         if screen == "mymods" {
             (v.page, v.mine, v.account, v.child) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(Child::new(2, &["Take down"])));
@@ -1448,8 +1500,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.status = "Open token page, make a token (Write) there and copy it, then Paste token.".into();
         m.sel = 0;
     } else if screen == "addmods" && std::env::var("HST_CHILD").is_ok() && !v.list.is_empty() {
-        v.child = Some(Child::new(TOP, &[PLAY, "Remove"]));
-        v.status = format!("Play a match as {}, or remove it (Reload then takes it out of the select)?", v.list[0].name);
+        v.child = Some(Child::new(TOP, &["Remove"]));
+        v.status = format!("Remove {} (Reload then takes it out of the select)?", v.list[0].name);
         m.sel = TOP;
     } else if screen.starts_with("phonemods") {
         v.phone = true;
@@ -1537,7 +1589,7 @@ fn page(
             menu.add.changed();
             shelf.shots.retain(|k, _| !k.starts_with("local/"));
         }
-        menu.add.status = s;
+        menu.add.status = format!("{}{s}", menu.add.count());
     }
     let up = menu.settings.0[super::UPSCALED_DOWNLOADS];
     for e in modstore::take() {
@@ -1563,6 +1615,7 @@ fn page(
                 v.busy = false;
                 // B255: the queued install's tag, then the next one
                 if let Some(e) = v.doing.take() {
+                    v.batch.0 += 1;
                     let job = match &r {
                         Ok(_) => ("Installed", format!("Installed {}. Restart the game to play it.", e.meta.name)),
                         Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
@@ -1583,7 +1636,7 @@ fn page(
                 };
                 v.next(up);
             }
-            Event::Progress(s) => v.status = s,
+            Event::Progress(s) => v.status = format!("{}{s}", v.count()),
             Event::Mine(r) => {
                 v.busy = false;
                 match r {
@@ -1757,13 +1810,13 @@ mod tests {
         m.sel = TOP;
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec![PLAY, "Remove", "Cancel"] }));
-        assert!(m.add.status.starts_with("Play a match as Screen"));
+        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec!["Remove", "Cancel"] }));
+        assert!(m.add.status.starts_with("Remove Screen"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.child.is_none(), m.screen, m.sel), (true, Screen::Mods, TOP));
         m.mods_step(ok(), &mut out);
         m.mods_step(Press { up: true, ..default() }, &mut out);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(2)));
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && crate::modfs::is_file(&root().join("t_screen/mod.json")));
         m.mods_step(ok(), &mut out);
@@ -1774,9 +1827,9 @@ mod tests {
         assert_eq!(at(&m, p[0] + 10.0, p[1] + 5.0), None);
         assert_eq!(at(&m, r[1][0] + 10.0, r[1][1] + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
         assert_eq!(super::super::pointer::tests::hits(&m).1, Some(super::super::pointer::press(|k| k.back = true)));
-        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(2, super::super::pointer::OK), false);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(2)));
-        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), true);
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), false);
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(0, super::super::pointer::OK), true);
         assert!(!crate::modfs::is_file(&root().join("t_screen/mod.json")));
         assert!(m.add.status.starts_with("Removed Screen"));
         m.sel = 0;
@@ -1806,29 +1859,27 @@ mod tests {
         m.add.list = vec![Mod { dir: root().join("pack/p"), ..a_mod("p", "P") }];
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.child.map(|c| c.opts), Some(vec![PLAY, "Cancel"]));
-        assert!(m.add.status.contains("Added by hand"), "{}", m.add.status);
+        assert!(m.add.child.is_none() && m.add.status.contains("added by hand"), "{}", m.add.status);
+        // nor by Remove all
+        m.sel = 2;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.child.is_none() && m.add.status.starts_with("No mods"), "{}", m.add.status);
     }
 
-    /// Play with on an installed mod: the select with it on 1P's cursor (B331); one not in the
-    /// select's roster yet says Reload instead.
+    /// B335: Remove all (Installed's third pill) asks, then removes every mod the game installed.
     #[test]
-    fn play_with_a_mod() {
-        use super::super::Dev::Keys;
-        let mut m = Menu { screen: Screen::Mods, sel: TOP, ..default() };
-        m.mods = vec![a_mod("x", "X"), a_mod("t_play", "P")];
-        m.add.list = vec![a_mod("t_play", "P"), a_mod("t_new", "N")];
-        m.step(Keys, ok());
-        assert_eq!(m.add.child.as_ref().map(|c| c.opts[0]), Some(PLAY));
-        m.step(Keys, ok());
-        assert_eq!((m.screen, m.players[0].modded, m.players[0].pick, m.add.play), (Screen::Chars, true, 1, None));
-        // a mod added since the start isn't in the select
-        let mut m = Menu { screen: Screen::Mods, sel: TOP + 1, ..default() };
-        m.add.list = vec![a_mod("t_play", "P"), a_mod("t_new", "N")];
-        m.step(Keys, ok());
-        m.step(Keys, ok());
-        assert_eq!((m.screen, m.add.play), (Screen::Mods, None));
-        assert!(m.add.status.contains("Reload first"), "{}", m.add.status);
+    fn remove_all_mods() {
+        let mut m = Menu { screen: Screen::Mods, sel: 2, ..default() };
+        for id in ["t_all1", "t_all2"] {
+            crate::modfs::add(&root().join(id).join("mod.json"), Vec::new().into());
+        }
+        m.add.list = vec![a_mod("t_all1", "A"), a_mod("t_all2", "B")];
+        let mut out = Vec::new();
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec!["Remove all", "Cancel"]));
+        m.mods_step(ok(), &mut out);
+        assert!(["t_all1", "t_all2"].iter().all(|id| !crate::modfs::is_file(&root().join(id).join("mod.json"))));
+        assert!(m.add.status.starts_with("Removed every mod") && m.add.changed, "{}", m.add.status);
     }
 
     /// Browse groups the store's mods under their uploaders' headings (the store's order, the unknown one last); a
@@ -1861,6 +1912,14 @@ mod tests {
         m.sel = 6;
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.contains("by unknown uploader"), "{}", m.add.status);
+        // B335: the batch's count; ← on one of bob's mods folds them under his heading, → shows them again
+        assert_eq!(m.add.count(), "0/3 done. ");
+        let (l, r) = (Press { left: true, ..default() }, Press { right: true, ..default() });
+        m.sel = 3;
+        m.mods_step(l, &mut out);
+        assert_eq!((m.sel, m.add.rows(), m.add.fold_at(1)), (1, 6, Some(("bob".into(), true))));
+        m.mods_step(r, &mut out);
+        assert_eq!((m.sel, m.add.rows()), (1, 8));
         // Upload: Sign in and Upload all side by side, then the mods
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
@@ -1886,11 +1945,11 @@ mod tests {
         // the cursor's mod (the 9th) is the last card shown
         let n = shown(&m.grid);
         assert!(n < 9);
-        assert_eq!((m.sel, m.add.top), (10, 9 - n));
+        assert_eq!((m.sel, m.add.top), (TOP + 8, 9 - n));
         let at = |x: f32, y: f32| super::super::pointer::tests::act_at(&m, x, y);
-        let r = rect(&m, 10);
-        assert_eq!(at(r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Row(10, super::super::pointer::OK)));
-        assert!(row_rect(&m.add, boxes(&m.grid).0, n, 11).is_none());
+        let r = rect(&m, TOP + 8);
+        assert_eq!(at(r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Row(TOP + 8, super::super::pointer::OK)));
+        assert!(row_rect(&m.add, boxes(&m.grid).0, n, TOP + 9).is_none());
         // the gap between two cards goes to the nearer one
         let first = rect(&m, TOP + m.add.top);
         assert_eq!(at(first[0] + 10.0, first[1] + CARD_H + 1.0), Some(super::super::pointer::Act::Row(TOP + m.add.top, super::super::pointer::OK)));

@@ -274,6 +274,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Mods => {
             moves(&mut v, (true, m.add.sideways(m.sel)));
+            // B335: an uploader's mods fold away under their heading on Browse
+            if let Some((_, folded)) = m.add.fold_at(m.sel) {
+                v.push((Act::LeftRight, if folded { "Show" } else { "Fold" }));
+            }
             v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Back, "Back")]);
         }
         _ => {}

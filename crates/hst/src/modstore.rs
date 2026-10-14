@@ -350,6 +350,15 @@ pub fn preview(e: &Entry) {
     spawn(async move { send(Event::Preview(id, get(&url, MAX_PREVIEW).await.ok())) });
 }
 
+/// B335: the installed store mod in `dir` (id `id`)'s listing picture, to `done` (None: not fetched); false if it
+/// isn't a store mod.
+pub fn installed_preview(dir: &Path, id: &str, done: impl FnOnce(Option<Vec<u8>>) + Send + 'static) -> bool {
+    let Some(s) = stamp(dir) else { return false };
+    let url = file_url(&s.rev, &format!("mods/{id}/preview.png"));
+    spawn(async move { done(get(&url, MAX_PREVIEW).await.ok()) });
+    true
+}
+
 /// A download of `size` bytes with sha256 `hash` is the zip `meta` describes.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 fn matches(size: u64, hash: &str, meta: &Meta) -> Result<(), String> {

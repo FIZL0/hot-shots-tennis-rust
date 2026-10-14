@@ -229,7 +229,7 @@ impl Loader {
 /// `previews/<costume's glb stem>.png` if it ships one.
 fn mod_png(dir: &Path, m: &Mod, k: usize, stamp: &str) -> PathBuf {
     let own = m.costumes.get(k).and_then(|c| Path::new(c).file_stem()).map(|s| m.dir.join("previews").join(s).with_extension("png"));
-    own.filter(|p| p.is_file()).unwrap_or_else(|| dir.join(format!("m-{stamp}-{k}.png")))
+    own.filter(|p| crate::modfs::is_file(p)).unwrap_or_else(|| dir.join(format!("m-{stamp}-{k}.png")))
 }
 
 /// The cache folder's name: the disc's boot file and [`RENDER`].
@@ -671,6 +671,10 @@ struct Baker {
     /// B187: a first drawing has started (the menu's start draws one under its loading screen, so the previews'
     /// pipelines compile there, not on the select's first frame: a 0.7–1.8 s freeze on a 6×-throttled browser).
     warmed: bool,
+    /// B335: store mods whose listing's `preview.png` was asked for (once a run), the one on its way, its answer.
+    tried: HashSet<Key>,
+    fetching: bool,
+    got: Arc<Mutex<Option<(Key, PathBuf, Option<Vec<u8>>)>>>,
 }
 
 struct Job {
@@ -862,6 +866,16 @@ fn bake(
         }
         return;
     }
+    // B335: a store mod's listing picture arrived: its drawing and close-up, else it's drawn as any other
+    if baker.fetching {
+        let Some((key, path, png)) = baker.got.lock().unwrap().take() else { return };
+        baker.fetching = false;
+        if png.is_some_and(|b| from_store(&b, &path)) {
+            loader.pngs.remove(&key);
+            loader.png_order.retain(|k| *k != key);
+            card.baked += 1;
+        }
+    }
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
         if menu.screen != Screen::Chars && Some(key) != asked && !home.contains(&key) && baker.warmed {
@@ -878,6 +892,14 @@ fn bake(
             Who::Mod(i) => loader.mod_at(&menu, i).cloned(),
             Who::Disc(_) => None,
         };
+        // B335: a store mod's costume 0 is its listing's picture (a phone ran out of memory drawing 40 mods)
+        if let Some(m) = m.as_ref().filter(|_| key.1 == 0 && baker.tried.insert(key)) {
+            let (got, p) = (baker.got.clone(), path.clone());
+            if crate::modstore::installed_preview(&m.dir, &m.id, move |png| *got.lock().unwrap() = Some((key, p, png))) {
+                baker.fetching = true;
+                return;
+            }
+        }
         loader.want(key, m.as_ref());
         match loader.model(key).cloned() {
             None => return,
@@ -968,6 +990,18 @@ fn face_path(preview: &Path) -> PathBuf {
     preview.with_file_name(format!("{stem}-face.png"))
 }
 
+/// B335: a store mod's listing picture (`preview.png`, the uploader's baked card) as `path`'s drawing at this
+/// device's size and its close-up (the head found by [`inspect::face_square`] without a head bone).
+fn from_store(png: &[u8], path: &Path) -> bool {
+    use image::imageops::{self, FilterType};
+    let Ok(img) = image::load_from_memory_with_format(png, image::ImageFormat::Png) else { return false };
+    let (bake, face) = sizes();
+    let img = imageops::resize(&img.into_rgba8(), bake.x, bake.y, FilterType::Triangle);
+    let Some(sq) = inspect::face_square(&img, None) else { return false };
+    let head = imageops::resize(&imageops::crop_imm(&img, sq.min.x, sq.min.y, sq.width(), sq.height()).to_image(), face.x, face.y, FilterType::Triangle);
+    save(head.into_raw(), face, &face_path(path)) && save(img.into_raw(), bake, path)
+}
+
 /// B160: a face icon (`inner` out of 64, [`inspect::face_icon`]) from `preview`'s close-up, else (a mod's own preview
 /// PNG, which has none) cut from the preview itself; None until baked.
 fn face_from(preview: &Path, inner: u32) -> Option<Image> {
@@ -980,14 +1014,15 @@ fn face_from(preview: &Path, inner: u32) -> Option<Image> {
 /// Whether the card cache has `path`: a file natively, an OPFS file in the browser (B120, `web.rs`).
 fn cached(path: &Path) -> bool {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::card(&card_name(path)).is_some();
+    return crate::web::card(&card_name(path)).is_some() || crate::modfs::is_file(path);
     #[cfg(not(target_arch = "wasm32"))]
     path.is_file()
 }
 
 fn read(path: &Path) -> Option<Vec<u8>> {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::card(&card_name(path)).map(|b| b.to_vec());
+    // a mod's own previews/ (its files are in modfs, not the card cache)
+    return crate::web::card(&card_name(path)).map(|b| b.to_vec()).or_else(|| crate::modfs::read(path).ok());
     #[cfg(not(target_arch = "wasm32"))]
     std::fs::read(path).ok()
 }
@@ -1200,6 +1235,27 @@ fn shots(dir: String, from: u32) -> impl FnMut(Commands, Local<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B335: a store picture (any size) becomes this device's drawing and a close-up of its head.
+    #[test]
+    fn a_store_picture_stands_in_for_a_drawing() {
+        let mut img = image::RgbaImage::new(200, 250);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            if (90..110).contains(&x) && y > 40 {
+                *p = image::Rgba([200, 100, 50, 255]);
+            }
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let dir = std::env::temp_dir().join(format!("hst-b335-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m-x-0.png");
+        assert!(from_store(&png, &path) && !from_store(b"not a png", &dir.join("m-y-0.png")));
+        let dims = |p: &Path| image::open(p).unwrap().into_rgba8().dimensions();
+        assert_eq!(dims(&path), (BAKE.x, BAKE.y));
+        assert_eq!(dims(&face_path(&path)), (FACE.x, FACE.y));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// A card's load (B102) has the preview's three motions, the same as a full load's, for every disc character.
     #[test]
