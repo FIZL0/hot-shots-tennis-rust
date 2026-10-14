@@ -12,3 +12,8 @@ cases (`false?.catch` is not nullish, hence the ternary to `null`).
 - Not reproduced: no Windows machine here, and Linux Gecko has no WebGPU by default; the root cause inside Gecko's
   WebGPU (skin/index buffers) is not found. Proper WebGPU fix only if someone can run Firefox WebGPU on Windows.
 - Not checked on the friend's Windows Zen that WebGL2 now draws right (Linux Zen on WebGL2 is reported fine).
+
+## Notice (user follow-up)
+Gecko also shows a banner at the top: fallback graphics, use Chrome, Edge or Safari; a tap closes it for good
+(`localStorage` `hst-gecko-notice`). Checked with headless Zen against `web/` served locally: the banner draws
+over the boot screen and the boot carries on.

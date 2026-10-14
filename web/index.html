@@ -35,6 +35,9 @@
   #boot a { color: #8cf; }
   /* M16: the Mods screen's Add mod row (web.rs mod_picker): a tap on it is the file input's own */
   #modzip { position: fixed; z-index: 5; opacity: 0; cursor: pointer; }
+  /* B298: Firefox/Zen notice, a tap closes it */
+  #gecko { position: fixed; top: 0; left: 0; right: 0; z-index: 40; padding: .6em 16px; background: #333e; color: #fff;
+    text-align: center; font-size: 14px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -151,6 +154,14 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 say('Checking graphics…');
 // an adapter request that never answers counts as none (WebGL2) after 5 s
 const gecko = navigator.userAgent.includes('Firefox');
+let seen; try { seen = localStorage.getItem('hst-gecko-notice'); } catch {}
+if (gecko && !seen) {
+  const n = document.body.appendChild(document.createElement('div'));
+  n.id = 'gecko';
+  n.textContent = 'Firefox and Zen get the game’s fallback graphics (their WebGPU draws it broken). For the best experience use Chrome, '
+    + 'Edge or Safari. (Tap to close.)';
+  n.onclick = () => { n.remove(); try { localStorage.setItem('hst-gecko-notice', '1'); } catch {} };
+}
 const adapter = !gecko && navigator.gpu ? Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]) : null;
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
