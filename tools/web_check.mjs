@@ -5,7 +5,7 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader). WEB_CPUPROFILE=s:n records the page's CPU profile from second s for n seconds of visit 2 into OUT/visit2.cpuprofile (B273; summed by research/b273_profile.py).
+// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader). WEB_CPUPROFILE=s:n records the page's CPU profile from second s for n seconds of visit 2 into OUT/visit2.cpuprofile (B273; summed by research/b273_profile.py). WEB_HIDE=s:ms minimises the window at second s of visit 2 for ms (B260, below).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -106,6 +106,20 @@ async function visit(n, pick) {
     if (t === stallAt) {
       await evaluate(`{ const end = performance.now() + ${stallMs}; while (performance.now() < end); }`);
       log.push(`[${n}] ${t}s stalled ${stallMs} ms`);
+    }
+    // WEB_HIDE=s:ms (B260): at second s of visit 2 the window is minimised for ms (hidden: no animation frames); logs the
+    // frames the page stepped while hidden (index.html steps them on a timer outside a match) and hstMatch
+    const [hideAt, hideMs] = (pick ? '' : process.env.WEB_HIDE ?? '').split(':').map(Number);
+    if (t === hideAt) {
+      await evaluate("{ self.__n = 0; const r = requestAnimationFrame; requestAnimationFrame = f => r(x => { __n++; f(x); }); }");
+      const { result: { windowId } } = await send('Browser.getWindowForTarget');
+      await send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+      log.push(`[${n}] ${t}s hidden: ${await evaluate('document.visibilityState')}, match ${await evaluate('!!self.hstMatch')}`);
+      await sleep(hideMs);
+      log.push(`[${n}] frames while hidden ${hideMs} ms: ${await evaluate('__n')} (visibility ${await evaluate('document.visibilityState')})`);
+      await send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
+      await sleep(1000);
+      log.push(`[${n}] 1 s after showing: frames ${await evaluate('__n')}, ${await evaluate('document.visibilityState')}`);
     }
     if (t % (+process.env.SHOT_EVERY || 10) === 0) {
       const shot = await send('Page.captureScreenshot', { format: 'png' });
