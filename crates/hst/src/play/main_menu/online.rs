@@ -103,7 +103,8 @@ const ROW_RECTS: [[f32; 4]; 7] = [
 ];
 /// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby. B214:
 /// no Vote button (B226 removes lobby voting).
-const HOST_BUTTONS: [&str; 5] = ["Start", "Characters", "Court", "Copy Link", "Leave"];
+/// B213: "Public" is the host's Public/Private switch (labelled with what the lobby is).
+const HOST_BUTTONS: [&str; 6] = ["Start", "Characters", "Court", "Copy Link", "Public", "Leave"];
 const GUEST_BUTTONS: [&str; 3] = ["Ready", "Characters", "Leave"];
 /// B214: the lobby's buttons as a grid under the seats, three to a row: their pitch, width and rows' top and pitch.
 const BUTTON_STEP: f32 = 176.0;
@@ -159,7 +160,7 @@ impl Menu {
         let (court, umpire) = self.venue();
         let names = [("host".to_string(), cfg.name.clone())].into();
         let picking = ["host".to_string()].into();
-        Room { name: cfg.name, doubles: self.doubles, court, sets: self.sets, games: self.games, umpire, seats, names, picking, ..Default::default() }
+        Room { name: cfg.name, doubles: self.doubles, court, sets: self.sets, games: self.games, umpire, seats, names, picking, private: cfg.private, ..Default::default() }
     }
 
     /// The code screen's keys: the short code's symbols, or the name's.
@@ -222,6 +223,8 @@ impl Menu {
             Item::Mode => "Singles / Doubles",
             Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
             Item::Button("Ready") if self.net.prepared => "Not Ready",
+            Item::Button("Public") if self.net.room.as_ref().is_some_and(|r| r.private) => "Make Public",
+            Item::Button("Public") => "Make Private",
             Item::Button(b @ ("Start" | "Characters" | "Court" | "Ready" | "Leave")) => b,
             Item::Button(_) => return None,
         })
@@ -350,7 +353,8 @@ impl Menu {
                 self.net.status = "Opening the lobby...".into();
                 Cmd::Host(self.room())
             }
-            Go::Quick => Cmd::Quick(self.room()),
+            // B213: a lobby Quickplay opens is always listed
+            Go::Quick => Cmd::Quick(Room { private: false, ..self.room() }),
             Go::Find | Go::Code => Cmd::Join(self.net.paste.clone(), self.picks()),
         };
         out.push(Effect::Online(Fx::Net(cmd)));
@@ -534,6 +538,11 @@ impl Menu {
                     } else if let Some(r) = r {
                         out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Doubles(!r.doubles)))]);
                     }
+                } else if let Some(r) = self.net.room.as_ref().filter(|_| item == Item::Button("Public")) {
+                    // B213: listed in Find and Quickplay or not; Host remembers it
+                    let p = !r.private;
+                    self.net.cfg.get_or_insert_with(Online::default).private = p;
+                    out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Private(p))), Effect::Online(Fx::SaveCfg)]);
                 } else if item == Item::Button("Copy Link") && shared(&self.net).is_some() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
                 } else if item == Item::Button("Start") {
@@ -955,6 +964,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     let label = match *b {
                         "Start" if open > 0 => format!("Start +{open} COM"),
                         "Ready" if m.net.prepared => "Not Ready".to_string(),
+                        "Public" if room.is_some_and(|r| r.private) => "Private".to_string(),
                         b => b.to_string(),
                     };
                     let dim = (*b == "Start" && room.and_then(waiting_for).is_some()) || (*b == "Copy Link" && shared(&m.net).is_none());
@@ -978,6 +988,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 }
                 d.info("Get its looks, or play it as its donor in odd colours.");
                 return;
+            }
+            if room.is_some_and(|r| r.private) {
+                // B213: over the code: only it joins
+                d.outlined(|d| d.centred("Private: code only", 515.0, 74.0, 20.0, GOLD));
             }
             if shared(&m.net).is_some() {
                 // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
@@ -1010,6 +1024,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Button("Start")) => "Start the match now: open seats are played by the computer.".into(),
                 Some(Item::Button("Copy Link")) => "Copy the lobby's link, or read out the code: friends type it in Join by Code.".into(),
                 Some(Item::Button("Characters")) => "Pick your characters again (not ready meanwhile); your seats stay yours.".into(),
+                Some(Item::Button("Public")) if room.is_some_and(|r| r.private) => "Private: Find and Quickplay don't show it, only the code joins. OK: list it again.".into(),
+                Some(Item::Button("Public")) => "Public: Find and Quickplay show it. OK: make it private (only the code joins).".into(),
                 Some(Item::Button("Court")) => "Change the court, sets, games and umpire: everyone sees it, and Find lists the court.".into(),
                 _ if m.net.pick_next => "Joining: your seats are held while you pick your characters.".into(),
                 Some(Item::Button("Ready")) => "Tell the host you're ready: they start when everyone in is, open seats played by the computer.".into(),
@@ -1462,12 +1478,14 @@ mod tests {
             Some(Act::Row(i, _)) => Some(i),
             _ => None,
         };
-        // the host: seats 1, 2 (guests), 3 (open), then Start, Characters, Court / Copy Link, Leave under them, the title last
+        // the host: seats 1, 2 (guests), 3 (open), then Start, Characters, Court / Copy Link, Public, Leave under them, the
+        // title last
         assert_eq!(at(&m, 200.0, 140.0 + 44.0 + 10.0), Some(0));
         assert_eq!(at(&m, 200.0, 150.0), None, "the host's own seat");
         assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(3), "Start");
-        assert_eq!(at(&m, 60.0 + BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(7), "Leave");
-        assert_eq!(at(&m, 100.0, 80.0), Some(8), "singles / doubles");
+        assert_eq!(at(&m, 60.0 + BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(7), "Public");
+        assert_eq!(at(&m, 60.0 + 2.0 * BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(8), "Leave");
+        assert_eq!(at(&m, 100.0, 80.0), Some(9), "singles / doubles");
         assert_eq!(at(&m, 60.0 + BUTTON_W + 2.0, BUTTON_Y + 10.0), Some(3), "between pills: the nearer");
         m.net.hosting = false;
         assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(0), "a guest's Ready");
@@ -1482,13 +1500,20 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         m.net.hosting = true;
-        assert_eq!(m.items(), vec![Item::Seat(1), Item::Seat(2), Item::Seat(3), Item::Button("Start"), Item::Button("Characters"), Item::Button("Court"), Item::Button("Copy Link"), Item::Button("Leave"), Item::Mode]);
+        assert_eq!(m.items(), vec![Item::Seat(1), Item::Seat(2), Item::Seat(3), Item::Button("Start"), Item::Button("Characters"), Item::Button("Court"), Item::Button("Copy Link"), Item::Button("Public"), Item::Button("Leave"), Item::Mode]);
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("k51qzi5uqu5d".into())));
         m.sel = 3;
         assert_eq!(net(&m.step(dev, ok)), None, "ACE-42 isn't ready");
         assert!(m.net.status.contains("ACE-42"), "{}", m.net.status);
         m.net.room.as_mut().unwrap().ready.insert("r8mxw2pa0c1e".into());
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Start));
+        // B213: Public / Private, remembered for the next Host
+        m.sel = 7;
+        assert_eq!(m.lobby_ok(), Some("Make Private"));
+        let fx = m.step(dev, ok);
+        assert_eq!(net(&fx), Some(Cmd::Private(true)));
+        assert!(fx.contains(&Effect::Online(Fx::SaveCfg)) && m.net.cfg.as_ref().is_some_and(|c| c.private));
+        assert!(m.room().private);
         // a guest: Ready toggles; Leave leaves
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
@@ -1618,11 +1643,11 @@ mod tests {
         m.sel = 5;
         m.step(dev, r);
         assert_eq!((m.sel, &m.net.cfg), (6, &relay), "←→ move off Relay, they don't change it");
-        // the host's lobby: seats 1–3 (items 0–2); Start Characters Court (3–5); Copy Link Leave (6, 7); the title (8)
+        // the host's lobby: seats 1–3 (items 0–2); Start Characters Court (3–5); Copy Link Public Leave (6–8); the title (9)
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        walk(&mut m, &[(d, 1), (d, 2), (d, 3), (r, 4), (r, 5), (r, 5), (d, 7), (l, 6), (u, 3), (u, 2), (u, 1), (u, 0), (u, 8), (u, 8)]);
+        walk(&mut m, &[(d, 1), (d, 2), (d, 3), (r, 4), (r, 5), (r, 5), (d, 8), (l, 7), (l, 6), (u, 3), (u, 2), (u, 1), (u, 0), (u, 9), (u, 9)]);
         // a guest: Ready Characters Leave in a row
         m.net.hosting = false;
         m.sel = 0;

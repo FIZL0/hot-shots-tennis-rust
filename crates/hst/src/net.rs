@@ -78,17 +78,19 @@ pub enum Relay {
 }
 
 /// `online.txt` beside the disc image: `name = …` (this player's name, shown on their lobby seats; a host's lobby is
-/// listed under it), `relay = n0 | own | off`, `relay_url = https://…`.
+/// listed under it), `relay = n0 | own | off`, `relay_url = https://…`, `private = yes | no` (B213: Host's last choice).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Online {
     pub name: String,
     pub relay: Relay,
     pub relay_url: String,
+    /// B213: the host's last Public/Private choice (Host opens the lobby with it).
+    pub private: bool,
 }
 
 impl Default for Online {
     fn default() -> Self {
-        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new() }
+        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false }
     }
 }
 
@@ -110,6 +112,7 @@ impl Online {
                 "name" if !v.is_empty() => o.name = v.chars().take(24).collect(),
                 "relay" => relay = v,
                 "relay_url" => o.relay_url = v,
+                "private" => o.private = v == "yes",
                 _ => {}
             }
         }
@@ -127,7 +130,7 @@ impl Online {
             Relay::Own(_) => "own",
             Relay::Off => "off",
         };
-        format!("name = {}\nrelay = {relay}\nrelay_url = {}\n", self.name, self.relay_url)
+        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\n", self.name, self.relay_url, if self.private { "yes" } else { "no" })
     }
 
     /// The next relay choice (own only once a `relay_url` is set).
@@ -210,6 +213,9 @@ pub struct Room {
     /// B201: each peer's players on the lobby's character select as they choose, in the order of the seats it holds.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub live: std::collections::BTreeMap<String, Vec<Live>>,
+    /// B213: not listed (no DHT listing, no mDNS listing, so Find and Quickplay never see it): only a code joins.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 /// B201: one player's place on the character select, live: the disc character hovered (a mod's donor, with the mod's
@@ -632,6 +638,8 @@ pub enum Cmd {
     Live(Vec<Live>),
     Bot(usize, Option<Pick>),
     Doubles(bool),
+    /// B213: the host's lobby private (unlisted) or public.
+    Private(bool),
 }
 
 /// What the network tells the app.
@@ -936,9 +944,15 @@ pub async fn find(dht: &Dht) -> Vec<Listing> {
 /// Put `room`'s listing on the DHT under lobby number `n`.
 async fn announce(cx: &Ctx, n: u16, room: &Room) {
     let Some(ep) = &cx.ep else { return };
-    let l = Listing::of(ep.id(), room);
+    let mut l = Listing::of(ep.id(), room);
+    if room.private {
+        // B213: gone private: shown as full, which Find and Quickplay skip
+        l.taken = l.seats;
+    }
     let value = seal(ep.secret_key(), n, &l);
-    let item = MutableItem::new(&SigningKey::from_bytes(BOARD), &value, (now() * 1_000_000) as i64, Some(&salt(n)));
+    // (µs: B213's Private / Public a second apart still overwrite each other)
+    let seq = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_micros()) as i64;
+    let item = MutableItem::new(&SigningKey::from_bytes(BOARD), &value, seq, Some(&salt(n)));
     if let Err(e) = cx.dht.put_mutable(item, None).await {
         bevy::log::warn!("lobby listing: {e}");
     }
@@ -1127,6 +1141,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut joined: Vec<(String, Link, Conn)> = Vec::new();
     let mut tick = n0_future::time::interval(REPUBLISH);
     let mut dirty = true;
+    let mut listed = false;
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
@@ -1162,7 +1177,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             // listing in the background: a slow DHT put never holds up a join
             if let Some(ep) = &cx.ep {
                 let l = room.clone();
-                ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)));
+                // B213: a private lobby keeps only its short code; once, its public listing is overwritten as full
+                let put = !l.private || std::mem::take(&mut listed);
+                listed |= !l.private;
+                ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)).filter(|_| !l.private));
                 let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep));
@@ -1170,7 +1188,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     if let Some(c) = code {
                         publish(&cx2.dht, &c, &ticket).await;
                     }
-                    announce(&cx2, n, &l).await
+                    if put {
+                        announce(&cx2, n, &l).await
+                    }
                 });
             }
         }
@@ -1345,6 +1365,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         cx.say(Event::Room(room.clone()));
                         dirty = true;
                     }
+                }
+                Some(Cmd::Private(p)) if starting.is_none() && p != room.private => {
+                    room.private = p;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
                 }
                 Some(Cmd::Venue(court, sets, games, umpire)) if starting.is_none() => {
                     (room.court, room.sets, room.games, room.umpire) = (court, sets, games, umpire);
@@ -2158,6 +2184,8 @@ mod tests {
         assert_eq!(o.relay, Relay::Own("https://relay.example.org".into()));
         assert_eq!(Online::parse(&o.text()), o);
         assert_eq!(Online::parse("").relay, Relay::N0);
+        let o = Online::parse("private = yes\n");
+        assert!(o.private && Online::parse(&o.text()) == o);
     }
 
     /// The lobby list on a local DHT testnet: a host's announce + listing, found and verified.
@@ -2176,6 +2204,65 @@ mod tests {
             let list = find(&b).await;
             assert_eq!(list.len(), 1);
             assert_eq!((list[0].id.clone(), list[0].taken, list[0].seats), (cx.ep.as_ref().unwrap().id().to_string(), 1, 4));
+        });
+    }
+
+    /// B213 on a local DHT testnet, through the host task: a private lobby isn't in Find but joins by code; Public
+    /// lists it on the next refresh, Private again takes it off (shown full) (~3 s).
+    #[test]
+    fn private_lobby_joins_by_code_only() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let net = n0_mainline::Testnet::new(10).await.unwrap();
+            let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
+            let finder = dht(&net.bootstrap);
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: dht(&net.bootstrap), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let id = hcx.ep.as_ref().unwrap().id().to_string();
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (_gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(0, 0)]);
+            r.private = true;
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let code = loop {
+                if let Ok(Event::Code(c)) = hev.recv_timeout(Duration::from_secs(5)) {
+                    break c;
+                }
+            };
+            // listed or not, waiting up to 5 s for it to settle
+            let listed = |want: bool| {
+                let (finder, id) = (finder.clone(), id.clone());
+                async move {
+                    for _ in 0..10 {
+                        if find(&finder).await.iter().any(|l| l.id == id) == want {
+                            return true;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    false
+                }
+            };
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(find(&finder).await.iter().all(|l| l.id != id), "a private lobby is in Find");
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let mut joined = false;
+            for _ in 0..250 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                if gev.try_iter().any(|e| matches!(e, Event::Room(r) if r.private && r.open() == 2)) {
+                    joined = true;
+                    break;
+                }
+            }
+            assert!(joined, "the code didn't join the private lobby");
+            hcmd.send(Cmd::Private(false)).unwrap();
+            assert!(listed(true).await, "Public didn't list it");
+            hcmd.send(Cmd::Private(true)).unwrap();
+            assert!(listed(false).await, "Private again didn't take it off");
         });
     }
 
