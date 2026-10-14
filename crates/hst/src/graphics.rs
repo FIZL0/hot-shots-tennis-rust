@@ -31,8 +31,9 @@ pub struct Graphics {
     pub original: bool,
     /// A window instead of borderless fullscreen on the current monitor (the default, B96). Not part of a preset.
     pub windowed: bool,
-    /// Draw the frame rate in the window's top-right corner (B186; `fps_counter`). Not part of a preset.
-    pub show_fps: bool,
+    /// Draw the frame rate in the window's bottom-left corner (B186; `fps_counter`): 0 off, 1 on, 2 detailed (where
+    /// the frame's time goes, B328). Not part of a preset.
+    pub show_fps: u8,
 }
 
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
@@ -45,16 +46,16 @@ pub const MSAA: [u32; 3] = [1, 2, 4];
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: false }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: false };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0 };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: false };
-    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0 };
+    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -66,7 +67,7 @@ impl Graphics {
             "msaa" | "anti_aliasing" => self.msaa = MSAA.into_iter().find(|&m| msaa_name(m) == v).unwrap_or(self.msaa),
             "original" => self.original = v != "off",
             "windowed" => self.windowed = v != "off",
-            "show_fps" => self.show_fps = v != "off",
+            "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             _ => return false,
         }
@@ -76,7 +77,7 @@ impl Graphics {
     /// settings.txt lines.
     pub fn text(&self) -> String {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
-        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" }, if self.show_fps { "on" } else { "off" })
+        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" }, ["off", "on", "detailed"][self.show_fps.min(2) as usize])
     }
 
     /// The match's flags.
@@ -91,8 +92,10 @@ impl Graphics {
         if self.windowed {
             f.push("--windowed".into());
         }
-        if self.show_fps {
-            f.push("--show-fps".into());
+        match self.show_fps {
+            0 => {}
+            1 => f.push("--show-fps".into()),
+            _ => f.push("--show-fps-detailed".into()),
         }
         f
     }
@@ -132,6 +135,46 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Graphics>()
         .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), fps_counter))
         .add_systems(Last, limit);
+    // Show FPS → Detailed: where the frame's time goes (`frame_start`)
+    use bevy::app::RunFixedMainLoopSystems as F;
+    app.init_resource::<Split>()
+        .add_systems(First, frame_start)
+        .add_systems(RunFixedMainLoop, (mark::<1>.in_set(F::BeforeFixedMainLoop), mark::<2>.in_set(F::AfterFixedMainLoop)))
+        .add_systems(Last, mark::<3>.before(limit));
+    if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        use bevy::render::renderer::{RenderGraph, RenderGraphSystems as G};
+        r.add_systems(RenderGraph, (mark::<4>.in_set(G::Begin), mark::<5>.in_set(G::Render).after(bevy::core_pipeline::schedule::camera_driver)))
+            .add_systems(bevy::render::Render, mark::<6>.in_set(bevy::render::RenderSystems::Cleanup));
+    }
+}
+
+/// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
+/// game's update, 4 the render graph's start (extract, prepare and queue done), 5 pass encoding done, 6 submitted and
+/// presented. On the web all of it runs on one thread in that order; natively rendering overlaps the next frame.
+static MARKS: std::sync::Mutex<[Option<bevy::platform::time::Instant>; 7]> = std::sync::Mutex::new([None; 7]);
+
+fn mark<const I: usize>() {
+    MARKS.lock().unwrap()[I] = Some(bevy::platform::time::Instant::now());
+}
+
+/// Sums of the frames since the counter last showed them, in ms: frame, game (incl. sim), sim, prepare (extract,
+/// prepare, queue), encode, submit (+ present), worst frame, frames.
+#[derive(Resource, Default)]
+struct Split([f32; 8]);
+
+fn frame_start(mut split: ResMut<Split>) {
+    let now = bevy::platform::time::Instant::now();
+    let mut m = MARKS.lock().unwrap();
+    if let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5), Some(t6)] = *m {
+        let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
+        let frame = ms(t0, now);
+        for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
+            *sum += v;
+        }
+        split.0[6] = split.0[6].max(frame);
+        split.0[7] += 1.0;
+    }
+    *m = [Some(now), None, None, None, None, None, None];
 }
 
 fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
@@ -186,30 +229,82 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
 #[derive(Component)]
 struct FpsText;
 
-/// Show FPS: the smoothed frame rate at the window's top-right corner, over menus and matches alike. Sized on the
+/// Show FPS: the smoothed frame rate at the window's bottom-left corner, over menus and matches alike. Sized on the
 /// 4:3 screen's height (the window's, or its width × 3/4 when taller than 4:3, `widescreen::vplace`) so it scales
-/// uniformly with the HUD.
-fn fps_counter(mut commands: Commands, g: Res<Graphics>, d: Res<bevy::diagnostic::DiagnosticsStore>, window: Query<&Window, With<PrimaryWindow>>, mut q: Query<(Entity, &mut Text, &mut TextFont), With<FpsText>>) {
+/// uniformly with the HUD. Detailed (B328) adds, averaged over half a second: the frame's time split into the game's
+/// update (of it the simulation), rendering (prepare, encode, submit) and idle (waiting on the browser/GPU: near 0 =
+/// CPU-bound), the meshes drawn and the renderer.
+#[allow(clippy::too_many_arguments)]
+fn fps_counter(
+    mut commands: Commands,
+    g: Res<Graphics>,
+    d: Res<bevy::diagnostic::DiagnosticsStore>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut q: Query<(Entity, &mut Text, &mut TextFont), With<FpsText>>,
+    mut split: ResMut<Split>,
+    meshes: Query<(&ViewVisibility, Has<bevy::light::NotShadowCaster>), With<Mesh3d>>,
+    adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
+) {
     let Ok((e, mut text, mut font)) = q.single_mut() else {
-        if g.show_fps {
+        if g.show_fps > 0 {
             // bottom-left: the menus' header holds pads/disc/version top-right, the legend bar's left end is empty (under the hint line)
-            let node = Node { position_type: PositionType::Absolute, bottom: Val::Px(0.0), left: Val::Percent(1.0), ..default() };
-            commands.spawn((FpsText, Text::new(""), TextFont::default(), TextColor(Color::srgb(1.0, 1.0, 0.3)), TextShadow::default(), node, GlobalZIndex(i32::MAX)));
+            // detailed: top-left on a dark box, clear of the match's team panels
+            let mut node = Node { position_type: PositionType::Absolute, bottom: Val::Px(0.0), left: Val::Percent(1.0), ..default() };
+            let mut bg = BackgroundColor::DEFAULT;
+            if g.show_fps == 2 {
+                (node.bottom, node.top, bg) = (Val::Auto, Val::Px(0.0), BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)));
+            }
+            commands.spawn((FpsText, Text::new(""), TextFont::default(), TextColor(Color::srgb(1.0, 1.0, 0.3)), TextShadow::default(), node, bg, GlobalZIndex(i32::MAX)));
         }
         return;
     };
-    if !g.show_fps {
+    // off, or switched between On and Detailed (they sit in different corners): respawned next frame
+    if g.show_fps == 0 || g.is_changed() {
         commands.entity(e).despawn();
         return;
     }
     let fps = d.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS).and_then(|f| f.smoothed()).unwrap_or(0.0);
-    let s = format!("{fps:.0} FPS");
-    if text.0 != s {
-        text.0 = s;
+    let [frame, game, sim, prep, enc, sub, worst, n] = split.0;
+    if g.show_fps == 1 {
+        let s = format!("{fps:.0} FPS");
+        if text.0 != s {
+            text.0 = s;
+        }
+    } else if frame >= 500.0 {
+        let a = |v: f32| v / n;
+        let render = prep + enc + sub;
+        let (mut shown, mut cast) = (0, 0);
+        for (v, no_cast) in &meshes {
+            shown += v.get() as u32;
+            cast += (v.get() && !no_cast) as u32;
+        }
+        let size = window.single().map_or(String::new(), |w| {
+            let k = if g.original { 0.0 } else { g.scale as f32 / 100.0 };
+            if k > 0.0 { format!("{:.0}x{:.0}", w.physical_width() as f32 * k, w.physical_height() as f32 * k) } else { "640x448".into() }
+        });
+        let gpu = adapter.map_or(String::new(), |a| format!("{:?} {}", a.backend, a.name));
+        text.0 = format!(
+            "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
+            a(frame),
+            a(game + render),
+            a((frame - game - render).max(0.0)),
+            a(game),
+            a(sim),
+            a(render),
+            a(prep),
+            a(enc),
+            a(sub),
+            g.shadows.name(),
+            msaa_name(g.msaa),
+        );
     }
-    // 16 lines of the PS2's 448
+    if frame >= 500.0 || g.show_fps == 1 {
+        split.0 = [0.0; 8];
+    }
+    // 16 lines of the PS2's 448 (detailed: 11, it has six)
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
-    let size = if tall { bevy::text::FontSize::Vw(16.0 / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(16.0 / 448.0 * 100.0) };
+    let px = if g.show_fps == 2 { 11.0 } else { 16.0 };
+    let size = if tall { bevy::text::FontSize::Vw(px / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(px / 448.0 * 100.0) };
     if font.font_size != size {
         font.font_size = size;
     }
@@ -240,7 +335,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: true };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1 };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -249,8 +344,8 @@ mod tests {
         assert_eq!(Graphics::default().preset(), "Default");
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
         assert_eq!(Graphics { windowed: true, ..default() }.preset(), "Default");
-        assert_eq!(Graphics { show_fps: true, ..default() }.preset(), "Default");
-        assert_eq!(Graphics { show_fps: true, ..default() }.flags().last().unwrap(), "--show-fps");
+        assert_eq!(Graphics { show_fps: 1, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { show_fps: 1, ..default() }.flags().last().unwrap(), "--show-fps");
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
     }

@@ -168,7 +168,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             }
             "--vsync" => gfx.vsync = true,
             "--original" => gfx.original = true,
-            "--show-fps" => gfx.show_fps = true,
+            "--show-fps" => gfx.show_fps = 1,
+            "--show-fps-detailed" => gfx.show_fps = 2,
             "--fps" | "--scale" | "--shadows" | "--msaa" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             // borderless fullscreen is the default (B96); `--fullscreen` stays for older launch scripts
             "--windowed" => gfx.windowed = true,

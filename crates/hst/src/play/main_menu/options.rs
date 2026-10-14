@@ -128,7 +128,7 @@ fn about(o: Opt) -> &'static str {
         Display => "Borderless fullscreen on the current monitor, or a window.",
         Aspect => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.",
         MenuSize => "Makes every menu smaller or bigger. The whole layout scales together, never stretched; the extra room goes around it.",
-        ShowFps => "Show the frame rate in the top-right corner, in the menus and in a match.",
+        ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         Preset => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
@@ -173,6 +173,7 @@ fn choices(o: Opt) -> Vec<String> {
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
+        ShowFps => words(&["Off", "On", "Detailed"]),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
@@ -198,7 +199,7 @@ impl Settings {
             Display => g.windowed = !g.windowed,
             Aspect => self.3 = (self.3 as isize + d).rem_euclid(ASPECTS.len() as isize) as u8,
             MenuSize => self.7 = cycle(&MENU_SIZES, self.7, d),
-            ShowFps => g.show_fps = !g.show_fps,
+            ShowFps => g.show_fps = (g.show_fps as isize + d).rem_euclid(3) as u8,
             KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
@@ -241,7 +242,7 @@ impl Settings {
             Display => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             Aspect => ASPECTS[self.3 as usize].into(),
             MenuSize => menu_size_name(self.7),
-            ShowFps => on_off(g.show_fps),
+            ShowFps => ["Off", "On", "Detailed"][g.show_fps.min(2) as usize].into(),
             KeyHints => on_off(self.0[KEY_HINTS]),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
@@ -645,8 +646,8 @@ mod tests {
         s.step(Display, 1);
         s.step(ShowFps, 1);
         s.step(Preset, 1);
-        assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, true, "Default", "Window"));
-        assert!(Settings::parse(&s.text()).1.show_fps && s.flags().contains(&"--show-fps".into()));
+        assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, 1, "Default", "Window"));
+        assert!(Settings::parse(&s.text()).1.show_fps == 1 && s.flags().contains(&"--show-fps".into()));
         s.step(Original, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
         // B301: Key Hints, on by default, saved
