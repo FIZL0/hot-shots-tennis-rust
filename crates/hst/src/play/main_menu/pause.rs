@@ -5,6 +5,11 @@
 //! underneath (its fixed clock held by `menu.rs`), so the sim and its RNG never see any of it.
 //!
 //! Mouse and touch (here and on the pause dialog): a click or tap on a row chooses it, the right button is Back.
+//!
+//! B254: the pause menu's "Controllers" (local matches) opens the main menu's controller assignment the same way, with
+//! the match's seats: each human seat's device, the computer's seats fixed (`Menu::paused`). 1P's ✕ (the menu's Start)
+//! hands the seats to the match's `controls::PadSlots`, Back leaves them as they were. Who is human doesn't change, so
+//! the sim only sees which device presses for a seat.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -12,7 +17,8 @@ use hst_data::{iso::Iso, xb::Archive};
 use std::sync::Arc;
 
 use super::super::widescreen;
-use super::{Art, Menu, POOL, Screen, Settings, Slot, Text, TickerClip, Ticker, slide};
+use super::super::controls::{PadSlots, Seat};
+use super::{Art, Dev, Menu, POOL, Screen, Settings, Slot, Text, TickerClip, Ticker, slide};
 use crate::Args;
 use crate::audio::{MusicBanks, Sound, SoundBank};
 
@@ -21,12 +27,43 @@ use crate::audio::{MusicBanks, Sound, SoundBank};
 pub(in crate::play) struct PauseSettings {
     pub open: bool,
     fresh: bool,
+    /// B254: the controller assignment is up, with the seats it opened on.
+    seats: Option<[Option<Dev>; 4]>,
 }
 
 impl PauseSettings {
     pub(in crate::play) fn open(&mut self) {
-        *self = PauseSettings { open: true, fresh: true };
+        *self = PauseSettings { open: true, fresh: true, seats: None };
     }
+
+    /// B254: the controller assignment.
+    pub(in crate::play) fn open_seats(&mut self) {
+        *self = PauseSettings { open: true, fresh: true, seats: Some([None; 4]) };
+    }
+}
+
+/// B254: the match's seats 1P..4P as the assignment holds them: each human seat's device (none while its pad is out),
+/// the others the computer's. A seat with both the keyboard and a pad (no `--pads`: 1P) shows its pad.
+fn seats_now(humans: [bool; 4], slots: &PadSlots) -> [Option<Dev>; 4] {
+    std::array::from_fn(|s| match slots.0[s] {
+        _ if !humans[s] => None,
+        Some(e) => Some(Dev::Pad(e)),
+        None => (slots.keys() == Some(s)).then_some(Dev::Keys),
+    })
+}
+
+/// B254: the assignment's seats into the match: each pad held by its seat (`pads`, the sorted list, gives `Seat`'s
+/// index), the keyboard on its own; a seat left without a device takes none until assigned again.
+fn apply(seats: [Option<Dev>; 4], pads: &[Entity], slots: &mut PadSlots) {
+    slots.0 = seats.map(|d| match d {
+        Some(Dev::Pad(e)) => Some(e),
+        _ => None,
+    });
+    slots.1 = Some(seats.map(|d| match d {
+        Some(Dev::Keys) => Some(Seat::Keys),
+        Some(Dev::Pad(e)) => pads.iter().position(|x| *x == e).map(Seat::Pad),
+        _ => None,
+    }));
 }
 
 #[derive(Component)]
@@ -129,9 +166,9 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
     let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word"), super::panel::image(&mut images, &hand)];
-    // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets, the rest left empty
+    // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets (and B254's controller assignment's wall), the rest left empty
     for (xb, name) in &super::SHEETS[..10] {
-        art.push(if name.ends_with("option") || *name == "option_00" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
+        art.push(if name.ends_with("option") || *name == "option_00" || *name == "wall_playerselect" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
     }
     // `Tex::Pill` is the last sheet, as in the main menu
     art.push(super::super::menu_art::pill_layers(&mut images));
@@ -157,9 +194,28 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
 }
 
 /// Opening: the Settings screen, first row, with what `settings.txt` holds now.
-fn opened(ps: Res<PauseSettings>, args: Res<Args>, mut menu: ResMut<Menu>, mut slide: ResMut<slide::Slide>, mut root: Query<&mut Visibility, With<Root>>) {
+fn opened(
+    mut ps: ResMut<PauseSettings>,
+    args: Res<Args>,
+    mut menu: ResMut<Menu>,
+    mut slide: ResMut<slide::Slide>,
+    mut root: Query<&mut Visibility, With<Root>>,
+    (game, pads, slots): (Option<Res<super::super::Game>>, Option<Res<super::super::Pads>>, Res<PadSlots>),
+) {
     if ps.fresh {
         let settings = crate::store::read_to_string(Settings::path(&args.iso)).map_or(menu.settings, |t| Settings::parse(&t));
+        if ps.seats.is_some() {
+            let n = game.map_or(2, |g| g.players.len());
+            let humans: [bool; 4] = std::array::from_fn(|s| s < n && pads.as_ref().is_some_and(|p| !p.autoplay && p.seats.map_or(s == 0 || p.connected > s, |h| h[s])));
+            let seats = seats_now(humans, &slots);
+            ps.seats = Some(seats);
+            *menu = Menu { screen: Screen::Assign, settings, doubles: n == 4, seats, bots: humans.map(|h| !h), paused: true, ..default() };
+            *slide = slide::Slide::default();
+            for mut v in &mut root {
+                v.set_if_neq(Visibility::Inherited);
+            }
+            return;
+        }
         let screen = match std::env::var("HST_PAUSE_SETTINGS").as_deref() {
             Ok("graphics") => Screen::Graphics,
             Ok("sound") => Screen::Sound,
@@ -210,6 +266,7 @@ pub(in crate::play) fn cursor_point(window: &Query<&Window, With<PrimaryWindow>>
 fn after(
     mut ps: ResMut<PauseSettings>,
     menu: Res<Menu>,
+    (mut slots, gamepads): (ResMut<PadSlots>, Query<(Entity, &bevy::input::gamepad::Gamepad)>),
     mut args: ResMut<Args>,
     game: Option<Res<super::super::Game>>,
     sound: Option<Res<Sound>>,
@@ -219,6 +276,18 @@ fn after(
         return;
     }
     ps.fresh = false;
+    // B254: the assignment's Start keeps the seats (if changed), its Back (to the mode screen) leaves them
+    if let Some(was) = ps.seats {
+        if menu.screen == Screen::Chars && menu.seats != was {
+            let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| super::super::controls::readable(g)).map(|(e, _)| e).collect();
+            pads.sort();
+            apply(menu.seats, &pads, &mut slots);
+        }
+        if menu.screen != Screen::Assign {
+            ps.open = false;
+        }
+        return;
+    }
     let [_, _, match_music, _] = menu.settings.0;
     widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
     if match_music != args.music
@@ -444,6 +513,38 @@ mod tests {
         assert_eq!(screen_point(&win, Vec2::new(1680.0, 1080.0)), Vec2::new(640.0, 448.0));
         win.resolution.set(800.0, 600.0);
         assert_eq!(screen_point(&win, Vec2::new(400.0, 300.0)), Vec2::new(320.0, 224.0));
+    }
+
+    /// B254: doubles, 1P on the keyboard, 3P on pad a, 2P and 4P the computer's. 1P's → passes the computer's seat
+    /// (its device to 3P, pad a now 1P), △ adds no computer player, the keyboard leaves, a new pad b's ✕ takes the free
+    /// human seat, 1P's ✕ hands it to the match's slots, which keep it through `update`.
+    #[test]
+    fn reassign_in_a_match() {
+        let [a, b] = [5, 7].map(|n| Entity::from_raw_u32(n).unwrap());
+        let mut slots = PadSlots([None, None, Some(a), None], Some([Some(Seat::Keys), None, Some(Seat::Pad(0)), None]));
+        let humans = [true, false, true, false];
+        let seats = seats_now(humans, &slots);
+        assert_eq!(seats, [Some(Dev::Keys), None, Some(Dev::Pad(a)), None]);
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats, bots: humans.map(|h| !h), paused: true, ..default() };
+        m.step(Dev::Keys, Press { right: true, ..default() });
+        assert_eq!((m.seats, m.bots, m.sel), ([Some(Dev::Pad(a)), None, Some(Dev::Keys), None], [false, true, false, true], 2));
+        m.sel = 1;
+        assert_eq!((m.step(Dev::Pad(a), Press { card: true, ..default() }), m.bots[1]), (vec![], true));
+        // no free human seat yet: b's ✕ does nothing; the keyboard's ○ leaves, then b takes 3P
+        m.step(Dev::Pad(b), Press { ok: true, ..default() });
+        assert!(!m.seats.contains(&Some(Dev::Pad(b))));
+        m.step(Dev::Keys, Press { back: true, ..default() });
+        m.step(Dev::Pad(b), Press { ok: true, ..default() });
+        assert_eq!(m.seats, [Some(Dev::Pad(a)), None, Some(Dev::Pad(b)), None]);
+        // 1P alone may take itself off too (no moving up over the computer's seats)
+        assert!(m.droppable(0) && m.droppable(2));
+        m.step(Dev::Pad(a), Press { ok: true, ..default() });
+        assert_eq!(m.screen, Screen::Chars);
+        apply(m.seats, &[a, b], &mut slots);
+        slots.update(&[a, b]);
+        assert_eq!((slots.0, slots.keys()), ([Some(a), None, Some(b), None], None));
+        // no `--pads`: 1P's pad stands for the keyboard beside it, a missing pad leaves its human seat empty
+        assert_eq!(seats_now([true, true, false, false], &PadSlots([Some(b), None, None, None], None)), [Some(Dev::Pad(b)), None, None, None]);
     }
 
     /// A row changes and saves; Back on the Settings screen goes to `Screen::Main`, which `after` takes as closing.

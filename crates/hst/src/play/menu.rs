@@ -13,8 +13,10 @@
 //! B68 (ours: the original fades out at once): once any point has been scored it first asks "Leave the match?" in
 //! the same dialog, Yes / No on its pills (No chosen; up/down, ✕ chooses, ○ or Start is No, sound 1); No goes back
 //! to the pause menu, Yes fades out.
-//! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`), with `HST_PAUSE_SETTINGS=settings|graphics|controls`
-//! on that Settings screen, or with `HST_PAUSE_ASK=1` on the Leave the match? confirm.
+//! B254 (ours): in a local match a fourth pill, "Controllers", opens the main menu's controller assignment over the
+//! paused match (`main_menu/pause.rs`) to move devices between the human seats.
+//! `HST_PAUSE=<seconds>` opens it after that long (for `--shot`), with `HST_PAUSE_SETTINGS=settings|graphics|controls|assign`
+//! on that Settings screen (or the controller assignment), or with `HST_PAUSE_ASK=1` on the Leave the match? confirm.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -69,11 +71,13 @@ const RETURN: Tex = Tex::Own(13);
 const ASK: Tex = Tex::Own(14);
 const YES: Tex = Tex::Own(15);
 const NO: Tex = Tex::Own(16);
+/// B254: "Controllers", set as `RESUME`.
+const SEATS: Tex = Tex::Own(17);
 /// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills; after
 /// [`LABELS`] in `setup` (B177: it was left at 14 when B68 added three labels, drawing the pills from "Leave the match?").
-const PILL: Tex = Tex::Own(17);
-/// The rows set in `setup` after `TEXTURES`, as [`LABEL`] to [`NO`].
-const LABELS: [&str; 6] = ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No"];
+const PILL: Tex = Tex::Own(18);
+/// The rows set in `setup` after `TEXTURES`, as [`LABEL`] to [`SEATS`].
+const LABELS: [&str; 7] = ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No", "Controllers"];
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
 const INK: [f32; 3] = [15.0; 3];
 pub(super) const PANEL: [f32; 3] = [52.0, 44.0, 36.0];
@@ -95,11 +99,19 @@ struct Quad {
 const OPTIONS: [i32; 3] = [6, SETTINGS, 1];
 /// Not a row of `i_dialog_01`: [`LABEL`].
 const SETTINGS: i32 = -1;
+/// B254: a local match's rows, with (ours) "Controllers" ([`SEATS`]) before "Return to the Menu".
+const OPTIONS_LOCAL: [i32; 4] = [6, SETTINGS, CONTROLLERS, 1];
+const CONTROLLERS: i32 = -2;
 
-/// Pill `k`'s top on the dialog: lifted for three sets, centred on the options.
-fn pill_y(sets_to_win: i32, k: usize) -> i32 {
+/// The dialog's rows: an online match has no "Controllers".
+fn options(local: bool) -> &'static [i32] {
+    if local { &OPTIONS_LOCAL } else { &OPTIONS }
+}
+
+/// Pill `k`'s top on the dialog of `n` rows: lifted for three sets, centred on the options.
+fn pill_y(sets_to_win: i32, n: usize, k: usize) -> i32 {
     let lift = if sets_to_win == 3 { -72 } else { -32 };
-    lift - (OPTIONS.len() as i32 - 1) * 16 + 0xcc + 40 * k as i32
+    lift - (n as i32 - 1) * 16 + 0xcc + 40 * k as i32
 }
 /// Points cells (column, row) by point index; 4 is Deuce, 5 Advantage (tiebreak: 0–7, 8 Deuce, 9 Advantage).
 const POINT_U: [i32; 10] = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
@@ -155,6 +167,9 @@ struct Menu {
     acc: f32,
     /// "Settings" chosen: `step` opens them.
     settings: bool,
+    /// B254: a local match (the dialog has "Controllers"), set by `step`; "Controllers" chosen.
+    local: bool,
+    seats: bool,
     /// B68: a point has been scored (set by `step`), so "Return to the Menu" asks first.
     scored: bool,
     /// B68: the confirm is up, 0 = Yes, 1 = No chosen; ○ pressed since the last tick.
@@ -195,16 +210,18 @@ impl Menu {
             };
             let up = self.held[1] == 0 && repeat(up, &mut self.held[0]);
             let down = self.held[0] == 0 && repeat(down, &mut self.held[1]);
-            let n = OPTIONS.len();
+            let opts = options(self.local);
+            let n = opts.len();
             if down || up {
                 self.sel = if down { (self.sel + 1) % n } else { (self.sel + n - 1) % n };
                 self.hand = Hand::default();
                 sound = Some(0);
             } else if self.confirm {
                 sound = Some(2);
-                match OPTIONS[self.sel] {
+                match opts[self.sel] {
                     6 => *self = Menu::default(),
                     SETTINGS => self.settings = true,
+                    CONTROLLERS => self.seats = true,
                     _ if self.scored => (self.ask, self.hand) = (Some(1), Hand::default()),
                     _ => self.quitting = Some(0),
                 }
@@ -264,6 +281,8 @@ struct View {
     fade: Option<i32>,
     /// B68: the confirm is up with Yes (0) or No (1) chosen.
     ask: Option<usize>,
+    /// B254: a local match's dialog, with "Controllers".
+    local: bool,
 }
 
 fn layout(v: &View) -> Vec<Quad> {
@@ -354,7 +373,8 @@ fn layout(v: &View) -> Vec<Quad> {
 
     // the dialog (B141, ours in the dialog's place and colours): a rounded box, a pill per option (bright when
     // chosen), the text, the hand
-    let nopt = OPTIONS.len() as i32;
+    let opts = options(v.local);
+    let nopt = opts.len() as i32;
     let lift = if v.sets_to_win == 3 { -72 } else { -32 };
     let top = lift - (nopt - 1) * 16 + 0xb8;
     let frame = r(160, top, 320, 16 + 8 * (nopt * 5 - 1) + 8 + 16);
@@ -363,14 +383,15 @@ fn layout(v: &View) -> Vec<Quad> {
             out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
         }
     }
-    let y0 = pill_y(v.sets_to_win, 0);
+    let y0 = pill_y(v.sets_to_win, opts.len(), 0);
     // the rows: the options, or (B68) the question without a pill over Yes and No
     let rows: Vec<Tex> = match v.ask {
         Some(_) => vec![ASK, YES, NO],
-        None => OPTIONS
+        None => opts
             .iter()
             .map(|&text| match text {
                 SETTINGS => LABEL,
+                CONTROLLERS => SEATS,
                 6 => RESUME,
                 _ => RETURN,
             })
@@ -530,6 +551,7 @@ fn step(
     mut auto: Local<bool>,
     (mouse, touches, window, mut settings): (Res<ButtonInput<MouseButton>>, Res<Touches>, Query<&Window, With<bevy::window::PrimaryWindow>>, ResMut<PauseSettings>),
     mut hovered: Local<Option<Vec2>>,
+    net: Option<Res<super::netplay::Netplay>>,
 ) {
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| g.just_pressed(b));
     let start = keys.just_pressed(KeyCode::Escape) || any(GamepadButton::Start);
@@ -557,8 +579,10 @@ fn step(
                 s.hold_followed();
             }
             play(2);
-            if timed && std::env::var_os("HST_PAUSE_SETTINGS").is_some() {
-                settings.open();
+            match std::env::var("HST_PAUSE_SETTINGS").as_deref() {
+                Ok("assign") if timed => settings.open_seats(),
+                Ok(_) if timed => settings.open(),
+                _ => {}
             }
             if timed && std::env::var_os("HST_PAUSE_ASK").is_some() {
                 menu.ask = Some(1);
@@ -580,7 +604,9 @@ fn step(
         return;
     }
     let sets = g.rules.sets.clamp(1, 3);
-    let pill = |p: Vec2| (176.0..464.0).contains(&p.x).then(|| (0..OPTIONS.len()).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(sets, k) as f32)))).flatten();
+    menu.local = net.is_none();
+    let n = options(menu.local).len();
+    let pill = |p: Vec2| (176.0..464.0).contains(&p.x).then(|| (0..n).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(sets, n, k) as f32)))).flatten();
     // B221: the mouse over a pill moves the hand there; a right click, or a click or tap off the pills, is Back
     let (press, right) = super::main_menu::pause::pointer_press(&window, &mouse, &touches);
     let at = super::main_menu::pause::cursor_point(&window);
@@ -627,6 +653,9 @@ fn step(
     spent(&mut pads);
     if std::mem::take(&mut menu.settings) {
         settings.open();
+    }
+    if std::mem::take(&mut menu.seats) {
+        settings.open_seats();
     }
     if menu.quitting.is_some_and(|t| t >= 60) {
         exit.write(AppExit::Success);
@@ -691,6 +720,7 @@ fn draw(
             hand_x: if cursor.is_some() { 0.0 } else { menu.hand.x },
             fade: menu.quitting,
             ask: menu.ask,
+            local: menu.local,
         })
     } else {
         Vec::new()
@@ -755,6 +785,7 @@ mod tests {
             hand_x: 0.0,
             fade: None,
             ask: None,
+            local: false,
         }
     }
 
@@ -763,7 +794,7 @@ mod tests {
     #[test]
     fn art_order() {
         let n = TEXTURES.len();
-        assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, PILL], std::array::from_fn(|i| Tex::Own(n + i)));
+        assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, SEATS, PILL], std::array::from_fn(|i| Tex::Own(n + i)));
         assert_eq!(HAND, Tex::Own(n - 1));
     }
 
@@ -785,7 +816,28 @@ mod tests {
         assert_eq!(at(RETURN, 240.0, 226.0).unwrap().alpha, 64.0);
         assert_eq!(at(LABEL, 240.0, 186.0).unwrap().dst, [240.0, 186.0, 160.0, 20.0]);
         assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 148.0, 64.0, 32.0]);
-        assert_eq!((pill_y(1, 1), pill_y(3, 0)), (180, 100));
+        assert_eq!((pill_y(1, 3, 1), pill_y(3, 3, 0)), (180, 100));
+    }
+
+    /// B254: a local match's dialog has four pills, "Controllers" third, centred as the three; ✕ on it asks for the
+    /// controller assignment.
+    #[test]
+    fn controllers_row() {
+        let qs = layout(&View { local: true, ..view() });
+        assert!(qs.iter().any(|q| q.tex == PILL && q.dst[0] == 176.0 && q.dst[1] == 124.0));
+        assert_eq!(qs.iter().find(|q| q.tex == SEATS).unwrap().dst[1], 210.0);
+        assert!(qs.iter().any(|q| q.tex == RETURN && q.dst[1] == 250.0));
+        let mut m = Menu { local: true, ..Menu::opened() };
+        for _ in 0..5 {
+            m.tick(false, false);
+        }
+        m.tick(false, true);
+        m.tick(false, false);
+        m.tick(false, true);
+        assert_eq!(m.sel, 2);
+        m.confirm = true;
+        assert_eq!(m.tick(false, false), Some(2));
+        assert!(m.open && m.seats && !m.settings);
     }
 
     /// Advantage: "A" for the leader, the trailing 40 at half alpha; tiebreak deuce uses the red D.
