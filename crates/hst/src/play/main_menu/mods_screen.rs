@@ -91,6 +91,10 @@ pub(super) struct View {
     changed: bool,
     fresh: bool,
     pub(super) ask: Option<usize>,
+    /// B208: the web build on a touch device (no file picker, no sign-in): Add mod and Upload my mod are greyed, and
+    /// choosing one puts up the "use the desktop app" popup (its row while up).
+    phone: bool,
+    nophone: Option<usize>,
 }
 
 impl View {
@@ -109,7 +113,7 @@ impl View {
         if self.page == Page::Mine { &self.mine } else { &self.store }.as_deref().unwrap_or_default()
     }
 
-    /// Installed: Add mod, Browse mods, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
+    /// Installed: Browse mods, Add mod, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
     /// Back. Upload: the account, My public mods, the mods, Back. Mine: the player's uploads, Refresh, Back.
     fn rows(&self) -> usize {
         match self.page {
@@ -197,6 +201,14 @@ impl Menu {
 
     pub(super) fn mods_step(&mut self, k: Press, out: &mut Vec<Effect>) {
         use Effect::Sound;
+        // B208: the phone popup takes every press; ✕ or ○ closes it
+        if self.add.nophone.is_some() {
+            if k.ok || k.back {
+                self.add.nophone = None;
+                out.push(Sound(1));
+            }
+            return;
+        }
         let n = self.add.rows();
         self.sel = self.sel.min(n - 1);
         if k.up || k.down {
@@ -212,7 +224,7 @@ impl Menu {
             Page::Installed => self.installed_step(k, s, n, out),
             Page::Browse => {
                 if k.back || (k.ok && s == n - 1) {
-                    self.mods_page(Page::Installed, 1);
+                    self.mods_page(Page::Installed, 0);
                     out.push(Sound(1));
                 } else if k.ok && s == n - 2 {
                     if !self.add.busy {
@@ -357,6 +369,12 @@ impl Menu {
             }
             out.push(Sound(1));
         } else if k.ok && s == 0 {
+            self.mods_page(Page::Browse, 0);
+            out.push(Sound(2));
+        } else if k.ok && (s == 1 || s == 2) && self.add.phone {
+            self.add.nophone = Some(s);
+            out.push(Sound(1));
+        } else if k.ok && s == 1 {
             // a pad's or key's ✕ (a tap lands on the page's input itself)
             #[cfg(target_arch = "wasm32")]
             crate::web::mod_pick();
@@ -366,9 +384,6 @@ impl Menu {
                 modstore::pick(root());
             }
             self.add.status = "Pick a mod .zip (a character from the mods repo).".into();
-            out.push(Sound(2));
-        } else if k.ok && s == 1 {
-            self.mods_page(Page::Browse, 0);
             out.push(Sound(2));
         } else if k.ok && s == 2 {
             self.mods_page(Page::Upload, 0);
@@ -499,8 +514,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let label = |r: usize| -> String {
         match v.page {
             Page::Installed => match r {
-                0 => "Add mod".into(),
-                1 => "Browse mods".into(),
+                0 => "Browse mods".into(),
+                1 => "Add mod".into(),
                 2 => "Upload my mod".into(),
                 r if r < TOP + v.list.len() => short(&v.list[r - TOP].name, 14),
                 r if r == TOP + v.list.len() => "Reload".into(),
@@ -522,7 +537,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let end = (v.top + SHOWN).min(v.rows());
     let labels: Vec<String> = (v.top..end).map(label).collect();
     let hits = d.hits.len();
-    d.rows_at(&labels, m.sel - v.top, X, Y, W, hand_x, PITCH);
+    let top = v.top;
+    let off = |r: usize| v.phone && v.page == Page::Installed && (r + top == 1 || r + top == 2);
+    d.rows_locked(&labels, m.sel - v.top, X, Y, W, hand_x, PITCH, off);
     // the rows shown are `top..`
     for h in &mut d.hits[hits..] {
         if let super::pointer::Act::Row(r, _) = &mut h.act {
@@ -561,8 +578,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     } else {
         match v.page {
             Page::Installed => match m.sel {
-                0 => "Add a custom character from a mod .zip (its mod.json and models).".into(),
-                1 => "Mods other players shared: install one with a press.".into(),
+                0 => "Mods other players shared: install one with a press.".into(),
+                1 | 2 if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
+                1 => "Add a custom character from a mod .zip (its mod.json and models).".into(),
                 2 => "Share one of your mods with everyone (needs a Hugging Face account).".into(),
                 s if s < TOP + v.list.len() => {
                     let md = &v.list[s - TOP];
@@ -597,6 +615,33 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
     };
     d.info(&info);
+    if let Some(r) = v.nophone {
+        nophone(d, if r == 1 { "Add mod" } else { "Upload my mod" });
+    }
+}
+
+/// B208: the phone popup over a dimmed page, in B205's popup style: the row's name, why, and an OK pill; a tap
+/// anywhere closes it.
+fn nophone(d: &mut Draw, row: &str) {
+    use super::super::menu::{CHOSEN, PANEL};
+    use super::pointer::{Act, OK, press};
+    if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
+        d.out.remove(i);
+    }
+    d.popup(Some(press(|k| k.back = true)));
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = super::Anchor::Centre;
+    let b = [140.0, ASK_TOP - 70.0, 360.0, 70.0 + 56.0 + 16.0];
+    d.box3(b, 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    d.hit(b, Act::Press(OK));
+    d.outlined(|d| d.label(row, 320.0, ASK_TOP - 58.0, 22.0, 328.0, GOLD));
+    d.outlined(|d| d.label("Not available in the browser on phones:", 320.0, ASK_TOP - 34.0, 20.0, 328.0, WHITE));
+    d.outlined(|d| d.label("use the desktop app.", 320.0, ASK_TOP - 12.0, 20.0, 328.0, WHITE));
+    d.pill_at([176.0, ASK_TOP + 20.0, 288.0, 32.0], [INK, WHITE, CHOSEN], 128.0);
+    d.label("OK", 320.0, ASK_TOP + 26.0, 20.0, 160.0, WHITE);
+    let why = if row == "Add mod" { "picks a .zip from your files" } else { "signs in to Hugging Face" };
+    d.said = format!("{row} {why}, which the browser on phones can't do: use the desktop app.");
 }
 
 /// A mod's detail lines: where it's from, who made it, its hand, costumes and the disc character it plays like.
@@ -682,6 +727,10 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.armed = Some(2);
         v.status = format!("{RULE} Press again to upload {}.", v.list.first().map_or("", |x| &x.name));
         m.sel = 2;
+    } else if screen.starts_with("phonemods") {
+        v.phone = true;
+        m.sel = 1;
+        v.nophone = (screen == "phonemods-ask").then_some(1);
     }
 }
 
@@ -689,7 +738,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
 /// puts its file input.
 fn add_rect(m: &Menu, aspect: f32) -> Option<[f32; 4]> {
     let (share, v) = (widescreen::share(aspect), widescreen::vshare(aspect));
-    (m.screen == Screen::Mods && m.add.page == Page::Installed && m.add.top == 0).then(|| [X * share / 6.4 + 50.0 * (1.0 - share), Y * v / 4.48 + 50.0 * (1.0 - v), W * share / 6.4, H * v / 4.48])
+    (m.screen == Screen::Mods && m.add.page == Page::Installed && m.add.top == 0 && !m.add.phone && m.add.nophone.is_none())
+        .then(|| [X * share / 6.4 + 50.0 * (1.0 - share), (Y + PITCH) * v / 4.48 + 50.0 * (1.0 - v), W * share / 6.4, H * v / 4.48])
 }
 
 /// The store's previews (by mod id; None: it has none, or it's on its way), and the hovered one's (`Tex::Shelf`).
@@ -720,6 +770,8 @@ fn page(
         if *on && menu.add.page == Page::Installed {
             menu.add.refresh();
         }
+        // B208: a touch device stays one (`web/touch.js` never forgets a touch)
+        menu.add.phone |= *on && super::touch_page();
         // the select's cards for the mods it has (its roster, built at startup)
         if *on && let Some(art) = &art {
             let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.id.clone(), *s)).collect();
@@ -918,7 +970,7 @@ mod tests {
         }
     }
 
-    /// The rows: Add mod, Browse, Upload, each installed mod, Reload, Back; ✕ twice removes a mod (from memory, and
+    /// The rows: Browse, Add mod, Upload, each installed mod, Reload, Back; ✕ twice removes a mod (from memory, and
     /// nothing else).
     #[test]
     fn removes_on_the_second_press() {
@@ -1000,7 +1052,9 @@ mod tests {
         m.add.have = [("a".to_string(), Some("1".repeat(64))), ("b".to_string(), Some("9".repeat(64)))].into();
         m.add.list = vec![a_mod("a", "A")];
         let mut out = Vec::new();
-        m.sel = 1;
+        // B208: the page opens on Browse mods
+        m.mods_open(&mut out);
+        assert_eq!(m.sel, 0);
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Browse, 0));
         let tags: Vec<_> = m.add.entries().iter().map(|x| m.add.state(x)).collect();
@@ -1009,7 +1063,7 @@ mod tests {
         assert!(m.add.status.contains("installed already") && !m.add.busy);
         assert_eq!(super::super::pointer::tests::act_at(&m, X + 10.0, Y + PITCH + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
         m.mods_step(Press { back: true, ..default() }, &mut out);
-        assert_eq!((m.add.page, m.sel, m.screen), (Page::Installed, 1, Screen::Mods));
+        assert_eq!((m.add.page, m.sel, m.screen), (Page::Installed, 0, Screen::Mods));
         m.sel = 2;
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.page, Page::Upload);
@@ -1026,6 +1080,34 @@ mod tests {
         m.sel = 3;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Installed, 2));
+    }
+
+    /// B208: on a phone Add mod and Upload my mod are greyed and put up the popup instead (no picker, no page); ✕, ○
+    /// or a tap anywhere closes it; Browse mods still opens; the file input stays off.
+    #[test]
+    fn phone_rows_greyed() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.add.phone = true;
+        let mut out = Vec::new();
+        for (row, close) in [(1, ok()), (2, Press { back: true, ..default() })] {
+            m.sel = row;
+            m.mods_step(ok(), &mut out);
+            assert_eq!((m.add.nophone, m.add.page, m.add.busy), (Some(row), Page::Installed, false));
+            // the popup takes the moves
+            m.mods_step(Press { down: true, ..default() }, &mut out);
+            assert_eq!((m.sel, m.add.nophone), (row, Some(row)));
+            m.mods_step(close, &mut out);
+            assert_eq!((m.screen, m.add.nophone), (Screen::Mods, None));
+        }
+        assert!(add_rect(&m, 4.0 / 3.0).is_none());
+        use super::super::pointer::{Act, OK, tests::act_at};
+        m.add.nophone = Some(1);
+        assert_eq!(act_at(&m, 320.0, ASK_TOP), Some(Act::Press(OK)));
+        assert_eq!(act_at(&m, 10.0, 300.0), None);
+        m.add.nophone = None;
+        m.sel = 0;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.page, Page::Browse);
     }
 
     /// M19: My public mods needs an account; its entries arm on the first press (a PR's closes, a merged one's asks
