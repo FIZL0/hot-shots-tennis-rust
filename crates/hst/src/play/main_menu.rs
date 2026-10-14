@@ -2133,8 +2133,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // the faces, darkened where every costume of it is taken (B66: for the player picking)
         for &(c, x, y) in &GRID {
             let tint = if m.next_free(lead, Who::Disc(c), 0, false).is_none() { [50.0; 3] } else { WHITE };
-            d.q(Tex::Solid, [0.0; 4], [x - 32.0, y - 32.0, 64.0, 64.0], [110.0, 100.0, 90.0], 128.0);
-            d.q(Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0], [x - 30.0, y - 30.0, 60.0, 60.0], tint, 128.0);
+            face_frame(d, (Tex::Icon(Who::Disc(c)), [(c % 8) as f32 * 64.0, (c / 8) as f32 * 64.0, 64.0, 64.0]), x, y, 64.0, tint);
         }
         for (i, &(_, x, y)) in GRID.iter().enumerate() {
             d.hit([x - 32.0, y - 32.0, 64.0, 64.0], pointer::Act::Cell(i));
@@ -2142,7 +2141,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         // B217: the Random card (the confirm screen's "?" court tile), dark when nothing's open
         let (rx, ry) = RANDOM_CELL;
         let tint = if m.draw(lead, 0).is_none() { [50.0; 3] } else { WHITE };
-        d.q(Tex::Solid, [0.0; 4], [rx - 26.0, ry - 20.0, 52.0, 40.0], [110.0, 100.0, 90.0], 128.0);
+        d.box3([rx - 27.0, ry - 21.0, 54.0, 42.0], 8.0, [Some(INK), Some(if tint == WHITE { WHITE } else { [60.0; 3] }), Some(FACE_FILL)], 128.0);
         d.q(C02, RANDOM_TILE, [rx - 24.0, ry - 18.0, 48.0, 36.0], tint, 128.0);
         d.hit([rx - 26.0, ry - 20.0, 52.0, 40.0], pointer::Act::Cell(CHARS));
     }
@@ -2319,6 +2318,24 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
     d.label(RANK_NAMES.get(r).copied().unwrap_or(""), x + 55.0, y + 2.0, 18.0, 96.0, WHITE);
 }
 
+/// B263: the warm fill behind a face icon.
+const FACE_FILL: [f32; 3] = [110.0, 100.0, 90.0];
+
+/// B263: a round face icon `icon` (a `Tex`, its source rect) in a frame `size` across centred on (x, y), in the
+/// cards' style: a thin ink rim and white ring (dark with the face where every costume is taken) round a warm fill,
+/// stacked discs of our pill's outer stadium.
+fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f32, tint: [f32; 3]) {
+    let ring = if tint == WHITE { WHITE } else { [60.0; 3] };
+    for (inset, rgb) in [(0.0, INK), (1.5, ring), (3.0, FACE_FILL)] {
+        let r = size / 2.0 - inset;
+        for (src, dst) in super::menu_art::pill_quads(0, [x - r, y - r, 2.0 * r, 2.0 * r]) {
+            d.q(Tex::Pill, src, dst, rgb, 128.0);
+        }
+    }
+    let f = size / 2.0 - 3.5;
+    d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
+}
+
 /// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
 /// tag of each player picking on this page on theirs.
 fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lead: usize) {
@@ -2327,9 +2344,8 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lea
     d.box3([g.x, ICON_BOX, Grid::width(g.cols), g.rows as f32 * ICON_PITCH + 10.0], 10.0, [Some(INK), Some(WHITE), None], 128.0);
     for i in page.clone() {
         let (x, y) = g.cell(i);
-        d.q(Tex::Solid, [0.0; 4], [x - 28.0, y - 28.0, 56.0, 56.0], [110.0, 100.0, 90.0], 128.0);
         let tint = if m.next_free(lead, Who::Mod(i), 0, false).is_none() { [50.0; 3] } else { WHITE };
-        d.q(Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0], [x - 27.0, y - 27.0, 54.0, 54.0], tint, 128.0);
+        face_frame(d, (Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0]), x, y, 56.0, tint);
         d.fitted(&m.mods[i].name, x, y + 29.0, 12.0, 64.0);
         d.hit([x - 28.0, y - 28.0, 56.0, 56.0], pointer::Act::Cell(i));
     }
