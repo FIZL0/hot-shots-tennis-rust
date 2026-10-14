@@ -175,7 +175,13 @@ if (window.GPUDevice) {
     return m;
   };
 }
-addEventListener('error', e => fail(e.error ?? e.message));
+// B330: a script from another origin that throws reaches the page as a bare "Script error." (no error, no file): the
+// browser's own or an extension's, never the game's (every script of ours is same-origin). iOS Safari's Share button
+// runs its share extensions' page scripts, and one throwing stopped the game on the ISO prompt: logged, not fatal.
+addEventListener('error', e => {
+  if (!e.error && !e.filename && /^script error\.?$/i.test(e.message ?? '')) return console.warn(`hst: ignored a script error from another origin (${e.message})`);
+  fail(e.error ?? e.message);
+});
 addEventListener('unhandledrejection', e => fail(e.reason));
 // B260: a hidden tab gets no animation frames and the game's loop (Bevy on winit) only steps on them, so while the
 // tab is hidden and no match is on (`web.rs` sets hstMatch), a frame comes from a timer instead (the browser throttles
