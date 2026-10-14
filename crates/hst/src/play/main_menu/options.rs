@@ -436,13 +436,13 @@ pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings,
         let vw = r[2] * 0.3;
         [r[0] + r[2] - 4.0 - (2 - c) as f32 * vw - (1 - c) as f32 * 6.0, vw]
     };
-    let [_, _, _, h0] = row(body, names.len(), 0);
+    let [_, _, _, h0] = row(body, names.len() + 1, 0);
     for (c, head) in ["Keyboard", "Controller"].into_iter().enumerate() {
-        let [cx, vw] = col(row(body, names.len(), 0), c);
+        let [cx, vw] = col(row(body, names.len() + 1, 0), c);
         d.centred(head, cx + vw / 2.0, list[1] + 8.0, (h0 * 0.45).min(13.0), MUTED);
     }
     for (i, n) in names.iter().enumerate() {
-        let r @ [x, y, _, h] = row(body, names.len(), i);
+        let r @ [x, y, _, h] = row(body, names.len() + 1, i);
         let on = i == m.sel;
         if on {
             chosen(d, r, hand_x);
@@ -458,11 +458,23 @@ pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings,
         }
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
+    {
+        // the last row: Reset to defaults
+        let i = names.len();
+        let r @ [x, y, _, h] = row(body, names.len() + 1, i);
+        if i == m.sel {
+            chosen(d, r, hand_x);
+        }
+        d.text("Reset to defaults", x + 14.0, y + (h - (h * 0.6).min(18.0)) / 2.0, (h * 0.6).min(18.0), BROWN);
+        d.hit(r, pointer::Act::Row(i, pointer::OK));
+    }
     d.text("Saved to controls.txt", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(n) = names.get(m.sel) {
         let about = if waiting { "Press the new key or button for it (Escape cancels). A key replaces its keys, a button its buttons." } else { "Choose it to rebind it: the next key or button you press." };
         let chips: Vec<String> = bind.names(m.sel).iter().map(|n| shown(n).to_string()).collect();
         side_panel(d, side, n, about, "Bound to", &chips, None, "");
+    } else {
+        side_panel(d, side, "Reset to defaults", "Puts every key and button back as it was first.", "", &[], None, "");
     }
 }
 
@@ -497,7 +509,7 @@ mod tests {
         m.step(Dev::Keys, press(|k| &mut k.ok));
         for &(_, s) in tabs_shown() {
             assert_eq!((m.screen, m.sel), (s, 0));
-            let n = if s == Screen::Controls { controls::action_names().count() } else { page(s).len() };
+            let n = if s == Screen::Controls { controls::action_names().count() + 1 } else { page(s).len() };
             for want in (1..n).chain([0]) {
                 m.step(Dev::Keys, press(|k| &mut k.down));
                 assert_eq!(m.sel, want);
@@ -540,7 +552,7 @@ mod tests {
         for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 5.0 / 4.0, 9.0 / 16.0, 0.4] {
             let grid = Grid::fit(a);
             for (_, s) in TABS {
-                let n = if s == Screen::Controls { controls::action_names().count() } else { page(s).len() };
+                let n = if s == Screen::Controls { controls::action_names().count() + 1 } else { page(s).len() };
                 let (list, side) = boxes(&grid, n);
                 assert!(side[2] >= 150.0 && side[3] >= 150.0 && list[0] + list[2] <= side[0] + side[2], "{a}: {list:?} {side:?}");
                 let r = row(list, n, n - 1);
