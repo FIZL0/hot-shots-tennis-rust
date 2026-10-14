@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -1505,8 +1505,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "chars-online" | "chars-random" => Screen::Chars,
-        "confirm" | "courts" | "umpires" => Screen::Confirm,
+        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
+        "confirm" | "confirm-random" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-ask" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
@@ -1530,8 +1530,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
         menu.players[0].card = screen.ends_with("attrs");
-        menu.players[0].ready = screen == "coms";
+        menu.players[0].ready = screen.starts_with("coms");
         menu.players[0].random = screen == "chars-random";
+        // B264: 2P's computer readied on Random (`coms-random`, `confirm-random`)
+        menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
+        menu.players[1].ready |= menu.players[1].random;
         // B64: the court / umpire picker open on Nakagawa River Courts / Lily, as the PCSX2 shots (`context/b64`)
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
@@ -2137,12 +2140,16 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         d.box3([x, y, 144.0, 168.0], 12.0, [Some(INK), Some(if picking || pl.ready { WHITE } else { [60.0; 3] }), Some(fill)], 128.0);
         // B221: a tap on a card readies its pick, on a ready one picks again
         d.hit([x, y, 144.0, 168.0], pointer::press(|k| if pl.ready { k.back = true } else { k.ok = true }));
-        if picking && pl.random && !pl.ready {
-            // B217: the ? card until the pick is drawn on ready
-            d.q(C02, RANDOM_TILE, [x + 14.0, y + 36.0, 116.0, 86.0], WHITE, 128.0);
+        if (picking || pl.ready) && pl.random {
+            // B217: the ? card; B264: a ready one too (who it drew stays hidden until the match)
+            // smaller once ready, under the COM tag and over "Ready to go!"
+            let tile = if pl.ready { [x + 29.0, y + 54.0, 86.0, 64.0] } else { [x + 14.0, y + 36.0, 116.0, 86.0] };
+            d.q(C02, RANDOM_TILE, tile, WHITE, 128.0);
             d.label("Random", x + 72.0, y + 142.0, 20.0, 128.0, GOLD);
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
-            if !pl.modded && !m.custom {
+            if pl.ready {
+                d.label("Ready to go!", x + 72.0, y + 120.0, 20.0, 128.0, GOLD);
+            } else if !pl.modded && !m.custom {
                 d.anchor = Anchor::Centre;
                 let (fx, fy) = RANDOM_CELL;
                 d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
@@ -2319,6 +2326,20 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
     let w = 600.0 / order.len() as f32;
     for (k, &p) in order.iter().enumerate() {
         let x = 20.0 + w * k as f32 + (w - 112.0) / 2.0;
+        // B264: a Random pick stays the ? card and "Random" until the match starts
+        if m.players[p].random {
+            d.q(C02, RANDOM_TILE, [x + 10.0, 90.0, 92.0, 68.0], WHITE, 128.0);
+            d.outlined(|d| d.label("Random", x + 56.0, 188.0, 20.0, 96.0, GOLD));
+            if m.seats[p].is_none() {
+                d.outlined(|d| {
+                    d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
+                    d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
+                });
+            } else {
+                d.outlined(|d| d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]));
+            }
+            continue;
+        }
         match m.pick(p) {
             (Who::Mod(i), costume) => {
                 // ponytail: no 3D preview on this screen; the name and costume on a dark card
