@@ -552,7 +552,12 @@ fn advance(w: &mut World) -> bool {
             handle(w, reqs, super::netplay::HASH_EVERY as i32);
             w.resource_mut::<Netplay>().stalled = 0.0;
             send_state(w);
-            true
+            // B299: at the prediction window ggrs answers with a rollback's re-runs and no new tick (catching up
+            // after a tab-out): that's a hold, the tick still owed
+            let mut rb = w.resource_mut::<Rollback>();
+            let new = rb.frame > f0;
+            rb.held += !new as u64;
+            new
         }
         // too far ahead of a peer: wait for its pads ("Waiting for …" after a while)
         Err(GgrsError::PredictionThreshold) => {

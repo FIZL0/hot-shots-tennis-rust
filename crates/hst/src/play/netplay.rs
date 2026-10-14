@@ -1076,11 +1076,15 @@ mod tests {
             let room = room(0);
             let mut apps = ["host", "g"].map(|me| {
                 let mut a = app(&room, me);
+                own_camera::plugin(&mut a);
                 a.insert_resource(Rollback::new(&room, me, step as fn(&mut _)).unwrap());
                 a
             });
             let mut wire: Vec<(usize, String, Vec<u8>)> = Vec::new();
             let mut gone: Option<std::time::Instant> = None;
+            // B299: per round after the guest is back, whether its picture is its own camera's (it looks from the
+            // other end, so the shared camera's is a different view)
+            let mut own = Vec::new();
             let mut round = 0;
             while round < 900 {
                 for (to, from, d) in std::mem::take(&mut wire) {
@@ -1103,6 +1107,11 @@ mod tests {
                         take(apps[1 - i].world_mut(), Event::Match(m));
                     }
                 }
+                if gone.is_some() && !hidden {
+                    let w = apps[1].world();
+                    let g = w.resource::<Game>();
+                    own.push(own_camera::shown(g, w.get_resource()) != own_camera::shown(g, None));
+                }
                 if hidden {
                     std::thread::sleep(std::time::Duration::from_millis(16));
                     assert!(apps[0].world().resource::<Rollback>().frame() <= 300 + rollback::WINDOW + rollback::DELAY + 1, "the host ran on without the guest");
@@ -1115,6 +1124,10 @@ mod tests {
             let n = a.lock.log.len().min(b.lock.log.len()) - rollback::WINDOW;
             assert!(n > 800, "only {n} ticks");
             assert_eq!(a.lock.log[..n], b.lock.log[..n]);
+            // a cut-away or replay has the shared camera for seconds; a round or two of it is the catch-up's re-runs
+            // flipping the picture to the other end
+            let runs: Vec<_> = own.chunk_by(|a, b| a == b).filter(|r| !r[0]).map(<[bool]>::len).collect();
+            assert!(runs.iter().all(|&r| r > 10), "the guest's picture flipped to the shared camera for {runs:?} rounds");
         }
 
         /// Longer than ggrs' 2 s default disconnect timeout.

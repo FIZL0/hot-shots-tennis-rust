@@ -1,7 +1,7 @@
 // M2k: two browser tabs play a LAN match over WebRTC with the codes passed the way phones would (the host's offer link
 // opened by the guest, the guest's answer link opened in a third tab that hands it to the host by BroadcastChannel).
 // Usage: node tools/web_lan.mjs ISO|- OUT [seconds of match]   (serve web/ on :8765 first: python3 -m http.server -d
-// web 8765). ISO `-`: OUT/profile already holds the pack. CHROME_FLAGS adds chromium flags (`--use-angle=vulkan
+// web 8765). ISO `-`: OUT/profile already holds the pack. WEB_HIDE: a tab-out mid-match (below). CHROME_FLAGS adds chromium flags (`--use-angle=vulkan
 // --enable-features=Vulkan`: the real GPU; SwiftShader draws two matches at ~5 fps). Console and screenshots into OUT.
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -38,9 +38,18 @@ const newWindow = () => new Promise(r => {
   browser.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url: 'about:blank', newWindow: true } }));
 });
 
+// a browser-level CDP call (one at a time)
+let bid = 1;
+const bsend = (method, params = {}) => new Promise(r => {
+  const id = ++bid;
+  browser.onmessage = ({ data }) => { const m = JSON.parse(data); if (m.id === id) r(m.result); };
+  browser.send(JSON.stringify({ id, method, params }));
+});
+
 /// A page: its console lines, `send` (CDP), `keys`.
 async function tab(name, url) {
-  const ws = new WebSocket(`ws://127.0.0.1:${cdp}/devtools/page/${await newWindow()}`);
+  const target = await newWindow();
+  const ws = new WebSocket(`ws://127.0.0.1:${cdp}/devtools/page/${target}`);
   await new Promise(r => (ws.onopen = r));
   let id = 0;
   const waiting = new Map();
@@ -80,8 +89,11 @@ async function tab(name, url) {
         await sleep(120);
       }
       await sleep(700);
+      // WEB_STEPS=1: a screenshot after each key (finding the way through changed menus)
+      if (process.env.WEB_STEPS) await shot(`step${++steps}-${key}`);
     }
   };
+  let steps = 0;
   const shot = async n => {
     const s = await send('Page.captureScreenshot', { format: 'png' });
     if (s.result) writeFileSync(resolve(out, `${name}-${n}.png`), Buffer.from(s.result.data, 'base64'));
@@ -97,7 +109,7 @@ async function tab(name, url) {
   // frames drawn so far, then each connection's state and its data channels' messages sent/received
   const stats = () => evaluate(`(async () => [__frames, ...await Promise.all(__pcs.map(async pc => pc.connectionState + ' ' +
     [...(await pc.getStats()).values()].filter(s => s.type == 'data-channel').map(s => s.label + ':' + s.messagesSent + '/' + s.messagesReceived).join(' ')))].join(' | '))()`);
-  return { name, lines, send, evaluate, keys, shot, wait, ws, stats };
+  return { name, target, lines, send, evaluate, keys, shot, wait, ws, stats };
 }
 
 const host = await tab('host', `${base}?webgl2`);
@@ -112,8 +124,8 @@ if (iso !== '-') {
 say(`host menu: ${!!(await host.wait(/loading screen down/, 120))}`);
 await sleep(3000);
 // Online → Relay (n0 → Off) → Host → singles → controllers → character → confirm's Start: the lobby
-await host.keys('ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'Enter', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'Enter',
-  'Enter', 'Enter', 'Enter', 'Enter');
+await host.keys('ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'Enter', 'ArrowUp', 'ArrowUp', 'Enter',
+  'Enter', 'Enter', 'Enter', 'Enter', 'Enter', 'ArrowRight', 'Enter');
 const offer = await host.wait(/LAN offer: (\S+)/, 30);
 await host.shot('lobby');
 say(`offer: ${offer?.[1]}`);
@@ -123,7 +135,7 @@ if (!offer) process.exit(1);
 const guest = await tab('guest', `${offer[1].replace(/^http:\/\/localhost:\d+\//, base)}&webgl2`);
 say(`guest menu: ${!!(await guest.wait(/loading screen down/, 120))}`);
 await sleep(3000);
-await guest.keys('ArrowDown', 'Enter', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'Enter', 'Enter', 'Enter', 'Enter');
+await guest.keys('ArrowDown', 'Enter');
 const answer = await guest.wait(/LAN answer: (\S+)/, 30);
 await guest.shot('lobby');
 say(`answer: ${answer?.[1]}`);
@@ -133,12 +145,35 @@ if (!answer) process.exit(1);
 const relay = await tab('answer', answer[1].replace(/^http:\/\/localhost:\d+\//, base));
 await sleep(2000);
 say(`answer tab: ${await relay.evaluate('document.body.innerText')}`);
+await sleep(5000);
+await guest.keys(...(process.env.WEB_GUEST ?? 'Enter,Enter,Enter').split(','));
+await host.keys(...(process.env.WEB_HOST ?? 'ArrowDown,Enter').split(','));
 
 const started = await Promise.all([host, guest].map(t => t.wait(/starting the online match/, 60)));
 say(`started: ${started.map(Boolean)}`);
 for (let s = 2; s <= 20; s += 2) {
   await sleep(2000);
   for (const t of [host, guest]) say(`${s}s ${t.name}: ${await t.stats()}`);
+}
+// WEB_HIDE=ms[:host[:frozen]]: the guest's (host's) window is then minimised for ms (hidden: no frames, its network
+// and timers go on, as a tab put behind another) and comes back (B299); `frozen`: the page is frozen instead
+// (Page.setWebLifecycleState: no timers or network either). Screenshots 1 and 3 s after.
+if (process.env.WEB_HIDE) {
+  const [ms, who, how] = process.env.WEB_HIDE.split(':');
+  const t = who === 'host' ? host : guest;
+  say(`hiding ${t.name} for ${ms} ms: ${await t.stats()}`);
+  const { windowId } = await bsend('Browser.getWindowForTarget', { targetId: t.target });
+  const hide = on => how === 'frozen' ? t.send('Page.setWebLifecycleState', { state: on ? 'frozen' : 'active' })
+    : bsend('Browser.setWindowBounds', { windowId, bounds: { windowState: on ? 'minimized' : 'normal' } });
+  await hide(true);
+  say(`${t.name} hidden: visibility ${await t.evaluate('document.visibilityState')}`);
+  await sleep(+ms);
+  await hide(false);
+  say(`${t.name} back: ${await t.stats()}`);
+  for (const s of [1, 3]) {
+    await sleep(s === 1 ? 1000 : 2000);
+    for (const u of [host, guest]) await u.shot(`back-${s}s`);
+  }
 }
 for (let s = 30; s <= +secs; s += 10) {
   await sleep(10000);
