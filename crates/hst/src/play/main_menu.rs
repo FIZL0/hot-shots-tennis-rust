@@ -414,6 +414,9 @@ struct Menu {
     /// B254: the assignment screen over a paused match (`pause.rs`): `bots` are the match's computer players, fixed
     /// (no △, never swapped); ✕ takes any device off its seat (1P too, without moving the others up).
     paused: bool,
+    /// B269: the roster cell the last pick readied on (`None` inside: the Random card); the next computer player's
+    /// cursor starts there.
+    last: Option<Option<Who>>,
 }
 
 impl Default for Menu {
@@ -442,6 +445,7 @@ impl Default for Menu {
             grid: Grid::default(),
             add: default(),
             paused: false,
+            last: None,
         }
     }
 }
@@ -700,6 +704,17 @@ impl Menu {
             for q in (0..n).filter(|&q| self.open(q) && !self.players[q].ready).collect::<Vec<_>>() {
                 self.players[q] = self.auto_com(q);
             }
+        }
+    }
+
+    /// B269: the computer player `dev` drives next (one 1P added) starts on the cell the last pick readied on, so ✕
+    /// over and over gives them all the same (e.g. all Random).
+    fn carry_pick(&mut self, dev: Dev) {
+        if let (Some(q), Some(c)) = (self.driven(dev), self.last)
+            && self.bots[q] && self.seats[q].is_none() && !self.players[q].ready
+        {
+            self.put(q, c);
+            self.skip_taken();
         }
     }
 
@@ -972,12 +987,14 @@ impl Menu {
                         self.players[p].ready = true;
                         self.skip_taken();
                         out.push(Sound(2));
+                        self.last = Some(self.cell(p));
                         if self.online() && self.net.edit == Some(p) {
                             self.online_bot_ready(p, &mut out);
                         } else if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
                             self.online_ready(&mut out);
                         } else {
                             self.chars_done(&mut out);
+                            self.carry_pick(dev);
                         }
                     }
                 } else if k.back {
@@ -3137,6 +3154,31 @@ mod tests {
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(0)));
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(7)));
         assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)));
+    }
+
+    /// B269: with 3 computer players added in doubles, 1P picking Random leaves each next COM's cursor on Random, so
+    /// ✕ ✕ ✕ gives them all Random; a character carries over too (on its next free costume).
+    #[test]
+    fn the_next_com_starts_on_the_last_pick() {
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), None, None, None], bots: [false, true, true, true], ..default() };
+        m.step(Dev::Keys, press(|p| &mut p.left));
+        assert!(m.players[0].random);
+        for q in 1..4 {
+            m.step(Dev::Keys, ok);
+            assert_eq!(m.driven(Dev::Keys), Some(q));
+            assert!(m.players[q].random && !m.players[q].ready, "COM {q} on Random");
+        }
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Confirm);
+        assert!(m.players.iter().all(|p| p.random && p.ready));
+        // a character: the next COM lands on it, on the costume after the taken one
+        let mut m = Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), None, None, None], bots: [false, true, true, true], ..default() };
+        m.players[0].cursor = 3;
+        m.step(Dev::Keys, ok);
+        assert_eq!((m.players[1].cursor, m.players[1].random, m.players[1].costume), (3, false, 1));
+        m.step(Dev::Keys, ok);
+        assert_eq!((m.players[2].cursor, m.players[2].costume), (3, 2));
     }
 
     /// B217: Random locked in many times lands on disc characters (a costume pack's costumes too), custom ones and
