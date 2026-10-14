@@ -20,6 +20,8 @@ pub(super) enum Opt {
     ShowFps,
     /// B301: the match's keyboard hints.
     KeyHints,
+    /// B362: the pads' button icons (`legend::LAYOUTS`).
+    ButtonIcons,
     Preset,
     Scale,
     Shadows,
@@ -70,7 +72,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, FewerShadows, BatchCrowd, MergeMeshes] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -110,6 +112,7 @@ fn label(o: Opt) -> &'static str {
         MenuSize => "Menu Size",
         ShowFps => "Show FPS",
         KeyHints => "Key Hints",
+        ButtonIcons => "Button Icons",
         Preset => "Preset",
         Scale => "Resolution",
         Shadows => "Shadows",
@@ -140,6 +143,7 @@ fn about(o: Opt) -> &'static str {
         MenuSize => "Makes every menu smaller or bigger. The whole layout scales together, never stretched; the extra room goes around it.",
         ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
+        ButtonIcons => "The controller buttons the hints show. Auto: each controller's own (PlayStation, Switch, Steam Deck, else Xbox); or the same set for every controller.",
         Preset => "Default draws at full quality; Steam Deck, Low and Phone trade detail for frame rate.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
@@ -188,6 +192,7 @@ fn choices(o: Opt) -> Vec<String> {
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
         ShowFps => words(&["Off", "On", "Detailed"]),
+        ButtonIcons => super::legend::LAYOUTS.iter().map(|l| l.0.to_string()).collect(),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
@@ -221,6 +226,7 @@ impl Settings {
             MenuSize => self.7 = cycle(&MENU_SIZES, self.7, d),
             ShowFps => g.show_fps = (g.show_fps as isize + d).rem_euclid(3) as u8,
             KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
+            ButtonIcons => self.9 = (self.9 as isize + d).rem_euclid(super::legend::LAYOUTS.len() as isize) as u8,
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
@@ -268,6 +274,7 @@ impl Settings {
             MenuSize => menu_size_name(self.7),
             ShowFps => ["Off", "On", "Detailed"][g.show_fps.min(2) as usize].into(),
             KeyHints => on_off(self.0[KEY_HINTS]),
+            ButtonIcons => super::legend::LAYOUTS[self.9 as usize].0.into(),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
             Shadows => ["Off", "Low", "High"][g.shadows as usize].into(),
@@ -682,6 +689,11 @@ mod tests {
         assert_eq!(s.value(KeyHints), "On");
         s.step(KeyHints, 1);
         assert!(!s.0[KEY_HINTS] && s.text().contains("key_hints = off") && Settings::parse(&s.text()) == s);
+        // B362: Button Icons, Auto by default, saved
+        assert_eq!(s.value(ButtonIcons), "Auto");
+        s.step(ButtonIcons, -1);
+        assert!(s.value(ButtonIcons) == "Generic" && s.text().contains("button_icons = generic") && Settings::parse(&s.text()) == s);
+        assert_eq!(choices(ButtonIcons), ["Auto", "PlayStation", "Xbox", "Switch", "Generic"]);
         s.step(Upscaled, 1);
         assert!(!s.0[0] && !s.0[UPSCALED_DOWNLOADS]);
         s.step(Downloads, 1);

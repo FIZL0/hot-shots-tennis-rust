@@ -197,6 +197,7 @@ impl Grid {
 fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
     super::widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
     super::key_hints::ON.store(menu.settings.0[KEY_HINTS], std::sync::atomic::Ordering::Relaxed);
+    legend::LAYOUT.store(menu.settings.9, std::sync::atomic::Ordering::Relaxed);
     let Ok(w) = window.single() else { return };
     let g = Grid::fit_n(super::widescreen::aspect(w), 1 + CHARS + menu.own_mods(), menu.settings.apply_menu_scale(w));
     if menu.grid != g {
@@ -257,10 +258,10 @@ pub(super) const FONT: [&str; 15] = [
 /// prompt asks, or its "Download, always" / "Never download" answer) and the browser build's renderer (B273, a
 /// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage) and the confirm screen's last umpire
 /// pick (B191: `UMPIRES` is Random, the first-time and fallback choice) and the Menu Size (`MENU_SIZES`: 0 Auto,
-/// else tenths) and how many store downloads run at once (B339: 0 Auto, [`Settings::downloads_at_once`]), saved in
-/// `settings.txt`.
+/// else tenths) and how many store downloads run at once (B339: 0 Auto, [`Settings::downloads_at_once`]) and the
+/// pads' button icons (B362: a `legend::LAYOUTS` index, 0 Auto), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8, u8, u8);
+pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
 /// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
 const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
 /// The Menu Size setting's values: Auto (0), then 50% to 150% in tenths.
@@ -300,7 +301,7 @@ fn default_aspect() -> u8 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0)
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0, 0)
     }
 }
 
@@ -317,6 +318,8 @@ impl Settings {
                 s.7 = v.trim().trim_end_matches('%').parse::<u8>().ok().map(|p| p / 10).filter(|t| MENU_SIZES.contains(t)).unwrap_or(0);
             } else if k.trim() == "downloads_at_once" {
                 s.8 = v.trim().parse::<u8>().ok().filter(|&n| n as usize <= max_downloads()).unwrap_or(0);
+            } else if k.trim() == "button_icons" {
+                s.9 = legend::LAYOUTS.iter().position(|l| l.1 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "renderer" {
                 s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
@@ -343,7 +346,7 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6) + &format!("menu_size = {}\n", if self.7 == 0 { "auto".into() } else { format!("{}", self.7 as u32 * 10) }) + &format!("downloads_at_once = {}\n", if self.8 == 0 { "auto".into() } else { self.8.to_string() })
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6) + &format!("menu_size = {}\n", if self.7 == 0 { "auto".into() } else { format!("{}", self.7 as u32 * 10) }) + &format!("downloads_at_once = {}\n", if self.8 == 0 { "auto".into() } else { self.8.to_string() }) + &format!("button_icons = {}\n", legend::LAYOUTS[self.9 as usize].1)
     }
 
     /// B339: how many store installs run at once: the setting, or on Auto 3 on desktop, 2 in a browser, 1 on a
@@ -1447,6 +1450,8 @@ enum Tex {
     Cover(Who),
     /// Our button pill's layers (`menu_art::pill_layers`).
     Pill,
+    /// B362: a style's ✕ (the keyboard's Enter) in the legend's art (`legend::Buttons`), whole.
+    Button(legend::Style),
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -1742,7 +1747,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck or a phone (B351: the browser on a touch screen): its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else if touch_page() { Graphics::PHONE } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0);
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else if touch_page() { Graphics::PHONE } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0, 0);
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
         let mut s = Settings::parse(&t);
         // B289: an older build kept the lobby prompt's answer in the online mod cache
@@ -2423,16 +2428,21 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
             d.q(Tex::Solid, [0.0; 4], [x, cy, cw, ch], [21.0, 18.0, 24.0], 32.0);
             dashed(d, [x, cy, cw, ch], [40.0; 3]);
             let (head, line) = if m.seats[p] == Some(Dev::Open) {
-                ("Open", "Press X / Enter to join")
+                ("Open", home::JOIN)
             } else if online {
                 ("Open", "Waiting for a player")
             } else if m.local_roster() {
-                ("CPU", "Press X / Enter to join")
+                ("CPU", home::JOIN)
             } else {
                 ("CPU", "Picks after the players")
             };
             d.label(head, x + cw / 2.0, cy + ch / 2.0 - 22.0, 24.0, cw - 16.0, INK);
-            d.label(line, x + cw / 2.0, cy + ch / 2.0 + 6.0, 14.0, cw - 16.0, INK);
+            if line == home::JOIN {
+                // B362: the buttons drawn, not named
+                home::press_hint(d, " to join", x + cw / 2.0, cy + ch / 2.0 + 6.0, 14.0, cw - 16.0, INK);
+            } else {
+                d.label(line, x + cw / 2.0, cy + ch / 2.0 + 6.0, 14.0, cw - 16.0, INK);
+            }
             d.label(&format!("{}P", p + 1), x + 18.0, cy + 6.0, 16.0, 30.0, [40.0; 3]);
             d.hit([x, cy, cw, ch], tap);
             if m.droppable(p) {
@@ -3362,6 +3372,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
+    buttons: Option<Res<legend::Buttons>>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -3435,9 +3446,16 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Button(s) => match buttons.as_ref().and_then(|b| b.0.get(&s)) {
+                Some((h, _)) => h.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
@@ -3670,16 +3688,16 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4);
+        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4, 0);
         assert_eq!(Settings::parse(&s.text()), s);
         // B339: Downloads at Once: Auto (3 on desktop) unless set, at most 8
         assert_eq!((s.downloads_at_once(), Settings::default().downloads_at_once()), (4, 3));
         assert_eq!((Settings::parse("downloads_at_once = 8\n").8, Settings::parse("downloads_at_once = 9\n").8), (8, 0));
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -3687,10 +3705,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -3700,7 +3718,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]
