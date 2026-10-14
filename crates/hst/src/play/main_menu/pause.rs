@@ -239,6 +239,146 @@ fn after(
     }
 }
 
+/// B196a: an online match's notice (a peer away, the bot-or-lobby question, why it ended), drawn in the pause
+/// dialog's window: dimmed court, our box, the words in the game's font, and while asking the two choices on pills
+/// with the 3D hand. `netplay.rs` fills it each frame; `recover.rs` reads the choice (`sel`, a tap in `tapped`).
+#[derive(Resource, Default)]
+pub(in crate::play) struct OnlineNotice {
+    pub text: String,
+    /// The question is up: pill 0 "A bot plays for them", 1 "Everyone to the lobby".
+    pub ask: bool,
+    pub sel: usize,
+    pub tapped: bool,
+}
+
+/// The choices' pills.
+pub(in crate::play) const CHOICES: [&str; 2] = ["A bot plays for them", "Everyone to the lobby"];
+
+#[derive(Component)]
+struct NoticeSlot(usize);
+#[derive(Component)]
+struct NoticeRoot;
+/// Three outlined lines of ~50 glyphs (9 quads each), the box, pills and hand.
+const NOTICE_POOL: usize = 1600;
+
+/// The window's quads and its pills' rects, centred on the 640×448 screen.
+fn notice_layout(text: &Text, n: &OnlineNotice) -> (Vec<super::Quad>, Vec<[f32; 4]>) {
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    use super::{INK, Tex, WHITE};
+    let mut d = super::Draw { out: Vec::new(), text, said: String::new(), anchor: widescreen::Anchor::Centre, hits: Vec::new(), outside: None };
+    if n.text.is_empty() {
+        return (d.out, Vec::new());
+    }
+    let lines: Vec<&str> = n.text.lines().collect();
+    let (x, w, max) = (120.0, 400.0, 368.0);
+    let h = 18.0 + 26.0 * lines.len() as f32 + if n.ask { 80.0 } else { 0.0 } + 14.0;
+    let top = (224.0 - h / 2.0).round();
+    d.anchor = widescreen::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 64.0);
+    d.anchor = widescreen::Anchor::Centre;
+    d.box3([x, top, w, h], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    for (i, l) in lines.iter().enumerate() {
+        // a long line (the score, a saved file's path) set smaller, down to 15 px, then squeezed across
+        let size = (20.0 * max / d.width(l, 20.0).max(1.0)).clamp(15.0, 20.0);
+        let y = top + 18.0 + 26.0 * i as f32 + (20.0 - size) / 2.0;
+        d.outlined(|d| d.label(l, 320.0, y, size, max, WHITE));
+    }
+    let mut pills = Vec::new();
+    if n.ask {
+        let y0 = top + 18.0 + 26.0 * lines.len() as f32 + 8.0;
+        for (k, word) in CHOICES.into_iter().enumerate() {
+            let r = [176.0, y0 + 40.0 * k as f32, 288.0, 32.0];
+            let on = k == n.sel;
+            d.pill_at(r, [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+            // as the pause dialog's rows: outlined, the other one dimmed
+            let start = d.out.len();
+            d.outlined(|d| d.label(word, 320.0, r[1] + 6.0, 20.0, 230.0, if on { WHITE } else { UNCHOSEN }));
+            if !on {
+                d.out[start..].iter_mut().for_each(|q| q.alpha = 64.0);
+            }
+            pills.push(r);
+        }
+        // where the pause dialog's hand points (`menu.rs`: pill x − 60)
+        d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0, y0 + 40.0 * n.sel as f32, 64.0, 32.0], WHITE, 128.0);
+    }
+    (d.out, pills)
+}
+
+fn notice_setup(mut commands: Commands) {
+    let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    // over the match's HUD, under the pause screen (which hides this root while it's up, as it did the plain text)
+    commands.spawn((full, GlobalZIndex(9), NoticeRoot)).with_children(|p| {
+        for i in 0..NOTICE_POOL {
+            p.spawn((NoticeSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+        }
+    });
+}
+
+/// Draws [`OnlineNotice`]; the mouse over a pill chooses it, a click or tap on it answers (sound 0 on a move).
+fn notice_draw(
+    mut n: ResMut<OnlineNotice>,
+    art: Option<Res<Art>>,
+    cursor: Option<Res<super::cursor::Cursor>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    (mouse, touches): (Res<ButtonInput<MouseButton>>, Res<Touches>),
+    sound: Option<Res<Sound>>,
+    mut last: Local<(usize, bool)>,
+    mut q: Query<(&NoticeSlot, &mut ImageNode, &mut Node, &mut Visibility)>,
+) {
+    use super::Tex;
+    let Some(art) = art else { return };
+    // `HST_NOTICE=<text, | between lines>` (with `HST_NOTICE_ASK=1` the question's pills) shows one, for `--shot`
+    if n.text.is_empty()
+        && let Ok(t) = std::env::var("HST_NOTICE")
+    {
+        (n.text, n.ask) = (t.replace('|', "\n"), std::env::var_os("HST_NOTICE_ASK").is_some());
+    }
+    let (quads, pills) = notice_layout(&art.2, &n);
+    let on = |p: Vec2| pills.iter().position(|r| (r[0]..r[0] + r[2]).contains(&p.x) && (r[1]..r[1] + r[3]).contains(&p.y));
+    if let Some(k) = cursor_point(&window).and_then(on) {
+        n.sel = k;
+    }
+    if let Some(k) = pointer_press(&window, &mouse, &touches).0.and_then(on) {
+        (n.sel, n.tapped) = (k, true);
+    }
+    if n.ask && last.1 && n.sel != last.0
+        && let (Some(s), Some(b)) = (&sound, &art.1)
+    {
+        s.play_centre(b, hst_sim::sound::Play { slot: 9, program: 0, key: 0, volume: 0x80, speed: 1.0 });
+    }
+    *last = (n.sel, n.ask);
+    let share = widescreen::window_share(&window);
+    let aspect = widescreen::window_aspect(&window);
+    for (NoticeSlot(i), mut img, mut node, mut vis) in &mut q {
+        let Some(quad) = quads.get(*i) else {
+            vis.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        let three_d = cursor.as_ref().filter(|_| quad.tex == Tex::Cursor);
+        img.image = match (three_d, quad.tex) {
+            (Some(c), _) => c.image.clone(),
+            (_, Tex::Solid) => art.0[0].clone(),
+            (_, Tex::Font) => art.0[1].clone(),
+            (_, Tex::Pill) => art.0.last().expect("pill").clone(),
+            _ => art.0[2].clone(),
+        };
+        let [u, v, w, h] = quad.src;
+        img.rect = (quad.tex != Tex::Solid && three_d.is_none()).then(|| Rect::new(u, v, u + w, v + h));
+        let [r, g, b] = quad.rgb.map(|c| c / 128.0);
+        img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
+        let [mut x, mut y, mut w, mut h] = quad.dst;
+        if three_d.is_some() {
+            // the hand's image covers `PAD` times its quad, around the same centre (B146)
+            let pad = super::cursor::PAD;
+            (x, y, w, h) = (x - w * (pad - 1.0) / 2.0, y - h * (pad - 1.0) / 2.0, w * pad, h * pad);
+        }
+        let (left, width) = widescreen::place(x, w, share, quad.anchor);
+        let (top, height) = widescreen::vplace(y, h, aspect, quad.anchor);
+        (node.left, node.top, node.width, node.height) = (Val::Percent(left), Val::Percent(top), Val::Percent(width), Val::Percent(height));
+        vis.set_if_neq(Visibility::Inherited);
+    }
+}
+
 pub(in crate::play) fn plugin(app: &mut App) {
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, touch_menu);
@@ -252,7 +392,9 @@ pub(in crate::play) fn plugin(app: &mut App) {
         // `super::draw` reads the custom page's mod icons (none in a match); without it the draw panicked (B139)
         .init_resource::<super::Icons>()
         .init_resource::<super::mods_screen::Shelf>()
-        .add_systems(PostStartup, setup)
+        .init_resource::<OnlineNotice>()
+        .add_systems(PostStartup, (setup, notice_setup))
+        .add_systems(Update, notice_draw.after(Systems))
         .add_systems(
             Update,
             (opened, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))

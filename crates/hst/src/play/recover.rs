@@ -52,11 +52,13 @@ pub struct Recover {
     pub hold: bool,
     /// Back to this lobby once the end notice is down (`netplay::LOBBY`).
     pub lobby: Option<Room>,
+    /// This frame's notice asks this machine bot-or-lobby (B196a: its pills, `main_menu/pause.rs`).
+    pub ask_me: bool,
 }
 
 impl Recover {
     pub fn new(rejoin: bool) -> Self {
-        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None }
+        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, ask_me: false }
     }
 
     /// Any word from a peer.
@@ -115,17 +117,28 @@ fn score(w: &World) -> String {
     format!("Score (1P's side first): sets {}-{}, games {}-{}.", s.sets[0], s.sets[1], s.games[0], s.games[1])
 }
 
-/// ✕ (or Enter) for a bot, ○ (or Backspace) for the lobby, pressed this frame on this machine.
+/// The answer chosen this frame on this machine: ✕ (or Enter, or a tap) on the chosen pill (up/down move between
+/// them; a bot is pill 0, without the pills too), ○ (or Backspace) the lobby.
 fn pressed(w: &mut World) -> Option<bool> {
     let keys = w.get_resource::<ButtonInput<KeyCode>>()?;
     let mut yes = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]);
     let mut no = keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyK]);
+    let mut moved = keys.any_just_pressed([KeyCode::KeyW, KeyCode::ArrowUp, KeyCode::KeyS, KeyCode::ArrowDown]);
     let mut q = w.query::<&Gamepad>();
     for g in q.iter(w).filter(|g| super::controls::readable(g)) {
         yes |= g.just_pressed(GamepadButton::South);
         no |= g.just_pressed(GamepadButton::East);
+        moved |= g.just_pressed(GamepadButton::DPadUp) || g.just_pressed(GamepadButton::DPadDown);
     }
-    if yes { Some(true) } else if no { Some(false) } else { None }
+    let mut sel = 0;
+    if let Some(mut n) = w.get_resource_mut::<super::main_menu::pause::OnlineNotice>().filter(|n| n.ask) {
+        if moved {
+            n.sel ^= 1;
+        }
+        yes |= std::mem::take(&mut n.tapped);
+        sel = n.sel;
+    }
+    if yes { Some(sel == 0) } else if no { Some(false) } else { None }
 }
 
 /// Each frame (`dt` real seconds): the keep-alive out, who's silent, the countdowns and answers; the notice to show
@@ -137,6 +150,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     let mut np = w.resource_mut::<Netplay>();
     let np = &mut *np;
     let r = &mut np.recover;
+    r.ask_me = false;
     r.alive += dt;
     if r.alive >= ALIVE {
         r.alive = 0.0;
@@ -164,6 +178,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
             r.answered = true;
             np.out.push(Msg::Choose(bot));
         }
+        r.ask_me = ask && !r.answered;
         return notice(&names(&np.room, &who), left, ask, r.answered);
     }
     // the host: who's away and who's back
@@ -225,14 +240,18 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
             r.ready = Some((0, u32::MAX, room, [[0; 6]; 4], Vec::new()));
             String::new()
         }
-        None => notice(&who, left, ask, false),
+        None => {
+            r.ask_me = ask;
+            notice(&who, left, ask, false)
+        }
     }
 }
 
 fn notice(who: &str, left: u32, ask: bool, answered: bool) -> String {
     match (ask, answered) {
         (false, _) => format!("Waiting for {who} to come back... {left} s"),
-        (true, false) => format!("{who} didn't come back.\nConfirm: a bot plays for them   Back: everyone to the lobby   ({left} s)"),
+        // the choices are the window's pills (`main_menu/pause.rs` `CHOICES`)
+        (true, false) => format!("{who} didn't come back. ({left} s)"),
         (true, true) => format!("{who} didn't come back.\nWaiting for the others' choice... ({left} s)"),
     }
 }
