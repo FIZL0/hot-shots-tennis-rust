@@ -170,6 +170,11 @@ impl Menu {
         self.align();
         if let Some(p) = new {
             self.players[i] = super::Player { cursor: super::GRID.iter().position(|g| g.0 == p.char).unwrap_or(0), costume: p.costume, ..default() };
+            // B269: the cursor on the cell the last pick readied on
+            if let Some(c) = self.last {
+                self.put(i, c);
+                self.skip_taken();
+            }
         }
         self.players[i].ready = false;
         self.filter = 0;
@@ -1634,6 +1639,17 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B269: a computer player the host adds opens on the cell the last pick readied on (Random here).
+    #[test]
+    fn an_added_bot_starts_on_the_last_pick() {
+        let mut m = Menu { doubles: true, last: Some(None), ..default() };
+        m.edit_bot(2, Some(&Pick::disc(6, 0)), &mut vec![]);
+        assert!(m.players[2].random && !m.players[2].ready);
+        m.last = Some(Some(super::super::Who::Disc(4)));
+        m.edit_bot(3, Some(&Pick::disc(6, 0)), &mut vec![]);
+        assert_eq!((m.players[3].char(), m.players[3].random), (4, false));
+    }
 
     #[test]
     fn online_flow_host_and_code() {
