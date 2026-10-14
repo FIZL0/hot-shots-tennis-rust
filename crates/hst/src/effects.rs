@@ -130,19 +130,52 @@ pub(crate) fn model<M: EffectMaterial>(
     let weights = MorphWeights::new(vec![0.0; model.morph_names.len()], None).unwrap_or_default();
     let root = commands.spawn((Transform::default(), Visibility::Hidden, weights)).id();
     commands.entity(parent).add_child(root);
+    let holder = commands.spawn((Transform::default(), Visibility::default(), Collapse(root))).id();
+    commands.entity(root).add_child(holder);
     let joints: Vec<Entity> = model.node_local.iter().map(|l| commands.spawn((Transform::from_matrix(Mat4::from_cols_array_2d(l)), Visibility::default())).id()).collect();
     for (i, p) in model.node_parent.iter().enumerate() {
-        commands.entity(p.map_or(root, |p| joints[p])).add_child(joints[i]);
+        commands.entity(p.map_or(holder, |p| joints[p])).add_child(joints[i]);
     }
     let skin = SkinnedMesh { inverse_bindposes: binds, joints: joints.clone() };
     for (mesh, material, morphed) in parts {
         let part = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
         if morphed {
-            commands.entity(part).insert(MeshMorphWeights::Reference(root));
+            // always drawn, collapsed while hidden (`Collapse`)
+            commands.entity(part).insert((MeshMorphWeights::Reference(root), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
         }
-        commands.entity(root).add_child(part);
+        commands.entity(holder).add_child(part);
     }
     Ok((effect, Shown { root, joints, materials: mats }))
+}
+
+/// Holds an effect model's joints and parts under its root (the entity here), scaled to nothing while the root is
+/// hidden. Bevy (0.19) draws a morphed mesh unmorphed on the first frame it is drawn again after being hidden (its morph
+/// descriptor is built before the mesh instance it needs), so an impact's disc flashed at full size before shrinking
+/// to its morphed size (B253): morphed parts stay drawn, collapsed to a point while their effect is hidden.
+#[derive(Component)]
+pub(crate) struct Collapse(Entity);
+
+/// Scale each `Collapse` holder to nothing while its root is hidden (by itself or an ancestor), else back to 1.
+pub fn collapse_hidden(mut holders: Query<(&Collapse, &mut Transform)>, vis: Query<(&Visibility, Option<&ChildOf>)>) {
+    for (c, mut t) in &mut holders {
+        let mut at = Some(c.0);
+        let mut shown = true;
+        while let Some(e) = at {
+            match vis.get(e) {
+                Ok((Visibility::Hidden, _)) => shown = false,
+                Ok((Visibility::Inherited, p)) => {
+                    at = p.map(ChildOf::parent);
+                    continue;
+                }
+                _ => {}
+            }
+            break;
+        }
+        let s = if shown { 1.0 } else { 0.0 };
+        if t.scale.x != s {
+            t.scale = Vec3::splat(s);
+        }
+    }
 }
 
 /// Show `effect` on `view` this frame (posed, morphed, faded) when live, else hide it.
