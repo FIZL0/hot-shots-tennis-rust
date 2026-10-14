@@ -282,7 +282,7 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, [x, y, w, h]: [f32; 4]) {
     let card = |d: &mut Draw, who: (Who, usize), cx: f32, top: f32, ph: f32| {
         let pw = ph * 128.0 / 168.0;
         // ponytail: face icons for both (B295 dropped the costume portrait sheets)
-        face_frame(d, (Tex::Icon(who.0), [0.0, 0.0, 64.0, 64.0]), cx, top + ph / 2.0, pw * 0.9, WHITE);
+        face_frame(d, (Tex::Face(who.0), [0.0, 0.0, 64.0, 64.0]), cx, top + ph / 2.0, pw * 0.9, WHITE);
     };
     let ph = h - 20.0;
     let pw = ph * 128.0 / 168.0;
@@ -298,13 +298,11 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, [x, y, w, h]: [f32; 4]) {
             }
         }
         Row::Local | Row::Duo => {
-            let first = if m.players[0].modded { 6 } else { m.players[0].char() };
-            let n = (((w - 16.0) / (pw * 0.8)) as usize).clamp(1, super::CHARS);
             let step = pw * 0.8;
-            let x0 = x + w / 2.0 - step * (n as f32 - 1.0) / 2.0;
-            for k in 0..n {
-                let c = (first + k) % super::CHARS;
-                card(d, (Who::Disc(c), 0), x0 + step * k as f32, y + 10.0, ph);
+            let disc = local_faces(m, w);
+            let x0 = x + w / 2.0 - step * (disc.len() as f32 - 1.0) / 2.0;
+            for (k, c) in disc.into_iter().enumerate() {
+                card(d, (c, 0), x0 + step * k as f32, y + 10.0, ph);
             }
         }
         Row::Online => {
@@ -323,9 +321,9 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, [x, y, w, h]: [f32; 4]) {
             let size = 60.0;
             let cols = ((w - 20.0) / (size + 8.0)) as usize;
             let x0 = x + (w - cols as f32 * (size + 8.0) + 8.0) / 2.0 + size / 2.0;
-            for i in 0..m.mods.len().min(cols * 2) {
+            for i in 0..mod_faces(m, w) {
                 let (cx, cy) = (x0 + (size + 8.0) * (i % cols) as f32, y + 12.0 + size / 2.0 + (size + 6.0) * (i / cols) as f32);
-                face_frame(d, (Tex::Icon(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0]), cx, cy, size, WHITE);
+                face_frame(d, (Tex::Face(Who::Mod(i)), [0.0, 0.0, 64.0, 64.0]), cx, cy, size, WHITE);
             }
         }
         Row::Settings => {
@@ -340,6 +338,38 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, [x, y, w, h]: [f32; 4]) {
         }
         Row::Quit => {}
     }
+}
+
+/// A picture card's width (`PIC_H - 20` tall, 128:168).
+fn card_w() -> f32 {
+    (PIC_H - 20.0) * 128.0 / 168.0
+}
+
+/// The Local row's disc faces on a picture `w` wide (the last pick first).
+fn local_faces(m: &Menu, w: f32) -> Vec<Who> {
+    let first = if m.players[0].modded { 6 } else { m.players[0].char() };
+    let n = (((w - 16.0) / (card_w() * 0.8)) as usize).clamp(1, super::CHARS);
+    (0..n).map(|k| Who::Disc((first + k) % super::CHARS)).collect()
+}
+
+/// How many installed mods' faces the Mods row shows on a picture `w` wide (two rows of 60-unit faces).
+fn mod_faces(m: &Menu, w: f32) -> usize {
+    m.mods.len().min(((w - 20.0) / 68.0) as usize * 2)
+}
+
+/// Every face the main screen's pictures can show (the Rematch's players, the Local row's, the Mods row's), in the
+/// order they draw: what `previews.rs` bakes and reads first while this screen is up, so they fill in on their own.
+pub(super) fn faces(m: &Menu) -> Vec<Who> {
+    let w = columns(m.grid.extra).2 - 6.0;
+    let mut v: Vec<Who> = Vec::new();
+    if m.rematch {
+        v.extend((0..m.players()).map(|p| m.pick(p).0));
+    }
+    v.extend(local_faces(m, w));
+    v.extend((0..mod_faces(m, w)).map(Who::Mod));
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|w| seen.insert(*w));
+    v
 }
 
 #[cfg(test)]

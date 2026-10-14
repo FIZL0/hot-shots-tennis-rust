@@ -272,15 +272,19 @@ pub(super) fn card(iso: &str, m: &Mod) -> Option<Vec<u8>> {
 }
 
 /// B133: the select's face icons (each character's costume 0, as the disc grid shows each character's first face;
-/// B160: the disc grid's too), read from the face close-ups as they're baked (a mod's own preview PNG: cut from it);
+/// B160: the disc grid's too; the main screen's pictures' too), read from the face close-ups as they're baked (a mod's own preview PNG: cut from it);
 /// [`ICON_READS`] new ones a frame so a page turn doesn't stall.
 fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<Who>>) {
-    if menu.screen != Screen::Chars {
-        return;
-    }
+    let page: Vec<Who> = match menu.screen {
+        Screen::Chars => {
+            let (start, roster) = menu.page();
+            roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect()
+        }
+        // the main screen's pictures' faces (`home::faces`), as the baker draws them
+        Screen::Main => super::home::faces(&menu),
+        _ => return,
+    };
     let mut reads = 0;
-    let (start, roster) = menu.page();
-    let page: Vec<Who> = roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect();
     for w in page {
         if reads == ICON_READS || icons.0.contains_key(&w) || failed.contains(&w) {
             continue;
@@ -761,11 +765,17 @@ fn bake(
             menu.mods.len() + loader.extra.len() - 1
         })), 0)
     });
-    if menu.screen != Screen::Chars && asked.is_none() && baker.job.is_none() && baker.warmed {
+    // the main screen's faces (`home::faces`): drawn there, first shown first, so they fill in without a select visit
+    let home: Vec<Key> = if menu.screen == Screen::Main { super::home::faces(&menu).into_iter().map(|w| (w, 0)).collect() } else { Vec::new() };
+    if menu.screen != Screen::Chars && asked.is_none() && home.is_empty() && baker.job.is_none() && baker.warmed {
         return;
     }
     // a hovered card without a PNG jumps the queue
-    let now: Vec<Key> = if menu.screen == Screen::Chars { (0..menu.players()).map(|p| menu.pick(p)).collect() } else { asked.into_iter().collect() };
+    let now: Vec<Key> = match menu.screen {
+        Screen::Chars => (0..menu.players()).map(|p| menu.pick(p)).collect(),
+        Screen::Main => home.iter().rev().copied().collect(),
+        _ => asked.into_iter().collect(),
+    };
     for k in &now {
         if !hovered.contains(k) && !baker.failed.contains(k) {
             baker.queue.push(*k);
@@ -843,7 +853,7 @@ fn bake(
     }
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
-        if menu.screen != Screen::Chars && Some(key) != asked && baker.warmed {
+        if menu.screen != Screen::Chars && Some(key) != asked && !home.contains(&key) && baker.warmed {
             return;
         }
         let path = loader.path(key, &menu);
