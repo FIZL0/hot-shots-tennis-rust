@@ -2666,6 +2666,22 @@ mod tests {
         assert_eq!((m.screen, m.sel), (Screen::Settings, SOUND_ROW));
     }
 
+    /// B220: ↓ walks every Settings row to Back, then wraps to the first (↑ the other way), changing nothing; and every
+    /// row, Back included, is drawn above the description bar (y 404), so the hand never goes out of sight.
+    #[test]
+    fn settings_down_reaches_every_row() {
+        let mut m = Menu { screen: Screen::Settings, ..default() };
+        let rows = CONTROLS_ROW + 2;
+        for want in (1..rows).chain([0]) {
+            assert_eq!(m.step(Dev::Keys, press(|k| &mut k.down)), [Effect::Sound(0)]);
+            assert_eq!((m.screen, m.sel), (Screen::Settings, want));
+        }
+        m.step(Dev::Keys, press(|k| &mut k.up));
+        assert_eq!(m.sel, rows - 1);
+        assert_eq!(m.settings, Settings::default());
+        assert!(SETTINGS_TOP + SETTINGS_PITCH * (rows - 1) as f32 + 38.0 <= 404.0);
+    }
+
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
         let mut p = Press::default();
         *f(&mut p) = true;
