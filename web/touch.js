@@ -208,6 +208,12 @@ addEventListener('touchstart', e => {
   const x = e.touches[0]?.clientX;
   if (inGame() && (x < 20 || x > innerWidth - 20)) e.preventDefault();
 }, { passive: false, capture: true });
+// B113: iOS starts a text selection, the magnifier or the long-press callout from a drag on the stick or the canvas,
+// and zooms on a double tap or pinch: pointer events' preventDefault doesn't stop those, the touch events' does. Only
+// the canvas and the pad: the page's own inputs and links (file pick, code entry, Reload) keep their taps.
+const ours = t => t instanceof Element && (t.tagName === 'CANVAS' || root.contains(t));
+for (const t of ['touchstart', 'touchmove']) addEventListener(t, e => { if (ours(e.target)) e.preventDefault(); }, { passive: false });
+for (const t of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart']) addEventListener(t, e => { if (ours(e.target)) e.preventDefault(); }, { passive: false });
 const guard = () => inGame() && history.pushState({ hst: 1 }, '', location.href);
 // pushed on a tap: Chrome skips entries a page added before any user activation
 addEventListener('pointerdown', function once() {
