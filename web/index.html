@@ -14,9 +14,13 @@
 <meta name="theme-color" content="#000000">
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 16px system-ui, sans-serif;
-    overflow: hidden; overscroll-behavior: none; touch-action: none; -webkit-touch-callout: none; }
+    overflow: hidden; overscroll-behavior: none; touch-action: none; -webkit-touch-callout: none;
+    /* B113: a drag on the touch stick / canvas never selects, highlights or magnifies (iOS home-screen app) */
+    user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  /* iOS won't type into an input under a user-select: none parent */
+  input { user-select: text; -webkit-user-select: text; }
   #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
-  canvas { display: block; width: 100% !important; height: 100% !important; }
+  canvas { touch-action: none; display: block; width: 100% !important; height: 100% !important; }
   button { font: inherit; }
   /* Join by Code on a touch screen: a tap anywhere but the controls opens the keyboard (typed_code) */
   #codekeys { position: fixed; inset: 0; z-index: 5; opacity: 0; font-size: 16px; border: 0; padding: 0; caret-color: transparent; }
