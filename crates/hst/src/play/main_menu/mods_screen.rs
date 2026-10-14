@@ -1074,7 +1074,7 @@ fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: boo
     let cw = d.width(&chip, 12.0) + 20.0;
     let cx = x + w - cw - 6.0;
     let ty = y + h - 22.0;
-    let title = format!("BY {} · {n} mod{}", who(author).to_uppercase(), if n == 1 { "" } else { "s" });
+    let title = format!("BY {} - {n} mod{}", who(author).to_uppercase(), if n == 1 { "" } else { "s" });
     let size = 14.0 * ((cx - x - 30.0) / d.width(&title, 14.0).max(1.0)).min(1.0);
     super::left(d, &title, x + 4.0, ty + (14.0 - size) / 2.0 + 2.0, size, cx - x - 30.0, if on { BROWN } else { MUTED });
     let lx = x + 12.0 + d.width(&title, size);
