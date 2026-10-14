@@ -1090,8 +1090,16 @@ impl<'a> Finding<'a> {
                 list.push(l.clone());
             }
         }
-        Some(list)
+        // B332: never this machine's own lobby (its listing lingers on the DHT and the LAN after it stops hosting)
+        Some(not_mine(list, cx.ep.as_ref().map(|ep| ep.id().to_string())))
     }
+}
+
+/// `list` without the lobby listed by endpoint `me` (this machine's), so Find, the Online screen's card and Quickplay
+/// never offer it.
+fn not_mine(mut list: Vec<Listing>, me: Option<String>) -> Vec<Listing> {
+    list.retain(|l| Some(&l.id) != me.as_ref());
+    list
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2728,6 +2736,16 @@ mod tests {
         assert_eq!(quick_pick(&list, true, 2).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(quick_pick(&list, true, 1)[0].id, "c");
         assert_eq!(quick_pick(&list, false, 1)[0].id, "d");
+    }
+
+    #[test]
+    fn find_never_lists_our_own_lobby() {
+        let l = |id: &str| Listing { id: id.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new() };
+        let ids = |v: Vec<Listing>| v.into_iter().map(|l| l.id).collect::<Vec<_>>();
+        assert_eq!(ids(not_mine(vec![l("me"), l("a"), l("b")], Some("me".into()))), ["a", "b"]);
+        // B332: Quickplay would otherwise dial itself
+        assert!(quick_pick(&not_mine(vec![l("me")], Some("me".into())), false, 1).is_empty());
+        assert_eq!(ids(not_mine(vec![l("a")], None)), ["a"]);
     }
 
     #[test]
