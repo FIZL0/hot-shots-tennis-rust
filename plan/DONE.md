@@ -456,6 +456,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B283** Grass court: audience visible from the opposite side (bug, user 2026-10-13): on the grass court, from the far end (after a change of ends / the other camera side) you can see audience that should not be there (missing culling or a stand drawn on the wrong side). Compare with the original from both ends (tools/screenshot.sh) → main.rs court models · court_anim.rs
 - [x] **B284** Lola's spin does not show properly (bug, user 2026-10-13): her spin (spin shot effect / animation) draws wrong. Ask the user which spin if unclear; compare with the original at the same moment (tools/screenshot.sh vs --shot) → effects.rs · character.rs (motions)
 - [x] **B280** Crocodile creature stays after being hit (bug, user 2026-10-13): when the ball hits the crocodile it does not disappear, and it shows up on the other side of the court. Compare with the original (it should leave after the hit) → play/npcs.rs · hst-sim npc.rs
+- [x] **B286** Footstep effects look too bright (user 2026-10-14): compare the foot dust/step marks with the original at the same moment (tools/screenshot.sh vs --shot) on a few courts and match brightness/alpha by eye → play/foot_fx.rs · effects.rs
 
 
 ### Shots
