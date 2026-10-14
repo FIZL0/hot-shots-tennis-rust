@@ -35,6 +35,7 @@ mod hud_gamma;
 mod inspect;
 mod loading;
 mod mash;
+mod merge;
 mod mode;
 mod noise;
 mod play;
@@ -294,7 +295,7 @@ fn start(argv: Vec<String>) {
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, merge::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
@@ -608,6 +609,8 @@ fn load(
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
+        // B328: the props' unblended parts drawn one mesh per material
+        let mut merger = merge::Merger::new();
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
@@ -626,7 +629,8 @@ fn load(
             .with_scale(Vec3::splat(s));
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let near = matches!(e.dir.as_str(), "tree" | "prop");
-            let e = spawn(&mut commands, parts, t);
+            let cast = p.code[3] != b'0' && (17..=19).contains(&p.category);
+            let e = merger.add(&mut commands, root, parts, t, cast, &meshes, &gs_materials);
             // B185: the Grand Palais end houses: the match camera behind your baseline sits inside one
             if stem.starts_with("w-house") {
                 let b = parts.iter().filter_map(|(m, _)| bevy::camera::primitives::MeshAabb::compute_aabb(meshes.get(m)?)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), a| (lo.min(a.min().into()), hi.max(a.max().into())));
@@ -645,7 +649,7 @@ fn load(
             } else if play::net_hide::tested(p.category, p.code) {
                 commands.entity(e).insert(play::net_hide::HideAroundEye { pos: p.pos, prop: None });
             }
-            if p.code[3] != b'0' && (17..=19).contains(&p.category) {
+            if cast {
                 commands.entity(e).insert(shadow::Caster);
                 if let Some(sun) = &sun {
                     shade_casters.push(hst_sim::shade::Caster::new(&shape, p, &sun.axes));
@@ -673,6 +677,7 @@ fn load(
                 spawn(&mut commands, &decal, Transform::default());
             }
         }
+        merger.finish(&mut commands, root, &mut meshes);
         look.sky = sky;
         if envir.is_some() {
             commands.insert_resource(look);
