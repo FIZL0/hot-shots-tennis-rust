@@ -401,7 +401,11 @@ def finish(tid, n, sid, commits):
 def master():
     """The master's tmux pane; started once, adopted by a restarted runner."""
     if 'master' not in panes():
-        cmd = shlex.join(['claude', '--model', 'opus', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion'])
+        # its hooks stamp when a prompt goes in and when the turn ends: master_idle() reads those, like agent-stop.sh
+        touch = lambda f: [{'hooks': [{'type': 'command', 'command': shlex.join(['touch', os.path.join(NOTES, f)])}]}]
+        hooks = {'UserPromptSubmit': touch('master.busy'), 'Stop': touch('master.idle'), 'StopFailure': touch('master.idle')}
+        cmd = shlex.join(['claude', '--model', 'opus', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion',
+                          '--settings', json.dumps({'hooks': hooks})])
         pane('master', ROOT, cmd)
         log('master session started (window master)')
         time.sleep(20)  # let the TUI come up before the first report is typed into it
@@ -422,10 +426,12 @@ idle_since = None  # when the master's TUI was first seen idle while it holds th
 
 
 def master_idle():
-    screen = sp.run(['tmux', 'capture-pane', '-p', '-t', panes().get('master', ['master'])[0]], capture_output=True, text=True).stdout
-    # ponytail: the TUI spinner ("✽ Working… (2m 3s") at the start of a line; breaks if Claude Code redraws it. Anchored:
-    # a diff on screen with "come back… (14 s)" in it read as busy for 4 h and every merge queued behind it (2026-10-14)
-    return not re.search(r'^\S[^\n]*…\s\(\d|esc to interrupt', screen, re.M)
+    """Its last turn ended after its last prompt (the master's own Stop/UserPromptSubmit hooks, `master()`); no
+    screen reading: a diff on screen with "come back… (14 s)" in it read as busy for 4 h (2026-10-14).
+    ponytail: a background task waking it mid-wait isn't a prompt, so it reads idle then; fine, hand() only types into an
+    empty box and master_busy() waits for its master.md line."""
+    t = lambda f: os.path.getmtime(os.path.join(NOTES, f)) if os.path.exists(os.path.join(NOTES, f)) else 0
+    return t('master.idle') >= t('master.busy')
 
 
 def master_busy():
