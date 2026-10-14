@@ -1209,6 +1209,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut offer = None;
     let mut code: Option<String> = None;
     let (ctx_, mut rolled) = amp::unbounded_channel::<Option<String>>();
+    // B266: the host's home relay, last seen (its code's record keeps it while a net report has none)
+    let (htx, mut homes) = amp::unbounded_channel::<RelayUrl>();
+    let mut home: Option<RelayUrl> = None;
     match &cx.ep {
         Some(ep) => {
             cx.say(Event::Code(EndpointTicket::new(ep.addr()).to_string()));
@@ -1217,13 +1220,21 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             bevy::log::info!("short code {first} shown");
             cx.say(Event::Short(first.clone()));
             cx.say(Event::Status("Putting the code online...".into()));
+            let mut addrs = iroh::Watcher::stream(ep.watch_addr());
             let (dht, ep, relays, ev) = (cx.dht.clone(), ep.clone(), cx.relays, cx.ev.clone());
             n0_future::task::spawn(async move {
                 let t = n0_future::time::Instant::now();
                 // B175: a browser dials only the ticket's relay, so a code without one (the relay slower than bind's
                 // 10 s) would time out there; native joiners would still find the host by the DHT
-                if relays && ep.addr().relay_urls().next().is_none() {
-                    let _ = n0_future::time::timeout(Duration::from_secs(30), ep.online()).await;
+                // B266: and never without one while the relays are on (the 30 s cap published a relay-less code,
+                // which a browser read as Relay off): a code without a relay is a Relay off host's
+                while relays && ep.addr().relay_urls().next().is_none() {
+                    if n0_future::time::timeout(Duration::from_secs(30), ep.online()).await.is_err() {
+                        if ctx_.is_closed() {
+                            return;
+                        }
+                        let _ = ev.send(Event::Status("Waiting for a relay to put the code online (no internet?)...".into()));
+                    }
                 }
                 // B114: relays off, right after bind the address can still be empty; a bare ID in the code fails
                 // the join with "no addressing information" when the DHT has no record of the host yet
@@ -1233,11 +1244,26 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                     n0_future::time::sleep(Duration::from_millis(100)).await;
                 }
-                let ticket = code_ticket(&ep);
+                let ticket = code_ticket(&ep, None);
                 bevy::log::info!("ticket with its addresses in {:?}", t.elapsed());
                 let c = roll(&dht, first, &ticket, |c| drop(ev.send(Event::Short(c.into())))).await;
                 bevy::log::info!("short code {c:?} in {:?}", t.elapsed());
                 let _ = ctx_.send(c);
+            });
+            // B266: the home relay as it changes (a new one picked, or a net report without one), so the code's
+            // record follows it at once instead of sending browsers to the old relay until the next REPUBLISH
+            n0_future::task::spawn(async move {
+                let mut last = None;
+                while let Some(a) = addrs.next().await {
+                    let r = a.relay_urls().next().cloned();
+                    if r.is_some() && r != last {
+                        bevy::log::info!("home relay {r:?}");
+                        last = r.clone();
+                        if htx.send(r.unwrap()).is_err() {
+                            return;
+                        }
+                    }
+                }
             });
         }
         None => {
@@ -1321,7 +1347,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)).filter(|_| !l.private));
                 let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), relays: cx.relays };
                 let n = lobby_number(ep.id());
-                let (code, ticket) = (code.clone(), code_ticket(ep));
+                let (code, ticket) = (code.clone(), code_ticket(ep, home.as_ref()));
                 let (id, slot) = (ep.id(), slot.clone());
                 let again = std::mem::take(&mut republish);
                 n0_future::task::spawn(async move {
@@ -1518,6 +1544,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 cx.say(Event::Room(room.clone()));
             }
             _ = tick.tick() => (dirty, republish) = (true, true),
+            Some(r) = homes.recv() => {
+                if code.is_some() && home.as_ref() != Some(&r) {
+                    (dirty, republish) = (true, true);
+                }
+                home = Some(r);
+            }
             Some(c) = rolled.recv() => {
                 code = c;
                 cx.say(Event::Short(code.clone().unwrap_or_default()));
@@ -2353,9 +2385,12 @@ async fn resolve(dht: &Dht, code: &str) -> Option<String> {
 }
 
 /// The ticket put under a short code: the endpoint's whole address if it fits a DHT item (1000 bytes), else its ID
-/// and relay.
-fn code_ticket(ep: &Endpoint) -> String {
-    let addr = ep.addr();
+/// and relay; `home` if the address has no relay just now (B266).
+fn code_ticket(ep: &Endpoint, home: Option<&RelayUrl>) -> String {
+    let mut addr = ep.addr();
+    if let Some(h) = home.filter(|_| addr.relay_urls().next().is_none()) {
+        addr = addr.with_relay_url(h.clone());
+    }
     let t = EndpointTicket::new(addr.clone()).to_string();
     if t.len() <= 900 {
         return t;
@@ -2403,6 +2438,19 @@ mod tests {
         // a relay-off host on the LAN, and bare IDs (found by mDNS/DHT)
         assert!(unreachable(&direct, false, true).is_none());
         assert!(unreachable(&EndpointAddr::new(id), false, false).is_none());
+    }
+
+    /// B266: a code's record keeps the last home relay while the address has none (a net report without one), so a
+    /// browser isn't told the host has Relay off.
+    #[test]
+    fn code_ticket_keeps_the_last_relay() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
+            let home: RelayUrl = "https://use1-1.relay.n0.iroh.link./".parse().unwrap();
+            let relay = |t: String| EndpointAddr::from(t.parse::<EndpointTicket>().unwrap()).relay_urls().next().cloned();
+            assert_eq!(relay(code_ticket(&ep, None)), None);
+            assert_eq!(relay(code_ticket(&ep, Some(&home))), Some(home));
+        });
     }
 
     #[test]
