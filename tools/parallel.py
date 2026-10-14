@@ -612,7 +612,15 @@ def main():
         procs[n], running[n] = proc, task
     for n in free_at:
         if n not in procs and os.path.isdir(slot(n)):
+            tid = git('branch', '--show-current', cwd=slot(n)).stdout.strip().removeprefix('task/')
             git('checkout', '-q', '--detach', cwd=slot(n))  # idle slots let go of old task/<ID>s, or start() can't take them
+            # a session that ended while no runner watched (B347, 2026-10-14: it exited as the runner restarted)
+            # left its branch unmerged: merge it now like any finished slot
+            if tid and (commits := git('log', '--format=%s', f'main..task/{tid}').stdout.splitlines()):
+                log(f'slot {n}: {tid} ended while no runner was up; merging its {len(commits)} commits')
+                tried.add(tid)
+                (t := threading.Thread(target=finish, args=(tid, n, '(unknown)', commits))).start()
+                merging.append(t)
     while True:
         for n in free_at:
             if n in procs and not alive(procs[n][0]):
