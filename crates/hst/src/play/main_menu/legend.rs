@@ -208,7 +208,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Back, "Back"));
             }
         }
-        Screen::Confirm if host && m.picking.is_some() => v.extend([(Act::LeftRight, if s == 1 { "Court" } else { "Umpire" }), (Act::Ok, "Keep"), (Act::Back, "Cancel")]),
+        Screen::Confirm if host && m.picking.is_some() => v.extend([if s == 1 { (Act::Move, "Court") } else { (Act::LeftRight, "Umpire") }, (Act::Ok, "Keep"), (Act::Back, "Cancel")]),
         Screen::Confirm if host => {
             v.push((Act::UpDown, "Move"));
             match s {

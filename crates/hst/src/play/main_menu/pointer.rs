@@ -378,23 +378,23 @@ pub(super) mod tests {
         tap(&mut m, x + 4.0, y + 4.0);
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
-        // the court picker: a tile hovers it, a tap off puts it back, the centre keeps it
-        let court = |m: &Menu| {
-            let [x, y, w, h] = super::super::confirm_rects(m)[1];
-            (x + w / 2.0, y + h / 2.0)
-        };
-        let (cx, cy) = court(&m);
+        // the court picker (B257: a pill grid): a pill hovers it, a tap off (the side card) puts it back, the hovered
+        // pill again keeps it
+        let centre = |[x, y, w, h]: [f32; 4]| (x + w / 2.0, y + h / 2.0);
+        let (cx, cy) = centre(super::super::confirm_rects(&m)[1]);
         tap(&mut m, cx, cy); // Select Court
         assert_eq!(m.picking, Some(m.court));
         let was = m.court;
-        tap(&mut m, 320.0 + 112.0, 366.0);
-        assert_ne!(m.court, was);
-        tap(&mut m, 320.0, 100.0);
+        let (px, py) = centre(super::super::court_rects(&m)[4]);
+        tap(&mut m, px, py);
+        assert_eq!(m.court, super::super::STRIP[4]);
+        let (ox, oy) = centre(super::super::confirm_rects(&m)[0]);
+        tap(&mut m, ox, oy);
         assert_eq!((m.picking, m.court), (None, was));
         tap(&mut m, cx, cy);
-        tap(&mut m, 320.0 + 112.0, 366.0);
-        tap(&mut m, 320.0, 366.0);
-        assert!(m.picking.is_none() && m.court != was);
+        tap(&mut m, px, py);
+        tap(&mut m, px, py);
+        assert!(m.picking.is_none() && m.court == super::super::STRIP[4]);
         let [x, y, w, h] = super::super::confirm_rects(&m)[0];
         let fx = tap(&mut m, x + w / 2.0, y + h / 2.0); // Start the match!
         assert!(fx.contains(&Effect::Launch), "{fx:?}");
