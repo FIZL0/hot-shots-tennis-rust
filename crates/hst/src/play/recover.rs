@@ -17,13 +17,14 @@ use super::tick_input::IDLE;
 use super::{Game, Pads, snapshot};
 use crate::net::{CPU, Event, Msg, Room, Seat};
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Keep-alive every this many seconds.
 const ALIVE: f32 = 0.5;
-/// A peer not heard for this long is away; before its first word (still loading the match), [`LOADING`].
+/// A peer not heard for this long is away; before it has loaded the match (`Msg::Loaded`: its first word may come
+/// before its loading screen's slow frames, a browser compiling pipelines), [`LOADING`] (B200).
 pub const SILENT: f32 = 3.0;
-const LOADING: f32 = 30.0;
+const LOADING: f32 = 60.0;
 /// How long the others wait for an away player to come back, then for an answer.
 pub const WAIT: f32 = 20.0;
 pub const CHOOSE: f32 = 15.0;
@@ -52,18 +53,32 @@ pub struct Recover {
     pub hold: bool,
     /// Back to this lobby once the end notice is down (`netplay::LOBBY`).
     pub lobby: Option<Room>,
+    /// B200: the peers (this machine too) past their loading screen; the match's ticks wait for all of them.
+    pub loaded: BTreeSet<String>,
 }
 
 impl Recover {
-    pub fn new(rejoin: bool) -> Self {
-        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None }
+    /// `others`: the other peers, already playing if this machine rejoins.
+    pub fn new(rejoin: bool, others: impl Iterator<Item = String>) -> Self {
+        let loaded = if rejoin { others.collect() } else { BTreeSet::new() };
+        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, loaded }
     }
 
     /// Any word from a peer.
     pub fn heard_from(&mut self, e: &Event) {
-        if let Event::Datagram(p, _) | Event::Match(Msg::Alive(p)) = e {
+        if let Event::Datagram(p, _) | Event::Match(Msg::Alive(p) | Msg::Loaded(p)) = e {
             self.quiet.insert(p.clone(), (0.0, true));
         }
+        if let Event::Match(Msg::Loaded(p)) = e {
+            self.loaded.insert(p.clone());
+        }
+    }
+
+    /// B200: the people in `room` who haven't loaded the match yet (empty: it runs).
+    pub fn loading(&self, room: &Room) -> Vec<String> {
+        let mut v: Vec<String> = room.seats.iter().flatten().filter(|s| s.human() && !self.loaded.contains(&s.peer)).map(|s| s.peer.clone()).collect();
+        v.dedup();
+        v
     }
 }
 
@@ -150,8 +165,8 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     }
     let names = |room: &Room, who: &[String]| who.iter().map(|p| name(room, p)).collect::<Vec<_>>().join(", ");
     if np.me != "host" {
-        let (q, heard) = *r.quiet.entry("host".into()).or_default();
-        let limit = if heard { SILENT } else { LOADING };
+        let q = r.quiet.entry("host".into()).or_default().0;
+        let limit = if r.loaded.contains("host") { SILENT } else { LOADING };
         if q > limit + HOST_WAIT {
             np.finish(format!("The host stopped answering. The match is over.\n{score}"), false);
             return String::new();
@@ -170,9 +185,9 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     let mut peers: Vec<String> = np.room.seats.iter().flatten().filter(|s| s.human() && s.peer != np.me).map(|s| s.peer.clone()).collect();
     peers.dedup();
     for p in peers {
-        let (q, heard) = *r.quiet.entry(p.clone()).or_default();
+        let q = r.quiet.entry(p.clone()).or_default().0;
         let away = r.away.contains(&p);
-        if !away && q > if heard { SILENT } else { LOADING } {
+        if !away && q > if r.loaded.contains(&p) { SILENT } else { LOADING } {
             info!("online: {} went silent", name(&np.room, &p));
             r.away.push(p);
         } else if away && q < SILENT {

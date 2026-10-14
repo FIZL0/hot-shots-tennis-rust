@@ -429,7 +429,7 @@ pub fn gate(w: &mut World) -> bool {
     poll(w);
     take_state(w);
     super::recover::restarted(w);
-    if w.resource::<Netplay>().end.is_some() || w.resource::<Netplay>().recover.hold || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
+    if w.resource::<Netplay>().end.is_some() || w.resource::<Netplay>().recover.hold || !super::netplay::started(w.resource::<Netplay>()) || w.resource::<Rollback>().sess.current_state() != SessionState::Running {
         return false;
     }
     // B197: every call is a tick of real time (Bevy's fixed step); one that didn't run (a stall, time sync) is run

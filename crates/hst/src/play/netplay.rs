@@ -197,6 +197,7 @@ impl Netplay {
         let taken = |i: usize| room.seats.get(i).is_some_and(|s| s.as_ref().is_some_and(crate::net::Seat::human));
         let mine = (0..room.seats.len()).filter(|&i| room.seats[i].as_ref().is_some_and(|s| s.peer == me)).collect();
         let rejoin = room.rejoin;
+        let others: Vec<String> = room.seats.iter().flatten().filter(|s| s.human() && s.peer != me).map(|s| s.peer.clone()).collect();
         let mash = std::env::var("HST_NET_MASH").ok().and_then(|v| v.parse::<u64>().ok()).map(|s| s | 1);
         Netplay {
             lock: Lockstep::new(std::array::from_fn(taken), mine, room.delay.max(1)),
@@ -213,7 +214,7 @@ impl Netplay {
             mash,
             intro: None,
             resync: Default::default(),
-            recover: super::recover::Recover::new(rejoin),
+            recover: super::recover::Recover::new(rejoin, others.into_iter()),
         }
     }
 
@@ -329,6 +330,7 @@ pub fn take(w: &mut World, e: Event) {
 
 /// The network's events in, the match's messages (and rollback's datagrams) out.
 pub(super) fn pump(w: &mut World) {
+    loaded(w);
     let Some(net) = w.get_resource::<Net>() else { return };
     // B196: going back to the lobby: its events are the menu's from now on
     let lobby = w.get_resource::<Netplay>().is_some_and(|n| n.recover.lobby.is_some());
@@ -346,13 +348,32 @@ pub(super) fn pump(w: &mut World) {
     }
 }
 
+/// B200: this machine's loading screen down: the peers hear it. Once everyone's is, presses reach the match again.
+pub(super) fn loaded(w: &mut World) {
+    let covered = crate::mode::covered(w);
+    let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
+    let me = np.me.clone();
+    if !covered && np.recover.loaded.insert(me.clone()) {
+        info!("online: loaded the match");
+        np.out.push(Msg::Loaded(me));
+    }
+    if np.recover.loading(&np.room).is_empty() {
+        w.remove_resource::<crate::mode::Hush>();
+    }
+}
+
+/// B200: every peer has loaded the match (its ticks, the court intro's too, wait until then).
+pub(super) fn started(np: &Netplay) -> bool {
+    np.recover.loading(&np.room).is_empty()
+}
+
 /// The match's tick gate: true runs the next tick on every seat's pads.
 pub fn gate(w: &mut World) -> bool {
     pump(w);
     super::resync::lockstep(w);
     super::recover::restarted(w);
     let Some(np) = w.get_resource::<Netplay>() else { return true };
-    if np.end.is_some() || np.recover.hold || !np.lock.missing().is_empty() {
+    if np.end.is_some() || np.recover.hold || !started(np) || !np.lock.missing().is_empty() {
         return false;
     }
     let t = np.lock.tick;
@@ -398,6 +419,9 @@ pub(super) fn intro_tick(w: &mut World, skip: bool) -> Option<bool> {
     if np.intro.is_none() {
         return Some(true);
     }
+    if !started(np) {
+        return None;
+    }
     let l = np.intro.as_mut().filter(|l| l.missing().is_empty())?;
     let local = vec![Pad { buttons: skip as u16, ..IDLE }; l.mine.len()];
     let (now, msg) = l.advance(&local);
@@ -439,6 +463,8 @@ fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
     }
     // the match reads only the pads the gate hands it
     commands.insert_resource(Replay(Default::default()));
+    // B200: and no press at all until every peer has loaded it
+    commands.insert_resource(crate::mode::Hush);
     commands.spawn((
         Say,
         Text::new(""),
@@ -476,6 +502,10 @@ fn watch(w: &mut World) {
     let text = match &np.end {
         Some(why) => why.clone(),
         None if !notice.is_empty() => notice,
+        None if np.stalled > STALL && !started(&np) => {
+            let who: Vec<String> = np.recover.loading(&np.room).iter().map(|p| np.room.names.get(p).cloned().unwrap_or_else(|| p.chars().take(8).collect())).collect();
+            format!("Waiting for {} to load...", who.join(", "))
+        }
         None if np.stalled > STALL && !result => {
             let who: Vec<String> = np.intro.as_ref().map(Lockstep::missing).or(remote).unwrap_or_else(|| np.lock.missing()).iter().map(|s| format!("{}P", s + 1)).collect();
             format!("Waiting for {}...", who.join(", "))
@@ -681,6 +711,29 @@ mod tests {
         }
         assert_eq!(skipped, [Some(14), Some(14)]);
         assert!(ticks[0] > 30 && ticks[0].abs_diff(ticks[1]) <= 4, "{ticks:?}");
+    }
+
+    /// B200: the match's ticks (and its court intro's) wait for every peer's loading screen to be down, and no press
+    /// reaches anything until then.
+    #[test]
+    fn the_match_waits_for_every_peer_to_load() {
+        use crate::net::{Pick, Seat};
+        let s = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
+        let room = Room { seats: vec![s("host"), s("g")], delay: 2, ..Default::default() };
+        let mut w = World::new();
+        let mut np = Netplay::new(room, "host".into());
+        np.start_intro();
+        w.insert_resource(np);
+        w.insert_resource(crate::mode::Hush);
+        assert_eq!(intro_tick(&mut w, false), None);
+        assert!(!gate(&mut w));
+        let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+        assert!(matches!(&out[..], [Msg::Loaded(p)] if p == "host"), "{out:?}");
+        assert!(w.contains_resource::<crate::mode::Hush>());
+        take(&mut w, Event::Match(Msg::Loaded("g".into())));
+        assert_eq!(intro_tick(&mut w, false), Some(false));
+        assert!(!w.contains_resource::<crate::mode::Hush>());
+        assert!(w.resource::<Netplay>().out.iter().all(|m| !matches!(m, Msg::Loaded(_))), "said once");
     }
 
     /// The match on two headless apps (`snapshot.rs`'s harness, doubles): what each gate sends reaches the other
