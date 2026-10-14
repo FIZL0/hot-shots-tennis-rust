@@ -7,7 +7,7 @@
 //! Also the landing markers from `PCDATA/PCCG0.XB`: the red one where a shot is aimed, the yellow one where a lob
 //! can be smashed.
 
-use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
+use bevy::mesh::morph::MorphWeights;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
@@ -138,14 +138,65 @@ pub(crate) fn model<M: EffectMaterial>(
     }
     let skin = SkinnedMesh { inverse_bindposes: binds, joints: joints.clone() };
     for (mesh, material, morphed) in parts {
-        let part = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
+        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material), skin.clone(), Transform::default())).id();
         if morphed {
             // always drawn, collapsed while hidden (`Collapse`)
-            commands.entity(part).insert((MeshMorphWeights::Reference(root), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
+            commands.entity(part).insert((cpu_morph(&mesh, root, meshes), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
         }
         commands.entity(holder).add_child(part);
     }
     Ok((effect, Shown { root, joints, materials: mats }))
+}
+
+/// A morphed effect part, morphed here rather than by Bevy: WebGPU in Safari on the iPhone drew the bounce ring's
+/// morphed sprites as big flat panels (B137a; WebGL2 and desktop fine), and Bevy morphs through storage buffers only on
+/// WebGPU. The effects' meshes are a few dozen vertices, so the positions are rewritten whenever the weights change.
+#[derive(Component)]
+pub(crate) struct CpuMorph {
+    /// The entity with the `MorphWeights`.
+    root: Entity,
+    base: Vec<Vec3>,
+    /// Per target, every vertex's offset.
+    targets: Vec<Vec<Vec3>>,
+    last: Vec<f32>,
+}
+
+/// Take `mesh`'s morph targets off it (rebuilt without them, kept in the main world) into a `CpuMorph`.
+fn cpu_morph(mesh: &Handle<Mesh>, root: Entity, meshes: &mut Assets<Mesh>) -> CpuMorph {
+    let old = meshes.get(mesh).expect("just added");
+    let mut new = Mesh::new(old.primitive_topology(), bevy::asset::RenderAssetUsages::default());
+    for (attr, values) in old.attributes() {
+        new.insert_attribute(attr.clone(), values.clone());
+    }
+    if let Some(i) = old.indices() {
+        new.insert_indices(i.clone());
+    }
+    let base: Vec<Vec3> = old.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|v| v.as_float3()).unwrap_or_default().iter().map(|p| Vec3::from(*p)).collect();
+    let attrs = old.morph_targets().cloned().unwrap_or_default();
+    let n = base.len().max(1);
+    let targets = attrs.chunks(n).map(|t| t.iter().map(|a| a.position).collect()).collect();
+    let _ = meshes.insert(mesh, new);
+    CpuMorph { root, base, targets, last: vec![] }
+}
+
+/// Write each `CpuMorph` part's positions (base + Σ weight · target) when its root's weights changed.
+pub fn morph_on_cpu(mut parts: Query<(&mut CpuMorph, &Mesh3d)>, weights: Query<&MorphWeights>, mut meshes: ResMut<Assets<Mesh>>) {
+    for (mut m, mesh) in &mut parts {
+        let Ok(w) = weights.get(m.root) else { continue };
+        if m.last == w.weights() {
+            continue;
+        }
+        let mut pos = m.base.clone();
+        for (t, &k) in m.targets.iter().zip(w.weights()) {
+            if k != 0.0 {
+                pos.iter_mut().zip(t).for_each(|(p, d)| *p += *d * k);
+            }
+        }
+        m.last = w.weights().to_vec();
+        if let Some(mut mesh) = meshes.get_mut(&mesh.0) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos.into_iter().map(|p| p.to_array()).collect::<Vec<_>>());
+        }
+    }
 }
 
 /// Holds an effect model's joints and parts under its root (the entity here), scaled to nothing while the root is
@@ -820,3 +871,28 @@ impl crate::play::snapshot::Wire for BallBounce {
 }
 
 impl crate::play::snapshot::Wire for LandingMarks {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn cpu_morph_adds_the_weighted_targets() {
+        let mut world = World::new();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let t = |p: [f32; 3]| bevy::mesh::morph::MorphAttributes::new(Vec3::from(p), Vec3::ZERO, Vec3::ZERO);
+        mesh.set_morph_targets(vec![t([1.0, 0.0, 0.0]), t([0.0; 3]), t([0.0; 3]), t([0.0; 3]), t([0.0, 2.0, 0.0]), t([0.0, 0.0, 4.0])]);
+        let h = meshes.add(mesh);
+        let root = world.spawn(MorphWeights::new(vec![0.5, 0.25], None).unwrap()).id();
+        let m = cpu_morph(&h, root, &mut meshes);
+        assert!(meshes.get(&h).unwrap().morph_targets().is_none());
+        world.spawn((m, Mesh3d(h.clone())));
+        world.insert_resource(meshes);
+        world.run_system_once(morph_on_cpu).unwrap();
+        let pos = world.resource::<Assets<Mesh>>().get(&h).unwrap().attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec();
+        assert_eq!(pos, vec![[0.5, 0.0, 0.0], [1.0, 0.5, 0.0], [0.0, 1.0, 1.0]]);
+    }
+}

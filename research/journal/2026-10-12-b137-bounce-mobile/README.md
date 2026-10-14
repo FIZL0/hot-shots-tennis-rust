@@ -74,3 +74,40 @@ screenshot or screen recording of a bounce, plus the phone model and browser (Sa
 ## Not verified / not 1:1 (B137a)
 - The bug itself: not reproduced on any profile available here (no phone, no Metal/mobile GPU, no adb device).
 - No comparison with the original via `tools/screenshot.sh`: nothing was changed, desktop rendering is as B137 left it.
+
+## B137a (2026-10-14): fixed by morphing the effects on the CPU
+The user's iPhone screenshot (`context/b137a/phone-bounce.png` in the main checkout): beside a bounce, two big flat
+yellow-white gradient panels with hard straight edges along the ground; the central glow and star are fine. Only on
+WebGPU (`?webgl2` draws it right).
+
+What differs between the two builds for these meshes: Bevy 0.19 morphs a mesh through a 3D texture + uniform weights
+when storage buffers are unsupported (WebGL2), and through storage buffers (targets in a mesh-allocator slab, weights,
+a per-instance `morph_descriptors[mesh.morph_descriptor_index]` table) on WebGPU and native. The ring's morphed parts
+(the splash/ring sprites) are what turn into panels, the unmorphed ones (glow, star) are right, and the panels'
+straight edges look like vertices displaced by another mesh's targets or weights. B244's iPhone-only WebGPU
+`createBindGroup` crash "after a hit" (the impact effects are morphed too) points at the same path. Desktop Chrome
+WebGPU and native Vulkan run the storage path without the bug, so the exact Safari fault couldn't be pinned here (no
+Safari WebGPU on this machine).
+
+Fix: the effect models no longer use Bevy's morphs at all. `effects::model` takes each morphed part's targets off its
+mesh (`cpu_morph`: the mesh rebuilt without them, kept in the main world) into a `CpuMorph` component, and
+`effects::morph_on_cpu` (PostUpdate, `main.rs`) writes base + Σ weight·target into the part's positions whenever its
+root's `MorphWeights` change. Every model built by `effects::model` (impacts, bounce ring and crater, landing
+markers, foot dash, tornado, pop-ups, intro banner, menu cursor, NPC creatures) goes through it; characters' face
+morphs are untouched. The meshes are a few dozen vertices, so the cost is nothing. Test:
+`effects::tests::cpu_morph_adds_the_weighted_targets`.
+
+Checked natively (Vulkan, court 1 bot singles, `context/b137a/cpu1/`): the impact X glow, sparks, bounce marks,
+puffs, landing marker and the hit ring draw as before.
+
+## Not verified / not 1:1 (B137a, 2026-10-14)
+- Not seen on an iPhone: no phone or Safari WebGPU here. Needs the user: on the iPhone (WebGPU build, not
+  `?webgl2`) play a rally and look at a bounce: the ring should be the small yellow fleck ring as on desktop, no flat
+  panels. If B244's crash after a hit is gone too, that confirms the cause was the morph storage path.
+- The exact Safari/WebGPU fault in Bevy's storage morph path is not identified; this works around it rather than
+  fixing Bevy.
+- No new `tools/screenshot.sh` comparison with the original: desktop rendering is unchanged by this (same positions,
+  computed on the CPU instead of in the vertex shader), and the bounce look was checked against the original when it
+  landed.
+- No native frame caught exactly on a bounce ring (the shot timing varies with load time); the impact effect, also a
+  morphed model, was caught and draws right.
