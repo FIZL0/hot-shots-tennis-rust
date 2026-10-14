@@ -276,11 +276,16 @@ pub(in crate::play) fn pointer(
     }
     // mouse (not the browser's copy of a touch)
     if now - st.touched > 0.6 && MOUSE_IDLE.load(Ordering::Relaxed) {
-        // hidden: back on its first move, which hovers whatever is under it then
-        (st.mouse, st.hovered) = (None, None);
+        // hidden: still follow what's under it, so waking it (a compositor's stray motion as the pointer hides or shows)
+        // doesn't pull the pad's or keyboard's cursor back to the row it rests on; only moving onto another row does
+        if let Some(c) = win.cursor_position() {
+            (st.mouse, st.hovered) = (Some(c), hover(at(c, SLOP)));
+        }
     } else if now - st.touched > 0.6 {
         let c = win.cursor_position();
-        if c != st.mouse {
+        // no position (the pointer left, or the compositor's leave / enter as it hides): what it was over stays, so
+        // coming back to the same row doesn't select it again
+        if c.is_some() && c != st.mouse {
             st.mouse = c;
             let a = c.and_then(|c| hover(at(c, SLOP)));
             if a != st.hovered {
@@ -529,6 +534,32 @@ pub(super) mod tests {
             }
         }
         assert_eq!(seen, (0..keys + 4).collect(), "every key and button reached");
+        // the host's lobby, the mouse resting on 2P's seat: ↑ hides it (a key press) and reaches Singles / Doubles; the
+        // compositor's leave / enter and a stray motion waking it don't pull the cursor back to the seat
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        super::super::online::sample(&mut m);
+        (m.net.hosting, m.sel) = (true, 0);
+        let at = centre(&m, 0);
+        frame(&mut app, &mut m, at, 0);
+        assert_eq!(m.sel, 0);
+        MOUSE_IDLE.store(true, Ordering::Relaxed);
+        m.step(Dev::Keys, Press { up: true, ..default() });
+        let mode = m.sel;
+        assert_ne!(mode, 0);
+        for n in 1..4 {
+            frame(&mut app, &mut m, at, n);
+        }
+        MOUSE_IDLE.store(false, Ordering::Relaxed);
+        app.world_mut().get_mut::<Window>(win).unwrap().set_cursor_position(None);
+        app.update();
+        for n in 4..10 {
+            frame(&mut app, &mut m, at, n);
+            assert_eq!(m.sel, mode, "frame {n}");
+        }
+        // moving onto another row still hovers it
+        let other = centre(&m, 1);
+        frame(&mut app, &mut m, other, 0);
+        assert_eq!(m.sel, 1);
     }
 
 }
