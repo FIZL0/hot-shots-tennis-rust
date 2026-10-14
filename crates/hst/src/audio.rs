@@ -147,6 +147,8 @@ struct Mix {
     /// B77: the plays the match re-levels every frame (`update`, `turn`: the flight whistle and rush, the flyover).
     followed: Vec<u64>,
     vol: Vol,
+    /// B203: the menu cue sounding, cut when the next starts.
+    menu: u64,
 }
 
 /// B235: the volume settings' groups. Presentation only: applied to the output, never to a play's level.
@@ -468,7 +470,7 @@ impl Sound {
     /// A mixer with no tables and no output, for tests that only follow plays.
     #[cfg(test)]
     pub fn bare() -> Self {
-        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default() })))
+        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 })))
     }
 
     /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
@@ -489,13 +491,26 @@ impl Sound {
         self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of(p.slot))
     }
 
+    /// B203: a menu cue (system bank key `key`, centred, full volume) that cuts the one before it, so mashing
+    /// buttons or a held direction's repeat never stacks cues louder than one press.
+    pub fn play_menu(&self, bank: &Arc<SoundBank>, key: u8) -> u64 {
+        let mut m = self.0.lock().unwrap();
+        let last = m.menu;
+        m.playing.retain(|q| q.id != last);
+        m.voices.retain(|v| v.2 != last);
+        drop(m);
+        let id = self.play_centre(bank, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
+        self.0.lock().unwrap().menu = id;
+        id
+    }
+
     /// How many 60 Hz frames `play_centre(bank, p)` sounds for: rendered alone on a silent copy of the mixer, so
     /// the match can time the umpire's voice by ticks, the same on every machine (the live mixer runs on the audio
     /// device's clock). ponytail: capped at 30 s; a looping sequence would never end
     pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
         let solo = {
             let m = self.0.lock().unwrap();
-            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default() }
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
         };
         let solo = Self(Arc::new(Mutex::new(solo)));
         let id = solo.play_centre(bank, p);
@@ -697,7 +712,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default() }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
 }
 
 #[cfg(test)]
@@ -820,6 +835,34 @@ mod tests {
         let loud = out.iter().fold(0f32, |a, x| a.max(x.abs()));
         eprintln!("peak {loud}, voices left {}", m.voices.len());
         assert!(loud > 0.01 && m.voices.is_empty() && m.playing.is_empty());
+    }
+
+    /// B203: mashing a menu cue (every frame, as a held direction's repeat or fast presses) peaks no louder than
+    /// one press: each cue cuts the one before.
+    #[test]
+    fn menu_cues_do_not_stack() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let bank = Arc::new(SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").unwrap());
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        let peak = |presses: usize, every: usize| {
+            let mut out = Vec::new();
+            for f in 0..120 {
+                if f % every == 0 && f / every < presses {
+                    sound.play_menu(&bank, 0);
+                }
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            assert!(sound.0.lock().unwrap().voices.len() <= 2);
+            out.iter().fold(0f32, |a, x| a.max(x.abs()))
+        };
+        let one = peak(1, 1);
+        for every in [1, 2, 4, 6] {
+            let mashed = peak(usize::MAX, every);
+            eprintln!("one {one}, every {every} frames {mashed}");
+            assert!(mashed <= one * 1.01, "every {every}: {mashed} > {one}");
+        }
     }
 
     /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono), play at the sequence's full
@@ -975,6 +1018,6 @@ mod tests {
     }
 
     fn mix_clone(m: &Mix) -> Mix {
-        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default() }
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
     }
 }
