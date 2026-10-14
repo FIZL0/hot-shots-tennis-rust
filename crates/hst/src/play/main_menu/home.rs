@@ -115,11 +115,16 @@ fn backdrop(r: Row) -> [f32; 3] {
 /// The main screen.
 pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f32) {
     d.frame(0, 5);
-    // the header's right: pads and disc (only SCUS-97610 gets this far, `exe`)
+    // the header's right: pads and disc (only SCUS-97610 gets this far, `exe`), B302's build version and commit
+    // under it (`+` if built with local changes; the font has no `·`); `Sides` pins each side of 320 to its own
+    // edge, so neither line may reach the middle
     d.anchor = super::Anchor::Sides;
     let head = format!("{pads} pad{}  -  Disc: SCUS-97610", if pads == 1 { "" } else { "s" });
     let w = d.width(&head, 16.0);
-    d.outlined(|d| d.text(&head, 624.0 - w, 20.0, 16.0, WHITE));
+    d.outlined(|d| d.text(&head, 624.0 - w, 18.0, 16.0, WHITE));
+    let version = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
+    let w = d.width(version, 10.0);
+    d.outlined(|d| d.text(version, 624.0 - w, 37.0, 10.0, WHITE));
     d.anchor = super::Anchor::Centre;
 
     let rows = m.main_rows();
@@ -171,7 +176,6 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
     if let Some(sx) = store {
         mods_screen::news(d, m, [sx, TOP, STORE_W, FOOT - TOP]);
     }
-    super::version_corner(d);
     mods_screen::ask_layout(d, m, hand_x);
 }
 

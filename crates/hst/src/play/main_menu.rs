@@ -2025,14 +2025,6 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
     d
 }
 
-/// B302: the build's version and commit (`v0.1.0 - abc1234`, `+` if built with local changes; the font has no `·`), small in the window's top-right corner under the title bar (the bottom one holds the key legend; pinned to it at any aspect).
-fn version_corner(d: &mut Draw) {
-    let s = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
-    d.anchor = Anchor::Sides;
-    d.outlined(|d| d.text(s, 634.0 - d.width(s, 14.0), 22.0, 14.0, WHITE));
-    d.anchor = Anchor::Centre;
-}
-
 /// A Singles / Doubles bar (B141, ours): pill `i`'s colour, dimmed and see-through when not chosen, its word in our
 /// font as tall as the bar allows.
 fn mode_bar(d: &mut Draw, i: usize, on: bool, [x, y, w, h]: [f32; 4], words: &str) {

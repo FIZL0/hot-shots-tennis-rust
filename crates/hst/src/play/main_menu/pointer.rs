@@ -425,7 +425,7 @@ pub(super) mod tests {
         assert_eq!(m.settings.value(Opt::Msaa), v);
         // Controls: a row starts a rebind
         let mut c = Menu { screen: Screen::Controls, ..default() };
-        let [x, y, _, h] = super::super::options::row(boxes(&c.grid, 13).0, 13, 2);
+        let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 13, 2);
         tap(&mut c, x + 40.0, y + h / 2.0);
         assert_eq!(c.rebinding, Some(2));
     }

@@ -425,31 +425,55 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
 }
 
-/// The Controls page: each action and its keys and buttons (✕ rebinds: the next key or button pressed); the chosen
-/// one's bindings in the side panel.
+/// The Controls page: each action with its keys and its pad buttons in two columns (✕ rebinds: the next key or
+/// button pressed replaces that column's); the chosen one's bindings in the side panel.
 pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings, hand_x: f32) {
     let names: Vec<String> = controls::action_names().map(|n| n[..1].to_uppercase() + &n[1..].replace('_', " ")).collect();
-    let (list, side) = chrome(d, m, names.len());
+    let (list, side) = chrome(d, m, names.len() + 1);
+    let body = controls_body(list);
     let waiting = m.rebinding.is_some();
+    let col = |r: [f32; 4], c: usize| {
+        let vw = r[2] * 0.3;
+        [r[0] + r[2] - 4.0 - (2 - c) as f32 * vw - (1 - c) as f32 * 6.0, vw]
+    };
+    let [_, _, _, h0] = row(body, names.len(), 0);
+    for (c, head) in ["Keyboard", "Controller"].into_iter().enumerate() {
+        let [cx, vw] = col(row(body, names.len(), 0), c);
+        d.centred(head, cx + vw / 2.0, list[1] + 8.0, (h0 * 0.45).min(13.0), MUTED);
+    }
     for (i, n) in names.iter().enumerate() {
-        let r @ [x, y, w, h] = row(list, names.len(), i);
+        let r @ [x, y, _, h] = row(body, names.len(), i);
         let on = i == m.sel;
         if on {
             chosen(d, r, hand_x);
         }
         let size = (h * 0.6).min(18.0);
         d.text(n, x + 14.0, y + (h - size) / 2.0, size, BROWN);
-        let keys = if on && waiting { "press a key or button...".to_string() } else { bind.names(i).join("  ") };
-        let vw = w * 0.6;
-        d.box3([x + w - vw - 4.0, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
-        d.label(&keys, x + w - vw / 2.0 - 4.0, y + (h - size * 0.85) / 2.0, size * 0.85, vw - 16.0, if on && waiting { MUTED } else { BROWN });
+        let (pads, keys): (Vec<String>, Vec<String>) = bind.names(i).into_iter().partition(|n| n.starts_with("Pad"));
+        for (c, v) in [keys, pads].into_iter().enumerate() {
+            let [cx, vw] = col(r, c);
+            let s = if on && waiting { "press...".to_string() } else if v.is_empty() { "-".to_string() } else { v.iter().map(|n| shown(n)).collect::<Vec<_>>().join("  ") };
+            d.box3([cx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
+            d.label(&s, cx + vw / 2.0, y + (h - size * 0.85) / 2.0, size * 0.85, vw - 16.0, if on && waiting || v.is_empty() { MUTED } else { BROWN });
+        }
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
     d.text("Saved to controls.txt", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(n) = names.get(m.sel) {
         let about = if waiting { "Press the new key or button for it (Escape cancels). A key replaces its keys, a button its buttons." } else { "Choose it to rebind it: the next key or button you press." };
-        side_panel(d, side, n, about, "Bound to", &bind.names(m.sel), None, "");
+        let chips: Vec<String> = bind.names(m.sel).iter().map(|n| shown(n).to_string()).collect();
+        side_panel(d, side, n, about, "Bound to", &chips, None, "");
     }
+}
+
+/// The Controls page's rows' box: the list less the column headings on top.
+pub(super) fn controls_body(list: [f32; 4]) -> [f32; 4] {
+    [list[0], list[1] + 18.0, list[2], list[3] - 18.0]
+}
+
+/// A binding's name as the page shows it: `KeyW` W, `Digit1` 1, `PadDPadUp` DPadUp (controls.txt keeps the full ones).
+fn shown(n: &str) -> &str {
+    ["Pad", "Key", "Digit"].iter().find_map(|p| n.strip_prefix(p).filter(|r| !r.is_empty())).unwrap_or(n)
 }
 
 #[cfg(test)]
