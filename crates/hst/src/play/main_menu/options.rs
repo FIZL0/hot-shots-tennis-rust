@@ -94,11 +94,6 @@ pub(super) fn locked(o: Opt) -> bool {
     cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
 }
 
-/// Whether ✕ changes `o` too (a slider only takes ◀ ▶).
-pub(super) fn ok_changes(o: Opt) -> bool {
-    !matches!(o, Volume(_)) && !locked(o)
-}
-
 fn label(o: Opt) -> &'static str {
     match o {
         Display => "Display",
@@ -277,14 +272,39 @@ impl Settings {
 }
 
 impl Menu {
-    /// An options page: ◀ ▶ (and ✕, but on a slider) change the row's option and save; L1 / R1 and ○ as [`Self::step_tabs`].
+    /// An options page (B326, as the confirm screen's Sets and Games): ✕ on a row picks it, ◀ ▶ then change it (applied
+    /// and saved at once), ✕ keeps it, ○ puts back what it was; ◀ ▶ on a row not picked do nothing; L1 / R1 and ○ as
+    /// [`Self::step_tabs`].
     pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
-        if let Some(&o) = page(self.screen).get(self.sel)
-            && !locked(o)
-            && (k.left || k.right || (k.ok && ok_changes(o)))
-        {
-            self.settings.step(o, if k.left { -1 } else { 1 });
-            out.extend([Effect::Sound(0), Effect::SaveSettings]);
+        let o = page(self.screen).get(self.sel).copied().filter(|&o| !locked(o));
+        if let Some(was) = self.editing {
+            let Some(o) = o else {
+                self.editing = None;
+                return;
+            };
+            if k.left || k.right {
+                let now = self.settings;
+                self.settings.step(o, if k.left { -1 } else { 1 });
+                if self.settings != now {
+                    out.extend([Effect::Sound(0), Effect::SaveSettings]);
+                }
+            } else if k.ok {
+                self.editing = None;
+                out.push(Effect::Sound(2));
+            } else if k.back {
+                self.editing = None;
+                if self.settings != was {
+                    self.settings = was;
+                    crate::chat::HIDDEN.store(!was.0[CHAT], std::sync::atomic::Ordering::Relaxed);
+                    out.push(Effect::SaveSettings);
+                }
+                out.push(Effect::Sound(1));
+            }
+            return;
+        }
+        if k.ok && o.is_some() {
+            self.editing = Some(self.settings);
+            out.push(Effect::Sound(2));
             return;
         }
         self.step_tabs(k, out);
@@ -413,9 +433,9 @@ fn side_panel(d: &mut Draw, side: [f32; 4], name: &str, about: &str, heading: &s
     para(d, note, x, y, w, 12.0, 16.0, MUTED);
 }
 
-/// An options page: the rows in the list, each label on the left and its value between ◀ ▶ on the right (a tap on
-/// the value's left half steps back, on its right half on, B221), a volume as a bar beside its number; the chosen
-/// one's name, description and choices in the side panel.
+/// An options page: the rows in the list, each label on the left and its value on the right (a tap picks the row;
+/// picked, its value between ◀ ▶, B326), a volume as a bar beside its number; the chosen one's name, description and
+/// choices in the side panel.
 pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let opts = page(m.screen);
     let (list, side) = chrome(d, m, opts.len());
@@ -430,7 +450,9 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         let vw = 130.0f32.min(w * 0.36);
         let vx = x + w - vw - 4.0;
         d.text(label(o), x + 14.0, y + (h - size) / 2.0, size, ink);
-        d.hit([x, y, vx - x, h], pointer::Act::Row(i, pointer::OK));
+        if m.editing.is_none() {
+            d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
+        }
         d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
         let value = m.settings.value(o);
         d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, if value == "Off" { MUTED } else { ink });
@@ -440,11 +462,25 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.box3(bar, 3.0, [None, None, Some([118.0, 105.0, 110.0])], 128.0);
             d.box3([bar[0], bar[1], (sw * m.settings.2 .0[s] as f32 / 10.0).max(6.0), 6.0], 3.0, [None, None, Some([109.0, 58.0, 72.0])], 128.0);
         }
-        if locked(o) {
+        // B326: only the picked row takes ◀ ▶: its value blue between them (a slider's gone at its ends), its value's
+        // halves step it, the rest of the row keeps it, a tap off puts it back (as ○)
+        if locked(o) || !(on && m.editing.is_some()) {
             continue;
         }
-        d.text("<", vx + 8.0, y + (h - size) / 2.0, size, BROWN);
-        d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, BROWN);
+        d.popup(Some(pointer::press(|k| k.back = true)));
+        d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [Some(INK), None, Some([40.0, 90.0, 128.0])], 128.0);
+        d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, WHITE);
+        let ends = match o {
+            Volume(s) => (m.settings.2 .0[s] > 0, m.settings.2 .0[s] < 10),
+            _ => (true, true),
+        };
+        if ends.0 {
+            d.text("<", vx + 8.0, y + (h - size) / 2.0, size, WHITE);
+        }
+        if ends.1 {
+            d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, WHITE);
+        }
+        d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
         d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
         d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
     }
@@ -538,8 +574,9 @@ mod tests {
     }
 
     /// Every tab: ✕ on the main menu's Settings opens the first, R1 walks them in order and wraps, L1 back; ↓ walks each
-    /// page's rows and wraps (changing nothing); ◀ ▶ on each option change it and save (◀ undoing ▶ on a cycle), each
-    /// value it takes one of its side panel's choices; ○ lands on the main menu's Settings row.
+    /// page's rows and wraps (changing nothing); ◀ ▶ on a row not picked change nothing (B326); ✕ picks it, then ◀ ▶
+    /// change it and save (◀ undoing ▶ on a cycle), ↓ and L1 / R1 stay on it, ✕ keeps it, ○ puts it back; each value it
+    /// takes one of its side panel's choices; ○ lands on the main menu's Settings row.
     #[test]
     fn every_page() {
         let mut m = Menu::default();
@@ -556,6 +593,11 @@ mod tests {
             for (i, &o) in page(s).iter().enumerate() {
                 m.sel = i;
                 let was = m.settings;
+                for k in [Press { right: true, ..default() }, Press { left: true, ..default() }] {
+                    assert!(m.step(Dev::Keys, k).is_empty() && m.settings == was, "{o:?}");
+                }
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                assert_eq!(m.editing, Some(was), "{o:?}");
                 let fx = m.step(Dev::Keys, press(|k| &mut k.right));
                 if matches!(o, Volume(_)) {
                     m.step(Dev::Keys, press(|k| &mut k.left));
@@ -565,7 +607,19 @@ mod tests {
                     assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
                     m.step(Dev::Keys, press(|k| &mut k.left));
                     assert_eq!(m.settings, was, "{o:?}");
+                    m.step(Dev::Keys, press(|k| &mut k.right));
                 }
+                // still on it: ↓ and R1 do nothing while it's picked
+                m.step(Dev::Keys, press(|k| &mut k.down));
+                m.step(Dev::Keys, press(|k| &mut k.next));
+                assert_eq!((m.screen, m.sel), (s, i));
+                let changed = m.settings;
+                let fx = m.step(Dev::Keys, press(|k| &mut k.back));
+                assert!(fx.contains(&Effect::SaveSettings) && m.settings == was && m.editing.is_none(), "{o:?}: ○ puts it back");
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                m.settings = changed;
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                assert!(m.settings == changed && m.editing.is_none(), "{o:?}: ✕ keeps it");
                 for _ in 0..12 {
                     assert!(choices(o).contains(&m.settings.value(o)), "{o:?} {}", m.settings.value(o));
                     m.settings.step(o, -1);
@@ -635,11 +689,12 @@ mod tests {
     #[test]
     fn sound_sliders() {
         let mut m = Menu { screen: Screen::Sound, sel: 1, ..default() };
-        m.step(Dev::Keys, press(|k| &mut k.right));
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert!(m.step(Dev::Keys, press(|k| &mut k.right)).is_empty(), "at its end: no sound, no save");
         assert_eq!(m.settings.2, Volumes([10, 10, 10, 10]));
         (0..12).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
         assert_eq!(m.settings.2, Volumes([10, 0, 10, 10]));
-        assert!(m.step(Dev::Keys, press(|k| &mut k.ok)).is_empty());
+        m.step(Dev::Keys, press(|k| &mut k.ok));
         assert_eq!(Settings::parse(&m.settings.text()), m.settings);
     }
 

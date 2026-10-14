@@ -423,11 +423,23 @@ pub(super) mod tests {
         let v = m.settings.value(Opt::Msaa);
         let n = page(Screen::Graphics).len();
         let [x, y, w, h] = row(boxes(&m.grid, n).0, n, 3);
+        // B326: the first tap only picks the row; then its value's halves step it, the label keeps it
         tap(&mut m, x + w - 20.0, y + h / 2.0);
-        assert_eq!(m.sel, 3);
+        assert_eq!((m.sel, m.settings.value(Opt::Msaa), m.editing.is_some()), (3, v.clone(), true));
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
         assert_ne!(m.settings.value(Opt::Msaa), v);
         tap(&mut m, x + w - 120.0, y + h / 2.0);
         assert_eq!(m.settings.value(Opt::Msaa), v);
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
+        tap(&mut m, x + 40.0, y + h / 2.0);
+        assert!(m.editing.is_none() && m.settings.value(Opt::Msaa) != v, "kept");
+        // a tap off a picked row puts it back
+        let kept = m.settings.value(Opt::Msaa);
+        tap(&mut m, x + 40.0, y + h / 2.0);
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
+        assert_ne!(m.settings.value(Opt::Msaa), kept);
+        tap(&mut m, 320.0, 5.0);
+        assert!(m.editing.is_none() && m.settings.value(Opt::Msaa) == kept, "put back");
         // Controls: a row starts a rebind
         let mut c = Menu { screen: Screen::Controls, ..default() };
         let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 14, 2);
