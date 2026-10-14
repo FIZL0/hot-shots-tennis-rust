@@ -1,7 +1,7 @@
 //! A standard mod (`crate::mods`) in a match slot: the donor's motions, trajectory tables, shot records, serve
 //! and timing tables (the setup loads them by the donor's number), with the mod's own TParam.csv row (stats, aim,
 //! reach and heights, smash window, power, timing stats, collision size), `ai_row` for the computer's
-//! AIParam.csv row and second-toss pick, `hand`, and its voice bank (the donor's for every program it ships no wav for).
+//! AIParam.csv row and second-toss pick, `hand`, and its voice bank (only its own takes, never the donor's: B181).
 
 use std::sync::Arc;
 
@@ -71,12 +71,10 @@ pub(super) fn apply(g: &mut Game, i: usize, iso: &mut Iso, m: &Mod, outfit: usiz
     g.smash_heights[i] = [smash[0] / 100.0, smash[1] / 100.0];
     g.reaches[i] = super::reach_of(&g.reach, &row, m.hand);
     g.timing[i].restat(&row);
-    if let Some(mut bank) = (!m.costumes.is_empty()).then(|| mods::voice(m)).flatten() {
-        // programs the mod has no wav for play the donor's disc takes (standard §5)
-        if let Some(donor) = &voices[i] {
-            (bank.hd, bank.bd) = (donor.hd.clone(), donor.bd.clone());
-        }
-        voices[i] = Some(Arc::new(bank));
+    // B181: a mod character speaks only its own takes; a program it has no wav for, or a mod with no voice, is silent
+    // (never its donor's). A costume pack is its disc character and keeps that voice.
+    if m.costume_of.is_none() {
+        voices[i] = mods::voice(m).map(Arc::new);
     }
 }
 
@@ -167,25 +165,28 @@ mod tests {
         }
     }
 
-    /// B131: every voice the match can ask a mod player for (shouts 1..4, serve 5 and 6, reactions 7..10, at every
-    /// key the singles game draws) sounds: the mod's own take, else its donor's disc take. Helghast ships no voice,
-    /// Wendy a full set, Chika (an umpire) six takes (skipped without the ISO or `mods/hst-mods`).
+    /// B181: a mod player speaks only its own takes, never its donor's. Helghast ships no voice: no bank at all, so
+    /// nothing it does in the match (shouts, serve, reactions, emotes) sounds; Wendy a full set and Chika (an umpire)
+    /// six takes: their banks hold no donor disc bank, so a program they lack is silent (skipped without the ISO or
+    /// `mods/hst-mods`).
     #[test]
-    fn mod_voices_fall_back_to_the_donor() {
+    fn mod_voices_never_fall_back_to_the_donor() {
         const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/");
         if !Path::new(ISO).is_file() || !Path::new(ROOT).is_dir() {
             return eprintln!("no ISO or mods/hst-mods, skipped");
         }
-        let asked = [(1, 4), (2, 2), (3, 2), (4, 1), (5, 0), (6, 2), (7, 2), (8, 4), (9, 1), (10, 1)];
         for id in ["getagrip_pc14_helghast", "getagrip_pc03_wendy", "hst_umpire_00_chika"] {
             let m = mods::read(&Path::new(ROOT).join(id)).unwrap();
             let app = bot_match(&m, m.donor);
-            let bank = app.world().resource::<crate::audio::VoiceBanks>().0[1].clone().unwrap_or_else(|| panic!("{id}: no voice bank"));
-            let hd = hst_data::snd::Bank::parse(&bank.hd).unwrap_or_else(|_| panic!("{id}: no donor bank"));
-            for (p, hi) in asked {
-                for k in 0..=hi {
-                    assert!(bank.wav.contains_key(&p) || hd.key_ons(p, k).is_some(), "{id}: program {p} key {k} is silent");
+            let banks = &app.world().resource::<crate::audio::VoiceBanks>().0;
+            assert!(banks[0].is_some(), "{id}: the disc player keeps its voice");
+            match (&banks[1], mods::voice(&m)) {
+                (None, None) => {}
+                (Some(b), Some(own)) => {
+                    assert!(b.hd.is_empty() && b.bd.is_empty(), "{id}: donor disc bank attached");
+                    assert_eq!(b.wav.keys().collect::<std::collections::BTreeSet<_>>(), own.wav.keys().collect(), "{id}");
                 }
+                (b, own) => panic!("{id}: bank {} but the mod's voice {}", b.is_some(), own.is_some()),
             }
         }
     }
