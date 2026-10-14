@@ -8,6 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B351** Phone performance: phones run 15–20 fps because they start at shadows High, so add a phone default preset (shadows Low or Off, render scale 100%); at Low only the players, ball, net, umpire chair and perhaps big props should cast (about 20 casters, down from 182); merge static court and prop meshes that share a material (B342, 592 meshes now); draw the crowd in fewer draws (B343) and skip off-screen objects (B345); then the smaller wins, sway updates (B344) and the label patch (user 2026-10-14) → graphics.rs · shadow.rs · main.rs
 - [ ] **B349** Character select: the handedness-swap button hint says 'View'; it should say 'Select' (user 2026-10-14) → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B347** New character select: △ doesn't open the character's stats (user 2026-10-14); wire it like the old select's stats panel → play/main_menu.rs · play.rs character_stats
