@@ -188,14 +188,14 @@ pub fn plugin(app: &mut App) {
     }
 }
 
-/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the scene cameras see and
+/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the active scene cameras see and
 /// how many distinct (mesh, material) pairs they are (the most draws they can batch down to), the spectators' and
 /// creatures' share (`shadow::Minor` rigs) and the meshes the sun's cascades draw.
 #[allow(clippy::type_complexity)]
 fn log_draws(
     time: Res<Time<Real>>,
     mut next: Local<f32>,
-    cams: Query<&bevy::camera::visibility::VisibleEntities, With<Camera3d>>,
+    cams: Query<(&bevy::camera::visibility::VisibleEntities, &Camera), With<Camera3d>>,
     cascades: Query<&bevy::camera::visibility::CascadesVisibleEntities>,
     parts: Query<(&Mesh3d, Option<&MeshMaterial3d<crate::gs::GsMaterial>>, Option<&MeshMaterial3d<StandardMaterial>>)>,
     parents: Query<&ChildOf>,
@@ -207,7 +207,10 @@ fn log_draws(
     }
     *next = now + 5.0;
     let (mut seen, mut pairs, mut npcs, mut npc_pairs) = (0, std::collections::HashSet::new(), 0, std::collections::HashSet::new());
-    for v in &cams {
+    for (v, c) in &cams {
+        if !c.is_active {
+            continue;
+        }
         for &e in v.get(std::any::TypeId::of::<Mesh3d>()) {
             let Ok((mesh, gs, std)) = parts.get(e) else { continue };
             let pair = (mesh.0.id(), gs.map(|m| m.0.id().untyped()).or(std.map(|m| m.0.id().untyped())));
@@ -220,7 +223,7 @@ fn log_draws(
         }
     }
     let cast: Vec<Vec<usize>> = cascades.iter().flat_map(|c| c.entities.values()).map(|v| v.iter().map(|c| c.entities.len()).collect()).collect();
-    eprintln!("draws at {now:.0} s: {} cameras, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().count(), pairs.len(), npc_pairs.len());
+    eprintln!("draws at {now:.0} s: {} of {} cameras active, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().filter(|(_, c)| c.is_active).count(), cams.iter().count(), pairs.len(), npc_pairs.len());
 }
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
