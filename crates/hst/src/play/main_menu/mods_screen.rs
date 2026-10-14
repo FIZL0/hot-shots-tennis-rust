@@ -1045,8 +1045,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
 
 /// The Add mod row's rectangle in % of the window (left, top, width, height), while it's on screen: where the page
 /// puts its file input.
-fn add_rect(m: &Menu, aspect: f32) -> Option<[f32; 4]> {
-    let (share, v) = (widescreen::share(aspect), widescreen::vshare(aspect));
+fn add_rect(m: &Menu, aspect: f32, k: f32) -> Option<[f32; 4]> {
+    let (share, v) = widescreen::menu_shares(aspect, k);
     (m.screen == Screen::Mods && m.add.page == Page::Installed && m.add.top == 0 && !m.add.phone && m.add.nophone.is_none())
         .then(|| [X * share / 6.4 + 50.0 * (1.0 - share), (Y + PITCH) * v / 4.48 + 50.0 * (1.0 - v), W * share / 6.4, H * v / 4.48])
 }
@@ -1268,7 +1268,7 @@ fn page(
         // the view's % → the window's (B117: a fixed aspect ratio's view sits inside the window)
         let size = Vec2::new(w.width(), w.height()).max(Vec2::ONE);
         let v = widescreen::view(size);
-        let [l, t, wd, h] = add_rect(&menu, widescreen::aspect(w))?;
+        let [l, t, wd, h] = add_rect(&menu, widescreen::aspect(w), widescreen::menu_scale())?;
         let (o, k) = (v.min / size * 100.0, v.size() / size);
         Some([o.x + l * k.x, o.y + t * k.y, wd * k.x, h * k.y])
     });
@@ -1403,11 +1403,11 @@ mod tests {
         assert_eq!(at(X + 10.0, Y + PITCH * 7.0 + 5.0), None);
         // the gap between two rows goes to the nearer one
         assert_eq!(at(X + 10.0, Y + H + 1.0), Some(super::super::pointer::Act::Row(4, super::super::pointer::OK)));
-        assert!(add_rect(&m, 16.0 / 9.0).is_none());
+        assert!(add_rect(&m, 16.0 / 9.0, 1.0).is_none());
         (0..10).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
         assert_eq!((m.sel, m.add.top), (0, 0));
         // 4:3 fills the window: the row's own place
-        let r = add_rect(&m, 4.0 / 3.0).unwrap();
+        let r = add_rect(&m, 4.0 / 3.0, 1.0).unwrap();
         assert!((r[0] - X / 6.4).abs() < 1e-4 && (r[2] - W / 6.4).abs() < 1e-4);
     }
 
@@ -1535,7 +1535,7 @@ mod tests {
             m.mods_step(close, &mut out);
             assert_eq!((m.screen, m.add.nophone), (Screen::Mods, None));
         }
-        assert!(add_rect(&m, 4.0 / 3.0).is_none());
+        assert!(add_rect(&m, 4.0 / 3.0, 1.0).is_none());
         use super::super::pointer::{Act, OK, tests::act_at};
         m.add.nophone = Some(1);
         assert_eq!(act_at(&m, 320.0, ASK_TOP), Some(Act::Press(OK)));

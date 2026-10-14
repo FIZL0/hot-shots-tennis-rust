@@ -633,7 +633,7 @@ pub(crate) fn draw(
         return;
     }
     let vw = widescreen::view_size(win).x;
-    let share = widescreen::share(widescreen::aspect(win));
+    let share = widescreen::menu_shares(widescreen::aspect(win), widescreen::menu_scale()).0;
     let (left, width) = widescreen::place(0.0, 640.0, share, Anchor::Span);
     let unit = share * vw / 640.0;
     // each chip: (key, words or the item, styles)
@@ -672,6 +672,9 @@ pub(crate) fn draw(
     }
     *shown = key;
     (node.left, node.width) = (Val::Percent(left), Val::Percent(width));
+    // its height at the Menu Size, on the window's bottom edge
+    let tall = TALL / 4.48 * widescreen::menu_scale();
+    (node.top, node.height) = (Val::Percent(100.0 - tall), Val::Percent(tall));
     // 11 of the strip's 12 units tall, 8 apart (a group's tag 14 before it), 8 in from the right; the row shrinks
     // as one if it's wider than the strip
     let room = width / 100.0 * vw - 16.0 * unit;

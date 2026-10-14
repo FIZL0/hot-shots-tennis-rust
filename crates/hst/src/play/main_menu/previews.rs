@@ -532,7 +532,8 @@ fn sync(
         }
     }
     let Some(root) = root else { return };
-    let scale = window.single().map_or(1.0, |w| crate::play::widescreen::unit_px(w) * w.scale_factor());
+    let scale = window.single().map_or(1.0, |w| crate::play::widescreen::unit_px(w) * w.scale_factor()) * crate::play::widescreen::menu_scale();
+    let (share, vshare) = crate::play::widescreen::window_menu_shares(&window);
     let now = time.elapsed_secs();
     let (shown, since) = &mut *cards;
     for (p, slot) in shown.iter_mut().enumerate() {
@@ -564,9 +565,9 @@ fn sync(
         let same = slot.as_ref().is_some_and(|s| Some(s.key) == key && want.is_some_and(|(_, q)| s.wh == [q.dst[2], q.dst[3]]));
         let upgrade = live.is_some() && slot.as_ref().is_some_and(|s| s.cam.is_none());
         let place = |node: &mut Node, [x, y, w, h]: [f32; 4], anchor| {
-            let (left, width) = crate::play::widescreen::place(x, w, crate::play::widescreen::window_share(&window), anchor);
+            let (left, width) = crate::play::widescreen::place(x, w, share, anchor);
             node.left = Val::Percent(left);
-            let (top, height) = crate::play::widescreen::vplace(y, h, crate::play::widescreen::window_aspect(&window), anchor);
+            let (top, height) = crate::play::widescreen::vplace_in(y, h, vshare, anchor);
             node.top = Val::Percent(top);
             node.width = Val::Percent(width);
             node.height = Val::Percent(height);

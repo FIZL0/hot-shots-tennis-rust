@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -15,6 +15,8 @@ use bevy::prelude::default;
 pub(super) enum Opt {
     Display,
     Aspect,
+    /// The menus' size (`widescreen::MENU_SCALE`).
+    MenuSize,
     ShowFps,
     /// B301: the match's keyboard hints.
     KeyHints,
@@ -62,7 +64,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, ShowFps, KeyHints] } else { &[Display, Aspect, ShowFps, KeyHints] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -99,6 +101,7 @@ fn label(o: Opt) -> &'static str {
     match o {
         Display => "Display",
         Aspect => "Aspect Ratio",
+        MenuSize => "Menu Size",
         ShowFps => "Show FPS",
         KeyHints => "Key Hints",
         Preset => "Preset",
@@ -124,6 +127,7 @@ fn about(o: Opt) -> &'static str {
     match o {
         Display => "Borderless fullscreen on the current monitor, or a window.",
         Aspect => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.",
+        MenuSize => "Makes every menu smaller or bigger. The whole layout scales together, never stretched; the extra room goes around it.",
         ShowFps => "Show the frame rate in the top-right corner, in the menus and in a match.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         Preset => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
@@ -149,6 +153,11 @@ fn about(o: Opt) -> &'static str {
     }
 }
 
+/// A Menu Size value's word (`MENU_SIZES`: 0 Auto, else tenths).
+fn menu_size_name(t: u8) -> String {
+    if t == 0 { "Auto".into() } else { format!("{}%", t as u32 * 10) }
+}
+
 fn fps_name(fps: u32) -> String {
     if fps == 0 { "Uncapped".into() } else { format!("{fps} fps") }
 }
@@ -160,6 +169,7 @@ fn choices(o: Opt) -> Vec<String> {
         _ if locked(o) => words(&["Off"]),
         Display => words(&["Fullscreen", "Window"]),
         Aspect => words(&ASPECTS),
+        MenuSize => MENU_SIZES.iter().map(|&t| menu_size_name(t)).collect(),
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
@@ -187,6 +197,7 @@ impl Settings {
         match o {
             Display => g.windowed = !g.windowed,
             Aspect => self.3 = (self.3 as isize + d).rem_euclid(ASPECTS.len() as isize) as u8,
+            MenuSize => self.7 = cycle(&MENU_SIZES, self.7, d),
             ShowFps => g.show_fps = !g.show_fps,
             KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
             Preset => {
@@ -229,6 +240,7 @@ impl Settings {
             _ if locked(o) => "Off".into(),
             Display => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             Aspect => ASPECTS[self.3 as usize].into(),
+            MenuSize => menu_size_name(self.7),
             ShowFps => on_off(g.show_fps),
             KeyHints => on_off(self.0[KEY_HINTS]),
             Preset => g.preset().into(),
@@ -419,7 +431,13 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
         let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
-        let note = if preset { "Set by Preset. Changing it switches Preset to Custom." } else { "" };
+        let note = if preset {
+            "Set by Preset. Changing it switches Preset to Custom."
+        } else if o == MenuSize {
+            "Auto is 100%, 80% on screens taller than 1440 px. The match HUD keeps its size."
+        } else {
+            ""
+        };
         let now = m.settings.value(o);
         side_panel(d, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
     }
@@ -552,6 +570,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Menu Size: at 60% on a 16:9 view the 640×448 screen is 60% of its 100% size, centred, its own shape; a tap
+    /// lands on the scaled rect, not where it was at 100%; Auto is 80% past 1440 px tall; it round-trips settings.txt.
+    #[test]
+    fn menu_size_scales_centred() {
+        use super::super::super::widescreen::{menu_shares, place, vplace_in};
+        let (s, v) = menu_shares(16.0 / 9.0, 0.6);
+        let (left, width) = place(0.0, 640.0, s, super::super::Anchor::Centre);
+        let (top, height) = vplace_in(0.0, 448.0, v, super::super::Anchor::Centre);
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert!(close(width, 45.0) && close(left, 27.5) && close(height, 60.0) && close(top, 20.0), "{left} {width} {top} {height}");
+        // same shape: 45% of 16 wide by 60% of 9 high is 4:3
+        assert!(close(width * 16.0 / (height * 9.0), 4.0 / 3.0));
+        let hits = [pointer::Hit { rect: [0.0, 0.0, 64.0, 44.8], anchor: default(), act: pointer::Act::Tab(0) }];
+        let at = |x, y, k| pointer::hit_at(&hits, bevy::math::Vec2::new(x, y), 16.0 / 9.0, k, 0.0);
+        assert_eq!(at(0.3, 0.22, 0.6), Some(pointer::Act::Tab(0)));
+        assert_eq!(at(0.14, 0.02, 0.6), None);
+        assert_eq!(at(0.14, 0.02, 1.0), Some(pointer::Act::Tab(0)));
+        let mut set = Settings::default();
+        assert_eq!((set.menu_scale(1440), set.menu_scale(2160), set.value(MenuSize).as_str()), (1.0, 0.8, "Auto"));
+        set.step(MenuSize, 1);
+        assert_eq!((set.menu_scale(2160), set.value(MenuSize).as_str()), (0.5, "50%"));
+        set.step(MenuSize, -1);
+        set.step(MenuSize, -1);
+        assert_eq!(set.value(MenuSize), "150%");
+        assert!(set.text().contains("menu_size = 150\n") && Settings::parse(&set.text()) == set);
     }
 
     /// B235: the sliders clamp to 0..=10 and the volumes round-trip settings.txt.
