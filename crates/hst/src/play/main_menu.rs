@@ -2187,7 +2187,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
                     },
                 }
             }
-            if pl.ready {
+            // B265: not on a computer's card, where it would cover the rank pill
+            if pl.ready && human {
                 d.label("Ready to go!", x + 72.0, y + 97.0, 20.0, 128.0, GOLD);
             } else if m.blocked(p) {
                 d.label("Not selectable", x + 72.0, y + 97.0, 18.0, 128.0, [80.0; 3]);
