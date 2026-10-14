@@ -1,0 +1,94 @@
+# B182 old -> new per mod (unchanged columns left out; dives always 2×/4× reach)
+
+- **fore_pc00_phoebe**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 3→11, VLowP 3→10, LobP 7→10, Top 9→12, Slc 9→13, Drp 7→10, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc01_mike**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 6→9, Slc 6→10, Drp 5→9, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc02_emma**: SrvP 3→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 5→10, Top 10→13, Slc 10→13, Drp 10→13, VolC 23→26, SrvC 23→25, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc03_sam**: SrvP 7→10, StkP 7→12, LowP 7→12, VolP 7→13, VLowP 7→12, Top 8→11, Slc 8→12, Drp 6→9, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc04_misaki**: SrvP 6→9, StkP 6→11, LowP 6→11, VolP 6→13, VLowP 6→11, Top 10→13, Slc 9→13, Drp 9→11, StkC 30→32, SrvC 30→28, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc05_brad**: SrvP 6→9, StkP 7→12, LowP 7→12, VolP 6→13, VLowP 6→11, Top 13→15, Slc 13→14, Drp 11→15, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc06_chaos**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, Top 4→9, Slc 3→9, Drp 3→8, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8
+- **fore_pc07_regis**: SrvP 3→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 5→10, Top 9→12, Slc 9→13, Drp 7→10, VolC 23→26, SrvC 23→25, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc08_maya**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 6→9, Slc 6→10, Drp 5→9, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc09_falcon**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 9→12, Slc 9→13, Drp 7→10, VolC 27→32, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc10_renee**: SrvP 9→11, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 8→11, Slc 8→12, Drp 6→9, StkC 30→32, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc11_z**: SrvP 14→13, Top 6→9, Slc 6→10, Drp 5→9, StkC 30→32, SrvC 35→33
+- **fore_pc12_mel**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 10→13, Slc 10→13, Drp 10→13, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc13_allan**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 6→9, Slc 6→10, Drp 5→9, StkC 26→24, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc14_tiffany**: SrvP 4→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 7→10, Top 8→11, Slc 8→12, Drp 6→9, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc15_kamala**: SrvP 8→10, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 8→11, Slc 8→12, Drp 6→9, StkC 30→32, SrvC 30→28, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc16_toni**: SrvP 8→10, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 10→13, Slc 9→13, Drp 9→11, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc17_tbone**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, Top 13→15, Slc 13→14, Drp 11→15, VolC 20→22, SrvC 22→23, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc18_lin**: SrvP 6→9, StkP 7→12, LowP 7→12, VolP 6→13, VLowP 6→11, Top 13→15, Slc 13→14, Drp 11→15, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc19_louise**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 13→15, Slc 13→14, Drp 11→15, StkC 30→32, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **fore_pc20_zeus**: SrvP 9→11, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 4→9, Slc 3→9, Drp 3→8, StkC 30→32, SrvC 35→33, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc21_hubert**: SrvP 7→10, StkP 7→12, LowP 7→12, VolP 7→13, VLowP 7→12, Top 8→11, Slc 8→12, Drp 6→9, VolC 23→26, SrvC 23→25, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc22_ratchet**: SrvP 11→12, StkP 11→15, LowP 11→15, VolP 13→15, VLowP 11→15, Top 8→11, Slc 8→12, Drp 6→9, StkC 30→32, SrvC 35→33, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, SPE 9→10, Agi 40→29, ai 1→11
+- **fore_pc23_jak**: SrvP 14→13, Top 13→15, Slc 13→14, Drp 11→15, StkC 26→24, VolC 27→32, SPE 9→10, Agi 40→29, ai 1→11
+- **getagrip_pc00_emi**: SrvP 6→9, StkP 4→10, LowP 4→10, VolP 7→13, VLowP 7→12, Top 9→12, Slc 3→9, Drp 3→8, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **getagrip_pc01_ban**: SrvP 3→9, StkP 5→11, LowP 5→11, Top 6→9, Slc 6→10, Drp 5→9, StkC 18→22, SrvC 20→21, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 3→10
+- **getagrip_pc02_taiga**: SrvP 4→9, StkP 6→11, LowP 6→11, VolP 2→9, VLowP 2→9, Top 10→13, Slc 7→12, Drp 6→9, VolC 20→22, SrvC 20→21, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 30→25
+- **getagrip_pc03_wendy**: unchanged (B182 keeps it)
+- **getagrip_pc04_brad**: SrvP 8→10, StkP 9→13, LowP 9→13, VolP 7→13, VLowP 7→12, Top 8→11, Slc 9→13, Drp 9→11, VolC 27→32, SrvC 23→25, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, Reach 100→90
+- **getagrip_pc05_rosetta**: SrvP 9→11, StkP 7→12, LowP 7→12, VolP 2→9, VLowP 2→9, Top 10→13, Slc 8→12, Drp 6→9, StkC 30→32, VolC 20→22, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 30→25, ai 6→9
+- **getagrip_pc06_mitsuzane**: StkP 8→12, LowP 8→12, VolP 9→14, VLowP 9→14, Top 4→9, Slc 9→13, Drp 8→11, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 30→25, ai 3→10
+- **getagrip_pc07_paola**: SrvP 6→9, StkP 4→10, LowP 4→10, VolP 5→12, VLowP 5→10, Slc 6→10, Drp 4→8, VolC 20→22, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 20→25, Reach 60→80, ai 6→9
+- **getagrip_pc08_fan**: SrvP 8→10, StkP 7→12, LowP 7→12, VolP 5→12, VLowP 5→10, Top 11→14, Slc 8→12, Drp 7→10, VolC 20→22, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8
+- **getagrip_pc09_rachel**: SrvP 14→13, VolP 9→14, VLowP 9→14, Top 6→9, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 10→11, Agi 40→29, ai 2→10
+- **getagrip_pc10_schneider**: SrvP 8→10, StkP 13→15, LowP 13→15, VolP 7→13, VLowP 7→12, Top 8→11, Slc 13→14, Drp 11→15, VolC 27→32, SrvC 23→25, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, Reach 100→90
+- **getagrip_pc11_norma**: SrvP 11→12, StkP 10→14, LowP 10→14, VolP 6→13, VLowP 6→11, Top 8→11, Slc 10→13, Drp 10→13, StkC 30→32, VolC 20→22, SrvC 35→33, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, Agi 10→25, ai 12→8
+- **getagrip_pc12_suzuki**: SrvP 4→9, StkP 7→12, LowP 7→12, VolP 5→12, VLowP 5→10, Top 10→13, Slc 8→12, Drp 7→10, StkC 26→24, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 20→25, STA 35→40
+- **getagrip_pc13_gloria**: SrvP 6→9, StkP 11→15, LowP 11→15, VolP 8→14, VLowP 8→12, Top 9→12, Slc 12→14, Drp 10→13, StkC 30→32, Agi 30→25, ai 12→8
+- **getagrip_pc14_helghast**: SrvP 4→9, StkP 8→12, LowP 8→12, VolP 9→14, VLowP 9→14, Top 13→15, Slc 9→13, Drp 7→10, StkC 20→22, SrvC 22→23, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 30→25, Reach 100→90, ai 3→10
+- **hst_umpire_00_chika**: SrvP 8→10, StkP 9→13, LowP 9→13, VolP 5→12, VLowP 5→10, Top 11→14, Slc 9→13, Drp 5→9, StkC 30→32, VolC 20→22, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **hst_umpire_01_suzuki**: SrvP 6→9, StkP 6→11, LowP 6→11, VolP 6→13, VLowP 6→11, Top 8→11, Slc 6→10, Drp 7→10, StkC 26→24, VolC 20→22, SrvC 35→33, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, STA 35→40, ai 13→9
+- **hst_umpire_02_lily**: SrvP 8→10, StkP 9→13, LowP 9→13, VolP 5→12, VLowP 5→10, Top 11→14, Slc 9→13, Drp 5→9, StkC 30→32, VolC 20→22, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **hst_umpire_03_robottennis**: SrvP 3→9, StkP 5→11, LowP 5→11, VolP 2→9, VLowP 2→9, LobP2 12→13, Top 7→10, Slc 6→10, Drp 10→13, VolC 20→22, SrvC 20→21, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, Agi 10→25, Reach 60→80, ai 5→9
+- **hst_umpire_04_anna**: SrvP 8→10, StkP 9→13, LowP 9→13, VolP 5→12, VLowP 5→10, Top 11→14, Slc 9→13, Drp 5→9, StkC 30→32, VolC 20→22, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **oob_pc00_jasmine**: SrvP 4→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 3→10, Top 8→11, Slc 8→12, Drp 6→9, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **oob_pc01_nick**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 3→11, VLowP 2→9, Top 4→9, Slc 9→13, Drp 3→8, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **oob_pc02_sophie**: SrvP 4→9, StkP 5→11, LowP 9→13, VolP 5→12, VLowP 5→10, Top 8→11, Slc 8→12, Drp 6→9, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 7→8
+- **oob_pc03_bjorn**: SrvP 3→9, StkP 4→10, LowP 5→11, VolP 2→9, VLowP 2→9, Top 8→11, Slc 3→9, Drp 6→9, StkC 30→32, SrvC 35→33, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **oob_pc04_sasha**: SrvP 6→9, StkP 6→11, LowP 4→10, VolP 6→13, VLowP 3→10, Top 8→11, Slc 8→12, Drp 6→9, VolC 27→32, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **oob_pc05_fernando**: SrvP 7→10, StkP 7→12, LowP 13→15, VolP 7→13, VLowP 11→15, Top 13→15, Slc 12→14, Drp 11→15, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8
+- **oob_pc06_sonia**: SrvP 9→11, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, LobP 5→10, LobP2 5→10, Top 8→11, Slc 3→9, Drp 6→9, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 35→26, ai 7→8
+- **oob_pc07_felipe**: SrvP 6→9, StkP 7→12, LowP 13→15, VolP 6→13, VLowP 11→15, Top 8→11, Slc 8→12, Drp 6→9, StkC 30→32, SrvC 35→33, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8
+- **oob_pc08_bloom**: SrvP 8→10, StkP 8→12, LowP 13→15, VolP 8→14, VLowP 11→15, Top 8→11, Drp 6→9, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8
+- **oob_pc09_lj**: SrvP 14→13, LowP 13→15, VLowP 11→15, Top 4→9, Slc 6→10, Drp 3→8, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, ai 7→11
+- **oob_pc10_kate**: SrvP 9→11, StkP 9→13, LowP 8→12, VolP 9→14, VLowP 8→12, LobP 5→10, LobP2 5→10, Top 8→11, Slc 8→12, Drp 6→9, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **oob_pc11_dino**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 11→15, Slc 12→14, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8
+- **oob_pc12_anya**: unchanged (B182 keeps it)
+- **oob_pc13_suzuki**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 3→11, VLowP 2→9, Top 10→13, Slc 9→13, Drp 10→13, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **oob_pc14_s_maruyama**: SrvP 9→11, StkP 10→14, LowP 5→11, VolP 9→14, VLowP 2→9, Top 8→11, Slc 6→10, Drp 6→9, StkC 26→24, VolC 27→32, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **oob_pc15_alex**: SrvP 6→9, StkP 7→12, LowP 4→10, VolP 6→13, VLowP 3→10, Top 10→13, Slc 9→13, Drp 10→13, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **oob_pc16_gloria**: SrvP 9→11, StkP 10→14, LowP 8→12, VolP 9→14, VLowP 8→12, LobP 5→10, LobP2 5→10, Top 10→13, Slc 8→12, Drp 10→13, StkC 30→32, SrvC 30→28, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee2_pc00_mika**: SrvP 4→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 7→10, LobP2 7→10, Top 8→11, Slc 6→10, Drp 5→9, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee2_pc01_rio**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 8→11, Slc 8→12, Drp 6→9, VolC 20→22, SrvC 22→23, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc02_alia**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 3→11, VLowP 3→10, LobP 7→10, LobP2 7→10, Top 8→11, Slc 9→13, Drp 7→10, StkC 26→24, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **opentee2_pc03_shu**: SrvP 6→9, StkP 7→12, LowP 7→12, VolP 6→13, VLowP 6→11, Top 8→11, Slc 12→14, Drp 10→13, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc04_julie**: SrvP 7→10, StkP 7→12, LowP 7→12, VolP 7→13, VLowP 7→12, Top 8→11, Slc 6→10, Drp 4→8, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee2_pc05_cj**: SrvP 8→10, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 8→11, Slc 3→9, Drp 3→8, StkC 30→32, SrvC 35→33, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc06_patricia**: SrvP 7→10, StkP 7→12, LowP 7→12, VolP 7→13, VLowP 7→12, Top 8→11, Slc 6→10, Drp 5→9, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee2_pc07_logan**: SrvP 14→13, Top 13→15, Slc 8→12, Drp 6→9, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8
+- **opentee2_pc08_holly**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 8→11, StkC 30→32, SrvC 30→28, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee2_pc09_roger**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, LobP2 12→13, Top 8→11, Slc 12→14, Drp 10→13, VolC 20→22, SrvC 22→23, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8
+- **opentee2_pc10_carly**: SrvP 3→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 5→10, LobP2 5→10, Top 8→11, Slc 9→13, Drp 9→11, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee2_pc11_luke**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 8→11, Slc 9→13, Drp 7→10, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc12_alice**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 3→11, VLowP 3→10, LobP 7→10, LobP2 7→10, Top 8→11, Slc 8→12, Drp 6→9, StkC 30→32, SrvC 30→28, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee2_pc13_malachy**: SrvP 6→9, StkP 6→11, LowP 6→11, VolP 6→13, VLowP 6→11, Top 8→11, Slc 13→14, Drp 11→15, StkC 20→22, VolC 20→22, SrvC 20→21, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc14_frauada**: SrvP 6→9, StkP 7→12, LowP 7→12, VolP 6→13, VLowP 6→11, Top 8→11, Slc 6→10, Drp 5→9, StkC 30→32, SrvC 30→28, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **opentee2_pc15_montcalm**: SrvP 8→10, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 8→11, Slc 9→13, Drp 9→11, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee2_pc16_lauryn**: SrvP 9→11, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 13→15, Slc 9→13, Drp 7→10, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee2_pc17_mifune**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, LobP2 12→13, Top 8→11, Slc 9→13, Drp 8→11, VolC 20→22, SrvC 22→23, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8
+- **opentee2_pc18_lee**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 8→11, Slc 6→10, Drp 4→8, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee2_pc19_chad**: SrvP 11→12, StkP 11→15, LowP 11→15, VolP 13→15, VLowP 11→15, Top 13→15, Slc 13→14, Drp 11→15, StkC 26→24, VolC 27→32, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8
+- **opentee2_pc20_gloria**: SrvP 9→11, StkP 9→13, LowP 9→13, VolP 9→14, VLowP 9→14, Top 8→11, Slc 9→13, Drp 7→10, StkC 30→32, SrvC 35→33, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee_pc00_mika**: SrvP 3→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 5→10, LobP2 5→10, Top 4→9, Slc 7→12, Drp 6→9, VolC 27→32, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee_pc01_rio**: SrvP 4→9, StkP 4→10, LowP 4→10, VolP 2→9, VLowP 2→9, LobP 7→10, LobP2 7→10, Top 6→9, Slc 9→13, Drp 7→10, VolC 23→26, SrvC 23→25, ImpE 9/0/10→3/0/7, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee_pc02_alia**: SrvP 4→9, StkP 5→11, LowP 5→11, VolP 5→12, VLowP 5→10, Top 11→14, Slc 9→13, Drp 9→11, StkC 26→24, VolC 27→32, ImpE 6/0/9→2/0/8, ImpL 4/0/8→2/0/8, Agi 35→26, Reach 70→80, ai 6→9
+- **opentee_pc03_shu**: SrvP 6→9, StkP 6→11, LowP 6→11, VolP 6→13, VLowP 6→11, Top 6→9, Slc 12→14, Drp 10→13, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 5/0/7→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee_pc04_julie**: SrvP 7→10, StkP 7→12, LowP 7→12, VolP 7→13, VLowP 7→12, Top 10→13, Slc 6→10, Drp 4→8, VolC 27→32, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee_pc05_cj**: SrvP 8→10, StkP 8→12, LowP 8→12, VolP 8→14, VLowP 8→12, Top 6→9, Slc 3→9, Drp 3→8, SrvC 35→33, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 9→10, Agi 40→29, ai 1→11
+- **opentee_pc06_patricia**: SrvP 9→11, StkP 9→13, LowP 9→13, VolP 9→14, VLowP 9→14, Top 4→9, Slc 7→12, Drp 6→9, StkC 30→32, SrvC 30→28, ImpE 4/0/8→2/0/8, ImpL 4/0/8→2/0/8, SPE 10→11, Agi 40→29, ai 0→8
+- **opentee_pc07_logan**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, LobP2 12→13, Top 13→15, Slc 8→12, Drp 7→10, StkC 18→22, VolC 20→22, SrvC 20→21, ImpE 3/0/7→2/0/8, ImpL 3/0/7→2/0/8
+- **opentee_pc08_holly**: SrvP 9→11, StkP 10→14, LowP 10→14, VolP 9→14, VLowP 9→14, Top 10→13, StkC 30→32, SrvC 35→33, ImpE 2/0/8→1/1/8, ImpL 2/0/8→1/1/8, SPE 10→11, Agi 35→26, ai 12→8
+- **opentee_pc09_roger**: StkP 13→15, LowP 13→15, VolP 14→16, VLowP 13→15, LobP2 12→13, Top 13→15, Slc 12→14, Drp 10→13, VolC 23→26, SrvC 23→25
