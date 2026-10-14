@@ -1731,11 +1731,14 @@ mod tests {
         assert_eq!((m.screen, m.net.edit, m.driven(dev), m.players[3].ready), (Screen::Chars, Some(3), Some(3), false));
         m.align();
         assert_eq!(m.players[3].char(), p.char, "the seat being picked isn't overwritten by the room");
+        // from the grid's first card (the add drew a random one), so the steps below land on known picks
+        (m.players[3].cursor, m.players[3].costume) = (0, 0);
         m.step(dev, Press { right: true, ..default() });
         m.step(dev, Press { next: true, ..default() });
         let c = m.players[3].char();
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };
-        assert_eq!((p.char, m.screen, m.net.edit), (c, Screen::Lobby, None));
+        // Cody: Sunny Day is ready on costume 1, so it landed on 2 and R1 took it to 3
+        assert_eq!((p.char, p.costume, m.screen, m.net.edit), (c, 2, Screen::Lobby, None));
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
         // OK on a computer's seat: its pick on the select again; ○ back to the lobby as it was
         m.sel = 2;
