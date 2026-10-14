@@ -3,7 +3,7 @@
 //! and Back.
 
 use super::super::widescreen::ASPECTS;
-use super::{Draw, Effect, GOLD, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, pointer};
+use super::{Draw, Effect, GOLD, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -14,6 +14,8 @@ pub(super) enum Opt {
     Display,
     Aspect,
     ShowFps,
+    /// B301: the match's keyboard hints.
+    KeyHints,
     Preset,
     Scale,
     Shadows,
@@ -41,7 +43,7 @@ pub(super) fn hub_row(page: Screen) -> usize {
 }
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row.
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Aspect, ShowFps] } else { &[Display, Aspect, ShowFps] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Aspect, ShowFps, KeyHints] } else { &[Display, Aspect, ShowFps, KeyHints] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -76,6 +78,7 @@ fn label(o: Opt) -> &'static str {
         Display => "Display",
         Aspect => "Aspect Ratio",
         ShowFps => "Show FPS",
+        KeyHints => "Key Hints",
         Preset => "Preset",
         Scale => "Resolution",
         Shadows => "Shadows",
@@ -97,6 +100,7 @@ fn about(o: Opt) -> &'static str {
         Display => "Borderless fullscreen on the current monitor, or a window.",
         Aspect => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.",
         ShowFps => "Show the frame rate in the top-right corner, in the menus and in a match.",
+        KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         Preset => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: smaller and fewer cascades).",
@@ -135,6 +139,7 @@ impl Settings {
             Display => g.windowed = !g.windowed,
             Aspect => self.3 = (self.3 as isize + d).rem_euclid(ASPECTS.len() as isize) as u8,
             ShowFps => g.show_fps = !g.show_fps,
+            KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
@@ -170,6 +175,7 @@ impl Settings {
             Display => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             Aspect => ASPECTS[self.3 as usize].into(),
             ShowFps => on_off(g.show_fps),
+            KeyHints => on_off(self.0[KEY_HINTS]),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
             Shadows => ["Off", "Low", "High"][g.shadows as usize].into(),
@@ -355,6 +361,10 @@ mod tests {
         assert!(Settings::parse(&s.text()).1.show_fps && s.flags().contains(&"--show-fps".into()));
         s.step(Original, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
+        // B301: Key Hints, on by default, saved
+        assert_eq!(s.value(KeyHints), "On");
+        s.step(KeyHints, 1);
+        assert!(!s.0[KEY_HINTS] && s.text().contains("key_hints = off") && Settings::parse(&s.text()) == s);
         s.step(Upscaled, 1);
         assert!(!s.0[0] && !s.0[UPSCALED_DOWNLOADS]);
         s.step(Downloads, 1);

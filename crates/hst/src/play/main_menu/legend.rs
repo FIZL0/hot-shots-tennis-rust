@@ -46,6 +46,8 @@ pub(crate) enum Act {
     Type,
     /// Esc only (the controls screen waiting for a key or button).
     Cancel,
+    /// B301: a match key hint, keycaps only (`key_hints.rs`).
+    Key,
 }
 
 /// A device's button art.
@@ -119,6 +121,7 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
         Act::Hand => vec![k(Action::Camera)],
         Act::Start | Act::Cancel => vec!["Esc".into()],
         Act::Type => vec!["A-Z".into()],
+        Act::Key => vec![],
     }
     .into_iter()
     .filter(|s| !s.is_empty())
@@ -394,7 +397,7 @@ enum Glyph {
 }
 
 fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
-    if style == Style::Keys || it.act == Act::Cancel {
+    if style == Style::Keys || matches!(it.act, Act::Cancel | Act::Key) {
         return it.keys.iter().cloned().map(Glyph::Cap).collect();
     }
     let ps = style == Style::Ps;
@@ -411,7 +414,7 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Costume => vec![Glyph::Shoulder("LB"), Glyph::Shoulder("RB")],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else { "View" })],
         Act::Start => vec![Glyph::Small(if ps { "Options" } else { "Menu" })],
-        Act::Type | Act::Cancel => vec![],
+        Act::Type | Act::Cancel | Act::Key => vec![],
     }
 }
 
@@ -593,11 +596,11 @@ fn row(parts: Vec<Pixmap>, label: &str, c: [u8; 3]) -> Pixmap {
 // ---------------------------------------------------------------- the strip
 
 #[derive(Component)]
-struct Strip;
+pub(crate) struct Strip;
 
 /// The art made so far, by its description: (image, width / height).
 #[derive(Resource, Default)]
-struct Chips(HashMap<String, (Handle<Image>, f32)>);
+pub(crate) struct Chips(HashMap<String, (Handle<Image>, f32)>);
 
 /// The strip's top and height on the 640×448 screen.
 const TOP: f32 = 436.0;
@@ -619,7 +622,7 @@ fn setup(mut commands: Commands) {
 
 /// Lays the frame's legend out on the strip (rebuilt when it or the window's size changes) and empties it.
 #[allow(clippy::too_many_arguments)]
-fn draw(
+pub(crate) fn draw(
     mut commands: Commands,
     mut legend: ResMut<Legend>,
     last: Res<Last>,
