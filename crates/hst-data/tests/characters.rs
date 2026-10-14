@@ -88,3 +88,21 @@ fn skinned_triangles_face_their_normals() {
         assert!(against * 50 < along, "character {c}: {against} of {} triangles face away from their normals", along + against);
     }
 }
+
+/// B54: every body model carries one helper triangle at the mouth (bound to "sankaku" alone; green on Jun, poking
+/// out between the lips); the skinned geometry drops it and nothing else.
+#[test]
+fn mouth_helper_triangle_is_not_drawn() {
+    let Some(mut iso) = iso() else { return eprintln!("no ISO, skipped") };
+    for c in 0..14 {
+        let data = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        let body = |n: &str| n.rsplit(['\\', '/']).next().is_some_and(|f| f.starts_with(&format!("pc{c:02}_t")) && f.ends_with("_c00.mdl"));
+        let e = arc.entries.iter().find(|e| body(&e.name.to_ascii_lowercase())).unwrap();
+        let m = mdl::parse(&arc.read(e).unwrap()).unwrap();
+        let helpers: Vec<_> = m.skinned().into_iter().filter(|p| m.is_helper(&p.1)).collect();
+        assert_eq!(helpers.len(), 1, "character {c}");
+        assert_eq!(helpers[0].1.len(), 3, "character {c}");
+        assert!(helpers[0].2.is_empty(), "character {c}");
+    }
+}
