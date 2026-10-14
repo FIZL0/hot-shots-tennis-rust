@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B350** Court select umpire: label reads 'Umpire Anna', should be just 'Anna'; and its icon looks like an icon inside an icon (nested frame), draw a single icon (user 2026-10-14) → play/main_menu.rs · play/menu_art.rs
 - [ ] **B349** Character select: the handedness-swap button hint says 'View'; it should say 'Select' (user 2026-10-14) → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B347** New character select: △ doesn't open the character's stats (user 2026-10-14); wire it like the old select's stats panel → play/main_menu.rs · play.rs character_stats

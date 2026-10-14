@@ -2684,11 +2684,15 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     // the umpire's round face (the "?" tile for a random one) and name
     let u = m.umpire as usize;
     let (face, uname) = match u {
-        UMPIRES => ((C02, RANDOM_TILE), "Random".to_string()),
+        UMPIRES => ((C02, RANDOM_TILE), "Random Umpire".to_string()),
         _ => ((C00, [63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0]), text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
     };
-    face_frame(d, face, sx + 22.0, sy + 106.0, 24.0, WHITE);
-    left(d, &format!("Umpire {uname}"), sx + 40.0, sy + 99.0, 14.0, sw - 50.0, BROWN);
+    // B350: one icon: the disc's face is round with its own rim already (no frame of ours round it), the "?" tile
+    // its middle square inside its edge lines; just her name beside it
+    let ([fu, fv, w, h], fh) = (face.1, 26.0);
+    let (src, fw) = if face.1 == RANDOM_TILE { ([fu + (w - h) / 2.0 + 4.0, fv + 4.0, h - 8.0, h - 8.0], fh) } else { (face.1, fh * w / h) };
+    d.q(face.0, src, [sx + 22.0 - fw / 2.0, sy + 106.0 - fh / 2.0, fw, fh], WHITE, 128.0);
+    left(d, &uname, sx + 40.0, sy + 99.0, 14.0, sw - 50.0, BROWN);
     let rects = confirm_rects(m);
     let rows: [String; CONFIRM_ROWS] = ["Start the match!".into(), "Select Court".into(), format!("Sets  {}", SETS[m.sets]), format!("Games  {}", m.games), "Select Umpire".into()];
     for (i, (label, r)) in rows.iter().zip(rects).enumerate() {
