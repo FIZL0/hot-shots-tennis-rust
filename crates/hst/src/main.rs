@@ -245,6 +245,15 @@ fn main() {
 fn start(argv: Vec<String>) {
     let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
+    // a bad archive name would otherwise panic inside `load` and take the renderer down with it
+    if !args.archives.is_empty() && let Ok(mut iso) = Iso::open(&args.iso) {
+        for path in &args.archives {
+            if let Err(e) = iso.read(path) {
+                eprintln!("hst: archive {path:?}: {e} (usage: hst <iso> [<archive.XB>...] [--flags])");
+                std::process::exit(2);
+            }
+        }
+    }
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
     let windowed = gfx.windowed;
