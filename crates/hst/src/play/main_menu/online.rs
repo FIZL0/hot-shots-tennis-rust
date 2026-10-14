@@ -306,6 +306,36 @@ impl Menu {
     /// on a disc character and costume nobody else has (B66); `None` if every one is.
     fn bot_pick(&self, i: usize, dc: isize, dk: isize) -> Option<Pick> {
         let r = self.net.room.as_ref()?;
+        let taken = self.bot_taken(i)?;
+        let now = r.seats.get(i)?.as_ref().map(|s| &s.pick);
+        let (n, nk) = (super::CHARS as isize, super::COSTUMES as isize);
+        let free = |c: usize, k: isize| Some((c, k.rem_euclid(nk) as usize)).filter(|ck| !taken.contains(ck)).map(|(c, k)| Pick::disc(c, k));
+        if let Some(p) = now.filter(|_| dk != 0) {
+            return (1..=nk).find_map(|j| free(p.char, p.costume as isize + dk * j));
+        }
+        // the next character that way (adding: the grid's first) on its first free costume
+        let at = now.map_or(0, |p| super::GRID.iter().position(|g| g.0 == p.char).unwrap_or(0) as isize);
+        let (step, from) = if dc == 0 { (1, 0) } else { (dc, 1) };
+        (from..from + n).map(|j| super::GRID[(at + step * j).rem_euclid(n) as usize].0).find_map(|c| (0..nk).find_map(|k| free(c, k)))
+    }
+
+    /// B217: a computer player added to open seat `i` starts on Random: a disc character with a costume nobody else
+    /// has, then one of its free costumes, each at random by `seed` (the host draws; the pick travels as any bot's).
+    fn bot_random(&self, i: usize, seed: u64) -> Option<Pick> {
+        let taken = self.bot_taken(i)?;
+        // ponytail: disc characters only until bots can play mods online (B216)
+        let open: Vec<(usize, Vec<usize>)> = (0..super::CHARS)
+            .map(|c| (c, (0..super::COSTUMES).filter(|&k| !taken.contains(&(c, k))).collect::<Vec<_>>()))
+            .filter(|(_, ks)| !ks.is_empty())
+            .collect();
+        let n = open.len() as u64;
+        let (c, ks) = open.get((seed % n.max(1)) as usize)?;
+        Some(Pick::disc(*c, ks[(seed / n % ks.len() as u64) as usize]))
+    }
+
+    /// B66: the disc characters and costumes the lobby's other seats hold (the readied ones), as `bot_pick` skips them.
+    fn bot_taken(&self, i: usize) -> Option<Vec<(usize, usize)>> {
+        let r = self.net.room.as_ref()?;
         let taken: Vec<(usize, usize)> = (0..r.seats.len())
             .filter(|&j| j != i)
             .filter_map(|j| {
@@ -317,16 +347,7 @@ impl Menu {
                 }
             })
             .collect();
-        let now = r.seats.get(i)?.as_ref().map(|s| &s.pick);
-        let (n, nk) = (super::CHARS as isize, super::COSTUMES as isize);
-        let free = |c: usize, k: isize| Some((c, k.rem_euclid(nk) as usize)).filter(|ck| !taken.contains(ck)).map(|(c, k)| Pick::disc(c, k));
-        if let Some(p) = now.filter(|_| dk != 0) {
-            return (1..=nk).find_map(|j| free(p.char, p.costume as isize + dk * j));
-        }
-        // the next character that way (adding: the grid's first) on its first free costume
-        let at = now.map_or(0, |p| super::GRID.iter().position(|g| g.0 == p.char).unwrap_or(0) as isize);
-        let (step, from) = if dc == 0 { (1, 0) } else { (dc, 1) };
-        (from..from + n).map(|j| super::GRID[(at + step * j).rem_euclid(n) as usize].0).find_map(|c| (0..nk).find_map(|k| free(c, k)))
+        Some(taken)
     }
 
     /// This machine's players took their controllers: open or join the lobby on placeholder picks (holding the seats);
@@ -522,7 +543,7 @@ impl Menu {
                         out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Kick(peer)))]);
                     } else if bot.is_some() {
                         out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
-                    } else if let Some(p) = self.bot_pick(i, 0, 0) {
+                    } else if let Some(p) = self.bot_random(i, super::dice()) {
                         out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Bot(i, Some(p))))]);
                     }
                 } else if item == Item::Mode {
@@ -1584,7 +1605,13 @@ mod tests {
         sample(&mut m);
         (m.net.me, m.sel) = ("host".into(), 2);
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };
-        assert_eq!(p.char, super::super::GRID[0].0);
+        assert!(!m.bot_taken(3).unwrap().contains(&(p.char, p.costume)));
+        // B217: added on Random: every character and costume comes up, never a taken one
+        let taken = m.bot_taken(3).unwrap();
+        assert!(!taken.is_empty());
+        let drawn: HashSet<(usize, usize)> = (0..20_000u64).map(|s| m.bot_random(3, s.wrapping_mul(0x9e37_79b9_7f4a_7c15))).map(|p| p.map(|p| (p.char, p.costume)).unwrap()).collect();
+        assert_eq!(drawn.len(), super::super::CHARS * super::super::COSTUMES - taken.len());
+        assert!(drawn.iter().all(|t| !taken.contains(t)));
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert_eq!((p.char, p.costume, m.sel), (6, 1, 2), "the host's costume 0 of the same character taken");

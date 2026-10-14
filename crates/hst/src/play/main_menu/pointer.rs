@@ -128,8 +128,19 @@ impl Menu {
                 if me.ready {
                     return out;
                 }
+                // B217: the Random card
+                if i == super::CHARS && !self.custom {
+                    if !me.random {
+                        self.players[p].random = true;
+                        out.push(Effect::Sound(0));
+                    }
+                    if tap {
+                        out.extend(self.step(dev, OK));
+                    }
+                    return out;
+                }
                 let (w, at) = if self.custom { (Who::Mod(i), me.pick) } else { (Who::Disc(GRID[i].0), me.cursor) };
-                if at != i || me.modded != self.custom {
+                if at != i || me.modded != self.custom || me.random {
                     // B66: a face with every costume taken can't be picked
                     if self.next_free(p, w, 0, false).is_none() {
                         if tap {
@@ -139,6 +150,7 @@ impl Menu {
                     }
                     let me = &mut self.players[p];
                     if self.custom { me.pick = i } else { me.cursor = i }
+                    me.random = false;
                     (me.modded, me.costume) = (self.custom, 0);
                     self.skip_taken();
                     out.push(Effect::Sound(0));
