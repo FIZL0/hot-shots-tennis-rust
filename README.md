@@ -172,9 +172,15 @@ relay = n0               # n0 (iroh's public relays), own (relay_url), off (dire
 relay_url = https://relay.example.org
 ```
 
+Online → Relay cycles n0 (public relays), Off, your own relay once one is set, and last, for advanced players,
+Custom...: OK on it opens a text field for your own `iroh-relay`'s URL (type or paste it, `https://…` or `http://…`).
+Save checks that it parses, switches to it and keeps it in `online.txt`; Back skips on to n0. Every player in a
+lobby needs the same relay. This works in the browser too.
+
 To run your own relay, install it with `cargo install iroh-relay --features server`. On a machine with a public IP and
-a domain, run it with a TLS config (`iroh-relay --config-path relay.toml`, see iroh-relay's docs). Then set
-`relay = own` and `relay_url = https://your.domain` on every player. `iroh-relay --dev` serves plain HTTP on
+a domain, run it with a TLS config (`iroh-relay --config-path relay.toml`, see iroh-relay's docs). Then type
+`https://your.domain` under Relay → Custom... (or set `relay = own` and `relay_url = https://your.domain` in
+`online.txt`) on every player. `iroh-relay --dev` serves plain HTTP on
 `:3340` for local tests.
 
 The same flow runs in a terminal without the window. Each command prints the events:

@@ -137,13 +137,31 @@ impl Online {
         format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\n", self.name, self.relay_url, if self.private { "yes" } else { "no" })
     }
 
-    /// The next relay choice (own only once a `relay_url` is set).
+    /// The next relay choice: n0, Off, then own only once a `relay_url` is set (the menu's Custom... comes after the
+    /// last of them, B323).
     pub fn next_relay(&mut self) {
         self.relay = match self.relay {
-            Relay::N0 if !self.relay_url.is_empty() => Relay::Own(self.relay_url.clone()),
-            Relay::N0 | Relay::Own(_) => Relay::Off,
-            Relay::Off => Relay::N0,
+            Relay::N0 => Relay::Off,
+            Relay::Off if !self.relay_url.is_empty() => Relay::Own(self.relay_url.clone()),
+            Relay::Off | Relay::Own(_) => Relay::N0,
         };
+    }
+
+    /// B323: this player's own relay from now on (`url` checked by [`relay_url`]).
+    pub fn set_own(&mut self, url: String) {
+        self.relay = Relay::Own(url.clone());
+        self.relay_url = url;
+    }
+}
+
+/// B323: a typed relay URL as the endpoint will dial it, or why it can't be one: http(s) with a host (iroh's
+/// `RelayUrl` parsing, so what's accepted here binds).
+pub fn relay_url(s: &str) -> Result<String, String> {
+    let u = s.trim().parse::<RelayUrl>().map_err(|e| e.to_string())?;
+    match u.scheme() {
+        "http" | "https" if u.host_str().is_some_and(|h| !h.is_empty()) => Ok(u.to_string()),
+        "http" | "https" => Err("no host".into()),
+        s => Err(format!("{s}: not http or https")),
     }
 }
 
@@ -2750,6 +2768,30 @@ mod tests {
         assert_eq!(Online::parse("").relay, Relay::N0);
         let o = Online::parse("private = yes\n");
         assert!(o.private && Online::parse(&o.text()) == o);
+    }
+
+    /// B323: the menu's relay cycle (n0, Off, own once set) and what a typed relay URL may be.
+    #[test]
+    fn relay_cycle_and_urls() {
+        let mut o = Online::default();
+        let mut seen = vec![];
+        for _ in 0..3 {
+            o.next_relay();
+            seen.push(o.relay.clone());
+        }
+        assert_eq!(seen, [Relay::Off, Relay::N0, Relay::Off]);
+        o.set_own("https://relay.example.org/".into());
+        assert_eq!(Online::parse(&o.text()), o);
+        o.relay = Relay::Off;
+        o.next_relay();
+        assert_eq!(o.relay, Relay::Own("https://relay.example.org/".into()));
+        o.next_relay();
+        assert_eq!(o.relay, Relay::N0);
+        assert_eq!(relay_url(" HTTPS://Relay.Example.org "), Ok("https://relay.example.org/".into()));
+        assert_eq!(relay_url("http://10.0.0.2:3340"), Ok("http://10.0.0.2:3340/".into()));
+        for bad in ["", "https://", "relay.example.org", "ftp://relay.example.org", "https://exa mple.org"] {
+            assert!(relay_url(bad).is_err(), "{bad}");
+        }
     }
 
     /// B116: the board slots on a local DHT testnet: two hosts take different slots, keep theirs on republish,

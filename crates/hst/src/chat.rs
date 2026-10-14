@@ -244,7 +244,7 @@ fn tapped(mouse: &mut ButtonInput<MouseButton>, touches: &mut Touches, win: Opti
 fn phone(was: &mut bool, on: bool) {
     if std::mem::replace(was, on) != on {
         #[cfg(target_arch = "wasm32")]
-        crate::web::code_entry(on);
+        crate::web::code_entry(on, false);
     }
 }
 
