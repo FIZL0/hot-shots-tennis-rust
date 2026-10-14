@@ -158,7 +158,7 @@ let seen; try { seen = localStorage.getItem('hst-gecko-notice'); } catch {}
 if (gecko && !seen) {
   const n = document.body.appendChild(document.createElement('div'));
   n.id = 'gecko';
-  n.textContent = 'Firefox and Zen get the game’s fallback graphics (their WebGPU draws it broken). For the best experience use Chrome, '
+  n.textContent = 'Firefox-based browsers get the game’s fallback graphics (their WebGPU draws it broken). For the best experience use Chrome, '
     + 'Edge or Safari. (Tap to close.)';
   n.onclick = () => { n.remove(); try { localStorage.setItem('hst-gecko-notice', '1'); } catch {} };
 }
