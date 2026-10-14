@@ -1028,7 +1028,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
                     } else {
                         // a level's name can be long: shrunk to the pill's end, in white to read on the seat's colour
-                        d.fitted(state, x0 + 318.0, y + 10.0, 18.0, 120.0);
+                        d.fitted(state, x0 + 286.0, y + 10.0, 18.0, 92.0);
                     }
                     // B216: the host's ✕ that takes a computer player off (△ on its row, or ✕ on it)
                     if let Some(k) = items.iter().position(|it| *it == Item::Remove(i)) {
@@ -1618,6 +1618,20 @@ mod tests {
         assert_eq!(at(&m, 60.0 + BUTTON_W + 2.0, BUTTON_Y + 10.0), Some(3), "between pills: the nearer");
         m.net.hosting = false;
         assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(0), "a guest's Ready");
+    }
+
+    #[test]
+    fn tmp_up_to_mode() {
+        let dev = super::super::Dev::Keys;
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        m.net.hosting = true;
+        m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
+        for s in 0..m.items().len() {
+            m.sel = s;
+            m.step(dev, Press { up: true, ..default() });
+            eprintln!("{:?} -> {:?}", m.items()[s], m.items()[m.sel]);
+        }
     }
 
     #[test]
