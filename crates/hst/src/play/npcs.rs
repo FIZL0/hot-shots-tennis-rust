@@ -22,7 +22,8 @@
 //!
 //! The trigger creatures hear the match as the original sends it ([`npc::Trigger::hear`]): 0xc entering the change of
 //! ends (all reset), 0xe at each serve set-up (`next_point`; after a change of ends only the passing ball resets, and
-//! rolls). Each is drawn while active, on and its +0x274 is not 0; the passing ball fades by it.
+//! rolls). Each is drawn while active, on and its +0x274 is not 0; the passing ball fades by it, court 8's startled
+//! creatures by their weight.
 
 use std::sync::Arc;
 
@@ -58,9 +59,10 @@ pub(super) struct Npcs {
     /// Changing ends last tick, and in the serve phase last tick (entering it is the serve set-up, message 0xe).
     ends: bool,
     serving: bool,
-    /// The passing ball's materials with their own alpha and blending, faded by its +0x274 (`npc::Trigger::speed`).
+    /// The fading creatures' GS draws with their own alpha and key: the passing ball's, faded by its +0x274
+    /// (`npc::Trigger::speed`), and court 8's startled ones', by their weight.
     #[serde(skip)]
-    fade: Vec<(Handle<StandardMaterial>, f32, AlphaMode)>,
+    fade: Vec<(Entity, Vec<(Handle<crate::gs::GsMaterial>, f32, crate::gs::GsKey)>)>,
     /// Rigs whose animation carries them far from their bind pose (the passing ball): not culled by its bounds.
     uncull: Vec<Entity>,
     /// The gallery's cheer marks (at a walker's neck when it started cheering); stepped after the walkers.
@@ -289,7 +291,7 @@ fn step(
     audio: Option<Res<crate::audio::Sound>>,
     bank: Option<Res<crate::audio::CourtBank>>,
     (ticks, mut once, mut ambience): (Res<super::heard::Heard>, ResMut<super::heard::Played>, ResMut<Ambience>),
-    (mats, mut materials): (Query<&MeshMaterial3d<StandardMaterial>>, ResMut<Assets<StandardMaterial>>),
+    (mats, mut materials): (Query<&MeshMaterial3d<crate::gs::GsMaterial>>, ResMut<Assets<crate::gs::GsMaterial>>),
     globals: Query<&GlobalTransform>,
     args: Res<Args>,
 ) {
@@ -543,17 +545,36 @@ fn step(
         if let Ok(mut v) = shown.get_mut(*e) {
             v.set_if_neq(if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden });
         }
-        // the passing ball's +0x274 is also its model's alpha (it fades over its last 10 frames)
-        if t.ty == 15 {
-            if npcs.fade.is_empty() {
-                npcs.fade = children.iter_descendants(*e).filter_map(|d| mats.get(d).ok()).filter_map(|m| materials.get(&m.0).map(|a| (m.0.clone(), a.base_color.alpha(), a.alpha_mode))).collect();
+        // the passing ball's +0x274 is also its model's alpha (it fades over its last 10 frames); court 8's startled
+        // creatures' alpha is their weight (in and out over a path's ends; type 31 unseen at its reset's 0)
+        // ponytail: types 0, 1, 5 and 39 (other courts) take theirs too in the original; not looked at, so not faded
+        let fade = match t.ty {
+            15 => Some(t.speed),
+            31 | 32 => Some(t.weight),
+            _ => None,
+        };
+        if let Some(a) = fade {
+            // its materials once its meshes are there
+            let k = npcs.fade.iter().position(|(f, _)| f == e).unwrap_or_else(|| {
+                npcs.fade.push((*e, Vec::new()));
+                npcs.fade.len() - 1
+            });
+            if npcs.fade[k].1.is_empty() {
+                npcs.fade[k].1 = children.iter_descendants(*e).filter_map(|d| mats.get(d).ok()).filter_map(|m| materials.get(&m.0).map(|a| (m.0.clone(), a.uniform.color.w, a.key))).collect();
             }
-            let a = t.speed.clamp(0.0, 1.0);
-            for (h, alpha, mode) in &npcs.fade {
-                let (alpha, mode) = if a < 1.0 { (alpha * a, AlphaMode::Blend) } else { (*alpha, *mode) };
-                if materials.get(h).is_some_and(|m| m.base_color.alpha() != alpha || m.alpha_mode != mode) {
+            let a = a.clamp(0.0, 1.0);
+            // ponytail: at 0 hidden outright, not drawn see-through with its Z (the GS's Z write there not looked at)
+            if a == 0.0 {
+                if let Ok(mut v) = shown.get_mut(*e) {
+                    v.set_if_neq(Visibility::Hidden);
+                }
+            }
+            // faded: the vertex alpha (material colour × a) as the GS alpha, blended (TFX MODULATE, ABE)
+            for (h, alpha, key) in &npcs.fade[k].1 {
+                let (alpha, key) = if a < 1.0 { (alpha * a, crate::gs::GsKey { modulate: true, blend: key.blend.or(Some(hst_data::mtl::Blend::Normal)), ..*key }) } else { (*alpha, *key) };
+                if materials.get(h).is_some_and(|m| m.uniform.color.w != alpha || m.key != key) {
                     let mut m = materials.get_mut(h).unwrap();
-                    (m.alpha_mode, m.base_color) = (mode, m.base_color.with_alpha(alpha));
+                    (m.uniform.color.w, m.key) = (alpha, key);
                 }
             }
         }
