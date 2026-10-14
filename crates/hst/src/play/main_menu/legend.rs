@@ -20,7 +20,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use super::super::controls::{self, Action, Bindings};
 use super::super::menu_art::{BOLD, fill_rgb, rounded, stroke_rgb, text_path, unpremultiply};
 use super::super::widescreen::{self, Anchor};
-use super::{CONFIRM_ROWS, CONTROLS_ROW, Dev, GRAPHICS_LABELS, GRAPHICS_ROW, MAIN, Menu, Screen, locked, switch};
+use super::{ASK_ROW, CONFIRM_ROWS, Dev, GRAPHICS_LABELS, GRAPHICS_ROW, MAIN, Menu, Screen, locked, switch};
 
 /// What a legend entry does with which button.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -138,10 +138,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
         Screen::Settings => {
             v.push((Act::UpDown, "Move"));
-            if s == 0 || switch(s).is_some_and(|i| !locked(i)) {
+            if s == 0 || s == ASK_ROW || switch(s).is_some_and(|i| !locked(i)) {
                 v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Change")]);
             } else if s >= GRAPHICS_ROW {
-                v.push((Act::Ok, if s > CONTROLS_ROW { "Back" } else { "Open" }));
+                v.push((Act::Ok, if s > ASK_ROW { "Back" } else { "Open" }));
             }
             v.push((Act::Back, "Back"));
         }

@@ -85,8 +85,6 @@ pub enum Fx {
     SaveCfg,
     /// Read `online.txt` (opening the Online screen).
     Load,
-    /// Remember the answer to "get a remote mod's looks?".
-    Ask(Ask),
 }
 
 /// Join by Code's symbol keys (then its four buttons).
@@ -566,7 +564,9 @@ impl Menu {
                     } else {
                         self.net.looks.insert(h, None);
                     }
-                    out.extend([Sound(2), Effect::Online(Fx::Ask(remember))]);
+                    // B289: kept with the settings (Settings → Online Mod Downloads changes it later)
+                    self.settings.4 = remember;
+                    out.extend([Sound(2), Effect::SaveSettings]);
                 }
             }
             Screen::Lobby => {
@@ -796,12 +796,12 @@ impl Menu {
                 self.net.looks.insert(h, Some(d));
                 continue;
             }
-            match Ask::load(&cache) {
-                Some(Ask::Always) => {
+            match self.settings.4 {
+                Ask::Always => {
                     self.net.wanted.insert(h);
                     net.send(Cmd::Want(h));
                 }
-                Some(Ask::Never) => drop(self.net.looks.insert(h, None)),
+                Ask::Never => drop(self.net.looks.insert(h, None)),
                 _ if self.net.ask.is_none() => (self.net.ask, self.sel) = (Some(h), 0),
                 _ => {}
             }
@@ -1499,7 +1499,6 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         Fx::Load => {
             menu.net.cfg.get_or_insert_with(|| Online::load(iso));
         }
-        Fx::Ask(a) => a.save(&mo::cache(iso)),
         Fx::SaveCfg => {
             if let Some(cfg) = &menu.net.cfg {
                 let path = Online::path(iso);
