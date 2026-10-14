@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B265** Lobby/character select: computer (COM) seats shouldn't show "READY TO GO" — it covers their rank text; leave it off for COMs — crates/hst/src/play/main_menu/
 - [ ] **B264** Character select with Random computers added: don't show the user's character on the other seats that have Random selected (show the Random face/state instead) — crates/hst/src/play/main_menu/ — Also the confirm screen (user 2026-10-13): a seat whose pick is Random still shows Random there (the Random face/name), not the character it drew, until the match starts
 - [ ] **B263** Lobby player icons: stylized borders (a frame in the game's UI style) instead of plain boxes around circle pfps — crates/hst/src/play/main_menu/
 - [ ] **B258** Solo singles/doubles: let the human pick the COM's character (user 2026-10-13): playing singles or doubles alone, character select doesn't let you choose the CPU's character, it just puts Ashley in. Auto-fill the empty seats with COM as now, but each COM seat gets its own card in the select that any human can take over with ✕/A to pick its character (and back out to leave it COM) — crates/hst/src/play/main_menu.rs (seats/select), play/main_menu/ (character select)
