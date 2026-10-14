@@ -279,3 +279,13 @@ fn tall_window_letterboxes() {
     // wide: as before
     assert_eq!(vplace(44.8, 44.8, 16.0 / 9.0, Anchor::Sides), (10.0, 10.0));
 }
+
+#[test]
+fn legend_strip_under_the_description_bar() {
+    // B325: the menus' description bar (404..436) and the legend strip (436..448) stay stacked at any aspect
+    for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
+        let (bt, bh) = vplace(404.0, 32.0, a, Anchor::Span);
+        let (lt, lh) = vplace(436.0, 12.0, a, Anchor::Span);
+        assert!((bt + bh - lt).abs() < 1e-3 && (lt + lh - 100.0).abs() < 1e-3, "{a}");
+    }
+}

@@ -610,8 +610,6 @@ const TALL: f32 = 12.0;
 fn setup(mut commands: Commands) {
     let node = Node {
         position_type: PositionType::Absolute,
-        top: Val::Percent(TOP / 4.48),
-        height: Val::Percent(TALL / 4.48),
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::FlexEnd,
         align_items: AlignItems::Center,
@@ -647,7 +645,11 @@ pub(crate) fn draw(
     let unit = share * vw / 640.0;
     // each chip: (key, words or the item, styles)
     let mut want: Vec<(String, Pixmap)> = Vec::new();
-    let mut key = format!("{left} {width} {unit} {vw}|");
+    // B325: bottom-pinned at the 4:3 screen's scale, as the description bar over it (`ticker_text`), so the two
+    // stay stacked at any aspect
+    let vshare = widescreen::menu_shares(widescreen::aspect(win), widescreen::menu_scale()).1;
+    let (top, height) = widescreen::vplace_in(TOP, TALL, vshare, Anchor::Span);
+    let mut key = format!("{left} {width} {top} {height} {unit} {vw}|");
     let mut plan: Vec<(String, bool)> = Vec::new();
     for g in &groups {
         let mut styles: Vec<Style> = g.devs.iter().map(|&d| style_of(d, &pads)).collect();
@@ -681,9 +683,7 @@ pub(crate) fn draw(
     }
     *shown = key;
     (node.left, node.width) = (Val::Percent(left), Val::Percent(width));
-    // its height at the Menu Size, on the window's bottom edge
-    let tall = TALL / 4.48 * widescreen::menu_scale();
-    (node.top, node.height) = (Val::Percent(100.0 - tall), Val::Percent(tall));
+    (node.top, node.height) = (Val::Percent(top), Val::Percent(height));
     // 11 of the strip's 12 units tall, 8 apart (a group's tag 14 before it), 8 in from the right; the row shrinks
     // as one if it's wider than the strip
     let room = width / 100.0 * vw - 16.0 * unit;
