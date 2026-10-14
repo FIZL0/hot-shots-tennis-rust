@@ -208,13 +208,12 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Back, "Back"));
             }
         }
-        Screen::Confirm if host && m.picking.is_some() => v.extend([(Act::LeftRight, if s == 1 { "Court" } else { "Umpire" }), (Act::Ok, "Keep"), (Act::Back, "Cancel")]),
+        Screen::Confirm if host && m.picking.is_some() => v.extend([(Act::LeftRight, ["", "Court", "Sets", "Games", "Umpire"].get(s).copied().unwrap_or("Change")), (Act::Ok, "Keep"), (Act::Back, "Cancel")]),
         Screen::Confirm if host => {
             v.push((Act::UpDown, "Move"));
             match s {
                 0 => v.push((Act::Ok, "Start")),
-                1 | 4 => v.push((Act::Ok, "Choose")),
-                _ if s < CONFIRM_ROWS => v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Change")]),
+                _ if s < CONFIRM_ROWS => v.push((Act::Ok, "Choose")),
                 _ => {}
             }
             v.push((Act::Back, "Back"));
