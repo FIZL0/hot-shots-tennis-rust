@@ -934,12 +934,14 @@ mod tests {
     }
 
     /// A real store mod installed (`HST_LIVE_INSTALL=<id>`, B204) into a temporary folder, its progress and (Linux) the
-    /// peak memory printed: it should stay well under the mod's size.
+    /// peak memory printed: it should stay well under the mod's size. `HST_LIVE_ROOT=<dir>` installs there and keeps it
+    /// (M17: then play it with `--slot-mod 0 <dir>/<id>`).
     #[test]
     fn live_install() {
         let Ok(id) = std::env::var("HST_LIVE_INSTALL") else { return eprintln!("HST_LIVE_INSTALL unset (skipped)") };
         list(true);
-        let root = std::env::temp_dir().join(format!("hst-live-{}", std::process::id()));
+        let keep = std::env::var("HST_LIVE_ROOT").ok();
+        let root = keep.clone().map_or_else(|| std::env::temp_dir().join(format!("hst-live-{}", std::process::id())), Into::into);
         let started = std::time::Instant::now();
         loop {
             for ev in take() {
@@ -951,7 +953,9 @@ mod tests {
                         let n = walk_len(&root.join(&id));
                         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
                         eprintln!("{n} files; {}", status.lines().find(|l| l.starts_with("VmHWM")).unwrap_or("no VmHWM"));
-                        std::fs::remove_dir_all(&root).unwrap();
+                        if keep.is_none() {
+                            std::fs::remove_dir_all(&root).unwrap();
+                        }
                         return assert!(r.is_ok() && n > 0);
                     }
                     _ => {}
@@ -1005,6 +1009,6 @@ mod tests {
         }
         let listed = listed.expect("no listing in 60 s").expect("the store can't be read");
         eprintln!("store: {} mods: {:?}", listed.len(), listed.iter().map(|e| (&e.meta.id, &e.rev)).collect::<Vec<_>>());
-        assert_eq!(shot, Some(("nobody_here".into(), None)));
+        assert_eq!(shot, Some((e.key(), None)));
     }
 }
