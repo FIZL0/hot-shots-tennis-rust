@@ -606,6 +606,8 @@ impl Menu {
         self.net.status.clear();
         self.net.room = None;
         self.net.started = false;
+        // B321: no code from an earlier lobby, and the Online screen's search (if it was still going) is dropped
+        (self.net.code, self.net.short, self.net.finding) = (String::new(), String::new(), 0);
         (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared, self.net.deciding) = (None, None, false, false, false);
         self.net.wanted.clear();
         self.net.pick_next = true;
@@ -1290,8 +1292,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     spinner(d, m.net.spin, qx + 44.0, qy + 44.0, 14.0);
                 }
                 let tx = sx + 104.0;
-                d.text(if r.private { "PRIVATE CODE" } else { "JOIN CODE" }, tx, qy + 2.0, 11.0, [38.0, 51.0, 32.0]);
-                let code = if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
+                d.text(if ticket_only(&m.net) { "JOIN LINK" } else if r.private { "PRIVATE CODE" } else { "JOIN CODE" }, tx, qy + 2.0, 11.0, [38.0, 51.0, 32.0]);
+                let code = if ticket_only(&m.net) { "LINK" } else if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
                 d.outlined(|d| super::left(d, code, tx, qy + 14.0, 32.0, sw - 112.0, super::GOLD));
             }
             if m.net.ask.is_none() {
@@ -1609,13 +1611,21 @@ fn failed(d: &mut Draw, y: f32, title: &str, line: &str) {
 }
 
 /// What the lobby's QR and Copy Link share: the short code's link, or the browser's LAN offer (scanned, nothing else
-/// reaches it). Never the long iroh ticket (B224: useless to type or scan); nothing until the short code is there.
+/// reaches it). The long iroh ticket (B224: useless to type) only as a link while the short code can't be put
+/// online (B321, `ticket_only`).
 fn shared(v: &View) -> Option<String> {
     if !v.short.is_empty() {
         Some(crate::net::link(&v.short))
+    } else if ticket_only(v) {
+        Some(crate::net::link(&v.code))
     } else {
         crate::net::rtc::is_offer(&v.code).then(|| v.code.clone())
     }
+}
+
+/// B321: hosting, and the short code's put failed (it's retried): the code is the whole ticket, shared as a link.
+fn ticket_only(v: &View) -> bool {
+    v.hosting && v.short.is_empty() && crate::net::is_ticket(&v.code)
 }
 
 /// The lobby code's QR, drawn as `Tex::Qr`.
@@ -1944,8 +1954,8 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             let text = text.or_else(crate::web::pasted);
             menu.pasted(text, &mut out);
         }
-        Fx::Copy if !menu.net.short.is_empty() => {
-            let link = crate::net::link(&menu.net.short);
+        Fx::Copy if !menu.net.short.is_empty() || ticket_only(&menu.net) => {
+            let link = shared(&menu.net).unwrap_or_default();
             let ok = clipboard.set_text(link.clone()).is_ok();
             menu.net.status = if ok { "Link copied: send it to a friend (it opens this lobby), or they type the code in Join by Code.".into() } else { link };
         }

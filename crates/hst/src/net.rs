@@ -996,15 +996,44 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), relays: cfg.relay != Relay::Off };
     bevy::log::info!("online in {:?}", t0.elapsed());
     cx.say(Event::Status("Online.".into()));
-    while let Some(c) = cmds.recv().await {
+    // B321: a Host, Join, Quickplay or Find that came in during a Find (dropped for it)
+    let mut cut: Option<Cmd> = None;
+    loop {
+        let Some(c) = (match cut.take() {
+            Some(c) => Some(c),
+            None => cmds.recv().await,
+        }) else {
+            break;
+        };
         match c {
             Cmd::Host(room) => host(&cx, room, &mut cmds).await,
             Cmd::Find => {
                 cx.say(Event::Status("Looking for lobbies...".into()));
                 // B267: the LAN's wait and the DHT's lookups at once, each list shown as it answers
                 let mut f = Finding::start(&cx);
-                while let Some(list) = f.next(&cx).await {
-                    cx.say(Event::Found(list));
+                let mut name = None;
+                // B321: the Online screen's search (the browser's slot reads take 7-12 s) never holds up a Host
+                // chosen meanwhile: the first host after a page load showed no code until it was over
+                loop {
+                    tokio::select! {
+                        list = f.next(&cx) => match list {
+                            Some(list) => cx.say(Event::Found(list)),
+                            None => break,
+                        },
+                        c = cmds.recv() => match c {
+                            Some(Cmd::Name(n)) => name = Some(n),
+                            Some(c @ (Cmd::Host(_) | Cmd::Join(..) | Cmd::Quick(_) | Cmd::Find)) => {
+                                cut = Some(c);
+                                break;
+                            }
+                            Some(_) => {}
+                            None => return,
+                        },
+                    }
+                }
+                drop(f);
+                if let Some(n) = name {
+                    cx.name = n;
                 }
             }
             Cmd::Quick(room) => {
@@ -1316,9 +1345,30 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                     n0_future::time::sleep(Duration::from_millis(100)).await;
                 }
-                let ticket = code_ticket(&ep, None);
                 bevy::log::info!("ticket with its addresses in {:?}", t.elapsed());
-                let c = roll(&dht, first, &ticket, |c| drop(ev.send(Event::Short(c.into())))).await;
+                // B321: a put that fails (the pkarr relay answers 429 for a while after Find's slot reads, the first
+                // host after a page load) is tried again; meanwhile the lobby shows its whole ticket as the link
+                let shown = std::sync::Mutex::new(first);
+                let mut pause = Duration::from_secs(2);
+                let c = loop {
+                    let ticket = code_ticket(&ep, None);
+                    let code = shown.lock().unwrap().clone();
+                    let c = roll(&dht, code, &ticket, |c| {
+                        *shown.lock().unwrap() = c.into();
+                        drop(ev.send(Event::Short(c.into())))
+                    })
+                    .await;
+                    if c.is_some() || !relays || ctx_.is_closed() {
+                        break c;
+                    }
+                    bevy::log::warn!("short code not out in {:?}: the ticket instead, again in {pause:?}", t.elapsed());
+                    bevy::log::info!("lobby link {}", link(&ticket));
+                    let _ = ev.send(Event::Short(String::new()));
+                    let _ = ev.send(Event::Code(ticket));
+                    let _ = ev.send(Event::Status("No short code yet (retrying): share the lobby's link meanwhile.".into()));
+                    n0_future::time::sleep(pause).await;
+                    pause = (pause * 2).min(Duration::from_secs(30));
+                };
                 bevy::log::info!("short code {c:?} in {:?}", t.elapsed());
                 let _ = ctx_.send(c);
             });
@@ -2221,6 +2271,11 @@ pub fn is_code(code: &str) -> bool {
     is_short(code) || rtc::is_offer(code) || code.parse::<EndpointTicket>().is_ok() || code.parse::<EndpointId>().is_ok()
 }
 
+/// `code` is a host's whole ticket.
+pub fn is_ticket(code: &str) -> bool {
+    code.parse::<EndpointTicket>().is_ok()
+}
+
 /// The join code in pasted or typed text: the code itself, or a lobby link's `?code=` (short codes in capitals).
 pub fn code_in(text: &str) -> Option<String> {
     let t = text.trim();
@@ -2439,7 +2494,14 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
         slot.store(i, Relaxed);
     }
     if i < SLOTS {
-        publish(dht, &slot_name(i), &serde_json::to_string(l).unwrap()).await;
+        // B321: the browser's put right after the slot reads is often refused (the pkarr relay's rate limit), which
+        // left the lobby off the board until the next REPUBLISH: tried again a few seconds on
+        for pause in [0, 3, 6] {
+            n0_future::time::sleep(Duration::from_secs(pause)).await;
+            if publish(dht, &slot_name(i), &serde_json::to_string(l).unwrap()).await {
+                break;
+            }
+        }
     } else {
         bevy::log::warn!("lobby board full: listed on the DHT only");
     }
@@ -2595,6 +2657,31 @@ mod tests {
         assert!(r.live.is_empty() && r.set_doubles(false) && !r.set_doubles(false));
         assert_eq!((r.doubles, r.seats.len(), r.seats[0].as_ref().map(|s| s.peer.as_str())), (false, 2, Some("host")));
         assert!(r.set_doubles(true) && r.seats.len() == 4);
+    }
+
+    /// B321: Host chosen while the Online screen's search still runs (its LAN wait alone is 3 s) opens the lobby at
+    /// once, the search dropped (~1 s).
+    #[test]
+    fn host_cuts_a_running_find() {
+        let net = Net::start(Online { relay: Relay::Off, ..Default::default() });
+        net.send(Cmd::Find);
+        std::thread::sleep(Duration::from_millis(200));
+        let t = std::time::Instant::now();
+        net.send(Cmd::Name("h".into()));
+        net.send(Cmd::Host(room(false)));
+        let mut found = false;
+        while t.elapsed() < LAN_WAIT - Duration::from_millis(500) {
+            for e in net.poll() {
+                found |= matches!(e, Event::Found(_));
+                if let Event::Room(r) = e {
+                    assert!(!found, "the search ran on");
+                    assert_eq!(r.names.get("host").map(String::as_str), Some("h"), "the name sent during the search");
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("no lobby in {:?}: Host waited for the search", t.elapsed());
     }
 
     /// B201 over a local connection: a guest's live place reaches the host, the host's computer player and court reach
