@@ -4,7 +4,7 @@
     tools/ctx.py                 index of plan/TODO.md: every heading and task id, one line each
     tools/ctx.py next            the first open task, with its sub-items
     tools/ctx.py <ID>            a task's full text: plan/<ID>.md, else its line in TODO.md or DONE.md
-    tools/ctx.py <name>          a heading's section (case-insensitive substring) in TODO.md, PLAN.md or DONE.md
+    tools/ctx.py <name>          a heading's section (case-insensitive substring) in TODO.md, PLAN.md, plan/HUMAN.md or DONE.md
     tools/ctx.py -f FILE <name>  same, on another markdown file
     tools/ctx.py tick <ID>       mark done: [x] here and in plan/<ID>.md, move the line to plan/DONE.md
     tools/ctx.py block <ID> WHY  mark [~] with "BLOCKED: WHY" appended
@@ -297,7 +297,7 @@ if __name__ == '__main__':
         sys.exit(print('\n'.join(brief(root, args[1]))))
     if args == ['archive']:
         sys.exit(print(f'archived {archive(todo, done)}'))
-    paths = [todo, os.path.join(root, 'PLAN.md'), done]
+    paths = [todo, os.path.join(root, 'PLAN.md'), os.path.join(root, 'plan', 'HUMAN.md'), done]
     if args[:1] == ['-f']:
         paths, args = [args[1]], args[2:]
     task = os.path.join(plan_dir, f'{args[0]}.md') if args else ''

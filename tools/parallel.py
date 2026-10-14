@@ -235,8 +235,10 @@ def start(n, task):
     brief = sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'brief', tid], cwd=d, capture_output=True, text=True).stdout
     prompt = PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60) + f' Its brief (tools/ctx.py brief {tid}) follows, so ' \
              f"don't gather it again.\n\n{brief}"
+    # lean prefix (~17k vs ~50k tokens re-read every turn): 4 tools, no user plugins/MCP; project hooks stay
     cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
-                      '--disallowedTools', 'AskUserQuestion', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
+                      '--disallowedTools', 'AskUserQuestion', '--model', 'opus', '--tools', 'Bash,Read,Edit,Write',
+                      '--setting-sources', 'project,local', '--strict-mcp-config', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
     p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1',
                     # each slot builds in its own worktree's target/: cargo names a workspace crate's output by its
                     # repo-relative path, so slots sharing one linked each other's crates. sccache shares the dependency

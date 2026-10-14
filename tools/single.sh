@@ -40,6 +40,7 @@ while grep -q '^- \[ \]' plan/TODO.md; do
   claude "$prompt Your task is $tid; its brief (tools/ctx.py brief $tid) follows, so don't gather it again.
 
 $(tools/ctx.py brief "$tid")" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
+    --model opus --tools Bash,Read,Edit,Write --setting-sources project,local --strict-mcp-config \
     --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it

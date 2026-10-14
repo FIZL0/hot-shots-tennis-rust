@@ -28,6 +28,8 @@ control, done list, known gaps): `plan/REFERENCE.md`. `tools/ctx.py` (index) · 
 its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any markdown) · `tick <ID>` · `block <ID> <why>` · `unblock <ID> [note]` · `move <ID> top|before ID|after ID|in SECTION` · `add <PREFIX> TEXT [@ WHERE]` (next free id) · `note <ID> TEXT` · `newid <PREFIX>`. Use these for reprioritising and new tasks instead of reading/editing TODO.md.
 
 ## Cheap context
+- Every turn re-reads the whole conversation: pipe long output through `tail`/`grep`, read files by line range
+  (`sed -n`, Read offset/limit), never dump whole logs or big files.
 - Decompile: `research/fn.sh <addr>` (one function), `research/xref.py <addr>` (callers/callees),
   `research/xref.py <addr> --similar` (look-alike functions; `ported` ones have Rust to copy the shape of). A hook
   blocks reading the 16 MB dumps whole.
