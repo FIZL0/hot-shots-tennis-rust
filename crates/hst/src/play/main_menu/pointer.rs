@@ -21,10 +21,8 @@ use super::{Dev, Effect, Menu, Press, Screen};
 pub(super) enum Act {
     /// Row `i` of the screen's list: hovering selects it, a tap selects it and presses `k` (usually ✕).
     Row(usize, Press),
-    /// A character select face: the roster's `i`th cell under the filter (B296).
+    /// A character select tile: the roster's `i`th (B306).
     Cell(usize),
-    /// B296: the character select roster's filter pill `i`.
-    Filter(usize),
     /// A court tile or umpire card in the confirm screen's picker: a tap hovers it, a tap on the hovered one keeps it.
     Pick(usize),
     /// A button: a tap is this press.
@@ -148,13 +146,6 @@ impl Menu {
                     out.extend(self.step(dev, OK));
                 }
             }
-            Act::Filter(f) if tap => {
-                if self.driven(dev).is_some() && f != self.filter {
-                    self.set_filter(f);
-                    out.push(Effect::Sound(0));
-                }
-            }
-            Act::Filter(_) => {}
             Act::Pick(v) if tap => {
                 let court = self.sel == 1;
                 if v == if court { self.court } else { self.umpire as usize } {
@@ -336,7 +327,7 @@ pub(super) mod tests {
 
     /// The screen's hits as drawn, and what a press outside them does.
     pub(in crate::play::main_menu) fn hits(m: &Menu) -> (Vec<Hit>, Option<Act>) {
-        let t = text();
+        let t = text_with_mods(m.mods.len());
         let d = drawn(m, &t, &Bindings::default(), &[], 0.0);
         (d.hits, d.outside)
     }
