@@ -319,7 +319,9 @@ def merge(tid):
     while queued():  # ponytail: the master's reports go first (back-to-back runner merges starved it); stalls if it never takes them
         time.sleep(10)
     with MERGE:
-        while master_busy():  # the master is merging in main: queue behind it
+        # the master is merging in main, or someone left conflicts there (a stash pop): queue behind it; merging
+        # over unmerged paths "resolves" theirs and commits that instead of the branch (B207, 2026-10-13)
+        while master_busy() or git('diff', '--name-only', '--diff-filter=U').stdout.strip():
             time.sleep(10)
         # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
         stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
@@ -340,6 +342,8 @@ def merge(tid):
             if stashed and git('stash', 'pop', '-q').returncode:
                 git('reset', '-q', '--hard')  # only the half-applied pop goes; the stash itself stays
                 log(f'{tid}: main\'s uncommitted changes clash with the merge: they are kept in git stash "runner {tid}"')
+        if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
+            return 'the merge did not land in main (main changed under it); merge it again'
         merged = git('rev-parse', 'HEAD').stdout.strip()
         # the agent's done.sh passed the tests on its branch: rerun them only if main's code differs from the branch's
         tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split())
