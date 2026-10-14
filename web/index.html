@@ -17,8 +17,11 @@
     overflow: hidden; overscroll-behavior: none; touch-action: none; -webkit-touch-callout: none;
     /* B113: a drag on the touch stick / canvas never selects, highlights or magnifies (iOS home-screen app) */
     user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
-  /* iOS won't type into an input under a user-select: none parent */
-  input { user-select: text; -webkit-user-select: text; }
+  /* B256: user-select, the callout and touch-action aren't all inherited, so every element (the boot/ISO text, the
+     full-screen code input's surroundings, pseudo-elements) gets them itself */
+  *, *::before, *::after { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  /* iOS won't type into an input under a user-select: none parent; the token paste / join code keep their own taps */
+  input, textarea { user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; touch-action: manipulation; }
   #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
   canvas { touch-action: none; display: block; width: 100% !important; height: 100% !important; }
   button { font: inherit; }
