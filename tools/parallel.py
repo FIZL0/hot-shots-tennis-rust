@@ -3,6 +3,7 @@
 sessions going, each on its own plan/TODO.md task in its own git worktree, and merges each finished branch into main.
 
     tmux new -s hst tools/parallel.sh [N] [p|d] [f]  # e.g. 5 p; f = keep starting past 90% weekly usage (else it waits for the reset); progress: context/notes/overnight.log, slot logs beside it
+    HST_LEAN=0 tools/parallel.sh …                     # agents get full Claude Code (plugins, subagents); default lean
 
 Type `s` + Enter in the runner's pane to stop starting new tasks (running ones finish and merge, then the run ends);
 `s` again takes it back. Each session is the normal TUI in its own pane (s1..sN, labelled on its border) of one tmux window "agents" in the
@@ -57,6 +58,9 @@ Examples:
   tools/parallel.sh 3                        3 agents on different files
   tools/parallel.sh 5 p f                    all options
 
+HST_LEAN=0 tools/parallel.sh …    agents get full Claude Code (plugins, subagents); default is lean (4 tools, ~17k
+                                  vs ~50k tokens per turn). Either way they are normal TUIs: attach, watch, type.
+
 While it runs: type s + Enter to stop starting new tasks (again to undo). Log: context/notes/overnight.log
 """
 _args = sys.argv[1:]
@@ -69,6 +73,10 @@ if any(not re.fullmatch(r'[pdf]|\d+', a) for a in _args) or SLOTS < 1:
     raise SystemExit(f'unknown option: {" ".join(_args)}\n\n{HELP}')
 WEEKLY_MAX = 90  # % of the 7-day limit; at or past it no new task starts (unless f)
 PAUSE = int(os.environ.get('HST_PAUSE', 60))
+# lean prefix (~17k vs ~50k tokens re-read every turn): 4 tools, no user plugins/MCP; project hooks stay.
+# Still the normal TUI (attach and type as ever); HST_LEAN=0 gives agents everything back (plugins, subagents)
+LEAN = [] if os.environ.get('HST_LEAN') == '0' else \
+    ['--tools', 'Bash,Read,Edit,Write', '--setting-sources', 'project,local', '--strict-mcp-config']
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
@@ -235,10 +243,8 @@ def start(n, task):
     brief = sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'brief', tid], cwd=d, capture_output=True, text=True).stdout
     prompt = PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60) + f' Its brief (tools/ctx.py brief {tid}) follows, so ' \
              f"don't gather it again.\n\n{brief}"
-    # lean prefix (~17k vs ~50k tokens re-read every turn): 4 tools, no user plugins/MCP; project hooks stay
     cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
-                      '--disallowedTools', 'AskUserQuestion', '--model', 'opus', '--tools', 'Bash,Read,Edit,Write',
-                      '--setting-sources', 'project,local', '--strict-mcp-config', '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
+                      '--disallowedTools', 'AskUserQuestion', '--model', 'opus', *LEAN, '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
     p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1',
                     # each slot builds in its own worktree's target/: cargo names a workspace crate's output by its
                     # repo-relative path, so slots sharing one linked each other's crates. sccache shares the dependency
@@ -367,9 +373,24 @@ def merge(tid):
             if not again.returncode:
                 log(f'{tid}: {", ".join(names)} failed under load, passed on a rerun')
                 chk = again
+        inherited = ''
+        later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
         if chk.returncode:
-            later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
             git('reset', '-q', '--keep', pre)
+            # main already failed that way without the branch (B231's flake, a disc test, main's own broken build):
+            # not the branch's fault, so merge it anyway and say so instead of spending a model on it
+            # ponytail: name-level match only; a branch that breaks an already-failing test differently slips through
+            names = re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)
+            build = 'BUILD FAILED' in chk.stdout
+            if not later and (names or build):
+                base = sp.run([os.path.join(ROOT, 'tools/check.sh'), *([] if build else ['--', '--exact', *names])],
+                              cwd=ROOT, capture_output=True, text=True)
+                still = set(re.findall(r'^---- (\S+) stdout ----', base.stdout, re.M))
+                if base.returncode and ('BUILD FAILED' in base.stdout if build else still >= set(names)):
+                    git('reset', '-q', '--keep', merged)
+                    inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
+                    log(f'{tid}: {inherited}; merged anyway')
+        if chk.returncode and not inherited:  # HEAD is at pre already
             if later and git('cherry-pick', *later).returncode:
                 git('cherry-pick', '--abort')
                 git('reset', '-q', '--keep', later[-1])  # can't replay them alone: keep them with the merge, master sorts it
@@ -382,6 +403,7 @@ def merge(tid):
         state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
         sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l)]
         note = f'{tid}: merged by the runner, {state}' + ('' if pushed else ', push failed') + \
+               (f'; tests fail but {inherited}' if inherited else '') + \
                (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
         open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
         log(note)

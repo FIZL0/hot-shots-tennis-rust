@@ -6,6 +6,7 @@
 #
 #   tmux new -s hst tools/single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
 #   HST_IDLE=90 HST_PAUSE=60 tools/single.sh
+#   HST_LEAN=0 tools/single.sh                    # full Claude Code (plugins, subagents); default is lean
 #
 # Runs with permission prompts bypassed: review the work in the morning (git log), and keep your backup.
 # Like the parallel runner's agents it gets its own PCSX2 copy (HST_PCSX2=6, ../<repo>-slots/pcsx2/s6; parallel runs use 1..N), so your own PCSX2 stays yours.
@@ -31,6 +32,9 @@ log=context/notes/overnight.log
 mkdir -p "$(dirname "$log")"
 pause=${HST_PAUSE:-60}
 run=0
+# lean prefix (~17k vs ~50k tokens per turn), still the normal TUI; HST_LEAN=0 for plugins/subagents back
+lean='--tools Bash,Read,Edit,Write --setting-sources project,local --strict-mcp-config'
+[ "${HST_LEAN:-1}" = 0 ] && lean=''
 trap 'tools/pcsx2-hst.sh stop' EXIT  # copy 6 starts its own virtual pad and takes it down with it
 while grep -q '^- \[ \]' plan/TODO.md; do
   run=$((run + 1))
@@ -40,7 +44,7 @@ while grep -q '^- \[ \]' plan/TODO.md; do
   claude "$prompt Your task is $tid; its brief (tools/ctx.py brief $tid) follows, so don't gather it again.
 
 $(tools/ctx.py brief "$tid")" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
-    --model opus --tools Bash,Read,Edit,Write --setting-sources project,local --strict-mcp-config \
+    --model opus $lean \
     --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
   echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it
