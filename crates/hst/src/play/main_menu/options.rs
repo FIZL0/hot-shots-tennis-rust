@@ -3,7 +3,7 @@
 //! and Back.
 
 use super::super::widescreen::ASPECTS;
-use super::{Draw, Effect, GOLD, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, pointer};
+use super::{CHAT, Draw, Effect, GOLD, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -31,6 +31,8 @@ pub(super) enum Opt {
     Downloads,
     /// B289: what to do with an online lobby's mods.
     OnlineMods,
+    /// M20: online chat shown.
+    Chat,
 }
 use Opt::*;
 
@@ -47,7 +49,7 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Aspect, ShowFps, Key
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
-const MODS: &[Opt] = &[Downloads, OnlineMods];
+const MODS: &[Opt] = &[Downloads, OnlineMods, Chat];
 /// B289: Online Mod Downloads' values.
 const ASK_VALUES: [(Ask, &str); 3] = [(Ask::Each, "Ask"), (Ask::Always, "Always"), (Ask::Never, "Never")];
 
@@ -92,6 +94,7 @@ fn label(o: Opt) -> &'static str {
         MatchMusic => "Match Music",
         Downloads => "Upscaled Downloads",
         OnlineMods => "Online Mod Downloads",
+        Chat => "Chat",
     }
 }
 
@@ -118,6 +121,7 @@ fn about(o: Opt) -> &'static str {
         MatchMusic => "Play each court's music during a match.",
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
+        Chat => "Show the online lobby's and match's text chat (Enter, or R2/L2 on a pad), or hide it.",
     }
 }
 
@@ -164,6 +168,10 @@ impl Settings {
             MatchMusic => self.0[2] = !self.0[2],
             Downloads => self.0[UPSCALED_DOWNLOADS] = !self.0[UPSCALED_DOWNLOADS],
             OnlineMods => self.4 = cycle(&ASK_VALUES.map(|(a, _)| a), self.4, d),
+            Chat => {
+                self.0[CHAT] = !self.0[CHAT];
+                crate::chat::HIDDEN.store(!self.0[CHAT], std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -190,6 +198,7 @@ impl Settings {
             MatchMusic => on_off(self.0[2]),
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
+            Chat => on_off(self.0[CHAT]),
         }
     }
 }
@@ -245,7 +254,7 @@ pub(super) fn hub_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         1 => "Quality preset, resolution, shadows, anti-aliasing, frame limit, vsync and textures.",
         2 => "The volumes, and music in the menus and in a match.",
         3 => "Change the keys and buttons (controls.txt).",
-        4 => "What the mod store and online lobbies download.",
+        4 => "What the mod store and online lobbies download, and online chat.",
         _ => "Back to the main menu.",
     });
 }
