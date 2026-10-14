@@ -237,6 +237,10 @@ pub struct Room {
     /// A vanilla lobby: the host allows no mods, so every seat plays a disc character (mod picks are refused).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vanilla: bool,
+    /// B322: the host's short code once it's online (empty until then, or with none), so a guest's lobby shows the
+    /// same code and QR as the host's and can pass the lobby on. Never the long ticket (B224).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub short: String,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -1633,6 +1637,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             Some(c) = rolled.recv() => {
                 code = c;
                 cx.say(Event::Short(code.clone().unwrap_or_default()));
+                // B322: the guests show it too
+                room.short = code.clone().unwrap_or_default();
+                broadcast(&joined, &Msg::Room(room.clone()));
+                cx.say(Event::Room(room.clone()));
                 cx.say(Event::Status(if code.is_some() { "Waiting for players..." } else { "No short code (no internet?): players on this network find the lobby with Find." }.into()));
                 dirty = true;
             }
@@ -3370,6 +3378,7 @@ mod tests {
             assert!(connect(&gcx, other, &mut nrx).await.is_none());
             assert!(matches!(next(&gev, |e| matches!(e, Event::Failed(_))).await, Event::Failed(f) if f.contains(other)));
             let joining = format!("Joining {code}...");
+            let shown = code.clone();
             tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
             // B268: the status names the dialled code, not the host's endpoint ID
             next(&gev, |e| matches!(e, Event::Status(s) if *s == joining)).await;
@@ -3385,6 +3394,8 @@ mod tests {
             hcmd.send(Cmd::Venue(2, 1, 4, 3)).unwrap();
             let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 2 && r.picking.is_empty())).await else { unreachable!() };
             assert_eq!((seen.seats[1].as_ref().unwrap().pick.char, seen.seats[1].as_ref().unwrap().pick.costume, seen.umpire), (5, 1, 3));
+            // B322: the guest's lobby has the host's short code to pass on
+            assert_eq!(seen.short, shown);
             // B215: everyone ready; B292: two seats still open, so no countdown until the host's Start
             gcmd.send(Cmd::Prepared(true)).unwrap();
             next(&hev, |e| matches!(e, Event::Room(r) if r.ready.contains(&guest))).await;
