@@ -160,7 +160,16 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Rebind" } else { "Back" }), (Act::Back, "Back")]);
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
-        Screen::Assign if host => v.extend([(Act::Ok, "Start"), (Act::Back, "Back")]),
+        Screen::Assign if host => {
+            v.push((Act::UpDown, "Pick"));
+            if m.host_swap(false).is_some() || m.host_swap(true).is_some() {
+                v.push((Act::LeftRight, "Swap"));
+            }
+            if m.droppable(m.sel.min(m.players() - 1)) {
+                v.push((Act::Page, "Remove"));
+            }
+            v.extend([(Act::Ok, "Start"), (Act::Back, "Back")]);
+        }
         Screen::Assign => {
             let n = m.players();
             let room = |q: usize| m.seats[q].is_none() && !(m.online() && q >= m.local_max());

@@ -600,15 +600,37 @@ impl Menu {
         }
     }
 
-    /// B238: whether seat `p` has a device that ✕ may take off: not this machine's first (the menu's driver).
+    /// B238: whether seat `p` has a device that ✕ may take off: not this machine's first (the menu's driver), except
+    /// on the assignment screen while another device is seated, which then moves up into it (changing 1P).
     fn droppable(&self, p: usize) -> bool {
-        matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && self.seats.iter().position(Option::is_some) != Some(p)
+        let dev = |s: &Option<Dev>| matches!(s, Some(Dev::Keys | Dev::Pad(_)));
+        let first = self.seats.iter().position(Option::is_some) == Some(p);
+        dev(&self.seats[p]) && (!first || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
+    }
+
+    /// The seats 1P's ←/→ (`right`) trades on the assignment screen: the focused one and its neighbour that way,
+    /// unless that would leave 1P empty or changes nothing.
+    fn host_swap(&self, right: bool) -> Option<(usize, usize)> {
+        let n = self.players();
+        let p = self.sel.min(n - 1);
+        let q = if right { (p + 1) % n } else { (p + n - 1) % n };
+        let empties_1p = q == 0 && self.seats[p].is_none() || p == 0 && self.seats[q].is_none();
+        (!empties_1p && self.seats[p] != self.seats[q]).then_some((p, q))
     }
 
     /// B238: seat `p`'s device off it: free in the assignment, held open on the select for another device to join.
     fn drop_seat(&mut self, p: usize) -> bool {
         if !self.droppable(p) {
             return false;
+        }
+        if p == 0 && self.screen == Screen::Assign {
+            // the next seated device becomes 1P (the menu's driver)
+            let n = self.players();
+            self.seats[..n].rotate_left(1);
+            self.seats[n - 1] = None;
+            let q = self.seats[..n].iter().position(Option::is_some).unwrap_or(0);
+            self.seats[..n].swap(0, q);
+            return true;
         }
         self.seats[p] = if self.screen == Screen::Chars { Some(Dev::Open) } else { None };
         self.unready(p);
@@ -745,6 +767,18 @@ impl Menu {
                         } else {
                             self.go(Screen::Chars, &mut out);
                         }
+                    } else if k.up || k.down {
+                        // 1P focuses a seat to swap or take off
+                        rows(n, &mut self.sel, &mut out);
+                    } else if k.left || k.right {
+                        // the focused seat's device trades places with the next seat that way (1P is never left empty)
+                        if let Some((p, q)) = self.host_swap(k.right) {
+                            self.seats.swap(p, q);
+                            self.sel = q;
+                            out.push(Sound(0));
+                        }
+                    } else if k.page && self.drop_seat(self.sel.min(n - 1)) {
+                        out.push(Sound(1));
                     } else if k.back {
                         self.seats[1..].fill(None);
                         self.screen = match self.net.go {
@@ -1900,7 +1934,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                     drop_button(&mut d, p, 482.0, y + 14.0);
                 }
             }
-            d.info(&format!("{} Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
+            d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off. Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
         }
         Screen::Chars => chars(&mut d, m, text),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
@@ -1986,11 +2021,6 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         d.q(Tex::Solid, [0.0; 4], [rx - 26.0, ry - 20.0, 52.0, 40.0], [110.0, 100.0, 90.0], 128.0);
         d.q(C02, RANDOM_TILE, [rx - 24.0, ry - 18.0, 48.0, 36.0], tint, 128.0);
         d.hit([rx - 26.0, ry - 20.0, 52.0, 40.0], pointer::Act::Cell(CHARS));
-        let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
-        d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
-        if !m.mods.is_empty() {
-            d.hit([170.0, 155.0, 300.0, 20.0], pointer::press(|k| k.page = true));
-        }
     }
     let panels: [[f32; 2]; 4] = if m.doubles { [[16.0, 56.0], [16.0, 240.0], [480.0, 56.0], [480.0, 240.0]] } else { [[16.0, 56.0], [480.0, 56.0], [0.0; 2], [0.0; 2]] };
     for p in 0..n {
@@ -2646,6 +2676,7 @@ fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>,
 pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin))
         .add_systems(Startup, (setup, load_bgm, cursor::setup))
+        .add_systems(PreUpdate, pointer::mouse_idle.after(bevy::input::InputSystems))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
@@ -2676,7 +2707,6 @@ mod tests {
         let mut g = [[0u8; 5]; 14];
         (g[0], g[1], g[2], g[3]) = ([1, 1, 1, 5, 2], [2, 2, 3, 3, 3], [4, 4, 4, 1, 4], [3, 3, 3, 1, 3]);
         let row = |s: &str| s.split(',').map(String::from).collect::<Vec<_>>();
-        .add_systems(PreUpdate, pointer::mouse_idle.after(bevy::input::InputSystems))
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,4,4,3"), 0, csv, &g), g[0]);
         // serve 7 → character 1's grade; stroke 9 → mean of 4 and 3 rounds to 4; volley 3 is the base's; Impact, Footwork base
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,7,9,3"), 0, csv, &g), [2, 4, 1, 5, 2]);
@@ -2995,7 +3025,6 @@ mod tests {
         assert_eq!(m.seats, [Some(Dev::Keys), Some(pa), Some(pb), None]);
         // B238: the ✕ on 2P (tapped, played as 1P's device): its seat is free, another device joins it
         m.point(Dev::Keys, pointer::Act::Drop(1), true);
-        assert!(!m.point(Dev::Keys, pointer::Act::Drop(0), true).contains(&Effect::Sound(1))); // 1P's own stays
         assert_eq!(m.seats, [Some(Dev::Keys), None, Some(pb), None]);
         m.step(pa, ok);
         assert_eq!(m.seats[1], Some(pa));
@@ -3023,6 +3052,32 @@ mod tests {
         m.step(Dev::Keys, press(|p| &mut p.back));
         m.step(Dev::Keys, press(|p| &mut p.back));
         assert_eq!((m.screen, m.seats), (Screen::Assign, [Some(Dev::Keys), Some(pa), None, None]));
+    }
+
+    #[test]
+    fn dropping_1p_moves_the_next_device_up() {
+        let pa = Dev::Pad(Entity::from_raw_u32(5).unwrap());
+        let mut m = Menu { screen: Screen::Assign, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        assert!(!m.droppable(0)); // alone: stays
+        m.step(pa, press(|p| &mut p.ok));
+        assert!(m.point(Dev::Keys, pointer::Act::Drop(0), true).contains(&Effect::Sound(1)));
+        assert_eq!(m.seats, [Some(pa), None, None, None]);
+        m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P
+        assert_eq!(m.seats[..2], [Some(pa), Some(Dev::Keys)]);
+        // 1P focuses 2P and swaps it back up, then takes the pad off
+        m.step(pa, press(|p| &mut p.down));
+        m.step(pa, press(|p| &mut p.left));
+        assert_eq!((&m.seats[..2], m.sel), (&[Some(Dev::Keys), Some(pa)][..], 0));
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!(m.seats[..2], [Some(Dev::Keys), None]);
+        m.step(Dev::Keys, press(|p| &mut p.right)); // an empty seat never goes to 1P
+        assert_eq!(m.seats[0], Some(Dev::Keys));
+        m.step(pa, press(|p| &mut p.ok));
+        m.step(pa, press(|p| &mut p.ok));
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert_eq!(m.screen, Screen::Chars);
+        assert!(!m.droppable(0)); // the select's driver stays
     }
 
     #[test]
