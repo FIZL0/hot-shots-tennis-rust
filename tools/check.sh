@@ -14,7 +14,7 @@ until for i in $(seq 0 $((n - 1))); do exec 9>"$lock.$i"; flock -n 9 && break 2;
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$jobs}
 # 9>&-: cargo mustn't inherit the lock, or the sccache server it starts holds it forever
 cargo test -j "$jobs" -q --message-format=short "$@" >"$log" 2>&1 9>&- && {
-  echo "TESTS PASSED: $(grep -o '[0-9]* passed' "$log" | awk '{s+=$1} END{print s+0}') tests"; exit 0; }
+  echo "TESTS PASSED: $(grep -ao '[0-9]* passed' "$log" | awk '{s+=$1} END{print s+0}') tests"; exit 0; }
 if grep -q '^test result: FAILED' "$log"; then
   echo "TESTS FAILED (this is a test result, the build is fine):"
   awk '/^failures:$/{f++; next} f==1 && !/^note: run with/ && NF' "$log"
