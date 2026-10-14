@@ -90,7 +90,9 @@ fn hush(mut g: ResMut<Game>, p: Res<Pace>) {
 fn pace(g: Res<Game>, mut p: ResMut<Pace>, mut virt: ResMut<Time<Virtual>>, mut fixed: ResMut<Time<Fixed>>) {
     let p = &mut *p;
     if !g.instant.replaying {
-        if p.replay.take().is_some() {
+        // B198: also when a rollback or resync restored a state from before the replay (no `replay` to take) with
+        // the clock still slowed or sped up, else this peer crawls at 1/31 speed until the next replay
+        if p.replay.take().is_some() || virt.relative_speed() != 1.0 {
             virt.set_relative_speed(1.0);
             virt.set_max_delta(Duration::from_millis(250));
         }

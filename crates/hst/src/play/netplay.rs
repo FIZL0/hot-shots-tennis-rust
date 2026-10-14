@@ -1522,6 +1522,123 @@ mod tests {
             }
         }
 
+        /// B198: rollback peers (as `paced`, one gate call a round) over a bad network: each datagram lost with
+        /// probability `loss`, the rest `lag` rounds on their way (the match's messages too, never lost: a stream),
+        /// one bigger than [`crate::net::DATAGRAM_MAX`] lost always (as iroh's), and nothing at all through the
+        /// rounds in `outage`. A round in which no peer runs a tick takes a 60th of a second of real time (ggrs
+        /// resends on its clock). Each peer's ticks run after every round, and the biggest datagram sent.
+        fn lossy(two: bool, loss: f64, lag: u32, down: u32, oneway: bool) -> (Vec<App>, Vec<Vec<usize>>, usize, std::ops::Range<u32>) {
+            let mut room = room(0);
+            let names: &[&str] = if two { &["host", "g"] } else { &["host", "h", "g", "k"] };
+            if !two {
+                for (s, p) in [(1, "h"), (2, "g"), (3, "k")] {
+                    room.seats[s].as_mut().unwrap().peer = p.into();
+                }
+            }
+            let mut apps: Vec<App> = names.iter().map(|&me| {
+                let mut a = app(&room, me);
+                a.insert_resource(Rollback::new(&room, me, step as fn(&mut _)).unwrap());
+                a
+            }).collect();
+            let mut ran = vec![Vec::new(); apps.len()];
+            let (mut wire, mut big) = (Vec::<(usize, u32, Event)>::new(), 0);
+            let mut rng = 0x2545_f491_4f6c_dd1du64;
+            let mut lost = move || {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                (rng >> 11) as f64 / (1u64 << 53) as f64 <= loss
+            };
+            let mut outage = u32::MAX..u32::MAX;
+            for round in 0.. {
+                // the outage 2 s after every session is running (ggrs' handshake, over the lossy network, first)
+                if outage.start == u32::MAX && apps.iter().all(|a| a.world().resource::<Rollback>().sess.current_state() == ggrs::SessionState::Running) {
+                    outage = round + 120..round + 120 + down;
+                }
+                if round == outage.end.saturating_add(300) {
+                    break;
+                }
+                let t0 = std::time::Instant::now();
+                for (to, at, e) in std::mem::take(&mut wire) {
+                    if at <= round {
+                        take(apps[to].world_mut(), e);
+                    } else {
+                        wire.push((to, at, e));
+                    }
+                }
+                let before: Vec<usize> = apps.iter().map(|a| a.world().resource::<Rollback>().frame()).collect();
+                for i in 0..apps.len() {
+                    let w = apps[i].world_mut();
+                    rollback::gate(w);
+                    let me = w.resource::<Netplay>().me.clone();
+                    for (to, d) in rollback::outgoing(w) {
+                        big = big.max(d.len());
+                        if (outage.contains(&round) && (!oneway || i == 0)) || lost() || !crate::net::fits(&d) {
+                            continue;
+                        }
+                        let j = names.iter().position(|n| **n == to).unwrap();
+                        wire.push((j, round + lag, Event::Datagram(me.clone(), d)));
+                    }
+                    let out = std::mem::take(&mut w.resource_mut::<Netplay>().out);
+                    for j in (0..names.len()).filter(|&j| j != i) {
+                        wire.extend(out.iter().map(|m| (j, round + lag, Event::Match(m.clone()))));
+                    }
+                    ran[i].push(apps[i].world().resource::<Rollback>().frame());
+                }
+                if apps.iter().zip(&before).all(|(a, &b)| a.world().resource::<Rollback>().frame() == b) {
+                    std::thread::sleep(std::time::Duration::from_micros(16_667).saturating_sub(t0.elapsed()));
+                }
+            }
+            (apps, ran, big, outage)
+        }
+
+        /// B198's acceptance: 2 or 4 peers, 20 % of datagrams lost and 150 ms round trip, then for 3 s nothing gets
+        /// through (`oneway`: nothing from the host): every peer's ticks go on within a second of the network
+        /// coming back (no mutual wait), and between, nobody waits a second; all in sync, no datagram too big.
+        fn on_a_bad_network(two: bool, oneway: bool) {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (apps, ran, big, outage) = lossy(two, 0.2, 5, 180, oneway);
+            for (i, f) in ran.iter().enumerate() {
+                // the longest run of rounds without a tick once every session is running, outside the outage and
+                // its first second after
+                let (mut still, mut worst) = (0, 0);
+                for r in outage.start as usize - 120..f.len() {
+                    still = if f[r] == f[r - 1] { still + 1 } else { 0 };
+                    if !(outage.start..outage.end + 60).contains(&(r as u32)) {
+                        worst = worst.max(still);
+                    }
+                }
+                let rb = apps[i].world().resource::<Rollback>();
+                eprintln!("peer {i}: {} ticks, longest wait {worst} rounds, {} held, {} re-run, biggest datagram {big} bytes", f[f.len() - 1], rb.held, rb.reruns);
+                assert!(worst < 60, "peer {i} waited {worst} rounds");
+            }
+            let logs: Vec<_> = apps.iter().map(|a| a.world().resource::<Netplay>()).collect();
+            let n = logs.iter().map(|np| np.lock.log.len()).min().unwrap() - rollback::WINDOW;
+            assert!(n > 400, "only {n} ticks in step");
+            for np in &logs {
+                assert_eq!((np.end.as_deref(), np.desynced), (None, false), "{}", np.me);
+                assert_eq!(np.lock.log[..n], logs[0].lock.log[..n], "{} ran other pads", np.me);
+            }
+        }
+
+        #[test]
+        fn two_peers_on_a_bad_network() {
+            on_a_bad_network(true, false);
+        }
+
+        #[test]
+        fn four_peers_on_a_bad_network() {
+            on_a_bad_network(false, false);
+        }
+
+        /// Only the host's datagrams lost for 3 s: its unacked inputs pile up past ggrs' 128.
+        #[test]
+        fn a_one_way_outage() {
+            on_a_bad_network(true, true);
+        }
+
         /// What a tick costs (the match tick, the snapshot ggrs keeps, a state hash): sets `rollback::WINDOW`.
         /// `cargo test --release -p hst rollback_tick_cost -- --ignored --nocapture`
         #[test]
