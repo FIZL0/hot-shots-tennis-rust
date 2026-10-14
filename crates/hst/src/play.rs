@@ -4078,9 +4078,9 @@ fn camera(
     own: Option<Res<own_camera::OwnCam>>,
     time: Res<Time<Fixed>>,
     window: Query<&Window>,
-    mut q: Query<(&mut Orbit, &mut Projection)>,
+    mut q: Query<(&mut Orbit, &mut Projection, &mut Transform)>,
 ) {
-    let Ok((mut o, mut proj)) = q.single_mut() else {
+    let Ok((mut o, mut proj, mut tf)) = q.single_mut() else {
         return;
     };
     // between the last two ticks' views
@@ -4093,6 +4093,8 @@ fn camera(
     o.pitch = pitch;
     o.yaw = yaw;
     o.focus = eye - Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z * o.radius;
+    // this frame's view: the base's `orbit` already ran (before every mode's Update, B288)
+    *tf = o.transform();
     if let Projection::Perspective(p) = &mut *proj {
         // never show less than the game's 4:3 picture: windows narrower than 4:3 widen vertically
         let aspect = window

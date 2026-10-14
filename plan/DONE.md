@@ -457,6 +457,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B284** Lola's spin does not show properly (bug, user 2026-10-13): her spin (spin shot effect / animation) draws wrong. Ask the user which spin if unclear; compare with the original at the same moment (tools/screenshot.sh vs --shot) → effects.rs · character.rs (motions)
 - [x] **B280** Crocodile creature stays after being hit (bug, user 2026-10-13): when the ball hits the crocodile it does not disappear, and it shows up on the other side of the court. Compare with the original (it should leave after the hit) → play/npcs.rs · hst-sim npc.rs
 - [x] **B286** Footstep effects look too bright (user 2026-10-14): compare the foot dust/step marks with the original at the same moment (tools/screenshot.sh vs --shot) on a few courts and match brightness/alpha by eye → play/foot_fx.rs · effects.rs
+- [x] **B288** Online doubles: the camera is far too zoomed out on a match win that ends on the opposite side (user 2026-10-14): the winning shot / result screen camera frames the whole jungle with the players tiny (screenshot context/B288/zoomed-out.png). Check the closing camera (win cutaway / result) for the far-side team, online and local; compare with the original winning from the far end → play/cutaway.rs · play/replay_camera.rs · play/netplay.rs
 
 
 ### Shots
