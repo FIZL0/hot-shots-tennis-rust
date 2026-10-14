@@ -226,7 +226,18 @@ pub struct Room {
     /// B213: not listed (no DHT listing, no mDNS listing, so Find and Quickplay never see it): only a code joins.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub private: bool,
+    /// B281: peers with a mod they haven't chosen to download or not; after Start, the seconds left for them to
+    /// choose (0: no wait running), and the wait being over (a mod not chosen plays as its stand-in).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub deciding: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub wait: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stand_in: bool,
 }
+
+/// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
+pub static DECIDE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10_000);
 
 /// B201: one player's place on the character select, live: the disc character hovered (a mod's donor, with the mod's
 /// id and name), the costume, and whether they're ready on it. Only for showing; the match takes the seats' picks.
@@ -357,6 +368,7 @@ impl Room {
         }
         self.names.retain(|p, _| !away.contains(p));
         self.picking.retain(|p| !away.contains(p));
+        self.deciding.retain(|p| !away.contains(p));
         self.ready.clear();
         (self.rejoin, self.ver) = (false, self.ver + 1);
     }
@@ -366,6 +378,7 @@ impl Room {
         self.names.remove(peer);
         self.ready.remove(peer);
         self.picking.remove(peer);
+        self.deciding.remove(peer);
         self.live.remove(peer);
         for s in &mut self.seats {
             if s.as_ref().is_some_and(|s| s.peer == peer) {
@@ -483,6 +496,8 @@ pub enum Msg {
     /// owner in turn), and a peer has every mod's looks or stand-in settled for line-up `ver`.
     Want(u64),
     Ready(u32),
+    /// B281: a peer has (or no longer has) a mod it hasn't chosen to download or not.
+    Deciding(bool),
     /// In the lobby: a guest is ready to play (or not any more).
     Prepared(bool),
     /// B215: a guest stops the start's countdown.
@@ -661,6 +676,8 @@ pub enum Cmd {
     /// In the lobby: a mod's looks wanted (its pack hash), and this machine settled for the room's line-up `ver`.
     Want(u64),
     Ready(u32),
+    /// B281: this machine has (or no longer has) a mod it hasn't chosen to download or not.
+    Deciding(bool),
     /// In the lobby: a guest ready or not; the host starts the match (the open seats played by the computer) or takes a
     /// peer's players out.
     Prepared(bool),
@@ -1233,6 +1250,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut go = false;
     let mut count: Option<n0_future::time::Instant> = None;
     let mut auto = true;
+    // B281: after Start, until when the players still choosing about a mod may (then they get its stand-in)
+    let mut wait: Option<n0_future::time::Instant> = None;
     let mut ping = n0_future::time::interval(Duration::from_secs(1));
     // mods (M2i): the packs passed through, who waits for which, who has settled every mod's looks for this line-up
     let mut packs: Packs = Default::default();
@@ -1262,6 +1281,20 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             // a fresh round trip from everyone before the input delay is picked (3 s at most)
             broadcast(&joined, &Msg::Ping(micros(t0)));
             starting = Some((joined.iter().map(|(p, ..)| p.clone()).collect(), n0_future::time::Instant::now() + Duration::from_secs(3)));
+        }
+        // B281: Start waits DECIDE_MS for the players still choosing about a mod; none left or no start: no wait
+        let was = (room.wait, room.stand_in);
+        if !go || room.deciding.is_empty() {
+            wait = None;
+            room.wait = 0;
+        } else if wait.is_none() && !room.stand_in && starting.is_none() {
+            wait = Some(n0_future::time::Instant::now() + Duration::from_millis(DECIDE_MS.load(std::sync::atomic::Ordering::Relaxed)));
+            room.wait = left(wait);
+        }
+        room.stand_in &= go;
+        if was != (room.wait, room.stand_in) {
+            broadcast(&joined, &Msg::Room(room.clone()));
+            cx.say(Event::Room(room.clone()));
         }
         if dirty {
             dirty = false;
@@ -1372,6 +1405,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     dirty = true;
                 }
                 Guest::Said(peer, Msg::Ready(v)) if v == room.ver => drop(ready.insert(peer)),
+                Guest::Said(peer, Msg::Deciding(d)) => deciding(cx, &joined, &mut room, peer, d),
                 Guest::Said(peer, Msg::Prepared(p)) => {
                     let changed = if p { room.ready.insert(peer) } else { room.ready.remove(&peer) };
                     auto |= p;
@@ -1460,6 +1494,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 broadcast(&joined, &Msg::Room(room.clone()));
                 cx.say(Event::Room(room.clone()));
             }
+            // B281: the wait's next second, and at 0 the stand-ins for every mod still not chosen
+            _ = n0_future::time::sleep(next_second(wait)), if wait.is_some() => {
+                room.wait = left(wait);
+                if room.wait == 0 {
+                    (wait, room.stand_in) = (None, true);
+                }
+                broadcast(&joined, &Msg::Room(room.clone()));
+                cx.say(Event::Room(room.clone()));
+            }
             _ = tick.tick() => (dirty, republish) = (true, true),
             Some(c) = rolled.recv() => {
                 code = c;
@@ -1469,6 +1512,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             }
             c = cmds.recv() => match c {
                 Some(Cmd::Ready(v)) if v == room.ver => drop(ready.insert("host".into())),
+                Some(Cmd::Deciding(d)) => deciding(cx, &joined, &mut room, "host".into(), d),
                 Some(Cmd::Start) if count.is_none() && !go && starting.is_none() => {
                     auto = false;
                     count = Some(n0_future::time::Instant::now() + Duration::from_millis(COUNTDOWN_MS.load(std::sync::atomic::Ordering::Relaxed)));
@@ -1555,6 +1599,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Some(_) => {}
             },
         }
+    }
+}
+
+/// B281: `peer` still choosing about a mod (or not any more), shown to everyone.
+fn deciding(cx: &Ctx, joined: &[(String, Link, Conn)], room: &mut Room, peer: String, d: bool) {
+    if (d && room.names.contains_key(&peer) && room.deciding.insert(peer.clone())) || (!d && room.deciding.remove(&peer)) {
+        broadcast(joined, &Msg::Room(room.clone()));
+        cx.say(Event::Room(room.clone()));
     }
 }
 
@@ -1946,6 +1998,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Send(m)) => link.send(&m),
                 Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
                 Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
+                Some(Cmd::Deciding(d)) => link.send(&Msg::Deciding(d)),
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
                 Some(Cmd::Cancel) => link.send(&Msg::Cancel),
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
@@ -2841,6 +2894,61 @@ mod tests {
             assert_eq!(r.seats[0].as_ref().unwrap().pick.r#mod.as_ref().unwrap().looks, h);
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B281 on loopback: the guest hasn't chosen about the host's mod; Start shows them deciding with the wait
+    /// counting down, and at its end the stand-ins: the guest settles and the match starts.
+    #[test]
+    fn start_waits_for_a_mod_choice_then_gives_stand_ins() {
+        DECIDE_MS.store(2000, std::sync::atomic::Ordering::Relaxed);
+        let wire = crate::mods_online::Wire {
+            id: "x".into(), name: "X".into(), donor: 3, hand: 1.0, base: 3, overrides: vec![], ai_row: 3,
+            names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: 9, dir: None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), relays: false }, rx)
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick { r#mod: Some(Box::new(wire)), ..Pick::disc(3, 0) }]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.open() == 0)).await else { unreachable!() };
+            let guest = seen.seats[1].as_ref().unwrap().peer.clone();
+            gcmd.send(Cmd::Deciding(true)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.deciding.contains(&guest))).await;
+            hcmd.send(Cmd::Ready(seen.ver)).unwrap();
+            hcmd.send(Cmd::Start).unwrap();
+            // the countdown, then the wait shown to the guest; no start meanwhile
+            next(&gev, |e| matches!(e, Event::Room(r) if r.wait > 0 && !r.stand_in)).await;
+            let Event::Room(over) = next(&gev, |e| matches!(e, Event::Room(r) if r.stand_in) || matches!(e, Event::Start(..))).await else {
+                panic!("started before the wait was over")
+            };
+            assert_eq!(over.wait, 0);
+            // the guest takes the stand-in (the menu's `settle`) and says so
+            gcmd.send(Cmd::Deciding(false)).unwrap();
+            gcmd.send(Cmd::Ready(over.ver)).unwrap();
+            next(&gev, |e| matches!(e, Event::Start(..))).await;
+        });
     }
 
     /// B216 on loopback: the host's computer player on a mod (in costume 2): the guest sees its wire, gets its looks

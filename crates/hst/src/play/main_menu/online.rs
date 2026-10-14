@@ -52,6 +52,8 @@ pub struct View {
     pub wanted: HashSet<u64>,
     pub ask: Option<u64>,
     pub ready: Option<u32>,
+    /// B281: what this machine last told the host about still choosing about a mod.
+    pub deciding: bool,
     /// This machine hosts the lobby; as a guest, it said it's ready.
     pub hosting: bool,
     pub prepared: bool,
@@ -418,7 +420,7 @@ impl Menu {
         self.net.status.clear();
         self.net.room = None;
         self.net.started = false;
-        (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared) = (None, None, false, false);
+        (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared, self.net.deciding) = (None, None, false, false, false);
         self.net.wanted.clear();
         self.net.pick_next = true;
         self.net.fail = None;
@@ -795,6 +797,12 @@ impl Menu {
     fn settle(&mut self, iso: &str, net: &Net) {
         let Some(room) = self.net.room.clone().filter(|_| !self.net.started) else { return };
         let cache = mo::cache(iso);
+        // B281: the host's wait is over: the mod still asked about plays as its stand-in
+        if room.stand_in
+            && let Some(h) = self.net.ask.take()
+        {
+            self.net.looks.insert(h, None);
+        }
         for (_, w) in room.mods() {
             let h = w.looks;
             if self.net.looks.contains_key(&h) || self.net.wanted.contains(&h) || self.net.ask == Some(h) {
@@ -810,6 +818,7 @@ impl Menu {
                     net.send(Cmd::Want(h));
                 }
                 Ask::Never => drop(self.net.looks.insert(h, None)),
+                _ if room.stand_in => drop(self.net.looks.insert(h, None)),
                 _ if self.net.ask.is_none() => (self.net.ask, self.sel) = (Some(h), 0),
                 _ => {}
             }
@@ -818,6 +827,11 @@ impl Menu {
             self.net.ready = Some(room.ver);
             net.send(Cmd::Ready(room.ver));
         }
+    }
+
+    /// B281: a mod in the lobby this machine hasn't chosen to download or not (asked, or not asked yet).
+    fn undecided(&self) -> bool {
+        self.net.room.as_ref().filter(|_| !self.net.started).is_some_and(|r| r.mods().any(|(_, w)| !self.net.looks.contains_key(&w.looks) && !self.net.wanted.contains(&w.looks)))
     }
 
     /// A mod's looks arrived: checked and kept, or refused (a stand-in plays it).
@@ -841,6 +855,12 @@ fn relay_name(cfg: &Online) -> String {
 /// The name `peer`'s player gave (its ID's start if none).
 fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
+}
+
+/// B281: after Start, who the match waits for to choose about a mod, and for how long.
+fn waiting(r: &Room) -> String {
+    let who: Vec<String> = r.deciding.iter().map(|p| name_of(r, p)).collect();
+    format!("Waiting for {} to choose whether to download a mod: {} s, then a stand-in plays it.", who.join(", "), r.wait)
 }
 
 fn court_name(text: &super::Text, c: usize) -> String {
@@ -1033,6 +1053,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         // B201: the computer's level, from its character and costume as the select's rank pill
                         let level = super::RANK_NAMES.get(super::com_rank(&text.ranks, s.pick.char, s.pick.costume, r.doubles)).copied().unwrap_or("COM");
                         (format!("COM #{} · {level}", s.pick.costume + 1), ("COM", Some(super::CHIP_COM)))
+                    } else if r.deciding.contains(&s.peer) {
+                        // B281: still choosing whether to download a mod
+                        (name_of(r, &s.peer), ("Deciding", None))
                     } else if s.peer == "host" {
                         (name_of(r, "host"), ("Host", Some(super::CHIP_HOST)))
                     } else if r.ready.contains(&s.peer) {
@@ -1064,7 +1087,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     super::side_button(d, rect, r.0, m.sel == i, false);
                     d.hit(rect, Act::Row(i, OK));
                 }
-                super::help_line(d, col, room.is_some_and(|r| r.doubles), "Get its looks, or play it as its donor in odd colours.");
+                let help = match room.filter(|r| r.wait > 0) {
+                    Some(r) => format!("The match is waiting: choose in {} s, or it plays as its donor in odd colours.", r.wait),
+                    None => "Get its looks, or play it as its donor in odd colours.".into(),
+                };
+                super::help_line(d, col, room.is_some_and(|r| r.doubles), &help);
                 return;
             }
             if let Some(r) = room {
@@ -1132,6 +1159,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 }
             }
             let info = match items.get(m.sel) {
+                _ if let Some(r) = room.filter(|r| r.wait > 0) => waiting(r),
                 _ if m.counting() > 0 => format!("The match starts in {}... Cancel stops it for everyone.", m.counting()),
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 // B201: the host's open and computer seats, and the singles / doubles switch
@@ -1254,8 +1282,14 @@ pub(super) fn poll(
             }
             menu.heard(e);
         }
-        if menu.screen == Screen::Lobby {
+        // B281: once the host's wait is over, settled on any screen (stand-ins: no prompt, no cursor moved)
+        if menu.screen == Screen::Lobby || menu.net.room.as_ref().is_some_and(|r| r.stand_in) {
             menu.settle(&args.iso, &net);
+        }
+        let d = menu.undecided();
+        if d != menu.net.deciding {
+            menu.net.deciding = d;
+            net.send(Cmd::Deciding(d));
         }
         // B201: everyone's places on the select into its panels, and this machine's out when they move
         menu.align();
@@ -1405,6 +1439,12 @@ pub(super) fn sample(m: &mut Menu) {
         r.ready.clear();
         (m.net.hosting, m.net.me, m.net.go) = (false, peers[0].into(), Some(Go::Code));
         m.align();
+    }
+    // B281: the host pressed Start; Sunny Day is still choosing about a mod
+    if menu == "lobby-wait" {
+        let r = m.net.room.as_mut().unwrap();
+        r.deciding.insert(peers[0].into());
+        r.wait = 7;
     }
     if std::env::var("HST_MENU").as_deref() == Ok("lobby-ask") {
         // 2P brought a mod this machine doesn't have: the prompt
