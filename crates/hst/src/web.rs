@@ -456,8 +456,13 @@ pub fn mod_drop(id: &str) {
     }
 }
 
+/// Reloads the page once its mod saves and removals in OPFS are done (B338: a reload right after a store install cut
+/// the save short and the mod didn't come in).
 pub fn reload() {
-    let _ = web_sys::window().unwrap().location().reload();
+    match page_fn("hstReload") {
+        Some(f) => drop(f.call0(&JsValue::NULL)),
+        None => drop(web_sys::window().unwrap().location().reload()),
+    }
 }
 
 /// M17: a mod the store installed (in memory) written to OPFS by the page, which then reports it (`mod_status`).

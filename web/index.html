@@ -310,7 +310,17 @@ async function start() {
   const pick = document.getElementById('modzip');
   window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `${r[1]}%`, width: `${r[2]}%`, height: `${r[3]}%` }); };
   window.hstModPick = () => pick.click();
-  window.hstModDrop = id => mods.removeEntry(id, { recursive: true }).catch(e => console.warn(`hst: removing mod ${id}: ${e}`));
+  // B338: the OPFS writes and removals under way; Reload (web.rs reload) waits for them, a save cut short by the
+  // reload is a folder without its mod.json, dropped at the next start (the mod "didn't come in")
+  const pending = new Set();
+  const track = p => { pending.add(p); p.finally(() => pending.delete(p)).catch(() => {}); return p; };
+  window.hstReload = async () => {
+    const until = Date.now() + 120000;
+    if (pending.size) { boot.hidden = false; say('Saving mods before reloading…'); }
+    while (pending.size && Date.now() < until) await Promise.race([Promise.allSettled([...pending]), new Promise(r => setTimeout(r, until - Date.now()))]);
+    location.reload();
+  };
+  window.hstModDrop = id => track(mods.removeEntry(id, { recursive: true }).catch(e => console.warn(`hst: removing mod ${id}: ${e}`)));
   pick.onchange = async () => {
     const f = pick.files[0];
     pick.value = '';
@@ -324,7 +334,7 @@ async function start() {
   // B227: the store reads a download's parts straight from it (modstore.rs ranged); B204's whole zip is gone
   dir.removeEntry('mod-download.zip').catch(() => {});
   // an installed mod (a picked zip, or one the mod store downloaded, M17) from the game into OPFS mods/<id>/
-  window.hstModSave = async (id, name) => {
+  const save = async (id, name) => {
     mod_status(`Saving ${name}...`);
     try {
       await mods.removeEntry(id, { recursive: true }).catch(() => {});
@@ -352,6 +362,7 @@ async function start() {
       mod_status(`Couldn't save ${name} in this browser's storage: ${e}`);
     }
   };
+  window.hstModSave = (id, name) => track(save(id, name));
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
