@@ -254,6 +254,16 @@ fn show(m: &mut Motion, id: usize, frame: f32, looping: bool) {
     m.clock.sampled = frame;
 }
 
+/// Pin each trigger creature's clip back on its own frame after a `character::tick` that `step` doesn't follow (the
+/// intro's, B180): only `step` moves them, so a ball-struck prop stays standing until a ball hits it.
+pub(super) fn hold_triggers(npcs: Option<Res<Npcs>>, mut q: Query<&mut Motion>) {
+    for (e, t, _) in npcs.iter().flat_map(|n| &n.triggers) {
+        if let Ok(mut m) = q.get_mut(*e) {
+            (m.prev, m.clock.sampled) = (t.frame, t.frame);
+        }
+    }
+}
+
 fn step(
     mut g: ResMut<Game>,
     npcs: Option<ResMut<Npcs>>,

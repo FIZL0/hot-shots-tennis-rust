@@ -314,9 +314,10 @@ fn hold(w: &mut World) {
 /// stance (0x20, bouncing the ball on the stance's ball track), the others their ready stance, and the match starts
 /// with those clocks where the intro left them. Only the drawn motions and the held ball's spot (rewritten every
 /// tick before the toss; the toss leaves from the player's matrix, `serve::toss_points`), so the sim and its RNG
-/// are as the setup left them.
+/// are as the setup left them. The court's creatures and props stay on their own frame (B180: the tick would run a
+/// ball-struck prop's topple clip on a loop).
 fn pose_players(w: &mut World) {
-    for r in [w.run_system_cached(super::motions), w.run_system_cached(crate::character::tick), w.run_system_cached(super::held_ball)] {
+    for r in [w.run_system_cached(super::motions), w.run_system_cached(crate::character::tick), w.run_system_cached(super::npcs::hold_triggers), w.run_system_cached(super::held_ball)] {
         if let Err(e) = r {
             warn!("intro pose: {e}");
         }
