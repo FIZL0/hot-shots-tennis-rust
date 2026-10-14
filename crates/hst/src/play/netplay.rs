@@ -424,10 +424,6 @@ pub(super) fn run_on(w: &mut World, now: [Pad; 4], last: [Pad; 4]) {
     }
 }
 
-/// The "waiting" / end text.
-#[derive(Component)]
-struct Say;
-
 fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
     let Some(np) = np else { return };
     if np.room.lockstep {
@@ -439,17 +435,6 @@ fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
     }
     // the match reads only the pads the gate hands it
     commands.insert_resource(Replay(Default::default()));
-    commands.spawn((
-        Say,
-        Text::new(""),
-        // the 448-line screen's 20 px, at any window size
-        TextFont { font_size: bevy::text::FontSize::Vh(20.0 / 448.0 * 100.0), ..default() },
-        TextColor(Color::WHITE),
-        TextLayout::justify(bevy::text::Justify::Center),
-        TextShadow::default(),
-        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), top: Val::Percent(38.0), justify_content: JustifyContent::Center, ..default() },
-        GlobalZIndex(50),
-    ));
 }
 
 /// Each frame: the network, the pause going out, the stall/end text, and closing the match after the end.
@@ -490,10 +475,14 @@ fn watch(w: &mut World) {
     };
     let close = np.ended > END;
     pump(w);
-    let mut q = w.query_filtered::<&mut Text, With<Say>>();
-    for mut t in q.iter_mut(w) {
-        if t.0 != text {
-            t.0 = text.clone();
+    // B196a: in the pause dialog's window (`main_menu/pause.rs`), the bot-or-lobby question on its pills
+    let ask = w.resource::<Netplay>().recover.ask_me && w.resource::<Netplay>().end.is_none();
+    if let Some(mut n) = w.get_resource_mut::<super::main_menu::pause::OnlineNotice>() {
+        if ask && !n.ask {
+            n.sel = 0;
+        }
+        if n.text != text || n.ask != ask {
+            (n.text, n.ask) = (text, ask);
         }
     }
     if close {
@@ -1419,13 +1408,14 @@ mod tests {
                 return eprintln!("no ISO, skipped");
             }
             let (kill, s) = (600, |x: f32| (x * 60.0) as u32);
-            let mut said = Vec::new();
+            let (mut said, mut asked) = (Vec::new(), Vec::new());
             let apps = peers(false, kill + s(recover::SILENT + recover::WAIT) + 1200, |round, apps, live| {
                 if round == kill {
                     live[2] = false;
                 }
                 if round == kill + s(recover::SILENT) + 30 || round == kill + s(recover::SILENT + recover::WAIT) + 30 {
                     said.push([0, 1].map(|i| notice(&mut apps[i])));
+                    asked.push([0, 1].map(|i| apps[i].world().resource::<Netplay>().recover.ask_me));
                 }
                 if round == kill + s(recover::SILENT + recover::WAIT) + 60 {
                     press(&mut apps[0], KeyCode::Enter);
@@ -1434,6 +1424,8 @@ mod tests {
             eprintln!("{said:#?}");
             assert!(said[0].iter().all(|t| t.starts_with("Waiting for g to come back... 2")), "{:?}", said[0]);
             assert!(said[1].iter().all(|t| t.starts_with("g didn't come back.")), "{:?}", said[1]);
+            // B196a: the waiting has no choice; then both machines left get the pills
+            assert_eq!(asked, [[false; 2], [true; 2]]);
             let base = in_step(&[&apps[0], &apps[1]], 600);
             assert!(base > kill as usize - 30 && base <= kill as usize + rollback::WINDOW, "restarted at {base}");
             for a in &apps[..2] {
