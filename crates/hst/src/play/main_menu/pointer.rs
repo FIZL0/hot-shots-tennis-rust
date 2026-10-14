@@ -367,11 +367,7 @@ pub(super) mod tests {
         let mut m = Menu::default();
         tap(&mut m, 150.0, 69.0); // Local (B297: the left list): straight to the roster (B331)
         assert_eq!(m.screen, Screen::Chars);
-        // the mode bar over the roster swaps Singles ↔ Doubles
-        let [sx, sy, sw, _] = m.grid.strip;
-        tap(&mut m, sx + sw - 60.0, sy - 19.0);
-        assert!(m.doubles);
-        tap(&mut m, sx + sw - 60.0, sy - 19.0);
+        // B361: the mode bar over the roster only shows the mode (singles for one device)
         assert!(!m.doubles);
         // a face (B296: roster cell 1 + its place in the disc grid, after the Random card): 1P moves there and is
         // ready; then the face for the computer's pick
