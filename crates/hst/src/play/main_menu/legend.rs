@@ -160,7 +160,16 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Rebind" } else { "Back" }), (Act::Back, "Back")]);
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
-        Screen::Assign if host => v.extend([(Act::Ok, "Start"), (Act::Back, "Back")]),
+        Screen::Assign if host => {
+            // B216: 1P's seat cursor and its computer player
+            if !m.online() {
+                v.push((Act::Move, "Seat"));
+            }
+            if m.can_bot(s) {
+                v.push((Act::Card, if m.bots[s] { "Remove COM" } else { "Add COM" }));
+            }
+            v.extend([(Act::Ok, "Start"), (Act::Back, "Back")]);
+        }
         Screen::Assign => {
             let n = m.players();
             let room = |q: usize| m.seats[q].is_none() && !(m.online() && q >= m.local_max());
@@ -190,6 +199,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             if me.ready {
                 v.push((Act::Back, "Cancel"));
+            } else if m.online() && m.net.edit == Some(p) {
+                v.push((Act::Back, "Back"));
             } else if m.seats[p].is_none() && m.players.iter().take(m.players()).any(|q| q.ready) {
                 v.push((Act::Back, "Back"));
             } else if m.seats[p] == Some(dev) && m.droppable(p) {
@@ -239,7 +250,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let (ud, lr) = m.pill_axes();
             if m.lobby_bot() {
                 moves(&mut v, (ud, false));
-                v.extend([(Act::LeftRight, "Character"), (Act::Costume, "Costume")]);
+                v.extend([(Act::LeftRight, "Character"), (Act::Costume, "Costume"), (Act::Card, "Remove")]);
             } else {
                 moves(&mut v, (ud, lr));
             }
