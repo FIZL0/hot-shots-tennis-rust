@@ -200,9 +200,12 @@ pub(super) const FONT: [&str; 15] = [
 
 /// The enhancements, each on or off (all on by default), the graphics settings, the volumes (B235) and the aspect
 /// ratio (B117, a `widescreen::ASPECTS` index) and what to do with an online lobby's mods (B289: the lobby's
-/// prompt asks, or its "Download, always" / "Never download" answer), saved in `settings.txt`.
+/// prompt asks, or its "Download, always" / "Never download" answer) and the browser build's renderer (B273, a
+/// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 6], Graphics, Volumes, u8, Ask);
+pub struct Settings([bool; 6], Graphics, Volumes, u8, Ask, u8);
+/// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
+const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
 const SETTING_NAMES: [&str; 6] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat"];
@@ -224,7 +227,7 @@ fn default_aspect() -> u8 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each)
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0)
     }
 }
 
@@ -235,6 +238,8 @@ impl Settings {
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
             if k.trim() == "online_mods" {
                 s.4 = Ask::parse(v).unwrap_or(s.4);
+            } else if k.trim() == "renderer" {
+                s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
                 aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
             } else if k.trim() == "widescreen" {
@@ -259,7 +264,12 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text()
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line()
+    }
+
+    /// B273: the renderer is the browser build's alone.
+    fn renderer_line(&self) -> String {
+        if cfg!(target_arch = "wasm32") { format!("renderer = {}\n", RENDERERS[self.5 as usize]) } else { String::new() }
     }
 
     pub(crate) fn path(iso: &str) -> std::path::PathBuf {
@@ -1447,7 +1457,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each);
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0);
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
         let mut s = Settings::parse(&t);
         // B289: an older build kept the lobby prompt's answer in the online mod cache
@@ -2661,6 +2671,8 @@ fn step(
                     if let Err(e) = crate::store::write(&path, menu.settings.text()) {
                         warn!("{}: {e}", path.display());
                     }
+                    #[cfg(target_arch = "wasm32")]
+                    crate::web::renderer(RENDERERS[menu.settings.5 as usize]);
                 }
                 Effect::Quit => {
                     exit.write(AppExit::Success);
@@ -2913,13 +2925,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each);
+        let s = Settings([true, false, false, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -2927,10 +2939,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -2940,7 +2952,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true], d, Volumes::default(), 1, Ask::Each).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true], d, Volumes::default(), 1, Ask::Each, 0).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]

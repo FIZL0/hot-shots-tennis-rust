@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -35,6 +35,8 @@ pub(super) enum Opt {
     OnlineMods,
     /// M20: online chat shown.
     Chat,
+    /// B273: the browser build's renderer.
+    Renderer,
 }
 use Opt::*;
 
@@ -46,8 +48,9 @@ pub(super) fn tab(page: Screen) -> usize {
     TABS.iter().position(|(_, s)| *s == page).unwrap_or(0)
 }
 
-/// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row.
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Aspect, ShowFps, KeyHints] } else { &[Display, Aspect, ShowFps, KeyHints] };
+/// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
+/// Renderer instead (B273).
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, ShowFps, KeyHints] } else { &[Display, Aspect, ShowFps, KeyHints] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -97,6 +100,7 @@ fn label(o: Opt) -> &'static str {
         Downloads => "Upscaled Downloads",
         OnlineMods => "Online Mod Downloads",
         Chat => "Chat",
+        Renderer => "Renderer",
     }
 }
 
@@ -124,6 +128,7 @@ fn about(o: Opt) -> &'static str {
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         Chat => "Show the online lobby's and match's text chat (Enter, or R2/L2 on a pad), or hide it.",
+        Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
     }
 }
 
@@ -195,6 +200,7 @@ impl Settings {
                 self.0[CHAT] = !self.0[CHAT];
                 crate::chat::HIDDEN.store(!self.0[CHAT], std::sync::atomic::Ordering::Relaxed);
             }
+            Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
         }
     }
 
@@ -221,6 +227,7 @@ impl Settings {
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
             Chat => on_off(self.0[CHAT]),
+            Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
         }
     }
 }

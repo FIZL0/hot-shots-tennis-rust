@@ -149,15 +149,31 @@ if (answer) await new Promise(() => {});
 navigator.serviceWorker?.register('sw.js').catch(() => {});
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
-// (`?webgl2` forces it).
+// (`?webgl2` forces it), or Settings → Display → Renderer (B273: `renderer` in settings.txt, which the game keeps in
+// localStorage, web.rs): WebGL2, or WebGPU (no WebGL2 retry when it fails; the error's Try WebGL2 link still is).
 say('Checking graphics…');
+let renderer = 'auto';
+try { renderer = /^renderer\s*=\s*(\w+)/m.exec(localStorage.getItem('./settings.txt') ?? '')?.[1] ?? 'auto'; } catch {}
 // an adapter request that never answers counts as none (WebGL2) after 5 s
-const adapter = navigator.gpu && Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]);
+const adapter = renderer !== 'webgl2' && navigator.gpu ? Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]) : null;
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
-console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
+console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'} (renderer setting: ${renderer})`);
 if (!webgpu) document.getElementById('gl').hidden = true;
+// the setting changed in the game: the page reloads into that build (without a `?webgl2`) once it's been left alone
+// for 1.5 s, so stepping past a value doesn't reload; back on the value it started with, nothing happens
+let reloading;
+window.hstRenderer = word => {
+  clearTimeout(reloading);
+  if (word === renderer) return;
+  reloading = setTimeout(() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.has('webgl2')) return location.reload();
+    q.delete('webgl2');
+    location.search = q.toString();
+  }, 1500);
+};
 window.hstWebGL2 = why => {
-  if (!webgpu) return false;
+  if (!webgpu || renderer === 'webgpu') return false;
   console.warn(`hst: WebGPU stopped (${why ?? 'before the first frame'}), reloading with WebGL2`);
   const q = new URLSearchParams(location.search);
   q.set('webgl2', '');

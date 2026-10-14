@@ -212,6 +212,14 @@ pub fn touch_menu(on: bool) {
     }
 }
 
+/// B273: the renderer setting saved (`auto`, `webgpu`, `webgl2`): the page reloads into that build once it's left
+/// alone for a moment (a no-op when it's the one running).
+pub fn renderer(word: &str) {
+    if let Some(f) = page_fn("hstRenderer") {
+        let _ = f.call1(&JsValue::NULL, &word.into());
+    }
+}
+
 /// B247: the page is played by touch (a touch screen, or touched once; `web/touch.js`).
 pub fn touched() -> bool {
     page_fn("hstTouched").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy())
