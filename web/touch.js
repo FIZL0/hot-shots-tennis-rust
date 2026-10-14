@@ -136,22 +136,28 @@ const set = (k, on) => {
 const settle = k => {
   if (!held[k].size && buttons[B[k]].pressed && seenAt[k] !== undefined && tick > seenAt[k]) set(k, false);
 };
-// each pointer tracked on its own (B165): a second finger on a button neither re-presses it nor lets it go when it lifts
+// each finger tracked on its own (B165): a second finger on a button neither re-presses it nor lets it go when it lifts
+const press = (k, id) => {
+  held[k].add(id);
+  // ponytail: a tap landing while the last one still waits on its frame merges with it (taps < 2 frames apart)
+  if (!buttons[B[k]].pressed) set(k, true);
+  else root.querySelector(`[data-b="${k}"]`).classList.add('on');
+};
+const lift = (k, id) => {
+  if (!held[k].delete(id)) return;
+  if (!held[k].size) root.querySelector(`[data-b="${k}"]`).classList.remove('on');
+  settle(k);
+};
+// a mouse or pen (`?touch` on a desktop); fingers come through the touch events below
 for (const el of root.querySelectorAll('button')) {
   const k = el.dataset.b;
   el.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
     e.preventDefault();
     el.setPointerCapture(e.pointerId);
-    held[k].add(e.pointerId);
-    // ponytail: a tap landing while the last one still waits on its frame merges with it (taps < 2 frames apart)
-    if (!buttons[B[k]].pressed) set(k, true);
-    else el.classList.add('on');
+    press(k, `p${e.pointerId}`);
   });
-  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, e => {
-    held[k].delete(e.pointerId);
-    if (!held[k].size) el.classList.remove('on');
-    settle(k);
-  });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, e => lift(k, `p${e.pointerId}`));
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
 // B165: no browser gesture (pinch zoom, double-tap zoom, scroll) out of two fingers on the controls; iOS Safari can
@@ -166,38 +172,80 @@ const knob = zone.querySelector('.knob');
 let stick = null;
 const place = (el, x, y) => { el.style.left = `${x}px`; el.style.top = `${y}px`; };
 const centre = el => { el.style.left = el.style.top = '50%'; };
-zone.addEventListener('pointerdown', e => {
+const stickDown = (id, x, y) => {
   if (stick) return;
-  e.preventDefault();
-  zone.setPointerCapture(e.pointerId);
   const r = zone.getBoundingClientRect();
   // in the menus the stick sits still: its centre is the zone's
-  stick = menu ? { id: e.pointerId, x: r.width / 2, y: r.height / 2 } : { id: e.pointerId, x: e.clientX - r.left, y: e.clientY - r.top };
+  stick = menu ? { id, x: r.width / 2, y: r.height / 2 } : { id, x: x - r.left, y: y - r.top };
   place(base, stick.x, stick.y);
   place(knob, stick.x, stick.y);
   base.hidden = knob.hidden = false;
-});
-zone.addEventListener('pointermove', e => {
-  if (stick?.id !== e.pointerId) return;
+};
+const stickMove = (id, x, y) => {
+  if (stick?.id !== id) return;
   const r = zone.getBoundingClientRect();
   const R = base.offsetWidth / 2;
-  let dx = e.clientX - r.left - stick.x, dy = e.clientY - r.top - stick.y;
+  let dx = x - r.left - stick.x, dy = y - r.top - stick.y;
   const d = Math.hypot(dx, dy);
   if (d > R) (dx *= R / d), (dy *= R / d);
   place(knob, stick.x + dx, stick.y + dy);
   pad.axes[0] = dx / R;
   pad.axes[1] = dy / R;
   stamp();
-});
-const release = e => {
-  if (stick?.id !== e.pointerId) return;
+};
+const stickUp = id => {
+  if (stick?.id !== id) return;
   stick = null;
   base.hidden = knob.hidden = !menu;
   if (menu) centre(knob);
   pad.axes[0] = pad.axes[1] = 0;
   stamp();
 };
-for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEventListener(t, release);
+zone.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') return;
+  e.preventDefault();
+  zone.setPointerCapture(e.pointerId);
+  stickDown(`p${e.pointerId}`, e.clientX, e.clientY);
+});
+zone.addEventListener('pointermove', e => stickMove(`p${e.pointerId}`, e.clientX, e.clientY));
+for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEventListener(t, e => stickUp(`p${e.pointerId}`));
+
+// B274: fingers by their touch events, each by its own `identifier` and only from `changedTouches`. Phones' pointer
+// events for a second finger were where two controls at once still blocked (a lift or cancel lost, or a pointer
+// re-targeted); touch events are what iOS has always delivered per finger. A touch keeps the control it landed on
+// (its `target`) until it lifts, wherever it slides.
+const control = new Map(); // touch identifier -> button key, or 'stick'
+root.addEventListener('touchstart', e => {
+  for (const t of e.changedTouches) {
+    const el = t.target instanceof Element ? t.target.closest('button, .zone') : null;
+    if (!el || control.has(t.identifier)) continue;
+    if (el === zone) {
+      if (stick) continue;
+      control.set(t.identifier, 'stick');
+      stickDown(t.identifier, t.clientX, t.clientY);
+    } else {
+      control.set(t.identifier, el.dataset.b);
+      press(el.dataset.b, t.identifier);
+    }
+  }
+}, { passive: false });
+root.addEventListener('touchmove', e => {
+  for (const t of e.changedTouches) if (control.get(t.identifier) === 'stick') stickMove(t.identifier, t.clientX, t.clientY);
+}, { passive: false });
+const letGo = id => {
+  const k = control.get(id);
+  control.delete(id);
+  if (k === 'stick') stickUp(id);
+  else if (k) lift(k, id);
+};
+// every touch event lists the fingers still down (`touches`): one that's gone without its own end (a cancel sent
+// elsewhere, a system gesture) lets its control go too, so nothing stays held or taken
+addEventListener('touchend', e => { for (const t of e.changedTouches) letGo(t.identifier); }, true);
+addEventListener('touchcancel', e => { for (const t of e.changedTouches) letGo(t.identifier); }, true);
+for (const t of ['touchstart', 'touchend', 'touchcancel']) addEventListener(t, e => {
+  const down = new Set([...e.touches].map(t => t.identifier));
+  for (const id of [...control.keys()]) if (!down.has(id)) letGo(id);
+}, true);
 
 // shown on touch screens (or after any touch) while no real controller is connected; `?touch` forces them on
 let touched = coarse.matches || new URLSearchParams(location.search).has('touch');
@@ -211,7 +259,7 @@ let menu = false;
 window.hstTouchMenu = on => {
   menu = on;
   root.classList.toggle('menu', on);
-  if (stick) release({ pointerId: stick.id });
+  if (stick) stickUp(stick.id);
   base.hidden = knob.hidden = !on;
   if (on) [base, knob].forEach(centre);
 };
@@ -221,7 +269,11 @@ const update = () => {
   if (want !== shown) {
     shown = want;
     root.hidden = !want;
-    if (!want) for (const k in B) held[k].clear(), buttons[B[k]].pressed && set(k, false);
+    if (!want) {
+      control.clear();
+      if (stick) stickUp(stick.id);
+      for (const k in B) held[k].clear(), buttons[B[k]].pressed && set(k, false);
+    }
   }
 };
 const frame = () => {
