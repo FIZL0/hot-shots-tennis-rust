@@ -417,6 +417,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B251** Tall windows (aspect < 4:3) stretch the custom characters roster to show more columns instead of letterboxing it at the 4:3 width (B232); wide windows already do (B190) — crates/hst/src/play/main_menu.rs Grid::fit, play/widescreen.rs
 - [x] **B253** Ball-hit effect stretches into place oddly when it appears (user 2026-10-13): compare its first frames (scale/stretch, position, timing) with the original via tools/screenshot.sh vs --shot at the same contact and match by eye — crates/hst/src/effects.rs (hit_fx.rs is its test)
 - [x] **B292** Lobby: don't autostart a match while seats are still open, even when every joined player is ready (wait for the host's Start or a full lobby)
+- [x] **B278** Emotes cut short by the ready stance, and emoting after a point / fault (user 2026-10-13): an emote stops as soon as the player goes into the ready stance; let it play out (or until the next real action). Make sure emotes also work in the post-point time and after a fault (between first and second serve). Presentation only: no effect on the sim RNG or match timing → play/emote.rs · play.rs (ready stance / motions) | with B252, B270
 
 
 ### Shots

@@ -1,8 +1,8 @@
 //! Right-stick emotes (B145, ours, layered on top): a human flicks the right stick fully up / down / left / right
 //! (keys 1–4) and their player plays one of four of the character's own motions with its voice line, standing: no
 //! run, no stroke and no swing press until the motion is out. A ball that comes meanwhile goes by unhit — that's the
-//! cost. Only between points' starts and ends: in a rally, waiting for a serve, or serving before the toss (not
-//! mid-stroke, not reacting to a point). The flick is part of the match input (`tick_input`'s right stick bytes),
+//! cost. In a rally, waiting for a serve, serving before the toss and in the post-point time (after a fault too),
+//! not mid-stroke; the point's reaction ends one, the next point's placement doesn't (B278). The flick is part of the match input (`tick_input`'s right stick bytes),
 //! so replays and online play see it alike; bots never emote. Nothing here draws from the match's generators.
 
 use bevy::prelude::*;
@@ -33,7 +33,12 @@ pub(super) fn flick(v: Vec2) -> Option<u8> {
 pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
     // the server too, until its toss (B228: online the host is 1P, who serves first)
     let serving = g.phase == Phase::Serve && g.score.server == i as i32;
-    let open = g.phase == Phase::Rally || g.phase == Phase::Serve && (!serving || g.serving.toss.is_none());
+    // B278: the post-point time too (a fault's or let's call included); the reaction (`react`) ends an emote
+    let open = match g.phase {
+        Phase::Rally | Phase::Post => true,
+        Phase::Serve => !serving || g.serving.toss.is_none(),
+        Phase::ChangeEnds(_) => false,
+    };
     if !open {
         g.players[i].emote = 0;
         return false;
@@ -93,7 +98,8 @@ fn idle(g: &Game, i: usize) -> bool {
         && p.served.is_none()
         && p.follow.is_none()
         && p.wait_swing.is_none()
-        && p.root.is_none()
+        // a played-out reaction may be followed by an emote (its root has stopped moving the player)
+        && (p.root.is_none() || p.played)
         && !super::bodyhit::standing(g, i)
 }
 
@@ -216,23 +222,29 @@ mod match_tests {
                 assert!(phase == Phase::Rally && pressed, "the press after the emote did nothing");
             }
         }
-        // the same flick as the serve comes: it goes by unhit and the point's end clears the lock
+        // the same flick as the serve comes: it goes by unhit, and the point's end doesn't cut it (B278): the
+        // emote plays on into the post-point time until it's out or the reaction takes over
         let mut pads = vec![[IDLE; 4]; n];
         pads[rally + 2][1] = flick;
         pads[rally + 10][1] = cross;
         let mut a = app(pads);
-        let (mut emoted, mut ended) = (false, None);
+        let (mut emoted, mut ended, mut last) = (false, None, 0);
         for t in 0..n {
-            let (_, emote, pressed, _, phase) = step(&mut a);
+            let (_, emote, pressed, motion, phase) = step(&mut a);
             assert!(!pressed, "pressed while emoting, tick {t}");
             emoted |= emote > 0;
             if let Some(e) = ended {
-                assert_eq!(emote, 0, "the lock outlived the point (ended {e})");
-                return eprintln!("emote {len} ticks, rally from {rally}, the point ended at {e}, {} ticks in", e - rally - 2);
-            }
-            if emoted && phase != Phase::Rally {
+                let reacted = a.world().resource::<Game>().post.as_ref().is_some_and(|p| p.reacted);
+                if emote == 0 {
+                    assert!(last == 1 || reacted, "the emote was cut at tick {t} ({last} left, point ended {e})");
+                    return eprintln!("emote {len} ticks, rally from {rally}, the point ended at {e}, emote out at {t}, reacted {reacted}");
+                }
+                assert_eq!((emote, motion), (last - 1, MOTIONS[0]), "tick {t}");
+            } else if emoted && phase != Phase::Rally {
+                assert!(emote > 0, "the emote was out before the point ended");
                 ended = Some(t);
             }
+            last = emote;
         }
         panic!("the point never ended");
     }
@@ -314,5 +326,50 @@ mod match_tests {
                 assert_eq!(hidden, own_clip && (at..at + len - 1).contains(&t), "own clip {own_clip}, tick {t}");
             }
         }
+    }
+
+    /// B278: 1P tosses and swings as the ball drops past (a whiff: a fault), and emotes in the call's post-point time: the emote plays out
+    /// through the serve's placement into the next serve, the server's ball in hand, then the stance comes back.
+    #[test]
+    fn an_emote_after_a_fault_plays_on_into_the_second_serve() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let flick = Pad { rx: 0, ry: 0x80, ..IDLE };
+        let cross = Pad { buttons: 0x2000, ..IDLE };
+        let n = 900;
+        let post = {
+            let mut pads = vec![[IDLE; 4]; n];
+            (pads[10][0], pads[134][0]) = (cross, cross);
+            let mut a = seated([true, false, false, false], pads);
+            (0..n).find(|_| {
+                a.world_mut().run_schedule(FixedUpdate);
+                a.world().resource::<Game>().phase == Phase::Post
+            })
+            .expect("the fault's call")
+        };
+        let len = seated([true, false, false, false], vec![]).world().resource::<Game>().data[0].motions[&MOTIONS[2]].length.ceil() as usize;
+        let at = post + 3;
+        let mut pads = vec![[IDLE; 4]; n];
+        (pads[10][0], pads[134][0]) = (cross, cross);
+        pads[at][0] = flick;
+        let mut a = seated([true, false, false, false], pads);
+        let mut served = None;
+        for t in 0..at + len + 5 {
+            a.world_mut().run_schedule(FixedUpdate);
+            let g = a.world().resource::<Game>();
+            let p = &g.players[0];
+            if served.is_none() && g.phase == Phase::Serve && t > at {
+                served = Some(t);
+            }
+            if (at..at + len).contains(&t) {
+                assert_eq!((p.emote as usize, p.cmd.id), (at + len - 1 - t, MOTIONS[2]), "tick {t}, {:?}", g.phase);
+            }
+        }
+        let g = a.world().resource::<Game>();
+        let s = served.expect("no serve after the call");
+        assert!(s < at + len, "the call outlasted the emote ({s} ≥ {}): nothing crossed the placement", at + len);
+        assert!(g.phase == Phase::Serve && (0x20..=0x22).contains(&g.players[0].cmd.id), "no stance after the emote: {:#x}", g.players[0].cmd.id);
+        eprintln!("call at {post}, emote {at}..{}, serve from {s}, faults {}", at + len, g.rally.faults);
     }
 }
