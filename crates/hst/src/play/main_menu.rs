@@ -1979,7 +1979,8 @@ fn ticker_text(
     let (bar_w, bar_h) = (width / 100.0 * vs.x, height / 100.0 * vs.y);
     // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
     let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
-    let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 2.0 * unit, cap);
+    // B325: 3 units clear above and below, so even two lines' descenders stay off the legend strip under the bar
+    let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 6.0 * unit, cap);
     let em = p / 0.6;
     font.font_size = bevy::text::FontSize::Px(em);
     node.left = Val::Px(ticker_x_in(ticker.1, bar_w / unit + 16.0) * unit);
