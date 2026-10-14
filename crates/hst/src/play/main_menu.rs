@@ -201,9 +201,10 @@ pub(super) const FONT: [&str; 15] = [
 /// The enhancements, each on or off (all on by default), the graphics settings, the volumes (B235) and the aspect
 /// ratio (B117, a `widescreen::ASPECTS` index) and what to do with an online lobby's mods (B289: the lobby's
 /// prompt asks, or its "Download, always" / "Never download" answer) and the browser build's renderer (B273, a
-/// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage), saved in `settings.txt`.
+/// `RENDERERS` index; web/index.html reads it from settings.txt in localStorage) and the confirm screen's last umpire
+/// pick (B191: `UMPIRES` is Random, the first-time and fallback choice), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 6], Graphics, Volumes, u8, Ask, u8);
+pub struct Settings([bool; 6], Graphics, Volumes, u8, Ask, u8, u8);
 /// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
 const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
@@ -227,7 +228,7 @@ fn default_aspect() -> u8 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0)
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8)
     }
 }
 
@@ -238,6 +239,8 @@ impl Settings {
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
             if k.trim() == "online_mods" {
                 s.4 = Ask::parse(v).unwrap_or(s.4);
+            } else if k.trim() == "umpire" {
+                s.6 = v.trim().parse().ok().filter(|&u| u as usize <= UMPIRES).unwrap_or(UMPIRES as u8);
             } else if k.trim() == "renderer" {
                 s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
@@ -264,7 +267,7 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line()
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6)
     }
 
     /// B273: the renderer is the browser build's alone.
@@ -429,7 +432,7 @@ impl Default for Menu {
             court: COURTS, // Random
             sets: 0,
             games: 4,
-            umpire: 4,
+            umpire: UMPIRES as u8, // B191: Random until a pick is saved
             roll: 0,
             rebinding: None,
             mods: Vec::new(),
@@ -1030,6 +1033,11 @@ impl Menu {
                 if k.ok {
                     self.picking = None;
                     out.push(Sound(2));
+                    // B191: the umpire pick is the next confirm screen's (and the next run's) starting choice
+                    if self.sel != 1 && self.settings.6 != self.umpire {
+                        self.settings.6 = self.umpire;
+                        out.push(SaveSettings);
+                    }
                 } else if k.back {
                     let v = self.picking.take().unwrap_or_default();
                     if self.sel == 1 { self.court = v } else { self.umpire = v as u8 }
@@ -1457,7 +1465,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0);
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8);
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
         let mut s = Settings::parse(&t);
         // B289: an older build kept the lobby prompt's answer in the online mod cache
@@ -1467,6 +1475,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         s
     });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
+    menu.umpire = menu.settings.6;
     // back from a match: its pause menu may have changed them (B126)
     if let Ok(s) = saved {
         menu.settings = s;
@@ -2870,6 +2879,7 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Effect::*;
 
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]
@@ -2943,13 +2953,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0);
+        let s = Settings([true, false, false, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -2957,10 +2967,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -2970,7 +2980,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true], d, Volumes::default(), 1, Ask::Each, 0).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]
@@ -3115,7 +3125,8 @@ mod tests {
         assert_eq!(flag("--chars"), "0,1,0,2");
         assert_eq!(flag("--outfits"), "0,0,1,0");
         assert_eq!(flag("--pads"), "k,1,-,-");
-        assert_eq!((flag("--umpire"), flag("--sets"), flag("--games")), ("4".into(), "1".into(), "4".into()));
+        assert_eq!((flag("--sets"), flag("--games")), ("1".into(), "4".into()));
+        assert!(flag("--umpire").parse::<usize>().unwrap() < UMPIRES, "B191: Random by default, thrown at Start");
         assert!(!a.contains(&"--singles".to_string()));
         // B66: a character with no free costume is passed over by left/right/up/down (one-costume mods, 4 a row:
         // 1 and 4 taken), never stopped on
@@ -3195,9 +3206,18 @@ mod tests {
             m.step(Dev::Keys, press(|p| &mut p.down));
         }
         m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, press(|p| &mut p.left)); // B191: Random by default → umpire 4
+        assert_eq!(m.step(Dev::Keys, ok), [Sound(2), SaveSettings]);
+        assert_eq!((m.umpire, Settings::parse(&m.settings.text()).6), (4, 4), "the pick is saved");
+        m.step(Dev::Keys, ok);
         m.step(Dev::Keys, press(|p| &mut p.right)); // umpire 4 → Random
         m.step(Dev::Keys, ok);
         assert_eq!(m.umpire as usize, UMPIRES);
+        assert_eq!(Settings::parse(&m.settings.text()).6 as usize, UMPIRES);
+        // an older settings.txt (no umpire line) or an unknown value: Random
+        for t in ["", "umpire = 9\n", "umpire = lily\n"] {
+            assert_eq!(Settings::parse(t).6 as usize, UMPIRES, "{t:?}");
+        }
         let mut seen = std::collections::HashSet::new();
         for _ in 0..200 {
             (m.screen, m.sel) = (Screen::Confirm, 0);
