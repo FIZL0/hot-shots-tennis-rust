@@ -28,6 +28,20 @@ pub(super) fn flick(v: Vec2) -> Option<u8> {
     })
 }
 
+/// B271: the browser's touch pad (web/touch.js) has no right stick, so its L1 / R1 stand in for the left / right
+/// flick, held as a stick is. Only that pad: a real pad's shoulders never emote.
+pub(super) fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
+    name.is_some_and(|n| is_touch(n))
+        .then(|| [(GamepadButton::LeftTrigger, 2), (GamepadButton::RightTrigger, 3)].into_iter().find(|(b, _)| g.pressed(*b)))
+        .flatten()
+        .map(|(_, d)| d)
+}
+
+/// The touch pad's id (web/touch.js `pad.id`), as gilrs names it.
+fn is_touch(name: &str) -> bool {
+    name.starts_with("Touch controls")
+}
+
 /// Human player `i`'s turn while it may emote: `start` is this tick's new flick. True while the emote holds the
 /// player (`control` skips its turn).
 pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
@@ -145,6 +159,7 @@ mod tests {
 
     #[test]
     fn flicks() {
+        assert!(is_touch("Touch controls (STANDARD GAMEPAD)") && !is_touch("Xbox Controller"));
         assert_eq!([Vec2::Y, -Vec2::Y, -Vec2::X, Vec2::X, Vec2::new(0.5, 0.5), Vec2::ZERO].map(flick), [Some(0), Some(1), Some(2), Some(3), None, None]);
     }
 
