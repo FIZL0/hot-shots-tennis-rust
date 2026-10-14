@@ -13,6 +13,10 @@
 //!
 //! The same pass skips any other court object of categories 17–20 the eye is buried in (`buried`): a cut-away
 //! camera standing in a flower bed or bush doesn't show it filling the lens.
+//!
+//! B303: a cut-away follows a player who ended the point off court into the props behind it (Alpine Heights' tables,
+//! fences and carved horses), which the test above doesn't hide (thin, partly in front, or no collision mesh), so a
+//! tree or prop whose box comes right up in front of the lens is hidden too (`in_front`).
 
 use bevy::prelude::*;
 use hst_sim::camera::View;
@@ -30,6 +34,13 @@ pub struct HideNearCamera;
 pub struct HideAroundEye {
     pub pos: [f32; 3],
     pub prop: Option<Option<usize>>,
+}
+
+/// A tree or prop model with its box in game space (B303's fallback, `in_front`).
+#[derive(Component)]
+pub struct NearBox {
+    pub lo: Vec3,
+    pub hi: Vec3,
 }
 
 pub fn plugin(app: &mut App) {
@@ -63,6 +74,19 @@ pub fn buried(v: &View, models: &[hst_sim::mesh::Model], o: &hst_sim::mesh::Obje
     })
 }
 
+/// Whether the box `lo..hi` comes within r/2 of the lens' line out to 3r ahead of the eye (r as `buried`, at least 1):
+/// the model would fill most of the view.
+/// ponytail: by eye, not the original's (its cut-aways have no obstacle check, so it shows these too); sampled along
+/// the line, a box thinner than the step between samples can slip through.
+pub fn in_front(v: &View, lo: Vec3, hi: Vec3) -> bool {
+    let r = (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0);
+    let (e, f) = (Vec3::from(v.eye), Vec3::from(v.rot[2]));
+    (0..=12).any(|i| {
+        let p = e + f * (3.0 * r * i as f32 / 12.0);
+        p.clamp(lo, hi).distance(p) <= r / 2.0
+    })
+}
+
 /// The plant the game picks: category 17 and its ground position within 1 m of the centre.
 pub fn picked(category: u8, pos: [f32; 3]) -> bool {
     category == 17 && pos[0].hypot(pos[2]) < 1.0
@@ -89,7 +113,7 @@ fn hide(g: Res<Game>, own: Option<Res<super::own_camera::OwnCam>>, d: Option<Res
 }
 
 /// Runs on the drawn camera (any mode: match, cut-away, replay, own camera, `HST_EYE`) once it has moved.
-fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection), With<crate::Orbit>>, window: Query<&Window>, mut q: Query<(&mut HideAroundEye, &mut Visibility)>) {
+fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection), With<crate::Orbit>>, window: Query<&Window>, mut q: Query<(Option<&mut HideAroundEye>, Option<&NearBox>, &mut Visibility), Or<(With<HideAroundEye>, With<NearBox>)>>) {
     let (Some(g), Ok((t, proj))) = (g, camera.single()) else { return };
     let Projection::Perspective(p) = proj else { return };
     // game space is Bevy's turned a half-turn about X; the horizontal fov as `fixed_eye` sets the vertical one
@@ -97,16 +121,18 @@ fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection)
     let (e, f) = (t.translation * Vec3::new(1.0, -1.0, -1.0), *t.forward() * Vec3::new(1.0, -1.0, -1.0));
     let view = View { rot: [[0.0; 3], [0.0; 3], f.to_array()], eye: e.to_array(), fov: ((p.fov / 2.0).tan() / 0.75f32.max(1.0 / aspect)).atan() };
     let world = &g.world.0;
-    for (mut h, mut v) in &mut q {
-        let pos = h.pos;
-        // the prop whose placement takes the plant's ground position to its model origin
-        let prop = *h.prop.get_or_insert_with(|| {
-            world.props.iter().position(|o| {
-                let m = hst_sim::vu0::transform(&o.to_model, [pos[0], pos[1], pos[2], 1.0]);
-                m[0].abs() + m[1].abs() + m[2].abs() < 1e-3
-            })
-        });
-        let hidden = prop.is_some_and(|i| buried(&view, &world.models, &world.props[i]));
+    for (h, near, mut v) in &mut q {
+        let hidden = h.is_some_and(|mut h| {
+            let pos = h.pos;
+            // the prop whose placement takes the plant's ground position to its model origin
+            let prop = *h.prop.get_or_insert_with(|| {
+                world.props.iter().position(|o| {
+                    let m = hst_sim::vu0::transform(&o.to_model, [pos[0], pos[1], pos[2], 1.0]);
+                    m[0].abs() + m[1].abs() + m[2].abs() < 1e-3
+                })
+            });
+            prop.is_some_and(|i| buried(&view, &world.models, &world.props[i]))
+        }) || near.is_some_and(|b| in_front(&view, b.lo, b.hi));
         v.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
     }
 }
@@ -156,5 +182,17 @@ mod tests {
             assert_eq!(gone, if court == 8 { vec![54] } else { vec![] }, "court {court} match camera");
         }
         assert!(tested(17, [0, 0, 0, 0]) && tested(20, *b"ab1\0") && !tested(18, *b"ab0\0") && !tested(16, [0; 4]));
+    }
+
+    /// B303: a table 1.5 m ahead of a cut-away's lens is hidden, one 5 m ahead or off to the side isn't; the match
+    /// camera's narrower view reaches further.
+    #[test]
+    fn props_in_front() {
+        let cut = view([0.0, -1.0, 0.0], [0.0, 0.0, 1.0], 51.4);
+        let table = |z: f32, x: f32| (Vec3::new(x - 0.4, -0.8, z - 0.4), Vec3::new(x + 0.4, 0.0, z + 0.4));
+        let hit = |v: &View, (lo, hi): (Vec3, Vec3)| in_front(v, lo, hi);
+        assert!(hit(&cut, table(1.5, 0.0)) && hit(&cut, table(2.0, 0.6)));
+        assert!(!hit(&cut, table(5.0, 0.0)) && !hit(&cut, table(1.5, 2.0)) && !hit(&cut, table(-1.0, 0.0)));
+        assert!(hit(&view([0.0, -1.0, 0.0], [0.0, 0.0, 1.0], 20.0), table(5.0, 0.0)));
     }
 }
