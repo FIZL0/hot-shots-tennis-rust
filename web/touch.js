@@ -199,8 +199,11 @@ const side = (index, far) => {
     const d = Math.hypot(dx, dy);
     if (d > R) (dx *= R / d), (dy *= R / d);
     place(knob, stick.x + dx, stick.y + dy);
-    pad.axes[0] = far ? -dx / R : dx / R;
-    pad.axes[1] = far ? -dy / R : dy / R;
+    // the match's sticks read in the screen's directions; in the menus the far one only drives the select, turned to
+    // face it (B118), so there it reads in its own
+    const turn = far && !menu ? -1 : 1;
+    pad.axes[0] = turn * dx / R;
+    pad.axes[1] = turn * dy / R;
     stamp();
   };
   const stickUp = id => {

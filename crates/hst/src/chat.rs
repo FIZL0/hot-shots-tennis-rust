@@ -2,7 +2,7 @@
 //! `net::Msg::Chat` through the host, which cleans it, rate-limits it and passes it on with the sender's lobby name;
 //! it never enters the match's input, so the sim, its generators and the replays never see it.
 //!
-//! The box: Enter opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
+//! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
 //! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
 //! themselves after a few seconds); a tap or click on Chat opens it on a touch page (the phone's keyboard). The last
 //! few lines show at the bottom left, fading out, over the menus and the HUD alike, taking no presses from the match.
@@ -155,9 +155,8 @@ fn input(
             chat.lines.push(Line { name, text, age: 0.0 });
         }
     }
-    let enter = [KeyCode::Enter, KeyCode::NumpadEnter];
     let tapped = !chat.open && tapped(&mut mouse, &mut touches, window.single().ok(), tap.single().ok().filter(|t| t.3.get()).map(|(n, at, t, _)| (n, at, t.physical_size().as_vec2())));
-    if !chat.open && (keys.any_just_pressed(enter) || tapped) {
+    if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped) {
         chat.open = true;
         typed.clear();
         keys.reset_all();
@@ -367,7 +366,7 @@ mod tests {
         }
     }
 
-    /// In a lobby, Enter opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
+    /// In a lobby, T opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
     #[test]
     fn enter_types_and_sends() {
         use bevy::input::{ButtonState, InputPlugin};
@@ -383,8 +382,8 @@ mod tests {
                 app.update();
             }
         };
-        key(&mut app, KeyCode::Enter, Key::Enter);
-        assert!(app.world().resource::<Chat>().open, "Enter opens the box");
+        key(&mut app, KeyCode::KeyT, Key::Character("t".into()));
+        assert!(app.world().resource::<Chat>().open, "T opens the box");
         key(&mut app, KeyCode::KeyH, Key::Character("h".into()));
         key(&mut app, KeyCode::KeyI, Key::Character("i".into()));
         assert!(!app.world().resource::<ButtonInput<KeyCode>>().get_just_pressed().any(|_| true), "the menus see no key");
