@@ -194,7 +194,7 @@ impl Menu {
         if k.ok && let Some((_, s)) = HUB.get(self.sel) {
             self.go(*s, out);
         } else if k.ok || k.back {
-            self.sel = 2;
+            self.sel = self.main_at(super::home::Row::Settings);
             self.screen = Screen::Main;
             out.push(Effect::Sound(1));
         }
@@ -321,7 +321,7 @@ mod tests {
         // Back on Settings: the main menu, on its Settings row
         let mut m = Menu { screen: Screen::Settings, sel: HUB.len(), ..default() };
         m.step(Dev::Keys, press(|k| &mut k.ok));
-        assert_eq!((m.screen, m.sel), (Screen::Main, 2));
+        assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Settings)));
     }
 
     /// B235: the sliders clamp to 0..=10 and the volumes round-trip settings.txt.

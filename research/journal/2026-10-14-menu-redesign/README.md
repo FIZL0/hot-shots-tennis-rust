@@ -10,3 +10,5 @@ Pause menu: the user asked for **only** one change there, showing the court name
 Tasks: main menu (list + preview panel, Rematch, 21:9 store column), character select (seat strip + one roster
 grid with filters + detail panel), lobby/confirm (seat rows by team + side card), settings (tabs + compact rows +
 detail panel), pause (court + umpire). All UI rules apply: any aspect ratio, scale uniformly, never stretch.
+
+- B297 main menu: `1-MAIN-MENU-FINAL.md`.

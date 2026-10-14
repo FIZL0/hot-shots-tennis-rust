@@ -352,7 +352,7 @@ pub(super) mod tests {
     #[test]
     fn taps_from_main_menu_to_match() {
         let mut m = Menu::default();
-        tap(&mut m, 320.0, 140.0); // Local
+        tap(&mut m, 150.0, 69.0); // Local (B297: the left list)
         assert_eq!(m.screen, Screen::Mode);
         tap(&mut m, 320.0, 240.0); // Doubles' bar: changes the mode and goes on
         assert_eq!((m.screen, m.doubles), (Screen::Assign, true));
@@ -392,9 +392,10 @@ pub(super) mod tests {
     #[test]
     fn hover_then_click_and_arrows() {
         let mut m = Menu::default();
-        let a = act_at(&m, 320.0, 120.0 + 88.0 + 19.0).unwrap();
+        // B297: the list's Settings pill (Local, Online, Mods, Settings from y 50, 46 apart, x 64..264 at 4:3)
+        let a = act_at(&m, 150.0, 50.0 + 46.0 * 3.0 + 19.0).unwrap();
         assert_eq!(m.point(Dev::Keys, a, false), [Effect::Sound(0)]);
-        assert_eq!((m.screen, m.sel), (Screen::Main, 2));
+        assert_eq!((m.screen, m.sel), (Screen::Main, 3));
         m.point(Dev::Keys, a, true);
         assert_eq!(m.screen, Screen::Settings);
         // Settings → Graphics → its first value's arrows

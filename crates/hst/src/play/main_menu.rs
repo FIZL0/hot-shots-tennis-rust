@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -48,6 +48,7 @@ pub(super) mod cursor;
 pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
+mod home;
 mod online;
 mod options;
 mod mods_screen;
@@ -105,6 +106,8 @@ struct Grid {
     x: f32,
     /// The frame's bottom (centred 448 space): 384 at 4:3 or wider, lower in a tall window (B251).
     foot: f32,
+    /// How far the view reaches past each side of the 4:3 screen (640 units; B297's main screen).
+    extra: f32,
 }
 
 impl Default for Grid {
@@ -127,7 +130,7 @@ impl Grid {
         let foot = 384.0 + (448.0 / super::widescreen::vshare(aspect) - 448.0) / 2.0;
         let rows = ((((foot - ICON_BOX) - 10.0) / ICON_PITCH) as usize).max(1);
         let w = Self::width(cols);
-        Grid { cols, rows, x: l + (r - l - w) / 2.0, foot }
+        Grid { cols, rows, x: l + (r - l - w) / 2.0, foot, extra }
     }
 
     fn width(cols: usize) -> f32 {
@@ -152,6 +155,10 @@ fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>)
     let g = Grid::fit(super::widescreen::aspect(w));
     if menu.grid != g {
         menu.grid = g;
+    }
+    // B297: the main screen's New in the store column, on a window wide enough for it
+    if menu.screen == Screen::Main && home::columns(menu.grid.extra).3.is_some() && mods_screen::store_len(&menu).is_none() {
+        menu.want_store();
     }
 }
 /// The original's courts on the confirm screen (names `message0` 276 + 2k, descriptions 581 + 2k).
@@ -391,6 +398,8 @@ struct Menu {
     /// B254: the assignment screen over a paused match (`pause.rs`): `bots` are the match's computer players, fixed
     /// (no △, never swapped); ✕ takes any device off its seat (1P too, without moving the others up).
     paused: bool,
+    /// B297: a local match was started from this menu this session; its setup is still here (the Rematch card).
+    rematch: bool,
 }
 
 impl Default for Menu {
@@ -418,16 +427,12 @@ impl Default for Menu {
             grid: Grid::default(),
             add: default(),
             paused: false,
+            rematch: false,
         }
     }
 }
 
-/// Rows per screen.
-#[cfg(not(target_arch = "wasm32"))]
-const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods", "Quit"];
-/// A web page can't close itself (an `AppExit` there only freezes it), so the browser build has no Quit.
-#[cfg(target_arch = "wasm32")]
-const MAIN: &[&str] = &["Local", "Online", "Settings", "Mods"];
+/// Rows per screen (the main screen's: `Menu::main_rows`).
 const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
@@ -694,22 +699,32 @@ impl Menu {
         }
         match self.screen {
             Screen::Main => {
-                rows(MAIN.len(), &mut self.sel, &mut out);
+                let main = self.main_rows();
+                rows(main.len(), &mut self.sel, &mut out);
                 if k.ok {
-                    match self.sel {
-                        0 => {
+                    use home::Row;
+                    match main.get(self.sel).copied().unwrap_or(Row::Local) {
+                        Row::Rematch => {
+                            // the same setup; a random court or umpire is drawn again, as Start does
+                            self.roll = std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0u8);
+                            out.extend([Sound(2), Launch]);
+                            self.screen = Screen::Playing;
+                        }
+                        Row::Local => {
+                            self.rematch = false;
                             self.seats = [Some(dev), None, None, None];
                             self.go(Screen::Mode, &mut out);
                         }
-                        1 => {
+                        Row::Online => {
+                            self.rematch = false;
                             self.seats = [Some(dev), None, None, None];
                             self.net.status.clear();
                             out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
                         }
-                        2 => self.go(Screen::Settings, &mut out),
-                        3 => self.mods_open(&mut out),
-                        _ => out.push(Quit),
+                        Row::Settings => self.go(Screen::Settings, &mut out),
+                        Row::Mods => self.mods_open(&mut out),
+                        Row::Quit => out.push(Quit),
                     }
                 }
             }
@@ -745,7 +760,7 @@ impl Menu {
                 } else if k.back && self.online() {
                     self.back_to_online(&mut out);
                 } else if k.back {
-                    self.sel = 0;
+                    self.sel = self.main_at(home::Row::Local);
                     self.screen = Screen::Main;
                     out.push(Sound(1));
                 }
@@ -1001,6 +1016,7 @@ impl Menu {
                 } else if k.ok && self.sel == 0 {
                     out.extend([Sound(2), Launch]);
                     self.screen = Screen::Playing;
+                    self.rematch = true;
                 } else if k.back && self.online() {
                     self.go(Screen::Lobby, &mut out);
                 } else if k.back {
@@ -1462,6 +1478,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if fresh && menu.screen == Screen::Main {
         online::linked(&mut menu);
     }
+    // B297: the main screen with a Rematch card (a singles match against the computer played)
+    if fresh && screen == "rematch" {
+        menu.rematch = true;
+        menu.seats[0] = Some(Dev::Keys);
+        menu.players[1].cursor = 9;
+    }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
     }
@@ -1704,12 +1726,7 @@ impl Draw<'_> {
         self.out.extend(fill);
     }
 
-    /// A column of rows, the chosen one bright with the hand beside it.
-    fn rows(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32) {
-        self.rows_at(labels, sel, x, y, w, hand_x, 44.0);
-    }
-
-    /// `rows` `pitch` px apart.
+    /// A column of rows `pitch` px apart, the chosen one bright with the hand beside it.
     #[allow(clippy::too_many_arguments)]
     fn rows_at(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32, pitch: f32) {
         self.rows_locked(labels, sel, x, y, w, hand_x, pitch, |_| false);
@@ -1840,20 +1857,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
 fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> Draw<'a> {
     let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
-        Screen::Main => {
-            d.frame(0, 5);
-            let labels: Vec<String> = MAIN.iter().map(|s| s.to_string()).collect();
-            d.rows(&labels, m.sel, 200.0, 120.0, 240.0, hand_x);
-            let info = match m.sel {
-                0 => text.msg(188).to_string(),
-                1 => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
-                2 => text.msg(190).to_string(),
-                3 => "Add, remove, browse and share custom characters (mods).".into(),
-                _ => "Close the game.".into(),
-            };
-            d.info(&info);
-            mods_screen::ask_layout(&mut d, m, hand_x);
-        }
+        Screen::Main => home::layout(&mut d, m, text, pads.len(), hand_x),
         Screen::Settings => options::hub_layout(&mut d, m, hand_x),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => {
@@ -3005,6 +3009,26 @@ mod tests {
         assert!(m.players[3].ready && m.screen == Screen::Confirm);
         let picks: Vec<_> = (0..4).map(|p| m.pick(p)).collect();
         assert!((0..4).all(|p| (0..4).all(|q| p == q || picks[p] != picks[q])), "{picks:?}");
+    }
+
+    /// B297: Start puts a Rematch card at the top of the main menu; it launches the same match flags, Local takes it
+    /// off again, and Back from Local lands on the Local row.
+    #[test]
+    fn rematch_replays_the_setup() {
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 3, ..default() };
+        assert!(!m.main_rows().contains(&home::Row::Rematch));
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.ok)), [Effect::Sound(2), Effect::Launch]);
+        let first = m.args(&[]);
+        (m.screen, m.sel) = (Screen::Main, 0);
+        assert_eq!(m.main_rows()[0], home::Row::Rematch);
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.ok)), [Effect::Sound(2), Effect::Launch]);
+        assert_eq!((m.screen, m.args(&[])), (Screen::Playing, first));
+        (m.screen, m.sel) = (Screen::Main, m.main_at(home::Row::Local));
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert_eq!(m.screen, Screen::Mode);
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert_eq!((m.screen, m.sel, m.rematch), (Screen::Main, 0, false));
+        assert_eq!(m.main_rows()[0], home::Row::Local);
     }
 
     #[test]
