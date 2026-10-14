@@ -348,6 +348,45 @@ impl Menu {
         }
     }
 
+    /// B285: how many of `mods` are this machine's roster; after them come the lobby's mods it has the looks of but
+    /// hasn't installed ([`Menu::borrow`]: online ones, with the lobby's skeleton), shown but never on the grid.
+    pub(super) fn own_mods(&self) -> usize {
+        self.mods.iter().position(|m| m.skeleton.is_some()).unwrap_or(self.mods.len())
+    }
+
+    /// B285: the lobby's mods whose looks this machine received (or kept from an earlier lobby) put after the roster
+    /// in `mods` (their select text in `text`), so the lobby and the select draw a downloaded mod as itself; gone with
+    /// the lobby.
+    fn borrow(&mut self, text: &mut super::Text) {
+        let own = self.own_mods();
+        let mut want: Vec<(Wire, PathBuf)> = Vec::new();
+        for (_, w) in self.net.room.iter().flat_map(|r| r.mods()) {
+            if let Some(Some(d)) = self.net.looks.get(&w.looks)
+                && !self.mods[..own].iter().any(|m| m.id == w.id)
+                && !want.iter().any(|(x, _)| x.id == w.id)
+            {
+                want.push((w.clone(), d.clone()));
+            }
+        }
+        if self.mods[own..].iter().map(|m| (&m.id, &m.dir)).eq(want.iter().map(|(w, d)| (&w.id, d))) {
+            return;
+        }
+        self.mods.truncate(own);
+        text.mods.truncate(own);
+        for (w, d) in want {
+            let mut m = mo::for_match(&w, Some(&d));
+            if m.costumes.is_empty() {
+                // its looks didn't read: the donor stands in, here and in the match
+                self.net.looks.insert(w.looks, None);
+                continue;
+            }
+            (m.id, m.costume_of) = (w.id, None);
+            // ponytail: the grades are its base row's (its stat overrides need the disc's TParam, `mods::tparam`)
+            text.mods.push((super::mod_style(&m, &text.style), text.grades[m.base]));
+            self.mods.push(m);
+        }
+    }
+
     /// B201: this machine's players' places on the select, for the others to see.
     fn lives(&self) -> Vec<Live> {
         (0..4)
@@ -1242,6 +1281,7 @@ pub(super) fn poll(
     args: Res<crate::Args>,
     time: Res<Time>,
     mut commands: Commands,
+    art: Option<ResMut<super::Art>>,
 ) {
     menu.net.spin = (menu.net.spin + time.delta_secs()) % 60.0;
     if let Some(net) = net {
@@ -1256,6 +1296,9 @@ pub(super) fn poll(
         }
         if menu.screen == Screen::Lobby {
             menu.settle(&args.iso, &net);
+        }
+        if let Some(mut art) = art {
+            menu.borrow(&mut art.2);
         }
         // B201: everyone's places on the select into its panels, and this machine's out when they move
         menu.align();
@@ -1744,6 +1787,48 @@ mod tests {
         b.seats[0] = Some(super::super::Dev::Keys);
         b.align();
         assert_eq!(b.pick(1), (super::super::Who::Mod(0), 0));
+    }
+
+    /// B285: a mod pick shows as the mod for its owner (its pick carries it, its looks are its own folder) and, in the
+    /// lobby and the select, for a peer that downloaded it (kept after the roster, off the grid); a stand-in otherwise.
+    #[test]
+    fn own_and_downloaded_mods_show_as_themselves() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/mods/test_pc00"));
+        if !dir.is_dir() {
+            return eprintln!("no context/mods/test_pc00, skipped");
+        }
+        let m = crate::mods::read(dir).unwrap();
+        let tmp = std::env::temp_dir().join(format!("hst-b285-{}", std::process::id()));
+        // the owner: the pick carries the mod, and its looks are found in the roster
+        let mut a = Menu { screen: Screen::Chars, mods: vec![m.clone()], ..default() };
+        a.seats[0] = Some(super::super::Dev::Keys);
+        (a.players[0].modded, a.players[0].pick) = (true, 0);
+        let w = *a.wire(0).r#mod.expect("the owner's pick carries its mod");
+        assert_eq!(mo::find(&w, &a.mods, &tmp), Some(m.dir.clone()));
+        // a guest that downloaded it: drawn as the mod in its seat, not on its own roster
+        let got = mo::unpack(&mo::pack(dir).unwrap(), w.looks, &tmp).unwrap();
+        let mut b = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut b);
+        (b.net.me, b.net.go) = ("host".into(), Some(Go::Code));
+        let r = b.net.room.as_mut().unwrap();
+        r.live.clear();
+        r.picking.clear();
+        r.seats[1].as_mut().unwrap().pick = Pick { r#mod: Some(Box::new(w.clone())), ..Pick::disc(w.donor, 0) };
+        let mut text = super::super::Text { msg: Vec::new(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+        b.borrow(&mut text);
+        assert!(b.mods.is_empty(), "no looks yet: the donor stands in");
+        b.net.looks.insert(w.looks, Some(got.dir));
+        b.borrow(&mut text);
+        assert_eq!((b.mods.len(), text.mods.len(), b.own_mods(), b.mods[0].id.as_str()), (1, 1, 0, w.id.as_str()));
+        assert!(!b.roster().contains(&Some(super::super::Who::Mod(0))));
+        b.seats[0] = Some(super::super::Dev::Keys);
+        b.align();
+        assert_eq!((b.pick(1), b.remote_mod_name(1)), ((super::super::Who::Mod(0), 0), None));
+        // gone with the lobby
+        b.net.room = None;
+        b.borrow(&mut text);
+        assert!(b.mods.is_empty() && text.mods.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Every lobby item reachable with ↑↓←→ from every other, whatever the seats hold (host and guest).
