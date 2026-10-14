@@ -1003,6 +1003,7 @@ fn page(
         // the page's word for a picked mod saved (index.html)
         if s.starts_with("Added ") {
             menu.add.changed();
+            shelf.shots.retain(|k, _| !k.starts_with("local/"));
         }
         menu.add.status = s;
     }
@@ -1039,6 +1040,8 @@ fn page(
                 v.refresh();
                 if r.is_ok() {
                     v.changed();
+                    // B259: an update's new picture, not the old one read before it
+                    shelf.shots.retain(|k, _| !k.starts_with("local/"));
                 }
                 v.status = match r {
                     // the browser's page says when it's saved

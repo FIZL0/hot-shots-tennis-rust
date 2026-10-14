@@ -39,6 +39,14 @@ pub fn is_file(p: &Path) -> bool {
     MEM.lock().unwrap().contains_key(&key(p)) || p.is_file()
 }
 
+/// File `p`'s size and (on disk) modified time; None for a folder or nothing.
+pub fn size(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    if let Some(b) = MEM.lock().unwrap().get(&key(p)) {
+        return Some((b.len() as u64, None));
+    }
+    std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| (m.len(), m.modified().ok()))
+}
+
 /// The files and folders in folder `p`, sorted.
 pub fn read_dir(p: &Path) -> Vec<PathBuf> {
     let pre = format!("{}/", key(p));

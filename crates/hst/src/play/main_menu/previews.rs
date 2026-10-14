@@ -195,8 +195,9 @@ impl Loader {
             Who::Disc(c) => Some(self.dir.join(format!("d{c:02}-{k}.png"))),
             Who::Mod(i) => {
                 let m = menu.mods.get(i).or_else(|| self.extra.get(i.checked_sub(menu.mods.len())?))?;
-                let stamp = self.stamps.entry(i).or_insert_with(|| stamp(m));
-                Some(mod_png(&self.dir, m, k, stamp))
+                // B259: a mod installed since the start (the Mods page's) can be updated again: never kept
+                let stamp = if i < menu.mods.len() { self.stamps.entry(i).or_insert_with(|| stamp(m)).clone() } else { stamp(m) };
+                Some(mod_png(&self.dir, m, k, &stamp))
             }
         }
     }
@@ -303,13 +304,39 @@ fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::I
 /// Icons read a frame (each a few ms: a PNG decode and a scale).
 const ICON_READS: usize = 2;
 
-/// A mod's PNG name stem: its folder's name and its newest file's time, so an edited mod is baked again.
+/// A mod's PNG name stem: its folder's name and a hash of its files (B259: every file's path, size and time, and
+/// `mod.json` / `store.json` whole: a store update's zip sha256 is in the latter), so an updated mod is baked again.
+// ponytail: sizes and times, not contents; a browser zip import (no times, no store.json) that changes a file to one
+// of the same size keeps its old card unless its mod.json changes too. Hash the in-memory bytes if that turns up.
 fn stamp(m: &Mod) -> String {
-    let files = [Some("mod.json"), m.motions.as_deref()].into_iter().flatten().map(String::from).chain(m.costumes.iter().cloned());
-    let t = files.filter_map(|f| std::fs::metadata(m.dir.join(f)).and_then(|d| d.modified()).ok()).max();
-    let secs = t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
-    let name: String = m.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' }).collect();
-    format!("{name}-{secs:x}")
+    dir_stamp(&m.dir)
+}
+
+fn dir_stamp(dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    fn walk(d: &Path, h: &mut impl Hasher) {
+        for p in crate::modfs::read_dir(d) {
+            match crate::modfs::size(&p) {
+                Some((len, t)) => (p.file_name(), len, t).hash(h),
+                None => walk(&p, h),
+            }
+        }
+    }
+    // ponytail: SipHash with fixed keys; a Rust update that changes it only bakes the cards once more
+    let mut h = std::hash::DefaultHasher::new();
+    walk(dir, &mut h);
+    for f in ["mod.json", "store.json"] {
+        crate::modfs::read(&dir.join(f)).ok().hash(&mut h);
+    }
+    // the folder's name, as its PNGs' names start (`m-<name>-<hash>-<k>.png`)
+    let name: String = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' }).collect();
+    format!("{name}-{:016x}", h.finish())
+}
+
+/// B259: cache file `name` is a mod's drawing (`m-…`, its face close-up too) that none of `stamps` made: an updated or
+/// removed mod's old one.
+fn stale(name: &str, stamps: &[String]) -> bool {
+    name.starts_with("m-") && !stamps.iter().any(|s| name.strip_prefix("m-").and_then(|n| n.strip_prefix(s.as_str())).is_some_and(|r| r.starts_with('-')))
 }
 
 /// The disc's boot file (`SCUS_976.10`), from SYSTEM.CNF.
@@ -670,7 +697,21 @@ impl Job {
     }
 }
 
-fn start_baker(mut commands: Commands, menu: Res<Menu>) {
+fn start_baker(mut commands: Commands, menu: Res<Menu>, mut loader: ResMut<Loader>) {
+    // B259: each mod's stamp now, and every other mod drawing goes (an updated mod's old one, a removed mod's)
+    let stamps: Vec<String> = menu.mods.iter().map(stamp).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    for e in std::fs::read_dir(&loader.dir).into_iter().flatten().flatten() {
+        if stale(&e.file_name().to_string_lossy(), &stamps) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let pre = format!("{}~", card_name(&loader.dir));
+        crate::web::cards_drop(|n| n.strip_prefix(pre.as_str()).is_some_and(|n| stale(n, &stamps)));
+    }
+    loader.stamps.extend(stamps.into_iter().enumerate());
     // every mod's costumes after the disc's (B99: an unbaked one is blank until its live model loads)
     let mut queue = Vec::new();
     // B187: in the browser (a load and a drawing's read-back inside a frame, a hitch on a phone) only the icons'
@@ -710,7 +751,8 @@ fn bake(
 ) {
     // B229: on the Mods page only its hovered mod's costume 0 draws
     let asked = card.want.as_ref().filter(|_| menu.screen == Screen::Mods).map(|m| {
-        let i = menu.mods.iter().position(|o| o.dir == m.dir).or_else(|| loader.extra.iter().position(|o| o.dir == m.dir).map(|n| menu.mods.len() + n));
+        // B259: an updated one's newest files
+        let i = menu.mods.iter().position(|o| o.dir == m.dir).or_else(|| loader.extra.iter().position(|o| o.dir == m.dir).inspect(|&n| loader.extra[n] = m.clone()).map(|n| menu.mods.len() + n));
         (Who::Mod(i.unwrap_or_else(|| {
             loader.extra.push(m.clone());
             menu.mods.len() + loader.extra.len() - 1
@@ -1153,6 +1195,32 @@ mod tests {
             }
             assert_eq!(part.faces.keys().collect::<HashSet<_>>(), full.faces.keys().filter(|k| inspect::MOTIONS.contains(k)).collect(), "character {c} faces");
         }
+    }
+
+    /// B259: a mod's stamp follows any file's change, a store update (store.json) and an added file; its old
+    /// drawings (and only its) are stale.
+    #[test]
+    fn updated_mod_gets_a_new_stamp() {
+        let dir = Path::new("t_b259/anya");
+        let put = |f: &str, b: &[u8]| crate::modfs::add(&dir.join(f), b.to_vec().into());
+        put("mod.json", b"{}");
+        put("textures/body.png", b"one");
+        let a = dir_stamp(dir);
+        assert_eq!(a, dir_stamp(dir));
+        put("textures/body.png", b"three");
+        let b = dir_stamp(dir);
+        put("store.json", br#"{"sha256":"1"}"#);
+        let c = dir_stamp(dir);
+        put("store.json", br#"{"sha256":"2"}"#);
+        let d = dir_stamp(dir);
+        put("voice/win.ogg", b"x");
+        let e = dir_stamp(dir);
+        let all = [&a, &b, &c, &d, &e];
+        assert!(all.iter().enumerate().all(|(i, x)| x.starts_with("anya-") && all[..i].iter().all(|y| y != x)), "{all:?}");
+        let now = [e.clone(), "zed-00".into()];
+        assert!(stale(&format!("m-{a}-0.png"), &now) && stale(&format!("m-{d}-1-face.png"), &now));
+        assert!(!stale(&format!("m-{e}-0.png"), &now) && !stale(&format!("m-{e}-2-face.png"), &now) && !stale("d05-0.png", &now));
+        crate::modfs::remove(Path::new("t_b259"));
     }
 
     /// R2 / L2 on a disc character and a mod start the matching voice (B86a).
