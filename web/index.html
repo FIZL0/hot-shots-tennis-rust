@@ -35,7 +35,7 @@
 </head>
 <body>
 <input id="modzip" type="file" accept=".zip,application/zip" hidden aria-label="Add mod">
-<input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" aria-label="Lobby code">
+<input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Lobby code">
 <div id="disc" hidden>
   <p>Pick your own <b>Hot Shots Tennis (USA)</b> disc image (SCUS-97610). The game copies what it needs (≈ 170 MB)
      into this browser's storage once; the ISO isn't needed after that.</p>
@@ -274,7 +274,9 @@ async function start() {
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
   // to the game one at a time (a space kept in it so Backspace always fires)
   const keys = document.getElementById('codekeys');
-  window.hstCodeEntry = on => { keys.hidden = !(on && matchMedia('(pointer: coarse)').matches); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  window.hstCodeEntry = on => { keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  // B207: Return / Go finishes the entry (as Save / Join) and closes the keyboard
+  keys.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); typed_code('\n'); keys.blur(); } };
   keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };
   // a LAN answer from a tab opened by scanning a guest's code
   new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));

@@ -229,10 +229,14 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 Some(2) => crate::net::is_short(&m.net.entry).then_some("Join"),
                 _ => Some("Back"),
             };
-            v.push((Act::Move, "Move"));
+            // B207: typing on the phone's keyboard: no grid to move on or type from
+            let grid = !super::online::touch_typing();
+            if grid {
+                v.push((Act::Move, "Move"));
+            }
             v.extend(ok.map(|ok| (Act::Ok, ok)));
             // B239: □ deletes, ○ leaves
-            v.extend([(Act::Type, "Type"), (Act::Page, "Delete"), (Act::Back, "Back")]);
+            v.extend([(Act::Type, "Type"), (Act::Page, "Delete"), (Act::Back, "Back")].into_iter().filter(|a| grid || a.0 == Act::Back));
         }
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
         Screen::Lobby => {

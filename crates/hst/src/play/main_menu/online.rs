@@ -845,7 +845,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     }
                 }
             }
-            for (i, c) in keys.iter().enumerate() {
+            let grid = !touch_typing();
+            for (i, c) in keys.iter().enumerate().filter(|_| grid) {
                 let (x, y) = (320.0 - 232.0 + 58.0 * (i % 8) as f32 + 3.0, top + 44.0 * (i / 8) as f32);
                 d.pill(x, y, 52.0, if m.sel == i { ON } else { OFF });
                 d.hit([x, y, 52.0, 38.0], Act::Row(i, OK));
@@ -857,7 +858,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 }
             }
             let buttons = if m.net.naming { ["Delete", "Clear", "Save", "Back"] } else { ["Delete", "Paste", "Join", "Back"] };
-            for (i, l) in buttons.iter().enumerate() {
+            for (i, l) in buttons.iter().enumerate().filter(|_| grid) {
                 let (x, y, on) = (320.0 - 232.0 + 116.0 * i as f32 + 2.0, top + 44.0 * rows as f32 + 8.0, m.sel == keys.len() + i);
                 let dim = i == 2 && if m.net.naming { m.net.entry.trim().is_empty() } else { !is_short(&m.net.entry) };
                 d.pill(x, y, 112.0, if on { ON } else { OFF });
@@ -866,6 +867,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             let info = match () {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
+                _ if !grid && m.net.naming => "Tap to type your name; Return saves it.".into(),
+                _ if !grid => "Tap to type the host's code (or paste their link or code); Return joins.".into(),
                 _ if m.net.naming => "Type your name, or pick each letter; Save keeps it.".into(),
                 _ => "Type the host's code (or pick each symbol), or Paste their link or code.".into(),
             };
@@ -1161,7 +1164,14 @@ pub(super) fn linked(m: &mut Menu) {
 
 /// Join by Code's keyboard: typed symbols, Backspace and Enter (finish) go into the code, not to the menu's key bindings (the
 /// browser's on-screen keyboard too, `web.rs`).
-pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCode>>, mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>, mut was: Local<bool>) {
+pub(super) fn typing(
+    mut menu: ResMut<Menu>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut typed: MessageReader<bevy::input::keyboard::KeyboardInput>,
+    mut was: Local<bool>,
+    gamepads: Query<&Gamepad>,
+    mut pending: Option<ResMut<super::pointer::Pending>>,
+) {
     use bevy::input::keyboard::Key;
     let on = menu.screen == Screen::Code;
     if on != *was {
@@ -1190,14 +1200,39 @@ pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCod
             _ => {}
         }
     }
+    let save = menu.keys().len() + 2;
+    // B207: Start on a pad finishes the entry from any key, as Enter: the cursor onto Save / Join, which its OK takes
+    if gamepads.iter().any(|g| super::controls::readable(g) && g.just_pressed(GamepadButton::Start)) {
+        menu.sel = save;
+    }
     #[cfg(target_arch = "wasm32")]
     for c in crate::web::typed().chars() {
-        if c == '\u{8}' {
-            menu.net.entry.pop();
-        } else {
-            menu.type_char(c);
+        match c {
+            '\u{8}' => _ = menu.net.entry.pop(),
+            // B207: the phone keyboard's Return / Go: a tap on Save / Join
+            '\n' => {
+                menu.sel = save;
+                if let Some(p) = pending.as_mut() {
+                    p.0.push((Act::Row(save, OK), true));
+                }
+            }
+            c => menu.type_char(c),
         }
     }
+    // B207: typing on the phone's keyboard only: the cursor stays on Save / Join (the touch pad's ✕ takes it)
+    if touch_typing() {
+        menu.sel = save;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = &mut pending;
+}
+
+/// B207: a touch page with no controller types on the phone's own keyboard: no letter grid or its buttons.
+pub(super) fn touch_typing() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::touched() && !crate::web::real_pad();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
 }
 
 /// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the QR).
@@ -1710,5 +1745,25 @@ mod tests {
         let mut m = app.world_mut().remove_resource::<Menu>().unwrap();
         m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert_eq!((m.screen, m.net.cfg.unwrap().name.as_str()), (Screen::Online, "SUNNY"), "saved without the hovered A");
+    }
+
+    /// B207: Start on a pad finishes the entry from any hovered key, as Enter.
+    #[test]
+    fn start_finishes_entry() {
+        use bevy::input::keyboard::KeyboardInput;
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>().init_resource::<ButtonInput<KeyCode>>().add_systems(Update, typing);
+        let mut m = Menu { screen: Screen::Code, net: View { naming: true, entry: "SUNNY".into(), cfg: Some(Online::default()), ..default() }, ..default() };
+        m.sel = 5; // hovering "F"
+        app.insert_resource(m);
+        let mut g = Gamepad::default();
+        g.digital_mut().press(GamepadButton::Start);
+        app.world_mut().spawn(g);
+        app.update();
+        let mut m = app.world_mut().remove_resource::<Menu>().unwrap();
+        assert_eq!(m.sel, NAME_KEYS.len() + 2, "on Save");
+        // the same Start is the pad's OK
+        m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        assert_eq!((m.screen, m.net.cfg.unwrap().name.as_str()), (Screen::Online, "SUNNY"), "saved without the hovered F");
     }
 }

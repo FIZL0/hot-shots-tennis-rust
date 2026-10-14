@@ -169,7 +169,7 @@ fn local() -> io::Result<web_sys::Storage> {
 /// The page's on-screen keyboard's keys (`index.html`; Backspace as `\u{8}`) for Join by Code, since the last call.
 static TYPED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
-/// Page: text typed on the phone's keyboard while Join by Code's code entry is up.
+/// Page: text typed on the phone's keyboard while Join by Code's code entry is up; Return / Go as `\n` (B207).
 #[wasm_bindgen]
 pub fn typed_code(text: String) {
     TYPED.lock().unwrap().push_str(&text);
@@ -215,6 +215,11 @@ pub fn touch_menu(on: bool) {
 /// B247: the page is played by touch (a touch screen, or touched once; `web/touch.js`).
 pub fn touched() -> bool {
     page_fn("hstTouched").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy())
+}
+
+/// B207: a controller other than the page's touch pad is connected (`web/touch.js`).
+pub fn real_pad() -> bool {
+    page_fn("hstRealPad").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy())
 }
 
 /// The select's baked cards (B120, `play/main_menu/previews.rs`): OPFS `previews/` files by name, all read by the page
