@@ -113,6 +113,11 @@ fn pill_y(sets_to_win: i32, n: usize, k: usize) -> i32 {
     let lift = if sets_to_win == 3 { -72 } else { -32 };
     lift - (n as i32 - 1) * 16 + 0xcc + 40 * k as i32
 }
+/// B178: the confirm's Yes (0) / No (1) pill tops: two pills as the dialog would centre them, moved down 24 px to
+/// make room for the question above.
+fn ask_y(sets_to_win: i32, k: usize) -> i32 {
+    pill_y(sets_to_win, 2, k) + 24
+}
 /// Points cells (column, row) by point index; 4 is Deuce, 5 Advantage (tiebreak: 0–7, 8 Deuce, 9 Advantage).
 const POINT_U: [i32; 10] = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
 const POINT_V: [i32; 10] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4];
@@ -372,39 +377,47 @@ fn layout(v: &View) -> Vec<Quad> {
     }
 
     // the dialog (B141, ours in the dialog's place and colours): a rounded box, a pill per option (bright when
-    // chosen), the text, the hand
-    let opts = options(v.local);
-    let nopt = opts.len() as i32;
-    let lift = if v.sets_to_win == 3 { -72 } else { -32 };
-    let top = lift - (nopt - 1) * 16 + 0xb8;
-    let frame = r(160, top, 320, 16 + 8 * (nopt * 5 - 1) + 8 + 16);
-    for (i, rgb) in [INK, WHITE, PANEL].into_iter().enumerate() {
-        for (src, dst) in super::menu_art::box_quads(i, frame, 16.0) {
-            out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
+    // chosen), the text, the hand; (B178) the confirm is a popup of its own there, as the main menu's Reload / Later
+    // (`mods_screen.rs ask_layout`): the match dimmed, a box with the question as its title, Yes and No on pills
+    let box_at = |out: &mut Vec<Quad>, frame: [f32; 4]| {
+        for (i, rgb) in [INK, WHITE, PANEL].into_iter().enumerate() {
+            for (src, dst) in super::menu_art::box_quads(i, frame, 16.0) {
+                out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
+            }
         }
-    }
-    let y0 = pill_y(v.sets_to_win, opts.len(), 0);
-    // the rows: the options, or (B68) the question without a pill over Yes and No
-    let rows: Vec<Tex> = match v.ask {
-        Some(_) => vec![ASK, YES, NO],
-        None => opts
-            .iter()
-            .map(|&text| match text {
-                SETTINGS => LABEL,
-                CONTROLLERS => SEATS,
-                6 => RESUME,
-                _ => RETURN,
-            })
-            .collect(),
     };
-    let sel = v.ask.map_or(v.sel, |a| a + 1);
-    for (k, &tex) in rows.iter().enumerate() {
-        if tex == ASK {
-            continue;
+    let (rows, ys, sel): (Vec<Tex>, Vec<i32>, usize) = match v.ask {
+        Some(a) => {
+            out.push(Quad { tex: DIM, src: [0.0, 0.0, 8.0, 8.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: [0.0; 3], alpha: 80.0 });
+            let y0 = ask_y(v.sets_to_win, 0);
+            box_at(&mut out, r(160, y0 - 46, 320, 46 + 72 + 16));
+            // the title as `ask_layout`'s: 22 px high
+            let (w, h) = (256.0 * 22.0 / 32.0, 22.0);
+            out.push(Quad { tex: ASK, src: [0.0, 0.0, 256.0, 32.0], dst: [320.0 - w / 2.0, (y0 - 32) as f32, w, h], rgb: WHITE, alpha: 128.0 });
+            (vec![YES, NO], (0..2).map(|k| ask_y(v.sets_to_win, k)).collect(), a)
         }
+        None => {
+            let opts = options(v.local);
+            let nopt = opts.len() as i32;
+            let lift = if v.sets_to_win == 3 { -72 } else { -32 };
+            let top = lift - (nopt - 1) * 16 + 0xb8;
+            box_at(&mut out, r(160, top, 320, 16 + 8 * (nopt * 5 - 1) + 8 + 16));
+            let rows = opts
+                .iter()
+                .map(|&text| match text {
+                    SETTINGS => LABEL,
+                    CONTROLLERS => SEATS,
+                    6 => RESUME,
+                    _ => RETURN,
+                })
+                .collect();
+            (rows, (0..opts.len()).map(|k| pill_y(v.sets_to_win, opts.len(), k)).collect(), v.sel)
+        }
+    };
+    for (k, &y) in ys.iter().enumerate() {
         let fill = if k == sel { CHOSEN } else { UNCHOSEN };
         for (i, rgb) in [INK, WHITE, fill].into_iter().enumerate() {
-            for (src, dst) in super::menu_art::pill_quads(i, r(176, y0 + 40 * k as i32, 288, 32)) {
+            for (src, dst) in super::menu_art::pill_quads(i, r(176, y, 288, 32)) {
                 out.push(Quad { tex: PILL, src, dst, rgb, alpha: 128.0 });
             }
         }
@@ -412,13 +425,13 @@ fn layout(v: &View) -> Vec<Quad> {
     let mut q = |tex, src: [i32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: i32| {
         out.push(Quad { tex, src: src.map(|c| c as f32), dst, rgb, alpha: alpha as f32 })
     };
-    for (k, &tex) in rows.iter().enumerate() {
-        let (rgb, alpha) = if k == sel || tex == ASK { (WHITE, 128) } else { (UNCHOSEN, 64) };
+    for (k, (&tex, &y)) in rows.iter().zip(&ys).enumerate() {
+        let (rgb, alpha) = if k == sel { (WHITE, 128) } else { (UNCHOSEN, 64) };
         // B171: the 256×32 row's ink is as tall as the pill; drawn at `FIT` and centred it sits inside the rims
         let (w, h) = (256.0 * FIT, 32.0 * FIT);
-        q(tex, [0, 0, 256, 32], [320.0 - w / 2.0, (y0 + 40 * k as i32) as f32 + (32.0 - h) / 2.0, w, h], rgb, alpha);
+        q(tex, [0, 0, 256, 32], [320.0 - w / 2.0, y as f32 + (32.0 - h) / 2.0, w, h], rgb, alpha);
     }
-    let hy = (y0 + sel as i32 * 40 + 8) as f32;
+    let hy = (ys[sel] + 8) as f32;
     out.push(Quad { tex: HAND, src: [0.0, 0.0, 64.0, 32.0], dst: [v.hand_x + 128.0, hy, 64.0, 32.0], rgb: WHITE, alpha: 128.0 });
     if let Some(t) = v.fade {
         let a = (128 * t / 60).min(128) as f32;
@@ -606,7 +619,10 @@ fn step(
     let sets = g.rules.sets.clamp(1, 3);
     menu.local = net.is_none();
     let n = options(menu.local).len();
-    let pill = |p: Vec2| (176.0..464.0).contains(&p.x).then(|| (0..n).find(|&k| (0.0..32.0).contains(&(p.y - pill_y(sets, n, k) as f32)))).flatten();
+    // B178: the confirm's pills are Yes and No
+    let (ask, rows) = (menu.ask.is_some(), if menu.ask.is_some() { 2 } else { n });
+    let top = |k| if ask { ask_y(sets, k) } else { pill_y(sets, n, k) };
+    let pill = |p: Vec2| (176.0..464.0).contains(&p.x).then(|| (0..rows).find(|&k| (0.0..32.0).contains(&(p.y - top(k) as f32)))).flatten();
     // B221: the mouse over a pill moves the hand there; a right click, or a click or tap off the pills, is Back
     let (press, right) = super::main_menu::pause::pointer_press(&window, &mouse, &touches);
     let at = super::main_menu::pause::cursor_point(&window);
@@ -614,7 +630,7 @@ fn step(
         && let Some(k) = at.and_then(pill)
     {
         match menu.ask {
-            Some(a) if k > 0 && a != k - 1 => (menu.ask, menu.hand) = (Some(k - 1), Hand::default()),
+            Some(a) if a != k => (menu.ask, menu.hand) = (Some(k), Hand::default()),
             None if k != menu.sel => (menu.sel, menu.hand) = (k, Hand::default()),
             _ => {}
         }
@@ -623,11 +639,9 @@ fn step(
     menu.cancel |= right || press.is_some_and(|p| pill(p).is_none());
     if let Some(k) = press.and_then(pill) {
         match menu.ask {
-            // the question's row isn't a pill
-            Some(_) if k == 0 => {}
             Some(a) => {
-                if a != k - 1 {
-                    (menu.ask, menu.hand) = (Some(k - 1), Hand::default());
+                if a != k {
+                    (menu.ask, menu.hand) = (Some(k), Hand::default());
                 }
                 menu.confirm = true;
             }
@@ -939,13 +953,20 @@ mod tests {
         assert_eq!(m.tick(false, false), Some(2));
         assert_eq!(m.quitting, Some(0));
 
-        // drawn in the dialog: the question without a pill, the hand by No
+        // B178: a popup of its own: the match dimmed, a box from 134 to 268, the question as its title, Yes and No on
+        // pills at 180 and 220 (No bright), the hand by No; none of the pause dialog's box or pills
         let qs = layout(&View { ask: Some(1), ..view() });
-        assert!(qs.iter().any(|q| q.tex == ASK && q.dst[1] == 146.0 && q.alpha == 128.0));
+        assert!(qs.iter().any(|q| q.tex == DIM && q.rgb == [0.0; 3] && q.alpha == 80.0));
+        assert!(qs.iter().any(|q| q.tex == ASK && q.dst == [232.0, 148.0, 176.0, 22.0] && q.alpha == 128.0));
+        assert!(qs.iter().any(|q| q.tex == PILL && q.dst[0] == 160.0 && q.dst[1] == 134.0));
+        assert!(qs.iter().any(|q| q.tex == PILL && q.dst[0] == 160.0 && q.dst[1] + q.dst[3] == 268.0));
+        assert!(!qs.iter().any(|q| q.tex == PILL && q.dst[1] == 120.0));
+        let pills: Vec<_> = qs.iter().filter(|q| q.tex == PILL && q.dst[0] == 176.0).map(|q| (q.dst[1], q.rgb)).collect();
+        assert_eq!(pills.iter().filter(|p| p.1 == UNCHOSEN).map(|p| p.0).collect::<Vec<_>>(), [180.0]);
+        assert_eq!(pills.iter().filter(|p| p.1 == CHOSEN).map(|p| p.0).collect::<Vec<_>>(), [220.0]);
+        assert!(qs.iter().any(|q| q.tex == YES && q.dst[1] == 186.0 && q.alpha == 64.0));
         assert!(qs.iter().any(|q| q.tex == NO && q.dst[1] == 226.0 && q.alpha == 128.0));
-        assert!(qs.iter().any(|q| q.tex == YES && q.alpha == 64.0));
-        assert!(!qs.iter().any(|q| q.tex == RESUME || q.tex == RETURN));
-        assert!(!qs.iter().any(|q| q.tex == PILL && q.dst[1] == 140.0));
+        assert!(!qs.iter().any(|q| [RESUME, RETURN, LABEL, SEATS].contains(&q.tex)));
         assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst[1], 228.0);
     }
 }
