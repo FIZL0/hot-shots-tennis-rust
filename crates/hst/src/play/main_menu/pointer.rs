@@ -379,18 +379,24 @@ pub(super) mod tests {
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
         // the court picker: a tile hovers it, a tap off puts it back, the centre keeps it
-        tap(&mut m, 120.0, 340.0); // Select Court
+        let court = |m: &Menu| {
+            let [x, y, w, h] = super::super::confirm_rects(m)[1];
+            (x + w / 2.0, y + h / 2.0)
+        };
+        let (cx, cy) = court(&m);
+        tap(&mut m, cx, cy); // Select Court
         assert_eq!(m.picking, Some(m.court));
         let was = m.court;
         tap(&mut m, 320.0 + 112.0, 366.0);
         assert_ne!(m.court, was);
         tap(&mut m, 320.0, 100.0);
         assert_eq!((m.picking, m.court), (None, was));
-        tap(&mut m, 120.0, 340.0);
+        tap(&mut m, cx, cy);
         tap(&mut m, 320.0 + 112.0, 366.0);
         tap(&mut m, 320.0, 366.0);
         assert!(m.picking.is_none() && m.court != was);
-        let fx = tap(&mut m, 190.0, 305.0); // Start the match!
+        let [x, y, w, h] = super::super::confirm_rects(&m)[0];
+        let fx = tap(&mut m, x + w / 2.0, y + h / 2.0); // Start the match!
         assert!(fx.contains(&Effect::Launch), "{fx:?}");
     }
 
@@ -510,16 +516,16 @@ pub(super) mod tests {
             Vec2::new(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
         };
         let right = Press { right: true, ..default() };
-        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's → to Leave holds
+        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's ↓ to Public holds
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         super::super::online::sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        // seats 1–3, Start Characters Court, Copy Link (6) Leave (7)
+        // seats 1–3, Start Characters Court, Copy Link (6) Public (7)
         let copy = 6;
         let at = centre(&m, copy);
         frame(&mut app, &mut m, at, 0);
         assert_eq!(m.sel, copy, "hovering selects");
-        m.step(Dev::Keys, right);
+        m.step(Dev::Keys, Press { down: true, ..default() });
         assert_eq!(m.sel, copy + 1);
         for n in 1..30 {
             if n == 10 {

@@ -10,9 +10,6 @@ use super::{Draw, Menu, Screen, Tex};
 
 /// `f_s.tm2`: fire on the left half, smoke on the right.
 const SHEET: Tex = Tex::Sheet(16);
-/// The effect's origin on the 640×448 screen: the screen centre plus the original's node offset (-24, -136) and
-/// the effect's own (32, 64).
-const AT: [f32; 2] = [320.0 + 8.0, 224.0 - 72.0];
 /// Frames from the setup until it steps (the original's start "~1 s" after the pick, from its logs).
 const DELAY: u32 = 60;
 
@@ -57,12 +54,13 @@ pub(super) fn tick(mut menu: ResMut<Menu>, time: Res<Time>) {
     *RAND.lock().unwrap() = Some(f.rand);
 }
 
-/// The particles about `AT`, under the VS.
-pub(super) fn draw(d: &mut Draw, m: &Menu) {
+/// The particles about `at` (B295: the confirm screen's VS between the teams; the original's was the screen centre
+/// plus its node offset (-24, -136) and the effect's own (32, 64)).
+pub(super) fn draw(d: &mut Draw, m: &Menu, at: [f32; 2]) {
     let Some((fx, _)) = &m.flame.fx else { return };
     for s in fx.sprites() {
         let src = [if s.smoke { 64.0 } else { 0.0 }, 0.0, 64.0, 64.0];
-        let [x, y] = [AT[0] + s.at[0] - s.size / 2.0, AT[1] + s.at[1] - s.size / 2.0];
+        let [x, y] = [at[0] + s.at[0] - s.size / 2.0, at[1] + s.at[1] - s.size / 2.0];
         d.q(SHEET, src, [x, y, s.size, s.size], super::WHITE, s.alpha);
         if let Some(q) = d.out.last_mut() {
             q.angle = s.angle;
