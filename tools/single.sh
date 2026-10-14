@@ -47,12 +47,22 @@ while grep -q '^- \[ \]' plan/TODO.md; do
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' plan/TODO.md | cut -c1-100)" | tee -a "$log"
   id=$(uuidgen)
   tid=$(grep -m1 -oP '^- \[ \] \*\*\K[^*\s]+' plan/TODO.md)
+  # stall check, as tools/parallel.py: transcript quiet HST_STALL s (20 min) at a prompt, or 65 min with a tool running
+  ( while sleep 60; do
+      t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1); [ -n "$t" ] || continue
+      q=$(( $(date +%s) - $(stat -c %Y "$t") )) c=$(/home/ryha/repos/HST-Remastered/tools/pgrep -f -- "--session-id $id" | head -1)
+      if [ "$q" -gt 3900 ] || { [ "$q" -gt "${HST_STALL:-1200}" ] && ! pgrep -P "${c:-1}" >/dev/null; }; then
+        echo "=== $(date -Is) run $run looks stalled: no transcript activity for $((q / 60)) min" | tee -a "$log"
+        printf '\a'; break
+      fi
+    done ) & stallwatch=$!
   claude "$prompt Your task is $tid; its brief (tools/ctx.py brief $tid) follows, so don't gather it again.
 
 $(tools/ctx.py brief "$tid")" --session-id "$id" --permission-mode bypassPermissions --disallowedTools AskUserQuestion \
     --model opus $lean \
     --settings "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$PWD/tools/agent-stop.sh\"}]}]}}"
-  echo "=== run $run exited $? at $(date -Is)" | tee -a "$log"
+  rc=$?; kill "$stallwatch" 2>/dev/null
+  echo "=== run $run exited $rc at $(date -Is)" | tee -a "$log"
   tools/pcsx2.sh tools/pcsx2-hst.sh stop  # as the parallel runner: after the session, once nothing holds it
   t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1)
   reset=$([ -n "$t" ] && grep -o 'limit · resets [0-9:]*[ap]m' "$t" | tail -1 | grep -o '[0-9:]*[ap]m')

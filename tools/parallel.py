@@ -565,6 +565,42 @@ def adopt():
     return out
 
 
+def transcript(sid):
+    return next(iter(glob.glob(os.path.expanduser(f'~/.claude/projects/*/{sid}.jsonl'))), None)
+
+
+def stats(sid):
+    """'N min, N calls, context Nk→Nk peak' from a session's transcript, for the exit line (watch these over runs
+    before cutting context further: peak creeping up or more blocked tasks means a cut went too far)."""
+    calls, ctx, ts = 0, [], []
+    try:
+        for l in open(transcript(sid) or os.devnull):
+            d = json.loads(l)
+            ts += [d['timestamp']] if 'timestamp' in d else []
+            if u := d.get('type') == 'assistant' and d.get('message', {}).get('usage'):
+                calls += 1
+                ctx.append(sum(u.get(k, 0) for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')))
+    except (OSError, ValueError):
+        pass
+    if not ctx:
+        return 'no transcript'
+    mins = (datetime.fromisoformat(ts[-1].replace('Z', '+00:00')) - datetime.fromisoformat(ts[0].replace('Z', '+00:00'))).seconds // 60
+    return f'{mins} min, {calls} calls, context {ctx[0] // 1000}k first, {max(ctx) // 1000}k peak'
+
+
+STALL = int(os.environ.get('HST_STALL', 20 * 60))  # seconds without a transcript entry at a prompt (no tool running)
+
+
+def stalled(pid, sid):
+    """Why a live session looks stuck, else None: its transcript hasn't moved for STALL s while no tool runs (a
+    prompt or dialog the idle hook doesn't see), or for longer than the 60 min Bash timeout even with one (a hung tool)."""
+    t = transcript(sid)
+    quiet = time.time() - os.path.getmtime(t) if t else 0
+    busy = sp.run(['pgrep', '-P', str(pid)], capture_output=True).returncode == 0
+    if quiet > 65 * 60 or (quiet > STALL and not busy):
+        return f'no transcript activity for {int(quiet // 60)} min' + (' with a tool still running' if busy else ' at a prompt')
+
+
 def alive(pid):
     try:
         return os.kill(pid, 0) or True
@@ -605,6 +641,7 @@ def main():
     log(f'parallel run, {SLOTS} slots, mode {MODE}, weekly usage {weekly()}%' + (' (cap ignored: f)' if FORCE else f' (cap {WEEKLY_MAX}%)'))
     cap_logged = False
     desk_logged = False
+    stall_logged = set()  # sessions already reported stalled (once each)
     merging = []  # threads merging finished branches into main
     if queued():
         master()  # reports a previous run left; otherwise the master starts only when a merge needs it
@@ -625,7 +662,7 @@ def main():
         for n in free_at:
             if n in procs and not alive(procs[n][0]):
                 (p, sid, since), task = procs.pop(n), running.pop(n)
-                log(f'slot {n}: {task[0]} exited')
+                log(f'slot {n}: {task[0]} exited ({stats(sid)})')
                 # close the slot's PCSX2 copy; waits for its lock, so it never cuts a leftover capture short
                 sp.Popen([os.path.join(ROOT, 'tools/pcsx2.sh'), os.path.join(ROOT, 'tools/pcsx2-hst.sh'), 'stop'],
                          env={**os.environ, 'HST_PCSX2': str(n)}, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
@@ -640,6 +677,10 @@ def main():
                     t.start()
                     merging.append(t)
                     free_at[n] = datetime.now() + timedelta(seconds=PAUSE)
+            if n in procs and procs[n][1] not in stall_logged and (why := stalled(procs[n][0], procs[n][1])):
+                stall_logged.add(procs[n][1])
+                log(f'slot {n}: {running[n][0]} looks stalled ({why}); attach to pane s{n} to see')
+                print(f'\a*** slot {n} ({running[n][0]}) looks stalled: {why} ***', flush=True)
             if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 if capped():
                     if not cap_logged:
