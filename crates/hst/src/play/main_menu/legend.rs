@@ -187,11 +187,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Chars => {
             let Some(p) = m.driven(dev) else {
-                return if m.join_seat().is_some() { vec![(Act::Ok, "Join".into())] } else { vec![] };
+                return if m.can_join() { vec![(Act::Ok, "Join".into())] } else { vec![] };
             };
-            if m.local_roster() {
-                v.push((Act::Page, "Singles / Doubles"));
-            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
@@ -312,7 +309,7 @@ fn drivers(m: &Menu, last: Dev) -> Vec<(Dev, Option<usize>)> {
         Screen::Chars | Screen::Assign => {
             let mut v = seated(m);
             v.dedup_by_key(|x| x.0);
-            if (m.screen == Screen::Assign || m.join_seat().is_some()) && !v.iter().any(|x| x.0 == last) {
+            if (m.screen == Screen::Assign || m.can_join()) && !v.iter().any(|x| x.0 == last) {
                 v.push((last, None));
             }
             v

@@ -255,7 +255,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
             vec![("Players", format!("{humans} + {} COM", m.players() - humans)), ("Games", m.games.to_string()), ("Umpire", umpire(m, text))]
         }
         Row::Local => {
-            let mut v = vec![("Singles", "1-2 players".to_string()), ("Doubles", "1-4 players".into())];
+            let mut v = vec![("Singles", "1-2 players".to_string()), ("Doubles", "3-4 players".into())];
             if m.rematch {
                 let court = if m.court == COURTS { "Random Court".to_string() } else { text.msg(276 + 2 * m.court).to_string() };
                 v.push(("Last match", format!("{}, {court}", if m.doubles { "Doubles" } else { "Singles" })));
