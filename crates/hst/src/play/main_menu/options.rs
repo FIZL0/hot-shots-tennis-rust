@@ -468,7 +468,8 @@ mod tests {
     /// value it takes one of its side panel's choices; ○ lands on the main menu's Settings row.
     #[test]
     fn every_page() {
-        let mut m = Menu { sel: 2, ..default() };
+        let mut m = Menu::default();
+        m.sel = m.main_at(super::super::home::Row::Settings);
         m.step(Dev::Keys, press(|k| &mut k.ok));
         for &(_, s) in tabs_shown() {
             assert_eq!((m.screen, m.sel), (s, 0));

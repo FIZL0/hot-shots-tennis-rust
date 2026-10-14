@@ -3439,7 +3439,8 @@ mod tests {
     /// off again, and Back from Local lands on the Local row.
     #[test]
     fn rematch_replays_the_setup() {
-        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 3, ..default() };
+        // a fixed umpire: Random (B191's default) draws again for the rematch
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 3, umpire: 2, ..default() };
         assert!(!m.main_rows().contains(&home::Row::Rematch));
         assert_eq!(m.step(Dev::Keys, press(|p| &mut p.ok)), [Effect::Sound(2), Effect::Launch]);
         let first = m.args(&[]);
