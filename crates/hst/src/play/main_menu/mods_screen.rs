@@ -1027,13 +1027,13 @@ mod tests {
         Press { ok: true, ..default() }
     }
 
-    /// The page keeps its cursor within its own rows only: on Settings, row 7 stays row 7 (it snapped back to 4).
+    /// The page keeps its cursor within its own rows only: on Graphics, row 7 stays row 7 (it snapped back to 4).
     #[test]
     fn other_screens_keep_their_cursor() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Image>().init_resource::<Shelf>().init_resource::<super::super::previews::ModCard>();
-        app.insert_resource(Menu { screen: Screen::Settings, sel: 7, ..default() });
+        app.insert_resource(Menu { screen: Screen::Graphics, sel: 7, ..default() });
         app.add_systems(Update, page);
         app.update();
         assert_eq!(app.world().resource::<Menu>().sel, 7);

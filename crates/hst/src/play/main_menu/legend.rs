@@ -20,7 +20,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use super::super::controls::{self, Action, Bindings};
 use super::super::menu_art::{BOLD, fill_rgb, rounded, stroke_rgb, text_path, unpremultiply};
 use super::super::widescreen::{self, Anchor};
-use super::{CONFIRM_ROWS, CONTROLS_ROW, Dev, GRAPHICS_LABELS, GRAPHICS_ROW, MAIN, Menu, Screen, locked, switch};
+use super::{CONFIRM_ROWS, Dev, MAIN, Menu, Screen, options};
 
 /// What a legend entry does with which button.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -136,21 +136,18 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
-        Screen::Settings => {
+        Screen::Settings => v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < options::HUB.len() { "Open" } else { "Back" }), (Act::Back, "Back")]),
+        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
             v.push((Act::UpDown, "Move"));
-            if s == 0 || switch(s).is_some_and(|i| !locked(i)) {
-                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Change")]);
-            } else if s >= GRAPHICS_ROW {
-                v.push((Act::Ok, if s > CONTROLS_ROW { "Back" } else { "Open" }));
-            }
-            v.push((Act::Back, "Back"));
-        }
-        Screen::Graphics => {
-            v.push((Act::UpDown, "Move"));
-            if s < GRAPHICS_LABELS.len() {
-                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Change")]);
-            } else {
-                v.push((Act::Ok, "Back"));
+            match options::page(m.screen).get(s) {
+                Some(&o) if !options::locked(o) => {
+                    v.push((Act::LeftRight, "Change"));
+                    if options::ok_changes(o) {
+                        v.push((Act::Ok, "Change"));
+                    }
+                }
+                Some(_) => {}
+                None => v.push((Act::Ok, "Back")),
             }
             v.push((Act::Back, "Back"));
         }
@@ -745,7 +742,7 @@ mod tests {
             m
         };
         let mut starts: Vec<(Menu, Dev)> = vec![(Menu::default(), Dev::Keys)];
-        for s in [Screen::Settings, Screen::Graphics, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
+        for s in [Screen::Settings, Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
             starts.push((base(s), Dev::Keys));
         }
         let mut m = base(Screen::Main);

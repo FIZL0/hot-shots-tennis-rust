@@ -161,6 +161,7 @@ fn opened(ps: Res<PauseSettings>, args: Res<Args>, mut menu: ResMut<Menu>, mut s
     if ps.fresh {
         let settings = crate::store::read_to_string(Settings::path(&args.iso)).map_or(menu.settings, |t| Settings::parse(&t));
         let screen = match std::env::var("HST_PAUSE_SETTINGS").as_deref() {
+            Ok("display") => Screen::Display,
             Ok("graphics") => Screen::Graphics,
             Ok("sound") => Screen::Sound,
             Ok("controls") => Screen::Controls,
@@ -449,9 +450,12 @@ mod tests {
     /// A row changes and saves; Back on the Settings screen goes to `Screen::Main`, which `after` takes as closing.
     #[test]
     fn back_returns_to_pause() {
-        let mut m = Menu { screen: Screen::Settings, ..default() };
+        let aspect = super::super::options::page(Screen::Display).iter().position(|o| *o == super::super::options::Opt::Aspect).unwrap();
+        let mut m = Menu { screen: Screen::Display, sel: aspect, ..default() };
         let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert!(m.settings.3 == 1 && fx.contains(&super::super::Effect::SaveSettings));
+        m.step(super::super::Dev::Keys, Press { back: true, ..default() });
+        assert_eq!(m.screen, Screen::Settings);
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
     }
@@ -481,12 +485,17 @@ mod tests {
         app.world_mut().resource_mut::<PauseSettings>().open();
         app.update();
         let was = app.world().resource::<Menu>().settings.0[1];
+        // Sound (Settings row 2), then its Menu Music row (4)
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(2, super::super::pointer::OK), true));
+        app.update();
+        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(4, super::super::pointer::OK), true));
         app.update();
         assert_eq!(app.world().resource::<Menu>().settings.0[1], !was, "Menu Music didn't change");
         assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
-        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
-        app.update();
+        for _ in 0..2 {
+            app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
+            app.update();
+        }
         assert!(!app.world().resource::<PauseSettings>().open, "Back didn't return to the pause menu");
         app.update();
         let _ = std::fs::remove_dir_all(&dir);
