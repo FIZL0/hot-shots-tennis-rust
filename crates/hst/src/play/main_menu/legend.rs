@@ -20,7 +20,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use super::super::controls::{self, Action, Bindings};
 use super::super::menu_art::{BOLD, fill_rgb, rounded, stroke_rgb, text_path, unpremultiply};
 use super::super::widescreen::{self, Anchor};
-use super::{CONFIRM_ROWS, CONTROLS_ROW, Dev, GRAPHICS_LABELS, GRAPHICS_ROW, MAIN, Menu, SETTING_NAMES, Screen, locked};
+use super::{CONFIRM_ROWS, CONTROLS_ROW, Dev, GRAPHICS_LABELS, GRAPHICS_ROW, MAIN, Menu, Screen, locked, switch};
 
 /// What a legend entry does with which button.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -138,7 +138,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
         Screen::Settings => {
             v.push((Act::UpDown, "Move"));
-            if s < SETTING_NAMES.len() && !locked(s) {
+            if s == 0 || switch(s).is_some_and(|i| !locked(i)) {
                 v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Change")]);
             } else if s >= GRAPHICS_ROW {
                 v.push((Act::Ok, if s > CONTROLS_ROW { "Back" } else { "Open" }));
@@ -622,12 +622,13 @@ fn draw(
     if hide {
         return;
     }
-    let share = widescreen::share(win.width() / win.height().max(1.0));
+    let vw = widescreen::view_size(win).x;
+    let share = widescreen::share(widescreen::aspect(win));
     let (left, width) = widescreen::place(0.0, 640.0, share, Anchor::Span);
-    let unit = share * win.width() / 640.0;
+    let unit = share * vw / 640.0;
     // each chip: (key, words or the item, styles)
     let mut want: Vec<(String, Pixmap)> = Vec::new();
-    let mut key = format!("{left} {width} {unit} {}|", win.width());
+    let mut key = format!("{left} {width} {unit} {vw}|");
     let mut plan: Vec<(String, bool)> = Vec::new();
     for g in &groups {
         let mut styles: Vec<Style> = g.devs.iter().map(|&d| style_of(d, &pads)).collect();
@@ -663,7 +664,7 @@ fn draw(
     (node.left, node.width) = (Val::Percent(left), Val::Percent(width));
     // 11 of the strip's 12 units tall, 8 apart (a group's tag 14 before it), 8 in from the right; the row shrinks
     // as one if it's wider than the strip
-    let room = width / 100.0 * win.width() - 16.0 * unit;
+    let room = width / 100.0 * vw - 16.0 * unit;
     let used: f32 = plan.iter().map(|(k, tag)| chips.0[k].1 * 11.0 + if *tag { 14.0 } else { 8.0 }).sum();
     let k = unit * (room / (used * unit)).min(1.0);
     node.padding = UiRect::right(Val::Px(8.0 * unit));

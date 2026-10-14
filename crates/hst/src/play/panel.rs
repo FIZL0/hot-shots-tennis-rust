@@ -614,7 +614,7 @@ fn draw(
         clock: *clock,
     };
     let quads = layout(&view);
-    let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+    let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::aspect);
     let share = super::widescreen::share(aspect);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {

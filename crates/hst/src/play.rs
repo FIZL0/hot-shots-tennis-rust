@@ -84,7 +84,7 @@ mod timing;
 mod tornado;
 mod replay_pace;
 mod weather;
-mod widescreen;
+pub mod widescreen;
 pub(crate) mod main_menu;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -4081,7 +4081,7 @@ fn camera(
         // never show less than the game's 4:3 picture: windows narrower than 4:3 widen vertically
         let aspect = window
             .single()
-            .map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+            .map_or(4.0 / 3.0, crate::play::widescreen::aspect);
         p.fov = 2.0 * (fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
         // the cut-aways come within a metre of the players; Bevy's reverse-Z float depth keeps the layered character
         // models apart at 40 m all the same (a 5 m near plane cut the near ground and players out of the cut-aways)

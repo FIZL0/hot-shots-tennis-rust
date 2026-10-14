@@ -592,7 +592,7 @@ fn draw_calls(
     if let Ok((mut proj, _)) = cam.single_mut()
         && let Projection::Perspective(p) = &mut *proj
     {
-        let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+        let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::aspect);
         p.fov = 2.0 * (CALL_FOV_DEG.to_radians().tan() * super::SHOWN_ASPECT.max(1.0 / aspect)).atan();
     }
     for (k, (effect, view)) in calls.models.iter().enumerate() {

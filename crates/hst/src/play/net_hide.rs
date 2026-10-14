@@ -93,7 +93,7 @@ fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection)
     let (Some(g), Ok((t, proj))) = (g, camera.single()) else { return };
     let Projection::Perspective(p) = proj else { return };
     // game space is Bevy's turned a half-turn about X; the horizontal fov as `fixed_eye` sets the vertical one
-    let aspect = window.single().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let aspect = window.single().map_or(16.0 / 9.0, crate::play::widescreen::aspect);
     let (e, f) = (t.translation * Vec3::new(1.0, -1.0, -1.0), *t.forward() * Vec3::new(1.0, -1.0, -1.0));
     let view = View { rot: [[0.0; 3], [0.0; 3], f.to_array()], eye: e.to_array(), fov: ((p.fov / 2.0).tan() / 0.75f32.max(1.0 / aspect)).atan() };
     let world = &g.world.0;
