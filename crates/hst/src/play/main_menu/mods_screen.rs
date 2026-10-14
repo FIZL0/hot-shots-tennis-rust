@@ -1,11 +1,12 @@
 //! Mods (M16, M17). Installed: Add mod picks a mod `.zip` (the browser build: the page's file picker, `web.rs`;
 //! desktop: the system's, `modstore::pick`), which is checked whole and kept in `mods/<id>/` (OPFS in the browser,
-//! beside the game on desktop; `modfs::install`); ✕ twice on an installed mod removes it.
+//! beside the game on desktop; `modfs::install`); ✕ on an installed mod opens Remove / Cancel beside it (B202's child
+//! buttons, `child.rs`, for every press that needs a second word).
 //! Browse mods lists the mod store (`modstore.rs`: Verified = merged on the store's `main`, Installed / Update by the
 //! zip's sha256); ✕ downloads, checks and installs one. Upload my mod signs in with a Hugging Face write token (the
-//! token page opens, the player copies one, the next press pastes it) and then, after the rule and a second press,
+//! token page opens, the player copies one, Paste token pastes it) and then, after the rule and Upload,
 //! commits an installed mod to the store as a pull request (`modstore::publish`). Its My public mods (M19) lists the
-//! signed-in player's own uploads (`modstore::mine`); ✕ twice takes one down (`modstore::remove`). Every page is a list on the left and
+//! signed-in player's own uploads (`modstore::mine`); Take down takes one down (`modstore::remove`). Every page is a list on the left and
 //! the hovered mod on the right, as the select's cards: its picture, △ card and details. The select's roster is
 //! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
@@ -20,6 +21,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use super::super::widescreen;
+use super::child::{self, Child, Got};
 use super::{CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, Screen, Tex, WHITE, attribute_card};
 use crate::modstore::{self, Entry, Event};
 use crate::mods::Mod;
@@ -72,8 +74,8 @@ pub(super) struct View {
     have: HashMap<String, Option<String>>,
     /// The listing or an install is under way.
     busy: bool,
-    /// The row a first ✕ armed (removal, or upload).
-    armed: Option<usize>,
+    /// B202: the open child buttons (Remove, Upload, Sign in / out, Take down) and the row they hang off.
+    child: Option<Child>,
     /// What the last action did (the description bar).
     status: String,
     /// The first row drawn.
@@ -97,7 +99,7 @@ impl View {
     fn refresh(&mut self) {
         self.list = crate::mods::list(root());
         self.have = self.list.iter().map(|m| (m.id.clone(), modstore::stamp(&m.dir).map(|s| s.sha256))).collect();
-        self.armed = None;
+        self.child = None;
     }
 
     fn changed(&mut self) {
@@ -161,7 +163,7 @@ impl Menu {
 
     fn mods_page(&mut self, p: Page, sel: usize) {
         self.add.page = p;
-        self.add.armed = None;
+        self.add.child = None;
         self.add.top = 0;
         self.sel = sel;
         self.add.status = match p {
@@ -190,18 +192,113 @@ impl Menu {
         }
     }
 
-    /// B221: the pointer moved off the row a first ✕ armed.
-    pub(super) fn mods_choose(&mut self) {
-        self.add.armed = None;
+    /// B221/B202: what the pointer's row moves: the open child's button, else the list's row.
+    pub(super) fn mods_cursor(&mut self) -> &mut usize {
+        match &mut self.add.child {
+            Some(c) => &mut c.at,
+            None => &mut self.sel,
+        }
     }
 
     pub(super) fn mods_step(&mut self, k: Press, out: &mut Vec<Effect>) {
         use Effect::Sound;
         let n = self.add.rows();
         self.sel = self.sel.min(n - 1);
+        if let Some(mut c) = self.add.child.take() {
+            match c.step(k, out) {
+                Got::Open => self.add.child = Some(c),
+                Got::Close => self.add.status = if self.add.page == Page::Upload { RULE.into() } else { String::new() },
+                Got::Pick(i) => self.child_pick(c, i, out),
+            }
+        } else {
+            self.list_step(k, n, out);
+        }
+        let n = self.add.rows();
+        self.sel = self.sel.min(n - 1);
+        self.add.top = self.add.top.min(self.sel).max((self.sel + 1).saturating_sub(SHOWN)).min(n.saturating_sub(SHOWN));
+    }
+
+    /// B202: opens the child buttons `opts` (and Cancel) on the chosen row, saying `status`.
+    fn open_child(&mut self, opts: &[&'static str], status: String, out: &mut Vec<Effect>) {
+        self.add.child = Some(Child::new(self.sel, opts));
+        self.add.status = status;
+        out.push(Effect::Sound(0));
+    }
+
+    /// The child's button `i` on its row.
+    fn child_pick(&mut self, c: Child, i: usize, out: &mut Vec<Effect>) {
+        use Effect::Sound;
+        let s = c.row;
+        match self.add.page {
+            Page::Installed => self.remove(s - TOP, out),
+            Page::Upload if s == 0 => {
+                let v = &mut self.add;
+                v.status = match (&v.account, i) {
+                    (Some(_), _) => {
+                        modstore::sign_out();
+                        v.account = None;
+                        v.mine = None;
+                        "Signed out: the token is forgotten.".into()
+                    }
+                    (None, 0) => {
+                        modstore::open(modstore::TOKENS);
+                        // the child stays, on Paste token
+                        v.child = Some(Child { at: 1, ..c });
+                        if cfg!(target_arch = "wasm32") {
+                            "On the page that opened, make a token (Write), copy it, paste it here (Ctrl+V), then Paste token.".into()
+                        } else {
+                            "On the page that opened, make a token (Write) and copy it, then Paste token.".into()
+                        }
+                    }
+                    (None, _) => {
+                        v.paste = true;
+                        "Checking the token...".into()
+                    }
+                };
+                out.push(Sound(2));
+            }
+            Page::Upload => {
+                let m = self.add.list[s - 2].clone();
+                match modstore::account() {
+                    Some((_, token)) => {
+                        self.add.busy = true;
+                        self.add.status = format!("Checking, packing and uploading {}...", m.name);
+                        let card = super::previews::card(&self.add.iso, &m);
+                        modstore::publish(&m, self.add.stats.get(&m.id).copied(), card, token);
+                        out.push(Sound(2));
+                    }
+                    None => {
+                        self.add.account = None;
+                        self.add.status = "Signed out: sign in again on the top row.".into();
+                        out.push(Sound(1));
+                    }
+                }
+            }
+            Page::Mine => {
+                let e = self.add.entries()[s].clone();
+                match modstore::account() {
+                    Some((_, token)) => {
+                        self.add.busy = true;
+                        self.add.status = format!("Taking {} off the store...", e.meta.name);
+                        modstore::remove(&e, token);
+                        out.push(Sound(2));
+                    }
+                    None => {
+                        self.add.account = None;
+                        self.add.status = "Signed out: sign in again on the Upload page.".into();
+                        out.push(Sound(1));
+                    }
+                }
+            }
+            Page::Browse => {}
+        }
+    }
+
+    /// The list's own press (no child open).
+    fn list_step(&mut self, k: Press, n: usize, out: &mut Vec<Effect>) {
+        use Effect::Sound;
         if k.up || k.down {
             self.sel = if k.down { (self.sel + 1) % n } else { (self.sel + n - 1) % n };
-            self.add.armed = None;
             if !matches!(self.add.page, Page::Upload | Page::Mine) && !self.add.busy {
                 self.add.status.clear();
             }
@@ -249,66 +346,28 @@ impl Menu {
                 } else if k.ok && s == 1 {
                     self.mods_page(Page::Mine, 0);
                     out.push(Sound(2));
-                } else if k.ok && self.add.armed == Some(s) {
-                    let m = self.add.list[s - 2].clone();
-                    self.add.armed = None;
-                    match modstore::account() {
-                        Some((_, token)) => {
-                            self.add.busy = true;
-                            self.add.status = format!("Checking, packing and uploading {}...", m.name);
-                            let card = super::previews::card(&self.add.iso, &m);
-                            modstore::publish(&m, self.add.stats.get(&m.id).copied(), card, token);
-                            out.push(Sound(2));
-                        }
-                        None => {
-                            self.add.account = None;
-                            self.add.status = "Signed out: sign in again on the top row.".into();
-                        }
-                    }
                 } else if k.ok {
-                    self.add.armed = Some(s);
-                    self.add.status = format!("{RULE} Press again to upload {}.", self.add.list[s - 2].name);
-                    out.push(Sound(0));
+                    let name = self.add.list[s - 2].name.clone();
+                    self.open_child(&["Upload"], format!("{RULE} Upload {name}?"), out);
                 }
             }
             Page::Mine => self.mine_step(k, s, n, out),
         }
-        let n = self.add.rows();
-        self.sel = self.sel.min(n - 1);
-        self.add.top = self.add.top.min(self.sel).max((self.sel + 1).saturating_sub(SHOWN)).min(n.saturating_sub(SHOWN));
     }
 
-    /// The account row: signed out, the first press opens the token page and the second pastes the token; signed in,
-    /// two presses sign out.
+    /// The account row: signed out, Open token page / Paste token; signed in, Sign out.
     fn account_step(&mut self, out: &mut Vec<Effect>) {
-        let v = &mut self.add;
-        let again = v.armed == Some(0);
-        v.armed = if again { None } else { Some(0) };
-        v.status = match (&v.account, again) {
-            (Some(name), false) => format!("Signed in as {name}. Press again to sign out."),
-            (Some(_), true) => {
-                modstore::sign_out();
-                v.account = None;
-                v.mine = None;
-                "Signed out: the token is forgotten.".into()
-            }
-            (None, false) => {
-                modstore::open(modstore::TOKENS);
-                if cfg!(target_arch = "wasm32") {
-                    "On the page that opened, make a token (Write), copy it, paste it here (Ctrl+V), then press again.".into()
-                } else {
-                    "On the page that opened, make a token (Write) and copy it, then press again to paste it.".into()
-                }
-            }
-            (None, true) => {
-                v.paste = true;
-                "Checking the token...".into()
-            }
-        };
-        out.push(Effect::Sound(2));
+        match self.add.account.clone() {
+            Some(name) => self.open_child(&["Sign out"], format!("Signed in as {name}. Sign out (the game forgets the token)?"), out),
+            None => self.open_child(
+                &["Open token page", "Paste token"],
+                "Open token page, make a token (Write) there and copy it, then Paste token.".into(),
+                out,
+            ),
+        }
     }
 
-    /// M19: My public mods: ✕ twice on one of the player's uploads takes it down.
+    /// M19: My public mods: Take down on one of the player's uploads.
     fn mine_step(&mut self, k: Press, s: usize, n: usize, out: &mut Vec<Effect>) {
         use Effect::Sound;
         if k.back || (k.ok && s == n - 1) {
@@ -319,30 +378,13 @@ impl Menu {
         } else if k.ok && s == n - 2 {
             self.read_mine();
             out.push(Sound(2));
-        } else if k.ok && self.add.armed == Some(s) {
-            let e = self.add.entries()[s].clone();
-            self.add.armed = None;
-            match modstore::account() {
-                Some((_, token)) => {
-                    self.add.busy = true;
-                    self.add.status = format!("Taking {} off the store...", e.meta.name);
-                    modstore::remove(&e, token);
-                    out.push(Sound(2));
-                }
-                None => {
-                    self.add.account = None;
-                    self.add.status = "Signed out: sign in again on the Upload page.".into();
-                }
-            }
         } else if k.ok {
             let e = self.add.entries()[s].clone();
-            self.add.armed = Some(s);
-            self.add.status = if e.verified {
-                format!("Press again to ask for {} to be deleted from the store (a maintainer merges it).", e.meta.name)
+            if e.verified {
+                self.open_child(&["Ask to delete"], format!("Ask for {} to be deleted from the store (a maintainer merges it)?", e.meta.name), out);
             } else {
-                format!("Press again to take {} off the store (closes its pull request).", e.meta.name)
-            };
-            out.push(Sound(0));
+                self.open_child(&["Take down"], format!("Take {} off the store (closes its pull request)?", e.meta.name), out);
+            }
         }
     }
 
@@ -379,32 +421,33 @@ impl Menu {
             }
         } else if k.ok {
             let i = s - TOP;
-            let (id, name, dir) = (self.add.list[i].id.clone(), self.add.list[i].name.clone(), self.add.list[i].dir.clone());
+            let (id, name, dir) = (&self.add.list[i].id, self.add.list[i].name.clone(), self.add.list[i].dir.clone());
             // desktop: only a store download / Add mod install (`mods/<id>`) is the game's to delete; a folder put in
             // by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put it there
-            if cfg!(not(target_arch = "wasm32")) && dir != root().join(&id) {
-                self.add.armed = None;
+            if cfg!(not(target_arch = "wasm32")) && dir != root().join(id) {
                 self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
                 out.push(Sound(0));
-            } else if self.add.armed == Some(i) {
-                crate::modfs::remove(&dir);
-                #[cfg(target_arch = "wasm32")]
-                crate::web::mod_drop(&id);
-                // a store download's own folder (`mods/<id>`); a pack's mods are left to their pack
-                #[cfg(not(target_arch = "wasm32"))]
-                if dir == root().join(&id) {
-                    let _ = std::fs::remove_dir_all(&dir);
-                }
-                self.add.refresh();
-                self.add.changed();
-                self.add.status = format!("Removed {name}. Reload to take it out of the select.");
-                out.push(Sound(1));
             } else {
-                self.add.armed = Some(i);
-                self.add.status = format!("Press again to remove {name}.");
-                out.push(Sound(0));
+                self.open_child(&["Remove"], format!("Remove {name}? Reload then takes it out of the select."), out);
             }
         }
+    }
+
+    /// Removes installed mod `i` (its child's Remove).
+    fn remove(&mut self, i: usize, out: &mut Vec<Effect>) {
+        let (id, name, dir) = (self.add.list[i].id.clone(), self.add.list[i].name.clone(), self.add.list[i].dir.clone());
+        crate::modfs::remove(&dir);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::mod_drop(&id);
+        // a store download's own folder (`mods/<id>`); a pack's mods are left to their pack
+        #[cfg(not(target_arch = "wasm32"))]
+        if dir == root().join(&id) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        self.add.refresh();
+        self.add.changed();
+        self.add.status = format!("Removed {name}. Reload to take it out of the select.");
+        out.push(Effect::Sound(1));
     }
 }
 
@@ -566,7 +609,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 2 => "Share one of your mods with everyone (needs a Hugging Face account).".into(),
                 s if s < TOP + v.list.len() => {
                     let md = &v.list[s - TOP];
-                    format!("{} ({}, {} of {}): press twice to remove it.", md.name, md.id, s - TOP + 1, v.list.len())
+                    format!("{} ({}, {} of {}): press to remove it.", md.name, md.id, s - TOP + 1, v.list.len())
                 }
                 s if s == TOP + v.list.len() => "Reload the game: added mods join the select, removed ones leave it.".into(),
                 _ => "Back to the main menu.".into(),
@@ -588,8 +631,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ => RULE.into(),
             },
             Page::Mine => match v.entries().get(m.sel) {
-                Some(e) if e.verified => format!("{} is on the store (merged): press twice to ask for it to be deleted.", e.meta.name),
-                Some(e) => format!("{} is live from your pull request: press twice to take it down.", e.meta.name),
+                Some(e) if e.verified => format!("{} is on the store (merged): press to ask for it to be deleted.", e.meta.name),
+                Some(e) => format!("{} is live from your pull request: press to take it down.", e.meta.name),
                 None if m.sel == v.entries().len() => "Read your uploads from the store again.".into(),
                 None if v.mine.as_ref().is_some_and(|s| s.is_empty()) => "None of your mods are on the store.".into(),
                 None => "Back to Upload my mod.".into(),
@@ -597,6 +640,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
     };
     d.info(&info);
+    if let Some(c) = &v.child
+        && (v.top..end).contains(&c.row)
+    {
+        let row = [X, Y + PITCH * (c.row - v.top) as f32, W, H];
+        child::draw(d, c, row, &label(c.row), hand_x);
+    }
 }
 
 /// A mod's detail lines: where it's from, who made it, its hand, costumes and the disc character it plays like.
@@ -642,7 +691,9 @@ fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(St
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown) / `mymods` (My public mods, the same made-up entries, one armed) / `uploadmods` (Upload, one mod armed) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
+/// shown) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, one mod's
+/// Upload open) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
+/// mod's Remove open) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
     v.refresh();
@@ -670,8 +721,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.have = v.list.iter().take(4).enumerate().map(|(i, md)| (md.id.clone(), (i != 2).then(|| format!("{:064}", 0)))).collect();
         m.sel = 1;
         if screen == "mymods" {
-            (v.page, v.mine, v.account, v.armed) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(1));
-            v.status = format!("Press again to take {} off the store (closes its pull request).", v.mine.as_ref().and_then(|l| l.get(1)).map_or("", |e| &e.meta.name));
+            (v.page, v.mine, v.account, v.child) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(Child::new(1, &["Take down"])));
+            v.status = format!("Take {} off the store (closes its pull request)?", v.mine.as_ref().and_then(|l| l.get(1)).map_or("", |e| &e.meta.name));
         }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
@@ -679,9 +730,18 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
         v.account = Some("FIZL0".into());
-        v.armed = Some(2);
-        v.status = format!("{RULE} Press again to upload {}.", v.list.first().map_or("", |x| &x.name));
+        v.child = Some(Child::new(2, &["Upload"]));
+        v.status = format!("{RULE} Upload {}?", v.list.first().map_or("", |x| &x.name));
         m.sel = 2;
+    } else if screen == "signinmods" {
+        v.page = Page::Upload;
+        v.child = Some(Child::new(0, &["Open token page", "Paste token"]));
+        v.status = "Open token page, make a token (Write) there and copy it, then Paste token.".into();
+        m.sel = 0;
+    } else if screen == "addmods" && std::env::var("HST_CHILD").is_ok() && !v.list.is_empty() {
+        v.child = Some(Child::new(TOP, &["Remove"]));
+        v.status = format!("Remove {}? Reload then takes it out of the select.", v.list[0].name);
+        m.sel = TOP;
     }
 }
 
@@ -716,8 +776,8 @@ fn page(
 ) {
     if (menu.screen == Screen::Mods) != *on {
         *on = !*on;
-        // (a `sample` screen opens on its own page, already read)
-        if *on && menu.add.page == Page::Installed {
+        // (a `sample` screen opens on its own page, already read, or with its child open)
+        if *on && menu.add.page == Page::Installed && menu.add.child.is_none() {
             menu.add.refresh();
         }
         // the select's cards for the mods it has (its roster, built at startup)
@@ -744,8 +804,10 @@ fn page(
                 modstore::sign_in(t);
             }
             None => {
-                menu.add.armed = Some(0);
-                menu.add.status = "No token (hf_...) was copied: copy it, then press again.".into();
+                let mut c = Child::new(0, &["Open token page", "Paste token"]);
+                c.at = 1;
+                menu.add.child = Some(c);
+                menu.add.status = "No token (hf_...) was copied: copy it, then Paste token.".into();
             }
         }
     }
@@ -803,7 +865,6 @@ fn page(
             }
             Event::Removed(id, r) => {
                 v.busy = false;
-                v.armed = None;
                 if r.is_ok() {
                     // ponytail: a merged mod stays listed on the store until its delete PR is merged; this hides it till the next read
                     v.mine.get_or_insert_default().retain(|e| e.meta.id != id);
@@ -918,10 +979,10 @@ mod tests {
         }
     }
 
-    /// The rows: Add mod, Browse, Upload, each installed mod, Reload, Back; ✕ twice removes a mod (from memory, and
-    /// nothing else).
+    /// The rows: Add mod, Browse, Upload, each installed mod, Reload, Back; ✕ on a mod opens Remove / Cancel beside
+    /// it (B202): ○ and Cancel close it, ↑↓ wrap in it, Remove removes the mod (from memory, and nothing else).
     #[test]
-    fn removes_on_the_second_press() {
+    fn removes_from_the_child() {
         let mut m = Menu::default();
         crate::modfs::add(&root().join("t_screen/mod.json"), Vec::new().into());
         m.add.list = vec![a_mod("t_screen", "Screen"), a_mod("b", "B")];
@@ -929,10 +990,25 @@ mod tests {
         m.sel = TOP;
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.armed, Some(0));
-        assert!(m.add.status.contains("again"));
-        assert!(crate::modfs::is_file(&root().join("t_screen/mod.json")));
+        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec!["Remove", "Cancel"] }));
+        assert!(m.add.status.starts_with("Remove Screen?"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.add.child.is_none(), m.screen, m.sel), (true, Screen::Mods, TOP));
         m.mods_step(ok(), &mut out);
+        m.mods_step(Press { up: true, ..default() }, &mut out);
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.child.is_none() && crate::modfs::is_file(&root().join("t_screen/mod.json")));
+        m.mods_step(ok(), &mut out);
+        // the pointer: only the child's buttons, a tap elsewhere is Back
+        let at = |m: &Menu, x: f32, y: f32| super::super::pointer::tests::act_at(m, x, y);
+        let r = m.add.child.as_ref().unwrap().rects([X, Y + PITCH * TOP as f32, W, H]);
+        assert_eq!(at(&m, X + 10.0, Y + 5.0), None);
+        assert_eq!(at(&m, r[1][0] + 10.0, r[1][1] + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
+        assert_eq!(super::super::pointer::tests::hits(&m).1, Some(super::super::pointer::press(|k| k.back = true)));
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), false);
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(0, super::super::pointer::OK), true);
         assert!(!crate::modfs::is_file(&root().join("t_screen/mod.json")));
         assert!(m.add.status.starts_with("Removed Screen"));
         m.sel = 0;
@@ -962,8 +1038,7 @@ mod tests {
         m.add.list = vec![Mod { dir: root().join("pack/p"), ..a_mod("p", "P") }];
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.armed, None);
+        assert_eq!(m.add.child, None);
         assert!(m.add.status.starts_with("P was added by hand"), "{}", m.add.status);
     }
 
@@ -991,7 +1066,8 @@ mod tests {
     }
 
     /// Browse tags each store mod by what's installed (same zip: Installed, another: Update); pressing an installed
-    /// one doesn't download it; Back returns to Browse mods. Upload asks twice, the rule shown both times.
+    /// one doesn't download it; Back returns to Browse mods. Upload opens Upload / Cancel, the rule shown; Sign in opens
+    /// Open token page / Paste token, signed in Sign out.
     #[test]
     fn browse_and_upload_pages() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
@@ -1018,18 +1094,35 @@ mod tests {
         m.add.account = None;
         m.sel = 2;
         m.mods_step(ok(), &mut out);
-        assert!(m.add.status.starts_with("Sign in first") && m.add.armed.is_none());
+        assert!(m.add.status.starts_with("Sign in first") && m.add.child.is_none());
         m.add.account = Some("me".into());
         m.mods_step(ok(), &mut out);
-        assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("upload A.") && !m.add.busy);
+        assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("Upload A?") && !m.add.busy);
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec!["Upload", "Cancel"]));
         assert_eq!(m.add.local(m.sel).map(|x| x.id.as_str()), Some("a"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.add.page, m.add.status.as_str()), (Page::Upload, RULE));
+        m.sel = 0;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec!["Sign out", "Cancel"]));
+        m.mods_step(Press { down: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.child.is_none(), m.add.account.as_deref()), (true, Some("me")));
+        m.add.account = None;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec!["Open token page", "Paste token", "Cancel"]));
+        // (Open token page would open a browser here) Paste token closes it and reads the clipboard
+        m.mods_step(Press { down: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.child.is_none() && m.add.paste && m.add.status.starts_with("Checking"));
+        m.add.paste = false;
         m.sel = 3;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Installed, 2));
     }
 
-    /// M19: My public mods needs an account; its entries arm on the first press (a PR's closes, a merged one's asks
-    /// for a delete), Back returns to its Upload row.
+    /// M19: My public mods needs an account; its entries open Take down (a PR's, it closes) or Ask to delete (a merged
+    /// one's), Back returns to its Upload row.
     #[test]
     fn my_public_mods() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
@@ -1044,10 +1137,12 @@ mod tests {
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel, m.add.rows(), m.add.busy), (Page::Mine, 0, 4, false));
         m.mods_step(ok(), &mut out);
-        assert!(m.add.armed == Some(0) && m.add.status.contains("closes its pull request"));
+        assert!(m.add.child.as_ref().is_some_and(|c| c.row == 0 && c.opts[0] == "Take down") && m.add.status.contains("closes its pull request"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
         m.mods_step(Press { down: true, ..default() }, &mut out);
         m.mods_step(ok(), &mut out);
-        assert!(m.add.armed == Some(1) && m.add.status.contains("maintainer"));
+        assert!(m.add.child.as_ref().is_some_and(|c| c.row == 1 && c.opts[0] == "Ask to delete") && m.add.status.contains("maintainer"));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Upload, 1));
