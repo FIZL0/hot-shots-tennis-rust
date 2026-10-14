@@ -185,7 +185,7 @@ const SETTING_LABELS: [&str; 5] = ["Widescreen", "Upscaled Textures", "Menu Musi
 const UPSCALED_DOWNLOADS: usize = 4;
 /// The Settings screen's first row and row pitch: nine rows above the description bar, as the Graphics screen's.
 pub(super) const SETTINGS_TOP: f32 = GRAPHICS_TOP;
-pub(super) const SETTINGS_PITCH: f32 = GRAPHICS_PITCH;
+pub(super) const SETTINGS_PITCH: f32 = 39.5;
 /// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
 /// Downloads, `modstore::install`).
 fn locked(i: usize) -> bool {
@@ -197,13 +197,13 @@ const SOUND_ROW: usize = GRAPHICS_ROW + 1;
 const CONTROLS_ROW: usize = SOUND_ROW + 1;
 /// B235: the Sound screen's sliders (`Volumes`' order), 0..=10 each.
 const SOUND_LABELS: [&str; 4] = ["Master", "Music", "Sound Effects", "Voices"];
-/// The Graphics screen's first row and row pitch (640×448): its nine rows fit between the title tab (to y 40) and the
+/// The Graphics screen's first row and row pitch (640×448): its ten rows fit between the title tab (to y 40) and the
 /// description bar (y 404).
 const GRAPHICS_TOP: f32 = 46.0;
-const GRAPHICS_PITCH: f32 = 39.5;
-const GRAPHICS_ALL: [&str; 8] = ["Preset", "Resolution", "Shadows", "Frame Limit", "VSync", "Original Mode", "Anti-aliasing", "Display"];
+const GRAPHICS_PITCH: f32 = 35.5;
+const GRAPHICS_ALL: [&str; 9] = ["Preset", "Resolution", "Shadows", "Frame Limit", "Show FPS", "VSync", "Original Mode", "Anti-aliasing", "Display"];
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display row.
-const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(7).0 } else { &GRAPHICS_ALL };
+const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(8).0 } else { &GRAPHICS_ALL };
 
 /// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
 const SETTING_DEFAULTS: [bool; 5] = [true, true, true, false, true];
@@ -253,14 +253,15 @@ impl Settings {
             0 => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
-                *g = Graphics { windowed: g.windowed, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
+                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
             }
             1 => g.scale = cycle(&SCALES, g.scale, d),
             2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
             3 => g.fps = cycle(&FPS, g.fps, d),
-            4 => g.vsync = !g.vsync,
-            5 => g.original = !g.original,
-            7 => g.windowed = !g.windowed,
+            4 => g.show_fps = !g.show_fps,
+            5 => g.vsync = !g.vsync,
+            6 => g.original = !g.original,
+            8 => g.windowed = !g.windowed,
             _ => g.msaa = cycle(&MSAA, g.msaa, d),
         }
     }
@@ -274,9 +275,10 @@ impl Settings {
             2 => ["Off", "Low", "High"][g.shadows as usize].into(),
             3 if g.fps == 0 => "Uncapped".into(),
             3 => format!("{} fps", g.fps),
-            4 => if g.vsync { "On" } else { "Off" }.into(),
-            5 => if g.original { "On" } else { "Off" }.into(),
-            7 => if g.windowed { "Window" } else { "Fullscreen" }.into(),
+            4 => if g.show_fps { "On" } else { "Off" }.into(),
+            5 => if g.vsync { "On" } else { "Off" }.into(),
+            6 => if g.original { "On" } else { "Off" }.into(),
+            8 => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             _ => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
         }
     }
@@ -1774,18 +1776,19 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 // B221: the value's arrows (a tap on its left half steps back, on its right half on)
                 d.text("<", 424.0, y + 7.0, 24.0, rgb);
                 d.text(">", 614.0, y + 7.0, 24.0, rgb);
-                d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(i, Press { left: true, ..default() }));
-                d.hit([520.0, y, 115.0, 38.0], pointer::Act::Row(i, Press { right: true, ..default() }));
+                d.hit([420.0, y, 100.0, GRAPHICS_PITCH], pointer::Act::Row(i, Press { left: true, ..default() }));
+                d.hit([520.0, y, 115.0, GRAPHICS_PITCH], pointer::Act::Row(i, Press { right: true, ..default() }));
             }
             d.info(match m.sel {
                 0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
                 1 => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
                 2 => "Off, or the shadow map's detail (Low: smaller and fewer cascades).",
                 3 => "The most frames drawn a second (the game itself always runs at 60 Hz).",
-                4 => "Wait for the display between frames: no tearing, at most its refresh rate.",
-                5 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
-                6 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
-                7 if GRAPHICS_LABELS.len() > 7 => "Borderless fullscreen on the current monitor, or a window.",
+                4 => "Show the frame rate in the top-right corner, in the menus and in a match.",
+                5 => "Wait for the display between frames: no tearing, at most its refresh rate.",
+                6 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
+                7 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
+                8 if GRAPHICS_LABELS.len() > 8 => "Borderless fullscreen on the current monitor, or a window.",
                 _ => "Back to the settings.",
             });
         }
@@ -2716,10 +2719,12 @@ mod tests {
         s.graphics_step(1, -1);
         assert_eq!((s.1.scale, s.graphics_value(0).as_str()), (85, "Custom"));
         // the display row survives a preset change and keeps the preset's name
-        s.graphics_step(7, 1);
+        s.graphics_step(8, 1);
+        s.graphics_step(4, 1);
         s.graphics_step(0, 1);
-        assert_eq!((s.1.windowed, s.graphics_value(0).as_str(), s.graphics_value(7).as_str()), (true, "Default", "Window"));
-        s.graphics_step(5, 1);
+        assert_eq!((s.1.windowed, s.1.show_fps, s.graphics_value(0).as_str(), s.graphics_value(8).as_str()), (true, true, "Default", "Window"));
+        assert!(Settings::parse(&s.text()).1.show_fps && s.flags().contains(&"--show-fps".into()));
+        s.graphics_step(6, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
     }
 
