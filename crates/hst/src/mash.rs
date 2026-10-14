@@ -16,7 +16,7 @@ pub fn plugin(app: &mut App) {
     let v: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
     let mash = Mash { until: v.first().copied().unwrap_or(60.0), seed: v.get(1).map_or(1, |&s| s as u64 | 1), every: v.get(2).map_or(2, |&f| f.max(1.0) as u32), frame: 0, held: None };
     app.insert_resource(mash)
-        .add_systems(PreUpdate, press.after(bevy::input::InputSystems))
+        .add_systems(PreUpdate, press.after(bevy::input::InputSystems).before(crate::mode::hush))
         .add_systems(Last, stay.before(bevy::window::ExitSystems));
 }
 

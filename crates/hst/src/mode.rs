@@ -91,7 +91,7 @@ struct Base {
 /// The loading screen: `up` frames shown before the switch, then `after` frames since it, `idle` of them in a row
 /// with no pipeline compiling.
 #[derive(Component, Default)]
-struct Loading {
+pub(crate) struct Loading {
     up: u32,
     built: bool,
     after: u32,
@@ -145,7 +145,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, zoom)
         .add_systems(First, unwarm.before(switch))
         .add_systems(PostUpdate, warm.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
-        .add_systems(PreUpdate, |w: &mut World| run(w, PreUpdate))
+        .add_systems(PreUpdate, hush.after(bevy::input::InputSystems))
+        .add_systems(PreUpdate, (|w: &mut World| run(w, PreUpdate)).after(hush))
         // before the fixed ticks (the court intro holds them: `play/intro.rs`)
         .add_systems(RunFixedMainLoop, (|w: &mut World| run(w, RunFixedMainLoop)).in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(FixedPreUpdate, |w: &mut World| run(w, FixedPreUpdate))
@@ -160,6 +161,44 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostUpdate, (|w: &mut World| run(w, PostUpdate)).before(bevy::ui::UiSystems::Layout).before(warm))
         // before winit drops the windows on an `AppExit`
         .add_systems(Last, ((|w: &mut World| run(w, Last)), back).chain().before(bevy::window::ExitSystems));
+}
+
+/// B200: the running mode holds every press back too (an online match until every peer has loaded it).
+#[derive(Resource)]
+pub struct Hush;
+
+/// B200: whether this mode's loading screen is still up.
+pub fn covered(world: &mut World) -> bool {
+    world.query_filtered::<(), With<Loading>>().iter(world).next().is_some()
+}
+
+/// B200: no press reaches anything while a switch is pending (the old mode runs on behind the coming loading screen),
+/// the loading screen is up, or the mode asks ([`Hush`]): this frame's presses and releases are dropped, held buttons
+/// stay held, so one held through counts again only once released and pressed anew.
+pub(crate) fn hush(
+    next: Res<Next>,
+    loading: Query<(), With<Loading>>,
+    hushed: Option<Res<Hush>>,
+    keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    mouse: Option<ResMut<ButtonInput<MouseButton>>>,
+    touches: Option<ResMut<Touches>>,
+    mut pads: Query<&mut Gamepad>,
+) {
+    if next.0.is_none() && loading.is_empty() && hushed.is_none() {
+        return;
+    }
+    if let Some(mut k) = keys {
+        k.clear();
+    }
+    if let Some(mut m) = mouse {
+        m.clear();
+    }
+    if let Some(mut t) = touches {
+        t.clear();
+    }
+    for mut g in &mut pads {
+        g.digital_mut().clear();
+    }
 }
 
 /// The running mode's fixed tick (rollback's gate runs the ticks itself).
@@ -407,6 +446,29 @@ mod tests {
     /// The test's quit: mode 2 asks for its way back every frame while this is in (as the pause menu does).
     #[derive(Resource)]
     struct Quit;
+
+    /// B200: a press while a switch is pending (or the loading screen is up, or the mode asks) reaches nothing, and a
+    /// button held through it doesn't count as pressed afterwards.
+    #[test]
+    fn presses_wait_out_a_switch() {
+        let mut app = App::new();
+        app.init_resource::<Next>().init_resource::<ButtonInput<KeyCode>>().add_systems(Update, hush);
+        let mut press = |app: &mut App, k| {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
+            app.update();
+            let keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            (keys.just_pressed(k), keys.pressed(k))
+        };
+        assert_eq!(press(&mut app, KeyCode::Enter), (true, true));
+        app.world_mut().resource_mut::<Next>().0 = Some(Mode::new(|_| {}));
+        assert_eq!(press(&mut app, KeyCode::Space), (false, true));
+        app.world_mut().resource_mut::<Next>().0 = None;
+        app.insert_resource(Hush);
+        assert_eq!(press(&mut app, KeyCode::KeyJ), (false, true));
+        app.world_mut().remove_resource::<Hush>();
+        // still held: no new press (a key repeat presses it again)
+        assert_eq!(press(&mut app, KeyCode::KeyJ), (false, true));
+    }
 
     fn mode(tag: u32) -> Mode {
         Mode::new(move |app| {

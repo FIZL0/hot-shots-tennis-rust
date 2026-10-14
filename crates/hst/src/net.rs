@@ -506,6 +506,8 @@ pub enum Msg {
     Rejoined { old: String, new: String, name: String },
     /// The players left chose to end it: everyone still in goes back to the lobby `Room` together (B196).
     Lobby(Room),
+    /// B200: a peer's match is past its loading screen (the match starts once every peer's is).
+    Loaded(String),
 }
 
 impl Msg {
@@ -513,7 +515,7 @@ impl Msg {
     fn in_match(&self) -> bool {
         matches!(
             self,
-            Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_) | Msg::Alive(_) | Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Lobby(_)
+            Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_) | Msg::Alive(_) | Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Lobby(_) | Msg::Loaded(_)
         )
     }
 }
