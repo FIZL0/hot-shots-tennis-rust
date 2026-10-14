@@ -1676,7 +1676,7 @@ pub struct MatchRng(pub Rngs);
 
 fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<(Entity, &Gamepad)>,
+    gamepads: Query<(Entity, &Gamepad, Option<&Name>)>,
     mut pads: ResMut<Pads>,
     bind: Res<controls::Bindings>,
     mut held: ResMut<controls::PadSlots>,
@@ -1704,13 +1704,13 @@ fn read_input(
     // controllers keep their slot while connected (`controls::PadSlots`); new ones fill the first free slot
     let mut list: Vec<_> = gamepads
         .iter()
-        .filter(|(_, g)| controls::readable(g))
-        .map(|(e, _)| e)
+        .filter(|(_, g, _)| controls::readable(g))
+        .map(|(e, ..)| e)
         .collect();
     list.sort();
     held.update(&list);
     for (slot, e) in held.0.iter().enumerate() {
-        let Some(Ok((_, g))) = e.map(|e| gamepads.get(e)) else {
+        let Some(Ok((_, g, name))) = e.map(|e| gamepads.get(e)) else {
             continue;
         };
         let s = &mut now[slot];
@@ -1725,7 +1725,7 @@ fn read_input(
             .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
         s.serve |= bind.pad_just_pressed(g, A::Serve);
-        s.emote = s.emote.or(emote::flick(g.right_stick()));
+        s.emote = s.emote.or(emote::flick(g.right_stick())).or(emote::touch(g, name));
     }
     pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {
