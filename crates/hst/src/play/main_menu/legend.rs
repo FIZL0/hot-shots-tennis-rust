@@ -258,7 +258,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             v.push((Act::Back, "Leave"));
         }
-        Screen::Mods => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
+        Screen::Mods => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Back, "Back")]),
         _ => {}
     }
     v.into_iter().map(|(a, l)| (a, l.to_string())).collect()
