@@ -38,7 +38,8 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Ambience>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
-        .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)));
+        .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)))
+        .add_systems(PostUpdate, cull_crowd.before(bevy::transform::TransformSystems::Propagate));
 }
 
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
@@ -717,6 +718,10 @@ fn crowd_model(
     };
     // (an effect's root starts hidden)
     commands.entity(shown.root).insert((Transform::from_matrix(Mat4::from_cols_array_2d(world)).with_scale(Vec3::splat(scale)), Visibility::Inherited));
+    // B283: the end stands' crowds (types 63, 66) are drawn only while a point by them is ahead of the camera
+    if let Some(z) = [(2, -49.0), (5, 49.0)].iter().find(|c| c.0 == t).map(|c| c.1) {
+        commands.entity(shown.root).insert(CrowdCull([0.0, f32::from_bits(0xc0ff_e76d), z]));
+    }
     let names = get(format!("creaturemdl/{stem}.mtl")).and_then(|m| hst_data::mtl::parse(&m, get(format!("creaturemdl/{stem}.mti")).as_deref()).ok());
     let uva = get(format!("creatureani/{stem}.uva")).and_then(|u| hst_data::mor::parse(&u, 4).ok());
     let (Some(names), Some(uva)) = (names, uva) else {
@@ -736,9 +741,33 @@ fn crowd_model(
         .collect()
 }
 
+/// A court 5 crowd drawn only while this game-space point passes the game's view test (`crowd_shown`).
+#[derive(Component)]
+struct CrowdCull([f32; 3]);
+
+/// The game's draw test for a point (types 63/66): more than a millimetre ahead of the camera and not so near that
+/// `focal` (240 / tan of the horizontal half-angle) over its depth reaches 1000.
+fn crowd_shown(depth: f32, focal: f32) -> bool {
+    0.001 < depth && focal / depth < 1000.0
+}
+
+/// Runs on the drawn camera (any mode) once it has moved, like `net_hide::hide_around_eye`.
+// ponytail: depth and focal from the drawn camera in f32, not the game's VU0 view matrix (rendering only)
+fn cull_crowd(camera: Query<(&Transform, &Projection), With<crate::Orbit>>, window: Query<&Window>, mut q: Query<(&CrowdCull, &mut Visibility)>) {
+    let Ok((t, Projection::Perspective(p))) = camera.single() else { return };
+    let aspect = window.single().map_or(16.0 / 9.0, crate::play::widescreen::aspect);
+    let focal = 240.0 * 0.75f32.max(1.0 / aspect) / (p.fov / 2.0).tan();
+    for (c, mut v) in &mut q {
+        // game space is Bevy's turned a half-turn about X
+        let at = Vec3::new(c.0[0], -c.0[1], -c.0[2]);
+        let shown = crowd_shown((at - t.translation).dot(*t.forward()), focal);
+        v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+    }
+}
+
 /// Court 5's creatures' atlas frames on their materials.
 // ponytail: the original sets the frame at the start of the creature's tick (the frame drawn lags its state by a
-// tick) and skips types 63 and 66 when a point behind them is off screen; both left out (rendering only)
+// tick); left out (rendering only)
 fn draw_crowd(npcs: Option<Res<Npcs>>, mut materials: ResMut<Assets<StandardMaterial>>) {
     let Some(npcs) = npcs else { return };
     for (c, parts) in &npcs.crowd {
@@ -959,3 +988,13 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod b283_tests {
+    #[test]
+    fn crowd_shown_skips_behind_and_too_near() {
+        assert!(super::crowd_shown(30.0, 700.0));
+        assert!(!super::crowd_shown(-30.0, 700.0));
+        assert!(!super::crowd_shown(0.0005, 700.0));
+        assert!(!super::crowd_shown(0.5, 700.0));
+    }
+}
