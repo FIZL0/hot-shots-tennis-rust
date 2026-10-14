@@ -97,6 +97,7 @@ fn own_materials(
     materials: Res<Assets<StandardMaterial>>,
     mut gs: ResMut<Assets<GsMaterial>>,
     mut shared_draws: ResMut<SharedDraws>,
+    cullable: Query<(), With<crate::cull::Cullable>>,
 ) {
     if rigs.iter().any(|r| r.2) {
         // a past match's models are gone
@@ -128,12 +129,18 @@ fn own_materials(
                     }
                     continue;
                 }
-                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h), bevy::camera::visibility::NoFrustumCulling));
+                let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h)));
                 if shared {
                     c.insert(shade_tag(1.0));
                 }
                 if let Some(s) = skin {
                     c.insert(s.clone());
+                }
+                // culled as its first draw is (B345; after its skin)
+                if cullable.contains(e) {
+                    c.insert(crate::cull::Cullable);
+                } else {
+                    c.insert(bevy::camera::visibility::NoFrustumCulling);
                 }
                 if let Some(w) = morph {
                     c.insert(w.clone());

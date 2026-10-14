@@ -831,7 +831,7 @@ pub fn load(
             // VU1's per-bone normals from one glTF normal: the first joint's share in the normal slot, the rest in the
             // tangent slot, which gs.wgsl turns by the other joints' weight blend
             // a swaying part stays readable: each rig sways its own copy (`noise`)
-            let usage = if moved.is_empty() { RenderAssetUsages::RENDER_WORLD } else { RenderAssetUsages::default() };
+            let usage = if moved.is_empty() { crate::cull::usage(RenderAssetUsages::RENDER_WORLD) } else { RenderAssetUsages::default() };
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, v.pos)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, v.nrm.iter().zip(&v.weights).map(|(n, w)| Vec3::from(*n) * w[0]).map(<[f32; 3]>::from).collect::<Vec<_>>())
@@ -847,6 +847,7 @@ pub fn load(
                 let attrs = names.iter().flat_map(|t| v.morph.iter().find(|m| m.0 == *t).map_or(&zero, |m| &m.1).iter().map(|d| bevy::mesh::morph::MorphAttributes::new(Vec3::from(*d), Vec3::ZERO, Vec3::ZERO)).collect::<Vec<_>>());
                 mesh.set_morph_targets(attrs.collect());
             }
+            crate::cull::bound(&mut mesh, v.morph.iter().map(|t| &t.1[..]));
             let mat = handles[p.material().index().unwrap_or(handles.len() - 1)].clone();
             if !moved.is_empty() {
                 swaying.push((parts.len(), moved));

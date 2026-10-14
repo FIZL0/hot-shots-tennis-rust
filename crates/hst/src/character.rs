@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::NoFrustumCulling;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -414,7 +413,7 @@ pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes
             continue;
         }
         let n = pos.len();
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, crate::cull::usage(RenderAssetUsages::RENDER_WORLD))
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
             // VU1's per-bone normals (gs.wgsl): the first joint's as the normal, the second's in the tangent slot
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm.iter().map(|n| n[0]).collect::<Vec<_>>())
@@ -429,6 +428,7 @@ pub fn skinned_parts<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes
             let attrs = morph.iter().flat_map(|t| (0..n).map(|v| bevy::mesh::morph::MorphAttributes::new(Vec3::from(t.get(v).copied().unwrap_or_default()), Vec3::ZERO, Vec3::ZERO)));
             mesh.set_morph_targets(attrs.collect());
         }
+        crate::cull::bound(&mut mesh, morph.iter().map(|t| &t[..]));
         parts.push((meshes.add(mesh), handles.get(m).cloned().unwrap_or_default(), morphed));
     }
     parts
@@ -759,11 +759,10 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
         commands.entity(up).add_child(joints[i]);
     }
     let skin = SkinnedMesh { inverse_bindposes: data.binds.clone(), joints: joints.clone() };
-    // a skinned part's bounds are its bind pose's: posed, a small part (the eyes, on the `eye` joint alone) leaves
-    // them and was culled in close-ups (the sockets showed through, black at a distance). The GS draws every packet.
-    // ponytail: no culling per part; posed bounds from the joints if the draw count ever matters
+    // a skinned part's bind-pose bounds don't follow it posed (the eyes, on the `eye` joint alone, were culled in
+    // close-ups): culled by bounds that follow its joints (B345, `cull.rs`), or not at all with the setting off
     for (mesh, material, morphed) in &data.parts {
-        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default(), NoFrustumCulling)).id();
+        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default(), crate::cull::Cullable)).id();
         if *morphed {
             commands.entity(part).insert(bevy::mesh::morph::MeshMorphWeights::Reference(root));
         }
@@ -771,7 +770,7 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
     }
     if let Some(r) = data.joint("Racket") {
         for (mesh, material) in &data.racket {
-            let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), NoFrustumCulling)).id();
+            let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), crate::cull::Cullable)).id();
             commands.entity(joints[r]).add_child(part);
         }
     }
