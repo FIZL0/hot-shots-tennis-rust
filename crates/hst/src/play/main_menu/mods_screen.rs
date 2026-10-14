@@ -12,7 +12,7 @@
 //! inside a real tap).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -65,11 +65,13 @@ pub(super) struct View {
     pub(super) page: Page,
     /// Installed mods.
     list: Vec<Mod>,
-    /// The store's listing (None: not read yet), and each entry's sha256 if it's installed.
+    /// The store's listing (None: not read yet).
     store: Option<Vec<Entry>>,
     /// M19: the player's own uploads (None: not read yet).
     mine: Option<Vec<Entry>>,
-    have: HashMap<String, Option<String>>,
+    /// B248: the installed store mods by [`Entry::key`] (a pre-B248 install's under `/<id>`): the zip's sha256 and
+    /// the folder. A mod added from a zip or by hand isn't one of the store's, though it may share an id.
+    have: HashMap<String, (String, PathBuf)>,
     /// The listing or an install is under way.
     busy: bool,
     /// The row a first ✕ armed (removal, or upload).
@@ -78,8 +80,8 @@ pub(super) struct View {
     status: String,
     /// The first row drawn.
     top: usize,
-    /// The select's play style and △ grades by mod id, and the disc's path (where the select's pictures are cached).
-    stats: HashMap<String, (usize, [u8; 5])>,
+    /// The select's play style and △ grades by mod folder, and the disc's path (where the select's pictures are cached).
+    stats: HashMap<PathBuf, (usize, [u8; 5])>,
     iso: String,
     /// The signed-in Hugging Face account; a press asked for the token on the clipboard.
     account: Option<String>,
@@ -96,7 +98,7 @@ pub(super) struct View {
 impl View {
     fn refresh(&mut self) {
         self.list = crate::mods::list(root());
-        self.have = self.list.iter().map(|m| (m.id.clone(), modstore::stamp(&m.dir).map(|s| s.sha256))).collect();
+        self.have = self.list.iter().filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
         self.armed = None;
     }
 
@@ -128,11 +130,16 @@ impl View {
         }
     }
 
+    /// Entry `e` installed: its zip's sha256 and folder.
+    fn installed(&self, e: &Entry) -> Option<&(String, PathBuf)> {
+        self.have.get(&e.key()).or_else(|| self.have.get(&format!("/{}", e.meta.id)))
+    }
+
     /// Entry `e`'s tag: installed as listed, installed but different (an update), or not.
     fn state(&self, e: &Entry) -> Option<&'static str> {
-        match self.have.get(&e.meta.id) {
+        match self.installed(e) {
             None => None,
-            Some(Some(sha)) if *sha != e.meta.sha256 => Some("Update"),
+            Some((sha, _)) if *sha != e.meta.sha256 => Some("Update"),
             Some(_) => Some("Installed"),
         }
     }
@@ -257,7 +264,7 @@ impl Menu {
                             self.add.busy = true;
                             self.add.status = format!("Checking, packing and uploading {}...", m.name);
                             let card = super::previews::card(&self.add.iso, &m);
-                            modstore::publish(&m, self.add.stats.get(&m.id).copied(), card, token);
+                            modstore::publish(&m, self.add.stats.get(&m.dir).copied(), card, token);
                             out.push(Sound(2));
                         }
                         None => {
@@ -382,17 +389,17 @@ impl Menu {
             let (id, name, dir) = (self.add.list[i].id.clone(), self.add.list[i].name.clone(), self.add.list[i].dir.clone());
             // desktop: only a store download / Add mod install (`mods/<id>`) is the game's to delete; a folder put in
             // by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put it there
-            if cfg!(not(target_arch = "wasm32")) && dir != root().join(&id) {
+            if cfg!(not(target_arch = "wasm32")) && !crate::modfs::installed_by_game(root(), &dir, &id) {
                 self.add.armed = None;
                 self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
                 out.push(Sound(0));
             } else if self.add.armed == Some(i) {
                 crate::modfs::remove(&dir);
                 #[cfg(target_arch = "wasm32")]
-                crate::web::mod_drop(&id);
-                // a store download's own folder (`mods/<id>`); a pack's mods are left to their pack
+                crate::web::mod_drop(&self.add.list[i].folder());
+                // a store download's own folder (`mods/<id>`, `mods/<id>-2`, …); a pack's mods are left to their pack
                 #[cfg(not(target_arch = "wasm32"))]
-                if dir == root().join(&id) {
+                if crate::modfs::installed_by_game(root(), &dir, &id) {
                     let _ = std::fs::remove_dir_all(&dir);
                 }
                 self.add.refresh();
@@ -553,8 +560,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         panel(d, &mt.name, mt.style.map(usize::from).zip(mt.grades), &lines, shot);
     } else if let Some(md) = v.local(m.sel) {
         let mut lines = details(&md.source, "", Some(md.hand), Some(md.costumes.len()), Some(md.donor));
-        lines.push((format!("Folder {}", md.id), [100.0; 3]));
-        panel(d, &md.name, v.stats.get(&md.id).copied(), &lines, shot);
+        lines.push((format!("Folder {}", md.folder()), [100.0; 3]));
+        panel(d, &md.name, v.stats.get(&md.dir).copied(), &lines, shot);
     }
     let info = if !v.status.is_empty() {
         v.status.clone()
@@ -566,7 +573,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 2 => "Share one of your mods with everyone (needs a Hugging Face account).".into(),
                 s if s < TOP + v.list.len() => {
                     let md = &v.list[s - TOP];
-                    format!("{} ({}, {} of {}): press twice to remove it.", md.name, md.id, s - TOP + 1, v.list.len())
+                    format!("{} ({}, {} of {}): press twice to remove it.", md.name, md.folder(), s - TOP + 1, v.list.len())
                 }
                 s if s == TOP + v.list.len() => "Reload the game: added mods join the select, removed ones leave it.".into(),
                 _ => "Back to the main menu.".into(),
@@ -667,7 +674,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
                 Entry { meta, rev: if i % 3 == 0 { "main".into() } else { format!("refs/pr/{i}") }, verified: i % 3 == 0 }
             }).collect(),
         );
-        v.have = v.list.iter().take(4).enumerate().map(|(i, md)| (md.id.clone(), (i != 2).then(|| format!("{:064}", 0)))).collect();
+        v.have = v.store.iter().flatten().zip(&v.list).take(4).map(|(e, md)| (e.key(), (format!("{:064}", 0), md.dir.clone()))).collect();
         m.sel = 1;
         if screen == "mymods" {
             (v.page, v.mine, v.account, v.armed) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(1));
@@ -722,7 +729,7 @@ fn page(
         }
         // the select's cards for the mods it has (its roster, built at startup)
         if *on && let Some(art) = &art {
-            let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.id.clone(), *s)).collect();
+            let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.dir.clone(), *s)).collect();
             menu.add.stats = stats;
         }
         if let Some(a) = &args {
@@ -847,12 +854,12 @@ fn page(
         shelf.shots.retain(|k, h| !k.starts_with("local/") || h.is_some());
     }
     // an installed store mod shows the installed one's picture
-    let local = menu.add.hovered(menu.sel).and_then(|e| menu.add.have.contains_key(&e.meta.id).then(|| menu.add.list.iter().find(|m| m.id == e.meta.id)).flatten());
+    let local = menu.add.hovered(menu.sel).and_then(|e| menu.add.installed(e)).and_then(|(_, dir)| menu.add.list.iter().find(|m| m.dir == *dir));
     let local = local.or_else(|| menu.add.local(menu.sel)).filter(|_| on);
     card.want = None;
     shelf.shown = if let Some(m) = local {
         // an installed mod's: the select's picture of it, read once; none yet: drawn (B229)
-        let key = format!("local/{}", m.id);
+        let key = format!("local/{}", m.dir.display());
         let h = match shelf.shots.get(&key) {
             Some(h) => h.clone(),
             None => {
@@ -867,9 +874,9 @@ fn page(
         h
     } else if let Some(e) = menu.add.hovered(menu.sel).filter(|_| on) {
         // a store mod's preview, fetched once
-        shelf.shots.get(&e.meta.id).cloned().unwrap_or_else(|| {
+        shelf.shots.get(&e.key()).cloned().unwrap_or_else(|| {
             modstore::preview(e);
-            shelf.shots.insert(e.meta.id.clone(), None);
+            shelf.shots.insert(e.key(), None);
             None
         })
     } else {
@@ -997,7 +1004,7 @@ mod tests {
         let mut m = Menu { screen: Screen::Mods, ..default() };
         let e = |id: &str, sha: &str| Entry { meta: Meta { id: id.into(), name: id.into(), sha256: sha.repeat(64), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
         m.add.store = Some(vec![e("a", "1"), e("b", "2"), e("c", "3")]);
-        m.add.have = [("a".to_string(), Some("1".repeat(64))), ("b".to_string(), Some("9".repeat(64)))].into();
+        m.add.have = [("/a".to_string(), ("1".repeat(64), "mods/a".into())), ("/b".to_string(), ("9".repeat(64), "mods/b".into()))].into();
         m.add.list = vec![a_mod("a", "A")];
         let mut out = Vec::new();
         m.sel = 1;

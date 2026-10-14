@@ -74,11 +74,18 @@ pub struct Entry {
     pub verified: bool,
 }
 
+impl Entry {
+    /// B248: what tells store mods apart (two authors may share an id): `<author>/<id>`.
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.meta.author, self.meta.id)
+    }
+}
+
 pub enum Event {
     Listing(Result<Vec<Entry>, String>),
     /// An install's outcome: the mod's name, or why it was refused (nothing kept).
     Installed(Result<String, String>),
-    /// Mod `id`'s `preview.png`, or None (it has none).
+    /// Mod [`Entry::key`]'s `preview.png`, or None (it has none).
     Preview(String, Option<Vec<u8>>),
     /// Upload's outcome: what to tell the player.
     Uploaded(Result<String, String>),
@@ -231,11 +238,12 @@ async fn get_meta(rev: &str, id: &str) -> Option<Meta> {
     meta_of(&get(&file_url(rev, &format!("mods/{id}/meta.json")), MAX_META).await.ok()?, id)
 }
 
-/// `main` first, then each PR newest first; an id already listed is left out.
+/// `main` first, then each PR newest first; one already listed (same id, and same author or zip) is left out, so
+/// two authors' mods sharing an id are both listed (B248).
 fn merge(lists: Vec<Vec<Entry>>) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     for e in lists.into_iter().flatten() {
-        if !out.iter().any(|o| o.meta.id == e.meta.id) {
+        if !out.iter().any(|o| o.meta.id == e.meta.id && (o.meta.author == e.meta.author || o.meta.sha256 == e.meta.sha256)) {
             out.push(e);
         }
     }
@@ -321,9 +329,9 @@ pub fn remove(e: &Entry, token: String) {
     });
 }
 
-/// Fetches mod `e`'s preview ([`Event::Preview`]).
+/// Fetches mod `e`'s preview ([`Event::Preview`], under [`Entry::key`]).
 pub fn preview(e: &Entry) {
-    let (id, url) = (e.meta.id.clone(), file_url(&e.rev, &format!("mods/{}/preview.png", e.meta.id)));
+    let (id, url) = (e.key(), file_url(&e.rev, &format!("mods/{}/preview.png", e.meta.id)));
     spawn(async move { send(Event::Preview(id, get(&url, MAX_PREVIEW).await.ok())) });
 }
 
@@ -353,6 +361,9 @@ pub struct Stamp {
     pub sha256: String,
     pub rev: String,
     pub verified: bool,
+    /// B248: the store author it was listed under (with its id, what makes it this store mod); empty before B248.
+    #[serde(default)]
+    pub author: String,
 }
 
 pub fn stamp(dir: &Path) -> Option<Stamp> {
@@ -376,7 +387,7 @@ pub fn install(e: &Entry, root: &Path, upscaled: bool) {
                 let _ = upscaled;
                 ranged(&e, &root, false).await?
             };
-            let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified };
+            let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified, author: e.meta.author.clone() };
             modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
             keep(&m)
         };
@@ -391,7 +402,7 @@ async fn whole(e: &Entry, root: &Path) -> Result<Mod, String> {
     let (size, hash) = download(e, &mut zip).await?;
     matches(size, &hash, &e.meta)?;
     send(Event::Progress(format!("Checking {}...", e.meta.name)));
-    zip.install(root, &e.meta.id).await
+    zip.install(root, &e.meta.id, &e.meta.author).await
 }
 
 /// `e`'s `mod.zip` from the store into `zip`: its size and sha256.
@@ -432,8 +443,8 @@ impl Zip {
     async fn write(&mut self, b: &[u8]) -> Result<(), String> {
         std::io::Write::write_all(&mut self.0, b).map_err(|e| format!("can't write {}: {e}", self.1.display()))
     }
-    async fn install(&self, root: &Path, id: &str) -> Result<Mod, String> {
-        modfs::install_file(&self.1, root, Some(id))
+    async fn install(&self, root: &Path, id: &str, owner: &str) -> Result<Mod, String> {
+        modfs::install_file(&self.1, root, Some(id), Some(owner))
     }
 }
 
@@ -484,7 +495,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
             Ok(b.to_vec())
         }
     };
-    modfs::install_with(len, read, root, Some(&e.meta.id), disk, false).await
+    modfs::install_with(len, read, root, Some(&e.meta.id), Some(&e.meta.author), disk, false).await
 }
 
 /// Bytes `at..at + n` of `url` (the store's file, or where it redirected), asked for; `partial` checks they came.
@@ -522,7 +533,7 @@ pub fn pick(root: &Path) {
             if len > MAX_ZIP {
                 return Err(format!("{len} bytes is bigger than a mod may be"));
             }
-            keep(&modfs::install_file(f.path(), &root, None)?)
+            keep(&modfs::install_file(f.path(), &root, None, None)?)
         })();
         send(Event::Installed(got));
     });
@@ -532,7 +543,7 @@ pub fn pick(root: &Path) {
 /// that went.
 fn keep(m: &Mod) -> Result<String, String> {
     #[cfg(target_arch = "wasm32")]
-    crate::web::mod_save(&m.id, &m.name);
+    crate::web::mod_save(&m.folder(), &m.name);
     Ok(m.name.clone())
 }
 
@@ -851,6 +862,10 @@ mod tests {
         let got = merge(vec![vec![e("a", "main")], vec![e("a", "refs/pr/9"), e("b", "refs/pr/9")], vec![e("b", "refs/pr/3"), e("c", "refs/pr/3")]]);
         let got: Vec<_> = got.iter().map(|e| (e.meta.id.as_str(), e.rev.as_str(), e.verified)).collect();
         assert_eq!(got, [("a", "main", true), ("b", "refs/pr/9", false), ("c", "refs/pr/3", false)]);
+        // B248: another author's mod with a listed id is listed too; the same zip under another author isn't
+        let by = |id: &str, rev: &str, who: &str, sha: &str| Entry { meta: Meta { author: who.into(), sha256: sha.into(), ..e(id, rev).meta }, ..e(id, rev) };
+        let got = merge(vec![vec![by("a", "main", "x", "1")], vec![by("a", "refs/pr/9", "y", "2"), by("a", "refs/pr/8", "z", "1"), by("a", "refs/pr/7", "y", "3")]]);
+        assert_eq!(got.iter().map(|e| e.rev.as_str()).collect::<Vec<_>>(), ["main", "refs/pr/9"]);
     }
 
     /// Upload → Install round trip: a real mod packaged, its zip checked against its meta (a flipped byte or a
@@ -882,16 +897,16 @@ mod tests {
                 for c in p.zip.chunks(64 << 10) {
                     z.write(c).await.unwrap();
                 }
-                assert!(z.install(&disk, "someone_else").await.unwrap_err().contains("not `someone_else`"));
+                assert!(z.install(&disk, "someone_else", "").await.unwrap_err().contains("not `someone_else`"));
                 assert!(disk.join(&m.id).join("old").exists() && !disk.join(".import").exists());
-                z.install(&disk, &m.id).await
+                z.install(&disk, &m.id, "").await
             })
             .unwrap();
         assert!(!disk.join(".download.zip").exists() && !disk.join(".import").exists());
         assert!(!disk.join(&m.id).join("old").exists());
         assert!(modfs::files_under(&disk).is_empty());
         assert_eq!(crate::mods::read(&got.dir).unwrap().id, m.id);
-        let s = Stamp { sha256: p.meta.sha256.clone(), rev: "refs/pr/1".into(), verified: false };
+        let s = Stamp { sha256: p.meta.sha256.clone(), rev: "refs/pr/1".into(), verified: false, author: String::new() };
         modfs::write(&got.dir.join("store.json"), serde_json::to_vec(&s).unwrap()).unwrap();
         assert_eq!(stamp(&got.dir).unwrap().rev, "refs/pr/1");
         // the stamp stays out of a re-upload's zip
