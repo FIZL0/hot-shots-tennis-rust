@@ -34,7 +34,7 @@ pub(super) enum Act {
 }
 
 /// ✕.
-pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false, hear: false };
+pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false };
 
 pub(super) fn press(f: impl FnOnce(&mut Press)) -> Act {
     let mut k = Press::default();

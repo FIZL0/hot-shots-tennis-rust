@@ -4,7 +4,8 @@
 //!
 //! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
 //! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
-//! themselves after a few seconds); a tap or click on Chat opens it on a touch page (the phone's keyboard). The last
+//! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch page (the
+//! legend hidden there) a small Chat label shows instead, and a tap on it opens the box (the phone's keyboard). The last
 //! few lines show at the bottom left, fading out, over the menus and the HUD alike, taking no presses from the match.
 //! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
 //! → Online & Mods → Chat off hides all of it.
@@ -255,6 +256,8 @@ fn draw(
     chat: Res<Chat>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     root: Query<(Entity, &mut Visibility), With<Root>>,
+    mut tap: Query<&mut Visibility, (With<Tap>, Without<Root>)>,
+    last: Option<Res<crate::play::main_menu::legend::Last>>,
     mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && net.is_some_and(|n| n.in_room());
@@ -271,6 +274,15 @@ fn draw(
     }
     if !on {
         return;
+    }
+    // B320: the Chat label only on a touch page (no keys to press, and no legend strip there); elsewhere the
+    // legend's T / R2 L2 say it
+    let touch = last.is_some_and(|l| *l == crate::play::main_menu::legend::Last::Touch);
+    for mut v in &mut tap {
+        let want = if touch { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
     }
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
     let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
@@ -329,7 +341,7 @@ fn spawn(commands: &mut Commands) {
         for i in 0..=SHOWN {
             p.spawn(row(i));
         }
-        p.spawn((Tap, Node { align_self: AlignSelf::FlexStart, ..default() })).with_children(|b| {
+        p.spawn((Tap, Node { align_self: AlignSelf::FlexStart, ..default() }, Visibility::Hidden)).with_children(|b| {
             b.spawn(row(SHOWN + 1));
         });
     });
