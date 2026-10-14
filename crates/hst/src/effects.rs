@@ -550,7 +550,7 @@ impl BallFlight {
 }
 
 /// The ribbon from the ball back along its samples, facing the camera, `speed`·20 long, fading to its end; the glow
-/// a disc at the ball turning a quarter turn from along the flight to across it and fading over its last 15 frames.
+/// a disc at the ball facing the flight, spinning a quarter turn about it and fading over its last 15 frames.
 // ponytail: the game's flag switch on the glow by flight facing (towards/away from the camera) and its halved ribbon
 // length under one of its mode counts are left out
 pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<Fx>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<Fx>>) {
@@ -604,9 +604,10 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
     fill(&mut mesh, pos, uv, colour, index);
 }
 
-/// The glow's orientation (game space): a frame looking along the flight (side = up × flight); a flight within 60° of
-/// the court's length is turned about up towards it (onto it under 30°, easing to no turn at 60°); then the disc turns
-/// about its side axis by `turn`, from lying along the flight (a quarter turn) to facing it (none).
+/// The glow's orientation (game space): a frame facing the flight (side = up × flight, then flight × side); a flight
+/// within 60° of the court's length is turned about up away from it (by its angle off the length under 30°, easing to
+/// none at 60°: the game's row-vector `RotMatrixY` by sign(x)·sign(z)·angle); then the disc spins about the flight by
+/// `turn` (`Rz · M`, so it keeps facing the flight).
 fn glow_turn(vel: Vec3, turn: f32) -> Quat {
     let d = vel.try_normalize().unwrap_or(Vec3::Z);
     let side = Vec3::Y.cross(d).try_normalize().unwrap_or(Vec3::X);
@@ -614,9 +615,9 @@ fn glow_turn(vel: Vec3, turn: f32) -> Quat {
     let a = d.x.abs().atan2(d.z.abs());
     let limit = 60f32.to_radians();
     if a < limit {
-        basis = Quat::from_rotation_y(-(limit - a).min(a) * d.x.signum() * d.z.signum()) * basis;
+        basis = Quat::from_rotation_y((limit - a).min(a) * d.x.signum() * d.z.signum()) * basis;
     }
-    basis * Quat::from_rotation_x(turn)
+    basis * Quat::from_rotation_z(turn)
 }
 
 /// The ball's bounce effects: the sim, the ring and crater models, and one mesh each for marks and dust.
