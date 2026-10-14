@@ -1481,6 +1481,15 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
     }
 }
 
+/// B198: the biggest datagram that surely gets through (QUIC's 1200-byte minimum path MTU less its headers; iroh
+/// drops a bigger one, silently).
+pub const DATAGRAM_MAX: usize = 1100;
+
+/// Whether `data` fits in a datagram with its peer name (an endpoint id, 64 characters) in front.
+pub fn fits(data: &[u8]) -> bool {
+    data.len() + 65 <= DATAGRAM_MAX
+}
+
 /// A datagram on the wire: the other end's peer name (the sender's from the host, the receiver's to it), then the data.
 fn datagram(peer: &str, data: &[u8]) -> Vec<u8> {
     let mut d = vec![peer.len() as u8];

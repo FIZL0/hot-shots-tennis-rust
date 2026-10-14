@@ -37,6 +37,10 @@ pub const OWE: i32 = WINDOW as i32;
 /// B197: a frame this long still runs all its ticks (Bevy's fixed loop drops time past `Time<Virtual>`'s max delta,
 /// 250 ms by default): a peer's 1 s hitch is caught up at once.
 pub const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(2);
+/// B198: the most inputs a peer may leave unacked before this machine holds (ggrs drops it past 128).
+const UNACKED: usize = 120;
+/// B198: how long a stall goes before this machine's inputs go again (ggrs' own resend interval).
+const RESEND: std::time::Duration = std::time::Duration::from_millis(200);
 
 pub struct Cfg;
 
@@ -65,10 +69,20 @@ impl Config for Cfg {
 pub struct Wires {
     pub out: Arc<Mutex<Vec<(String, Message)>>>,
     pub inbox: Arc<Mutex<Vec<(String, Message)>>>,
+    /// B198: the last inputs message to each peer (every input it hasn't acked yet), sent again while stalled.
+    last: Arc<Mutex<std::collections::HashMap<String, Message>>>,
+}
+
+/// Whether `msg` is ggrs' inputs message (its body private: bincode's variant index after the 2-byte header).
+fn inputs(msg: &Message) -> bool {
+    bincode::serialize(msg).is_ok_and(|b| b.get(2..6) == Some(&[2, 0, 0, 0]))
 }
 
 impl NonBlockingSocket<String> for Wires {
     fn send_to(&mut self, msg: &Message, addr: &String) {
+        if inputs(msg) {
+            self.last.lock().unwrap().insert(addr.clone(), msg.clone());
+        }
         self.out.lock().unwrap().push((addr.clone(), msg.clone()));
     }
 
@@ -115,6 +129,10 @@ pub struct Rollback {
     /// (every datagram carries it, so an older session's are dropped).
     pub base: usize,
     pub round: u8,
+    /// B198: the frame last run (or inputs last sent again) and when.
+    moved: (i32, web_time::Instant),
+    /// Inputs sent again (`resend`), in all.
+    pub resent: u64,
 }
 
 type Cell = ggrs::GameStateCell<Arc<(snapshot::Snapshot, Option<Replay>)>>;
@@ -175,7 +193,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, owed: 0, shift: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0 })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, owed: 0, shift: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0, moved: (0, web_time::Instant::now()), resent: 0 })
     }
 
     /// The tick the next run is.
@@ -216,6 +234,7 @@ pub fn outgoing(w: &World) -> Vec<(String, Vec<u8>)> {
 pub fn poll(w: &mut World) {
     let Some(mut rb) = w.get_resource_mut::<Rollback>() else { return };
     rb.sess.poll_remote_clients();
+    resend(&mut rb);
     let events: Vec<_> = rb.sess.events().collect();
     for e in events {
         match e {
@@ -230,6 +249,24 @@ pub fn poll(w: &mut World) {
         }
     }
     stats(w);
+}
+
+/// B198: stalled [`RESEND`] (or paused), this machine's last inputs to each peer go again, and again every
+/// [`RESEND`]. ggrs resends only once a peer's inputs stop coming: two peers stalled at their windows, each missing
+/// one of the other's lost inputs, kept each other's resends from ever starting (any peer's datagram resets the
+/// clock), each waiting for the other for ever. A peer that has them all drops the copy.
+fn resend(rb: &mut Rollback) {
+    let (frame, now) = (rb.sess.current_frame(), web_time::Instant::now());
+    if frame != rb.moved.0 || now - rb.moved.1 < RESEND {
+        if frame != rb.moved.0 {
+            rb.moved = (frame, now);
+        }
+        return;
+    }
+    rb.moved.1 = now;
+    let last: Vec<_> = rb.wires.last.lock().unwrap().iter().map(|(p, m)| (p.clone(), m.clone())).collect();
+    rb.resent += last.len() as u64;
+    rb.wires.out.lock().unwrap().extend(last);
 }
 
 /// Every 10 s in the log: each peer's round trip and how far ahead it runs, and the ticks re-run, sat out and held
@@ -473,6 +510,14 @@ pub fn gate(w: &mut World) -> bool {
 
 /// Runs the next tick (and any re-runs ggrs asks for): false if it couldn't (waiting on a peer's pads).
 fn advance(w: &mut World) -> bool {
+    // B198: a peer that hears this machine's peers but not this machine lets the others run on to its window and past
+    // it, and ggrs drops a peer for good at 128 unacked inputs (the others then run on without it, it waits for ever):
+    // this machine holds before that, sending them again (`resend`) until the peer acks
+    let rb = w.resource::<Rollback>();
+    if rb.sync.is_none() && rb.sess.remote_player_handles().into_iter().any(|h| rb.sess.network_stats(h).is_ok_and(|n| n.send_queue_len >= UNACKED)) {
+        w.resource_mut::<Rollback>().held += 1;
+        return false;
+    }
     // this machine's seats' pads (each seat's local device in the slot of the same number, `--pads`)
     let (handles, seats, frame) = {
         let rb = w.resource::<Rollback>();
