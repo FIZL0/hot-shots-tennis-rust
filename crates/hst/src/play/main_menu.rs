@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -1485,7 +1485,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" | "confirm-random" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
-        "lobby" | "lobby-bot" | "lobby-ask" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
+        "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
         _ => Screen::Main,
