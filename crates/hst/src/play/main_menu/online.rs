@@ -578,7 +578,9 @@ impl Menu {
                 let to = pill_step(&self.lobby_rects(), self.sel, k);
                 // B201: on a computer's seat L1 / R1 change its costume (and so its level); ←→ reach its ✕
                 if let Some(i) = bot.filter(|_| k.prev || k.next) {
-                    match self.bot_pick(i, 0, k.next as isize - k.prev as isize) {
+                    // a Random computer stays Random: a new costume doesn't show who it drew
+                    let random = self.net.room.as_ref().is_some_and(|r| r.seats[i].as_ref().is_some_and(|s| s.pick.random));
+                    match self.bot_pick(i, 0, k.next as isize - k.prev as isize).map(|p| Pick { random, ..p }) {
                         Some(p) => out.extend([Sound(0), Effect::Online(Fx::Net(Cmd::Bot(i, Some(p))))]),
                         None => out.push(Sound(1)),
                     }
@@ -1039,8 +1041,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     }
                 }
                 // the host's hand on the guest seat it would take out
-                if let (None, Some(Item::Seat(i) | Item::Remove(i))) = (m.net.ask, items.get(m.sel)) {
-                    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x0 - 60.0 + hand_x, 140.0 + 44.0 * *i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
+                if let (None, Some(&it @ (Item::Seat(i) | Item::Remove(i)))) = (m.net.ask, items.get(m.sel)) {
+                    // on the ✕: the hand at its left, over the seat's end
+                    let x = if matches!(it, Item::Remove(_)) { x0 + w - 64.0 } else { x0 - 60.0 };
+                    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x + hand_x, 140.0 + 44.0 * i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
                 }
             }
             if m.net.ask.is_none() {
@@ -1621,20 +1625,6 @@ mod tests {
     }
 
     #[test]
-    fn tmp_up_to_mode() {
-        let dev = super::super::Dev::Keys;
-        let mut m = Menu { screen: Screen::Lobby, ..default() };
-        sample(&mut m);
-        m.net.hosting = true;
-        m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
-        for s in 0..m.items().len() {
-            m.sel = s;
-            m.step(dev, Press { up: true, ..default() });
-            eprintln!("{:?} -> {:?}", m.items()[s], m.items()[m.sel]);
-        }
-    }
-
-    #[test]
     fn lobby_start_ready_kick_and_name() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
@@ -1784,6 +1774,9 @@ mod tests {
         m.sel = 2;
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert_eq!((p.char, p.costume, m.sel), (6, 1, 2), "the host's costume 0 of the same character taken");
+        m.net.room.as_mut().unwrap().seats[3].as_mut().unwrap().pick.random = true;
+        let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
+        assert!(p.random, "a new costume keeps a Random computer hidden");
         // ←→ don't change its character: → reaches its ✕, OK on that takes it off
         assert_eq!(net(&m.step(dev, Press { right: true, ..default() })), None);
         assert_eq!(m.items()[m.sel], Item::Remove(3));
