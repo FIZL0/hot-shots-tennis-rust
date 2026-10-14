@@ -27,7 +27,7 @@ pub(super) struct FootFx {
     table: Foot,
     feet: Feet,
     court: usize,
-    /// The court's dust colour (1 = the game's 128).
+    /// The court's dust colour (linear, `lin`).
     dust: [f32; 3],
     /// Last tick was in the serve, to clear everything as a point starts.
     serving: bool,
@@ -64,7 +64,7 @@ fn setup(
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("game program");
     let court = args.stage.map_or(args.court, |s| s as usize);
     let looks = game.bounce_looks();
-    let dust = looks.get(court).unwrap_or(&looks[10]).dust.map(|v| v / 128.0);
+    let dust = looks.get(court).unwrap_or(&looks[10]).dust.map(lin);
     let mut mesh = |tex: &str| {
         let m = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
         let material = look(&mut iso, tex, &mut materials, &mut images).expect("footstep texture");
@@ -79,6 +79,13 @@ fn setup(
     let dash = (0..4).map(|_| model(&arc, "run/dash", &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes).expect("run/dash")).collect();
     let (table, feet) = (game.foot(), Feet::default());
     commands.insert_resource(FootFx { table, feet, court, dust, serving: false, wet: false, dry_puffs, wet_puffs, prints, dash, dives: [DiveWatch::default(); 4], bits, states: [0; 4] });
+}
+
+/// A game colour channel (0..128, the GS's modulate in the framebuffer's gamma) as the linear vertex colour Bevy
+/// multiplies the sRGB-decoded texture by; passed raw (`v / 128`) every colour showed brighter, footprints at court
+/// 10's 25/128 as 48% grey (B286).
+fn lin(v: f32) -> f32 {
+    Color::srgb(v / 128.0, 0.0, 0.0).to_linear().red
 }
 
 /// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
@@ -242,7 +249,7 @@ fn draw(fx: Option<Res<FootFx>>, g: Res<Game>, own: Option<Res<super::own_camera
         put(&mut mesh, vec![]);
     }
     let c = fx.table.courts.get(fx.court).unwrap_or(&fx.table.courts[10]);
-    let [r, g, b] = c.print_rgb[fx.wet as usize].map(|v| v / 128.0);
+    let [r, g, b] = c.print_rgb[fx.wet as usize].map(lin);
     let prints = fx
         .feet
         .prints
@@ -301,12 +308,12 @@ fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>
             index.extend([n, n + 1, n + 2, n + 2, n + 1, n + 3]);
         };
         if blades {
-            let [r, g, b] = s.rgb.map(|v| v / 128.0);
+            let [r, g, b] = s.rgb.map(lin);
             quad((v3(s.m[0]) * s.size, v3(s.m[2]) * s.size), at, [r, g, b, 1.0]);
         } else {
-            let [r, g, b] = c.clod_rgb.map(|v| v / 128.0);
+            let [r, g, b] = c.clod_rgb.map(lin);
             quad((right * s.size, up * s.size), at, [r, g, b, 1.0]);
-            quad((Vec3::X * s.size, Vec3::Z * s.size), Vec3::new(at.x, -0.01, at.z), [0.25, 0.25, 0.25, 90.0 / 128.0]);
+            quad((Vec3::X * s.size, Vec3::Z * s.size), Vec3::new(at.x, -0.01, at.z), [lin(32.0), lin(32.0), lin(32.0), 90.0 / 128.0]);
         }
     }
     let [shown, empty] = if blades { [&fx.bits[1], &fx.bits[0]] } else { [&fx.bits[0], &fx.bits[1]] };
