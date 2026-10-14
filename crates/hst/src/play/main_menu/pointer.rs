@@ -365,18 +365,14 @@ pub(super) mod tests {
     #[test]
     fn taps_from_main_menu_to_match() {
         let mut m = Menu::default();
-        tap(&mut m, 150.0, 69.0); // Local (B297: the left list)
-        assert_eq!(m.screen, Screen::Mode);
-        tap(&mut m, 320.0, 240.0); // Doubles' bar: changes the mode and goes on
-        assert_eq!((m.screen, m.doubles), (Screen::Assign, true));
-        tap(&mut m, 20.0, 10.0); // the title tab: Back
-        assert_eq!(m.screen, Screen::Mode);
-        tap(&mut m, 320.0, 170.0); // Singles
-        assert_eq!((m.screen, m.doubles), (Screen::Assign, false));
-        tap(&mut m, 468.0, 188.0); // B216: 2P's + COM
-        assert!(m.bots[1]);
-        tap(&mut m, 320.0, 118.0); // 1P's card
+        tap(&mut m, 150.0, 69.0); // Local (B297: the left list): straight to the roster (B331)
         assert_eq!(m.screen, Screen::Chars);
+        // the mode bar over the roster swaps Singles ↔ Doubles
+        let [sx, sy, sw, _] = m.grid.strip;
+        tap(&mut m, sx + sw - 60.0, sy - 19.0);
+        assert!(m.doubles);
+        tap(&mut m, sx + sw - 60.0, sy - 19.0);
+        assert!(!m.doubles);
         // a face (B296: roster cell 1 + its place in the disc grid, after the Random card): 1P moves there and is
         // ready; then the face for the computer's pick
         let [x, y, w, h] = m.grid.cell(6);

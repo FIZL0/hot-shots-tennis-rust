@@ -43,7 +43,7 @@ pub(crate) fn root() -> &'static Path {
 const TOP: usize = 2;
 const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
-const PAGES: [Page; 4] = [Page::Installed, Page::Browse, Page::Upload, Page::Mine];
+const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
 /// A mod card's height and pitch in the list.
 const CARD_H: f32 = 40.0;
 const CARD_PITCH: f32 = 45.0;
@@ -321,7 +321,7 @@ impl Menu {
     pub(super) fn mods_open(&mut self, out: &mut Vec<Effect>) {
         self.add.status.clear();
         self.add.top = 0;
-        self.add.page = Page::Installed;
+        self.mods_page(Page::Browse, 0);
         self.go(Screen::Mods, out);
     }
 
@@ -1089,7 +1089,7 @@ fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: boo
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let v = &m.add;
     d.frame(5, 6);
-    let tabs = [format!("Installed {}", v.list.len()), "Browse".into(), "Upload".into(), "My uploads".into()];
+    let tabs = ["Browse".into(), format!("Installed {}", v.list.len()), "Upload".into(), "My uploads".into()];
     let words: Vec<&str> = tabs.iter().map(String::as_str).collect();
     super::options::tab_row(d, m, 5, &words, PAGES.iter().position(|p| *p == v.page));
     let (list, side) = boxes(&m.grid);
@@ -1810,7 +1810,7 @@ mod tests {
         assert!(m.add.status.contains("Added by hand"), "{}", m.add.status);
     }
 
-    /// Play with on an installed mod: the mode choice, then the select with it on 1P's cursor; one not in the
+    /// Play with on an installed mod: the select with it on 1P's cursor (B331); one not in the
     /// select's roster yet says Reload instead.
     #[test]
     fn play_with_a_mod() {
@@ -1820,10 +1820,6 @@ mod tests {
         m.add.list = vec![a_mod("t_play", "P"), a_mod("t_new", "N")];
         m.step(Keys, ok());
         assert_eq!(m.add.child.as_ref().map(|c| c.opts[0]), Some(PLAY));
-        m.step(Keys, ok());
-        assert_eq!((m.screen, m.add.play, m.seats[0]), (Screen::Mode, Some(1), Some(Keys)));
-        m.step(Keys, ok());
-        assert_eq!(m.screen, Screen::Assign);
         m.step(Keys, ok());
         assert_eq!((m.screen, m.players[0].modded, m.players[0].pick, m.add.play), (Screen::Chars, true, 1, None));
         // a mod added since the start isn't in the select
@@ -1917,9 +1913,7 @@ mod tests {
         m.add.list = vec![a_mod("a", "A")];
         let mut out = Vec::new();
         m.mods_open(&mut out);
-        assert_eq!((m.add.page, m.sel), (Page::Installed, 0));
-        // E: the next tab, Browse (Refresh, then the entries)
-        m.mods_step(Press { next: true, ..default() }, &mut out);
+        // Browse first (Refresh, then the entries)
         assert_eq!((m.add.page, m.sel, m.add.rows()), (Page::Browse, 0, 5));
         let tags: Vec<_> = m.add.entries().iter().map(|x| m.add.state(x)).collect();
         assert_eq!(tags, [Some("Installed"), Some("Update"), None]);

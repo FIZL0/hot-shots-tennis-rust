@@ -864,9 +864,56 @@ impl Menu {
             self.seats[..n].swap(0, q);
             return true;
         }
-        self.seats[p] = if self.screen == Screen::Chars { Some(Dev::Open) } else { None };
+        // B331: on a local roster (not the phone duo's) the seat goes back to the computer, open to the next ✕
+        self.seats[p] = if self.screen == Screen::Chars && !self.local_roster() { Some(Dev::Open) } else { None };
         self.unready(p);
         true
+    }
+
+    /// B331: the local roster (not online, not the phone duo's): devices join it with ✕, □ / Tab swaps the mode.
+    fn local_roster(&self) -> bool {
+        self.screen == Screen::Chars && !self.online() && !self.duo
+    }
+
+    /// The seat a device's ✕ on the select takes: one held open for a device (B238), else on a local roster the
+    /// first computer player's (B331).
+    fn join_seat(&self) -> Option<usize> {
+        let n = self.players();
+        (0..n).find(|&p| self.seats[p] == Some(Dev::Open)).or_else(|| (0..n).find(|&p| self.local_roster() && self.seats[p].is_none()))
+    }
+
+    /// B331: a local match goes straight to the roster (Smash style): `dev` is 1P, every other seat a computer player
+    /// until a device joins with ✕; the Mods page's Play with puts its mod on 1P's cursor.
+    fn local_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
+        self.rematch = false;
+        self.duo = false;
+        self.seats = [Some(dev), None, None, None];
+        self.bots = [false; 4];
+        self.players = [Player::default(); 4];
+        self.scroll = 0;
+        if let Some(j) = self.add.play.take().filter(|&j| j < self.own_mods()) {
+            self.put(0, Some(Who::Mod(j)));
+        }
+        self.go(Screen::Chars, out);
+    }
+
+    /// B331: Singles ↔ Doubles on the roster. 1P's opponent stays across the net (singles' 2P is doubles' 3P);
+    /// going to singles keeps 1P and the first other human (opponents first), a third or fourth device has to join
+    /// again. Picks follow their seats, every card picks again.
+    fn swap_mode(&mut self) {
+        let (seats, players) = (self.seats, self.players);
+        let from = if self.doubles {
+            let o = [2, 3, 1].into_iter().find(|&q| seats[q].is_some()).unwrap_or(2);
+            [Some(0), Some(o), None, None]
+        } else {
+            [Some(0), None, Some(1), None]
+        };
+        self.doubles = !self.doubles;
+        for (p, q) in from.into_iter().enumerate() {
+            self.seats[p] = q.and_then(|q| seats[q]);
+            self.players[p] = Player { ready: false, ..q.map_or_else(Player::default, |q| players[q]) };
+        }
+        self.focus = 0;
     }
 
     /// One device's presses on the current screen.
@@ -900,11 +947,7 @@ impl Menu {
                             out.extend([Sound(2), Launch]);
                             self.screen = Screen::Playing;
                         }
-                        Row::Local => {
-                            self.rematch = false;
-                            self.seats = [Some(dev), None, None, None];
-                            self.go(Screen::Mode, &mut out);
-                        }
+                        Row::Local => self.local_start(dev, &mut out),
                         Row::Online => {
                             self.rematch = false;
                             self.seats = [Some(dev), None, None, None];
@@ -1027,13 +1070,20 @@ impl Menu {
             }
             Screen::Chars => {
                 // B238: a device not seated takes the first seat held open for one
-                if k.ok && !self.seats.contains(&Some(dev)) && let Some(p) = self.seats.iter().position(|s| *s == Some(Dev::Open)) {
+                if k.ok && !self.seats.contains(&Some(dev)) && let Some(p) = self.join_seat() {
                     self.seats[p] = Some(dev);
+                    self.unready(p);
                     out.push(Sound(2));
                     return out;
                 }
                 let Some(p) = self.driven(dev) else { return out };
                 self.focus = p;
+                // B331: □ / Tab (or a tap on the mode bar) swaps Singles ↔ Doubles on a local roster
+                if k.page && self.local_roster() {
+                    self.swap_mode();
+                    out.push(Sound(0));
+                    return out;
+                }
                 let costumes = self.costumes(self.who(p));
                 let costume_to = |back: bool| self.next_free(p, self.who(p), (self.players[p].costume + if back { costumes - 1 } else { 1 }) % costumes, back);
                 let (next_c, prev_c) = (costume_to(false), costume_to(true));
@@ -1118,12 +1168,16 @@ impl Menu {
                     } else if self.seats[p] == Some(dev) && self.drop_seat(p) {
                         // B238: a joined device's ○ takes it off its seat
                         out.push(Sound(1));
-                    } else if p == 0 {
+                    } else if p == 0 && self.online() {
                         // online: back to the lobby, the seats still held
-                        self.screen = if self.online() { Screen::Lobby } else { Screen::Assign };
-                        if !self.online() {
-                            self.seats.iter_mut().filter(|s| **s == Some(Dev::Open)).for_each(|s| *s = None);
-                        }
+                        self.screen = Screen::Lobby;
+                        out.push(Sound(1));
+                    } else if p == 0 {
+                        // B331: the local roster is the first screen past the main menu
+                        self.seats[1..].fill(None);
+                        self.add.play = None;
+                        self.sel = self.main_at(home::Row::Local);
+                        self.screen = Screen::Main;
                         out.push(Sound(1));
                     }
                 }
@@ -1217,9 +1271,7 @@ impl Menu {
                 self.mods_step(k, &mut out);
                 // Play with: a local match from the mode choice, the mod put on 1P's cursor at the select
                 if self.add.play.is_some() {
-                    self.rematch = false;
-                    self.seats = [Some(dev), None, None, None];
-                    self.go(Screen::Mode, &mut out);
+                    self.local_start(dev, &mut out);
                 }
             }
             _ => {}
@@ -2238,7 +2290,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
         Who::Disc(c) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[c]).to_string(),
     };
     let [sx, sy, sw, _] = g.strip;
-    mode_bar(d, m.doubles as usize, true, [sx + sw - 120.0, sy - 32.0, 120.0, 26.0], if m.doubles { "Doubles" } else { "Singles" });
+    let bar = [sx + sw - 120.0, sy - 32.0, 120.0, 26.0];
+    mode_bar(d, m.doubles as usize, true, bar, if m.doubles { "Doubles" } else { "Singles" });
+    if m.local_roster() {
+        // B331: a tap swaps Singles ↔ Doubles, as □ / Tab
+        d.hit(bar, pointer::press(|k| k.page = true));
+    }
 
     // the roster's tiles on view
     let (start, roster) = m.page();
@@ -2313,6 +2370,8 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
                 ("Open", "Press X / Enter to join")
             } else if online {
                 ("Open", "Waiting for a player")
+            } else if m.local_roster() {
+                ("CPU", "Press X / Enter to join")
             } else {
                 ("CPU", "Picks after the players")
             };
@@ -3564,12 +3623,10 @@ mod tests {
         }
     }
 
-    /// B216: on the seat assignment, 1P adds a computer player on 2P.
+    /// B216: 2P a computer player 1P picks for (as an online lobby's), not an open seat's automatic pick.
     fn add_com(m: &mut Menu) {
-        assert_eq!(m.screen, Screen::Assign);
-        m.step(Dev::Keys, press(|p| &mut p.down));
-        m.step(Dev::Keys, press(|p| &mut p.card));
-        assert!(m.bots[1]);
+        assert_eq!(m.screen, Screen::Chars);
+        m.bots[1] = true;
     }
 
     /// B216 / B258: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on the first character
@@ -3578,9 +3635,7 @@ mod tests {
     fn an_open_seat_is_a_com_card() {
         let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
         let mut m = Menu::default();
-        for _ in 0..3 {
-            m.step(Dev::Keys, ok);
-        }
+        m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         assert_eq!(m.driven(Dev::Keys), Some(0));
         m.step(Dev::Keys, ok);
@@ -3623,30 +3678,19 @@ mod tests {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu::default();
         let ok = press(|p| &mut p.ok);
-        m.step(Dev::Keys, ok); // Local
-        assert_eq!(m.screen, Screen::Mode);
-        m.step(Dev::Keys, press(|p| &mut p.down)); // doubles
-        m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Assign);
+        m.step(Dev::Keys, ok); // Local: straight to the roster (B331)
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(Dev::Keys, press(|p| &mut p.page)); // doubles
         m.step(pad, ok); // the pad joins as 2P
         assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(pad)]);
-        // B216: 1P adds a computer player on 3P (△ on its seat, twice takes it off, three times back on); 4P stays open
-        m.step(Dev::Keys, press(|p| &mut p.down));
-        m.step(Dev::Keys, press(|p| &mut p.card));
-        assert!(!m.bots[1], "2P has a device");
-        m.step(Dev::Keys, press(|p| &mut p.down));
-        for _ in 0..3 {
-            m.step(Dev::Keys, press(|p| &mut p.card));
-        }
-        assert_eq!(m.bots, [false, false, true, false]);
-        // a device joining passes over the computer's seat
+        // B216: a computer player 1P picks for on 3P; 4P stays open (its automatic pick)
+        m.bots[2] = true;
+        // a device joins the computer's seat and leaves it to the computer again
         let pad2 = Dev::Pad(Entity::from_raw_u32(11).unwrap());
         m.step(pad2, ok);
-        assert_eq!(m.seats[3], Some(pad2));
+        assert_eq!(m.seats[2], Some(pad2));
         m.step(pad2, press(|p| &mut p.back));
-        assert_eq!(m.seats[3], None);
-        m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Chars);
+        assert_eq!(m.seats[2], None);
         // B66: both on Ashley costume 1: 1P locks it in, 2P moves on to costume 2; leaving Ashley and coming back
         // lands on costume 2 again, and L1 / R1 pass costume 1
         m.step(Dev::Keys, ok);
@@ -3790,7 +3834,7 @@ mod tests {
         assert_eq!((m.screen, m.args(&[])), (Screen::Playing, first));
         (m.screen, m.sel) = (Screen::Main, m.main_at(home::Row::Local));
         m.step(Dev::Keys, press(|p| &mut p.ok));
-        assert_eq!(m.screen, Screen::Mode);
+        assert_eq!(m.screen, Screen::Chars);
         m.step(Dev::Keys, press(|p| &mut p.back));
         assert_eq!((m.screen, m.sel, m.rematch), (Screen::Main, 0, false));
         assert_eq!(m.main_rows()[0], home::Row::Local);
@@ -3930,30 +3974,26 @@ mod tests {
         assert_eq!(m.seats, [Some(Dev::Keys), None, Some(pb), None]);
         m.step(pa, ok);
         assert_eq!(m.seats[1], Some(pa));
-        // on the select: held open (still a human's), the next device's ✕ takes it, the dropped one's does nothing
+        // on the local roster (B331): back to the computer, the next device's ✕ takes it
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         m.step(pb, ok);
         assert!(m.players[2].ready);
         m.step(pb, press(|p| &mut p.back)); // ready → picking again
         m.step(pb, press(|p| &mut p.back)); // ○ off its seat
-        assert_eq!((m.seats[2], m.players[2].ready), (Some(Dev::Open), false));
+        assert_eq!((m.seats[2], m.players[2].ready), (None, false));
         assert_eq!(m.driven(pb), None);
         m.step(pb, ok);
         assert_eq!(m.seats[2], Some(pb));
         m.point(Dev::Keys, pointer::Act::Drop(2), true);
-        m.step(pa, ok); // seated already: readies its own, doesn't take the open seat
-        assert_eq!((m.seats[2], m.players[1].ready), (Some(Dev::Open), true));
-        m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Chars); // not to the confirm screen with a seat open
+        m.step(pa, ok); // seated already: readies its own, doesn't take the free seat
+        assert_eq!((m.seats[2], m.players[1].ready), (None, true));
         let keys2 = Dev::Pad(Entity::from_raw_u32(7).unwrap());
         m.step(keys2, ok);
         assert_eq!(m.seats[2], Some(keys2));
-        // 1P backing out to the assignment frees seats still open
-        m.point(Dev::Keys, pointer::Act::Drop(2), true);
+        // 1P backing out of the roster: the main menu, the other seats freed
         m.step(Dev::Keys, press(|p| &mut p.back));
-        m.step(Dev::Keys, press(|p| &mut p.back));
-        assert_eq!((m.screen, m.seats), (Screen::Assign, [Some(Dev::Keys), Some(pa), None, None]));
+        assert_eq!((m.screen, m.seats), (Screen::Main, [Some(Dev::Keys), None, None, None]));
     }
 
     #[test]
@@ -3987,18 +4027,14 @@ mod tests {
         let [p0, p1, p2] = [3, 9, 11].map(|n| Dev::Pad(Entity::from_raw_u32(n).unwrap()));
         let ok = press(|p| &mut p.ok);
         let mut m = Menu::default();
-        m.step(p1, ok); // a pad chose Local: it is 1P
-        m.step(p1, press(|p| &mut p.down)); // doubles
-        m.step(p1, ok);
-        m.step(Dev::Keys, ok); // the keyboard joins as 2P
-        m.step(p0, ok); // 3P
-        m.step(Dev::Keys, press(|p| &mut p.right)); // the keyboard moves to the free 4P (other team)
-        assert_eq!(m.seats, [Some(p1), None, Some(p0), Some(Dev::Keys)]);
-        m.step(p2, ok); // the last pad takes 2P
-        m.step(Dev::Keys, press(|p| &mut p.left)); // no free seat: stays
-        assert_eq!(m.seats, [Some(p1), Some(p2), Some(p0), Some(Dev::Keys)]);
-        m.step(p1, ok);
+        m.step(p1, ok); // a pad chose Local: it is 1P, on the roster (B331)
         assert_eq!(m.screen, Screen::Chars);
+        m.step(p1, press(|p| &mut p.page)); // doubles
+        // each device's ✕ joins the next free seat
+        m.step(p2, ok);
+        m.step(p0, ok);
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.seats, [Some(p1), Some(p2), Some(p0), Some(Dev::Keys)]);
         // every seat is a human: each readies its own player, 1P never drives another
         for (i, d) in [p1, p2, p0, Dev::Keys].into_iter().enumerate() {
             assert_eq!(m.driven(d), Some(i));
@@ -4017,7 +4053,6 @@ mod tests {
         assert_eq!(seats, [Some(Seat::Pad(1)), Some(Seat::Pad(2)), Some(Seat::Pad(0)), Some(Seat::Keys)]);
         // singles: the keyboard can be 2P
         let mut m = Menu::default();
-        m.step(p0, ok);
         m.step(p0, ok);
         m.step(Dev::Keys, ok);
         m.step(p1, ok); // no seat left
@@ -4143,7 +4178,8 @@ mod tests {
         }
     }
 
-    /// B306: one roster, no filters: Random, the disc's 14, every mod; □ / Tab does nothing on it.
+    /// B306: one roster, no filters: Random, the disc's 14, every mod. B331: □ / Tab swaps Singles ↔ Doubles, 2P
+    /// going to 3P (across the net) and back.
     #[test]
     fn one_roster() {
         let from = |i: usize, s: &str| crate::mods::Mod { id: format!("m{i}"), source: s.into(), costumes: vec!["a".into()], ..fake_mod(i) };
@@ -4152,7 +4188,10 @@ mod tests {
         assert_eq!(r.len(), 1 + CHARS + 4);
         assert_eq!((r[0], r[1], r[CHARS + 1]), (None, Some(Who::Disc(GRID[0].0)), Some(Who::Mod(0))));
         let was = m.players;
-        assert!(m.step(Dev::Keys, press(|p| &mut p.page)).is_empty());
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(Dev::Keys), None]));
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(Dev::Keys), None, None]));
         assert_eq!(m.players, was);
         // the shown player: the one who pressed last while picking
         m.step(Dev::Keys, press(|p| &mut p.right));
@@ -4184,10 +4223,7 @@ mod tests {
         let ok = press(|p| &mut p.ok);
         let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };
         m.step(Dev::Keys, ok); // Local, singles
-        m.step(Dev::Keys, ok);
         add_com(&mut m);
-        m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Chars);
         // B306: the mods follow the disc roster on the one grid; everyone onto the first mod
         m.put(0, Some(Who::Mod(0)));
         m.put(1, Some(Who::Mod(0)));
@@ -4218,9 +4254,7 @@ mod tests {
         assert!(m.players[0].modded && !m.players[0].ready);
         // M1n: a costume whose model failed to load is passed by L1 / R1 and can't be readied on
         let mut m = Menu { mods: vec![fake("c", 3, 3)], ..default() };
-        for _ in 0..3 {
-            m.step(Dev::Keys, ok);
-        }
+        m.step(Dev::Keys, ok);
         m.put(0, Some(Who::Mod(0)));
         m.broken.insert((0, 1));
         m.step(Dev::Keys, press(|p| &mut p.next));
@@ -4262,12 +4296,8 @@ mod tests {
         assert_eq!(m.resolve(Who::Disc(0), 12), (Who::Mod(2), 0));
         let ok = press(|p| &mut p.ok);
         let mut m = m;
-        for _ in 0..2 {
-            m.step(Dev::Keys, ok);
-        }
-        add_com(&mut m);
         m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Chars);
+        add_com(&mut m);
         m.step(Dev::Keys, press(|p| &mut p.prev)); // 0 → 12: pack z's only costume
         assert_eq!(m.pick(0), (Who::Mod(2), 0));
         m.step(Dev::Keys, ok);
@@ -4291,12 +4321,8 @@ mod tests {
         let ok = press(|p| &mut p.ok);
         let hand = press(|p| &mut p.hand);
         let mut m = Menu::default();
-        for _ in 0..2 {
-            m.step(Dev::Keys, ok);
-        }
-        add_com(&mut m);
         m.step(Dev::Keys, ok);
-        assert_eq!(m.screen, Screen::Chars);
+        add_com(&mut m);
         assert_eq!(m.who(0), Who::Disc(0), "Ashley");
         m.step(Dev::Keys, hand);
         m.step(Dev::Keys, hand);
