@@ -150,11 +150,21 @@ impl Model {
         let mut out = Vec::new();
         for (material, packets) in self.materials.iter().enumerate() {
             for pk in packets {
-                let (verts, tris, morph) = self.skin_packet(pk);
+                let (verts, mut tris, morph) = self.skin_packet(pk);
+                if self.is_helper(&verts) {
+                    tris.clear();
+                }
                 out.push((material, verts, tris, morph));
             }
         }
         out
+    }
+
+    /// A modelling helper the exporter left in every body model (B54): one small triangle bound only to the
+    /// head's child node "sankaku" (三角), at the mouth. It is no part of the character; drawn, it pokes out
+    /// between the lips as a pointed wedge (green on Jun), so [`Model::skinned`] gives it no triangles.
+    pub fn is_helper(&self, verts: &[SkinVertex]) -> bool {
+        !verts.is_empty() && verts.iter().all(|v| self.node_names.get(v.joints[0] as usize).is_some_and(|n| n == "sankaku") && v.weights[0] == 1.0)
     }
 
     /// One packet of [`Model::skinned`]: its drawn vertices, triangles and morph offsets.
