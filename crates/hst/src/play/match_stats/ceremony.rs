@@ -250,6 +250,7 @@ pub(super) fn begin(
     net: Option<Res<super::super::netplay::Netplay>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    match_mod: Option<Res<crate::mods::MatchMod>>,
 ) {
     let Some(table) = g.match_stats.result.as_ref() else { return };
     if screen.open || cer.is_some() || !pending() {
@@ -295,7 +296,10 @@ pub(super) fn begin(
     let slot = plan.start.iter().map(|&s| (s, 0.0)).collect();
     let c = g.chars[plan.shown].clamp(0, 13);
     let b = if g.stage == 7 { "B" } else { "" };
-    let voice = SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase()))
+    // B181: a mod character (not a costume pack) has no prize take of its own and never speaks its donor's
+    let modded = match_mod.as_ref().and_then(|m| m.0.get(plan.shown)?.as_ref()).is_some_and(|m| m.costume_of.is_none());
+    let voice = (!modded).then(|| SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase())))
+        .flatten()
         .map(Arc::new);
     let mut cer = Ceremony {
         plan,
