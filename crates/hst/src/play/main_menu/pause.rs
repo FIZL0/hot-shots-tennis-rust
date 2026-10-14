@@ -195,8 +195,11 @@ pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>
     (at.map(|p| screen_point(win, p)), mouse.just_pressed(MouseButton::Right))
 }
 
-/// The 640×448 point under the mouse, if it's over the window.
+/// The 640×448 point under the mouse, if it's over the window and not hidden (`pointer::MOUSE_IDLE`).
 pub(in crate::play) fn cursor_point(window: &Query<&Window, With<PrimaryWindow>>) -> Option<Vec2> {
+    if super::pointer::MOUSE_IDLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
     let win = window.single().ok()?;
     win.cursor_position().map(|p| screen_point(win, p))
 }

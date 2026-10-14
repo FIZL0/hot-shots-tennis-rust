@@ -2676,6 +2676,7 @@ mod tests {
         let mut g = [[0u8; 5]; 14];
         (g[0], g[1], g[2], g[3]) = ([1, 1, 1, 5, 2], [2, 2, 3, 3, 3], [4, 4, 4, 1, 4], [3, 3, 3, 1, 3]);
         let row = |s: &str| s.split(',').map(String::from).collect::<Vec<_>>();
+        .add_systems(PreUpdate, pointer::mouse_idle.after(bevy::input::InputSystems))
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,4,4,3"), 0, csv, &g), g[0]);
         // serve 7 → character 1's grade; stroke 9 → mean of 4 and 3 rounds to 4; volley 3 is the base's; Impact, Footwork base
         assert_eq!(mod_grades(&row("0,a,,,,,,,,,,,7,9,3"), 0, csv, &g), [2, 4, 1, 5, 2]);

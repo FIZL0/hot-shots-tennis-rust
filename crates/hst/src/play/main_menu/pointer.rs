@@ -7,9 +7,11 @@
 //! scroll with it). A tap or click outside a popup is its Back (`Draw::popup`). Hit rects are placed as their quads are
 //! (`widescreen::place`), so they follow the art at any aspect; a press within `SLOP` of one still lands on it.
 
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorOptions, PrimaryWindow};
 
 use super::super::widescreen::{self, Anchor};
 use super::{Dev, Effect, Menu, Press, Screen, Who, GRID};
@@ -178,6 +180,30 @@ impl Menu {
     }
 }
 
+/// The mouse pointer is hidden and ignored (hover and clicks) since a key or a pad button was pressed, until the mouse
+/// moves or clicks again: a resting mouse never pulls the keyboard's or pad's cursor back to the row under it.
+pub(in crate::play) static MOUSE_IDLE: AtomicBool = AtomicBool::new(false);
+
+/// Keeps `MOUSE_IDLE` and the window's pointer visibility: any key or pad button hides it, mouse motion (more than
+/// a resting mouse's jitter) or a click brings it back.
+pub(in crate::play) fn mouse_idle(
+    keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut motion: MessageReader<MouseMotion>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    let moved = motion.read().map(|m| m.delta).sum::<Vec2>().length() > 2.0 || mouse.get_just_pressed().next().is_some();
+    let pressed = keys.get_just_pressed().next().is_some() || pads.iter().any(|g| g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5);
+    let idle = if moved { false } else if pressed { true } else { MOUSE_IDLE.load(Ordering::Relaxed) };
+    MOUSE_IDLE.store(idle, Ordering::Relaxed);
+    for mut c in &mut cursor {
+        if c.visible == idle {
+            c.visible = !idle;
+        }
+    }
+}
+
 /// Where the mouse was, the finger down (its id, where it went down, where the last drag step was, whether it
 /// dragged), the wheel's part-notches and when a finger last touched (the browser's mouse events copied from a touch
 /// are dropped).
@@ -251,7 +277,10 @@ pub(in crate::play) fn pointer(
         st.touched = now;
     }
     // mouse (not the browser's copy of a touch)
-    if now - st.touched > 0.6 {
+    if now - st.touched > 0.6 && MOUSE_IDLE.load(Ordering::Relaxed) {
+        // hidden: back on its first move, which hovers whatever is under it then
+        (st.mouse, st.hovered) = (None, None);
+    } else if now - st.touched > 0.6 {
         let c = win.cursor_position();
         if c != st.mouse {
             st.mouse = c;
