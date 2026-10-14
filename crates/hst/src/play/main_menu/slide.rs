@@ -81,7 +81,7 @@ mod tests {
     use super::*;
 
     fn quad(anchor: Anchor) -> Quad {
-        Quad { tex: Tex::Solid, src: [0.0; 4], dst: [100.0, 0.0, 10.0, 10.0], rgb: [128.0; 3], alpha: 128.0, tile: false, anchor, angle: 0.0 }
+        Quad { tex: Tex::Solid, src: [0.0; 4], dst: [100.0, 0.0, 10.0, 10.0], rgb: [128.0; 3], alpha: 128.0, tile: false, anchor, angle: 0.0, round: [0.0; 4] }
     }
 
     #[test]

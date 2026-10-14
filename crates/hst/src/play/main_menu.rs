@@ -395,8 +395,6 @@ struct Press {
     page: bool,
     /// Select / − (keyboard: the camera key, C): the hand toggle.
     hand: bool,
-    /// □ / X: the umpire picker's "Hear a call".
-    hear: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -511,7 +509,7 @@ struct Menu {
     duo: bool,
     /// B297: a local match was started from this menu this session; its setup is still here (the Rematch card).
     rematch: bool,
-    /// The umpire picker's "Hear a call" presses so far (each plays the next of [`CALLS`]).
+    /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
     calls: usize,
 }
 
@@ -562,7 +560,7 @@ enum Effect {
     Quit,
     ResetControls,
     Online(online::Fx),
-    /// The umpire picker's "Hear a call": umpire, voice program, key (`hst_sim::umpire`'s banks).
+    /// The umpire picker's Preview Voice: umpire, voice program, key (`hst_sim::umpire`'s banks).
     Hear(u8, u8, u8),
 }
 
@@ -1145,7 +1143,8 @@ impl Menu {
                         }
                         out.push(Sound(0));
                     }
-                    if k.hear && self.sel == 4 && (self.umpire as usize) < UMPIRES {
+                    if k.card && self.sel == 4 && (self.umpire as usize) < UMPIRES {
+                        // the lob key (△): Preview Voice
                         let (program, key) = CALLS[self.calls % CALLS.len()];
                         self.calls += 1;
                         out.push(Hear(self.umpire, program, key));
@@ -1429,6 +1428,9 @@ struct Quad {
     anchor: Anchor,
     /// Turned clockwise about its centre (radians).
     angle: f32,
+    /// Its corners rounded off (in 640×448 units: top-left, top-right, bottom-right, bottom-left), a picture cut to
+    /// the round box it sits in.
+    round: [f32; 4],
 }
 
 /// The disc's text and tables the screens show.
@@ -1843,7 +1845,7 @@ const RANK_NAMES: [&str; 17] = [
 
 impl Draw<'_> {
     fn q(&mut self, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: f32) {
-        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0 });
+        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0, round: [0.0; 4] });
     }
 
     /// B221: `rect` (placed as `q` would place it) does `act` under the pointer.
@@ -1859,7 +1861,7 @@ impl Draw<'_> {
 
     /// The screen's wall (tiled) and title bar.
     fn frame(&mut self, title: usize, wall: usize) {
-        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0 });
+        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0, round: [0.0; 4] });
         self.anchor = Anchor::Span;
         // B141, ours: the screen's colour along the top over a white and a dark rule, and a tab hanging from it with
         // the title in our font, its soft shadow down and right
@@ -2474,6 +2476,12 @@ fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f
         }
     }
     let f = size / 2.0 - 3.5;
+    if src == RANDOM_TILE {
+        // the square "?" tile: its middle square, inscribed in the round frame (a face icon is round already)
+        let [u, v, w, h] = RANDOM_TILE;
+        let f = f * std::f32::consts::FRAC_1_SQRT_2;
+        return d.q(tex, [u + (w - h) / 2.0, v, h, h], [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
+    }
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
 }
 
@@ -2684,12 +2692,17 @@ fn court_meters(d: &mut Draw, m: &Menu, [x0, y, w]: [f32; 3]) {
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
         d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], x0, y, 16.0, w, tint));
         // B141a: the icons and balls are ours (`menu_art::pill_layers`)
-        for (g, (icon, n)) in [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)].into_iter().enumerate() {
+        let meters = [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)];
+        // each meter in its half of the card, the pair shrunk alike when the wider one wouldn't fit there
+        let natural = |icon: [f32; 4]| icon[2] * 18.0 / icon[3] + 2.0 + 13.0 * 4.0;
+        let z = meters.iter().map(|m| (w / 2.0 - 4.0) / natural(m.0)).fold(1.0f32, f32::min);
+        for (g, (icon, n)) in meters.into_iter().enumerate() {
             let x = x0 + w / 2.0 * g as f32;
-            let k = 18.0 / icon[3];
-            d.q(Tex::Pill, icon, [x, y + 20.0, icon[2] * k, 18.0], WHITE, 128.0);
+            let (ih, ball) = (18.0 * z, 13.0 * z);
+            let iw = icon[2] * ih / icon[3];
+            d.q(Tex::Pill, icon, [x, y + 29.0 - ih / 2.0, iw, ih], WHITE, 128.0);
             for b in 0..4 {
-                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + icon[2] * k + 2.0 + 13.0 * b as f32, y + 22.0, 13.0, 13.0], WHITE, 128.0);
+                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + iw + 2.0 * z + ball * b as f32, y + 28.5 - ball / 2.0, ball, ball], WHITE, 128.0);
             }
         }
     }
@@ -2714,10 +2727,15 @@ fn court_picture(d: &mut Draw, k: usize, [x, y, w, h]: [f32; 4]) {
 fn stage(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], [x, y, w, h]: [f32; 4]) {
     d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
     let (ix, iy, iw, ih) = (x + 5.0, y + 5.0, w - 10.0, h - 10.0);
+    // the picture's corners round, concentric with the box's fill (`box3`'s: 11/16 of `c` across, 4/16 in)
+    let at = d.out.len();
     court_picture(d, m.court, [ix, iy, iw, ih]);
+    let r = 12.0 * 11.0 / 16.0 - (5.0 - 12.0 * 4.0 / 16.0);
+    d.out[at..].iter_mut().filter(|q| q.dst == [ix, iy, iw, ih]).for_each(|q| q.round = [r; 4]);
     // the labels' shade along the foot
     let foot = 64.0;
     d.q(Tex::Solid, [0.0; 4], [ix, iy + ih - foot, iw, foot], [0.0; 3], 60.0);
+    d.out.last_mut().unwrap().round = [0.0, 0.0, r, r];
     let n = m.players();
     let per = 1 + m.doubles as usize;
     let gap = 56.0;
@@ -2801,7 +2819,7 @@ fn court_screen(d: &mut Draw, m: &Menu, text: &Text) {
 }
 
 /// Select Umpire as its own screen (ours): the hovered umpire in her chair (the disc's still of her model,
-/// `item_umpireNN`) on a stage in the middle, her name on a card top-left with "Hear a call" under it, the strip of
+/// `item_umpireNN`) on a stage in the middle, her name on a card top-left (the lob key, △, plays one of her calls), the strip of
 /// umpire cards along the foot.
 fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     d.frame(9, 8);
@@ -2813,24 +2831,16 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
         _ => (text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string(), format!("Umpire {} of {UMPIRES}", u + 1)),
     };
     let [cx, cy, cw, ch] = name_card(d, m, &name, &sub, false);
-    // "Hear a call" (□ / X) under the card: one of her lines
-    let words = "Hear a call";
-    let bw = d.width(words, 18.0) + 40.0;
-    let hear = [cx, cy + ch + 8.0, bw, 34.0];
-    if u < UMPIRES {
-        d.pill_at(hear, [INK, WHITE, [128.0, 108.0, 38.0]], 128.0);
-        d.centred(words, cx + bw / 2.0, hear[1] + 8.0, 18.0, INK);
-    }
     // the stage: as tall as the room between the title and the strip, the still fitted in it; on a narrow window,
-    // under the card and button
+    // under the card
     let stage = |y0: f32| {
         let h = top - 10.0 - y0;
         let w = (h * 0.8).min(r - l - 16.0);
         [(l + r) / 2.0 - w / 2.0, y0, w, h]
     };
     let mut s = stage(t + 48.0);
-    if s[0] < cx + cw.max(bw) + 8.0 {
-        s = stage(hear[1] + hear[3] + 10.0);
+    if s[0] < cx + cw + 8.0 {
+        s = stage(cy + ch + 10.0);
     }
     let [x, y0, w, h] = s;
     d.box3(s, 16.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
@@ -2845,7 +2855,8 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     }
     strip(d, m, text);
     if u < UMPIRES {
-        d.hit(hear, pointer::press(|k| k.hear = true));
+        // a tap on her plays a call, as the lob key's Preview Voice
+        d.hit(s, pointer::press(|k| k.card = true));
     }
     d.info(text.msg(333));
 }
@@ -2942,10 +2953,15 @@ fn confirm_rects(m: &Menu) -> [[f32; 4]; CONFIRM_ROWS] {
 
 /// B295: the side card's court band (`[x, y, w]`): grass stripes, the court's name along its foot.
 fn court_band(d: &mut Draw, [x, y, w]: [f32; 3], name: &str) {
-    let n = 8;
+    // the dark stripe as the card's own fill shape (`box3` at the card's corners), so the band's top corners are the
+    // card's round ones; its round foot under the band covered back in the card's cream, and the light stripes only
+    // between the end ones (clear of the corners)
+    let (n, c) = (9, 14.0);
+    d.box3([x, y, w, 45.0 + c], c, [None, None, Some([40.0, 77.0, 30.0])], 128.0);
+    d.q(Tex::Solid, [0.0; 4], [x + c / 4.0, y + 45.0, w - c / 2.0, c], CREAM, 128.0);
     let sw = (w - 6.0) / n as f32;
-    for i in 0..n {
-        d.q(Tex::Solid, [0.0; 4], [x + 3.0 + sw * i as f32, y + 3.0, sw, 42.0], if i % 2 == 0 { [40.0, 77.0, 30.0] } else { [45.0, 84.0, 35.0] }, 128.0);
+    for i in (1..n - 1).step_by(2) {
+        d.q(Tex::Solid, [0.0; 4], [x + 3.0 + sw * i as f32, y + 3.0, sw, 42.0], [45.0, 84.0, 35.0], 128.0);
     }
     d.q(Tex::Solid, [0.0; 4], [x + 3.0, y + 45.0, w - 6.0, 2.0], INK, 128.0);
     d.outlined(|d| left(d, name, x + 10.0, y + 24.0, 18.0, w - 20.0, WHITE));
@@ -2976,7 +2992,7 @@ fn strip_at(m: &Menu) -> usize {
     strip_order(m).iter().position(|&k| k == v).unwrap_or(0)
 }
 
-/// "Hear a call"'s lines in turn, (umpire voice program, key): Out, Deuce, Game, Advantage, Game and match.
+/// Preview Voice's lines in turn, (umpire voice program, key): Out, Deuce, Game, Advantage, Game and match.
 const CALLS: [(u8, u8); 5] = [(1, 1), (0, 9), (2, 1), (0, 10), (2, 4)];
 
 // ---------------------------------------------------------------- systems
@@ -3008,7 +3024,7 @@ fn step(
     mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
     (net, mut clipboard, mut pending): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pointer::Pending>>),
-    // "Hear a call": each umpire's voice bank once read, and the call playing
+    // Preview Voice: each umpire's voice bank once read, and the call playing
     mut voice: Local<(std::collections::HashMap<u8, Option<Arc<crate::audio::SoundBank>>>, Option<u64>)>,
 ) {
     let play = |key: u8| {
@@ -3069,7 +3085,6 @@ fn step(
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
                 k.hand = bind.key_just_pressed(&keys, Action::Camera);
-                k.hear = keys.just_pressed(KeyCode::KeyX);
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -3081,7 +3096,6 @@ fn step(
                 k.prev = g.just_pressed(GamepadButton::LeftTrigger);
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
                 k.page = g.just_pressed(GamepadButton::West);
-                k.hear = k.page;
                 k.hand = g.just_pressed(GamepadButton::Select);
             }
         }
@@ -3290,6 +3304,10 @@ fn draw(
         node.width = Val::Percent(width);
         node.height = Val::Percent(height);
         turn.rotation = Rot2::radians(quad.angle);
+        // the corners: units to logical pixels at the quad's placed width
+        let k = window.single().map_or(0.0, |win| width / 100.0 * super::widescreen::view_size(win).x / quad.dst[2].max(1e-3));
+        let [tl, tr, br, bl] = quad.round.map(|r| Val::Px(r * k));
+        node.border_radius = BorderRadius { top_left: tl, top_right: tr, bottom_right: br, bottom_left: bl };
         *vis = Visibility::Inherited;
     }
 }
@@ -3843,13 +3861,13 @@ mod tests {
         m.step(Dev::Keys, left);
         assert_eq!(m.step(Dev::Keys, left), []); // the umpire cards don't wrap: Random first
         assert_eq!(m.umpire as usize, UMPIRES);
-        // "Hear a call": not for Random; one of the picked umpire's lines in turn
-        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.hear)), []);
+        // Preview Voice: not for Random; one of the picked umpire's lines in turn
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.card)), []);
         for _ in 0..9 {
             m.step(Dev::Keys, right);
         }
-        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.hear)), [Hear(4, CALLS[0].0, CALLS[0].1)]);
-        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.hear)), [Hear(4, CALLS[1].0, CALLS[1].1)]);
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.card)), [Hear(4, CALLS[0].0, CALLS[0].1)]);
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.card)), [Hear(4, CALLS[1].0, CALLS[1].1)]);
         m.step(Dev::Keys, ok);
         assert_eq!((m.umpire, m.picking), (4, None));
     }

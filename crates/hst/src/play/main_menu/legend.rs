@@ -41,8 +41,6 @@ pub(crate) enum Act {
     Page,
     /// Select: the hand.
     Hand,
-    /// □ / X: the umpire picker's "Hear a call".
-    Hear,
     Start,
     /// The keyboard types (Join by Code, the name); words only for a pad.
     Type,
@@ -50,6 +48,8 @@ pub(crate) enum Act {
     Cancel,
     /// B301: a match key hint, keycaps only (`key_hints.rs`).
     Key,
+    /// B320: text chat in an online lobby (`chat.rs`): T, a pad's R2 (phrases) and L2 (say it).
+    Chat,
 }
 
 /// A device's button art.
@@ -120,10 +120,10 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
         Act::Card => vec![k(Action::Lob)],
         Act::Costume => vec!["Q".into(), "E".into()],
         Act::Page => vec!["Tab".into()],
-        Act::Hear => vec!["X".into()],
         Act::Hand => vec![k(Action::Camera)],
         Act::Start | Act::Cancel => vec!["Esc".into()],
         Act::Type => vec!["A-Z".into()],
+        Act::Chat => vec!["T".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -211,7 +211,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Confirm if host && m.picking.is_some() => {
             v.push((Act::LeftRight, ["", "Court", "Sets", "Games", "Umpire"].get(s).copied().unwrap_or("Change")));
             if s == 4 && (m.umpire as usize) < super::UMPIRES {
-                v.push((Act::Hear, "Hear"));
+                v.push((Act::Card, "Preview Voice"));
             }
             v.extend([(Act::Ok, "Keep"), (Act::Back, "Cancel")]);
         }
@@ -272,6 +272,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Back, "Back")]);
         }
         _ => {}
+    }
+    // B320: chat works in an online room's lobby and character select (`chat.rs`, unless Settings turned it off)
+    if m.net.room.is_some() && matches!(m.screen, Screen::Lobby | Screen::Chars) && !crate::chat::HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        v.push((Act::Chat, "Chat"));
     }
     v.into_iter().map(|(a, l)| (a, l.to_string())).collect()
 }
@@ -411,11 +415,13 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::LeftRight => vec![Glyph::Dpad([false, false, true, true])],
         Act::Ok => vec![Glyph::Face(style, 0)],
         Act::Back => vec![Glyph::Face(style, 1)],
-        Act::Page | Act::Hear => vec![Glyph::Face(style, 2)],
+        Act::Page => vec![Glyph::Face(style, 2)],
         Act::Card => vec![Glyph::Face(style, 3)],
         Act::Costume if ps => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume if style == Style::Deck => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume => vec![Glyph::Shoulder("LB"), Glyph::Shoulder("RB")],
+        Act::Chat if ps || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
+        Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else { "View" })],
         Act::Start => vec![Glyph::Small(if ps { "Options" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -826,7 +832,6 @@ mod tests {
                         h(|p| &mut p.prev) || h(|p| &mut p.next),
                         h(|p| &mut p.page),
                         h(|p| &mut p.hand),
-                        h(|p| &mut p.hear),
                     ];
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
@@ -837,9 +842,8 @@ mod tests {
                         has(&[Act::Costume]),
                         has(&[Act::Page]),
                         has(&[Act::Hand]),
-                        has(&[Act::Hear]),
                     ];
-                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select Hear] handled vs legend {acts:?}", m.screen, m.sel);
+                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select] handled vs legend {acts:?}", m.screen, m.sel);
                     checked += 1;
                 }
             }

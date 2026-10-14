@@ -263,6 +263,45 @@ impl Menu {
             .collect()
     }
 
+    /// The lobby's ←→↑↓ off the settings row: ↑↓ keep to the seats column or the side card (and up into the
+    /// settings row; a portrait window, the card under the seats, goes on down into it); ←→ along a seat's row (onto a
+    /// computer's ✕), then across to the other column's item at the nearest height (onto a seat, not its ✕).
+    fn lobby_step(&self, items: &[Item], rects: &[[f32; 4]], k: Press) -> usize {
+        let from = self.sel;
+        let side = |it: &Item| match it {
+            Item::Seat(_) | Item::Remove(_) => Some(false),
+            Item::Button(_) => Some(true),
+            _ => None,
+        };
+        let Some(mine) = items.get(from).and_then(side) else { return pill_step(rects, from, k) };
+        // `pill_step` over the items `keep` lets through, as indices into `items`
+        let among = |keep: &dyn Fn(&Item) -> bool, k: Press| {
+            let idx: Vec<usize> = (0..items.len()).filter(|&i| i == from || keep(&items[i])).collect();
+            let sub: Vec<[f32; 4]> = idx.iter().map(|&i| rects[i]).collect();
+            idx[pill_step(&sub, idx.iter().position(|&i| i == from).unwrap(), k)]
+        };
+        let ([cx, _, cw, _], [sx, ..]) = self.lobby_split();
+        let beside = sx >= cx + cw;
+        if k.up || k.down {
+            let to = among(&|it| side(it).is_none_or(|s| s == mine), k);
+            return if to == from && !beside { pill_step(rects, from, k) } else { to };
+        }
+        if !(k.left || k.right) {
+            return from;
+        }
+        let to = among(&|it| side(it) == Some(mine), k);
+        if to != from {
+            return to;
+        }
+        let centre = |[x, y, w, h]: [f32; 4]| (x + w / 2.0, y + h / 2.0);
+        let (fx, fy) = centre(rects[from]);
+        let dx = if k.right { 1.0 } else { -1.0 };
+        (0..items.len())
+            .filter(|&i| side(&items[i]) == Some(!mine) && !matches!(items[i], Item::Remove(_)) && (centre(rects[i]).0 - fx) * dx > 1.0)
+            .min_by(|&a, &b| (centre(rects[a]).1 - fy).abs().total_cmp(&(centre(rects[b]).1 - fy).abs()))
+            .unwrap_or(from)
+    }
+
     /// The lobby's seats column and side card (`Grid::split`), the side card beside the seats starting under the
     /// settings row.
     fn lobby_split(&self) -> ([f32; 4], [f32; 4]) {
@@ -337,11 +376,13 @@ impl Menu {
         if self.screen == Screen::Lobby && self.net.ask.is_none() && matches!(self.items().get(self.sel), Some(Item::Mode | Item::Set(_))) {
             return (true, false);
         }
+        let lobby = self.screen == Screen::Lobby && self.net.ask.is_none();
         let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { row_rects(self.grid.extra) };
+        let items = self.items();
         let to = |f: fn(&mut Press) -> &mut bool| {
             let mut k = Press::default();
             *f(&mut k) = true;
-            pill_step(&rects, self.sel, k) != self.sel
+            (if lobby { self.lobby_step(&items, &rects, k) } else { pill_step(&rects, self.sel, k) }) != self.sel
         };
         (to(|k| &mut k.up) || to(|k| &mut k.down), to(|k| &mut k.left) || to(|k| &mut k.right))
     }
@@ -736,7 +777,7 @@ impl Menu {
                     Some(Item::Set(i)) if k.up && *i > 0 => self.sel - 1,
                     Some(Item::Mode) if k.up => self.sel - 1,
                     Some(Item::Set(_)) if k.down => self.sel + 1,
-                    _ => pill_step(&rects, self.sel, k),
+                    _ => self.lobby_step(&items, &rects, k),
                 };
                 if let (Some(Item::Set(i)), true) = (items.get(self.sel), k.left || k.right) {
                     self.change_setting(*i, if k.right { 1 } else { -1 }, out);
@@ -2254,6 +2295,58 @@ mod tests {
         }
     }
 
+    /// ←→ cross straight between the seats and the side card at the nearest row (Copy Link's ← onto a seat), ↑↓ keep
+    /// to their column (or go up into the settings row).
+    #[test]
+    fn arrows_cross_the_lobby_columns() {
+        let dev = super::super::Dev::Keys;
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        (m.net.me, m.net.go, m.seats[0], m.net.hosting) = ("host".into(), Some(Go::Host), Some(dev), true);
+        m.doubles = true;
+        m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
+        let items = m.items();
+        let rects = m.lobby_rects();
+        let at = |it: Item| items.iter().position(|&i| i == it).unwrap();
+        let go = |from: usize, f: fn(&mut Press)| {
+            let mut c = m.clone();
+            c.sel = from;
+            let mut k = Press::default();
+            f(&mut k);
+            c.step(dev, k);
+            items[c.sel]
+        };
+        let cy = |i: usize| rects[i][1] + rects[i][3] / 2.0;
+        let mut crossed = false;
+        for (i, it) in items.iter().enumerate() {
+            match it {
+                Item::Seat(_) | Item::Remove(_) => {
+                    let to = go(i, |k| k.right = true);
+                    if let Item::Button(_) = to {
+                        crossed = true;
+                        // the nearest height on the card
+                        let d = (cy(at(to)) - cy(i)).abs();
+                        assert!(items.iter().enumerate().all(|(j, b)| !matches!(b, Item::Button(_)) || (cy(j) - cy(i)).abs() >= d - 0.01), "{it:?} → {to:?}");
+                    } else {
+                        assert!(matches!(to, Item::Remove(_)), "{it:?} → {to:?}");
+                    }
+                    for f in [|k: &mut Press| k.up = true, |k: &mut Press| k.down = true] {
+                        assert!(!matches!(go(i, f), Item::Button(_)), "{it:?} ↑↓ left the seats");
+                    }
+                }
+                Item::Button(_) => {
+                    assert!(matches!(go(i, |k| k.left = true), Item::Seat(_)), "{it:?} ← not onto a seat");
+                    for f in [|k: &mut Press| k.up = true, |k: &mut Press| k.down = true] {
+                        assert!(!matches!(go(i, f), Item::Seat(_) | Item::Remove(_)), "{it:?} ↑↓ left the card");
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(crossed);
+        assert!(matches!(go(at(Item::Button("Copy Link")), |k| k.left = true), Item::Seat(_)));
+    }
+
     /// B201: the select's panels are the lobby's seats (this machine's player in the one it holds, the others' live
     /// places beside it, their ready costumes taken); the host's computer players and singles / doubles.
     #[test]
@@ -2350,11 +2443,12 @@ mod tests {
         m.step(dev, r);
         assert_eq!((m.sel, &m.net.cfg), (5, &relay), "←→ don't change Relay");
         // the host's lobby: seats 1–3 (items 0–2); Start Characters (3, 4); Copy Link Public Leave (5–7); the settings
-        // row: Court, Umpire, Sets, Games, Mods, Mode (8–13), ↑↓ along it, off Mode's end onto the side card
+        // row: Court, Umpire, Sets, Games, Mods, Mode (8–13), ↑↓ along it, off Mode's end onto the side card;
+        // ↑↓ stay in a column, ←→ cross to the other's nearest row
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        walk(&mut m, &[(d, 1), (d, 2), (d, 3), (u, 4), (r, 4), (u, 6), (u, 5), (l, 5), (u, 13), (u, 12), (u, 11), (u, 10), (u, 9), (d, 10), (d, 11), (d, 12), (d, 13), (d, 5), (d, 6)]);
+        walk(&mut m, &[(d, 1), (d, 2), (d, 2), (r, 4), (d, 3), (u, 4), (u, 6), (u, 5), (l, 0), (r, 5), (u, 13), (u, 12), (u, 11), (u, 10), (u, 9), (d, 10), (d, 11), (d, 12), (d, 13), (d, 5), (d, 6)]);
         // a guest: Characters over Ready over Leave
         m.net.hosting = false;
         m.sel = 0;
