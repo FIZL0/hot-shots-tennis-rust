@@ -87,6 +87,9 @@ function fail(e) {
   const msg = String(e?.message ?? e ?? 'unknown error');
   // winit hands the event loop to the browser by throwing: not an error
   if (msg.includes('Using exceptions for control flow')) return;
+  // B244: a WebGPU validation error mid-game (an iPhone's "createBindGroup" after a hit; its WebGL2 build plays on)
+  // kills the match: start again on the WebGL2 build, the browser's message kept in the console for a report
+  if (/createBindGroup|Validation/.test(`${lastError} ${msg} ${renderError}`) && window.hstWebGL2?.(`${lastError || msg}`)) return;
   boot.hidden = false;
   boot.classList.add('err');
   document.getElementById('help').hidden = false;
@@ -153,9 +156,9 @@ const adapter = navigator.gpu && Promise.race([navigator.gpu.requestAdapter(), n
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'}`);
 if (!webgpu) document.getElementById('gl').hidden = true;
-window.hstWebGL2 = () => {
+window.hstWebGL2 = why => {
   if (!webgpu) return false;
-  console.warn('hst: WebGPU stopped before the first frame, reloading with WebGL2');
+  console.warn(`hst: WebGPU stopped (${why ?? 'before the first frame'}), reloading with WebGL2`);
   const q = new URLSearchParams(location.search);
   q.set('webgl2', '');
   location.search = q.toString();
