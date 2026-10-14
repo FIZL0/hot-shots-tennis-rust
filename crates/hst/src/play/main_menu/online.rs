@@ -1125,7 +1125,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Button("Court")) => "Change the court, sets, games and umpire: everyone sees it, and Find lists the court.".into(),
                 _ if m.net.pick_next => "Joining: your seats are held while you pick your characters.".into(),
                 Some(Item::Button("Ready")) => "Ready up: when everyone in is, the match starts after 4 seconds, open seats played by the computer.".into(),
-                _ if room.is_some() && !m.net.hosting => "Leave the lobby. The match starts once everyone in is ready (or the host starts it).".into(),
+                _ if room.is_some() && !m.net.hosting => "Leave the lobby. The match starts once every seat is taken and everyone's ready (or the host starts it).".into(),
                 _ if room.is_none() => "The lobby's closed.".into(),
                 _ => "Leave the lobby.".into(),
             };

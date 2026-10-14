@@ -323,9 +323,10 @@ impl Room {
         self.seats.iter().flatten().all(|s| s.peer == "host" || !s.human() || self.ready.contains(&s.peer))
     }
 
-    /// B215: a guest in, every person's seat picked and ready: the countdown starts by itself.
+    /// B215: a guest in, every person's seat picked and ready: the countdown starts by itself. B292: only with no
+    /// seat open (otherwise the host's Start, the open seats going to the computer).
     fn all_set(&self) -> bool {
-        self.picking.is_empty() && self.all_ready() && self.seats.iter().flatten().any(|s| s.peer != "host" && s.human())
+        self.open() == 0 && self.picking.is_empty() && self.all_ready() && self.seats.iter().flatten().any(|s| s.peer != "host" && s.human())
     }
 
     /// The open seats to the computer: disc characters nobody picked, in grid order.
@@ -2217,6 +2218,21 @@ mod tests {
         Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() }
     }
 
+    /// B292: every person in ready doesn't count down while a seat is open; a full lobby does.
+    #[test]
+    fn no_autostart_with_open_seats() {
+        let mut r = room(true);
+        r.take("host", &[Pick::disc(0, 0)]);
+        r.take("g", &[Pick::disc(1, 0)]);
+        r.picking.clear();
+        r.ready.insert("g".into());
+        assert!(r.all_ready() && !r.all_set(), "two seats open");
+        r.take("h", &[Pick::disc(2, 0), Pick::disc(3, 0)]);
+        r.picking.clear();
+        r.ready.insert("h".into());
+        assert!(r.all_set(), "full and ready");
+    }
+
     #[test]
     fn relay_off_fails_fast_on_relay_only_tickets() {
         let id = SecretKey::from_bytes(&[7; 32]).public();
@@ -2865,8 +2881,12 @@ mod tests {
             hcmd.send(Cmd::Venue(2, 1, 4, 3)).unwrap();
             let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 2 && r.picking.is_empty())).await else { unreachable!() };
             assert_eq!((seen.seats[1].as_ref().unwrap().pick.char, seen.seats[1].as_ref().unwrap().pick.costume, seen.umpire), (5, 1, 3));
-            // B215: everyone ready counts down to the start by itself
+            // B215: everyone ready; B292: two seats still open, so no countdown until the host's Start
             gcmd.send(Cmd::Prepared(true)).unwrap();
+            next(&hev, |e| matches!(e, Event::Room(r) if r.ready.contains(&guest))).await;
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(gev.try_iter().all(|e| !matches!(e, Event::Start(..)) && !matches!(e, Event::Room(r) if r.count > 0)), "counted down with open seats");
+            hcmd.send(Cmd::Start).unwrap();
             let Event::Start(r, me) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             assert_eq!(me, guest);
             assert_eq!(r.open(), 0);
@@ -2881,6 +2901,7 @@ mod tests {
             let Event::Match(Msg::Lobby(l)) = next(&gev, |e| matches!(e, Event::Match(Msg::Lobby(_)))).await else { unreachable!() };
             assert_eq!(l.open(), 2);
             gcmd.send(Cmd::Prepared(true)).unwrap();
+            hcmd.send(Cmd::Start).unwrap();
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             assert_eq!(r.open(), 0);
         });
