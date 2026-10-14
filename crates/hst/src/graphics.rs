@@ -34,6 +34,12 @@ pub struct Graphics {
     /// Draw the frame rate in the window's bottom-left corner (B186; `fps_counter`): 0 off, 1 on, 2 detailed (where
     /// the frame's time goes, B328). Not part of a preset.
     pub show_fps: u8,
+    /// B343: at Shadows Low only the players, the umpire and what shades the court cast (`shadow::Minor`, B351);
+    /// off, Low casts everything High does. A speed-up a device can turn off; not part of a preset.
+    pub fewer_shadows: bool,
+    /// B343: identical court creatures share their meshes and materials (each one's shade rides in its draw's
+    /// `MeshTag`, `shade::Shared`) so the renderer can draw them as one instanced draw. Not part of a preset.
+    pub batch_crowd: bool,
 }
 
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
@@ -43,22 +49,25 @@ pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
+/// The speed-up switches' defaults (`Graphics::fewer_shadows`, `batch_crowd`).
+const FEWER_SHADOWS: bool = true;
+const BATCH_CROWD: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
     /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0 };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0 };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -72,6 +81,8 @@ impl Graphics {
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
+            "fewer_shadows" | "fewer-shadows" => self.fewer_shadows = v != "off",
+            "batch_crowd" | "batch-crowd" => self.batch_crowd = v != "off",
             _ => return false,
         }
         true
@@ -80,7 +91,19 @@ impl Graphics {
     /// settings.txt lines.
     pub fn text(&self) -> String {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
-        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" }, ["off", "on", "detailed"][self.show_fps.min(2) as usize])
+        let on = |b: bool| if b { "on" } else { "off" };
+        format!(
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\n",
+            on(self.vsync),
+            self.scale,
+            self.shadows.name(),
+            msaa_name(self.msaa),
+            on(self.original),
+            on(self.windowed),
+            ["off", "on", "detailed"][self.show_fps.min(2) as usize],
+            on(self.fewer_shadows),
+            on(self.batch_crowd)
+        )
     }
 
     /// The match's flags.
@@ -100,11 +123,22 @@ impl Graphics {
             1 => f.push("--show-fps".into()),
             _ => f.push("--show-fps-detailed".into()),
         }
+        // the speed-up switches only when not at their defaults (also the browser's `?fewer-shadows=off` etc.)
+        for (flag, on, default) in [("--fewer-shadows", self.fewer_shadows, FEWER_SHADOWS), ("--batch-crowd", self.batch_crowd, BATCH_CROWD)] {
+            if on != default {
+                f.extend([flag.into(), if on { "on" } else { "off" }.into()]);
+            }
+        }
         f
     }
 
     pub fn preset(&self) -> &'static str {
-        Self::PRESETS.iter().find(|(_, g)| Graphics { windowed: self.windowed, show_fps: self.show_fps, ..*g } == *self).map_or("Custom", |(n, _)| n)
+        Self::PRESETS.iter().find(|(_, g)| self.keep(*g) == *self).map_or("Custom", |(n, _)| n)
+    }
+
+    /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, the speed-up switches).
+    pub fn keep(&self, p: Graphics) -> Graphics {
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, ..p }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -149,6 +183,44 @@ pub fn plugin(app: &mut App) {
         r.add_systems(RenderGraph, (mark::<4>.in_set(G::Begin), mark::<5>.in_set(G::Render).after(bevy::core_pipeline::schedule::camera_driver)))
             .add_systems(bevy::render::Render, mark::<6>.in_set(bevy::render::RenderSystems::Cleanup));
     }
+    if std::env::var_os("HST_FPS").is_some() {
+        app.add_systems(Last, log_draws);
+    }
+}
+
+/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the scene cameras see and
+/// how many distinct (mesh, material) pairs they are (the most draws they can batch down to), the spectators' and
+/// creatures' share (`shadow::Minor` rigs) and the meshes the sun's cascades draw.
+#[allow(clippy::type_complexity)]
+fn log_draws(
+    time: Res<Time<Real>>,
+    mut next: Local<f32>,
+    cams: Query<&bevy::camera::visibility::VisibleEntities, With<Camera3d>>,
+    cascades: Query<&bevy::camera::visibility::CascadesVisibleEntities>,
+    parts: Query<(&Mesh3d, Option<&MeshMaterial3d<crate::gs::GsMaterial>>, Option<&MeshMaterial3d<StandardMaterial>>)>,
+    parents: Query<&ChildOf>,
+    npc: Query<(), (With<crate::character::Rig>, With<crate::shadow::Minor>)>,
+) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let (mut seen, mut pairs, mut npcs, mut npc_pairs) = (0, std::collections::HashSet::new(), 0, std::collections::HashSet::new());
+    for v in &cams {
+        for &e in v.get(std::any::TypeId::of::<Mesh3d>()) {
+            let Ok((mesh, gs, std)) = parts.get(e) else { continue };
+            let pair = (mesh.0.id(), gs.map(|m| m.0.id().untyped()).or(std.map(|m| m.0.id().untyped())));
+            seen += 1;
+            pairs.insert(pair);
+            if parents.iter_ancestors(e).any(|a| npc.contains(a)) {
+                npcs += 1;
+                npc_pairs.insert(pair);
+            }
+        }
+    }
+    let cast: Vec<Vec<usize>> = cascades.iter().flat_map(|c| c.entities.values()).map(|v| v.iter().map(|c| c.entities.len()).collect()).collect();
+    eprintln!("draws at {now:.0} s: {} cameras, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().count(), pairs.len(), npc_pairs.len());
 }
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
@@ -338,7 +410,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -352,5 +424,15 @@ mod tests {
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "100", "--shadows", "low", "--msaa", "4x"]);
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
+        // B343: the speed-up switches pass only off their defaults, keep through a preset and read back as flags
+        let g = Graphics { fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, ..default() };
+        assert_eq!(g.preset(), "Default");
+        assert_eq!(g.keep(Graphics::PHONE), Graphics { fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, ..Graphics::PHONE });
+        let f = g.flags();
+        let mut back = Graphics::default();
+        for kv in f[8..].chunks(2) {
+            assert!(back.set(&kv[0][2..], &kv[1]), "{kv:?}");
+        }
+        assert_eq!(back, g);
     }
 }
