@@ -102,6 +102,8 @@ struct Grid {
     rows: usize,
     /// The frame's left edge (centred 640 space).
     x: f32,
+    /// The frame's bottom (centred 448 space): 384 at 4:3 or wider, lower in a tall window (B251).
+    foot: f32,
 }
 
 impl Default for Grid {
@@ -119,10 +121,12 @@ impl Grid {
         // from 40 past the left cards (room for a hand left of the first face) to 13 short of the right ones
         let (l, r) = (200.0 - extra, 467.0 + extra);
         let cols = (((r - l + 5.0) / ICON_STEP) as usize).max(1);
-        // the frame ends at 384, over the page count (B232: a tall window letterboxes the 4:3 screen, no extra rows)
-        let rows = ((((384.0 - ICON_BOX) - 10.0) / ICON_PITCH) as usize).max(1);
+        // the frame ends at 384, over the page count; a tall window (B251) adds rows down into the letterbox below the
+        // 4:3 screen, up to where the ticker (pinned to the window's bottom) begins
+        let foot = 384.0 + (448.0 / super::widescreen::vshare(aspect) - 448.0) / 2.0;
+        let rows = ((((foot - ICON_BOX) - 10.0) / ICON_PITCH) as usize).max(1);
         let w = Self::width(cols);
-        Grid { cols, rows, x: l + (r - l - w) / 2.0 }
+        Grid { cols, rows, x: l + (r - l - w) / 2.0, foot }
     }
 
     fn width(cols: usize) -> f32 {
@@ -2378,8 +2382,8 @@ fn custom_list(d: &mut Draw, m: &Menu, players: impl Iterator<Item = usize>, lea
     }
     let per = g.per();
     let pages = m.mods.len().div_ceil(per);
-    d.centred(&format!("Custom characters  {}/{pages}", page.start / per + 1), 320.0, 386.0, 14.0, WHITE);
-    d.hit([200.0, 382.0, 240.0, 22.0], pointer::press(|k| k.page = true));
+    d.centred(&format!("Custom characters  {}/{pages}", page.start / per + 1), 320.0, g.foot + 2.0, 14.0, WHITE);
+    d.hit([200.0, g.foot - 2.0, 240.0, 22.0], pointer::press(|k| k.page = true));
 }
 
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
@@ -3399,18 +3403,23 @@ mod tests {
     #[test]
     fn custom_grid_fits_the_window() {
         let g = Grid::fit(4.0 / 3.0);
-        assert_eq!((g.cols, g.rows, g.x), (4, 4, 200.0));
+        assert_eq!((g.cols, g.rows, g.x, g.foot), (4, 4, 200.0, 384.0));
         assert_eq!(g.cell(5), (300.0, 190.0));
         let fit = |a: f32| (Grid::fit(a).cols, Grid::fit(a).rows);
         assert_eq!(fit(16.0 / 9.0), (7, 4));
         assert_eq!(fit(21.0 / 9.0), (11, 4));
-        assert_eq!(fit(9.0 / 16.0), (4, 4));
-        // the frame stays clear of the cards and over the page count
+        // B251: a tall window's letterbox below the 4:3 screen holds more rows
+        assert_eq!(fit(1.0), (4, 5));
+        assert_eq!(fit(9.0 / 16.0), (4, 8));
+        // the frame stays clear of the cards and over the page count, the page count clear of the ticker
         for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
             let g = Grid::fit(a);
             let extra = (640.0 / super::super::widescreen::share(a) - 640.0) / 2.0;
             assert!(g.x >= 200.0 - extra - 1e-3 && g.x + Grid::width(g.cols) <= 467.0 + extra + 1e-3, "{a}");
-            assert!(ICON_BOX + g.rows as f32 * ICON_PITCH + 10.0 <= 384.0 + 1e-3, "{a}");
+            assert!(ICON_BOX + g.rows as f32 * ICON_PITCH + 10.0 <= g.foot + 1e-3, "{a}");
+            let ticker = super::super::widescreen::vplace(404.0, 32.0, a, Anchor::Span).0;
+            let page = super::super::widescreen::vplace(g.foot - 2.0, 22.0, a, Anchor::Centre);
+            assert!(page.0 + page.1 <= ticker + 1e-3, "{a}");
         }
     }
 
