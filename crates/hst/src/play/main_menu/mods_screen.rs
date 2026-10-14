@@ -957,9 +957,12 @@ fn page(
             }
         }
     }
-    let n = menu.add.rows();
-    menu.sel = menu.sel.min(n - 1);
     let on = menu.screen == Screen::Mods;
+    // only its own rows: every other screen's cursor is `sel` too (past row 4 it snapped back: Settings, the lobby)
+    if on {
+        let n = menu.add.rows();
+        menu.sel = menu.sel.min(n - 1);
+    }
     let png = |b: Vec<u8>| Image::from_buffer(&b, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok();
     // B229: a drawing came back: the pictures that weren't there are read again
     if card.baked != *baked {
@@ -1022,6 +1025,18 @@ mod tests {
 
     fn ok() -> Press {
         Press { ok: true, ..default() }
+    }
+
+    /// The page keeps its cursor within its own rows only: on Settings, row 7 stays row 7 (it snapped back to 4).
+    #[test]
+    fn other_screens_keep_their_cursor() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>().init_resource::<Shelf>().init_resource::<super::super::previews::ModCard>();
+        app.insert_resource(Menu { screen: Screen::Settings, sel: 7, ..default() });
+        app.add_systems(Update, page);
+        app.update();
+        assert_eq!(app.world().resource::<Menu>().sel, 7);
     }
 
     fn a_mod(id: &str, name: &str) -> Mod {

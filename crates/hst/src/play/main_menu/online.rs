@@ -1714,6 +1714,52 @@ mod tests {
         assert_eq!(b.pick(1), (super::super::Who::Mod(0), 0));
     }
 
+    /// Every lobby item reachable with ↑↓←→ from every other, whatever the seats hold (host and guest).
+    #[test]
+    fn arrows_reach_every_lobby_item() {
+        let dev = super::super::Dev::Keys;
+        let cpu = || Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
+        let guest = || Some(Seat { peer: "k51qzi5uqu5d".into(), pick: Pick::disc(1, 0) });
+        let host = || Some(Seat { peer: "host".into(), pick: Pick::disc(6, 0) });
+        for doubles in [false, true] {
+            for mask in 0..if doubles { 27 } else { 3 } {
+                for hosting in [true, false] {
+                    let mut m = Menu { screen: Screen::Lobby, ..default() };
+                    sample(&mut m);
+                    (m.net.me, m.net.go, m.seats[0], m.doubles, m.net.hosting) = ("host".into(), Some(Go::Host), Some(dev), doubles, hosting);
+                    let r = m.net.room.as_mut().unwrap();
+                    r.doubles = doubles;
+                    r.seats = vec![host()];
+                    let mut k = mask;
+                    for _ in 1..if doubles { 4 } else { 2 } {
+                        r.seats.push([None, cpu(), guest()][k % 3].clone());
+                        k /= 3;
+                    }
+                    let n = m.items().len();
+                    for from in 0..n {
+                        let mut seen = vec![false; n];
+                        let mut todo = vec![from];
+                        while let Some(i) = todo.pop() {
+                            if std::mem::replace(&mut seen[i], true) {
+                                continue;
+                            }
+                            for f in [|k: &mut Press| k.up = true, |k: &mut Press| k.down = true, |k: &mut Press| k.left = true, |k: &mut Press| k.right = true] {
+                                let mut c = m.clone();
+                                c.sel = i;
+                                let mut k = Press::default();
+                                f(&mut k);
+                                c.step(dev, k);
+                                assert_eq!((c.screen, c.net.room.as_ref().map(|r| r.seats.len())), (Screen::Lobby, m.net.room.as_ref().map(|r| r.seats.len())));
+                                todo.push(c.sel);
+                            }
+                        }
+                        assert!(seen.iter().all(|&s| s), "doubles {doubles} mask {mask} hosting {hosting}: from {:?} not {:?}", m.items()[from], m.items().iter().zip(&seen).filter(|p| !p.1).collect::<Vec<_>>());
+                    }
+                }
+            }
+        }
+    }
+
     /// B201: the select's panels are the lobby's seats (this machine's player in the one it holds, the others' live
     /// places beside it, their ready costumes taken); the host's computer players and singles / doubles.
     #[test]

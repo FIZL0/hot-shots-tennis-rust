@@ -50,6 +50,7 @@ mod child;
 mod online;
 mod mods_screen;
 mod pointer;
+mod trace;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
@@ -2536,6 +2537,9 @@ fn step(
     let dt = time.delta_secs();
     // B221: the pointer's acts (`pointer.rs`), as its device's
     let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();
+    if trace::on() && !acts.is_empty() {
+        eprintln!("{:9.3} pointer acts {acts:?}", time.elapsed_secs());
+    }
     let pointed = pointer::device(&menu, &pads);
     let mut devices = vec![(Dev::Keys, None)];
     devices.extend(pads.iter().map(|&e| (Dev::Pad(e), Some(e))));
@@ -2580,6 +2584,9 @@ fn step(
             for (a, tap) in std::mem::take(&mut acts) {
                 fx.extend(menu.point(dev, a, tap));
             }
+        }
+        if trace::on() && (k != Press::default() || !fx.is_empty()) {
+            eprintln!("{:9.3} step {dev:?} {k:?} pointer fx {fx:?}", time.elapsed_secs());
         }
         if k == Press::default() && fx.is_empty() {
             continue;
@@ -2783,6 +2790,7 @@ pub fn plugin(app: &mut App) {
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
+    app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
         (online::poll.after(step).before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
