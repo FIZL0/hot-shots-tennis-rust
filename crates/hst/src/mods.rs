@@ -146,6 +146,9 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
     };
     let ai_row = num(&j["ai_row"], "ai_row", 13)?;
+    if !j["disc_racket"].is_null() {
+        num(&j["disc_racket"], "disc_racket", 13)?;
+    }
     if let Some(c) = costume_of
         && (donor != c || base != c || ai_row != c || !overrides.is_empty())
     {
@@ -848,7 +851,7 @@ pub fn load(
         }
     }
 
-    // the racket: racket.glb in the Racket joint's space, else the donor's
+    // the racket: racket.glb in the Racket joint's space, else disc character `disc_racket`'s (M1r), else the donor's
     let racket = match m.dir.join("racket.glb") {
         f if crate::modfs::is_file(&f) => {
             let (rdoc, rblob) = open(&f)?;
@@ -869,8 +872,9 @@ pub fn load(
             out
         }
         _ => {
-            let data = iso.read(&format!("PC/PC{:02}C00.XB", m.donor)).map_err(|e| e.to_string())?;
-            character::disc_racket(&Archive::parse(&data).map_err(|e| e.0)?, m.donor, meshes, materials, images, &mut gs)?
+            let n = disc_racket(&m.dir).unwrap_or(m.donor);
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).map_err(|e| e.to_string())?;
+            character::disc_racket(&Archive::parse(&data).map_err(|e| e.0)?, n, meshes, materials, images, &mut gs)?
         }
     };
 
@@ -892,6 +896,13 @@ pub fn load(
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
+}
+
+/// `mod.json`'s `disc_racket` (§6, M1r): the disc character (0..13) whose racket it holds when it ships no
+/// `racket.glb` (`read` checked the range). Looks only: gameplay never reads the racket mesh.
+fn disc_racket(dir: &Path) -> Option<usize> {
+    let j: serde_json::Value = crate::modfs::read_to_string(&dir.join("mod.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    j["disc_racket"].as_u64().filter(|&n| n <= 13).map(|n| n as usize)
 }
 
 /// `mod.json`'s `eyes` (§4c): the glTF materials the donor's `.UVA` eye track moves (`read` checked the list).
@@ -1324,6 +1335,30 @@ mod tests {
         }
     }
 
+    /// M1r: a mod with `disc_racket` and no racket.glb holds that disc character's racket, not its donor's
+    /// (Get a Grip's Suzuki: HST's Suzuki's, donor Cody).
+    #[test]
+    fn disc_racket_is_the_named_characters() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let dir = Path::new(MODS).join("getagrip_pc12_suzuki");
+        if disc_racket(&dir) != Some(13) || dir.join("racket.glb").exists() {
+            return eprintln!("no context/mods/getagrip_pc12_suzuki packaged with disc_racket 13, skipped");
+        }
+        let mut s = Stores(default(), default(), default(), default());
+        let (m, c) = load_mod(&mut iso, &mut s, "getagrip_pc12_suzuki").unwrap();
+        // every disc racket has the same vertex counts: compare where the vertices are
+        let verts = |s: &Stores, r: &[(Handle<Mesh>, Handle<StandardMaterial>)]| format!("{:?}", r.iter().map(|p| s.0.get(&p.0).unwrap().attribute(Mesh::ATTRIBUTE_POSITION)).collect::<Vec<_>>());
+        let mut gs = HashMap::new();
+        let disc = |iso: &mut Iso, s: &mut Stores, gs: &mut _, n: usize| {
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).unwrap();
+            character::disc_racket(&Archive::parse(&data).unwrap(), n, &mut s.0, &mut s.1, &mut s.2, gs).unwrap()
+        };
+        let (own, donor) = (disc(&mut iso, &mut s, &mut gs, 13), disc(&mut iso, &mut s, &mut gs, m.donor));
+        assert_ne!(m.donor, 13);
+        assert_eq!(verts(&s, &c.racket), verts(&s, &own));
+        assert_ne!(verts(&s, &c.racket), verts(&s, &donor));
+    }
+
     /// Seeded mutations of a real mod's costume and motions `.glb` (numbers in its glTF JSON, bytes in its binary
     /// chunk): `read`, `check`, `skeleton` and (with the ISO) `load` return errors, never panic (M16's fuzz run;
     /// `HST_FUZZ=n` runs n instead of 400).
@@ -1452,11 +1487,14 @@ mod tests {
         // M1n: a listed costume with no file is left out, the rest kept
         assert_eq!(try_(&ok.replace("[\"model/c00.glb\"]", "[\"model/c00.glb\",\"model/c01.glb\"]")).unwrap().costumes, ["model/c00.glb"]);
         assert_eq!((m.source.as_str(), try_(&ok.replace("\"id\"", "\"source\":\"Hot Shots Tennis: Get a Grip (PSP) pc03\",\"id\"")).unwrap().source.as_str()), ("", "Hot Shots Tennis: Get a Grip"));
-        for (bad, field) in [("\"standard\":1", "\"standard\":2"), ("\"donor\":3", "\"donor\":14"), ("\"right\"", "\"ambi\""), ("Strk POW", "Strk PWR"), ("\"morph\"", "\"texture\""), ("model/c00.glb", "model/c01.glb")].map(|(a, b)| (ok.replace(a, b), b)) {
+        for (bad, field) in [("\"standard\":1", "\"standard\":2"), ("\"donor\":3", "\"donor\":14"), ("\"right\"", "\"ambi\""), ("Strk POW", "Strk PWR"), ("\"morph\"", "\"texture\""), ("model/c00.glb", "model/c01.glb"), ("\"ai_row\"", "\"disc_racket\":14,\"ai_row\"")].map(|(a, b)| (ok.replace(a, b), b)) {
             let e = try_(&bad).err().unwrap_or_default();
             assert!(!e.is_empty(), "accepted {field}");
             eprintln!("{e}");
         }
+        // M1r: a disc character's racket by number
+        try_(&ok.replace("\"ai_row\"", "\"disc_racket\":12,\"ai_row\"")).unwrap();
+        assert_eq!((disc_racket(&dir), m.donor), (Some(12), 3));
         // a costume pack plays exactly as its disc character: donor, base and AI row it, no overrides
         let pack = ok.replace("\"donor\"", "\"costume_of\":3,\"donor\"").replace(",\"override\":{\"Strk POW\":5}", "");
         assert_eq!(try_(&pack).unwrap().costume_of, Some(3));
