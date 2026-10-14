@@ -27,3 +27,8 @@ OPFS into wasm memory at startup (≈ 10–40 MB a mod), and a Download all kept
 - `mod_saved` after a store download in the browser (a store install takes minutes headless); it's the same `unload`
   the test covers.
 - A real phone: the user's to try with the 40 mods.
+
+## Follow-up: Installed showed 0 (user 2026-10-14)
+B334 made Mods open on Browse, but the installed list was only read when Mods opened on Installed, so Installed (and
+Browse's Installed tags) stayed empty until an install. Now it's read on every open (`mods_screen.rs`). Browser check
+(run5–run8): "Installed 3", Remove all → confirm → "Installed 0", after a reload "0 custom characters".

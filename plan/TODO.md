@@ -8,6 +8,8 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B340** Pause menu: Circle (back) doesn't close the pause menu and resume the match (user 2026-10-14); it should, like Start → play/main_menu/pause.rs · play/menu.rs
+- [ ] **B341** Paused, tabbing the pause menu with L1/R1 queues emotes that play once the match resumes (user 2026-10-14): match input (play.rs gather → SlotPad.emote, emote::touch/flick) must ignore pad presses while paused and clear any latched emote on resume → play.rs (input gather) · play/emote.rs · play/main_menu/pause.rs
 - [ ] **B339** Mods: asynchronous (parallel) store downloads for Download all / several installs, with a Settings → Mods option for how many at once and a lower max on browser/mobile (user 2026-10-14) — files: crates/hst/src/modstore.rs, crates/hst/src/play/main_menu/mods_screen.rs, web/index.html
 - [ ] **B338** Mods-change Reload prompt (B205's Reload / Later on the main menu): Reload did nothing on mobile (user 2026-10-14, after store installs); check web::reload / window.location.reload on iOS Safari and Android Chrome — crates/hst/src/play/main_menu/mods_screen.rs reload, crates/hst/src/web.rs, web/index.html — Reload worked on the next try (user 2026-10-14): intermittent, maybe only right after an install's OPFS save
 - [ ] **B337** Mods Browse: mouse/touch way to fold and unfold an uploader (a tap on the heading is Download all today; ← / → only on keys and pads, B335) — e.g. a fold toggle on the heading beside its Download all chip
