@@ -1853,6 +1853,8 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
         }
     }
     let resolved;
+    // B268: "Joining" names the short code that was dialled, not the first letters of the host's endpoint ID
+    let shown = is_short(code).then(|| code.to_string());
     let code = if is_short(code) {
         cx.say(Event::Status(format!("Looking up {code}...")));
         let Some(t) = resolve(&cx.dht, code).await else {
@@ -1883,7 +1885,7 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
         cx.say(Event::Failed(why.into()));
         return None;
     }
-    cx.say(Event::Status(format!("Joining {}...", short(&addr.id.to_string()))));
+    cx.say(Event::Status(format!("Joining {}...", shown.unwrap_or_else(|| short(&addr.id.to_string()).into()))));
     let conn = match n0_future::time::timeout(Duration::from_secs(30), ep.connect(addr, ALPN)).await {
         Ok(Ok(c)) => c,
         Ok(Err(iroh::endpoint::ConnectError::Connect { source: iroh::endpoint::ConnectWithOptsError::NoAddress { .. }, .. })) => {
@@ -3206,7 +3208,10 @@ mod tests {
             let other = if code == "2222" { "3333" } else { "2222" };
             assert!(connect(&gcx, other, &mut nrx).await.is_none());
             assert!(matches!(next(&gev, |e| matches!(e, Event::Failed(_))).await, Event::Failed(f) if f.contains(other)));
+            let joining = format!("Joining {code}...");
             tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            // B268: the status names the dialled code, not the host's endpoint ID
+            next(&gev, |e| matches!(e, Event::Status(s) if *s == joining)).await;
             // doubles with two seats open: the guest's ready starts it, the computer takes the open seats
             let Event::Room(seen) = next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 2)).await else { unreachable!() };
             let guest = seen.seats[1].as_ref().unwrap().peer.clone();
