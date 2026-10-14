@@ -54,3 +54,32 @@ fn trails_s05() {
     eprintln!("{starts} swings, {drawn} drawn frames");
     assert!(starts >= 15 && drawn >= 300);
 }
+
+/// Short trails: 1–3 frames, and the 0 / −1 / −10 frames a rollback restoring a swing past its clip's end starts
+/// one with. The racket moves 0.5 along x a frame, so the alpha is the fade + 64·0.5. Those with no frames never
+/// end at 0 and their fade divides by 0: the game's `div` (no trap) gives 1 for the negative dividend.
+#[test]
+fn short_trails() {
+    let racket = |k: i32| [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.5 * k as f32, 1.0, 0.0, 1.0]];
+    // per frames left: (live, alpha) after each of 3 ticks
+    let cases: [(i32, [(bool, f32); 3]); 6] = [
+        (1, [(false, 0.0); 3]),
+        (2, [(true, 0.0), (false, 0.0), (false, 0.0)]),
+        (3, [(true, 0.0), (true, 160.0), (false, 160.0)]),
+        (0, [(true, 0.0), (true, 33.0), (true, 33.0)]),
+        (-1, [(true, 0.0), (true, 33.0), (true, 33.0)]),
+        // rise −3, fall −4: −1536 / −4 = 384 + 32, capped
+        (-10, [(true, 0.0), (true, 255.0), (true, 255.0)]),
+    ];
+    for (frames, want) in cases {
+        let mut t = Trail::default();
+        t.start(0x10, frames);
+        for (k, w) in want.iter().enumerate() {
+            t.tick(0x10, &racket(k as i32));
+            assert_eq!((t.live, t.alpha), *w, "{frames} frames, tick {k}");
+        }
+        t.ribbon();
+    }
+    assert_eq!(hst_sim::effect::ee_div(5, 0), -1);
+    assert_eq!(hst_sim::effect::ee_div(i32::MIN, -1), i32::MIN);
+}

@@ -495,12 +495,13 @@ impl Trail {
         }
         // fade in over the first 30% of the swing, out over the last 40%; a fast racket draws brighter
         let (life, length) = (self.life, self.length);
-        // B197: at least 1, for a trail a rollback left past its swing's length (the game's divides by zero there)
-        let (rise, fall) = ((mul(length as f32, 0.3) as i32).max(1), (mul(length as f32, 0.4) as i32).max(1));
+        // a trail started with no frames left (a rollback restoring a swing past its end) never ends at 0 and
+        // divides by 0 here: the game's `div` doesn't trap, so it gets the EE's quotient (see `ee_div`)
+        let (rise, fall) = (mul(length as f32, 0.3) as i32, mul(length as f32, 0.4) as i32);
         let a = if length - life < rise {
-            ((length - life) * 128 / rise) as f32
+            ee_div((length - life) * 128, rise) as f32
         } else if life < fall {
-            (life * 128 / fall) as f32
+            ee_div(life * 128, fall) as f32
         } else {
             128.0
         };
@@ -535,6 +536,14 @@ impl Trail {
     }
 }
 
+/// The EE's `div` quotient: by 0 it is 1 for a negative dividend, −1 otherwise (no trap; PCSX2 alike).
+pub fn ee_div(a: i32, b: i32) -> i32 {
+    match b {
+        0 => if a < 0 { 1 } else { -1 },
+        _ => a.wrapping_div(b),
+    }
+}
+
 /// The game's sample spline at `x` (in samples): a uniform cubic B-spline, its first two spans weighted to start on
 /// the first sample, ends clamped.
 fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
@@ -547,6 +556,9 @@ fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
         _ => [v * v * v * 0.1666666, u3 * 0.5 - u2 + 0.6666667, (u - u3 + u2 + 0.33333334) * 0.5, u3 * 0.1666666],
     };
     let last = p.len() - 1;
+    // ponytail: a trail with no frames left (reach ±max) samples far outside; held to the samples (the game reads
+    // past its buffer there, draw only)
+    let i = i.min(last);
     let q = [p[i.saturating_sub(1)], p[i], p[(i + 1).min(last)], p[(i + 2).min(last)]];
     std::array::from_fn(|e| std::array::from_fn(|k| w0 * q[0][e][k] + w1 * q[1][e][k] + w2 * q[2][e][k] + w3 * q[3][e][k]))
 }

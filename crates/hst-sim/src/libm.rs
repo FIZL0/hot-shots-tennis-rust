@@ -329,7 +329,16 @@ fn hi(x: f32) -> f32 {
 /// __ieee754_powf(x, y) for x > 0 and y of moderate size (the game raises speeds to 1.1). It is fdlibm's,
 /// as compiled into the original: its own constant roundings and the old `t_h` seed (`+ 0x40000`, unmasked).
 pub fn powf(x: f32, y: f32) -> f32 {
-    // ponytail: x ≤ 0, |y| ≥ 2^27, |x| near 1 with huge y and over/underflow aren't ported; the game never asks
+    use crate::ps2::{div, sub};
+    if y == 0.5 && x.is_sign_positive() && x.is_finite() {
+        return x.sqrt(); // its sqrtf: the exact bit-by-bit one
+    }
+    // a negative x to a fractional power is fdlibm's (x − x) / (x − x): 0/0, +max on the EE (a swing trail with no
+    // frames left asks it)
+    if x < 0.0 && x.to_bits() & 0x7fff_ffff >= 0x80_0000 && x != -1.0 && y.fract() != 0.0 && y.abs() < 1.0e8 {
+        return div(sub(x, x), sub(x, x));
+    }
+    // ponytail: x ≤ 0 otherwise, |y| ≥ 2^27, |x| near 1 with huge y and over/underflow aren't ported; the game never asks
     assert!(x > 0.0 && x.is_finite() && y.abs() < 1.0e8, "powf({x}, {y})");
     if y.to_bits() & 0x7fff_ffff < 0x80_0000 {
         return 1.0;
@@ -339,9 +348,6 @@ pub fn powf(x: f32, y: f32) -> f32 {
     }
     if y == 2.0 {
         return crate::ps2::mul(x, x);
-    }
-    if y == 0.5 {
-        return x.sqrt(); // its sqrtf: the exact bit-by-bit one
     }
     if y == 2.0 {
         return mul(x, x);
