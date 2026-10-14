@@ -316,12 +316,20 @@ def union(files, tid):
 def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
-    while queued():  # ponytail: the master's reports go first (back-to-back runner merges starved it); stalls if it never takes them
+    # the master's reports go first (back-to-back runner merges starved it), but never wait on it more than 30 min:
+    # a master that never takes its line (2026-10-14: idle misread as busy for 4 h) mustn't hold every merge back
+    t0 = time.time()
+    while queued() and time.time() - t0 < 30 * 60:
         time.sleep(10)
+    if queued():
+        log(f'{tid}: the master has not taken its queued reports in 30 min; merging without waiting')
     with MERGE:
         # the master is merging in main, or someone left conflicts there (a stash pop): queue behind it; merging
         # over unmerged paths "resolves" theirs and commits that instead of the branch (B207, 2026-10-13)
+        t0 = time.time()
         while master_busy() or git('diff', '--name-only', '--diff-filter=U').stdout.strip():
+            if time.time() - t0 > 60 * 60:  # hard stop: left for the master instead of stalling the run
+                return 'main stayed busy (the master, or unmerged paths) for 60 min'
             time.sleep(10)
         # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
         stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
@@ -415,7 +423,9 @@ idle_since = None  # when the master's TUI was first seen idle while it holds th
 
 def master_idle():
     screen = sp.run(['tmux', 'capture-pane', '-p', '-t', panes().get('master', ['master'])[0]], capture_output=True, text=True).stdout
-    return not re.search(r'…\s\(\d|esc to interrupt', screen)  # ponytail: the TUI spinner ("✽ Working… (2m 3s"); breaks if Claude Code redraws it
+    # ponytail: the TUI spinner ("✽ Working… (2m 3s") at the start of a line; breaks if Claude Code redraws it. Anchored:
+    # a diff on screen with "come back… (14 s)" in it read as busy for 4 h and every merge queued behind it (2026-10-14)
+    return not re.search(r'^\S[^\n]*…\s\(\d|esc to interrupt', screen, re.M)
 
 
 def master_busy():
