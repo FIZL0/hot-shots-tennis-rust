@@ -5,7 +5,8 @@
 //! Browse mods lists the mod store (`modstore.rs`: Verified = merged on the store's `main`, Installed / Update by the
 //! zip's sha256); ✕ downloads, checks and installs one. Upload my mod signs in with a Hugging Face write token (the
 //! token page opens, the player copies one, Paste token pastes it) and then, after the rule and Upload,
-//! commits an installed mod to the store as a pull request (`modstore::publish`). Its My public mods (M19) lists the
+//! commits an installed mod to the store as a pull request (`modstore::publish`); Upload all (B250) queues every one, in
+//! the background with a status beside each, and a re-upload goes over the player's earlier one. Its My public mods (M19) lists the
 //! signed-in player's own uploads (`modstore::mine`); Take down takes one down (`modstore::remove`). Every page is a list on the left and
 //! the hovered mod on the right, as the select's cards: its picture, △ card and details. The select's roster is
 //! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
@@ -23,7 +24,7 @@ use bevy::window::PrimaryWindow;
 use super::super::widescreen;
 use super::child::{self, Child, Got};
 use super::{CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, Screen, Tex, WHITE, attribute_card};
-use crate::modstore::{self, Entry, Event};
+use crate::modstore::{self, Entry, Event, Up};
 use crate::mods::Mod;
 
 /// The mods folder: `mods/` beside the disc, as the select's roster reads it (`main_menu.rs setup` sets it; a
@@ -47,8 +48,9 @@ const W: f32 = 180.0;
 const PANEL: [f32; 4] = [326.0, 60.0, 300.0, 336.0];
 const PITCH: f32 = 44.0;
 const H: f32 = 38.0;
-/// The rows above the installed mods on the main page.
+/// The rows above the installed mods on the main page, and on Upload.
 const TOP: usize = 3;
+const UP_TOP: usize = 3;
 
 /// B255: Browse's child buttons on a store mod.
 const INSTALL: &str = "Install";
@@ -80,6 +82,8 @@ pub(super) struct View {
     have: HashMap<String, (String, PathBuf)>,
     /// The listing or an install is under way.
     busy: bool,
+    /// B250: each upload since the game started, by mod folder (uploads run in the background, not `busy`).
+    ups: HashMap<PathBuf, Up>,
     /// B202: the open child buttons (Remove, Upload, Sign in / out, Take down) and the row they hang off.
     child: Option<Child>,
     /// What the last action did (the description bar).
@@ -176,12 +180,12 @@ impl View {
     }
 
     /// Installed: Browse mods, Add mod, Upload my mod, the mods, Reload, Back. Browse: the store's mods, Refresh,
-    /// Back. Upload: the account, My public mods, the mods, Back. Mine: the player's uploads, Refresh, Back.
+    /// Back. Upload: the account, My public mods, Upload all, the mods, Back. Mine: the player's uploads, Refresh, Back.
     fn rows(&self) -> usize {
         match self.page {
             Page::Installed => TOP + self.list.len() + 2,
             Page::Browse | Page::Mine => self.entries().len() + 2,
-            Page::Upload => self.list.len() + 3,
+            Page::Upload => self.list.len() + UP_TOP + 1,
         }
     }
 
@@ -189,7 +193,7 @@ impl View {
     fn local(&self, sel: usize) -> Option<&Mod> {
         match self.page {
             Page::Installed => self.list.get(sel.checked_sub(TOP)?),
-            Page::Upload => self.list.get(sel.checked_sub(2)?),
+            Page::Upload => self.list.get(sel.checked_sub(UP_TOP)?),
             Page::Browse | Page::Mine => None,
         }
     }
@@ -336,13 +340,10 @@ impl Menu {
                 out.push(Sound(2));
             }
             Page::Upload => {
-                let m = self.add.list[s - 2].clone();
+                let mods = if s == 2 { self.add.list.clone() } else { vec![self.add.list[s - UP_TOP].clone()] };
                 match modstore::account() {
-                    Some((_, token)) => {
-                        self.add.busy = true;
-                        self.add.status = format!("Checking, packing and uploading {}...", m.name);
-                        let card = super::previews::card(&self.add.iso, &m);
-                        modstore::publish(&m, self.add.stats.get(&m.dir).copied(), card, token);
+                    Some((name, token)) => {
+                        self.queue(mods, name, token);
                         out.push(Sound(2));
                     }
                     None => {
@@ -476,12 +477,46 @@ impl Menu {
                 } else if k.ok && s == 1 {
                     self.mods_page(Page::Mine, 0);
                     out.push(Sound(2));
+                } else if k.ok && s == 2 && self.add.list.is_empty() {
+                    self.add.status = "No mods installed to upload.".into();
+                    out.push(Sound(1));
+                } else if k.ok && s == 2 {
+                    self.open_child(&["Upload all"], format!("{RULE} Upload all {} mods?", self.add.list.len()), out);
                 } else if k.ok {
-                    let name = self.add.list[s - 2].name.clone();
-                    self.open_child(&["Upload"], format!("{RULE} Upload {name}?"), out);
+                    let m = &self.add.list[s - UP_TOP];
+                    if matches!(self.add.ups.get(&m.dir), Some(Up::Queued | Up::Uploading)) {
+                        self.add.status = format!("{} is uploading already.", m.name);
+                    } else {
+                        let name = m.name.clone();
+                        self.open_child(&["Upload"], format!("{RULE} Upload {name}?"), out);
+                    }
                 }
             }
             Page::Mine => self.mine_step(k, s, n, out),
+        }
+    }
+
+    /// B250: uploads `mods` in the background as account `name`, one Hub commit each, each marked Queued till its
+    /// turn; ones already on their way are left out.
+    fn queue(&mut self, mods: Vec<Mod>, name: String, token: String) {
+        let v = &mut self.add;
+        let mods: Vec<Mod> = mods.into_iter().filter(|m| !matches!(v.ups.get(&m.dir), Some(Up::Queued | Up::Uploading))).collect();
+        v.status = match mods.len() {
+            0 => "Those are uploading already.".into(),
+            1 => format!("Checking, packing and uploading {} (in the background)...", mods[0].name),
+            n => format!("Uploading {n} mods one after another in the background: the menu stays yours."),
+        };
+        let ups = mods
+            .into_iter()
+            .map(|m| {
+                v.ups.insert(m.dir.clone(), Up::Queued);
+                let card = super::previews::card(&v.iso, &m);
+                let stats = v.stats.get(&m.dir).copied();
+                (m, stats, card)
+            })
+            .collect::<Vec<_>>();
+        if !ups.is_empty() {
+            modstore::publish(ups, name, token);
         }
     }
 
@@ -692,7 +727,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 0 if v.account.is_some() => "Signed in".into(),
                 0 => "Sign in".into(),
                 1 => "My public mods".into(),
-                r => v.list.get(r - 2).map_or("Back".into(), |m| short(&m.name, 14)),
+                2 => "Upload all".into(),
+                r => v.list.get(r - UP_TOP).map_or("Back".into(), |m| short(&m.name, 14)),
             },
         }
     };
@@ -724,6 +760,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
         }
     }
+    if v.page == Page::Upload {
+        for r in v.top..end {
+            let Some(u) = v.local(r).and_then(|md| v.ups.get(&md.dir)) else { continue };
+            let (t, rgb) = up_tag(u);
+            d.outlined(|d| d.text(t, X + W + 6.0, Y + PITCH * (r - v.top) as f32 + 11.0, 15.0, rgb));
+        }
+    }
     if let Some(e) = v.hovered(m.sel) {
         let mt = &e.meta;
         let mut lines = details(&mt.source, &mt.author, mt.hand.map(f32::from), mt.costumes.map(|c| c as usize), mt.like.map(usize::from));
@@ -737,6 +780,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     } else if let Some(md) = v.local(m.sel) {
         let mut lines = details(&md.source, "", Some(md.hand), Some(md.costumes.len()), Some(md.donor));
         lines.push((format!("Folder {}", md.folder()), [100.0; 3]));
+        if let Some(u) = v.ups.get(&md.dir).filter(|_| v.page == Page::Upload) {
+            let (t, rgb) = up_tag(u);
+            lines.push(match u {
+                Up::Done(s) | Up::Skipped(s) | Up::Failed(s) => (format!("{t}: {}", s.rsplit(' ').next().filter(|w| w.starts_with("https://")).unwrap_or(s)), rgb),
+                _ => (t.into(), rgb),
+            });
+        }
         panel(d, &md.name, v.stats.get(&md.dir).copied(), &lines, shot);
     }
     let info = if !v.status.is_empty() {
@@ -772,6 +822,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 (0, Some(name)) => format!("Signed in to Hugging Face as {name}."),
                 (0, None) => "Sign in to Hugging Face with a token, once: the game then uploads by itself.".into(),
                 (1, _) => "The mods you've put on the store: take one down.".into(),
+                (2, _) => "Upload every installed mod, in the background (ones already on the store as they are are skipped).".into(),
                 _ => RULE.into(),
             },
             Page::Mine => match v.entries().get(m.sel) {
@@ -792,6 +843,17 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     if let Some(r) = v.nophone {
         nophone(d, if r == 1 { "Add mod" } else { "Upload my mod" });
+    }
+}
+
+/// B250: an upload's tag beside its mod, and its colour.
+fn up_tag(u: &Up) -> (&'static str, [f32; 3]) {
+    match u {
+        Up::Queued => ("Queued", [100.0; 3]),
+        Up::Uploading => ("Uploading", WHITE),
+        Up::Done(_) => ("Uploaded", GOLD),
+        Up::Skipped(_) => ("Skipped", [100.0; 3]),
+        Up::Failed(_) => ("Error", [255.0, 80.0, 80.0]),
     }
 }
 
@@ -862,8 +924,8 @@ fn panel(d: &mut Draw, name: &str, stats: Option<(usize, [u8; 5])>, lines: &[(St
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, one mod's
-/// Upload open) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
+/// shown; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, Upload
+/// all open, the first mods tagged with each upload state; `HST_CHILD=0`: none open, the first mod hovered) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
 /// mod's Remove open) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
@@ -909,9 +971,21 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
         v.account = Some("FIZL0".into());
-        v.child = Some(Child::new(2, &["Upload"]));
-        v.status = format!("{RULE} Upload {}?", v.list.first().map_or("", |x| &x.name));
+        v.child = Some(Child::new(2, &["Upload all"]));
+        v.status = format!("{RULE} Upload all {} mods?", v.list.len());
+        let ups = [
+            Up::Done("https://huggingface.co/datasets/FIZL0/opentennis-mods/discussions/12".into()),
+            Up::Skipped("this copy is on the store already".into()),
+            Up::Uploading,
+            Up::Queued,
+            Up::Failed("413: too big".into()),
+        ];
+        v.ups = v.list.iter().zip(ups).map(|(md, u)| (md.dir.clone(), u)).collect();
         m.sel = 2;
+        // `HST_CHILD=0`: none open, the first mod hovered (its upload's line in its panel)
+        if std::env::var("HST_CHILD").is_ok_and(|c| c == "0") {
+            (v.child, v.status, m.sel) = (None, RULE.into(), UP_TOP);
+        }
     } else if screen == "signinmods" {
         v.page = Page::Upload;
         v.child = Some(Child::new(0, &["Open token page", "Paste token"]));
@@ -1071,11 +1145,18 @@ fn page(
                 }
                 v.status = r.unwrap_or_else(|e| format!("Not removed: {e}"));
             }
-            Event::Uploaded(r) => {
-                v.busy = false;
-                v.store = None;
-                v.mine = None;
-                v.status = r.unwrap_or_else(|e| format!("Not uploaded: {e}"));
+            Event::Upload(dir, u) => {
+                match &u {
+                    Up::Done(s) => {
+                        v.store = None;
+                        v.mine = None;
+                        v.status = s.clone();
+                    }
+                    Up::Skipped(s) => v.status = s.clone(),
+                    Up::Failed(e) => v.status = format!("Not uploaded: {e}"),
+                    _ => {}
+                }
+                v.ups.insert(dir, u);
             }
             Event::Signed(r) => {
                 v.busy = false;
@@ -1315,7 +1396,7 @@ mod tests {
         assert_eq!(m.add.status, RULE);
         // the account row first, then the mods; uploading needs an account
         m.add.account = None;
-        m.sel = 2;
+        m.sel = UP_TOP;
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.starts_with("Sign in first") && m.add.child.is_none());
         m.add.account = Some("me".into());
@@ -1339,9 +1420,58 @@ mod tests {
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && m.add.paste && m.add.status.starts_with("Checking"));
         m.add.paste = false;
-        m.sel = 3;
+        m.sel = UP_TOP + 1;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.page, m.sel), (Page::Installed, 2));
+    }
+
+    /// B250: Upload all opens Upload all / Cancel; it (and a mod's own Upload) queues the mods in the background
+    /// without making the page busy, each tagged; one on its way isn't queued again; the outcomes come back per mod.
+    #[test]
+    fn upload_all() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let mut out = Vec::new();
+        m.mods_page(Page::Upload, 2);
+        m.add.account = Some("me".into());
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.starts_with("No mods") && m.add.child.is_none());
+        // (no such folders: each fails packing, before any network)
+        m.add.list = vec![a_mod("t_up_a", "A"), a_mod("t_up_b", "B")];
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.child.as_ref().map(|c| (c.row, c.opts.clone())), Some((2, vec!["Upload all", "Cancel"])));
+        assert!(m.add.status.ends_with("Upload all 2 mods?"));
+        // ✕ goes through the account on disk; signed in, the same as `queue`
+        m.add.child = None;
+        m.queue(m.add.list.clone(), "me".into(), "hf_test".into());
+        assert!(!m.add.busy && m.add.status.contains("2 mods"));
+        assert!(m.add.list.iter().all(|x| m.add.ups.get(&x.dir) == Some(&Up::Queued)));
+        m.sel = UP_TOP;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.child.is_none() && m.add.status == "A is uploading already.");
+        m.queue(m.add.list.clone(), "me".into(), "hf_test".into());
+        assert_eq!(m.add.status, "Those are uploading already.");
+        // the menu stays usable meanwhile: My public mods and back
+        m.sel = 1;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.page, Page::Mine);
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!(m.add.page, Page::Upload);
+        super::super::pointer::tests::hits(&m);
+        // each mod's outcome lands beside it (here both fail packing), the last one said in the status bar
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>().init_resource::<Shelf>().init_resource::<super::super::previews::ModCard>();
+        app.insert_resource(m);
+        app.add_systems(Update, page);
+        for _ in 0..500 {
+            app.update();
+            let v = &app.world().resource::<Menu>().add;
+            if v.list.iter().all(|x| matches!(v.ups.get(&x.dir), Some(Up::Failed(_)))) {
+                return assert!(v.status.starts_with("Not uploaded:"), "{}", v.status);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("no outcomes: {:?}", app.world().resource::<Menu>().add.ups);
     }
 
     /// B208: on a phone Add mod and Upload my mod are greyed and put up the popup instead (no picker, no page); ✕, ○

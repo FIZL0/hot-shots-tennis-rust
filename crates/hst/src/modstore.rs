@@ -87,8 +87,8 @@ pub enum Event {
     Installed(Result<String, String>),
     /// Mod [`Entry::key`]'s `preview.png`, or None (it has none).
     Preview(String, Option<Vec<u8>>),
-    /// Upload's outcome: what to tell the player.
-    Uploaded(Result<String, String>),
+    /// B250: how the upload of the installed mod in this folder is going.
+    Upload(std::path::PathBuf, Up),
     /// A pasted token checked: the account's name, or why it isn't kept.
     Signed(Result<String, String>),
     /// An install under way: what to show (how much has arrived, or that it's being checked).
@@ -97,6 +97,19 @@ pub enum Event {
     Mine(Result<Vec<Entry>, String>),
     /// M19: mod `id`'s removal ([`remove`]): what to tell the player.
     Removed(String, Result<String, String>),
+}
+
+/// B250: one mod's upload, as the Upload page shows it beside the mod.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Up {
+    /// Waiting for the uploads before it (one Hub commit at a time).
+    Queued,
+    Uploading,
+    /// Up: what to tell the player (the PR's URL in it).
+    Done(String),
+    /// Left alone: the store has this copy already, or a newer one.
+    Skipped(String),
+    Failed(String),
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -285,16 +298,18 @@ pub fn list(fresh: bool) {
 /// M19: `name`'s own uploads ([`Event::Mine`]): the mods on their open PRs, and those on `main` whose meta.json
 /// author is them (an upload writes the account's name there), newest PR first, then `main`. Never cached.
 pub fn mine(name: String) {
-    spawn(async move {
-        let (main, prs) = n0_future::future::zip(entries("main".into(), None), pulls()).await;
-        if main.is_empty() && prs.is_empty() && get(&format!("{HF}/api/datasets/{REPO}"), 1 << 20).await.is_err() {
-            return send(Event::Mine(Err("Can't reach the mod store.".into())));
-        }
-        let prs = prs.into_iter().filter(|p| p.1.eq_ignore_ascii_case(&name));
-        let pr = n0_future::join_all(prs.map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
-        let main: Vec<Entry> = main.into_iter().filter(|e| e.meta.author.eq_ignore_ascii_case(&name)).collect();
-        send(Event::Mine(Ok(pr.into_iter().flatten().chain(std::iter::once(main).flatten()).collect())));
-    });
+    spawn(async move { send(Event::Mine(uploads_of(&name).await)) });
+}
+
+async fn uploads_of(name: &str) -> Result<Vec<Entry>, String> {
+    let (main, prs) = n0_future::future::zip(entries("main".into(), None), pulls()).await;
+    if main.is_empty() && prs.is_empty() && get(&format!("{HF}/api/datasets/{REPO}"), 1 << 20).await.is_err() {
+        return Err("Can't reach the mod store.".into());
+    }
+    let prs = prs.into_iter().filter(|p| p.1.eq_ignore_ascii_case(name));
+    let pr = n0_future::join_all(prs.map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
+    let main: Vec<Entry> = main.into_iter().filter(|e| e.meta.author.eq_ignore_ascii_case(name)).collect();
+    Ok(pr.into_iter().flatten().chain(std::iter::once(main).flatten()).collect())
 }
 
 /// `refs/pr/<n>`'s `n`.
@@ -317,7 +332,7 @@ pub fn remove(e: &Entry, token: String) {
                     format!("{name} is off the store: its pull request #{n} is closed.")
                 }
                 None => {
-                    let pr = commit(&token, &format!("Remove mod {name} ({id})"), Vec::new(), &[format!("mods/{id}")]).await?;
+                    let pr = commit(&token, &format!("Remove mod {name} ({id})"), Vec::new(), &[format!("mods/{id}")], None).await?;
                     format!("Asked to delete {name}: it leaves the store when a maintainer merges {pr}")
                 }
             };
@@ -669,29 +684,84 @@ pub fn sign_out() {
     let _ = crate::store::write(TOKEN, "");
 }
 
-/// Packages mod `m` and commits it to the store as a pull request with the player's token ([`Event::Uploaded`]).
-/// `card` is the select's picture of it, sent when the mod ships no `previews/*.png`.
-pub fn publish(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, token: String) {
-    let m = m.clone();
+/// One upload: an installed mod, its play style and △ grades as the select shows them, and the select's picture of
+/// it (sent when the mod ships no `previews/*.png`).
+pub type Upload = (Mod, Option<(usize, [u8; 5])>, Option<Vec<u8>>);
+
+/// B250: uploads `mods` one after another in the background as account `name` ([`Event::Upload`] for each: Uploading,
+/// then Done / Skipped / Failed): each is packaged and committed to the store as its own pull request, or, if `name`
+/// uploaded that id before, over that upload ([`plan`]).
+pub fn publish(mods: Vec<Upload>, name: String, token: String) {
     spawn(async move {
-        let got = async {
-            let mut p = package(&m, stats)?;
-            // M19: the uploader's account, so My public mods finds it once merged (Browse shows a PR's author anyway)
-            if let Some((name, _)) = account() {
-                p.meta.author = plain_text(&name, 40);
-            }
-            let dir = format!("mods/{}", m.id);
-            let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
-            if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
-                files.push((format!("{dir}/preview.png"), png));
-            }
-            let pr = commit(&token, &format!("Add mod {} ({})", m.name, m.id), files, &[]).await?;
-            // the next Browse reads the store again, this upload included
-            let _ = crate::store::write(CACHE, "");
-            Ok(format!("{} is up ({} MB): it's in everyone's Browse mods now. {pr}", m.name, p.meta.size.div_ceil(1 << 20)))
-        };
-        send(Event::Uploaded(got.await));
+        let mut own = None;
+        for (m, stats, card) in mods {
+            send(Event::Upload(m.dir.clone(), Up::Uploading));
+            let got = upload(&m, stats, card, &name, &token, &mut own).await;
+            send(Event::Upload(m.dir.clone(), got.unwrap_or_else(Up::Failed)));
+        }
+        // the next Browse reads the store again, these uploads included
+        let _ = crate::store::write(CACHE, "");
     });
+}
+
+/// What uploading a mod does, given the uploader's own copy of its id on the store (`old`, newest first).
+#[derive(Debug, PartialEq)]
+enum Plan {
+    /// A new pull request: never uploaded, or merged (the PR's files replace `mods/<id>/` on `main`).
+    New,
+    /// A commit onto the uploader's open pull request.
+    Onto(u32),
+    Skip(String),
+}
+
+/// Same zip: skipped; the store's version newer: skipped; else over the open PR, or a new one.
+fn plan(old: Option<&Entry>, new: &Meta) -> Plan {
+    // "1.10" > "1.9"; a missing version is 1, as `package` writes it
+    let v = |s: &str| {
+        let mut n: Vec<u64> = s.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).map(|p| p.parse().unwrap_or(u64::MAX)).collect();
+        if n.is_empty() {
+            n.push(1);
+        }
+        while n.len() > 1 && n.last() == Some(&0) {
+            n.pop();
+        }
+        n
+    };
+    match old {
+        None => Plan::New,
+        Some(o) if o.meta.sha256 == new.sha256 => Plan::Skip("this copy is on the store already".into()),
+        Some(o) if v(&o.meta.version) > v(&new.version) => Plan::Skip(format!("the store has a newer version ({})", o.meta.version)),
+        Some(o) => pr_of(&o.rev).map_or(Plan::New, Plan::Onto),
+    }
+}
+
+/// Mod `m` packaged and committed as `name`; `own` is `name`'s uploads, read once per batch.
+async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, name: &str, token: &str, own: &mut Option<Vec<Entry>>) -> Result<Up, String> {
+    let mut p = package(m, stats)?;
+    // M19: the uploader's account, so My public mods finds it once merged (Browse shows a PR's author anyway)
+    p.meta.author = plain_text(name, 40);
+    if own.is_none() {
+        *own = Some(uploads_of(name).await?);
+    }
+    let old = own.iter().flatten().find(|e| e.meta.id == m.id);
+    let (onto, verb) = match plan(old, &p.meta) {
+        Plan::Skip(why) => return Ok(Up::Skipped(format!("{} not uploaded: {why}.", m.name))),
+        Plan::New if old.is_some() => (None, "Update"),
+        Plan::New => (None, "Add"),
+        Plan::Onto(n) => (Some(n), "Update"),
+    };
+    let dir = format!("mods/{}", m.id);
+    let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
+    if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
+        files.push((format!("{dir}/preview.png"), png));
+    }
+    let pr = commit(token, &format!("{verb} mod {} ({})", m.name, m.id), files, &[], onto).await?;
+    let mb = p.meta.size.div_ceil(1 << 20);
+    Ok(Up::Done(match onto {
+        Some(_) => format!("{} updated ({mb} MB) on your pull request: {pr}", m.name),
+        None if verb == "Update" => format!("{} updated ({mb} MB): live now, and on main once {pr} is merged.", m.name),
+        None => format!("{} is up ({mb} MB): it's in everyone's Browse mods now. {pr}", m.name),
+    }))
 }
 
 /// An HTTP client; natively the TLS provider goes in first (building one without it panics).
@@ -714,15 +784,17 @@ async fn call(r: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
 }
 
 /// The Hub's commit API (as `huggingface_hub`'s `create_commit`): asks which files go through LFS, uploads those,
-/// then commits all of them, and the deletion of the folders `gone`, to a new pull request. Returns the PR's URL.
-async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>, gone: &[String]) -> Result<String, String> {
+/// then commits all of them, and the deletion of the folders `gone`, to a new pull request, or onto open pull request
+/// `onto` (B250: its author may commit to `refs/pr/<n>`). Returns the PR's URL.
+async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>, gone: &[String], onto: Option<u32>) -> Result<String, String> {
     use data_encoding::BASE64;
     use serde_json::json;
     let c = client();
     let api = format!("{HF}/api/datasets/{REPO}");
+    let to = onto.map_or("main?create_pr=1".into(), |n| rev_part(&format!("refs/pr/{n}")));
     let ask = json!({ "files": files.iter().map(|(path, b)| json!({ "path": path, "size": b.len(), "sample": BASE64.encode(&b[..b.len().min(512)]) })).collect::<Vec<_>>() });
     // `create_pr`: an account with read access only may still open a PR (403 without it)
-    let modes = if files.is_empty() { json!({}) } else { call(c.post(format!("{api}/preupload/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await? };
+    let modes = if files.is_empty() { json!({}) } else { call(c.post(format!("{api}/preupload/{to}")).bearer_auth(token).header("Content-Type", "application/json").body(ask.to_string())).await? };
     let lfs = |path: &str| modes["files"].as_array().into_iter().flatten().any(|f| f["path"] == path && f["uploadMode"] == "lfs");
     let mut lines = vec![json!({ "key": "header", "value": { "summary": summary, "description": "Uploaded from the game." } })];
     for (path, b) in &files {
@@ -736,7 +808,10 @@ async fn commit(token: &str, summary: &str, files: Vec<(String, Vec<u8>)>, gone:
     }
     lines.extend(gone.iter().map(|path| json!({ "key": "deletedFolder", "value": { "path": path } })));
     let body = lines.iter().map(|l| l.to_string() + "\n").collect::<String>();
-    let r = call(c.post(format!("{api}/commit/main?create_pr=1")).bearer_auth(token).header("Content-Type", "application/x-ndjson").body(body)).await?;
+    let r = call(c.post(format!("{api}/commit/{to}")).bearer_auth(token).header("Content-Type", "application/x-ndjson").body(body)).await?;
+    if let Some(n) = onto {
+        return Ok(format!("{HF}/datasets/{REPO}/discussions/{n}"));
+    }
     Ok(r["pullRequestUrl"].as_str().or(r["commitUrl"].as_str()).unwrap_or_default().to_string())
 }
 
@@ -885,6 +960,22 @@ mod tests {
         let by = |id: &str, rev: &str, who: &str, sha: &str| Entry { meta: Meta { author: who.into(), sha256: sha.into(), ..e(id, rev).meta }, ..e(id, rev) };
         let got = merge(vec![vec![by("a", "main", "x", "1")], vec![by("a", "refs/pr/9", "y", "2"), by("a", "refs/pr/8", "z", "1"), by("a", "refs/pr/7", "y", "3")]]);
         assert_eq!(got.iter().map(|e| e.rev.as_str()).collect::<Vec<_>>(), ["main", "refs/pr/9"]);
+    }
+
+    /// B250: a re-upload by its uploader goes onto their open PR, or a new PR once merged; the same zip, or an older
+    /// version than the store's, is skipped.
+    #[test]
+    fn re_upload_plan() {
+        let new = Meta { id: "a".into(), version: "1.10".into(), sha256: "1".repeat(64), ..Default::default() };
+        let old = |rev: &str, version: &str, sha: &str| Entry { meta: Meta { version: version.into(), sha256: sha.repeat(64), ..new.clone() }, rev: rev.into(), verified: rev == "main" };
+        assert_eq!(plan(None, &new), Plan::New);
+        assert_eq!(plan(Some(&old("refs/pr/4", "1.9", "2")), &new), Plan::Onto(4));
+        assert_eq!(plan(Some(&old("main", "1", "2")), &new), Plan::New);
+        // same version, another zip (a fix not bumped): still goes up
+        assert_eq!(plan(Some(&old("refs/pr/4", "1.10.0", "2")), &new), Plan::Onto(4));
+        assert!(matches!(plan(Some(&old("refs/pr/4", "1.10", "1")), &new), Plan::Skip(w) if w.contains("already")));
+        assert!(matches!(plan(Some(&old("main", "2", "2")), &new), Plan::Skip(w) if w.contains("newer")));
+        assert!(matches!(plan(Some(&old("main", "", "2")), &Meta { version: "".into(), ..new.clone() }), Plan::New));
     }
 
     /// Upload → Install round trip: a real mod packaged, its zip checked against its meta (a flipped byte or a
