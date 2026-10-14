@@ -37,6 +37,12 @@ lean='--tools Bash,Read,Edit,Write --setting-sources project,local --strict-mcp-
 [ "${HST_LEAN:-1}" = 0 ] && lean=''
 trap 'tools/pcsx2-hst.sh stop' EXIT  # copy 6 starts its own virtual pad and takes it down with it
 while grep -q '^- \[ \]' plan/TODO.md; do
+  # PCSX2, screenshots and --shot need this user's Wayland session; after a reboot SDDM's greeter has the only one
+  if ! compgen -G "/run/user/$(id -u)/wayland-[0-9]*" >/dev/null; then
+    echo "=== $(date -Is) no desktop session: waiting for a login (from a shell: tools/desktop-login.sh)" | tee -a "$log"
+    printf '\a*** NO DESKTOP: log in, or run tools/desktop-login.sh ***\n'
+    until compgen -G "/run/user/$(id -u)/wayland-[0-9]*" >/dev/null; do sleep 30; done
+  fi
   run=$((run + 1))
   echo "=== run $run $(date -Is) — next: $(grep -m1 '^- \[ \]' plan/TODO.md | cut -c1-100)" | tee -a "$log"
   id=$(uuidgen)

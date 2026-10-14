@@ -118,6 +118,12 @@ def weekly():
     return _weekly[1]
 
 
+def desktop():
+    """True while this user has a Wayland session (PCSX2, screenshots and --shot need one); after a reboot only
+    SDDM's greeter (another user) has one until someone logs in."""
+    return bool(glob.glob(f'/run/user/{os.getuid()}/wayland-[0-9]*'))
+
+
 def capped():
     return not FORCE and (w := weekly()) is not None and w >= WEEKLY_MAX
 
@@ -598,6 +604,7 @@ def main():
     stopping = False  # `s` typed: start nothing new
     log(f'parallel run, {SLOTS} slots, mode {MODE}, weekly usage {weekly()}%' + (' (cap ignored: f)' if FORCE else f' (cap {WEEKLY_MAX}%)'))
     cap_logged = False
+    desk_logged = False
     merging = []  # threads merging finished branches into main
     if queued():
         master()  # reports a previous run left; otherwise the master starts only when a merge needs it
@@ -634,6 +641,16 @@ def main():
                 if cap_logged:
                     log(f'weekly usage {weekly()}%: below the cap again, starting tasks')
                     cap_logged = False
+                if not desktop():
+                    if not desk_logged:
+                        log('no desktop session (rebooted? SDDM at its password screen): no new tasks until you log in; '
+                            'from a shell: tools/desktop-login.sh')
+                        print('\a*** NO DESKTOP: log in, or run tools/desktop-login.sh — tasks wait until then ***', flush=True)
+                        desk_logged = True
+                    continue
+                if desk_logged:
+                    log('desktop session up again, starting tasks')
+                    desk_logged = False
                 procs[n], running[n] = start(n, task), task
         merging = [t for t in merging if t.is_alive()]
         # merges still queued (they wait on each other and the master's reports): RUN DONE only once they're in
