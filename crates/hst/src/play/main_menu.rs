@@ -2896,6 +2896,24 @@ mod tests {
         assert!(gold(0) && !gold(1));
     }
 
+    /// B282: a seat row draws a disc character's name and a mod's the same way: our font's glyphs, same size and
+    /// colour (no disc name-sheet art for one and text for the other).
+    #[test]
+    fn seat_names_one_style() {
+        let glyphs = ('A'..='z').map(|c| (c, (0.0, 0.0, 16.0))).collect();
+        let t = Text { msg: Vec::new(), glyphs, grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+        let name = |s: &str| {
+            let mut d = Draw { out: Vec::new(), text: &t, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
+            let row = SeatRow { p: 0, face: None, name: s, faint: false, who: "", chip: ("", None), filled: true, on: false };
+            seat_row(&mut d, [0.0, 0.0, 300.0, 40.0], &row, 0.0);
+            let font: Vec<_> = d.out.iter().filter(|q| q.tex == Tex::Font && q.dst[1] == 2.0).map(|q| (q.dst[3], q.rgb, q.alpha)).collect();
+            assert!(d.out.iter().all(|q| !matches!(q.tex, Tex::Sheet(_))), "{s}: no sheet art");
+            font
+        };
+        let (disc, mods) = (name(CHAR_NAMES[0]), name("Anya"));
+        assert!(!disc.is_empty() && disc[0] == mods[0] && disc.iter().chain(&mods).all(|&q| q == disc[0]));
+    }
+
     #[test]
     fn description_wraps_and_fits() {
         assert_eq!(wrap("a bb ccc dddd", 6), ["a bb", "ccc", "dddd"]);
