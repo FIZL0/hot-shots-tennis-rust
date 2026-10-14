@@ -108,11 +108,6 @@ const ROW_RECTS: [[f32; 4]; 7] = [
 /// B213: "Public" is the host's Public/Private switch (labelled with what the lobby is).
 const HOST_BUTTONS: [&str; 6] = ["Start", "Characters", "Court", "Copy Link", "Public", "Leave"];
 const GUEST_BUTTONS: [&str; 3] = ["Ready", "Characters", "Leave"];
-/// B214: the lobby's buttons as a grid under the seats, three to a row: their pitch, width and rows' top and pitch.
-const BUTTON_STEP: f32 = 176.0;
-const BUTTON_W: f32 = 168.0;
-const BUTTON_Y: f32 = 322.0;
-const BUTTON_ROW: f32 = 42.0;
 
 /// What a lobby selection is: a guest's seat (the host can take them out) or a button.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -222,19 +217,32 @@ impl Menu {
         }
     }
 
-    /// B214: where `items` are drawn (640×448): a guest's seat on its row, the buttons three to a row under the seats.
-    fn lobby_rects(&self) -> Vec<[f32; 4]> {
-        let mut b = 0;
-        self.items()
+    /// B295: where `items` are drawn (640×448, `Grid::split`): a seat's row, a computer's ✕ at its end, the title
+    /// line (singles / doubles), and on the side card Copy Link and Public by the code, Characters and Court under it,
+    /// Start (a guest's Ready) big at its foot over Leave.
+    pub(super) fn lobby_rects(&self) -> Vec<[f32; 4]> {
+        let (col, [sx, sy, sw, sh]) = self.grid.split();
+        let [l, t, ..] = self.grid.reach();
+        let doubles = self.net.room.as_ref().map_or(self.doubles, |r| r.doubles);
+        let half = (sw - 6.0) / 2.0;
+        let items = self.items();
+        let guest = !items.contains(&Item::Button("Court"));
+        items
             .iter()
-            .map(|it| match it {
-                Item::Seat(i) => [60.0, 140.0 + 44.0 * *i as f32, 340.0, 38.0],
-                Item::Remove(i) => [402.0, 145.0 + 44.0 * *i as f32, 28.0, 28.0],
-                Item::Mode => [32.0, 72.0, 300.0, 38.0],
-                Item::Button(_) => {
-                    b += 1;
-                    [60.0 + BUTTON_STEP * ((b - 1) % 3) as f32, BUTTON_Y + BUTTON_ROW * ((b - 1) / 3) as f32, BUTTON_W, 38.0]
+            .map(|it| match *it {
+                Item::Seat(i) => super::seat_rect(col, doubles, i),
+                Item::Remove(i) => {
+                    let [x, y, w, _] = super::seat_rect(col, doubles, i);
+                    [x + w - 32.0, y + 4.0, 26.0, 26.0]
                 }
+                Item::Mode => [l, t + 44.0, 300.0, 28.0],
+                Item::Button("Start" | "Ready") => [sx, sy + sh - 78.0, sw, 44.0],
+                Item::Button("Leave") => [sx + 24.0, sy + sh - 28.0, sw - 48.0, 26.0],
+                Item::Button("Characters") if guest => [sx, sy + 158.0, sw, 30.0],
+                Item::Button("Characters") => [sx, sy + 158.0, half, 30.0],
+                Item::Button("Court") => [sx + sw - half, sy + 158.0, half, 30.0],
+                Item::Button("Copy Link") => [sx + 104.0, sy + 102.0, sw - 112.0, 18.0],
+                Item::Button(_) => [sx + 104.0, sy + 124.0, sw - 112.0, 18.0],
             })
             .collect()
     }
@@ -962,139 +970,156 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.info(&info);
         }
         Screen::Lobby => {
-            d.frame(4, 8);
+            // B295 (ours, `mockups/Lobby`): the seats as rows by team with the help line under them; the side card
+            // with the court, the QR and code, Characters / Court, and Start big over Leave
+            d.frame(6, 8);
             let room = m.net.room.as_ref();
-            let title = room.map_or("Lobby".to_string(), |r| format!("{} - {}", r.name, if r.doubles { "Doubles" } else { "Singles" }));
             const DIM: [f32; 3] = [100.0; 3];
-            const GOLD: [f32; 3] = [128.0, 110.0, 40.0];
             let items = m.items();
-            // B201: the host's singles / doubles switch is the title
-            if items.get(m.sel) == Some(&Item::Mode) && m.net.ask.is_none() {
-                d.pill(32.0, 72.0, d.width(&title, 26.0) + 16.0, [70.0, 70.0, 80.0]);
+            let rects = m.lobby_rects();
+            let (col, [sx, sy, sw, _]) = m.grid.split();
+            let [l, t, ..] = m.grid.reach();
+            let at = |it: Item| items.iter().position(|x| *x == it);
+            // B201: the host's singles / doubles switch is the title line
+            let title = room.map_or("Lobby".to_string(), |r| {
+                let sets = super::SETS.get(r.sets).copied().unwrap_or(1);
+                format!("{} · {} · {sets} set{}", r.name, if r.doubles { "Doubles" } else { "Singles" }, if sets == 1 { "" } else { "s" })
+            });
+            if let Some(k) = at(Item::Mode) {
+                if m.sel == k && m.net.ask.is_none() {
+                    d.pill_at([l, t + 44.0, d.width(&title, 20.0) + 20.0, 28.0], [super::INK, WHITE, [70.0, 70.0, 80.0]], 128.0);
+                }
+                d.hit(rects[k], Act::Row(k, OK));
             }
-            if let Some(k) = items.iter().position(|it| *it == Item::Mode) {
-                d.hit([32.0, 72.0, 300.0, 38.0], Act::Row(k, OK));
-            }
-            d.outlined(|d| d.text(&title, 40.0, 76.0, 26.0, [128.0, 110.0, 40.0]));
+            d.outlined(|d| d.text(&title, l + 10.0, t + 48.0, 20.0, super::GOLD));
             if let Some(r) = room {
-                d.outlined(|d| d.text(&court_name(text, r.court), 40.0, 106.0, 20.0, WHITE));
-                // a seat a row: who (1P..), their character, their name, ready; the columns centred on the pill's middle
-                let (x0, w) = (60.0, 340.0);
+                super::team_boxes(d, col, r.doubles);
                 for (i, s) in r.seats.iter().enumerate() {
-                    let y = 140.0 + 44.0 * i as f32;
-                    d.pill(x0, y, w, if s.is_some() { super::COLOURS[i] } else { [60.0; 3] });
-                    if let Some(k) = items.iter().position(|it| *it == Item::Seat(i)) {
-                        d.hit([x0, y, w, 38.0], Act::Row(k, OK));
+                    let rect = super::seat_rect(col, r.doubles, i);
+                    let k = at(Item::Seat(i));
+                    if let Some(k) = k {
+                        d.hit(rect, Act::Row(k, OK));
                     }
-                    d.centred(&format!("{}P", i + 1), x0 + 30.0, y + 9.0, 20.0, WHITE);
+                    let on = m.net.ask.is_none() && k.is_some_and(|k| k == m.sel);
                     let Some(s) = s else {
-                        d.centred("open", x0 + 110.0, y + 9.0, 20.0, DIM);
-                        d.centred("COM", x0 + 292.0, y + 10.0, 18.0, DIM);
+                        let row = super::SeatRow { p: i, face: None, name: "Open seat", faint: true, who: "Start fills it with a computer player", chip: ("Open", None), filled: false, on };
+                        super::seat_row(d, rect, &row, 0.0);
                         continue;
                     };
                     let live = r.live_of(i).filter(|l| s.human() && (!l.ready || r.picking.contains(&s.peer)));
-                    match &s.pick.r#mod {
-                        // B201: still choosing: who they're on now, dimmed
-                        _ if live.is_some_and(|l| l.r#mod.is_none()) => {
-                            let c = live.unwrap().char;
-                            d.q(super::NAMES, [23.0, 24.0 * c as f32, 105.0, 24.0], [x0 + 58.0, y + 7.0, 105.0, 24.0], DIM, 128.0);
-                        }
-                        // B234: still choosing, on a mod: its own name, dimmed
-                        _ if live.is_some_and(|l| !l.name.is_empty()) => {
-                            let n = &live.unwrap().name;
-                            let k = (100.0 / d.width(n, 20.0).max(1.0)).min(1.0);
-                            d.centred(n, x0 + 110.0, y + 9.0 + 10.0 * (1.0 - k), 20.0 * k, DIM);
-                        }
-                        // B195: still choosing, the seat held
-                        _ if live.is_some() || r.picking.contains(&s.peer) => d.centred("Picking...", x0 + 110.0, y + 9.0, 20.0, DIM),
-                        // B217: who Random drew stays hidden until the match
-                        _ if s.pick.random => d.centred("Random", x0 + 110.0, y + 9.0, 20.0, WHITE),
-                        // the name from the select's name sheet (a mod's in text)
-                        Some(w) => d.fitted(&w.name, x0 + 110.0, y + 9.0, 20.0, 100.0),
-                        None => d.q(super::NAMES, [23.0, 24.0 * s.pick.char as f32, 105.0, 24.0], [x0 + 58.0, y + 7.0, 105.0, 24.0], WHITE, 128.0),
-                    }
-                    let level;
-                    let (who, state, rgb) = if !s.human() {
+                    let choosing = live.is_some() || r.picking.contains(&s.peer);
+                    // the character: who they're on now while still choosing (B201), a mod's own name (B234), Random
+                    // hidden until the match (B217)
+                    let (c, id) = match live {
+                        Some(l) => (l.char, l.r#mod.clone()),
+                        None => (s.pick.char, s.pick.r#mod.as_ref().map(|w| w.id.clone())),
+                    };
+                    let local = id.as_ref().and_then(|id| m.mods.iter().position(|x| x.id == *id));
+                    let name = match (&s.pick.r#mod, live) {
+                        (_, Some(l)) if !l.name.is_empty() => l.name.clone(),
+                        (_, Some(_)) => super::CHAR_NAMES[c.min(super::CHARS - 1)].to_string(),
+                        _ if choosing => "Picking...".into(),
+                        _ if s.pick.random => "Random".into(),
+                        (Some(w), _) => w.name.clone(),
+                        (None, _) => super::CHAR_NAMES[c.min(super::CHARS - 1)].to_string(),
+                    };
+                    let face = match local {
+                        _ if choosing && live.is_none() => None,
+                        _ if s.pick.random && !choosing => Some(super::cell_face(None)),
+                        Some(j) => Some(super::cell_face(Some(super::Who::Mod(j)))),
+                        None => Some(super::cell_face(Some(super::Who::Disc(c.min(super::CHARS - 1))))),
+                    };
+                    let (who, chip) = if !s.human() {
                         // B201: the computer's level, from its character and costume as the select's rank pill
-                        level = super::RANK_NAMES.get(super::com_rank(&text.ranks, s.pick.char, s.pick.costume, r.doubles)).copied().unwrap_or("COM");
-                        (format!("COM #{}", s.pick.costume + 1), level, DIM)
+                        let level = super::RANK_NAMES.get(super::com_rank(&text.ranks, s.pick.char, s.pick.costume, r.doubles)).copied().unwrap_or("COM");
+                        (format!("COM #{} · {level}", s.pick.costume + 1), ("COM", Some(super::CHIP_COM)))
                     } else if s.peer == "host" {
-                        (name_of(r, "host"), "Host", GOLD)
+                        (name_of(r, "host"), ("Host", Some(super::CHIP_HOST)))
                     } else if r.ready.contains(&s.peer) {
-                        (name_of(r, &s.peer), "Ready", GOLD)
+                        (name_of(r, &s.peer), ("Ready", Some(super::CHIP_READY)))
                     } else {
-                        (name_of(r, &s.peer), "Waiting", DIM)
+                        (name_of(r, &s.peer), ("Waiting", None))
                     };
-                    d.fitted(&who, x0 + 200.0, y + 9.0, 20.0, 96.0);
-                    if s.human() {
-                        d.centred(state, x0 + 292.0, y + 10.0, 18.0, rgb);
-                    } else {
-                        // a level's name can be long: shrunk to the pill's end, in white to read on the seat's colour
-                        d.fitted(state, x0 + 286.0, y + 10.0, 18.0, 92.0);
-                    }
+                    let remove = at(Item::Remove(i));
+                    let row = super::SeatRow { p: i, face, name: &name, faint: choosing, who: &who, chip, filled: true, on };
+                    super::seat_row(d, rect, &row, if remove.is_some() { 32.0 } else { 0.0 });
                     // B216: the host's ✕ that takes a computer player off (△ on its row, or ✕ on it)
-                    if let Some(k) = items.iter().position(|it| *it == Item::Remove(i)) {
-                        let ring = if m.sel == k { GOLD } else { WHITE };
-                        d.pill_at([x0 + w + 2.0, y + 5.0, 28.0, 28.0], [super::INK, ring, [120.0, 30.0, 30.0]], 128.0);
-                        d.centred("X", x0 + w + 16.0, y + 9.0, 20.0, WHITE);
-                        d.hit([x0 + w + 2.0, y + 5.0, 28.0, 28.0], Act::Row(k, OK));
+                    if let Some(k) = remove {
+                        let [x, y, w, h] = rects[k];
+                        let ring = if m.sel == k { super::GOLD } else { WHITE };
+                        d.pill_at([x, y, w, h], [super::INK, ring, [120.0, 30.0, 30.0]], 128.0);
+                        d.centred("X", x + w / 2.0, y + 4.0, 18.0, WHITE);
+                        d.hit([x, y, w, h], Act::Row(k, OK));
                     }
-                }
-                // the host's hand on the guest seat it would take out
-                if let (None, Some(&it @ (Item::Seat(i) | Item::Remove(i)))) = (m.net.ask, items.get(m.sel)) {
-                    // on the ✕: the hand at its left, over the seat's end
-                    let x = if matches!(it, Item::Remove(_)) { x0 + w - 64.0 } else { x0 - 60.0 };
-                    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x + hand_x, 140.0 + 44.0 * i as f32 + 3.0, 64.0, 32.0], WHITE, 128.0);
-                }
-            }
-            if m.net.ask.is_none() {
-                // the buttons along the bottom
-                let rects = m.lobby_rects();
-                let buttons: Vec<(usize, &str)> = items.iter().enumerate().filter_map(|(i, it)| if let Item::Button(b) = it { Some((i, *b)) } else { None }).collect();
-                let open = room.map_or(0, Room::open);
-                for (i, b) in &buttons {
-                    let ([x, y, ..], on) = (rects[*i], m.sel == *i);
-                    let label = match *b {
-                        "Start" | "Ready" if m.counting() > 0 => format!("Cancel ({})", m.counting()),
-                        "Start" if open > 0 => format!("Start +{open} COM"),
-                        "Ready" if m.net.prepared => "Not Ready".to_string(),
-                        "Public" if room.is_some_and(|r| r.private) => "Private".to_string(),
-                        b => b.to_string(),
-                    };
-                    let dim = *b == "Copy Link" && shared(&m.net).is_none();
-                    d.pill(x, y, BUTTON_W, if on { GOLD } else { [70.0, 70.0, 80.0] });
-                    d.hit([x, y, BUTTON_W, 38.0], Act::Row(*i, OK));
-                    let k = ((BUTTON_W - 20.0) / d.width(&label, 20.0)).min(1.0);
-                    d.centred(&label, x + BUTTON_W / 2.0, y + 9.0 + 10.0 * (1.0 - k), 20.0 * k, if on && !dim { WHITE } else if dim { [60.0; 3] } else { DIM });
                 }
             }
             if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
-                // a mod this machine doesn't have: its looks, or its donor recoloured
-                d.outlined(|d| d.text(&format!("{} is a mod you don't have.", w.name), 410.0, 120.0, 18.0, WHITE));
-                // the gold pill is the cursor (a hand would sit on the seats); it has to be answered
+                // a mod this machine doesn't have: its looks, or its donor recoloured, asked on the side card; the
+                // gold pill is the cursor, and it has to be answered
                 d.popup(None);
+                d.box3([sx, sy, sw, 210.0], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
+                d.label(&format!("{} is a mod you don't have.", w.name), sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
                 for (i, r) in ASK_ROWS.iter().enumerate() {
-                    let y = 156.0 + 44.0 * i as f32;
-                    d.pill(420.0, y, 200.0, if m.sel == i { GOLD } else { [70.0, 70.0, 80.0] });
-                    d.hit([420.0, y, 200.0, 38.0], Act::Row(i, OK));
-                    let k = (176.0 / d.width(r.0, 22.0)).min(1.0);
-                    d.centred(r.0, 520.0, y + 8.0 + 11.0 * (1.0 - k), 22.0 * k, if m.sel == i { WHITE } else { DIM });
+                    let rect = [sx + 10.0, sy + 40.0 + 40.0 * i as f32, sw - 20.0, 32.0];
+                    super::side_button(d, rect, r.0, m.sel == i, false);
+                    d.hit(rect, Act::Row(i, OK));
                 }
-                d.info("Get its looks, or play it as its donor in odd colours.");
+                super::help_line(d, col, room.is_some_and(|r| r.doubles), "Get its looks, or play it as its donor in odd colours.");
                 return;
             }
-            if room.is_some_and(|r| r.private) {
-                // B213: over the code: only it joins
-                d.outlined(|d| d.centred("Private: code only", 515.0, 74.0, 20.0, GOLD));
-            }
-            if shared(&m.net).is_some() {
-                // the code as a QR beside the seats (the texture `QrImage`, made when the code arrives)
-                d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [430.0, 100.0, 170.0, 170.0], WHITE, 128.0);
+            if let Some(r) = room {
+                // the side card: the court, the code as a QR (the texture `QrImage`, made when the code arrives) and
                 // the short code, big enough to read out (the QR is its link)
-                d.outlined(|d| d.centred(&m.net.short, 515.0, 272.0, 46.0, GOLD));
-            } else if m.net.hosting && room.is_some() {
-                spinner(d, m.net.spin, 515.0, 150.0, 14.0);
-                d.outlined(|d| d.centred("Getting the code...", 515.0, 176.0, 18.0, WHITE));
+                d.box3([sx, sy, sw, 150.0], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
+                super::court_band(d, [sx, sy, sw], &court_name(text, r.court));
+                let (qx, qy) = (sx + 8.0, sy + 54.0);
+                if shared(&m.net).is_some() {
+                    d.q(Tex::Solid, [0.0; 4], [qx, qy, 88.0, 88.0], WHITE, 128.0);
+                    d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [qx, qy, 88.0, 88.0], WHITE, 128.0);
+                } else {
+                    spinner(d, m.net.spin, qx + 44.0, qy + 44.0, 14.0);
+                }
+                let tx = sx + 104.0;
+                d.text(if r.private { "PRIVATE CODE" } else { "JOIN CODE" }, tx, qy + 2.0, 11.0, [38.0, 51.0, 32.0]);
+                let code = if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
+                d.outlined(|d| super::left(d, code, tx, qy + 14.0, 32.0, sw - 112.0, super::GOLD));
+            }
+            if m.net.ask.is_none() {
+                let open = room.map_or(0, Room::open);
+                for (i, it) in items.iter().enumerate() {
+                    let Item::Button(b) = *it else { continue };
+                    let (r, on) = (rects[i], m.sel == i);
+                    let label = match b {
+                        "Start" | "Ready" if m.counting() > 0 => format!("Cancel ({})", m.counting()),
+                        "Start" if open > 0 => format!("Start match +{open} COM"),
+                        "Start" => "Start match".into(),
+                        "Ready" if m.net.prepared => "Not Ready".into(),
+                        "Copy Link" => "Copy link".into(),
+                        "Public" if room.is_some_and(|r| r.private) => "Private".into(),
+                        "Leave" => "Leave lobby".into(),
+                        b => b.into(),
+                    };
+                    d.hit(r, Act::Row(i, OK));
+                    match b {
+                        // the small pills by the code: Copy link white (grey with nothing to copy), Public dark
+                        "Copy Link" | "Public" => {
+                            let dim = b == "Copy Link" && shared(&m.net).is_none();
+                            let (fill, words) = if b == "Public" { (super::INK, WHITE) } else if dim { ([90.0; 3], [60.0; 3]) } else { (WHITE, super::INK) };
+                            d.pill_at(r, [super::INK, if on { super::GOLD } else { fill }, if on { super::GOLD } else { fill }], 128.0);
+                            d.label(&label, r[0] + r[2] / 2.0, r[1] + 3.0, 12.0, r[2] - 10.0, if on { WHITE } else { words });
+                        }
+                        // Leave: an outline only
+                        "Leave" => {
+                            d.pill_at(r, [super::INK, if on { super::GOLD } else { [60.0; 3] }, if on { [128.0, 110.0, 40.0] } else { [90.0, 104.0, 80.0] }], if on { 128.0 } else { 70.0 });
+                            d.label(&label, r[0] + r[2] / 2.0, r[1] + 5.0, 15.0, r[2] - 16.0, if on { WHITE } else { super::INK });
+                        }
+                        _ => super::side_button(d, r, &label, on, matches!(b, "Start" | "Ready")),
+                    }
+                }
+                // the hand on the chosen item's left end
+                if let Some([x, y, _, h]) = rects.get(m.sel) {
+                    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 22.0 + hand_x, y + h / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
+                }
             }
             // B236: no lobby yet: what's happening, the spinner turning; or why it stopped
             if room.is_none() {
@@ -1129,7 +1154,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if room.is_none() => "The lobby's closed.".into(),
                 _ => "Leave the lobby.".into(),
             };
-            d.info(&info);
+            // B295: under the seats; with no lobby, in the description bar under the panel
+            if room.is_some() {
+                super::help_line(d, col, room.is_some_and(|r| r.doubles), &info);
+            } else {
+                d.info(&info);
+            }
         }
         _ => {}
     }
@@ -1610,17 +1640,20 @@ mod tests {
             Some(Act::Row(i, _)) => Some(i),
             _ => None,
         };
-        // the host: seats 1, 2 (guests), 3 (open), then Start, Characters, Court / Copy Link, Public, Leave under them, the
-        // title last
-        assert_eq!(at(&m, 200.0, 140.0 + 44.0 + 10.0), Some(0));
-        assert_eq!(at(&m, 200.0, 150.0), None, "the host's own seat");
-        assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(3), "Start");
-        assert_eq!(at(&m, 60.0 + BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(7), "Public");
-        assert_eq!(at(&m, 60.0 + 2.0 * BUTTON_STEP + 50.0, BUTTON_Y + BUTTON_ROW + 10.0), Some(8), "Leave");
-        assert_eq!(at(&m, 100.0, 80.0), Some(9), "singles / doubles");
-        assert_eq!(at(&m, 60.0 + BUTTON_W + 2.0, BUTTON_Y + 10.0), Some(3), "between pills: the nearer");
+        // the host: seats 1, 2 (guests), 3 (open), then Start, Characters, Court, Copy Link, Public, Leave on the side
+        // card, the title last: each one's middle hits it
+        let rects = m.lobby_rects();
+        assert_eq!(rects.len(), 10);
+        for (k, [x, y, w, h]) in rects.iter().enumerate() {
+            assert_eq!(at(&m, x + w / 2.0, y + h / 2.0), Some(k), "{:?}", m.items()[k]);
+        }
+        let [x, y, ..] = super::super::seat_rect(m.grid.split().0, true, 0);
+        assert_eq!(at(&m, x + 100.0, y + 10.0), None, "the host's own seat");
+        // the side card beside the seats, every item inside the 4:3 screen
+        assert!(rects.iter().all(|r| r[0] >= 0.0 && r[0] + r[2] <= 640.0 && r[1] >= 0.0 && r[1] + r[3] <= 448.0), "{rects:?}");
         m.net.hosting = false;
-        assert_eq!(at(&m, 70.0, BUTTON_Y + 10.0), Some(0), "a guest's Ready");
+        let [x, y, w, h] = m.lobby_rects()[0];
+        assert_eq!(at(&m, x + w / 2.0, y + h / 2.0), Some(0), "a guest's Ready");
     }
 
     #[test]
@@ -1657,7 +1690,7 @@ mod tests {
         m.net.room.as_mut().unwrap().count = 0;
         // Characters: unready (it was), back to the select
         m.net.prepared = true;
-        m.step(dev, Press { right: true, ..default() });
+        m.step(dev, Press { up: true, ..default() });
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Prepared(false)));
         assert_eq!(m.screen, Screen::Chars);
         m.screen = Screen::Lobby;
@@ -1859,11 +1892,11 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        walk(&mut m, &[(d, 1), (d, 2), (d, 3), (r, 4), (r, 5), (r, 5), (d, 8), (l, 7), (l, 6), (u, 3), (u, 2), (u, 1), (u, 0), (u, 9), (u, 9)]);
-        // a guest: Ready Characters Leave in a row
+        walk(&mut m, &[(d, 1), (d, 2), (d, 3), (u, 4), (r, 5), (r, 5), (u, 7), (u, 6), (l, 0), (u, 9), (u, 9), (d, 0), (r, 6), (d, 7), (d, 5), (d, 3), (d, 8), (u, 3)]);
+        // a guest: Characters over Ready over Leave
         m.net.hosting = false;
         m.sel = 0;
-        walk(&mut m, &[(r, 1), (r, 2), (d, 2), (l, 1)]);
+        walk(&mut m, &[(u, 1), (u, 1), (d, 0), (d, 2), (u, 0)]);
     }
 
     /// B195: Find lists every open lobby before any pick; choosing one takes this machine's controllers (no more

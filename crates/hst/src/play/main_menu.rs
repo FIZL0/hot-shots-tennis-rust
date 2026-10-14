@@ -1188,8 +1188,6 @@ enum Tex {
     Cursor,
     /// `SHEETS[k]`.
     Sheet(usize),
-    /// A portrait sheet: costume 0 (characters 0–7, 8–13), costume 9 (same), costumes 1..8.
-    Shots(usize),
     /// Player `p`'s 3D preview (`previews.rs`), in place of the portrait.
     Preview(usize),
     /// The lobby code's QR (`online::QrImage`).
@@ -1225,7 +1223,6 @@ const SHEETS: [(&str, &str); 15] = [
 ];
 /// The disc grid's faces sheet (`SHEETS` index): drawn for a face icon not baked yet.
 const FACES: usize = 11;
-const NAMES: Tex = Tex::Sheet(12);
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
 const ATTRS: Tex = Tex::Sheet(14);
 const CONFIRM: Tex = Tex::Sheet(15);
@@ -1566,13 +1563,14 @@ struct Draw<'a> {
 
 const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
-const TITLES: [(&str, [f32; 3]); 6] = [
+const TITLES: [(&str, [f32; 3]); 7] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
     ("Options", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
     ("Character Selection", [102.0, 70.0, 40.0]),
     ("Confirm Settings", [55.0, 80.0, 42.0]),
     ("Mods", [110.0, 65.0, 75.0]),
+    ("Lobby", [55.0, 80.0, 42.0]),
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];
@@ -1950,7 +1948,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
         }
         Screen::Chars => chars(&mut d, m, text, pads),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
-        Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, hand_x),
+        Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, pads, hand_x),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
     }
@@ -1961,19 +1959,6 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
         d.anchor = Anchor::Centre;
     }
     d
-}
-
-fn portrait(c: usize, costume: usize) -> (Tex, [f32; 4]) {
-    let cell = match costume {
-        0 | 9 => c % 8,
-        _ => costume - 1,
-    };
-    let sheet = match costume {
-        0 => c / 8,
-        9 => 2 + c / 8,
-        _ => 4 + c,
-    };
-    (Tex::Shots(sheet), [(cell % 4) as f32 * 128.0, (cell / 4 % 2) as f32 * 168.0, 128.0, 168.0])
 }
 
 /// A Singles / Doubles bar (B141, ours): pill `i`'s colour, dimmed and see-through when not chosen, its word in our
@@ -2249,13 +2234,6 @@ fn drop_button(d: &mut Draw, p: usize, x: f32, y: f32) {
     d.hit([x, y, 28.0, 28.0], pointer::Act::Drop(p));
 }
 
-/// A computer's "Tennis Lv N" pill (`Confirmation_04`: rank `r`'s label, 9 to a column, on its pill in the card's
-/// colour).
-fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
-    d.pill_at([x, y, 110.0, 22.0], [rgb.map(|c| c * 0.45), rgb, rgb], 128.0);
-    d.label(RANK_NAMES.get(r).copied().unwrap_or(""), x + 55.0, y + 2.0, 18.0, 96.0, WHITE);
-}
-
 /// B263: the warm fill behind a face icon.
 const FACE_FILL: [f32; 3] = [110.0, 100.0, 90.0];
 
@@ -2276,124 +2254,255 @@ fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
 }
 
-fn confirm(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
-    d.frame(4, 8);
-    let order: &[usize] = if m.doubles { &[0, 1, 3, 2] } else { &[0, 1] };
-    let w = 600.0 / order.len() as f32;
-    for (k, &p) in order.iter().enumerate() {
-        let x = 20.0 + w * k as f32 + (w - 112.0) / 2.0;
-        // B264: a Random pick stays the ? card and "Random" until the match starts
-        if m.players[p].random {
-            d.q(C02, RANDOM_TILE, [x + 10.0, 90.0, 92.0, 68.0], WHITE, 128.0);
-            d.outlined(|d| d.label("Random", x + 56.0, 188.0, 20.0, 96.0, GOLD));
-            if m.seats[p].is_none() {
-                d.outlined(|d| {
-                    d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
-                    d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
-                });
-            } else {
-                d.outlined(|d| d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]));
-            }
-            continue;
-        }
-        match m.pick(p) {
-            (Who::Mod(i), costume) => {
-                // ponytail: no 3D preview on this screen; the name and costume on a dark card
-                d.q(Tex::Solid, [0.0; 4], [x, 64.0, 112.0, 147.0], [30.0, 30.0, 40.0], 110.0);
-                d.fitted(&m.mods[i].name, x + 56.0, 120.0, 20.0, 104.0);
-                d.centred(&format!("{}", costume + 1), x + 56.0, 146.0, 18.0, WHITE);
-            }
-            (Who::Disc(c), costume) => {
-                let (sheet, src) = portrait(c, costume);
-                d.q(sheet, src, [x, 64.0, 112.0, 147.0], WHITE, 128.0);
-            }
-        }
-        // play style over the card's foot (`Confirmation_03`'s titles)
-        let (style, ai) = match m.pick(p) {
-            (Who::Mod(i), costume) => (text.mods[i].0, (m.mods[i].ai_row, costume)),
-            (Who::Disc(c), costume) => (text.style[c], (c, costume)),
-        };
-        d.outlined(|d| d.label(["All-round", "Baseline", "Net Player", "Big Server"][style], x + 56.0, 188.0, 20.0, 96.0, GOLD));
-        if m.seats[p].is_none() {
-            d.outlined(|d| {
-                d.text(&format!("{}P", p + 1), x + 10.0, 214.0, 24.0, COLOURS[p]);
-                d.text("COM", x + 56.0, 218.0, 18.0, [60.0, 120.0, 30.0]);
-            });
-            // the computer's Tennis Lv: its AIParam row's rank (`Confirmation_04`'s titles, nine to a column)
-            let row = hst_sim::ai::Choice::new(hst_sim::ai::menu_row(ai.0 as u8, ai.1 as u8) as u32, ai.0 as u8, m.doubles).row;
-            rank_pill(d, text.ranks.get(row).copied().unwrap_or(0) as usize, COLOURS[p], x + 1.0, 238.0);
+/// B295: the side card's width, a seat row's height and pitch, and the gap between the teams' groups.
+const SIDE_W: f32 = 190.0;
+const ROW_H: f32 = 34.0;
+const ROW_PITCH: f32 = 38.0;
+const TEAM_GAP: f32 = 18.0;
+/// B295: the status chips' words on white (the mockup's): Host pink, Ready orange, a computer green.
+const CHIP_HOST: [f32; 3] = [88.0, 24.0, 53.0];
+const CHIP_READY: [f32; 3] = [90.0, 48.0, 3.0];
+const CHIP_COM: [f32; 3] = [30.0, 61.0, 15.0];
+
+impl Grid {
+    /// B295: the view's reach in 640×448 units (left, top, right, bottom), down to the legend strip: the lobby and
+    /// confirm screens put their help under the seats, not in the description bar.
+    fn reach(&self) -> [f32; 4] {
+        [self.strip[0], self.strip[1] - 46.0, self.strip[0] + self.strip[2], self.detail[1] + self.detail[3] + 32.0]
+    }
+
+    /// B295: the lobby's and confirm screen's seats column (the teams' groups, the help line under them) and side card
+    /// (beside it; under it in a portrait window, as the select's detail panel).
+    fn split(&self) -> ([f32; 4], [f32; 4]) {
+        let [l, t, r, b] = self.reach();
+        let top = t + 76.0;
+        // under it only when the window is tall enough for the side card's buttons (a near-square one keeps it beside)
+        if self.detail[0] > self.strip[0] || b - t < 670.0 {
+            ([l, top, r - l - SIDE_W - 10.0, b - top], [r - SIDE_W, t + 48.0, SIDE_W, b - t - 48.0])
         } else {
-            d.outlined(|d| d.centred(&format!("{}P", p + 1), x + 56.0, 214.0, 24.0, COLOURS[p]));
+            let w = (r - l).min(280.0);
+            ([l, top, r - l, 268.0], [(l + r - w) / 2.0, top + 276.0, w, (b - top - 276.0).min(340.0)])
         }
     }
-    flame::draw(d, m);
-    d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [288.0, 110.0, 64.0, 48.0], WHITE, 128.0);
-    // "Umpire", the umpire's round face (the "?" tile for a random one) and name at the top right
-    d.anchor = Anchor::Sides;
-    let u = m.umpire as usize;
-    d.outlined(|d| d.label("Umpire", 443.0, 12.0, 28.0, 78.0, WHITE));
-    let (face, name) = match u {
-        UMPIRES => ([96.0, 360.0, 92.0, 68.0], "Random".to_string()),
-        _ => ([63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0], text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
+}
+
+/// B295: team `k`'s group (of `per` seats) in the seats column `col`.
+fn team_box(col: [f32; 4], per: usize, k: usize) -> [f32; 4] {
+    let h = 24.0 + ROW_PITCH * per as f32;
+    [col[0], col[1] + (h + TEAM_GAP) * k as f32, col[2], h]
+}
+
+/// B295: seat `i`'s row (1P, 2P on the first team; doubles 3P, 4P on the second).
+fn seat_rect(col: [f32; 4], doubles: bool, i: usize) -> [f32; 4] {
+    let per = 1 + doubles as usize;
+    let [x, y, w, _] = team_box(col, per, i / per);
+    [x + 6.0, y + 22.0 + ROW_PITCH * (i % per) as f32, w - 12.0, ROW_H]
+}
+
+/// B295: the context help under the seats.
+fn help_rect(col: [f32; 4], doubles: bool) -> [f32; 4] {
+    let [x, y, w, h] = team_box(col, 1 + doubles as usize, 1);
+    [x, y + h + 8.0, w, 40.0]
+}
+
+/// B295: the teams' groups ("Team 1", "Team 2") behind the seat rows.
+fn team_boxes(d: &mut Draw, col: [f32; 4], doubles: bool) {
+    for k in 0..2 {
+        let [x, y, w, h] = team_box(col, 1 + doubles as usize, k);
+        d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CREAM)], 120.0);
+        d.text(&format!("TEAM {}", k + 1), x + 10.0, y + 5.0, 12.0, [38.0, 51.0, 32.0]);
+    }
+}
+
+/// B295: the help line's box under the seats, `s` word-wrapped onto its two lines (shrunk to fit).
+fn help_line(d: &mut Draw, col: [f32; 4], doubles: bool, s: &str) {
+    let [x, y, w, h] = help_rect(col, doubles);
+    d.box3([x, y, w, h], 10.0, [None, None, Some(WHITE)], 96.0);
+    let mut size = 13.0;
+    let lines = loop {
+        let lines = wrap(s, ((w - 16.0) / (size * 0.55)) as usize);
+        if lines.len() <= 2 || size < 8.0 {
+            break lines;
+        }
+        size -= 1.0;
     };
-    d.q(if u == UMPIRES { C02 } else { C00 }, face, [486.0, 4.0, 46.0, 44.0], WHITE, 128.0);
-    d.outlined(|d| d.text(&name, 538.0, 16.0, 22.0, WHITE));
-    d.anchor = Anchor::Centre;
-    // court name, its surface and the surface's ball meters (bounce, speed); none for a random court
-    let gold = [128.0, 110.0, 40.0];
-    if m.court == COURTS {
-        d.outlined(|d| d.text("Random Court", 30.0, 258.0, 24.0, gold));
-    } else {
-        let court = format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court));
-        d.outlined(|d| d.text(&court, 30.0, 258.0, 24.0, gold));
+    let top = y + (h - 1.25 * size * lines.len() as f32) / 2.0;
+    for (i, l) in lines.iter().enumerate() {
+        let lw = d.width(l, size).min(w - 16.0);
+        d.label(l, x + 8.0 + lw / 2.0, top + 1.25 * size * i as f32, size, w - 16.0, INK);
+    }
+}
+
+/// `s` from `x` at `size`, squeezed to fit `max`.
+fn left(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3]) {
+    let w = d.width(s, size).min(max);
+    d.label(s, x + w / 2.0, y, size, max, rgb);
+}
+
+/// B295: what a seat row shows.
+struct SeatRow<'a> {
+    /// the player (its colour and tag)
+    p: usize,
+    face: Option<(Tex, [f32; 4])>,
+    name: &'a str,
+    /// the name dimmed (still picking)
+    faint: bool,
+    who: &'a str,
+    /// the status chip's words and their colour (None: see-through, white words)
+    chip: (&'a str, Option<[f32; 3]>),
+    /// taken (not an open seat)
+    filled: bool,
+    /// the cursor's
+    on: bool,
+}
+
+/// B295: a seat's row (`mockups/Lobby`): the player's colour, "NP", the face, the character over the player, the
+/// status chip at the right end (`end` units in from it, for a ✕), gold-ringed when chosen.
+fn seat_row(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &SeatRow, end: f32) {
+    let fill = if s.filled { CARD_FILL[s.p] } else { CARD_FILL[s.p].map(|c| c * 0.45) };
+    let ring = if s.on { GOLD } else if s.filled { WHITE } else { [60.0; 3] };
+    d.box3([x, y, w, h], 12.0, [Some(INK), Some(ring), Some(fill)], 128.0);
+    d.text(&format!("{}P", s.p + 1), x + 8.0, y + 8.0, 18.0, WHITE);
+    let fx = x + 50.0;
+    match s.face {
+        Some(f) => face_frame(d, f, fx, y + h / 2.0, h - 6.0, WHITE),
+        None => {
+            let r = (h - 6.0) / 2.0;
+            for (src, dst) in super::menu_art::pill_quads(0, [fx - r, y + h / 2.0 - r, 2.0 * r, 2.0 * r]) {
+                d.q(Tex::Pill, src, dst, [40.0; 3], 128.0);
+            }
+        }
+    }
+    let (words, fill) = s.chip;
+    let cw = d.width(words, 12.0).min(90.0) + 18.0;
+    let cx = x + w - end - 6.0 - cw;
+    d.pill_at([cx, y + 8.0, cw, 18.0], [fill.map_or([40.0; 3], |_| [60.0; 3]), fill.map_or([40.0; 3], |_| WHITE), fill.map_or([40.0; 3], |_| WHITE)], if fill.is_some() { 128.0 } else { 70.0 });
+    d.label(words, cx + cw / 2.0, y + 10.0, 12.0, cw - 6.0, fill.unwrap_or(WHITE));
+    let (tx, tw) = (fx + h / 2.0 + 4.0, cx - fx - h / 2.0 - 10.0);
+    left(d, s.name, tx, y + 2.0, 17.0, tw, if s.faint { [100.0; 3] } else { WHITE });
+    left(d, s.who, tx, y + 20.0, 11.0, tw, [118.0; 3]);
+}
+
+/// The confirm screen (B295, ours after `mockups/Lobby`): the seats as rows by team with the original's VS between
+/// them, the side card with the court (its surface and ball meters) and umpire, the court / sets / games / umpire
+/// rows and Start under it. The original's pickers (`picker`) take the bottom as before.
+fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
+    d.frame(4, 8);
+    let (col, [sx, sy, sw, _]) = m.grid.split();
+    let [l, t, ..] = m.grid.reach();
+    let mode = format!("{} · {} set{}, {} games", if m.doubles { "Doubles" } else { "Singles" }, SETS[m.sets], if SETS[m.sets] == 1 { "" } else { "s" }, m.games);
+    d.outlined(|d| d.text(&mode, l + 8.0, t + 48.0, 20.0, GOLD));
+    // the flame behind the teams' groups, the VS over the gap between them
+    let gap = team_box(col, 1 + m.doubles as usize, 1)[1] - TEAM_GAP / 2.0;
+    let vs = [col[0] + col[2] / 2.0, gap];
+    flame::draw(d, m, vs);
+    team_boxes(d, col, m.doubles);
+    d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [vs[0] - 32.0, vs[1] - 24.0, 64.0, 48.0], WHITE, 128.0);
+    for p in 0..m.players() {
+        let pl = m.players[p];
+        let remote = m.remote(p).filter(|s| s.human());
+        let human = m.seats[p].is_some() || remote.is_some();
+        let name = match m.who(p) {
+            _ if pl.random => "Random".to_string(),
+            Who::Mod(i) => m.mods[i].name.clone(),
+            Who::Disc(c) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[c]).to_string(),
+        };
+        let (who, costume) = m.pick(p);
+        let (style, c) = match who {
+            Who::Mod(i) => (text.mods[i].0, m.mods[i].donor),
+            Who::Disc(c) => (text.style[c], c),
+        };
+        let owner = match remote {
+            Some(s) => m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online".to_string(), |n| n.clone()),
+            None if human => dev_name(m.seats[p], pads),
+            None => "COM".into(),
+        };
+        // B264: a Random pick stays hidden until the match starts
+        let line = if pl.random { owner } else { format!("{owner} · {} · Costume {}", STYLE_NAMES[style], costume + 1) };
+        let rank = RANK_NAMES.get(com_rank(&text.ranks, c, costume, m.doubles)).copied().unwrap_or("COM");
+        let chip = if human { ("Ready", Some(CHIP_READY)) } else { (rank, Some(CHIP_COM)) };
+        let row = SeatRow { p, face: Some(cell_face(m.cell(p))), name: &name, faint: false, who: &line, chip, filled: true, on: false };
+        seat_row(d, seat_rect(col, m.doubles, p), &row, 0.0);
+    }
+
+    // the side card: the court's band, its surface and meters, the umpire
+    d.box3([sx, sy, sw, 122.0], 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+    let court = if m.court == COURTS { "Random Court".to_string() } else { format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court)) };
+    court_band(d, [sx, sy, sw], &court);
+    if m.court < COURTS {
         let s = SURFACE[m.court];
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
-        d.outlined(|d| d.label(["Grass Court", "Clay Court", "Hard Court"][s], 462.0, 256.0, 24.0, 124.0, tint));
+        d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], sx + 10.0, sy + 52.0, 16.0, sw - 20.0, tint));
         // B141a: the icons and balls are ours (`menu_art::pill_layers`)
         for (g, (icon, n)) in [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)].into_iter().enumerate() {
-            let x = 344.0 + 140.0 * g as f32;
-            d.q(Tex::Pill, icon, [x, 296.0, icon[2] * 0.8, icon[3] * 0.8], WHITE, 128.0);
+            let x = sx + 10.0 + (sw - 20.0) / 2.0 * g as f32;
+            let k = 18.0 / icon[3];
+            d.q(Tex::Pill, icon, [x, sy + 72.0, icon[2] * k, 18.0], WHITE, 128.0);
             for b in 0..4 {
-                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + 40.0 + 22.0 * b as f32, 292.0, 22.0, 22.0], WHITE, 128.0);
+                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + icon[2] * k + 2.0 + 13.0 * b as f32, sy + 74.0, 13.0, 13.0], WHITE, 128.0);
             }
         }
     }
+    // the umpire's round face (the "?" tile for a random one) and name
+    let u = m.umpire as usize;
+    let (face, uname) = match u {
+        UMPIRES => ((C02, RANDOM_TILE), "Random".to_string()),
+        _ => ((C00, [63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0]), text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
+    };
+    face_frame(d, face, sx + 22.0, sy + 106.0, 24.0, WHITE);
+    left(d, &format!("Umpire {uname}"), sx + 40.0, sy + 99.0, 14.0, sw - 50.0, BROWN);
     if m.picking.is_some() {
         return picker(d, m, text, hand_x);
     }
-    // the rows: Start, Court, Sets, Games, Umpire
-    let rows: [(&str, String); CONFIRM_ROWS] = [
-        ("", String::new()),
-        ("Select Court", String::new()),
-        ("Sets", SETS[m.sets].to_string()),
-        ("Games", m.games.to_string()),
-        ("Select Umpire", String::new()),
-    ];
-    // the original's 3×2 grid under Start (its Set Handicap and Offbeat Rules aren't here: B40g)
-    let pos = [[60.0, 286.0, 260.0], [40.0, 334.0, 180.0], [230.0, 334.0, 180.0], [420.0, 334.0, 180.0], [40.0, 372.0, 180.0]];
-    for (i, ((label, value), [x, y, w])) in rows.iter().zip(pos).enumerate() {
+    let rects = confirm_rects(m);
+    let rows: [String; CONFIRM_ROWS] = ["Start the match!".into(), "Select Court".into(), format!("Sets  {}", SETS[m.sets]), format!("Games  {}", m.games), "Select Umpire".into()];
+    for (i, (label, r)) in rows.iter().zip(rects).enumerate() {
         let on = i == m.sel;
-        d.hit([x, if i == 0 { y } else { y - 4.0 }, w, 38.0], pointer::Act::Row(i, pointer::OK));
-        if i == 0 {
-            d.pill(x, y, w, if on { [128.0, 40.0, 60.0] } else { [80.0, 40.0, 50.0] });
-            d.label("Start the match!", x + w / 2.0, y + 6.0, 26.0, 160.0, GOLD);
-            continue;
-        }
-        d.pill(x, y - 4.0, w, if on { [128.0, 110.0, 40.0] } else { [90.0; 3] });
-        d.text(label, x + 20.0, y + 4.0, 20.0, if on { WHITE } else { [60.0; 3] });
-        let vw = d.width(value, 20.0);
-        d.text(value, x + w - 18.0 - vw, y + 4.0, 20.0, if on { WHITE } else { [60.0; 3] });
+        d.hit(r, pointer::Act::Row(i, pointer::OK));
+        side_button(d, r, label, on, i == 0);
     }
-    let [hx, hy, _] = pos[m.sel];
-    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hx - 50.0 + hand_x, hy + 2.0, 64.0, 32.0], WHITE, 128.0);
+    let [hx, hy, _, hh] = rects[m.sel];
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [hx - 22.0 + hand_x, hy + hh / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
     let info = match m.sel {
-        0 => text.msg(323).to_string(),
-        1 => text.msg(326).to_string(),
-        2 => text.msg(324).to_string(),
-        3 => text.msg(325).to_string(),
-        _ => text.msg(328).to_string(),
+        0 => text.msg(323),
+        1 => text.msg(326),
+        2 => text.msg(324),
+        3 => text.msg(325),
+        _ => text.msg(328),
     };
-    d.info(&info);
+    help_line(d, col, m.doubles, info);
+}
+
+/// B295: the confirm screen's rows on the side card: Start (big, at its foot), then Court, Sets, Games, Umpire under
+/// the court and umpire.
+fn confirm_rects(m: &Menu) -> [[f32; 4]; CONFIRM_ROWS] {
+    let (_, [sx, sy, sw, sh]) = m.grid.split();
+    let row = |k: f32| [sx, sy + 130.0 + 32.0 * k, sw, 28.0];
+    [[sx, sy + sh - 46.0, sw, 44.0], row(0.0), row(1.0), row(2.0), row(3.0)]
+}
+
+/// B295: the side card's court band (`[x, y, w]`): grass stripes, the court's name along its foot.
+fn court_band(d: &mut Draw, [x, y, w]: [f32; 3], name: &str) {
+    let n = 8;
+    let sw = (w - 6.0) / n as f32;
+    for i in 0..n {
+        d.q(Tex::Solid, [0.0; 4], [x + 3.0 + sw * i as f32, y + 3.0, sw, 42.0], if i % 2 == 0 { [40.0, 77.0, 30.0] } else { [45.0, 84.0, 35.0] }, 128.0);
+    }
+    d.q(Tex::Solid, [0.0; 4], [x + 3.0, y + 45.0, w - 6.0, 2.0], INK, 128.0);
+    d.outlined(|d| left(d, name, x + 10.0, y + 24.0, 18.0, w - 20.0, WHITE));
+}
+
+/// B295: a side card button: the big one (Start, Ready) yellow with dark words, the rest grey; the chosen one gold.
+fn side_button(d: &mut Draw, [x, y, w, h]: [f32; 4], label: &str, on: bool, big: bool) {
+    let (fill, words) = match (big, on) {
+        (true, true) => ([128.0, 112.0, 40.0], INK),
+        (true, false) => ([110.0, 92.0, 30.0], INK),
+        (false, true) => ([128.0, 110.0, 40.0], WHITE),
+        (false, false) => ([56.0, 56.0, 67.0], WHITE),
+    };
+    d.pill_at([x, y, w, h], [INK, if on { WHITE } else { [100.0; 3] }, fill], 128.0);
+    let size = (h * 0.55).min(24.0);
+    d.label(label, x + w / 2.0, y + (h - size) / 2.0, size, w - h * 0.6, words);
 }
 
 /// B64: the original's court picker (a strip of `Confirmation_02` court tiles, the hovered one large and lit, its
@@ -2661,7 +2770,6 @@ fn draw(
             },
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Pill => art.0.last().expect("pill").clone(),
-            Tex::Shots(k) => art.0[3 + SHEETS.len() + 2 + 5 + k].clone(),
             Tex::Preview(_) => continue,
             Tex::Icon(w) => match (icons.0.get(&w), w) {
                 (Some(h), _) => h.clone(),
@@ -3262,6 +3370,49 @@ mod tests {
             let apart = g.roster[0] + g.roster[2] < g.detail[0] || g.roster[1] + g.roster[3] < g.detail[1];
             assert!(apart, "{a}");
             assert!(last[0] + last[2] <= g.roster[0] + g.roster[2] && last[1] + last[3] <= g.roster[1] + g.roster[3] - 20.0, "{a} {last:?}");
+        }
+    }
+
+    /// B295: the lobby and confirm screens at any aspect: the seats column and side card in the view, apart, over the
+    /// legend strip; the seats and help line in their column; every button on the side card, none overlapping.
+    #[test]
+    fn lobby_and_confirm_fit_the_window() {
+        use super::super::widescreen::{share, vplace, vshare};
+        let inside = |r: [f32; 4], c: [f32; 4]| r[0] >= c[0] - 1e-3 && r[1] >= c[1] - 1e-3 && r[0] + r[2] <= c[0] + c[2] + 1e-3 && r[1] + r[3] <= c[1] + c[3] + 1e-3;
+        let overlap = |a: [f32; 4], b: [f32; 4]| a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+        for a in [0.4, 9.0 / 16.0, 0.99, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
+            let g = Grid::fit(a);
+            let (ex, ey) = ((640.0 / share(a) - 640.0) / 2.0, (448.0 / vshare(a) - 448.0) / 2.0);
+            let legend = vplace(436.0, 12.0, a, Anchor::Span).0;
+            let (col, side) = g.split();
+            for r in [col, side] {
+                assert!(r[0] >= -ex && r[0] + r[2] <= 640.0 + ex + 1e-3 && r[1] >= -ey && r[2] > 0.0, "{a} {r:?}");
+                let (t, h) = vplace(r[1], r[3], a, Anchor::Centre);
+                assert!(t + h <= legend + 1e-3, "{a} {r:?}");
+            }
+            assert!(!overlap(col, side), "{a}");
+            for doubles in [false, true] {
+                assert!(inside(help_rect(col, doubles), col), "{a} {doubles}");
+            }
+            let mut m = Menu { screen: Screen::Confirm, grid: g, ..default() };
+            let rows = confirm_rects(&m);
+            assert!(rows.iter().all(|&r| inside(r, side)) && (0..5).all(|i| (0..i).all(|j| !overlap(rows[i], rows[j]))), "{a} {rows:?}");
+            // the lobby, hosting with a computer player on 4P, and as a guest
+            m.screen = Screen::Lobby;
+            online::sample(&mut m);
+            m.net.room.as_mut().unwrap().seats[3] = Some(crate::net::Seat { peer: crate::net::CPU.into(), pick: crate::net::Pick::disc(9, 4) });
+            for hosting in [true, false] {
+                m.net.hosting = hosting;
+                let rects = m.lobby_rects();
+                let [l, t, r, b] = g.reach();
+                assert!(rects.iter().all(|&x| inside(x, [l, t, r - l, b - t])), "{a} {hosting} {rects:?}");
+                for i in 0..rects.len() {
+                    for j in 0..i {
+                        // a computer's ✕ sits on its own seat's row
+                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 26.0, "{a} {hosting} {i} {j} {rects:?}");
+                    }
+                }
+            }
         }
     }
 
