@@ -336,8 +336,9 @@ def merge(tid):
                 git('commit', '-q', '--no-edit')
                 log(f'{tid}: the runner joined both sides of {", ".join(files)}')
             sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
-            if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
-                git('commit', '-qam', f'{tid}: archive ticked tasks into plan/DONE.md')
+            plan = ['plan/TODO.md', 'plan/DONE.md']  # only these: never sweep someone's edits into the commit (-a did)
+            if git('status', '--porcelain', '--', *plan).stdout.strip():
+                git('commit', '-qm', f'{tid}: archive ticked tasks into plan/DONE.md', '--', *plan)
         finally:
             if stashed and git('stash', 'pop', '-q').returncode:
                 git('reset', '-q', '--hard')  # only the half-applied pop goes; the stash itself stays
