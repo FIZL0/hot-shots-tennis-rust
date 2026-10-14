@@ -190,8 +190,8 @@ struct FpsText;
 fn fps_counter(mut commands: Commands, g: Res<Graphics>, d: Res<bevy::diagnostic::DiagnosticsStore>, window: Query<&Window, With<PrimaryWindow>>, mut q: Query<(Entity, &mut Text, &mut TextFont), With<FpsText>>) {
     let Ok((e, mut text, mut font)) = q.single_mut() else {
         if g.show_fps {
-            // bottom-left: the menus' header holds pads/disc/version top-right, the legend bar's left end is empty
-            let node = Node { position_type: PositionType::Absolute, bottom: Val::Percent(1.0), left: Val::Percent(1.0), ..default() };
+            // bottom-left: the menus' header holds pads/disc/version top-right, the legend bar's left end is empty (under the hint line)
+            let node = Node { position_type: PositionType::Absolute, bottom: Val::Px(0.0), left: Val::Percent(1.0), ..default() };
             commands.spawn((FpsText, Text::new(""), TextFont::default(), TextColor(Color::srgb(1.0, 1.0, 0.3)), TextShadow::default(), node, GlobalZIndex(i32::MAX)));
         }
         return;
