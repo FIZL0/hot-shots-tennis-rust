@@ -415,6 +415,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B254** Reassign controllers from the pause menu in local matches (user 2026-10-13): a pause-menu screen listing each seat (1P–4P) with its device; swap who is who between seats, move a seat from keyboard/mouse to a controller (or back), and let a newly plugged-in controller take a seat, the same device-join flow as the menu's Assign step (B238's ✕ / swap). Local only (not online); presentation only, no effect on the sim RNG or match timing — crates/hst/src/play/menu.rs, play/main_menu/pause.rs, play/main_menu.rs (Assign/seats), play.rs input/Pads
 - [x] **B252** Emoting before the serve (B231): hide the ball in the server's hand until the emote ends, then bring it back for the toss — crates/hst/src/play/emote.rs, play.rs (serving && p.emote, ball draw) — User 2026-10-13: the ball should not disappear for the original (disc) characters
 - [x] **B251** Tall windows (aspect < 4:3) stretch the custom characters roster to show more columns instead of letterboxing it at the 4:3 width (B232); wide windows already do (B190) — crates/hst/src/play/main_menu.rs Grid::fit, play/widescreen.rs
+- [x] **B293** Pause menu: show the match's court name and umpire (the only change to the pause menu, user 2026-10-14); any aspect ratio → play/menu.rs (pause panel) · play/main_menu/pause.rs — j: 2026-10-14-menu-redesign
 
 
 ### Shots

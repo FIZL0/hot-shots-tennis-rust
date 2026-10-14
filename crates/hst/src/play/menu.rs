@@ -76,6 +76,9 @@ const SEATS: Tex = Tex::Own(17);
 /// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills; after
 /// [`LABELS`] in `setup` (B177: it was left at 14 when B68 added three labels, drawing the pills from "Leave the match?").
 const PILL: Tex = Tex::Own(18);
+/// B293: the match's court name and umpire (`pause::venue`), set as [`LABEL`], at the right of the top bar.
+const COURT: Tex = Tex::Own(19);
+const UMPIRE: Tex = Tex::Own(20);
 /// The rows set in `setup` after `TEXTURES`, as [`LABEL`] to [`SEATS`].
 const LABELS: [&str; 7] = ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No", "Controllers"];
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
@@ -302,6 +305,9 @@ fn layout(v: &View) -> Vec<Quad> {
     q(TEXT, [0, 64, 56, 24], r(192, 24, 56, 24), WHITE, 128);
     q(TEXT, [(v.games - 1) * 16, 40, 16, 24], r(248, 24, 16, 24), [127.0, 97.0, 24.0], 128);
     q(TEXT, [0, 88, 104, 24], r(264, 24, 104, 24), WHITE, 128);
+    // B293 (ours): the court in the rules' yellow over the umpire, right of the rules, the court on the bar above its rim, the umpire under it
+    q(COURT, [0, 0, 256, 32], r(408, 3, 192, 24), [127.0, 110.0, 40.0], 128);
+    q(UMPIRE, [0, 0, 256, 32], r(424, 34, 160, 20), WHITE, 128);
 
     // the score board: the result board's frame and plates, each set's games, the points either side
     let short = (1..=2).contains(&v.sets_to_win);
@@ -515,6 +521,9 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
     }
     art.push(super::menu_art::pill_layers(&mut images));
+    let (court, umpire) = super::main_menu::pause::venue(&mut iso, args.stage.map_or(args.court, |s| s as usize), args.umpire);
+    art.push(super::main_menu::pause::label(&mut iso, &mut images, &court));
+    art.push(super::main_menu::pause::label(&mut iso, &mut images, &umpire));
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank));
     commands
@@ -753,7 +762,14 @@ fn draw(
             (x, y, w, h) = (x - w * (pad - 1.0) / 2.0, y - h * (pad - 1.0) / 2.0, w * pad, h * pad);
         }
         // widescreen: the dimmer and the top bar span the window, "Paused" and the rules keep to its left
-        let anchor = if [DIM, BAR, TEXT].contains(&quad.tex) { Anchor::Span } else { Anchor::Centre };
+        // B293: the court and umpire pinned to the window's right, under the bar's right end
+        let anchor = if [DIM, BAR, TEXT].contains(&quad.tex) {
+            Anchor::Span
+        } else if [COURT, UMPIRE].contains(&quad.tex) {
+            Anchor::Sides
+        } else {
+            Anchor::Centre
+        };
         let (left, width) = super::widescreen::place(x, w, share, anchor);
         let (top, height) = super::widescreen::vplace(y, h, aspect, anchor);
         node.left = Val::Percent(left);
@@ -794,7 +810,7 @@ mod tests {
     #[test]
     fn art_order() {
         let n = TEXTURES.len();
-        assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, SEATS, PILL], std::array::from_fn(|i| Tex::Own(n + i)));
+        assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, SEATS, PILL, COURT, UMPIRE], std::array::from_fn(|i| Tex::Own(n + i)));
         assert_eq!(HAND, Tex::Own(n - 1));
     }
 
@@ -817,6 +833,9 @@ mod tests {
         assert_eq!(at(LABEL, 240.0, 186.0).unwrap().dst, [240.0, 186.0, 160.0, 20.0]);
         assert_eq!(qs.iter().find(|q| q.tex == HAND).unwrap().dst, [128.0, 148.0, 64.0, 32.0]);
         assert_eq!((pill_y(1, 3, 1), pill_y(3, 3, 0)), (180, 100));
+        // B293: the court on the bar's right end, the umpire under its rim
+        assert_eq!(qs.iter().find(|q| q.tex == COURT).unwrap().dst, [408.0, 3.0, 192.0, 24.0]);
+        assert_eq!(qs.iter().find(|q| q.tex == UMPIRE).unwrap().dst, [424.0, 34.0, 160.0, 20.0]);
     }
 
     /// B254: a local match's dialog has four pills, "Controllers" third, centred as the three; ✕ on it asks for the
