@@ -74,8 +74,9 @@ pub(in crate::play) struct Root;
 pub(in crate::play) struct Systems;
 
 /// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
-/// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered).
-const POOL_HERE: usize = 480;
+/// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered); B294's tabs and
+/// panels take up to ~800 (`options::tests::pages_fit`).
+pub(super) const POOL_HERE: usize = 1200;
 
 /// One sheet out of a disc archive.
 fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
@@ -186,7 +187,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank, text));
-    commands.insert_resource(Menu { screen: Screen::Settings, ..default() });
+    commands.insert_resource(Menu { screen: Screen::Display, ..default() });
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     // over the pause screen (`GlobalZIndex(10)`)
     commands.spawn((full, GlobalZIndex(11), Visibility::Hidden, Root)).with_children(|p| {
@@ -231,13 +232,22 @@ fn opened(
             Ok("graphics") => Screen::Graphics,
             Ok("sound") => Screen::Sound,
             Ok("controls") => Screen::Controls,
-            _ => Screen::Settings,
+            _ => Screen::Display,
         };
         *menu = Menu { screen, settings, ..default() };
         *slide = slide::Slide::default();
     }
     for mut v in &mut root {
         v.set_if_neq(if ps.open { Visibility::Inherited } else { Visibility::Hidden });
+    }
+}
+
+/// B294: the Settings pages lay out on the whole view, as the main menu's (`fit_grid`, less its live settings).
+fn fit(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
+    let Ok(w) = window.single() else { return };
+    let g = super::Grid::fit(widescreen::aspect(w));
+    if menu.grid != g {
+        menu.grid = g;
     }
 }
 
@@ -482,7 +492,7 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .add_systems(Update, notice_draw.after(Systems))
         .add_systems(
             Update,
-            (opened, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
+            (opened, fit, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
                 .chain()
                 .in_set(Systems),
         )
@@ -559,7 +569,7 @@ mod tests {
         assert_eq!(seats_now([true, true, false, false], &PadSlots([Some(b), None, None, None], None)), [Some(Dev::Pad(b)), None, None, None]);
     }
 
-    /// A row changes and saves; Back on the Settings screen goes to `Screen::Main`, which `after` takes as closing.
+    /// A row changes and saves; Back on a Settings tab goes to `Screen::Main`, which `after` takes as closing.
     #[test]
     fn back_returns_to_pause() {
         let aspect = super::super::options::page(Screen::Display).iter().position(|o| *o == super::super::options::Opt::Aspect).unwrap();
@@ -567,13 +577,11 @@ mod tests {
         let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert!(m.settings.3 == 1 && fx.contains(&super::super::Effect::SaveSettings));
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
-        assert_eq!(m.screen, Screen::Settings);
-        m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
     }
 
     /// B139: the overlay's systems run in an app with only what a match has (no main menu): open Settings, toggle
-    /// Menu Music (not the Aspect Ratio: `after` stores that in a global), Back to the
+    /// Menu Music (not the Aspect Ratio: `after` stores that in a global) on the Sound tab, Back to the
     /// pause menu, no panic. `settings.txt` goes beside the ISO, so a linked copy in a temp directory keeps the
     /// user's. Needs the ISO at the repository root, skipped without.
     #[test]
@@ -597,17 +605,15 @@ mod tests {
         app.world_mut().resource_mut::<PauseSettings>().open();
         app.update();
         let was = app.world().resource::<Menu>().settings.0[1];
-        // Sound (Settings row 2), then its Menu Music row (4)
-        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(2, super::super::pointer::OK), true));
+        // the Sound tab (2), then its Menu Music row (4)
+        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Tab(2), true));
         app.update();
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(4, super::super::pointer::OK), true));
         app.update();
         assert_eq!(app.world().resource::<Menu>().settings.0[1], !was, "Menu Music didn't change");
         assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
-        for _ in 0..2 {
-            app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
-            app.update();
-        }
+        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
+        app.update();
         assert!(!app.world().resource::<PauseSettings>().open, "Back didn't return to the pause menu");
         app.update();
         let _ = std::fs::remove_dir_all(&dir);
