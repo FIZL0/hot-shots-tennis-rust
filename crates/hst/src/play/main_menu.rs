@@ -418,7 +418,7 @@ struct Menu {
     /// The device driving each player (menu order 1P..4P); `None` is the computer.
     seats: [Option<Dev>; 4],
     /// B216: the seats 1P added a computer player to (picked on the select by 1P); a seat with no device and no bot
-    /// fills at Start ([`Menu::fill_open`]). Online, the room's computer seats (`align`).
+    /// is a COM card on its automatic pick ([`Menu::preset_coms`]). Online, the room's computer seats (`align`).
     bots: [bool; 4],
     players: [Player; 4],
     court: usize,
@@ -611,7 +611,8 @@ impl Menu {
             if self.online() {
                 return self.online_driven(dev, p);
             }
-            if !self.players[p].ready || p != 0 || !humans_ready {
+            // B258: any human, once every human is ready (not only 1P)
+            if !self.players[p].ready || !humans_ready {
                 return Some(p);
             }
             return (0..n).find(|&q| self.bot(q) && !self.players[q].ready).or(Some(p));
@@ -619,9 +620,10 @@ impl Menu {
         None
     }
 
-    /// B216: seat `p` has a computer player added (no device on it).
+    /// Seat `p` is a computer player on the select (no device on it): one 1P added (B216), or a seat left open,
+    /// whose card starts on its automatic pick (B258, [`Menu::preset_coms`]).
     fn bot(&self, p: usize) -> bool {
-        self.bots[p] && self.seats[p].is_none()
+        self.seats[p].is_none()
     }
 
     /// B216: seat `p` has nobody: no device, no computer player added; it fills at Start.
@@ -634,20 +636,37 @@ impl Menu {
         !self.online() && (1..self.players()).contains(&p) && self.seats[p].is_none()
     }
 
-    /// B216: the seats nobody took and no computer player was added to, as an online lobby's at Start: the disc
-    /// characters nobody picked, in number order, on their first free costume (B66), ready.
-    fn fill_open(&mut self) {
-        for q in (0..self.players()).filter(|&q| self.open(q)).collect::<Vec<_>>() {
-            let taken: Vec<usize> = (0..self.players())
-                .filter(|&o| o != q && (self.players[o].ready || !self.open(o)))
-                .map(|o| match self.pick(o).0 {
-                    Who::Disc(c) => c,
-                    Who::Mod(i) => self.mods[i].donor,
-                })
-                .collect();
-            let c = (0..CHARS).find(|c| !taken.contains(c)).unwrap_or(0);
-            let costume = self.next_free(q, Who::Disc(c), 0, false).unwrap_or(0);
-            self.players[q] = Player { cursor: GRID.iter().position(|g| g.0 == c).unwrap_or(0), costume, ready: true, ..default() };
+    /// B216: the pick of a seat nobody took and no computer player was added to, as an online lobby's at Start: the
+    /// first disc character nobody else picked, in number order, on its first free costume (B66); not ready.
+    fn auto_com(&self, q: usize) -> Player {
+        let taken: Vec<usize> = (0..self.players())
+            .filter(|&o| o != q && (self.players[o].ready || !self.open(o)))
+            .map(|o| match self.pick(o).0 {
+                Who::Disc(c) => c,
+                Who::Mod(i) => self.mods[i].donor,
+            })
+            .collect();
+        let c = (0..CHARS).find(|c| !taken.contains(c)).unwrap_or(0);
+        let costume = self.next_free(q, Who::Disc(c), 0, false).unwrap_or(0);
+        Player { cursor: GRID.iter().position(|g| g.0 == c).unwrap_or(0), costume, ..default() }
+    }
+
+    /// B258: once every human is ready, the open seats' COM cards (not ready) start on their automatic pick, for a
+    /// human to keep (✕), change, or leave to the computer (○).
+    fn preset_coms(&mut self) {
+        let n = self.players();
+        if (0..n).all(|q| self.seats[q].is_none() || self.players[q].ready) {
+            for q in (0..n).filter(|&q| self.open(q) && !self.players[q].ready).collect::<Vec<_>>() {
+                self.players[q] = self.auto_com(q);
+            }
+        }
+    }
+
+    /// The local select done: on to the court and umpire once every card is ready.
+    fn chars_done(&mut self, out: &mut Vec<Effect>) {
+        self.preset_coms();
+        if (0..self.players()).all(|q| self.players[q].ready) {
+            self.go(Screen::Confirm, out);
         }
     }
 
@@ -984,9 +1003,8 @@ impl Menu {
                             self.online_bot_ready(p, &mut out);
                         } else if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
                             self.online_ready(&mut out);
-                        } else if (0..self.players()).all(|q| self.players[q].ready || self.open(q)) {
-                            self.fill_open();
-                            self.go(Screen::Confirm, &mut out);
+                        } else {
+                            self.chars_done(&mut out);
                         }
                     }
                 } else if k.back {
@@ -998,6 +1016,11 @@ impl Menu {
                         self.net.edit = None;
                         self.go(Screen::Lobby, &mut out);
                         out.push(Sound(1));
+                    } else if self.open(p) && !self.online() {
+                        // B258: a human leaves an open seat's COM card to the computer: its automatic pick
+                        self.players[p] = Player { ready: true, ..self.auto_com(p) };
+                        out.push(Sound(1));
+                        self.chars_done(&mut out);
                     } else if self.seats[p].is_none() {
                         // player 1 driving a computer player: back to the last one readied
                         if let Some(q) = (0..self.players()).rev().find(|&q| self.players[q].ready) {
@@ -2219,7 +2242,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
             d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
         }
         if !human {
-            d.text(if (online && !picking) || (!online && m.open(p) && !pl.ready) { "Open" } else { "COM" }, x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
+            d.text(if online && !picking { "Open" } else { "COM" }, x + 8.0, y + 30.0, 20.0, [60.0, 120.0, 30.0]);
         }
         // B201: another machine's player: whose it is
         if let Some(s) = m.remote(p).filter(|s| s.human() && online) {
@@ -2994,11 +3017,11 @@ mod tests {
         assert!(m.bots[1]);
     }
 
-    /// B216: a singles match with nobody on 2P: 1P readies and the match has 2P filled with the first character
-    /// nobody has, on its first costume.
+    /// B216 / B258: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on the first character
+    /// nobody has (first costume); ✕ keeps it, ○ leaves it to the computer, or 1P picks another.
     #[test]
-    fn an_open_seat_fills_at_start() {
-        let ok = press(|p| &mut p.ok);
+    fn an_open_seat_is_a_com_card() {
+        let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
         let mut m = Menu::default();
         for _ in 0..3 {
             m.step(Dev::Keys, ok);
@@ -3006,12 +3029,38 @@ mod tests {
         assert_eq!(m.screen, Screen::Chars);
         assert_eq!(m.driven(Dev::Keys), Some(0));
         m.step(Dev::Keys, ok);
+        assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(1)));
+        assert!(!m.players[1].ready);
+        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
+        // 1P moves the COM's cursor, then backs out: the computer's own pick again
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        assert_ne!(m.players[1].char(), 1);
+        m.step(Dev::Keys, back);
         assert_eq!(m.screen, Screen::Confirm);
         assert!(m.players[1].ready);
         assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
-        // back to the select: 2P open again
-        m.step(Dev::Keys, press(|p| &mut p.back));
+        // back to the select: everyone picks again; this time 1P picks the COM's character
+        m.step(Dev::Keys, back);
         assert!(m.screen == Screen::Chars && !m.players[1].ready && m.open(1));
+        m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        let c = m.players[1].char();
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.screen, Screen::Confirm);
+        assert_eq!(m.players[1].char(), c);
+        // doubles, two humans: either one can pick each COM card
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.driven(Dev::Keys), Some(0), "2P not ready yet");
+        m.step(pad, ok);
+        assert_eq!((m.driven(Dev::Keys), m.driven(pad)), (Some(2), Some(2)));
+        m.step(pad, ok);
+        assert_eq!(m.driven(Dev::Keys), Some(3));
+        m.step(Dev::Keys, back);
+        assert_eq!(m.screen, Screen::Confirm);
+        let chars: Vec<usize> = m.players.iter().map(|p| p.char()).collect();
+        assert!(chars[2] != chars[3] && !chars[..2].contains(&chars[2]) && !chars[..2].contains(&chars[3]), "{chars:?}");
     }
 
     #[test]
@@ -3058,9 +3107,12 @@ mod tests {
         assert_eq!(m.players[1].costume, 1, "10 → 2, past 1");
         m.step(pad, ok);
         assert!(m.players[1].ready);
-        // 1P now picks the computer's 3P: Cody; the open 4P fills at Start with the first character nobody has (Jun)
+        // 1P now picks the computer's 3P: Cody; the open 4P starts on the first character nobody has (Jun)
         assert_eq!(m.driven(Dev::Keys), Some(2));
         m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(Dev::Keys, ok);
+        // B258: then the open 4P's COM card, on its automatic pick
+        assert_eq!(m.driven(Dev::Keys), Some(3));
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Confirm);
         let a = m.args(&[Entity::from_raw_u32(3).unwrap(), Entity::from_raw_u32(9).unwrap()]);
