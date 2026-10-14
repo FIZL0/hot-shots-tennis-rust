@@ -526,7 +526,7 @@ impl Menu {
                     self.net.list.clear();
                     self.net.fit = 0;
                     self.go(Screen::Lobbies, out);
-                    (self.net.finding, self.net.fail) = (2, None);
+                    (self.net.finding, self.net.fail) = (crate::net::FINDS, None);
                     out.push(Effect::Online(Fx::Net(Cmd::Find)));
                 } else if k.ok && self.sel < 3 {
                     self.net.go = Some([Go::Quick, Go::Host, Go::Find][self.sel]);
@@ -550,7 +550,7 @@ impl Menu {
                     self.go(Screen::Assign, out);
                 } else if k.ok && self.sel == n {
                     self.net.list.clear();
-                    (self.net.finding, self.net.fail) = (self.net.finding.saturating_add(2), None);
+                    (self.net.finding, self.net.fail) = (self.net.finding.saturating_add(crate::net::FINDS), None);
                     out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Find))]);
                 } else if k.ok || k.back {
                     self.back_to_online(out);
@@ -805,7 +805,7 @@ impl Menu {
             Event::Found(l) => {
                 v.finding = v.finding.saturating_sub(1);
                 v.status = match l.len() {
-                    0 if v.finding > 0 => "None on this network: looking on the internet...".into(),
+                    0 if v.finding > 0 => "None found yet: still looking...".into(),
                     0 => "No open lobbies found: Refresh to look again, or Host one from Online.".into(),
                     n => format!("{n} open lobb{}.", if n == 1 { "y" } else { "ies" }),
                 };
@@ -2040,10 +2040,12 @@ mod tests {
         let ok = Press { ok: true, ..default() };
         let mut m = Menu { screen: Screen::Online, sel: 2, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
         m.step(dev, ok);
-        assert_eq!(m.net.finding, 2);
-        m.heard(Event::Found(vec![]));
-        assert_eq!(m.net.finding, 1);
-        m.heard(Event::Found(vec![]));
+        // B267: one list per lookup (LAN, DHT board, slots), each as it answers
+        assert_eq!(m.net.finding, crate::net::FINDS);
+        for left in (0..crate::net::FINDS).rev() {
+            m.heard(Event::Found(vec![]));
+            assert_eq!(m.net.finding, left);
+        }
         assert_eq!((m.net.finding, m.net.fail), (0, None));
         assert!(m.net.status.starts_with("No open lobbies"), "{}", m.net.status);
         m.net.finding = 2;

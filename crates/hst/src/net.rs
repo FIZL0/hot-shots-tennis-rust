@@ -912,11 +912,6 @@ fn watch_lan(_: ()) -> Lan {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn find_all(cx: &Ctx) -> Vec<Listing> {
-    find_slots(&cx.dht).await
-}
-
-#[cfg(target_arch = "wasm32")]
 async fn announce(_: &Ctx, _: u16, _: &Room) {}
 
 #[cfg(target_arch = "wasm32")]
@@ -972,23 +967,32 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             Cmd::Host(room) => host(&cx, room, &mut cmds).await,
             Cmd::Find => {
                 cx.say(Event::Status("Looking for lobbies...".into()));
-                // the LAN's first (all there is with no internet), then the DHT's added
-                n0_future::time::sleep(LAN_WAIT).await;
-                cx.say(Event::Found(lan_list(&cx.lan)));
-                let list = find_all(&cx).await;
-                cx.say(Event::Found(list));
+                // B267: the LAN's wait and the DHT's lookups at once, each list shown as it answers
+                let mut f = Finding::start(&cx);
+                while let Some(list) = f.next(&cx).await {
+                    cx.say(Event::Found(list));
+                }
             }
             Cmd::Quick(room) => {
                 cx.say(Event::Status("Looking for a lobby...".into()));
                 let mine: Vec<Pick> = room.seats.iter().flatten().map(|s| s.pick.clone()).collect();
                 let mut joined = false;
-                n0_future::time::sleep(LAN_WAIT).await;
-                for l in quick_pick(&find_all(&cx).await, room.doubles, mine.len()) {
-                    if join(&cx, l.dial(), mine.clone(), &mut cmds).await {
-                        joined = true;
-                        break;
+                // B267: the first fitting lobby from whichever list answers first (each tried once)
+                let mut tried: Vec<String> = Vec::new();
+                let mut f = Finding::start(&cx);
+                'look: while let Some(list) = f.next(&cx).await {
+                    for l in quick_pick(&list, room.doubles, mine.len()) {
+                        if tried.contains(&l.id) {
+                            continue;
+                        }
+                        tried.push(l.id.clone());
+                        if join(&cx, l.dial(), mine.clone(), &mut cmds).await {
+                            joined = true;
+                            break 'look;
+                        }
                     }
                 }
+                drop(f);
                 if !joined {
                     host(&cx, room, &mut cmds).await;
                 }
@@ -1005,21 +1009,55 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// The open lobbies on the LAN and the DHT (the LAN's copy of one listed on both).
-async fn find_all(cx: &Ctx) -> Vec<Listing> {
-    let mut list = lan_list(&cx.lan);
-    let (dht, slots) = n0_future::future::zip(find(&cx.dht), find_slots(&cx.dht)).await;
-    // the first copy of each: the LAN's (its full lobbies too), then the DHT board's (dialled by ID: a native host
-    // may have no code, relays off), then a slot's (a browser's, joined by its code)
-    let mut seen: Vec<String> = cx.lan.lock().unwrap().keys().map(|id| id.to_string()).collect();
-    for l in dht.into_iter().chain(slots) {
-        if !seen.contains(&l.id) {
-            seen.push(l.id.clone());
-            list.push(l);
+/// How many lists Find sends (`Event::Found`): native the LAN's, the DHT board's and the short-code slots', each
+/// merged with those in so far; the browser only the slots'.
+pub const FINDS: u8 = if cfg!(target_arch = "wasm32") { 1 } else { 3 };
+
+/// One of Find's lookups: which answer (0 the board, 1 the slots, 2 the LAN's wait) and its lobbies.
+type Lookup<'a> = std::pin::Pin<Box<dyn Future<Output = (usize, Vec<Listing>)> + 'a>>;
+
+/// B267: Find's lookups all running at once; `next` gives the open lobbies so far as each answers.
+struct Finding<'a> {
+    left: n0_future::FuturesUnordered<Lookup<'a>>,
+    /// The DHT board's and the slots' answers.
+    dht: [Vec<Listing>; 2],
+}
+
+impl<'a> Finding<'a> {
+    fn start(cx: &'a Ctx) -> Finding<'a> {
+        let mut left = n0_future::FuturesUnordered::<Lookup<'a>>::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // the LAN's is mDNS's, heard meanwhile: this only says when it's had its time
+            left.push(Box::pin(async {
+                n0_future::time::sleep(LAN_WAIT).await;
+                (2, vec![])
+            }));
+            left.push(Box::pin(async { (0, find(&cx.dht).await) }));
         }
+        left.push(Box::pin(async { (1, find_slots(&cx.dht).await) }));
+        Finding { left, dht: Default::default() }
     }
-    list
+
+    /// The open lobbies on the LAN and the DHT once one more lookup answered (the LAN's copy of one listed on both);
+    /// None once all have.
+    async fn next(&mut self, cx: &Ctx) -> Option<Vec<Listing>> {
+        let (i, l) = n0_future::StreamExt::next(&mut self.left).await?;
+        if let Some(d) = self.dht.get_mut(i) {
+            *d = l;
+        }
+        let mut list = lan_list(&cx.lan);
+        // the first copy of each: the LAN's (its full lobbies too), then the DHT board's (dialled by ID: a native host
+        // may have no code, relays off), then a slot's (a browser's, joined by its code)
+        let mut seen: Vec<String> = cx.lan.lock().unwrap().keys().map(|id| id.to_string()).collect();
+        for l in self.dht.iter().flatten() {
+            if !seen.contains(&l.id) {
+                seen.push(l.id.clone());
+                list.push(l.clone());
+            }
+        }
+        Some(list)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2073,8 +2111,8 @@ pub fn cli(mut a: Vec<String>, play: bool) -> Option<(Net, Room, String)> {
             return None;
         }
     };
-    // Find answers twice: the LAN's list, then with the DHT's
-    let mut finds = if matches!(cmd, Cmd::Find) { 2 } else { 0 };
+    // Find answers once per lookup (B267)
+    let mut finds = if matches!(cmd, Cmd::Find) { FINDS } else { 0 };
     let host = matches!(cmd, Cmd::Host(_) | Cmd::Quick(_));
     net.send(cmd);
     let t0 = std::time::Instant::now();
