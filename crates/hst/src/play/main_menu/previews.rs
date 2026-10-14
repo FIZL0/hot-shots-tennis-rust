@@ -282,6 +282,7 @@ fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::I
         }
         // the main screen's pictures' faces (`home::faces`), as the baker draws them
         Screen::Main => super::home::faces(&menu),
+        Screen::Mods => super::mods_screen::faces(&menu),
         _ => return,
     };
     let mut reads = 0;
@@ -767,7 +768,15 @@ fn bake(
         })), 0)
     });
     // the main screen's faces (`home::faces`): drawn there, first shown first, so they fill in without a select visit
-    let home: Vec<Key> = if menu.screen == Screen::Main { super::home::faces(&menu).into_iter().map(|w| (w, 0)).collect() } else { Vec::new() };
+    // the Mods page's shown cards' too (`mods_screen::faces`)
+    let home: Vec<Key> = match menu.screen {
+        Screen::Main => super::home::faces(&menu),
+        Screen::Mods => super::mods_screen::faces(&menu),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(|w| (w, 0))
+    .collect();
     if menu.screen != Screen::Chars && asked.is_none() && home.is_empty() && baker.job.is_none() && baker.warmed {
         return;
     }
@@ -775,6 +784,7 @@ fn bake(
     let now: Vec<Key> = match menu.screen {
         Screen::Chars => (0..menu.players()).map(|p| menu.pick(p)).collect(),
         Screen::Main => home.iter().rev().copied().collect(),
+        Screen::Mods => home.iter().rev().copied().chain(asked).collect(),
         _ => asked.into_iter().collect(),
     };
     for k in &now {

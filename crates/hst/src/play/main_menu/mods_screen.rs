@@ -870,7 +870,28 @@ const GREY: [f32; 3] = [55.0; 3];
 
 /// Installed mod `md`'s face in the select's roster (built at startup: one added since has none yet).
 fn face_of(m: &Menu, dir: &Path) -> Option<(Tex, [f32; 4])> {
-    m.mods.iter().position(|x| x.dir == dir).map(|j| super::cell_face(Some(super::Who::Mod(j))))
+    mod_of(m, dir).map(|j| super::cell_face(Some(super::Who::Mod(j))))
+}
+
+/// Installed mod `dir`'s place in the select's roster.
+fn mod_of(m: &Menu, dir: &Path) -> Option<usize> {
+    // the roster's dirs keep `./mods`'s `./`, the page's (`root`) drop it
+    let bare = |p: &Path| p.strip_prefix(".").unwrap_or(p).to_path_buf();
+    m.mods.iter().position(|x| bare(&x.dir) == bare(dir))
+}
+
+/// The faces of the installed mods the list shows now, top first: what `previews.rs` bakes and reads first while
+/// this page is up, so its cards fill in without a select visit.
+pub(super) fn faces(m: &Menu) -> Vec<super::Who> {
+    let v = &m.add;
+    let shown = shown(&m.grid);
+    (v.acts() + v.top..v.rows().min(v.acts() + v.top + shown))
+        .filter_map(|r| match v.local(r) {
+            Some(md) => mod_of(m, &md.dir),
+            None => v.hovered(r).and_then(|e| v.installed(e)).and_then(|(_, dir)| mod_of(m, dir)),
+        })
+        .map(super::Who::Mod)
+        .collect()
 }
 
 fn card_of(m: &Menu, r: usize) -> Option<Card> {
