@@ -185,6 +185,7 @@ fn choices(o: Opt) -> Vec<String> {
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
         ShowFps => words(&["Off", "On", "Detailed"]),
+        Renderer => words(&["Auto", "WebGPU", "WebGL2"]),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
@@ -469,8 +470,30 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         } else {
             ""
         };
+        // B324: the WebGL2 build says what it reaches here under the frame rate's and the renderer's rows
+        #[cfg(target_arch = "wasm32")]
+        let reach = matches!(o, Renderer | ShowFps).then(crate::web::webgl2_reach).flatten().map(|(fps, play, hz)| webgl2_reach(fps, play, hz));
+        #[cfg(not(target_arch = "wasm32"))]
+        let reach: Option<String> = None;
+        let note = reach.as_deref().unwrap_or(note);
         let now = m.settings.value(o);
         side_panel(d, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
+    }
+}
+
+/// B324: what the WebGL2 build reaches here, in words: `fps`, the best second's frame rate (`play`: in a match,
+/// else in the menus), against the display's `refresh` rate (Hz, when the page could measure it). Short of the
+/// display's rate by more than 10 % (a second's count wobbles by a frame, and the odd hitch), it's capped: say so and
+/// where the full rate is to be had.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn webgl2_reach(fps: f64, play: bool, refresh: Option<f64>) -> String {
+    let (fps, place) = (fps.round(), if play { "in a match" } else { "in the menus" });
+    match refresh.map(f64::round) {
+        Some(hz) if fps < hz * 0.9 => format!(
+            "WebGL2 reaches up to {fps} fps {place} on this device, below the display's {hz} Hz. WebGPU (where the browser has it) or the desktop app (download the desktop build) gets the full refresh rate."
+        ),
+        Some(hz) => format!("WebGL2 reaches the display's full {hz} Hz {place} on this device."),
+        None => format!("WebGL2 reaches up to {fps} fps {place} on this device."),
     }
 }
 
@@ -541,6 +564,15 @@ fn shown(n: &str) -> &str {
 mod tests {
     use super::super::{Dev, Graphics, Volumes};
     use super::*;
+
+    #[test]
+    fn webgl2_reach_words() {
+        let capped = webgl2_reach(59.6, true, Some(120.2));
+        assert!(capped.starts_with("WebGL2 reaches up to 60 fps in a match on this device, below the display's 120 Hz.") && capped.contains("desktop build"), "{capped}");
+        assert_eq!(webgl2_reach(116.0, false, Some(120.0)), "WebGL2 reaches the display's full 120 Hz in the menus on this device.");
+        assert_eq!(webgl2_reach(60.0, true, Some(60.0)), "WebGL2 reaches the display's full 60 Hz in a match on this device.");
+        assert_eq!(webgl2_reach(60.0, true, None), "WebGL2 reaches up to 60 fps in a match on this device.");
+    }
 
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
         let mut p = Press::default();

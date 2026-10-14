@@ -138,10 +138,51 @@ pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
 /// B260: tells the page whether a match is on (`hstMatch`): a hidden tab steps the game on a timer only outside one
 /// (`index.html`), so a match holds while hidden.
 pub fn in_match(on: bool) {
-    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if ON.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
+    if IN_MATCH.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
         let _ = js_sys::Reflect::set(&js_sys::global(), &"hstMatch".into(), &on.into());
     }
+}
+
+static IN_MATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// B324: the best frame rate the game has held over a whole second, in fps × 10: [in the menus, in a match].
+static BEST_FPS: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
+
+/// B324: counts the frames drawn in each second (real time) and keeps the best second's rate, the menus' and a
+/// match's apart (a phone's GPU can keep up in the menus and not in a match). A second that crosses into or out of
+/// a match counts for neither.
+pub fn frame_rate(time: Res<bevy::time::Time<bevy::time::Real>>, mut w: bevy::prelude::Local<(f64, u32, bool)>) {
+    let (now, on) = (time.elapsed_secs_f64(), IN_MATCH.load(std::sync::atomic::Ordering::Relaxed));
+    if w.1 == 0 || w.2 != on {
+        *w = (now, 1, on);
+        return;
+    }
+    let span = now - w.0;
+    if span >= 1.0 {
+        let fps = ((w.1 as f64 / span) * 10.0).round() as u32;
+        BEST_FPS[on as usize].fetch_max(fps, std::sync::atomic::Ordering::Relaxed);
+        *w = (now, 1, on);
+    } else {
+        w.1 += 1;
+    }
+}
+
+/// B324: the display's refresh rate (Hz) as the page measured it from requestAnimationFrame before the game was
+/// loaded (`hstRefresh`, index.html), when it could.
+fn refresh() -> Option<f64> {
+    js_sys::Reflect::get(&js_sys::global(), &"hstRefresh".into()).ok()?.as_f64().filter(|&hz| hz > 0.0)
+}
+
+/// B324: on the WebGL2 build, what it reaches here: the best second's frame rate (a match's once one has run, and
+/// whether it was a match's) and the display's refresh rate. `None` on the WebGPU build and before a whole second has
+/// been measured (words: `options::webgl2_reach`).
+pub fn webgl2_reach() -> Option<(f64, bool, Option<f64>)> {
+    if cfg!(feature = "webgpu") {
+        return None;
+    }
+    let [menus, play] = [0, 1].map(|i| BEST_FPS[i].load(std::sync::atomic::Ordering::Relaxed));
+    let fps = if play > 0 { play } else { menus };
+    (fps > 0).then(|| (fps as f64 / 10.0, play > 0, refresh()))
 }
 
 /// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).

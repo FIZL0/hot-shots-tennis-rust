@@ -219,6 +219,23 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 // Gecko (Firefox, Zen) gets WebGL2 unless the setting says WebGPU (B298): its WebGPU (Windows, D3D12) draws skinned
 // and indexed meshes broken (exploded skinning, holes in the court) and WebGL2 draws them right.
 say('Checking graphics…');
+// B324: the display's refresh rate, from requestAnimationFrame while the page is still light (before the game loads):
+// the median of 40 frame gaps, snapped to a usual rate within 3 %. Settings (WebGL2 build) holds the game's best
+// second against it to say whether WebGL2 is capped on this device (`hstRefresh`, web.rs)
+{
+  const gaps = [];
+  let last;
+  const tick = t => {
+    if (last !== undefined) gaps.push(t - last);
+    last = t;
+    if (gaps.length < 40) return requestAnimationFrame(tick);
+    const hz = 1000 / gaps.sort((a, b) => a - b)[20];
+    const usual = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 175, 240, 360].find(r => Math.abs(hz - r) < r * 0.03);
+    window.hstRefresh = usual ?? Math.round(hz);
+    console.info(`hst: display ≈ ${hz.toFixed(1)} Hz (${window.hstRefresh})`);
+  };
+  requestAnimationFrame(tick);
+}
 let renderer = 'auto';
 try { renderer = /^renderer\s*=\s*(\w+)/m.exec(localStorage.getItem('./settings.txt') ?? '')?.[1] ?? 'auto'; } catch {}
 // an adapter request that never answers counts as none (WebGL2) after 5 s

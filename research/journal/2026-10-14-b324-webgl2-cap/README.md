@@ -1,0 +1,1 @@
+- 1-WEBGL2-CAP-FINAL.md: Settings (Renderer / Show FPS) on the WebGL2 build shows the best frame rate it held vs the display's refresh rate (rAF before load), with the WebGPU/desktop hint when capped.
