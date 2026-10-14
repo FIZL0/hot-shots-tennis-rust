@@ -34,7 +34,13 @@ pub struct Graphics {
     /// Draw the frame rate in the window's bottom-left corner (B186; `fps_counter`): 0 off, 1 on, 2 detailed (where
     /// the frame's time goes, B328). Not part of a preset.
     pub show_fps: u8,
+    /// B342: each prop model's placements drawn as one mesh per material (`merge.rs`) instead of one draw per placement.
+    /// Off by default: no gain measured (Bevy already batches the copies' draws). Not part of a preset.
+    pub merge_meshes: bool,
 }
+
+/// `--merge-meshes` given at launch: 0 not given, 1 off, 2 on; it holds over `Graphics::merge_meshes` (B342).
+pub static MERGE_FORCED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
 pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
@@ -46,16 +52,16 @@ pub const MSAA: [u32; 3] = [1, 2, 4];
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, merge_meshes: false }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, merge_meshes: false };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0 };
-    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, merge_meshes: false };
+    pub const PRESETS: [(&str, Graphics); 3] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, merge_meshes: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -68,6 +74,7 @@ impl Graphics {
             "original" => self.original = v != "off",
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
+            "merge_meshes" | "merge-meshes" => self.merge_meshes = v != "off",
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             _ => return false,
         }
@@ -77,7 +84,7 @@ impl Graphics {
     /// settings.txt lines.
     pub fn text(&self) -> String {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
-        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" }, ["off", "on", "detailed"][self.show_fps.min(2) as usize])
+        format!("frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nmerge_meshes = {}\n", if self.vsync { "on" } else { "off" }, self.scale, self.shadows.name(), msaa_name(self.msaa), if self.original { "on" } else { "off" }, if self.windowed { "on" } else { "off" }, ["off", "on", "detailed"][self.show_fps.min(2) as usize], if self.merge_meshes { "on" } else { "off" })
     }
 
     /// The match's flags.
@@ -97,11 +104,22 @@ impl Graphics {
             1 => f.push("--show-fps".into()),
             _ => f.push("--show-fps-detailed".into()),
         }
+        if self.merge_meshes {
+            f.extend(["--merge-meshes".into(), "on".into()]);
+        }
         f
     }
 
     pub fn preset(&self) -> &'static str {
-        Self::PRESETS.iter().find(|(_, g)| Graphics { windowed: self.windowed, show_fps: self.show_fps, ..*g } == *self).map_or("Custom", |(n, _)| n)
+        Self::PRESETS.iter().find(|(_, g)| Graphics { windowed: self.windowed, show_fps: self.show_fps, merge_meshes: self.merge_meshes, ..*g } == *self).map_or("Custom", |(n, _)| n)
+    }
+
+    /// Whether court meshes are drawn merged (`merge.rs`): the setting, unless `--merge-meshes` said otherwise.
+    pub fn merged(&self) -> bool {
+        match MERGE_FORCED.load(Ordering::Relaxed) {
+            0 => self.merge_meshes,
+            f => f == 2,
+        }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -335,7 +353,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, merge_meshes: !p.merge_meshes };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -345,6 +363,8 @@ mod tests {
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
         assert_eq!(Graphics { windowed: true, ..default() }.preset(), "Default");
         assert_eq!(Graphics { show_fps: 1, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { merge_meshes: true, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { merge_meshes: true, ..default() }.flags().last().unwrap(), "on");
         assert_eq!(Graphics { show_fps: 1, ..default() }.flags().last().unwrap(), "--show-fps");
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);

@@ -22,6 +22,7 @@ mod court_anim;
 #[cfg(not(target_arch = "wasm32"))]
 mod disc;
 mod effects;
+mod merge;
 mod graphics;
 mod handshake;
 mod gs;
@@ -170,7 +171,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--original" => gfx.original = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
-            "--fps" | "--scale" | "--shadows" | "--msaa" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--merge-meshes" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             // borderless fullscreen is the default (B96); `--fullscreen` stays for older launch scripts
             "--windowed" => gfx.windowed = true,
             "--fullscreen" => gfx.windowed = false,
@@ -246,6 +247,7 @@ fn main() {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
+    let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
     let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
@@ -260,6 +262,10 @@ fn start(argv: Vec<String>) {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
     let windowed = gfx.windowed;
+    // so does `--merge-meshes` (the browser's `?merge-meshes=off`, B342), over the menu's setting and a match's flags
+    if merge_flag {
+        graphics::MERGE_FORCED.store(1 + gfx.merge_meshes as u8, std::sync::atomic::Ordering::Relaxed);
+    }
     // the menu opens the window as settings.txt's graphics say, so it doesn't start fullscreen and then shrink
     if menu && let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
         for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
@@ -289,6 +295,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
+    app.add_plugins(merge::plugin);
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Last, web::shown);
     if bg {
@@ -422,6 +429,7 @@ fn load(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
     (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
+    gfx: Option<Res<graphics::Graphics>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
@@ -608,6 +616,7 @@ fn load(
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
+        let mut placed = Vec::new();
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
@@ -639,6 +648,10 @@ fn load(
                 if lo.cmple(hi).all() {
                     commands.entity(e).insert(play::net_hide::NearBox { lo, hi });
                 }
+            }
+            // B342: drawn merged with the model's other copies (not the net or a house the camera can sit in)
+            if !stem.starts_with("w-house") && !play::net_hide::picked(p.category, p.pos) {
+                placed.push(merge::Placed { stem: stem.clone(), entity: e, transform: t, caster: p.code[3] != b'0' && (17..=19).contains(&p.category) });
             }
             if play::net_hide::picked(p.category, p.pos) {
                 commands.entity(e).insert(play::net_hide::HideNearCamera);
@@ -672,6 +685,9 @@ fn load(
                 }).collect();
                 spawn(&mut commands, &decal, Transform::default());
             }
+        }
+        if gfx.as_deref().is_some_and(graphics::Graphics::merged) {
+            merge::build(&mut commands, root, &placed, &library, &mut meshes, &gs_materials);
         }
         look.sky = sky;
         if envir.is_some() {

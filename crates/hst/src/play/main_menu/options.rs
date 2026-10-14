@@ -41,6 +41,8 @@ pub(super) enum Opt {
     Renderer,
     /// B118: the on-screen pad buzzes on each press.
     Vibration,
+    /// B342: `Graphics::merge_meshes`.
+    MergeMeshes,
 }
 use Opt::*;
 
@@ -64,7 +66,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, MergeMeshes] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -120,6 +122,7 @@ fn label(o: Opt) -> &'static str {
         Chat => "Chat",
         Renderer => "Renderer",
         Vibration => "Vibration",
+        MergeMeshes => "Merge Court Meshes",
     }
 }
 
@@ -136,6 +139,7 @@ fn about(o: Opt) -> &'static str {
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
+        MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
         Upscaled => "Use the upscaled textures in mods/texture-replacements.",
@@ -204,7 +208,7 @@ impl Settings {
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
                 let n = cycle(&names, g.preset(), d);
-                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
+                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, merge_meshes: g.merge_meshes, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
             }
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
@@ -231,6 +235,7 @@ impl Settings {
             }
             Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
             Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
+            MergeMeshes => g.merge_meshes = !g.merge_meshes,
         }
     }
 
@@ -251,6 +256,7 @@ impl Settings {
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
+            MergeMeshes => on_off(g.merge_meshes),
             Upscaled => on_off(self.0[0]),
             Volume(i) => self.2 .0[i].to_string(),
             MenuMusic => on_off(self.0[1]),
