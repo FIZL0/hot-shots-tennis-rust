@@ -1608,6 +1608,8 @@ fn reset_positions(g: &mut Game) {
         let ai = (g.players[i].ai, g.players[i].ai_hit);
         let mind = g.players[i].ai_mind;
         let formation = g.players[i].formation;
+        // an emote plays out across the placement (B278): its lock and motion carry into the serve
+        let emote = (g.players[i].emote, g.players[i].cmd);
         g.players[i] = Player {
             pos: at.pos,
             prev: at.pos,
@@ -1624,6 +1626,9 @@ fn reset_positions(g: &mut Game) {
         (g.players[i].ai, g.players[i].ai_hit) = ai;
         g.players[i].ai_mind = mind;
         g.players[i].formation = formation;
+        if emote.0 > 0 {
+            (g.players[i].emote, g.players[i].cmd) = emote;
+        }
     }
     // with more than one human the camera keeps its end through changes of ends; only solo games turn it
     if g.humans.iter().filter(|&&h| h).count() <= 1 {
@@ -3004,11 +3009,12 @@ fn control(mut g: ResMut<Game>, pads: Res<Pads>, tick: Res<tick_input::TickPads>
         match pads.slot_of(i, g.players.len()) {
             Some(s) => {
                 let pad = &tick.slot(s);
+                // an emote in the post-point time doesn't swallow the press that hurries it (B278)
+                post_press(g, matches!(pad.shot, Some(0 | 1)));
                 if emote::tick(g, i, pad.emote) {
                     continue;
                 }
                 let (shot, serve_press) = (pad.shot, pad.serve);
-                post_press(g, matches!(shot, Some(0 | 1)));
                 doubles_ai::human(g, i);
                 human(g, i, pad, shot, serve_press);
             }
@@ -3990,6 +3996,8 @@ fn react(g: &mut Game, event: Event) {
         let p = &mut g.players[i];
         p.vel = Vec2::ZERO;
         (p.whiff, p.pending, p.approach) = (None, None, None);
+        // the reaction ends an emote (B278)
+        p.emote = 0;
         // the reaction ends a serve's follow-through
         p.served = None;
         // the ball's target keeps the 0x2b it has played since the hit, in place
