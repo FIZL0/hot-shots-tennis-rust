@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use super::pointer::{Act, OK};
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 use crate::mods_online::{self as mo, Ask, Wire};
-use crate::net::{Cmd, Event, Listing, Live, Net, Online, Pick, Relay, Room, SHORT, SYMBOLS, Seat, is_short};
+use crate::net::{Cmd, Event, Listing, Live, Msg, Net, Online, Pick, Relay, Room, SHORT, SYMBOLS, Seat, is_short};
 
 /// What Online does once this machine's players are picked.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -788,6 +788,12 @@ impl Menu {
                 v.started = true;
                 v.status = "Starting the match...".into();
             }
+            // B279: the host left the result screen after this machine: the lobby is open again
+            Event::Match(Msg::Lobby(r)) => {
+                (v.room, v.started) = (Some(r), false);
+                v.status = "Back in the lobby.".into();
+                self.align();
+            }
             Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Chat { .. } => {}
         }
     }
@@ -1505,11 +1511,12 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         let back = crate::mode::Mode::new(move |app| {
             app.insert_resource(base);
             // B196: the match ended for a player who didn't come back: this lobby again, with whoever is still in
-            if let Some((net, room)) = crate::play::netplay::LOBBY.lock().unwrap().take() {
+            if let Some((net, room, wait)) = crate::play::netplay::LOBBY.lock().unwrap().take() {
                 let mut m = kept;
                 (m.screen, m.sel) = (super::Screen::Lobby, 0);
-                (m.net.room, m.net.started, m.net.prepared, m.net.ready) = (Some(room), false, false, None);
-                m.net.status = "Back in the lobby.".into();
+                // B279: a guest ahead of its host holds as started (only Leave) until the host's `Msg::Lobby`
+                (m.net.room, m.net.started, m.net.prepared, m.net.ready, m.net.sent) = (Some(room), wait, false, None, None);
+                m.net.status = if wait { "Waiting for the host to leave the results..." } else { "Back in the lobby." }.into();
                 app.insert_resource(net).insert_resource(super::Kept(m));
             }
             crate::menu_mode(app);
@@ -1960,6 +1967,17 @@ mod tests {
         (m.net.go, m.net.pick_next, m.screen) = (Some(Go::Code), true, Screen::Lobby);
         m.heard(Event::Failed("timed out".into()));
         assert_eq!((m.net.pick_next, m.net.fail), (false, Some("Couldn't join the lobby")));
+    }
+
+    /// B279: a guest back from the results ahead of its host has only Leave until the host's lobby comes.
+    #[test]
+    fn waits_for_the_hosts_lobby() {
+        let room = Room { seats: vec![None, None], ..default() };
+        let mut m = Menu { screen: Screen::Lobby, net: View { room: Some(room.clone()), me: "g".into(), started: true, ..default() }, ..default() };
+        assert_eq!(m.items(), [Item::Button("Leave")]);
+        m.heard(Event::Match(Msg::Lobby(Room { ver: 7, ..room })));
+        assert_eq!((m.net.started, m.net.room.as_ref().map(|r| r.ver)), (false, Some(7)));
+        assert_eq!(m.items(), GUEST_BUTTONS.map(Item::Button));
     }
 
     fn find_first_then_pick_in_the_lobby() {

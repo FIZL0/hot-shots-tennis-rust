@@ -162,6 +162,8 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     restarted(w);
     let press = pressed(w);
     let score = score(w);
+    // B279: on the result screen nobody waits for anybody: each leaves it for the lobby in their own time
+    let over = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
     let mut np = w.resource_mut::<Netplay>();
     let np = &mut *np;
     let r = &mut np.recover;
@@ -171,7 +173,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
         r.alive = 0.0;
         np.out.push(Msg::Alive(np.me.clone()));
     }
-    if np.end.is_some() {
+    if np.end.is_some() || over {
         return String::new();
     }
     for q in r.quiet.values_mut() {
