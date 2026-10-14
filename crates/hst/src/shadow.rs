@@ -117,9 +117,9 @@ fn casters(mut commands: Commands, new: Query<Entity, Added<Mesh3d>>, parents: Q
 }
 
 /// Shadows Low: the [`Minor`] casters' meshes don't cast; Off and High give them back (Off draws none anyway, and
-/// switching on again needs no rebuild).
+/// switching on again needs no rebuild). B343: so does Low with Fewer Shadows off (`Graphics::fewer_shadows`).
 fn low(mut commands: Commands, g: Option<Res<crate::graphics::Graphics>>, all: Query<Entity, With<Dropped>>, new: Query<Entity, Added<Dropped>>) {
-    let on = g.as_ref().is_some_and(|g| g.shadows == crate::graphics::Shadows::Low);
+    let on = g.as_ref().is_some_and(|g| g.shadows == crate::graphics::Shadows::Low && g.fewer_shadows);
     let changed = g.as_ref().is_some_and(|g| g.is_changed());
     for e in if changed { all.iter().collect::<Vec<_>>() } else { new.iter().collect() } {
         if on {
