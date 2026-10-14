@@ -384,8 +384,7 @@ struct Menu {
     rebinding: Option<usize>,
     /// The custom roster.
     mods: Vec<crate::mods::Mod>,
-    /// B296: the select's roster filter ([`Menu::filters`]): 0 everyone, 1 the disc's, 2 the mods, 3 + k the mods
-    /// from the k-th game ([`Menu::sources`]).
+    /// B296: the select's roster filter ([`Menu::filters`]): 0 everyone, 1 the disc's, 2 the mods.
     filter: usize,
     /// B296: the player whose pick the select's detail panel shows: the last one to press anything there.
     focus: usize,
@@ -558,25 +557,17 @@ impl Menu {
         self.players[p].ready = false;
     }
 
-    /// B296: the games the mods come from (`Mod::source`, each once, sorted): the roster's "From" filters.
-    fn sources(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = self.mods.iter().map(|m| m.source.as_str()).filter(|s| !s.is_empty()).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    }
-
-    /// B296: how many filters □ / Tab cycles: everyone, the disc's, the mods, one per game (one with no mods).
+    /// B296: how many filters □ / Tab cycles: everyone, the disc's, the mods (B304: no per-game ones; one with no
+    /// mods).
     fn filters(&self) -> usize {
-        if self.mods.is_empty() { 1 } else { 3 + self.sources().len() }
+        if self.mods.is_empty() { 1 } else { 3 }
     }
 
     /// B296: the select's roster under the filter: the Random card (`None`) first, then the disc characters in the
     /// original's grid order (beginner, intermediate, expert), then the custom ones in folder order.
     fn roster(&self) -> Vec<Option<Who>> {
-        let from = self.filter.checked_sub(3).and_then(|k| self.sources().get(k).map(|s| s.to_string()));
         let disc = self.filter <= 1 || self.mods.is_empty();
-        let mods = (0..self.mods.len()).filter(|&i| self.filter != 1 && from.as_ref().is_none_or(|s| *s == self.mods[i].source));
+        let mods = (0..self.mods.len()).filter(|_| self.filter != 1);
         let disc = GRID.iter().map(|g| Who::Disc(g.0)).filter(|_| disc);
         std::iter::once(None).chain(disc.chain(mods.map(Who::Mod)).map(Some)).collect()
     }
@@ -2076,9 +2067,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
     let [rx, ry, rw, rh] = g.roster;
     d.box3([rx, ry, rw, rh], 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
     let mut px = rx + 10.0;
-    let sources = m.sources();
     let mut pills = vec![("All".to_string(), CHARS + m.mods.len()), ("Hot Shots Tennis".into(), CHARS), ("Mods".into(), m.mods.len())];
-    pills.extend(sources.iter().map(|s| (format!("From {s}"), m.mods.iter().filter(|x| x.source == *s).count())));
     if m.mods.is_empty() {
         pills.truncate(1);
         pills[0].0 = "Hot Shots Tennis".into();
@@ -3409,23 +3398,20 @@ mod tests {
         }
     }
 
-    /// B296: the roster's filters: everyone, the disc's, the mods, then one per game the mods come from; a player
-    /// whose character a filter hides moves to its first, a ready one stays.
+    /// B296: the roster's filters: everyone, the disc's, the mods (B304: no per-game ones, whatever the mods' games);
+    /// a player whose character a filter hides moves to its first, a ready one stays.
     #[test]
     fn roster_filters() {
         let from = |i: usize, s: &str| crate::mods::Mod { id: format!("m{i}"), source: s.into(), costumes: vec!["a".into()], ..fake_mod(i) };
         let mut m = Menu { screen: Screen::Chars, mods: vec![from(0, "Golf"), from(1, ""), from(2, "Get a Grip"), from(3, "Golf")], seats: [Some(Dev::Keys), Some(Dev::Keys), None, None], ..default() };
-        assert_eq!(m.filters(), 5);
+        assert_eq!(m.filters(), 3);
         assert_eq!(m.roster().len(), 1 + CHARS + 4);
         m.players[1] = Player { cursor: 3, ready: true, ..default() };
-        m.set_filter(4);
-        assert_eq!(m.roster(), [None, Some(Who::Mod(0)), Some(Who::Mod(3))], "from Golf");
+        m.set_filter(2);
+        assert_eq!(m.roster(), [None, Some(Who::Mod(0)), Some(Who::Mod(1)), Some(Who::Mod(2)), Some(Who::Mod(3))], "the mods");
         assert_eq!((m.cell(0), m.cell(1)), (Some(Who::Mod(0)), Some(Who::Disc(GRID[3].0))));
         m.set_filter(3);
-        assert_eq!(m.roster(), [None, Some(Who::Mod(2))], "from Get a Grip");
-        assert_eq!(m.cell(0), Some(Who::Mod(2)));
-        m.set_filter(5);
-        assert_eq!((m.filter, m.roster().len()), (0, 19), "the filters wrap");
+        assert_eq!((m.filter, m.roster().len()), (0, 1 + CHARS + 4), "the filters wrap");
         m.set_filter(1);
         assert_eq!(m.cell(0), Some(Who::Disc(GRID[0].0)));
         // the shown player: the one who pressed last while picking
