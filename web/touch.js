@@ -62,7 +62,8 @@ let tick = 0;
 let menu = false;
 
 const css = `
-.touch { position: fixed; inset: 0; z-index: 10; pointer-events: none; user-select: none; -webkit-user-select: none;
+/* B333: over the canvas, sized like it from the screen's current size (index.html) */
+.touch { position: fixed; left: 0; top: 0; width: var(--app-w, 100vw); height: var(--app-h, 100dvh); z-index: 10; pointer-events: none; user-select: none; -webkit-user-select: none;
   --u: min(7vw, 12.5vh); font: 600 calc(var(--u) * .42) system-ui, sans-serif; color: #fff; }
 .touch[hidden] { display: none; }
 /* B118: the far player's controls, the whole layer turned a half turn: its bottom is the screen's top */

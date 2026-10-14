@@ -23,7 +23,13 @@
   /* iOS won't type into an input under a user-select: none parent; the token paste / join code keep their own taps */
   input, textarea { user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; touch-action: manipulation; }
   #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
-  canvas { touch-action: none; display: block; width: 100% !important; height: 100% !important; }
+  /* B333: the page and the canvas are as big as the visible screen right now (--app-w/-h, kept up to date below), not
+     a size read once on load: iOS Safari can open with its toolbar's height still unsettled and leave an empty bar
+     ("chin") until the phone is turned. 100dvh before the script runs. The canvas is pinned to the top left so a
+     page scrolled by the browser can't shift it. */
+  html, body { width: var(--app-w, 100%); height: 100%; height: var(--app-h, 100dvh); }
+  canvas { touch-action: none; display: block; position: fixed; left: 0; top: 0;
+    width: var(--app-w, 100vw) !important; height: var(--app-h, 100dvh) !important; }
   button { font: inherit; }
   /* Join by Code on a touch screen: a tap anywhere but the controls opens the keyboard (typed_code) */
   #codekeys { position: fixed; inset: 0; z-index: 5; opacity: 0; font-size: 16px; border: 0; padding: 0; caret-color: transparent; }
@@ -62,6 +68,29 @@ const answer = new URLSearchParams(location.search).get('code')?.startsWith('rtc
 if (answer) {
   new BroadcastChannel('hst-rtc').postMessage(new URLSearchParams(location.search).get('code'));
   document.body.textContent = 'Sent to the game in your other tab: switch back to it. You can close this one.';
+}
+</script>
+<script>
+// B333: the visible screen's size into --app-w/-h, scrolled back to the top, whenever it may have changed: a resize, a
+// turn, the toolbar settling (visualViewport), the page shown again; and a few times in the first seconds and after a
+// turn, as iOS reports the settled size late without a resize. innerWidth/innerHeight, not the visual viewport's: an
+// open keyboard (Join by Code) shrinks the visual viewport and must not shrink the game.
+{
+  const root = document.documentElement.style;
+  const fit = () => {
+    if (innerWidth > 0 && innerHeight > 0) {
+      root.setProperty('--app-w', innerWidth + 'px');
+      root.setProperty('--app-h', innerHeight + 'px');
+    }
+    if (scrollX || scrollY) scrollTo(0, 0);
+  };
+  const settle = () => { fit(); for (const ms of [50, 150, 400, 1000, 2000]) setTimeout(fit, ms); };
+  for (const e of ['resize', 'pageshow', 'load', 'focus']) addEventListener(e, fit);
+  addEventListener('orientationchange', settle);
+  screen.orientation?.addEventListener?.('change', settle);
+  visualViewport?.addEventListener('resize', fit);
+  document.addEventListener('visibilitychange', () => document.hidden || settle());
+  settle();
 }
 </script>
 <script>

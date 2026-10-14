@@ -206,9 +206,16 @@ pub fn code_entry(on: bool) {
     }
 }
 
-/// The page's size in CSS px (the canvas fills it): where touches and the mouse are measured.
+/// The page's size in CSS px (the canvas fills it): where touches and the mouse are measured. The canvas's own box
+/// first (B333: on iOS the window's inner size can lag the screen the canvas was just fitted to), else the window's.
 pub fn page_size() -> Option<bevy::math::Vec2> {
     let w = web_sys::window()?;
+    if let Some(c) = w.document().and_then(|d| d.query_selector("canvas").ok().flatten()) {
+        let r = c.get_bounding_client_rect();
+        if r.width() > 0.0 && r.height() > 0.0 {
+            return Some(bevy::math::Vec2::new(r.width() as f32, r.height() as f32));
+        }
+    }
     let (x, y) = (w.inner_width().ok()?.as_f64()?, w.inner_height().ok()?.as_f64()?);
     (x > 0.0 && y > 0.0).then(|| bevy::math::Vec2::new(x as f32, y as f32))
 }
