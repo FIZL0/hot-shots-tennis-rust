@@ -183,7 +183,7 @@ impl Menu {
             }
         }
         self.players[i].ready = false;
-        self.filter = 0;
+        self.scroll = 0;
         self.net.edit = Some(i);
         self.net.status.clear();
         self.go(Screen::Chars, out);

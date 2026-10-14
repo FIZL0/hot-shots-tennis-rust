@@ -782,7 +782,8 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 fn boxes(g: &super::Grid) -> ([f32; 4], [f32; 4]) {
     let [l, y, w, _] = g.strip;
     let bottom = g.detail[1] + g.detail[3] + 32.0;
-    if g.detail[1] > g.roster[1] {
+    // a portrait view: the detail panel spans the width
+    if g.detail[2] >= g.strip[2] {
         let h = ((bottom - y) * 0.55).max(150.0);
         ([l, y, w, h], [l, y + h + 8.0, w, bottom - y - h - 8.0])
     } else {

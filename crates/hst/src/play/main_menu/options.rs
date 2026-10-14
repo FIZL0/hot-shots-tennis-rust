@@ -300,7 +300,7 @@ pub(super) const MUTED: [f32; 3] = [61.0, 37.0, 46.0];
 pub(super) fn boxes(g: &Grid, n: usize) -> ([f32; 4], [f32; 4]) {
     let [l, y, w, _] = g.strip;
     let bottom = g.detail[1] + g.detail[3] + 32.0;
-    if g.detail[1] > g.roster[1] {
+    if g.detail[0] <= g.strip[0] {
         // portrait: the list as tall as the page's `n` rows want, the panel the rest
         let h = 30.0 + 32.0 * n as f32;
         ([l, y, w, h], [l, y + h + 8.0, w, bottom - y - h - 8.0])

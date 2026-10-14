@@ -191,9 +191,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
-            if m.own_mods() > 0 {
-                v.push((Act::Page, "Filter"));
-            }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
