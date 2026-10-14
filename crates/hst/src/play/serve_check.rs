@@ -260,4 +260,51 @@ mod tests {
         }
         panic!("no second serve");
     }
+
+    /// B270: two whiffed serves, a double fault: once the players react, the server plays its `di` (0x2d) and the
+    /// receiver its `gu` (0x2c), not the whiff's miss motion; that runs out first and the server stands (motion 0),
+    /// as `context/b270/run1` (slot 3: miss motion to t 83, stance, the reaction at message 0x19). The original's
+    /// message 0x19 puts every player into the reaction, whatever its serve state (a body-hit one plays `re_ball`).
+    #[test]
+    fn a_whiffed_double_fault_plays_the_reactions() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = to_serve();
+        // ticks since this serve's toss press
+        let mut since: Option<u32> = None;
+        let mut stood = false;
+        for _ in 0..1500 {
+            let (b, reacted) = {
+                let g = app.world().resource::<Game>();
+                since = match (g.phase == Phase::Serve, since) {
+                    (false, _) => None,
+                    (true, Some(k)) => Some(k + 1),
+                    (true, None) => (g.serving.t > 30).then_some(0),
+                };
+                let b = if since.is_some_and(|k| k < 5 || (119..124).contains(&k)) { 0x4000 } else { 0 };
+                (b, g.post.as_ref().filter(|p| p.event.is_some()).map(|p| p.reacted))
+            };
+            if reacted == Some(true) {
+                let w = app.world_mut();
+                let mut ms: Vec<(usize, usize)> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, m.id)).collect();
+                ms.sort();
+                let g = w.resource::<Game>();
+                assert_eq!((g.post_winner, g.score.points), (1, [0, 1]), "not a double fault");
+                // in doubles `gu`/`di` may be drawn as a team reaction (0x30..0x34)
+                let reacts = |i: usize, base| ms[i].1 == base || (0x30..0x35).contains(&ms[i].1);
+                assert!(reacts(0, 0x2d) && reacts(2, 0x2d) && reacts(1, 0x2c) && reacts(3, 0x2c), "{ms:x?}");
+                assert!(stood, "the server didn't stand once its miss motion ran out");
+                return;
+            }
+            let w = app.world_mut();
+            let m = w.query::<(&Figure, &Motion)>().iter(w).find(|(f, _)| f.0 == 0).map(|(_, m)| m.id).unwrap();
+            stood |= reacted == Some(false) && w.resource::<Game>().rally.faults == 2 && m == 0;
+            // her call line held on: the call runs its countdown, past the miss motion's end
+            app.world_mut().resource_mut::<Game>().umpire_voice = 1;
+            app.world_mut().resource_mut::<Replay>().0.push_back(pad(b));
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+        panic!("no double fault");
+    }
 }
