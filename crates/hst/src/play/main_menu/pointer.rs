@@ -235,8 +235,11 @@ pub(in crate::play) fn pointer(
     if let Some(css) = crate::web::page_size() {
         size = css;
     }
+    // B117: measured in the view (a fixed aspect ratio's centred rect)
+    let off = widescreen::view(size).min;
+    let size = widescreen::in_view(size, off).0;
     let aspect = size.x / size.y;
-    let at = |p: Vec2, slop: f32| hit_at(&hits.0, p / size, aspect, slop);
+    let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, slop);
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
     let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_)));

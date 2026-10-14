@@ -180,7 +180,12 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 let v: Vec<_> = a.next().unwrap_or_default().split(',').map(play::controls::Seat::parse).collect();
                 pads = Some(std::array::from_fn(|i| v.get(i).copied().flatten()));
             }
-            "--4x3" => play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed),
+            "--4x3" => play::main_menu::ASPECT.store(1, std::sync::atomic::Ordering::Relaxed),
+            // B117: Auto, 4:3, 16:9, 16:10, 21:9
+            "--aspect" => {
+                let a = a.next().unwrap_or_default();
+                play::main_menu::ASPECT.store(play::widescreen::ASPECTS.iter().position(|n| *n == a).unwrap_or(0) as u8, std::sync::atomic::Ordering::Relaxed);
+            }
             "--no-upscale" => upscale = false,
             "--sound" => {
                 let mut n = || a.next().unwrap_or_default();
@@ -202,7 +207,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     }
     // the original's picture: 4:3 with the disc's own textures
     if gfx.original {
-        play::main_menu::WIDE.store(false, std::sync::atomic::Ordering::Relaxed);
+        play::main_menu::ASPECT.store(1, std::sync::atomic::Ordering::Relaxed);
         upscale = false;
     }
     // unattended runner slots (HST_BG=1) debug against the disc's own textures, never the upscaled pack
@@ -347,10 +352,9 @@ pub fn menu_mode(app: &mut App) {
     app.add_systems(Startup, load).add_plugins(play::main_menu::plugin);
 }
 
-/// The menu's match in this app: `flags` read as on the command line (the settings' `--4x3`, `--no-upscale` and
+/// The menu's match in this app: `flags` read as on the command line (the settings' `--no-upscale` and
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
-    play::main_menu::WIDE.store(true, std::sync::atomic::Ordering::Relaxed);
     let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
@@ -1154,7 +1158,7 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
     // game space → Bevy: (x, -y, -z)
     let b = |i: usize| Vec3::new(v[i], -v[i + 1], -v[i + 2]);
     *t = Transform::from_translation(b(0)).looking_to(b(3), -b(6));
-    let aspect = window.single().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let aspect = window.single().map_or(16.0 / 9.0, crate::play::widescreen::aspect);
     if let Projection::Perspective(p) = &mut *proj {
         p.fov = 2.0 * (v[9] * 0.75f32.max(1.0 / aspect)).atan();
     }

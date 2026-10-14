@@ -996,7 +996,14 @@ fn page(
         None
     };
     menu.add.shot = shelf.shown.is_some();
-    let rect = window.single().ok().and_then(|w| add_rect(&menu, w.width() / w.height().max(1.0)));
+    let rect = window.single().ok().and_then(|w| {
+        // the view's % → the window's (B117: a fixed aspect ratio's view sits inside the window)
+        let size = Vec2::new(w.width(), w.height()).max(Vec2::ONE);
+        let v = widescreen::view(size);
+        let [l, t, wd, h] = add_rect(&menu, widescreen::aspect(w))?;
+        let (o, k) = (v.min / size * 100.0, v.size() / size);
+        Some([o.x + l * k.x, o.y + t * k.y, wd * k.x, h * k.y])
+    });
     if rect != *was {
         *was = rect;
         #[cfg(target_arch = "wasm32")]

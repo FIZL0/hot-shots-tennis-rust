@@ -40,7 +40,7 @@ use crate::Args;
 use crate::graphics::Graphics;
 use crate::audio::{Sound, SoundBank, Volumes};
 
-pub use super::widescreen::WIDE;
+pub use super::widescreen::ASPECT;
 pub(crate) use previews::face;
 
 pub(super) mod cursor;
@@ -104,16 +104,16 @@ struct Grid {
 
 impl Default for Grid {
     fn default() -> Self {
-        Grid::fit(4.0 / 3.0, true)
+        Grid::fit(4.0 / 3.0)
     }
 }
 
 impl Grid {
-    /// The grid on a window `aspect` wide (`wide` = widescreen on, the cards at the window's edges).
-    fn fit(aspect: f32, wide: bool) -> Self {
+    /// The grid on a view `aspect` wide (the cards at its edges).
+    fn fit(aspect: f32) -> Self {
         let share = super::widescreen::share(aspect);
-        // how far the window reaches past each side of the 4:3 screen, in its 640 units
-        let extra = if wide { (640.0 / share - 640.0) / 2.0 } else { 0.0 };
+        // how far the view reaches past each side of the 4:3 screen, in its 640 units
+        let extra = (640.0 / share - 640.0) / 2.0;
         // from 40 past the left cards (room for a hand left of the first face) to 13 short of the right ones
         let (l, r) = (200.0 - extra, 467.0 + extra);
         let cols = (((r - l + 5.0) / ICON_STEP) as usize).max(1);
@@ -138,10 +138,11 @@ impl Grid {
     }
 }
 
-/// Keeps `Menu::grid` fitted to the window, live on resize.
+/// Keeps `Menu::grid` fitted to the window, live on resize; applies the Aspect Ratio setting live (B117).
 fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>) {
+    super::widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
     let Ok(w) = window.single() else { return };
-    let g = Grid::fit(w.width() / w.height().max(1.0), super::widescreen::WIDE.load(std::sync::atomic::Ordering::Relaxed));
+    let g = Grid::fit(super::widescreen::aspect(w));
     if menu.grid != g {
         menu.grid = g;
     }
@@ -183,26 +184,31 @@ pub(super) const FONT: [&str; 15] = [
 
 // ---------------------------------------------------------------- settings
 
-/// The enhancements, each on or off (all on by default), the graphics settings and the volumes (B235), saved in
-/// `settings.txt`.
+/// The enhancements, each on or off (all on by default), the graphics settings, the volumes (B235) and the aspect
+/// ratio (B117, a `widescreen::ASPECTS` index), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 5], Graphics, Volumes);
-/// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match).
-const SETTING_NAMES: [&str; 5] = ["widescreen", "upscaled_textures", "menu_music", "music", "upscaled_downloads"];
-const SETTING_LABELS: [&str; 5] = ["Widescreen", "Upscaled Textures", "Menu Music", "Match Music", "Upscaled Downloads"];
+pub struct Settings([bool; 4], Graphics, Volumes, u8);
+/// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). The Settings screen's
+/// row 0 is the Aspect Ratio; these switches are rows 1 on.
+const SETTING_NAMES: [&str; 4] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads"];
+const SETTING_LABELS: [&str; 4] = ["Upscaled Textures", "Menu Music", "Match Music", "Upscaled Downloads"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
-const UPSCALED_DOWNLOADS: usize = 4;
+const UPSCALED_DOWNLOADS: usize = 3;
 /// The Settings screen's first row and row pitch: nine rows above the description bar, as the Graphics screen's.
 pub(super) const SETTINGS_TOP: f32 = GRAPHICS_TOP;
 pub(super) const SETTINGS_PITCH: f32 = 39.5;
 /// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
 /// Downloads, `modstore::install`).
 fn locked(i: usize) -> bool {
-    cfg!(target_arch = "wasm32") && (i == 1 || i == UPSCALED_DOWNLOADS)
+    cfg!(target_arch = "wasm32") && (i == 0 || i == UPSCALED_DOWNLOADS)
+}
+/// The switch on Settings row `row`, if it's one.
+fn switch(row: usize) -> Option<usize> {
+    row.checked_sub(1).filter(|&i| i < SETTING_NAMES.len())
 }
 /// The Settings screen's rows after the switches.
-const GRAPHICS_ROW: usize = SETTING_NAMES.len();
+const GRAPHICS_ROW: usize = SETTING_NAMES.len() + 1;
 const SOUND_ROW: usize = GRAPHICS_ROW + 1;
 const CONTROLS_ROW: usize = SOUND_ROW + 1;
 /// B235: the Sound screen's sliders (`Volumes`' order), 0..=10 each.
@@ -215,12 +221,17 @@ const GRAPHICS_ALL: [&str; 9] = ["Preset", "Resolution", "Shadows", "Frame Limit
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display row.
 const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(8).0 } else { &GRAPHICS_ALL };
 
-/// Widescreen, upscaled textures and menu music on, match music off (user 2026-10-12).
-const SETTING_DEFAULTS: [bool; 5] = [true, true, true, false, true];
+/// Upscaled textures and menu music on, match music off (user 2026-10-12).
+const SETTING_DEFAULTS: [bool; 4] = [true, true, false, true];
+
+/// Auto, but 16:9 on a phone (B117: the browser played by touch).
+fn default_aspect() -> u8 {
+    if touch_page() { 2 } else { 0 }
+}
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default())
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect())
     }
 }
 
@@ -233,9 +244,14 @@ fn cycle<T: PartialEq + Copy>(list: &[T], cur: T, d: isize) -> T {
 impl Settings {
     fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
-        let mut downloads = None;
+        let (mut downloads, mut aspect, mut wide) = (None, None, None);
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
-            if let Some(i) = SETTING_NAMES.iter().position(|n| *n == k.trim()) {
+            if k.trim() == "aspect" {
+                aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
+            } else if k.trim() == "widescreen" {
+                // before B117's aspect ratio: on was Auto, off the 4:3 picture
+                wide = Some(if v.trim() == "off" { 1 } else { 0 });
+            } else if let Some(i) = SETTING_NAMES.iter().position(|n| *n == k.trim()) {
                 s.0[i] = v.trim() != "off";
                 downloads = downloads.or((i == UPSCALED_DOWNLOADS).then_some(s.0[i]));
             } else if k.trim() == "uncapped_fps" {
@@ -245,14 +261,15 @@ impl Settings {
                 s.1.set(k, v);
             }
         }
-        s.0[UPSCALED_DOWNLOADS] = downloads.unwrap_or(s.0[1]);
+        s.0[UPSCALED_DOWNLOADS] = downloads.unwrap_or(s.0[0]);
+        s.3 = aspect.or(wide).unwrap_or(s.3);
         s.2 = Volumes::parse(text);
         s
     }
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        on + &self.1.text() + &self.2.text()
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &self.1.text() + &self.2.text()
     }
 
     /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
@@ -299,8 +316,8 @@ impl Settings {
 
     /// The match's flags for these settings.
     fn flags(&self) -> Vec<String> {
-        let [wide, upscale, _, music, _] = self.0;
-        let on = [(!wide, "--4x3"), (!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
+        let [upscale, _, music, _] = self.0;
+        let on = [(!upscale, "--no-upscale"), (music, "--music")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string());
         on.chain(self.1.flags()).collect()
     }
 }
@@ -722,10 +739,16 @@ impl Menu {
             Screen::Settings => {
                 rows(CONTROLS_ROW + 2, &mut self.sel, &mut out);
                 let s = self.sel;
-                if s < SETTING_NAMES.len() && !locked(s) && (k.ok || k.left || k.right) {
-                    self.settings.0[s] = !self.settings.0[s];
-                    if s == 1 {
-                        self.settings.0[UPSCALED_DOWNLOADS] = self.settings.0[1];
+                if s == 0 && (k.ok || k.left || k.right) {
+                    let n = super::widescreen::ASPECTS.len() as u8;
+                    self.settings.3 = (self.settings.3 + if k.left { n - 1 } else { 1 }) % n;
+                    out.extend([Sound(0), SaveSettings]);
+                } else if let Some(i) = switch(s).filter(|&i| !locked(i))
+                    && (k.ok || k.left || k.right)
+                {
+                    self.settings.0[i] = !self.settings.0[i];
+                    if i == 0 {
+                        self.settings.0[UPSCALED_DOWNLOADS] = self.settings.0[0];
                     }
                     out.extend([Sound(0), SaveSettings]);
                 } else if k.ok && s == GRAPHICS_ROW {
@@ -1465,7 +1488,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default());
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect());
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| Settings::parse(&t));
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
     // back from a match: its pause menu may have changed them (B126)
@@ -1843,8 +1866,9 @@ fn ticker_text(
     let (top, height) = super::widescreen::vplace(404.0, 32.0, super::widescreen::window_aspect(&window), Anchor::Span);
     (cnode.top, cnode.height) = (Val::Percent(top), Val::Percent(height));
     // one 640-space unit in logical px
-    let unit = share * win.width() / 640.0;
-    let (bar_w, bar_h) = (width / 100.0 * win.width(), height / 100.0 * win.height());
+    let vs = super::widescreen::view_size(win);
+    let unit = share * vs.x / 640.0;
+    let (bar_w, bar_h) = (width / 100.0 * vs.x, height / 100.0 * vs.y);
     // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
     let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
     let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 2.0 * unit, cap);
@@ -1883,17 +1907,20 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
         }
         Screen::Settings => {
             d.frame(1, 6);
-            let mut labels: Vec<String> = SETTING_LABELS.iter().map(|s| s.to_string()).collect();
+            let mut labels: Vec<String> = vec!["Aspect Ratio".into()];
+            labels.extend(SETTING_LABELS.iter().map(|s| s.to_string()));
             labels.extend(["Graphics".into(), "Sound".into(), "Controls".into(), "Back".into()]);
-            d.rows_locked(&labels, m.sel, 120.0, SETTINGS_TOP, 300.0, hand_x, SETTINGS_PITCH, |i| i < SETTING_NAMES.len() && locked(i));
+            d.rows_locked(&labels, m.sel, 120.0, SETTINGS_TOP, 300.0, hand_x, SETTINGS_PITCH, |i| switch(i).is_some_and(locked));
+            d.text(super::widescreen::ASPECTS[m.settings.3 as usize], 440.0, SETTINGS_TOP + 7.0, 24.0, GOLD);
+            d.hit([420.0, SETTINGS_TOP, 100.0, 38.0], pointer::Act::Row(0, pointer::OK));
             for (i, on) in m.settings.0.iter().enumerate() {
-                let on = &(*on && !locked(i));
-                d.text(if *on { "ON" } else { "OFF" }, 440.0, SETTINGS_TOP + SETTINGS_PITCH * i as f32 + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
-                d.hit([420.0, SETTINGS_TOP + SETTINGS_PITCH * i as f32, 100.0, 38.0], pointer::Act::Row(i, pointer::OK));
+                let (on, y) = (&(*on && !locked(i)), SETTINGS_TOP + SETTINGS_PITCH * (i + 1) as f32);
+                d.text(if *on { "ON" } else { "OFF" }, 440.0, y + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
+                d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(i + 1, pointer::OK));
             }
             d.info(&match m.sel {
-                0 => "Fill wide windows with the court; off shows the original 4:3 picture.".to_string(),
-                1 | 4 if locked(1) => "Upscaled textures aren't available in the browser.".into(),
+                0 => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.".to_string(),
+                1 | 4 if locked(0) => "Upscaled textures aren't available in the browser.".into(),
                 1 => "Use the upscaled textures in mods/texture-replacements.".into(),
                 2 => "Play music in the menus.".into(),
                 3 => "Play each court's music during a match.".into(),
@@ -2691,9 +2718,10 @@ fn draw(
             && let Ok(win) = window.single()
         {
             // a QR stays square (scannable) at any aspect: the largest square in its rect, centred
-            let side = (width * win.width()).min(height * win.height());
-            (left, top) = (left + (width - side / win.width()) / 2.0, top + (height - side / win.height()) / 2.0);
-            (width, height) = (side / win.width(), side / win.height());
+            let vs = super::widescreen::view_size(win);
+            let side = (width * vs.x).min(height * vs.y);
+            (left, top) = (left + (width - side / vs.x) / 2.0, top + (height - side / vs.y) / 2.0);
+            (width, height) = (side / vs.x, side / vs.y);
         }
         node.left = Val::Percent(left);
         node.top = Val::Percent(top);
@@ -2731,7 +2759,7 @@ fn load_bgm(mut commands: Commands, args: Res<Args>) {
 /// The overlay switches track only when the screen's track changes: the new one from its start at volume 55, no fade.
 fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>, mut on: Local<Option<usize>>) {
     let (Some(tracks), Some(sound)) = (tracks, sound) else { return };
-    let want = menu.screen.bgm().filter(|_| menu.settings.0[2]); // Menu Music; Match Music is the match's `--music`
+    let want = menu.screen.bgm().filter(|_| menu.settings.0[1]); // Menu Music; Match Music is the match's `--music`
     if want == *on {
         return;
     }
@@ -2859,23 +2887,27 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, true, false, false, true], Graphics::LOW, Volumes::default());
+        let s = Settings([true, false, false, true], Graphics::LOW, Volumes::default(), 3);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, true, false, true], d, Volumes::default()));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true], d, Volumes::default(), 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, true, false, true], d, Volumes::default()));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true], d, Volumes::default()));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true], d, Volumes::default(), 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d, Volumes::default(), 0));
+        // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
+        assert_eq!(Settings::parse("widescreen = on\n").3, 0);
+        assert_eq!(Settings::parse("widescreen = off\n").3, 1);
+        assert_eq!(Settings::parse("widescreen = off\naspect = 21:9\n").3, 4);
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, true, false, false, true], d, Volumes::default()));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true], d, Volumes::default(), 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, true, false, true], d, Volumes::default()).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, true, false, true, true], d, Volumes::default()).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true], d, Volumes::default(), 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true], d, Volumes::default(), 0).flags().contains(&"--music".to_string()));
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, false, true, false], d, Volumes::default()).flags()[..3], ["--4x3", "--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false], d, Volumes::default(), 1).flags()[..2], ["--no-upscale", "--music"]);
         // the preset row steps through the presets; changing any other row makes it Custom
         let mut s = Settings::default();
         s.graphics_step(0, 1);
@@ -3241,17 +3273,16 @@ mod tests {
     /// off keeps 4:3's columns.
     #[test]
     fn custom_grid_fits_the_window() {
-        let g = Grid::fit(4.0 / 3.0, true);
+        let g = Grid::fit(4.0 / 3.0);
         assert_eq!((g.cols, g.rows, g.x), (4, 4, 200.0));
         assert_eq!(g.cell(5), (300.0, 190.0));
-        let fit = |a: f32, wide| (Grid::fit(a, wide).cols, Grid::fit(a, wide).rows);
-        assert_eq!(fit(16.0 / 9.0, true), (7, 4));
-        assert_eq!(fit(21.0 / 9.0, true), (11, 4));
-        assert_eq!(fit(21.0 / 9.0, false), (4, 4));
-        assert_eq!(fit(9.0 / 16.0, true), (4, 4));
+        let fit = |a: f32| (Grid::fit(a).cols, Grid::fit(a).rows);
+        assert_eq!(fit(16.0 / 9.0), (7, 4));
+        assert_eq!(fit(21.0 / 9.0), (11, 4));
+        assert_eq!(fit(9.0 / 16.0), (4, 4));
         // the frame stays clear of the cards and over the page count
         for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
-            let g = Grid::fit(a, true);
+            let g = Grid::fit(a);
             let extra = (640.0 / super::super::widescreen::share(a) - 640.0) / 2.0;
             assert!(g.x >= 200.0 - extra - 1e-3 && g.x + Grid::width(g.cols) <= 467.0 + extra + 1e-3, "{a}");
             assert!(ICON_BOX + g.rows as f32 * ICON_PITCH + 10.0 <= 384.0 + 1e-3, "{a}");

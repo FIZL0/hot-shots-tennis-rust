@@ -42,6 +42,8 @@ struct Targets {
     scene: Handle<Image>,
     hud: Handle<Image>,
     composite: Handle<Composite>,
+    /// The camera putting the composite on the window: only in the view (B117's fixed aspect ratios), black around it.
+    out: Entity,
     /// The persistence's two images, cameras and mixes: frame parity `i` draws `mixes[i]` into `last[i]` with
     /// cameras[i], from the scene and `last[1 - i]`.
     last: [Handle<Image>; 2],
@@ -102,7 +104,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
     ));
     let composite = materials.add(Composite { scene: scene.clone(), hud: hud.clone() });
     let out = commands
-        .spawn((Camera2d, Camera { order: 51, ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
+        .spawn((Camera2d, Camera { order: 51, output_mode: bevy::camera::CameraOutputMode::Write { blend_state: None, clear_color: ClearColorConfig::Custom(Color::BLACK) }, ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
         .id();
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
@@ -131,7 +133,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         ));
         cam
     });
-    commands.insert_resource(Targets { scene, hud, composite, last, cameras, mixes });
+    commands.insert_resource(Targets { scene, hud, composite, out, last, cameras, mixes });
 }
 
 /// A 3D camera drawing into the scene image.
@@ -189,10 +191,21 @@ fn follow_window(
     mut materials: ResMut<Assets<Composite>>,
     mut mixes: ResMut<Assets<Mix>>,
     mut targets: Query<&mut RenderTarget>,
+    mut cams: Query<&mut Camera>,
     mut stale: Local<u8>,
 ) {
     let Ok(w) = window.single() else { return };
-    let (pw, ph) = (w.physical_width() as f32, w.physical_height() as f32);
+    // B117: the images are the view's size, the composite drawn only there
+    let v = crate::play::widescreen::view(Vec2::new(w.physical_width() as f32, w.physical_height() as f32));
+    let (pos, vs) = (v.min.round().as_uvec2(), v.size().round().as_uvec2().max(UVec2::ONE));
+    let viewport = (vs != w.physical_size()).then(|| bevy::camera::Viewport { physical_position: pos, physical_size: vs, ..default() });
+    let key = |v: &Option<bevy::camera::Viewport>| v.as_ref().map(|v| (v.physical_position, v.physical_size));
+    if let Ok(mut cam) = cams.get_mut(t.out)
+        && key(&cam.viewport) != key(&viewport)
+    {
+        cam.viewport = viewport;
+    }
+    let (pw, ph) = (vs.x as f32, vs.y as f32);
     let size = |x: f32, y: f32| Extent3d { width: (x.round() as u32).max(1), height: (y.round() as u32).max(1), depth_or_array_layers: 1 };
     let ((scene, ks), (hud, kh)) = if g.original {
         let k = 448.0 / ph.max(1.0);
@@ -314,7 +327,7 @@ fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<P
     if !g.original {
         return;
     }
-    let aspect = w.width() / w.height().max(1.0);
+    let aspect = crate::play::widescreen::aspect(w);
     for (mut cam, proj) in &mut q {
         if let Projection::Perspective(p) = proj {
             let clip = PerspectiveProjection { aspect_ratio: aspect, ..p.clone() }.get_clip_from_view();

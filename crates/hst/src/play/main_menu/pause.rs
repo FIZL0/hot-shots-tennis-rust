@@ -183,6 +183,7 @@ fn screen_point(win: &Window, p: Vec2) -> Vec2 {
     if let Some(css) = crate::web::page_size() {
         size = css;
     }
+    let (size, p) = widescreen::in_view(size, p);
     let (share, v) = (widescreen::share(size.x / size.y), widescreen::vshare(size.x / size.y));
     let x = (p.x / size.x * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
     Vec2::new(x, (p.y / size.y * 100.0 - 50.0 * (1.0 - v)) * 4.48 / v)
@@ -218,8 +219,8 @@ fn after(
         return;
     }
     ps.fresh = false;
-    let [wide, _, _, match_music, _] = menu.settings.0;
-    widescreen::WIDE.store(wide, std::sync::atomic::Ordering::Relaxed);
+    let [_, _, match_music, _] = menu.settings.0;
+    widescreen::ASPECT.store(menu.settings.3, std::sync::atomic::Ordering::Relaxed);
     if match_music != args.music
         && let (Some(game), Some(sound), Some(mut music)) = (game, sound, music)
     {
@@ -450,13 +451,13 @@ mod tests {
     fn back_returns_to_pause() {
         let mut m = Menu { screen: Screen::Settings, ..default() };
         let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
-        assert!(!m.settings.0[0] && fx.contains(&super::super::Effect::SaveSettings));
+        assert!(m.settings.3 == 1 && fx.contains(&super::super::Effect::SaveSettings));
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
     }
 
     /// B139: the overlay's systems run in an app with only what a match has (no main menu): open Settings, toggle
-    /// Menu Music (not Widescreen: `after` stores that in a global the parallel widescreen tests read), Back to the
+    /// Menu Music (not the Aspect Ratio: `after` stores that in a global), Back to the
     /// pause menu, no panic. `settings.txt` goes beside the ISO, so a linked copy in a temp directory keeps the
     /// user's. Needs the ISO at the repository root, skipped without.
     #[test]
@@ -479,10 +480,10 @@ mod tests {
         app.update();
         app.world_mut().resource_mut::<PauseSettings>().open();
         app.update();
-        let was = app.world().resource::<Menu>().settings.0[2];
+        let was = app.world().resource::<Menu>().settings.0[1];
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(2, super::super::pointer::OK), true));
         app.update();
-        assert_eq!(app.world().resource::<Menu>().settings.0[2], !was, "Menu Music didn't change");
+        assert_eq!(app.world().resource::<Menu>().settings.0[1], !was, "Menu Music didn't change");
         assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));
         app.update();

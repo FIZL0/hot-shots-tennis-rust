@@ -364,7 +364,7 @@ fn show(intro: Option<Res<Intro>>, mut camera: Query<(&mut Transform, &mut Proje
     let v = intro.shot.rolled();
     let b = |p: [f32; 3]| Vec3::new(p[0], -p[1], -p[2]);
     *t = Transform::from_translation(b(v.eye)).looking_to(b(v.rot[2]), -b(v.rot[1]));
-    let aspect = window.single().map_or(4.0 / 3.0, |w| w.width() / w.height().max(1.0));
+    let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::aspect);
     if let Projection::Perspective(p) = &mut *proj {
         p.fov = 2.0 * (v.fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
     }
@@ -523,9 +523,6 @@ mod tests {
     /// too), "Skip" keeps its 16 px from the right edge.
     #[test]
     fn pinned_16_9() {
-        if !widescreen::WIDE.load(std::sync::atomic::Ordering::Relaxed) {
-            return;
-        }
         let q = plate([0, 2, 4], 40);
         let at = |q: &Quad| widescreen::place(q.2[0], q.2[2], 0.75, q.4);
         assert_eq!(at(&q[0]), (0.0, 100.0));
