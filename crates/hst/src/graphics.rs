@@ -152,7 +152,8 @@ fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>
     if !g.is_changed() && added.is_empty() {
         return;
     }
-    let m = Msaa::from_samples(g.msaa);
+    // Browser WebGPU only takes 1 or 4 samples (createTexture rejects 2), so 2x draws as 4x there.
+    let m = Msaa::from_samples(if cfg!(all(target_arch = "wasm32", feature = "webgpu")) && g.msaa == 2 { 4 } else { g.msaa });
     for mut c in &mut q {
         c.set_if_neq(m);
     }

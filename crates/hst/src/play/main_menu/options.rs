@@ -147,7 +147,7 @@ fn about(o: Opt) -> &'static str {
         MatchMusic => "Play each court's music during a match.",
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
-        Chat => "Show the online lobby's and match's text chat (Enter, or R2/L2 on a pad), or hide it.",
+        Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
         Vibration => "Buzz briefly on each press of the on-screen controls (where the phone can).",
     }

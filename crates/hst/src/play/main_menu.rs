@@ -566,6 +566,11 @@ enum Effect {
 }
 
 impl Menu {
+    /// B118: 1v1 on this phone, 1P picked and 2P (at the far end) picking: the select turns a half turn to face them.
+    pub(super) fn turned(&self) -> bool {
+        self.duo && self.screen == Screen::Chars && self.players[0].ready && !self.players[1].ready
+    }
+
     fn players(&self) -> usize {
         if self.doubles { 4 } else { 2 }
     }
@@ -1165,6 +1170,10 @@ impl Menu {
                     }
                     out.push(Sound(1));
                 }
+                if self.picking.is_none() {
+                    // opened from the lobby's settings row: back there
+                    self.venue_picked(&mut out);
+                }
             }
             Screen::Confirm if host == Some(dev) => {
                 rows(CONFIRM_ROWS, &mut self.sel, &mut out);
@@ -1465,6 +1474,19 @@ impl Text {
 struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>, Text);
 #[derive(Component)]
 struct Slot(usize);
+
+/// The menu's root: turned a half turn while [`Menu::turned`] (the previews are its children too).
+#[derive(Component)]
+struct Turned;
+
+fn turn(menu: Res<Menu>, mut root: Query<&mut UiTransform, With<Turned>>) {
+    let want = if menu.turned() { Rot2::PI } else { Rot2::IDENTITY };
+    for mut t in &mut root {
+        if t.rotation != want {
+            t.rotation = want;
+        }
+    }
+}
 // four human cards on the select take ~760 (B156); the confirm screen needs more than 700 (B141a)
 // B296: a full roster page (64 cells) with four players' cards takes ~2.5k
 const POOL: usize = 3200;
@@ -1722,7 +1744,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     commands.insert_resource(menu);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-    commands.spawn((full, GlobalZIndex(10))).with_children(|p| {
+    commands.spawn((full, GlobalZIndex(10), Turned)).with_children(|p| {
         for i in 0..POOL {
             p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
@@ -3304,7 +3326,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick));
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text, turn).chain(), bgm, cursor::tick));
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
@@ -3342,6 +3364,13 @@ mod tests {
         let ok = Press { ok: true, ..default() };
         m.step(Dev::Pad(far), ok);
         assert_eq!(m.seats[1], Some(Dev::Pad(far)));
+        // 1P ready: the select turns to face 2P, whose pad the taps now are
+        assert!(!m.turned());
+        m.step(Dev::Pad(near), ok);
+        assert!(m.players[0].ready && m.turned());
+        assert_eq!(pointer::device(&m, &[near, far]), Dev::Pad(far));
+        m.step(Dev::Pad(far), ok);
+        assert!(!m.turned());
         m.screen = Screen::Main;
         m.duo_sync(&[near, far]);
         assert!(!m.duo);

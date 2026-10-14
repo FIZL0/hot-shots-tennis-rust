@@ -234,6 +234,9 @@ pub struct Room {
     pub wait: u32,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stand_in: bool,
+    /// A vanilla lobby: the host allows no mods, so every seat plays a disc character (mod picks are refused).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vanilla: bool,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -315,6 +318,29 @@ impl Room {
         }
         self.picking.remove(peer);
         self.ready.remove(peer);
+        self.ver += 1;
+        true
+    }
+
+    /// Picks this lobby takes: playable mods (`picks_ok`), and none in a vanilla lobby.
+    fn allowed(&self, p: &[Pick]) -> Result<(), String> {
+        match self.vanilla && p.iter().any(|p| p.r#mod.is_some()) {
+            true => Err("this lobby plays without mods".into()),
+            false => picks_ok(p),
+        }
+    }
+
+    /// Mods allowed or not (vanilla); going vanilla puts each seated mod's donor in its place. False: no change.
+    fn set_vanilla(&mut self, vanilla: bool) -> bool {
+        if vanilla == self.vanilla {
+            return false;
+        }
+        self.vanilla = vanilla;
+        for s in self.seats.iter_mut().flatten() {
+            if let Some(w) = s.pick.r#mod.take() {
+                s.pick = Pick::disc(w.donor, 0);
+            }
+        }
         self.ver += 1;
         true
     }
@@ -701,6 +727,8 @@ pub enum Cmd {
     Doubles(bool),
     /// B213: the host's lobby private (unlisted) or public.
     Private(bool),
+    /// The host's lobby vanilla (no mods) or not.
+    Vanilla(bool),
     /// M20: a chat line to everyone else in the lobby or match.
     Chat(String),
 }
@@ -900,7 +928,7 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), St
 }
 
 // The browser has no UDP: no DHT and no mDNS, only the relays. A code (ticket) carries the host's relay, so joining by
-// code works; the lobby list doesn't (Find shows none, Quickplay hosts).
+// code works; Find and Quickplay see lobbies through the slot listings (`find_slots`), not the DHT board.
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 struct Dht;
@@ -1502,7 +1530,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                 }
                 Guest::Said(peer, Msg::Picks(p)) => {
-                    let ok = picks_ok(&p);
+                    let ok = room.allowed(&p);
                     // B275: a refused pick is a message to both, not a seat change (the guest stays)
                     if let Err(why) = &ok {
                         let name = room.names.get(&peer).cloned().unwrap_or_else(|| short(&peer).into());
@@ -1615,9 +1643,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                 }
-                Some(Cmd::Picks(p)) if picks_ok(&p).is_err() => cx.say(Event::Status(format!("Pick refused: {}", picks_ok(&p).unwrap_err()))),
-                Some(Cmd::Bot(_, Some(p))) if picks_ok(std::slice::from_ref(&p)).is_err() => {
-                    cx.say(Event::Status(format!("Pick refused: {}", picks_ok(std::slice::from_ref(&p)).unwrap_err())));
+                Some(Cmd::Picks(p)) if room.allowed(&p).is_err() => cx.say(Event::Status(format!("Pick refused: {}", room.allowed(&p).unwrap_err()))),
+                Some(Cmd::Bot(_, Some(p))) if room.allowed(std::slice::from_ref(&p)).is_err() => {
+                    cx.say(Event::Status(format!("Pick refused: {}", room.allowed(std::slice::from_ref(&p)).unwrap_err())));
                 }
                 Some(Cmd::Picks(p)) if starting.is_none() && room.repick("host", &p) => {
                     auto = true;
@@ -1643,6 +1671,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         cx.say(Event::Room(room.clone()));
                         dirty = true;
                     }
+                }
+                Some(Cmd::Vanilla(v)) if starting.is_none() && room.set_vanilla(v) => {
+                    ready.clear();
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
                 }
                 Some(Cmd::Private(p)) if starting.is_none() && p != room.private => {
                     room.private = p;
@@ -2512,6 +2546,23 @@ mod tests {
     }
 
     /// B195: a joiner's placeholder seats take its chosen picks (same count only), no longer picking or ready.
+    /// A vanilla lobby refuses mod picks, and going vanilla puts the seated mods' donors in.
+    #[test]
+    fn vanilla_lobby_has_no_mods() {
+        let w = crate::mods_online::Wire {
+            id: "x".into(), name: "X".into(), donor: 5, hand: 1.0, base: 5, overrides: vec![], ai_row: 5,
+            names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: 1, dir: None,
+        };
+        let modded = Pick { r#mod: Some(Box::new(w)), ..Pick::disc(5, 2) };
+        let mut r = room(false);
+        assert!(r.take("host", &[modded.clone()]));
+        assert!(r.allowed(std::slice::from_ref(&modded)).is_ok());
+        let v = r.ver;
+        assert!(r.set_vanilla(true) && !r.set_vanilla(true));
+        assert_eq!((r.seats[0].as_ref().unwrap().pick.clone(), r.ver), (Pick::disc(5, 0), v + 1));
+        assert!(r.allowed(&[modded]).is_err() && r.allowed(&[Pick::disc(1, 0)]).is_ok());
+    }
+
     #[test]
     fn repick_fills_held_seats() {
         let mut r = room(true);
