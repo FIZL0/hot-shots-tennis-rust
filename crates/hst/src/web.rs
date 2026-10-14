@@ -135,6 +135,15 @@ pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
     }
 }
 
+/// B260: tells the page whether a match is on (`hstMatch`): a hidden tab steps the game on a timer only outside one
+/// (`index.html`), so a match holds while hidden.
+pub fn in_match(on: bool) {
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ON.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
+        let _ = js_sys::Reflect::set(&js_sys::global(), &"hstMatch".into(), &on.into());
+    }
+}
+
 /// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).
 static PASTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 

@@ -145,6 +145,16 @@ if (window.GPUDevice) {
 }
 addEventListener('error', e => fail(e.error ?? e.message));
 addEventListener('unhandledrejection', e => fail(e.reason));
+// B260: a hidden tab gets no animation frames and the game's loop (Bevy on winit) only steps on them, so while the
+// tab is hidden and no match is on (`web.rs` sets hstMatch), a frame comes from a timer instead (the browser throttles
+// it to about one a second): store downloads and their queue, the lobby and its keep-alives go on. A match holds
+// while hidden (the others see "Waiting for …", `play/recover.rs`).
+{
+  const raf = requestAnimationFrame.bind(window), caf = cancelAnimationFrame.bind(window);
+  // timer ids negated, so they never clash with a real frame's
+  window.requestAnimationFrame = f => document.hidden && !window.hstMatch ? -setTimeout(() => f(performance.now()), 100) : raf(f);
+  window.cancelAnimationFrame = id => id < 0 ? clearTimeout(-id) : caf(id);
+}
 // web.rs: the game's first frames are on screen
 window.hstShown = () => { shown = true; clearTimeout(stuck); if (!boot.classList.contains('err')) boot.hidden = true; };
 </script>
