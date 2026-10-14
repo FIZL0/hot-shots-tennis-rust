@@ -14,15 +14,17 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use super::super::widescreen::{self, Anchor};
-use super::{Dev, Effect, Menu, Press, Screen, Who, GRID};
+use super::{Dev, Effect, Menu, Press, Screen};
 
 /// What a hit rect does.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Act {
     /// Row `i` of the screen's list: hovering selects it, a tap selects it and presses `k` (usually ✕).
     Row(usize, Press),
-    /// A character select face: the disc grid's cell, or the custom page's mod.
+    /// A character select face: the roster's `i`th cell under the filter (B296).
     Cell(usize),
+    /// B296: the character select roster's filter pill `i`.
+    Filter(usize),
     /// A court tile or umpire card in the confirm screen's picker: a tap hovers it, a tap on the hovered one keeps it.
     Pick(usize),
     /// A button: a tap is this press.
@@ -123,34 +125,20 @@ impl Menu {
             }
             Act::Cell(i) => {
                 let Some(p) = self.driven(dev) else { return out };
-                let me = self.players[p];
-                if me.ready {
+                self.focus = p;
+                if self.players[p].ready {
                     return out;
                 }
-                // B217: the Random card
-                if i == super::CHARS && !self.custom {
-                    if !me.random {
-                        self.players[p].random = true;
-                        out.push(Effect::Sound(0));
-                    }
-                    if tap {
-                        out.extend(self.step(dev, OK));
-                    }
-                    return out;
-                }
-                let (w, at) = if self.custom { (Who::Mod(i), me.pick) } else { (Who::Disc(GRID[i].0), me.cursor) };
-                if at != i || me.modded != self.custom || me.random {
+                let Some(&c) = self.roster().get(i) else { return out };
+                if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
-                    if self.next_free(p, w, 0, false).is_none() {
+                    if self.full(p, c) {
                         if tap {
                             out.push(Effect::Sound(1));
                         }
                         return out;
                     }
-                    let me = &mut self.players[p];
-                    if self.custom { me.pick = i } else { me.cursor = i }
-                    me.random = false;
-                    (me.modded, me.costume) = (self.custom, 0);
+                    self.put(p, c);
                     self.skip_taken();
                     out.push(Effect::Sound(0));
                 }
@@ -158,6 +146,13 @@ impl Menu {
                     out.extend(self.step(dev, OK));
                 }
             }
+            Act::Filter(f) if tap => {
+                if self.driven(dev).is_some() && f != self.filter {
+                    self.set_filter(f);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Filter(_) => {}
             Act::Pick(v) if tap => {
                 let court = self.sel == 1;
                 if v == if court { self.court } else { self.umpire as usize } {
@@ -326,7 +321,13 @@ pub(super) mod tests {
     use super::*;
 
     fn text() -> Text {
-        Text { msg: Vec::new(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() }
+        text_with_mods(0)
+    }
+
+    /// A stand-in for the disc's words with `n` mods' grades, every glyph 16 wide (so words cost their quads).
+    pub(in crate::play::main_menu) fn text_with_mods(n: usize) -> Text {
+        let glyphs = (' '..='~').chain("·…–—".chars()).map(|c| (c, (0.0, 0.0, 16.0))).collect();
+        Text { msg: Vec::new(), glyphs, grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: vec![(0, [3; 5]); n] }
     }
 
     /// The screen's hits as drawn, and what a press outside them does.
@@ -364,12 +365,13 @@ pub(super) mod tests {
         assert!(m.bots[1]);
         tap(&mut m, 320.0, 118.0); // 1P's card
         assert_eq!(m.screen, Screen::Chars);
-        // a face: 1P moves there and is ready; then the face for the computer's pick
-        let (_, x, y) = GRID[5];
-        tap(&mut m, x, y);
+        // a face (B296: roster cell 1 + its place in the disc grid, after the Random card): 1P moves there and is
+        // ready; then the face for the computer's pick
+        let [x, y, w, h] = m.grid.cell(6);
+        tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[0].ready && m.players[0].cursor == 5);
-        let (_, x, y) = GRID[9];
-        tap(&mut m, x + 20.0, y - 20.0);
+        let [x, y, ..] = m.grid.cell(10);
+        tap(&mut m, x + 4.0, y + 4.0);
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
         // the court picker: a tile hovers it, a tap off puts it back, the centre keeps it
@@ -414,18 +416,19 @@ pub(super) mod tests {
         assert_eq!(c.rebinding, Some(2));
     }
 
-    /// Hit rects follow their quads' anchors: on 16:9 the 2P card (x 480..624, Sides) is pinned 16 px off the window's
-    /// right edge, the grid (Centre) stays on the middle 4:3.
+    /// Hit rects follow their quads: on 16:9 the select (B296) reaches past the middle 4:3 to the window's sides,
+    /// its Random card left of it.
     #[test]
     fn wide_window_hits() {
-        let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let h = hits(&m).0;
-        let at = |x: f32, y: f32| hit_at(&h, Vec2::new(x, y / 448.0), 16.0 / 9.0, SLOP);
-        let right = 1.0 - 16.0 / 640.0 * 0.75;
-        assert_eq!(at(right - 0.01, 150.0), Some(press(|k| k.ok = true)));
-        assert_eq!(at(right + 0.01, 150.0), None);
-        let (_, x, y) = GRID[0];
-        assert_eq!(at(0.5 + (x - 320.0) / 640.0 * 0.75, y), Some(Act::Cell(0)));
+        let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, SLOP);
+        for k in [0, 10] {
+            let [x, y, w, hh] = m.grid.cell(k);
+            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(k)));
+        }
+        assert!(m.grid.cell(0)[0] + m.grid.cell(0)[2] < 0.0, "left of the 4:3 screen");
+        assert_eq!(at(-200.0, 300.0), None, "off the window");
     }
 
     /// Popups: a tap off the mods' Reload / Later popup is Later; the lobby's topics close on Cancel.

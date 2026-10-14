@@ -416,6 +416,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B252** Emoting before the serve (B231): hide the ball in the server's hand until the emote ends, then bring it back for the toss — crates/hst/src/play/emote.rs, play.rs (serving && p.emote, ball draw) — User 2026-10-13: the ball should not disappear for the original (disc) characters
 - [x] **B251** Tall windows (aspect < 4:3) stretch the custom characters roster to show more columns instead of letterboxing it at the 4:3 width (B232); wide windows already do (B190) — crates/hst/src/play/main_menu.rs Grid::fit, play/widescreen.rs
 - [x] **B253** Ball-hit effect stretches into place oddly when it appears (user 2026-10-13): compare its first frames (scale/stretch, position, timing) with the original via tools/screenshot.sh vs --shot at the same contact and match by eye — crates/hst/src/effects.rs (hit_fx.rs is its test)
+- [x] **B296** Character select redesign (user 2026-10-14, mockups/CharSelect.dc.html): seat cards as one strip across the top (teams with VS), disc and custom characters in one roster grid with filter pills (All / Hot Shots Tennis / Mods / from game), a detail panel for the hovered character (3D figure, hand, play style, △ numbers, costume); keeps every current rule (B66 costume locks, Random, COM picks, B238 open seats); any aspect ratio → play/main_menu.rs (Screen::Chars, Grid) · play/main_menu/previews.rs — j: 2026-10-14-menu-redesign
 
 
 ### Shots

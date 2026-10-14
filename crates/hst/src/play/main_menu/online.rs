@@ -175,7 +175,7 @@ impl Menu {
             self.players[i] = super::Player { cursor: super::GRID.iter().position(|g| g.0 == p.char).unwrap_or(0), costume: p.costume, ..default() };
         }
         self.players[i].ready = false;
-        self.custom = self.players[i].modded;
+        self.filter = 0;
         self.net.edit = Some(i);
         self.net.status.clear();
         self.go(Screen::Chars, out);
