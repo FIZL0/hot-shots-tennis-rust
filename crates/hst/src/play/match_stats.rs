@@ -628,7 +628,7 @@ fn step(
     *stick = x;
     let play = |key: u8| {
         if let (Some(s), Some(b)) = (&sound, sounds.as_deref().and_then(|a| a.1.as_ref())) {
-            s.play_centre(b, hst_sim::sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
+            s.play_menu(b, key);
         }
     };
     for s in &mut pads.slots {

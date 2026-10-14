@@ -541,7 +541,7 @@ fn step(
     let down = keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) || gamepads.iter().filter(|g| super::controls::readable(g)).any(|g| stick(g) < -0.5);
     let play = |key: usize| {
         if let (Some(s), Some(Art(_, Some(b)))) = (&sound, art.as_deref()) {
-            s.play_centre(b, sound::Play { slot: 9, program: 0, key: key as u8, volume: 0x80, speed: 1.0 });
+            s.play_menu(b, key as u8);
         }
     };
     let timed = !*auto
