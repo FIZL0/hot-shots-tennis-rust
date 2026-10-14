@@ -290,7 +290,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin));
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
-        app.add_systems(Last, log_fps);
+        app.add_systems(Last, (log_fps, log_assets));
     }
     if std::env::var_os("HST_KEYS").is_some() {
         app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
@@ -1199,6 +1199,32 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
             acc.3 = cpu;
         }
         *acc = (0, 0.0, 0.0, acc.3);
+    }
+}
+
+/// `HST_FPS=1` too (B276): every 5 s, how many images (and their bytes), meshes, materials and entities there are,
+/// to see a leak grow over a match.
+fn log_assets(w: &World, mut next: Local<f32>) {
+    let now = w.resource::<Time<Real>>().elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let images = w.get_resource::<Assets<Image>>();
+    let bytes: usize = images.iter().flat_map(|a| a.iter()).map(|(_, i)| i.data.as_ref().map_or(0, Vec::len)).sum();
+    let n = |k: Option<usize>| k.unwrap_or(0);
+    eprintln!(
+        "assets at {now:.0} s: {} images ({} kB on CPU), {} meshes, {} std materials, {} fx materials, {} entities",
+        n(images.map(|a| a.len())),
+        bytes / 1024,
+        n(w.get_resource::<Assets<Mesh>>().map(|a| a.len())),
+        n(w.get_resource::<Assets<StandardMaterial>>().map(|a| a.len())),
+        n(w.get_resource::<Assets<effects::Fx>>().map(|a| a.len())),
+        w.entities().len(),
+    );
+    // the GPU's own allocations (Vulkan/DX12)
+    if let Some(r) = w.get_resource::<bevy::render::renderer::RenderDevice>().and_then(|d| d.wgpu_device().generate_allocator_report()) {
+        eprintln!("gpu at {now:.0} s: {} kB in {} allocations, {} kB reserved", r.total_allocated_bytes / 1024, r.allocations.len(), r.total_reserved_bytes / 1024);
     }
 }
 
