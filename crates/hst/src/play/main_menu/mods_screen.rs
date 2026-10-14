@@ -557,7 +557,7 @@ impl Menu {
         use Effect::Sound;
         if k.back || (k.ok && s == n - 1) {
             self.screen = Screen::Main;
-            self.sel = 3;
+            self.sel = self.main_at(super::home::Row::Mods);
             // B205: ask once per change; Later leaves the note on the Mods row
             if std::mem::take(&mut self.add.fresh) {
                 self.add.ask = Some(0);
@@ -666,19 +666,60 @@ impl Menu {
     }
 }
 
+/// B205: mods changed since the start (the main menu's note on its Mods row) and the popup isn't up.
+pub(super) fn reload_due(m: &Menu) -> bool {
+    m.add.changed && m.add.ask.is_none()
+}
+
+/// The store's mod count, once listed.
+pub(super) fn store_len(m: &Menu) -> Option<usize> {
+    m.add.store.as_ref().map(Vec::len)
+}
+
+impl Menu {
+    /// B297: reads the store's listing (cached an hour, `modstore::list`) for the main menu's New in the store
+    /// column, once.
+    pub(super) fn want_store(&mut self) {
+        if self.add.store.is_none() && !self.add.busy {
+            self.add.busy = true;
+            modstore::list(false);
+        }
+    }
+}
+
+/// B297: the main menu's New in the store column in `[x, y, w, h]` (a wide window): the store's mods not installed
+/// here, newest uploads (open pull requests) first, each a chip in its play style's colour with its name and the
+/// game it's from.
+pub(super) fn news(d: &mut Draw, m: &Menu, [x, y, w, h]: [f32; 4]) {
+    d.box3([x, y, w, h], 16.0, [Some(INK), Some(WHITE), Some([128.0; 3])], 118.0);
+    let muted = [45.0, 40.0, 52.0];
+    d.text("NEW IN THE STORE", x + 12.0, y + 10.0, 12.0, muted);
+    let Some(store) = &m.add.store else {
+        d.text(if m.add.busy { "Reading the store..." } else { "Store not read yet." }, x + 12.0, y + 32.0, 14.0, muted);
+        return;
+    };
+    let fresh: Vec<&Entry> = store.iter().filter(|e| !e.verified).chain(store.iter().filter(|e| e.verified)).filter(|e| !m.add.have.contains_key(&e.key())).collect();
+    if fresh.is_empty() {
+        d.text("Nothing new.", x + 12.0, y + 32.0, 14.0, muted);
+    }
+    let rows = ((h - 40.0) / 46.0) as usize;
+    for (k, e) in fresh.iter().take(rows).enumerate() {
+        let ry = y + 30.0 + 46.0 * k as f32;
+        d.box3([x + 8.0, ry, w - 16.0, 40.0], 10.0, [None, None, Some([122.0, 118.0, 125.0])], 128.0);
+        let style = e.meta.style.unwrap_or(0).min(3) as usize;
+        d.box3([x + 12.0, ry + 4.0, 32.0, 32.0], 8.0, [Some(INK), None, Some(CARD_FILL[style])], 128.0);
+        let initial: String = e.meta.name.chars().take(1).collect();
+        d.centred(&initial.to_uppercase(), x + 28.0, ry + 9.0, 22.0, WHITE);
+        super::home::fit_text(d, &e.meta.name, x + 52.0, ry + 4.0, 16.0, w - 68.0, INK);
+        super::home::fit_text(d, &e.meta.source, x + 52.0, ry + 22.0, 12.0, w - 68.0, muted);
+    }
+}
+
 /// B205, on the main menu: the note beside the Mods row while mods changed since the start, and the popup over a
 /// dimmed menu in the pause dialog's style (`menu.rs`: rounded box, title, a pill per choice, the chosen one bright,
 /// the hand beside it).
 pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
-    let v = &m.add;
-    if v.changed && v.ask.is_none() {
-        // the Mods row: `layout`'s main rows from y 120, 44 apart, 240 wide from x 200
-        d.outlined(|d| d.text("Reload", 448.0, 120.0 + 44.0 * 3.0 + 9.0, 20.0, GOLD));
-        if m.sel == 3 {
-            d.said = "Mods changed: Reload on the Mods page brings them into the select.".into();
-        }
-    }
-    let Some(a) = v.ask else { return };
+    let Some(a) = m.add.ask else { return };
     use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
     // the menu's own hand goes; the popup has its own
     if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
@@ -1320,11 +1361,11 @@ mod tests {
         m.mods_step(Press { up: true, ..default() }, &mut out);
         assert_eq!(m.sel, m.add.rows() - 1);
         m.mods_step(ok(), &mut out);
-        assert_eq!((m.screen, m.sel), (Screen::Main, 3));
+        assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Mods)));
         // B205: back on the main menu the popup asks (Reload chosen) and takes the presses; Later closes it, the note stays
         assert_eq!(m.add.ask, Some(0));
         let out = m.step(super::super::Dev::Keys, Press { down: true, ..default() });
-        assert_eq!((m.add.ask, m.sel), (Some(1), 3));
+        assert_eq!((m.add.ask, m.sel), (Some(1), m.main_at(super::super::home::Row::Mods)));
         assert_eq!(out, [Effect::Sound(0)]);
         let out = m.step(super::super::Dev::Keys, ok());
         assert_eq!((m.add.ask, m.screen, m.add.changed), (None, Screen::Main, true));

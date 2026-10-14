@@ -273,7 +273,7 @@ impl Menu {
             let n = tabs.len();
             self.go(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
         } else if k.back {
-            self.sel = 2;
+            self.sel = self.main_at(super::home::Row::Settings);
             self.screen = Screen::Main;
             out.push(Effect::Sound(1));
         }
@@ -504,7 +504,7 @@ mod tests {
         m.step(Dev::Keys, press(|k| &mut k.prev));
         assert_eq!(m.screen, tabs_shown().last().unwrap().1);
         m.step(Dev::Keys, press(|k| &mut k.back));
-        assert_eq!((m.screen, m.sel), (Screen::Main, 2));
+        assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Settings)));
     }
 
     /// B294: at any aspect every page's rows sit in its list over the footnote, the side panel has room, and the

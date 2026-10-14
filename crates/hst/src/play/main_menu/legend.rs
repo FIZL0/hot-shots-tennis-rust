@@ -20,7 +20,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use super::super::controls::{self, Action, Bindings};
 use super::super::menu_art::{BOLD, fill_rgb, rounded, stroke_rgb, text_path, unpremultiply};
 use super::super::widescreen::{self, Anchor};
-use super::{CONFIRM_ROWS, Dev, MAIN, Menu, Screen, options};
+use super::{CONFIRM_ROWS, Dev, Menu, Screen, options};
 
 /// What a legend entry does with which button.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -138,7 +138,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let s = m.sel;
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
-        Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if MAIN.get(s) == Some(&"Quit") { "Quit" } else { "Choose" })]),
+        Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { "Quit" } else { "Choose" })]),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
             v.push((Act::UpDown, "Option"));
             if let Some(&o) = options::page(m.screen).get(s).filter(|o| !options::locked(**o)) {

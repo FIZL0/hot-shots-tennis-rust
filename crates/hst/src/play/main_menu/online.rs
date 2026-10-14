@@ -539,7 +539,7 @@ impl Menu {
                     self.go(Screen::Mode, out);
                 } else if (k.ok && self.sel == 6) || k.back {
                     self.net.go = None;
-                    self.sel = 1;
+                    self.sel = self.main_at(super::home::Row::Online);
                     self.screen = Screen::Main;
                     out.extend([Sound(1), Effect::Online(Fx::Off)]);
                 }
