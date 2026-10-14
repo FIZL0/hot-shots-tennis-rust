@@ -104,22 +104,44 @@ fn idle(g: &Game, i: usize) -> bool {
 }
 
 /// The reaction's voice line for the emote's motion (`sound::reaction_voice`, as a winner, never the losers' group
-/// groan), its key picked without the match's generators and without the key memory the real reactions keep.
+/// groan), from the singles keys whatever the player count (the character's bank has them all; doubles' reactions
+/// ask for one key only). B300: the key never repeats the player's last emote's — its own key memory, slot 2, which
+/// neither the shouts (0, 1) nor the reactions (3–5) use, so the real reactions pick as before. The memory is match
+/// state (snapshots carry it), so every peer picks alike; nothing draws from the match's generators.
 fn voice(g: &mut Game, i: usize, motion: usize) {
-    let Some((program, lo, hi, _)) = sound::reaction_voice(g.players.len() as u32, motion as i32, false, false, || 100) else {
-        return;
-    };
-    // ponytail: the key by the player's position bits, the same on every machine; an emote counter if it repeats
+    // ponytail: every emote has two keys, so avoiding the last one alternates them; the draw only matters past two
     let draw = g.players[i].pos[0].to_bits() ^ g.players[i].pos[2].to_bits();
-    if let Some(play) = g.voices[i].react(i, (program, lo, hi, None), || draw) {
+    if let Some(play) = line(&mut g.voices[i], i, motion, draw) {
         g.whooshes.push((0, i, play));
     }
 }
+
+/// Player `i`'s emote line for `motion` on its voice `v`, `draw` picking among the keys left.
+fn line(v: &mut sound::Voice, i: usize, motion: usize, draw: u32) -> Option<sound::Play> {
+    let (program, lo, hi, _) = sound::reaction_voice(2, motion as i32, false, false, || 100)?;
+    v.react(i, (program, lo, hi, Some(EMOTE_SLOT)), || draw)
+}
+
+/// The emotes' key-memory slot in `sound::Voice`.
+const EMOTE_SLOT: usize = 2;
 
 #[cfg(test)]
 mod tests {
     use super::super::tick_input::{IDLE, TickPads, decode};
     use super::*;
+
+    /// B300: repeated emotes of one direction play more than one line, and leave the reactions' key memory alone.
+    #[test]
+    fn emote_lines_vary() {
+        for m in MOTIONS {
+            let mut v = sound::Voice::default();
+            let keys: Vec<u8> = (0..4).map(|_| line(&mut v, 1, m, 7).unwrap().key).collect();
+            assert!(keys.windows(2).all(|w| w[0] != w[1]), "motion {m:#x}: {keys:?}");
+            let rv = sound::reaction_voice(2, m as i32, false, false, || 0).unwrap();
+            let mut fresh = sound::Voice::default();
+            assert_eq!(v.react(1, rv, || 3).map(|p| p.key), fresh.react(1, rv, || 3).map(|p| p.key), "motion {m:#x}");
+        }
+    }
 
     #[test]
     fn flicks() {
