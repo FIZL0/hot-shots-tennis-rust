@@ -286,6 +286,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins(shade::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
+    app.add_systems(PostUpdate, effects::morph_on_cpu);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin));
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
