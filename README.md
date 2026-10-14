@@ -9,6 +9,18 @@ frame by frame against the real game, with better rendering on top.
 
 Work in progress. `PLAN.md` holds the rules, `plan/TODO.md` the open tasks, `plan/DONE.md` the finished ones; `plan/REFERENCE.md` lists what works.
 
+## Screenshots
+
+Taken from the remaster running on a retail disc (the art comes from the disc; none of it is in this repository).
+
+| | |
+|---|---|
+| ![A rally on a grass court](docs/screenshots/rally-grass.jpg) | ![A rally on an autumn court](docs/screenshots/rally-autumn.jpg) |
+| ![Serving](docs/screenshots/serve.jpg) | ![Main menu](docs/screenshots/menu-main.jpg) |
+| ![Character selection with mod characters](docs/screenshots/menu-chars.jpg) | ![Court selection](docs/screenshots/menu-courts.jpg) |
+| ![Umpire selection](docs/screenshots/menu-umpires.jpg) | ![Online lobby](docs/screenshots/menu-lobby.jpg) |
+| ![Mod store](docs/screenshots/menu-browsemods.jpg) | |
+
 ## You must provide the game disc
 
 **This repository contains no game data**: no models, textures, animations, sounds, music or program code from the
