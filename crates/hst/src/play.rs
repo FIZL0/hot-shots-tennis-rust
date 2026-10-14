@@ -4233,8 +4233,10 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         let i = f.0;
         let p = &g.players[i];
         m.arm = p.arm;
-        // a whiffed serve's miss motion plays on through the fault's call
-        let serving = (g.phase == Phase::Serve || g.serving.whiffed) && g.score.server == i as i32
+        // a whiffed serve's miss motion plays on through the fault's call, until the players react (B270: a
+        // double fault's reaction takes the server too)
+        let serving = (g.phase == Phase::Serve || g.serving.whiffed && !g.post.as_ref().is_some_and(|p| p.reacted))
+            && g.score.server == i as i32
             || change_ends::server(&g) == Some(i);
         // an emote before the toss (B231) plays its own motion, then the stance comes back
         if serving && p.emote == 0 {
@@ -4259,7 +4261,13 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
                     let swing = motion::serve_swing(under, 0).0 as usize;
                     let miss = motion::whiff(swing as i32).unwrap_or(0x29) as usize;
                     let id = if m.id == miss || m.id == swing && m.clock.time > SWEET_FRAME as f32 { miss } else { swing };
-                    m.play(id, 1.0, false)
+                    // the miss motion run out (a double fault's call outlasts it), the stance until the reaction (B270)
+                    let out = g.data[i].motions.get(&miss).is_some_and(|c| m.id == miss && m.clock.time >= c.length);
+                    if m.id == 0 || out {
+                        m.play(0, 1.0, true)
+                    } else {
+                        m.play(id, 1.0, false)
+                    }
                 }
                 (Some(_), None) => m.play(motion::serve_toss(under) as usize, 1.0, false),
             }
