@@ -431,7 +431,7 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Costume => vec![Glyph::Shoulder("LB"), Glyph::Shoulder("RB")],
         Act::Chat if ps || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
         Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
-        Act::Hand => vec![Glyph::Small(if ps { "Create" } else { "View" })],
+        Act::Hand => vec![Glyph::Small(if ps { "Create" } else { "Select" })],
         Act::Start => vec![Glyph::Small(if ps { "Options" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
     }
@@ -751,6 +751,15 @@ mod tests {
         idle.step(dev, Press::default());
         let fx = n.step(dev, press(f));
         format!("{n:?}") != format!("{idle:?}") || fx.iter().any(|e| *e != Effect::Sound(1))
+    }
+
+    /// The hand swap's pill names the pad's Select button: "Select" (not Xbox's "View"), "Create" on a PlayStation pad.
+    #[test]
+    fn hand_hint_says_select() {
+        let it = Item { act: Act::Hand, label: "Hand".into(), keys: vec![] };
+        for (style, want) in [(Style::Xbox, "Select"), (Style::Deck, "Select"), (Style::Ps, "Create")] {
+            assert_eq!(glyphs(style, &it), vec![Glyph::Small(want)], "{style:?}");
+        }
     }
 
     /// Every screen's legend (each state reachable with the d-pad from a start, on that screen) lists exactly the

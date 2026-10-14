@@ -9,7 +9,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Next (user priorities, in order)
 
 - [ ] **B351** Phone defaults: phones run 15–20 fps partly because they start at shadows High. Detect a phone and default to shadows Low (or Off) at render scale 100%; at Low, only the players, ball, net, umpire chair and perhaps big props cast (about 20 casters, down from 182; coordinate with B343's small-prop cut). Mesh merging, crowd draws, sway and culling stay in B342–B345 (user 2026-10-14) → graphics.rs · shadow.rs · main.rs
-- [ ] **B349** Character select: the handedness-swap button hint says 'View'; it should say 'Select' (user 2026-10-14) → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B348** Character select: each player's panel repeats the same button hints along the bottom (user 2026-10-14, dislikes it); show one shared hint bar since every player does the same things → play/main_menu.rs · play/main_menu/legend.rs
 - [ ] **B347** New character select: △ doesn't open the character's stats (user 2026-10-14); wire it like the old select's stats panel → play/main_menu.rs · play.rs character_stats
 - [ ] **B346** Character select: the default cursor still starts on Ashley; and for a CPU seat the next choice still moves to the next character when it should stay on the same one (in a different costume, already implemented) (user 2026-10-14) → play/main_menu.rs · play/main_menu/previews.rs
