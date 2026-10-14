@@ -293,7 +293,7 @@ impl Menu {
 }
 
 /// Words' purple-grey (the mockup's #7a4a5c): footnotes and headings.
-const MUTED: [f32; 3] = [61.0, 37.0, 46.0];
+pub(super) const MUTED: [f32; 3] = [61.0, 37.0, 46.0];
 
 /// B294: the Settings pages' list (of `n` rows) and side panel on the view `g` fits (the side panel under the list in a portrait
 /// window), from under the tabs down to the legend strip.
@@ -318,16 +318,23 @@ pub(super) fn row(list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
 
 /// The tabs across the title band, right of the title's tab (shrunk to fit a narrow window); a tap opens one.
 fn tabs(d: &mut Draw, m: &Menu) {
-    // right of the title's tab (`Draw::frame`), to the window's right edge (the strip spans the view less 12 a side)
-    let x0 = d.width(super::TITLES[1].0, 30.0) + 88.0;
-    let room = m.grid.strip[2] + 24.0 - x0 - 8.0;
     let tabs = tabs_shown();
-    let ws: Vec<f32> = tabs.iter().map(|(l, _)| d.width(l, 15.0) + 22.0).collect();
-    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (tabs.len() - 1) as f32)).min(1.0);
+    let words: Vec<&str> = tabs.iter().map(|t| t.0).collect();
+    tab_row(d, m, 1, &words, tabs.iter().position(|t| t.1 == m.screen));
+}
+
+/// Pills `words` across the title band, right of title `title`'s tab (shrunk to fit a narrow window), `on` dark; a
+/// tap on one is `Act::Tab(i)` (Settings, the Mods page).
+pub(super) fn tab_row(d: &mut Draw, m: &Menu, title: usize, words: &[&str], on: Option<usize>) {
+    // right of the title's tab (`Draw::frame`), to the window's right edge (the strip spans the view less 12 a side)
+    let x0 = d.width(super::TITLES[title].0, 30.0) + 88.0;
+    let room = m.grid.strip[2] + 24.0 - x0 - 8.0;
+    let ws: Vec<f32> = words.iter().map(|l| d.width(l, 15.0) + 22.0).collect();
+    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (words.len() - 1) as f32)).min(1.0);
     // in the centred screen's units from the view's top-left (`Span` would stretch a tab past 640 to the edge)
     let (mut x, top) = (x0 + m.grid.strip[0] - 12.0, m.grid.strip[1] - 46.0);
-    for (i, ((words, s), w)) in tabs.iter().zip(&ws).enumerate() {
-        let on = *s == m.screen;
+    for (i, (words, w)) in words.iter().zip(&ws).enumerate() {
+        let on = on == Some(i);
         let b = [x, top + 3.0, w * k, 24.0];
         d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
         d.label(words, x + w * k / 2.0, top + 7.5, 15.0, (w - 18.0) * k, if on { WHITE } else { BROWN });
@@ -337,7 +344,7 @@ fn tabs(d: &mut Draw, m: &Menu) {
 }
 
 /// `s` broken at spaces to lines `w` wide at `size` from (x, y), `gap` px apart; the y under its last line.
-fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, gap: f32, rgb: [f32; 3]) -> f32 {
+pub(super) fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, gap: f32, rgb: [f32; 3]) -> f32 {
     let mut lines: Vec<String> = Vec::new();
     for word in s.split_whitespace() {
         match lines.last_mut() {
@@ -363,7 +370,7 @@ fn chrome(d: &mut Draw, m: &Menu, n: usize) -> ([f32; 4], [f32; 4]) {
 }
 
 /// The chosen row's highlight and the hand beside it.
-fn chosen(d: &mut Draw, r: [f32; 4], hand_x: f32) {
+pub(super) fn chosen(d: &mut Draw, r: [f32; 4], hand_x: f32) {
     d.box3(r, 10.0, [Some(INK), None, Some(CELL_ON)], 128.0);
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 16.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
 }

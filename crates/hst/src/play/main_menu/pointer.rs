@@ -167,6 +167,11 @@ impl Menu {
             Act::Pick(_) => {}
             Act::Drop(p) if tap && self.drop_seat(p) => out.push(Effect::Sound(1)),
             Act::Drop(_) => {}
+            Act::Tab(i) if self.screen == Screen::Mods => {
+                if tap {
+                    self.mods_tab(i, &mut out);
+                }
+            }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
         }
