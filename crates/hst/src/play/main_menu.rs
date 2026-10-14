@@ -790,7 +790,7 @@ impl Menu {
     }
 
     /// B258: once every human is ready, the open seats' COM cards (not ready) start on their automatic pick, for a
-    /// human to keep (✕), change, or leave to the computer (○).
+    /// human to keep (✕) or change; ○ goes back to the last pick readied (B355).
     fn preset_coms(&mut self) {
         let n = self.players();
         if (0..n).all(|q| self.seats[q].is_none() || self.players[q].ready) {
@@ -1158,13 +1158,9 @@ impl Menu {
                         self.net.edit = None;
                         self.go(Screen::Lobby, &mut out);
                         out.push(Sound(1));
-                    } else if self.open(p) && !self.online() {
-                        // B258: a human leaves an open seat's COM card to the computer: its automatic pick
-                        self.players[p] = Player { ready: true, ..self.auto_com(p) };
-                        out.push(Sound(1));
-                        self.chars_done(&mut out);
                     } else if self.seats[p].is_none() {
-                        // player 1 driving a computer player: back to the last one readied
+                        // player 1 driving a computer player (one added or an open seat's COM card): back to the last
+                        // one readied, never a pick for the computer (B355)
                         if let Some(q) = (0..self.players()).rev().find(|&q| self.players[q].ready) {
                             self.unready(q);
                         }
@@ -3664,8 +3660,8 @@ mod tests {
     }
 
     /// B216 / B258 / B346: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on 1P's
-    /// character (its next free costume); ✕ keeps it, ○ leaves it to the computer (the first character nobody has),
-    /// or 1P picks another.
+    /// character (its next free costume); ✕ keeps it, or 1P picks another; ○ (B355) undoes 1P's pick instead of
+    /// picking for the computer.
     #[test]
     fn an_open_seat_is_a_com_card() {
         let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
@@ -3678,16 +3674,13 @@ mod tests {
         assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(1)));
         assert!(!m.players[1].ready);
         assert_eq!((m.players[1].char(), m.players[1].costume), (0, 1));
-        // 1P moves the COM's cursor, then backs out: the computer's own pick again
+        // 1P moves the COM's cursor, then backs out: 1P's own pick is undone, the COM's stays open (B355)
         m.step(Dev::Keys, press(|p| &mut p.right));
         assert_ne!(m.players[1].char(), 0);
         m.step(Dev::Keys, back);
-        assert_eq!(m.screen, Screen::Confirm);
-        assert!(m.players[1].ready);
-        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
-        // back to the select: everyone picks again; this time 1P picks the COM's character
-        m.step(Dev::Keys, back);
-        assert!(m.screen == Screen::Chars && !m.players[1].ready && m.open(1));
+        assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(0)));
+        assert!(!m.players[0].ready && !m.players[1].ready && m.open(1));
+        // 1P readies again; this time 1P picks the COM's character
         m.step(Dev::Keys, ok);
         m.step(Dev::Keys, press(|p| &mut p.right));
         let c = m.players[1].char();
@@ -3703,11 +3696,28 @@ mod tests {
         assert_eq!((m.driven(Dev::Keys), m.driven(pad)), (Some(2), Some(2)));
         m.step(pad, ok);
         assert_eq!(m.driven(Dev::Keys), Some(3));
+        // ○ on 4P's card: back to 3P's, not a pick for the computer (B355)
         m.step(Dev::Keys, back);
-        assert_eq!(m.screen, Screen::Confirm);
-        let chars: Vec<usize> = m.players.iter().map(|p| p.char()).collect();
-        // 3P carried 2P's character on, 4P left to the computer: one nobody has
-        assert!(chars[2] == chars[1] && !chars[..3].contains(&chars[3]), "{chars:?}");
+        assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(2)));
+        assert!(!m.players[2].ready && !m.players[3].ready);
+    }
+
+    /// B355: on a phone (touch only, the keyboard's device) the title tab's Back after 1P's pick undoes it, never
+    /// readies the computer's card; a second one leaves the select.
+    #[test]
+    fn touch_back_after_1p_picks_undoes_it() {
+        let mut m = Menu::default();
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert!(m.players[0].ready && m.driven(Dev::Keys) == Some(1));
+        let tab = pointer::press(|k| k.back = true);
+        assert!(pointer::tests::hits(&m).0.iter().any(|h| h.act == tab), "the title tab is drawn");
+        m.point(Dev::Keys, tab, true);
+        assert_eq!(m.screen, Screen::Chars);
+        assert!(!m.players[0].ready && !m.players[1].ready);
+        m.point(Dev::Keys, tab, true);
+        assert_eq!(m.screen, Screen::Main);
     }
 
     #[test]

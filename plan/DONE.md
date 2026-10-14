@@ -479,6 +479,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B347** New character select: △ doesn't open the character's stats (user 2026-10-14); wire it like the old select's stats panel → play/main_menu.rs · play.rs character_stats
 - [x] **B338** Mods-change Reload prompt (B205's Reload / Later on the main menu): Reload did nothing on mobile (user 2026-10-14, after store installs); check web::reload / window.location.reload on iOS Safari and Android Chrome — crates/hst/src/play/main_menu/mods_screen.rs reload, crates/hst/src/web.rs, web/index.html — Reload worked on the next try (user 2026-10-14): intermittent, maybe only right after an install's OPFS save
 - [x] **B337** Mods Browse: mouse/touch way to fold and unfold an uploader (a tap on the heading is Download all today; ← / → only on keys and pads, B335) — e.g. a fold toggle on the heading beside its Download all chip
+- [x] **B355** Local menu back button picks CPU player: in the local menu, when P1 has selected their player and presses ○ (circle) to go back, it selects the CPU player instead of going back to the previous step; seen on mobile (touch); ○ should undo P1's selection / return to the previous screen, not confirm a pick for the CPU (user 2026-10-14) → play/main_menu.rs · main_menu/cursor.rs · main_menu/pointer.rs
 
 
 ### Shots
