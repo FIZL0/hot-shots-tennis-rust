@@ -1632,7 +1632,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         if screen.starts_with("mods") && menu.screen == Screen::Chars {
             menu.set_filter(2);
         }
-        if matches!(menu.screen, Screen::Lobby | Screen::Lobbies | Screen::Code) || screen == "chars-online" {
+        if matches!(menu.screen, Screen::Online | Screen::Lobby | Screen::Lobbies | Screen::Code) || screen == "chars-online" {
             online::sample(&mut menu);
         }
     }
@@ -1669,7 +1669,7 @@ struct Draw<'a> {
 
 const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
-const TITLES: [(&str, [f32; 3]); 8] = [
+const TITLES: [(&str, [f32; 3]); 9] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
     ("Settings", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
@@ -1678,6 +1678,7 @@ const TITLES: [(&str, [f32; 3]); 8] = [
     ("Mods", [110.0, 65.0, 75.0]),
     ("Lobby", [55.0, 80.0, 42.0]),
     ("Select Court", [55.0, 80.0, 42.0]),
+    ("Online", [32.0, 67.0, 98.0]),
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];

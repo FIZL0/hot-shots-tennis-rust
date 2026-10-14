@@ -95,16 +95,22 @@ const KEYS: usize = SYMBOLS.len();
 const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
 const ROWS: [&str; 7] = ["Quickplay", "Host", "Find", "Join by Code", "Name", "Relay", "Back"];
-/// B214: the Online screen's pills as the confirm screen's grid: Quickplay wide on top, then two columns.
-const ROW_RECTS: [[f32; 4]; 7] = [
-    [170.0, 84.0, 300.0, 38.0],
-    [100.0, 140.0, 210.0, 38.0],
-    [330.0, 140.0, 210.0, 38.0],
-    [100.0, 184.0, 210.0, 38.0],
-    [330.0, 184.0, 210.0, 38.0],
-    [100.0, 228.0, 210.0, 38.0],
-    [330.0, 228.0, 210.0, 38.0],
-];
+/// The Online screen as the home screen (`home::columns`): Quickplay, Host, Find and Join by Code as its list's
+/// pills, Name and Relay small under them; the preview card right of them (no store column: the card centred).
+fn online_cols(extra: f32) -> (f32, f32, f32) {
+    let (x, px, pw, store) = super::home::columns(extra);
+    let shift = if store.is_some() { (16.0 + 170.0) / 2.0 } else { 0.0 };
+    (x + shift, px + shift, pw)
+}
+
+/// Where `ROWS` are drawn (Back has none: the title tab and ○ are Back).
+fn row_rects(extra: f32) -> Vec<[f32; 4]> {
+    let (x, ..) = online_cols(extra);
+    let mut v: Vec<[f32; 4]> = (0..4).map(|i| [x, 50.0 + 46.0 * i as f32, 200.0, 38.0]).collect();
+    v.extend((0..2).map(|i| [x, 254.0 + 30.0 * i as f32, 200.0, 26.0]));
+    v
+}
+
 /// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby. B214:
 /// no Vote button (B226 removes lobby voting).
 /// B213: "Public" is the host's Public/Private switch (labelled with what the lobby is).
@@ -257,7 +263,7 @@ impl Menu {
     /// M14: the chosen lobby item is a computer player's seat (←→ and L1 / R1 change its pick).
     /// M14: on Online or the lobby, whether ↑↓ and ←→ reach another pill from the chosen one.
     pub(super) fn pill_axes(&self) -> (bool, bool) {
-        let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { ROW_RECTS.to_vec() };
+        let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { row_rects(self.grid.extra) };
         let to = |f: fn(&mut Press) -> &mut bool| {
             let mut k = Press::default();
             *f(&mut k) = true;
@@ -511,7 +517,7 @@ impl Menu {
         };
         match self.screen {
             Screen::Online => {
-                let to = pill_step(&ROW_RECTS, self.sel, k);
+                let to = pill_step(&row_rects(self.grid.extra), self.sel.min(5), k);
                 if to != self.sel {
                     self.sel = to;
                     out.push(Sound(0));
@@ -519,6 +525,7 @@ impl Menu {
                 let cfg = self.net.cfg.get_or_insert_with(Online::default);
                 if self.sel == 5 && k.ok {
                     cfg.next_relay();
+                    (self.net.list, self.net.finding) = (vec![], 0);
                     out.extend([Sound(0), Effect::Online(Fx::SaveCfg), Effect::Online(Fx::Off)]);
                 } else if k.ok && (self.sel == 3 || self.sel == 4) {
                     self.net.naming = self.sel == 4;
@@ -782,8 +789,12 @@ impl Menu {
     fn heard(&mut self, e: Event) {
         let v = &mut self.net;
         match e {
+            // the Online screen's background search (`Fx::Load`): its card says how it goes
+            Event::Status(_) if self.screen == Screen::Online => {}
             Event::Status(s) => v.status = s,
             // the lobby's gone (refused, taken out, the host left, or it couldn't open): only Leave is left
+            // the Online screen's own search failing: its card says none found
+            Event::Failed(_) if self.screen == Screen::Online && v.finding > 0 => v.finding = 0,
             Event::Failed(s) => {
                 v.status = s;
                 v.fail = Some(match v.go {
@@ -809,11 +820,14 @@ impl Menu {
             Event::Short(c) => v.short = c,
             Event::Found(l) => {
                 v.finding = v.finding.saturating_sub(1);
-                v.status = match l.len() {
+                // the Online screen's card shows them (the lobby count on its chip)
+                if self.screen != Screen::Online {
+                    v.status = match l.len() {
                     0 if v.finding > 0 => "None found yet: still looking...".into(),
                     0 => "No open lobbies found: Refresh to look again, or Host one from Online.".into(),
-                    n => format!("{n} open lobb{}.", if n == 1 { "y" } else { "ies" }),
-                };
+                        n => format!("{n} open lobb{}.", if n == 1 { "y" } else { "ies" }),
+                    };
+                }
                 v.list = l;
             }
             Event::Room(r) => {
@@ -920,31 +934,7 @@ fn court_name(text: &super::Text, c: usize) -> String {
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let text = d.text;
     match m.screen {
-        Screen::Online => {
-            d.frame(0, 5);
-            let relay = relay_name(m.net.cfg.as_ref().unwrap_or(&Online::default()));
-            let labels: Vec<String> = ROWS.iter().map(|r| if *r == "Relay" { format!("Relay: {relay}") } else { r.to_string() }).collect();
-            for (i, (l, [x, y, w, _])) in labels.iter().zip(ROW_RECTS).enumerate() {
-                let on = i == m.sel;
-                d.pill(x, y, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
-                let k = ((w - 24.0) / d.width(l, 24.0)).min(1.0);
-                d.centred(l, x + w / 2.0, y + 7.0 + 12.0 * (1.0 - k), 24.0 * k, if on { WHITE } else { [100.0; 3] });
-            }
-            let [x, y, ..] = ROW_RECTS[m.sel.min(6)];
-            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + 3.0, 64.0, 32.0], WHITE, 128.0);
-            let info = match m.sel {
-                _ if !m.net.status.is_empty() => m.net.status.clone(),
-                1 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".into(),
-                2 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
-                0 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
-                3 => "Type the host's 4-character code, or paste their link or code.".into(),
-                4 => format!("Your name on your lobby seats (now {}).", m.net.cfg.as_ref().map_or("Player", |c| c.name.as_str())),
-                5 if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
-                5 => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
-                _ => "Back to the main menu.".into(),
-            };
-            d.info(&info);
-        }
+        Screen::Online => online_screen(d, m, hand_x),
         Screen::Lobbies => {
             d.frame(0, 5);
             // B195: every open lobby, singles and doubles together, a row each: host, kind, court, open seats
@@ -1244,6 +1234,136 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 }
 
 /// B236: dots in a ring, the bright one going round (once a second) with a fading tail, centred on (cx, cy).
+/// The Online screen (home style): the list left, the chosen row's card right with its picture (the open lobbies
+/// for Quickplay and Find), its words and three facts.
+fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
+    use super::INK;
+    const ON: [f32; 3] = [128.0, 108.0, 38.0];
+    const OFF: [f32; 3] = [56.0, 56.0, 67.0];
+    const PAPER: [f32; 3] = [128.0; 3];
+    const MUTED: [f32; 3] = [45.0, 40.0, 52.0];
+    const SMALL: [f32; 3] = [84.0, 96.0, 110.0];
+    let fit = super::home::fit_text;
+    d.frame(8, 5);
+    d.anchor = super::Anchor::Span;
+    d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
+    d.anchor = super::Anchor::Centre;
+    let cfg = m.net.cfg.clone().unwrap_or_default();
+    let relay = relay_name(&cfg);
+    let sel = m.sel.min(5);
+    let rects = row_rects(m.grid.extra);
+    for (i, &r) in rects.iter().enumerate() {
+        let on = i == sel;
+        let [x, y, w, h] = r;
+        if i < 4 {
+            d.pill_at(r, [INK, WHITE, if on { ON } else { OFF }], 128.0);
+            d.text(ROWS[i], x + 20.0, y + 7.0, 24.0, if on { INK } else { [100.0; 3] });
+            if on {
+                d.text(">", x + w - 28.0, y + 7.0, 24.0, INK);
+            }
+        } else {
+            d.pill_at(r, [INK, WHITE, if on { ON } else { SMALL }], 128.0);
+            let value = if i == 4 { cfg.name.clone() } else { relay.clone() };
+            d.text(ROWS[i], x + 12.0, y + 5.0, 15.0, INK);
+            let vw = d.width(&value, 15.0).min(w - 80.0);
+            fit(d, &value, x + w - 12.0 - vw, y + 5.0, 15.0, w - 80.0, INK);
+        }
+        d.hit(r, Act::Row(i, OK));
+        if on {
+            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + h / 2.0 - 16.0, 64.0, 32.0], WHITE, 128.0);
+        }
+    }
+    d.outlined(|d| d.text("YOU", rects[4][0] + 6.0, rects[4][1] - 17.0, 13.0, WHITE));
+
+    // the card
+    let (_, x, w) = online_cols(m.grid.extra);
+    // over the help line (`Draw::info`, from 404)
+    let (y, h, pic_h) = (50.0, 346.0, 160.0);
+    d.box3([x, y, w, h], 16.0, [Some(INK), Some(WHITE), Some(PAPER)], 118.0);
+    let pic = [x + 3.0, y + 3.0, w - 6.0, pic_h];
+    d.box3(pic, 13.0, [None, None, Some([92.0, 108.0, 122.0])], 128.0);
+    d.q(Tex::Solid, [0.0; 4], [x, y + 3.0 + pic_h, w, 2.5], INK, 128.0);
+    let lobbies = |d: &mut Draw| {
+        d.outlined(|d| d.text("OPEN LOBBIES NOW", x + 18.0, y + 12.0, 13.0, WHITE));
+        if m.net.list.is_empty() {
+            let line = if m.net.finding > 0 { "Looking for lobbies..." } else { "None open right now" };
+            d.outlined(|d| d.text(line, x + 18.0, y + 40.0, 18.0, WHITE));
+        }
+        for (k, l) in m.net.list.iter().take(3).enumerate() {
+            let r = [x + 16.0, y + 32.0 + 30.0 * k as f32, w - 32.0, 26.0];
+            d.box3(r, 9.0, [Some(INK), Some(PAPER), Some(PAPER)], 110.0);
+            let count = format!("{} / {}", l.taken, l.seats);
+            let cw = d.width(&count, 15.0);
+            fit(d, &l.name, r[0] + 10.0, r[1] + 5.0, 15.0, r[2] * 0.5 - 14.0, INK);
+            d.text(if l.doubles { "Doubles" } else { "Singles" }, r[0] + r[2] * 0.5, r[1] + 5.0, 15.0, MUTED);
+            d.text(&count, r[0] + r[2] - 10.0 - cw, r[1] + 5.0, 15.0, INK);
+        }
+    };
+    let big = |d: &mut Draw, s: &str| {
+        let k = ((w - 60.0) / d.width(s, 40.0)).min(1.0);
+        d.outlined(|d| d.centred(s, x + w / 2.0, y + 50.0, 40.0 * k, WHITE));
+    };
+    match sel {
+        0 | 2 => lobbies(d),
+        1 => {
+            // the courts the host can choose (`Confirmation_02`'s tiles, one row)
+            let (tw, th) = (92.0 * 0.8, 68.0 * 0.8);
+            let n = (((w - 20.0) / (tw + 8.0)) as usize).min(super::COURTS);
+            let x0 = x + (w - n as f32 * (tw + 8.0) + 8.0) / 2.0;
+            for k in 0..n {
+                let tile = if k < 7 { 2 * k } else { 2 * (k - 7) + 1 };
+                d.q(super::C02, [96.0 * (tile % 2) as f32, 72.0 * (tile / 2) as f32, 92.0, 68.0], [x0 + (tw + 8.0) * k as f32, y + 30.0, tw, th], WHITE, 128.0);
+            }
+        }
+        3 => big(d, "_  _  _  _"),
+        4 => big(d, &cfg.name),
+        _ => big(d, &relay),
+    }
+    d.outlined(|d| d.text(ROWS[sel], x + 18.0, y + pic_h - 34.0, 34.0, WHITE));
+    let words = match sel {
+        1 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".to_string(),
+        2 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
+        0 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
+        3 => "Type the host's 4-character code, or paste their link or code.".into(),
+        4 => format!("Your name on your lobby seats (now {}).", cfg.name),
+        _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (online.txt) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
+        _ => "Relay for when a direct connection fails: n0's public relays, your own (online.txt), or none.".into(),
+    };
+    para(d, &words, x + 18.0, y + pic_h + 16.0, w - 36.0, 17.0, 4, INK);
+    let open = match m.net.list.len() {
+        0 if m.net.finding > 0 => "Searching...".to_string(),
+        0 => "None open".into(),
+        n => format!("{n} open"),
+    };
+    let players = m.seats.iter().filter(|s| s.is_some()).count().max(1);
+    let facts = [("Lobbies", open), ("Your players", players.to_string()), ("Relay", relay.clone())];
+    let tw = (w - 36.0 - 20.0) / 3.0;
+    for (i, (k, v)) in facts.iter().enumerate() {
+        let (tx, ty) = (x + 18.0 + (tw + 10.0) * i as f32, y + h - 16.0 - 44.0);
+        d.box3([tx, ty, tw, 44.0], 10.0, [Some(INK), Some(PAPER), Some(PAPER)], 128.0);
+        fit(d, &k.to_uppercase(), tx + 10.0, ty + 6.0, 12.0, tw - 20.0, MUTED);
+        fit(d, v, tx + 10.0, ty + 21.0, 17.0, tw - 20.0, INK);
+    }
+    d.info(if m.net.status.is_empty() { &words } else { &m.net.status });
+}
+
+/// `s` word-wrapped to `w` at `size` from (x, y), at most `lines` lines (as the home card's).
+fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, lines: usize, rgb: [f32; 3]) {
+    let mut out: Vec<String> = Vec::new();
+    for word in s.split_whitespace() {
+        match out.last_mut() {
+            Some(l) if d.width(&format!("{l} {word}"), size) <= w => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => out.push(word.into()),
+        }
+    }
+    for (i, l) in out.iter().take(lines).enumerate() {
+        super::home::fit_text(d, l, x, y + size * 1.35 * i as f32, size, w, rgb);
+    }
+}
+
 fn spinner(d: &mut Draw, t: f32, cx: f32, cy: f32, r: f32) {
     let lead = (t * 8.0).floor() as i32;
     let dot = r * 0.32;
@@ -1515,6 +1635,7 @@ pub(super) fn sample(m: &mut Menu) {
     // B236: the loading, empty and failed states
     match menu.as_str() {
         "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
+        "online" => m.net.room = None,
         "lobby-hosting" | "lobby-joining" | "lobby-failed" => (m.net.room, m.net.short, m.net.go, m.net.pick_next) = (None, String::new(), Some(Go::Code), true),
         _ => {}
     }
@@ -1623,6 +1744,12 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         }
         Fx::Load => {
             menu.net.cfg.get_or_insert_with(|| Online::load(iso));
+            // the Online screen's card lists the open lobbies: look for them at once
+            if net.is_none() {
+                menu.net.list.clear();
+                menu.net.finding = crate::net::FINDS;
+                return apply(Fx::Net(Cmd::Find), menu, commands, net, clipboard, iso);
+            }
         }
         Fx::SaveCfg => {
             if let Some(cfg) = &menu.net.cfg {
@@ -2029,13 +2156,13 @@ mod tests {
                 assert_eq!(m.sel, *to, "step {n} on {:?}", m.screen);
             }
         };
-        // Quickplay; Host Find; Join by Code Name; Relay Back
+        // Quickplay, Host, Find, Join by Code, then Name and Relay: one column
         let mut m = Menu { screen: Screen::Online, sel: 0, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
-        walk(&mut m, &[(l, 0), (d, 1), (r, 2), (r, 2), (d, 4), (l, 3), (d, 5), (r, 6), (d, 6), (u, 4), (u, 2), (u, 0)]);
+        walk(&mut m, &[(l, 0), (d, 1), (r, 1), (d, 2), (d, 3), (d, 4), (d, 5), (d, 5), (u, 4), (u, 3), (u, 2), (u, 1), (u, 0), (u, 0)]);
         let relay = m.net.cfg.clone();
         m.sel = 5;
         m.step(dev, r);
-        assert_eq!((m.sel, &m.net.cfg), (6, &relay), "←→ move off Relay, they don't change it");
+        assert_eq!((m.sel, &m.net.cfg), (5, &relay), "←→ don't change Relay");
         // the host's lobby: seats 1–3 (items 0–2); Start Characters Court (3–5); Copy Link Public Leave (6–8); the title (9)
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
