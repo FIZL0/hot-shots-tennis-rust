@@ -447,6 +447,11 @@ impl Player {
     fn char(&self) -> usize {
         GRID[self.cursor].0
     }
+
+    /// B346: a seat entering the select: its cursor on the Random card.
+    fn fresh() -> Self {
+        Player { random: true, ..default() }
+    }
 }
 
 /// Who a player has on the select: a disc character or the custom roster's entry.
@@ -793,11 +798,12 @@ impl Menu {
         }
     }
 
-    /// B269: the computer player `dev` drives next (one 1P added) starts on the cell the last pick readied on, so ✕
-    /// over and over gives them all the same (e.g. all Random).
+    /// B269 / B346: the computer player `dev` drives next (one 1P added, or an open seat's COM card) starts on the
+    /// cell the last pick readied on, so ✕ over and over gives them all the same (e.g. all Random, or one character
+    /// in its next free costumes).
     fn carry_pick(&mut self, dev: Dev) {
         if let (Some(q), Some(c)) = (self.driven(dev), self.last)
-            && self.bots[q] && self.seats[q].is_none() && !self.players[q].ready
+            && self.seats[q].is_none() && !self.players[q].ready
         {
             self.put(q, c);
             self.skip_taken();
@@ -889,7 +895,7 @@ impl Menu {
         self.duo = false;
         self.seats = [Some(dev), None, None, None];
         self.bots = [false; 4];
-        self.players = [Player::default(); 4];
+        self.players = [Player::fresh(); 4];
         self.scroll = 0;
         self.go(Screen::Chars, out);
     }
@@ -908,7 +914,7 @@ impl Menu {
         self.doubles = !self.doubles;
         for (p, q) in from.into_iter().enumerate() {
             self.seats[p] = q.and_then(|q| seats[q]);
-            self.players[p] = Player { ready: false, ..q.map_or_else(Player::default, |q| players[q]) };
+            self.players[p] = Player { ready: false, ..q.map_or_else(Player::fresh, |q| players[q]) };
         }
         self.focus = 0;
     }
@@ -1001,7 +1007,7 @@ impl Menu {
                 if host == Some(dev) {
                     if k.ok {
                         for p in &mut self.players {
-                            *p = Player::default();
+                            *p = Player::fresh();
                         }
                         self.scroll = 0;
                         if self.online() {
@@ -1276,7 +1282,7 @@ impl Menu {
         self.doubles = false;
         self.seats = [Some(dev), Some(Dev::Open), None, None];
         self.bots = [false; 4];
-        self.players = [Player::default(); 4];
+        self.players = [Player::fresh(); 4];
         self.scroll = 0;
         self.go(Screen::Chars, out);
     }
@@ -3627,8 +3633,9 @@ mod tests {
         m.bots[1] = true;
     }
 
-    /// B216 / B258: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on the first character
-    /// nobody has (first costume); ✕ keeps it, ○ leaves it to the computer, or 1P picks another.
+    /// B216 / B258 / B346: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on 1P's
+    /// character (its next free costume); ✕ keeps it, ○ leaves it to the computer (the first character nobody has),
+    /// or 1P picks another.
     #[test]
     fn an_open_seat_is_a_com_card() {
         let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
@@ -3636,13 +3643,14 @@ mod tests {
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Chars);
         assert_eq!(m.driven(Dev::Keys), Some(0));
+        m.step(Dev::Keys, press(|p| &mut p.right)); // from Random onto Ashley
         m.step(Dev::Keys, ok);
         assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(1)));
         assert!(!m.players[1].ready);
-        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
+        assert_eq!((m.players[1].char(), m.players[1].costume), (0, 1));
         // 1P moves the COM's cursor, then backs out: the computer's own pick again
         m.step(Dev::Keys, press(|p| &mut p.right));
-        assert_ne!(m.players[1].char(), 1);
+        assert_ne!(m.players[1].char(), 0);
         m.step(Dev::Keys, back);
         assert_eq!(m.screen, Screen::Confirm);
         assert!(m.players[1].ready);
@@ -3668,7 +3676,8 @@ mod tests {
         m.step(Dev::Keys, back);
         assert_eq!(m.screen, Screen::Confirm);
         let chars: Vec<usize> = m.players.iter().map(|p| p.char()).collect();
-        assert!(chars[2] != chars[3] && !chars[..2].contains(&chars[2]) && !chars[..2].contains(&chars[3]), "{chars:?}");
+        // 3P carried 2P's character on, 4P left to the computer: one nobody has
+        assert!(chars[2] == chars[1] && !chars[..3].contains(&chars[3]), "{chars:?}");
     }
 
     #[test]
@@ -3689,6 +3698,9 @@ mod tests {
         assert_eq!(m.seats[2], Some(pad2));
         m.step(pad2, press(|p| &mut p.back));
         assert_eq!(m.seats[2], None);
+        // B346: both from Random onto Ashley
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(pad, press(|p| &mut p.right));
         // B66: both on Ashley costume 1: 1P locks it in, 2P moves on to costume 2; leaving Ashley and coming back
         // lands on costume 2 again, and L1 / R1 pass costume 1
         m.step(Dev::Keys, ok);
@@ -3704,19 +3716,19 @@ mod tests {
         assert_eq!(m.players[1].costume, 1, "10 → 2, past 1");
         m.step(pad, ok);
         assert!(m.players[1].ready);
-        // 1P now picks the computer's 3P: Cody; the open 4P starts on the first character nobody has (Jun)
+        // 1P now picks the computer's 3P: Cody; the open 4P starts on Cody too (B346), his next free costume
         assert_eq!(m.driven(Dev::Keys), Some(2));
         m.step(Dev::Keys, press(|p| &mut p.right));
         m.step(Dev::Keys, ok);
-        // B258: then the open 4P's COM card, on its automatic pick
+        // B258: then the open 4P's COM card
         assert_eq!(m.driven(Dev::Keys), Some(3));
         m.step(Dev::Keys, ok);
         assert_eq!(m.screen, Screen::Confirm);
         let a = m.args(&[Entity::from_raw_u32(3).unwrap(), Entity::from_raw_u32(9).unwrap()]);
         let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
         // match order: 1P, 3P, 2P, 4P
-        assert_eq!(flag("--chars"), "0,1,0,2");
-        assert_eq!(flag("--outfits"), "0,0,1,0");
+        assert_eq!(flag("--chars"), "0,1,0,1");
+        assert_eq!(flag("--outfits"), "0,0,1,1");
         assert_eq!(flag("--pads"), "k,1,-,-");
         assert_eq!((flag("--sets"), flag("--games")), ("1".into(), "4".into()));
         assert!(flag("--umpire").parse::<usize>().unwrap() < UMPIRES, "B191: Random by default, thrown at Start");
@@ -3772,6 +3784,28 @@ mod tests {
         assert_eq!((m.players[1].cursor, m.players[1].random, m.players[1].costume), (3, false, 1));
         m.step(Dev::Keys, ok);
         assert_eq!((m.players[2].cursor, m.players[2].costume), (3, 2));
+    }
+
+    /// B346: a local select opens with 1P on the Random card (not Ashley); in doubles the open seats' COM cards then
+    /// take the character 1P readied on, each on its next free costume, not the next character.
+    #[test]
+    fn select_opens_on_random_and_coms_keep_the_character() {
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu { doubles: true, ..default() };
+        let mut out = Vec::new();
+        m.local_start(Dev::Keys, &mut out);
+        assert_eq!(m.screen, Screen::Chars);
+        assert!(m.players.iter().all(|p| p.random && !p.ready), "every cursor on Random");
+        assert_eq!(m.cell(0), None);
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        let ch = m.players[0].char();
+        m.step(Dev::Keys, ok);
+        for q in 1..4 {
+            assert!(m.open(q) && m.driven(Dev::Keys) == Some(q));
+            assert_eq!((m.players[q].char(), m.players[q].random, m.players[q].costume), (ch, false, q), "COM {q}");
+            m.step(Dev::Keys, ok);
+        }
+        assert_eq!(m.screen, Screen::Confirm);
     }
 
     /// B217: Random locked in many times lands on disc characters (a costume pack's costumes too), custom ones and
@@ -4190,7 +4224,7 @@ mod tests {
         assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(Dev::Keys), None]));
         m.step(Dev::Keys, press(|p| &mut p.page));
         assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(Dev::Keys), None, None]));
-        assert_eq!(m.players, was);
+        assert_eq!(m.players[..2], was[..2]);
         // the shown player: the one who pressed last while picking
         m.step(Dev::Keys, press(|p| &mut p.right));
         assert_eq!(m.shown(), 0);
@@ -4296,6 +4330,7 @@ mod tests {
         let mut m = m;
         m.step(Dev::Keys, ok);
         add_com(&mut m);
+        m.step(Dev::Keys, press(|p| &mut p.right)); // B346: from Random onto Ashley
         m.step(Dev::Keys, press(|p| &mut p.prev)); // 0 → 12: pack z's only costume
         assert_eq!(m.pick(0), (Who::Mod(2), 0));
         m.step(Dev::Keys, ok);
@@ -4321,6 +4356,7 @@ mod tests {
         let mut m = Menu::default();
         m.step(Dev::Keys, ok);
         add_com(&mut m);
+        m.step(Dev::Keys, press(|p| &mut p.right)); // B346: from Random onto Ashley
         assert_eq!(m.who(0), Who::Disc(0), "Ashley");
         m.step(Dev::Keys, hand);
         m.step(Dev::Keys, hand);
