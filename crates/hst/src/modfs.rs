@@ -458,7 +458,7 @@ pub fn upscaled(n: &str) -> bool {
 }
 
 /// A mod zip (`len` bytes, read as [`unpack_with`] reads it) installed into `root` (the `mods/` folder) as
-/// `root/<id>/`: unpacked a file at a time under `root/.import/` (on disk, or in memory: the browser's page then
+/// `root/<id>/`: unpacked a file at a time under `root/.import/` (a store mod's under `root/.import-<owner>-<id>/`) (on disk, or in memory: the browser's page then
 /// stores [`files_under`] `root/<id>`), checked whole ([`check_all`]), then put in place of an installed mod with the
 /// same id ([`folder_for`]; else beside it). `want` is the id it must hold (a store download's), `owner` its store
 /// author. `upscaled` false leaves the mod's upscaled set
@@ -472,7 +472,11 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
     disk: bool,
     with_upscaled: bool,
 ) -> Result<Mod, String> {
-    let stage = root.join(".import");
+    // B339: a store mod's own stage, as several install at once
+    let stage = root.join(match (owner, want) {
+        (Some(o), Some(w)) => format!(".import-{o}-{w}"),
+        _ => ".import".into(),
+    });
     let clear = || {
         remove(&stage);
         if disk {
@@ -515,6 +519,9 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
             return Err(e.replace(&format!("{}/", stage.display()), ""));
         }
     };
+    // one install at a time picks its folder and moves in (B339: two of one id mustn't both take `<id>-2`)
+    static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _placing = PLACING.lock().unwrap_or_else(|e| e.into_inner());
     let dir = folder_for(root, &id, &stage, owner);
     if disk {
         let _ = std::fs::remove_dir_all(&dir);

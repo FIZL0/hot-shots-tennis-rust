@@ -185,9 +185,10 @@ fn game(source: &str) -> String {
 /// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly.
 pub fn list(root: &Path) -> Vec<Mod> {
     let sub = crate::modfs::read_dir;
-    // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods)
+    // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods); a dot folder is an
+    // install still being unpacked (`modfs::install_with`'s stage, B339: one may be while another lists)
     let mut dirs: Vec<PathBuf> =
-        sub(root).into_iter().flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
+        sub(root).into_iter().filter(|d| !d.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
     dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }

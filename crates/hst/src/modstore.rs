@@ -83,16 +83,17 @@ impl Entry {
 
 pub enum Event {
     Listing(Result<Vec<Entry>, String>),
-    /// An install's outcome: the mod's name, or why it was refused (nothing kept).
-    Installed(Result<String, String>),
+    /// An install's outcome: whose it is (the store mod's [`Entry::key`], empty for Add mod's pick) and the mod's
+    /// name, or why it was refused (nothing kept). B339: several store installs run at once, each saying its own.
+    Installed(String, Result<String, String>),
     /// Mod [`Entry::key`]'s `preview.png`, or None (it has none).
     Preview(String, Option<Vec<u8>>),
     /// B250: how the upload of the installed mod in this folder is going.
     Upload(std::path::PathBuf, Up),
     /// A pasted token checked: the account's name, or why it isn't kept.
     Signed(Result<String, String>),
-    /// An install under way: what to show (how much has arrived, or that it's being checked).
-    Progress(String),
+    /// An install under way ([`Entry::key`]): what to show (how much has arrived, or that it's being checked).
+    Progress(String, String),
     /// M19: the signed-in player's own uploads ([`mine`]).
     Mine(Result<Vec<Entry>, String>),
     /// M19: mod `id`'s removal ([`remove`]): what to tell the player.
@@ -434,17 +435,17 @@ pub fn install(e: &Entry, root: &Path, upscaled: bool) {
             modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
             keep(&m)
         };
-        send(Event::Installed(got.await));
+        send(Event::Installed(e.key(), got.await));
     });
 }
 
 /// `e`'s whole `mod.zip` downloaded, checked and installed on disk.
 #[cfg(not(target_arch = "wasm32"))]
 async fn whole(e: &Entry, root: &Path) -> Result<Mod, String> {
-    let mut zip = Zip::create(root).await?;
+    let mut zip = Zip::create(root, &format!("{}-{}", e.meta.author, e.meta.id)).await?;
     let (size, hash) = download(e, &mut zip).await?;
     matches(size, &hash, &e.meta)?;
-    send(Event::Progress(format!("Checking {}...", e.meta.name)));
+    send(Event::Progress(e.key(), format!("Checking {}...", e.meta.name)));
     zip.install(root, &e.meta.id, &e.meta.author).await
 }
 
@@ -466,20 +467,21 @@ async fn download(e: &Entry, zip: &mut Zip) -> Result<(u64, String), String> {
         hash.update(&c);
         zip.write(&c).await?;
         if got >> 20 != mb {
-            send(Event::Progress(format!("Downloading {}... {} / {} MB ({}%)", e.meta.name, got >> 20, total >> 20, got * 100 / total)));
+            send(Event::Progress(e.key(), format!("Downloading {}... {} / {} MB ({}%)", e.meta.name, got >> 20, total >> 20, got * 100 / total)));
         }
     }
     Ok((got, hex(&hash.finalize())))
 }
 
-/// A download's zip until it's installed: `mods/.download.zip` beside the game, removed when dropped.
+/// A download's zip until it's installed: `mods/.download-<author>-<id>.zip` beside the game (B339: one each, as
+/// several download at once), removed when dropped.
 #[cfg(not(target_arch = "wasm32"))]
 struct Zip(std::fs::File, std::path::PathBuf);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Zip {
-    async fn create(root: &Path) -> Result<Self, String> {
-        let p = root.join(".download.zip");
+    async fn create(root: &Path, whose: &str) -> Result<Self, String> {
+        let p = root.join(format!(".download-{whose}.zip"));
         let f = std::fs::create_dir_all(root).and_then(|_| std::fs::File::create(&p)).map_err(|e| format!("can't write {}: {e}", p.display()))?;
         Ok(Zip(f, p))
     }
@@ -502,7 +504,7 @@ impl Drop for Zip {
 /// (`modfs::upscaled`, ≈ 90% of a store mod), which is never downloaded; on `disk`, else in memory (the browser). Its sha256 needs all of it, so here its size is checked against the store's, and each file's CRC-32
 /// as it's unpacked (`modfs::unpack_with`); the connection is HTTPS to the store either way.
 async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
-    send(Event::Progress(format!("Downloading {}...", e.meta.name)));
+    send(Event::Progress(e.key(), format!("Downloading {}...", e.meta.name)));
     let asked = file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id));
     let mut r = ask(&asked, 0, 1).await?;
     if r.status() != reqwest::StatusCode::PARTIAL_CONTENT && r.url().as_str() != asked {
@@ -521,8 +523,9 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
         return Err("too big".into());
     }
     let (url, got) = (r.url().to_string(), std::sync::atomic::AtomicU64::new(0));
+    let key = e.key();
     let read = |at: u64, n: usize| {
-        let (url, got, name) = (url.clone(), &got, &e.meta.name);
+        let (url, got, name, key) = (url.clone(), &got, &e.meta.name, &key);
         async move {
             if n == 0 {
                 return Ok(Vec::new());
@@ -533,7 +536,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
             }
             let was = got.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
             if (was + n as u64) >> 20 != was >> 20 {
-                send(Event::Progress(format!("Downloading {name}... {} MB", (was + n as u64) >> 20)));
+                send(Event::Progress(key.clone(), format!("Downloading {name}... {} MB", (was + n as u64) >> 20)));
             }
             Ok(b.to_vec())
         }
@@ -569,7 +572,7 @@ pub fn pick(root: &Path) {
     let root = root.to_path_buf();
     spawn(async move {
         let Some(f) = rfd::AsyncFileDialog::new().add_filter("Mod", &["zip"]).set_title("Add mod").pick_file().await else {
-            return send(Event::Installed(Err("no file picked".into())));
+            return send(Event::Installed(String::new(), Err("no file picked".into())));
         };
         let got = (|| {
             let len = std::fs::metadata(f.path()).map_err(|e| e.to_string())?.len();
@@ -578,7 +581,7 @@ pub fn pick(root: &Path) {
             }
             keep(&modfs::install_file(f.path(), &root, None, None)?)
         })();
-        send(Event::Installed(got));
+        send(Event::Installed(String::new(), got));
     });
 }
 
@@ -908,7 +911,7 @@ mod tests {
         let m = rt.block_on(ranged(&e, root, false)).unwrap();
         let files = modfs::files_under(&m.dir);
         let mb = files.iter().map(|f| f.1.len()).sum::<usize>() >> 20;
-        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(p) = e { Some(p) } else { None }).last().unwrap();
+        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(_, p) = e { Some(p) } else { None }).last().unwrap();
         eprintln!("{} files, {mb} MB kept of a {} MB zip; last progress: {fetched}", files.len(), e.meta.size >> 20);
         assert!(files.iter().all(|f| !f.0.contains("/textures/upscaled/")) && files.iter().any(|f| f.0.ends_with(".glb")));
         assert!(mb < 64);
@@ -921,6 +924,11 @@ mod tests {
     }
 
     use super::*;
+
+    /// Whether `dir` holds a download's zip or stage still (a dot file or folder).
+    fn dot(dir: &Path) -> bool {
+        std::fs::read_dir(dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with('.'))
+    }
 
     fn meta(id: &str, zip: &[u8]) -> Meta {
         Meta { id: id.into(), name: "Lauryn".into(), size: zip.len() as u64, sha256: sha256(zip), ..Default::default() }
@@ -1015,16 +1023,16 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let got = rt
             .block_on(async {
-                let mut z = Zip::create(&disk).await.unwrap();
+                let mut z = Zip::create(&disk, "-x").await.unwrap();
                 for c in p.zip.chunks(64 << 10) {
                     z.write(c).await.unwrap();
                 }
                 assert!(z.install(&disk, "someone_else", "").await.unwrap_err().contains("not `someone_else`"));
-                assert!(disk.join(&m.id).join("old").exists() && !disk.join(".import").exists());
+                assert!(disk.join(&m.id).join("old").exists() && !disk.join(".import--someone_else").exists());
                 z.install(&disk, &m.id, "").await
             })
             .unwrap();
-        assert!(!disk.join(".download.zip").exists() && !disk.join(".import").exists());
+        assert!(!dot(&disk));
         assert!(!disk.join(&m.id).join("old").exists());
         assert!(modfs::files_under(&disk).is_empty());
         assert_eq!(crate::mods::read(&got.dir).unwrap().id, m.id);
@@ -1069,8 +1077,8 @@ mod tests {
             for ev in take() {
                 match ev {
                     Event::Listing(r) => install(r.unwrap().iter().find(|e| e.meta.id == id).expect("not in the store"), &root, true),
-                    Event::Progress(s) if s.ends_with("0%)") || !s.contains('%') => eprintln!("{:.1}s {s}", started.elapsed().as_secs_f32()),
-                    Event::Installed(r) => {
+                    Event::Progress(_, s) if s.ends_with("0%)") || !s.contains('%') => eprintln!("{:.1}s {s}", started.elapsed().as_secs_f32()),
+                    Event::Installed(_, r) => {
                         eprintln!("{:.1}s {r:?}", started.elapsed().as_secs_f32());
                         let n = walk_len(&root.join(&id));
                         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -1101,6 +1109,51 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         panic!("no answer in 60 s");
+    }
+
+    /// B339: the store's `HST_LIVE_PARALLEL` smallest mods (a number) installed side by side into one folder, every
+    /// other one whole (Upscaled Downloads on), the rest a part at a time: each says its own progress and outcome by key, each lands in its own folder, and no
+    /// download zip or stage is left. Network: `HST_LIVE_PARALLEL=3 tools/check.sh -p hst live_parallel` after
+    /// touching `install` or `modfs::install_with`'s stage.
+    #[test]
+    fn live_parallel() {
+        let Some(n) = std::env::var("HST_LIVE_PARALLEL").ok().and_then(|n| n.parse::<usize>().ok()) else { return eprintln!("HST_LIVE_PARALLEL unset (skipped)") };
+        let root = std::env::temp_dir().join(format!("hst-parallel-{}", std::process::id()));
+        list(true);
+        let (started, mut want, mut seen) = (std::time::Instant::now(), Vec::new(), std::collections::HashSet::new());
+        let mut done = Vec::new();
+        while started.elapsed().as_secs() < 600 {
+            for ev in take() {
+                match ev {
+                    Event::Listing(r) => {
+                        let mut l = r.unwrap();
+                        l.sort_by_key(|e| e.meta.size);
+                        l.dedup_by(|a, b| a.meta.id == b.meta.id);
+                        for (i, e) in l.iter().take(n).enumerate() {
+                            eprintln!("installing {} ({} MB)", e.key(), e.meta.size >> 20);
+                            // the whole zip (each to its own file) and the ranged one, side by side
+                            install(e, &root, i % 2 == 1);
+                            want.push(e.key());
+                        }
+                    }
+                    Event::Progress(k, _) => _ = seen.insert(k),
+                    Event::Installed(k, r) => {
+                        eprintln!("{:.1}s {k}: {r:?}", started.elapsed().as_secs_f32());
+                        done.push((k, r));
+                    }
+                    _ => {}
+                }
+            }
+            if !want.is_empty() && done.len() == want.len() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let dirs = crate::mods::list(&root).len();
+        let left = dot(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(done.iter().all(|d| d.1.is_ok() && want.contains(&d.0)) && done.len() == n, "{done:?}");
+        assert!(want.iter().all(|k| seen.contains(k)) && dirs == n && !left);
     }
 
     fn walk_len(d: &Path) -> usize {
