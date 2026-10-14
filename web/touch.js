@@ -173,6 +173,8 @@ let touched = coarse.matches || new URLSearchParams(location.search).has('touch'
 addEventListener('pointerdown', e => { if (e.pointerType === 'touch') touched = true; }, { capture: true });
 // B247: the game asks, so a real pad's first press takes over the screen's 1P seat
 window.hstTouched = () => touched;
+// B207: the name and code entries show their letter grid again for one
+window.hstRealPad = anyReal;
 // the game's menus take taps themselves (B221): there the stick keeps to its own circle (`.menu`), drawn at rest
 let menu = false;
 window.hstTouchMenu = on => {
