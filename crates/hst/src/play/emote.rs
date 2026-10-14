@@ -64,6 +64,22 @@ pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
     true
 }
 
+/// While the server emotes before its toss, a mod character's ball (B252): its own emote clip is what's drawn
+/// (`CharacterData::visual`), but `held_ball` places the ball on the donor's, so the ball would float off the hand
+/// — it's hidden (with its shadow and outline) until the emote ends, then back in hand for the toss. A disc
+/// character's ball stays in its hand, seen. Draw-side only.
+pub(super) fn hide_ball(g: Res<Game>, mut q: Query<&mut Visibility, Or<(With<super::BallView>, With<crate::shade::Ball>)>>, mut hidden: Local<bool>) {
+    let i = g.score.server as usize;
+    let hide = g.phase == Phase::Serve
+        && g.players.get(i).is_some_and(|p| p.emote > 0 && g.data[i].visual.contains_key(&p.cmd.id));
+    // only on a change, so the ceremony's hiding (`match_stats::ceremony::hide`) stays
+    if std::mem::replace(&mut *hidden, hide) != hide {
+        for mut v in &mut q {
+            *v = if hide { Visibility::Hidden } else { Visibility::Inherited };
+        }
+    }
+}
+
 /// Nothing under way: no stroke, dive, whiff, serve follow-through, reaction or body hit.
 fn idle(g: &Game, i: usize) -> bool {
     let p = &g.players[i];
@@ -260,5 +276,43 @@ mod match_tests {
             }
         }
         panic!("never tossed");
+    }
+
+    /// B252: a disc server's ball stays seen through its emote; a mod's (its own emote clip drawn, here the donor's
+    /// copied in as one) is hidden for the emote's length and back for the toss.
+    #[test]
+    fn a_mods_ball_hides_while_it_emotes() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let flick = Pad { rx: 0, ry: 0x80, ..IDLE };
+        for own_clip in [false, true] {
+            let (at, n) = (10, 120);
+            let mut pads = vec![[IDLE; 4]; n];
+            pads[at][0] = flick;
+            let mut a = seated([true, false, false, false], pads);
+            a.add_systems(FixedUpdate, super::hide_ball.after(held_ball));
+            let ball = a.world_mut().spawn((BallView(false), Visibility::Inherited)).id();
+            // the rigs share the data: dropped, so this test may change it
+            let rigs: Vec<_> = a.world_mut().query_filtered::<Entity, With<character::Rig>>().iter(a.world()).collect();
+            for e in rigs {
+                a.world_mut().entity_mut(e).remove::<character::Rig>();
+            }
+            let len = {
+                let mut g = a.world_mut().resource_mut::<Game>();
+                let d = std::sync::Arc::get_mut(&mut g.data[0]).expect("the match's own character data");
+                let clip = d.motions[&MOTIONS[2]].clone();
+                let len = clip.length.ceil() as usize;
+                if own_clip {
+                    d.visual.insert(MOTIONS[2], clip);
+                }
+                len
+            };
+            for t in 0..at + len + 5 {
+                a.world_mut().run_schedule(FixedUpdate);
+                let hidden = a.world().get::<Visibility>(ball) == Some(&Visibility::Hidden);
+                assert_eq!(hidden, own_clip && (at..at + len - 1).contains(&t), "own clip {own_clip}, tick {t}");
+            }
+        }
     }
 }

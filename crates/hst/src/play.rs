@@ -628,6 +628,7 @@ pub fn plugin(app: &mut App) {
                 .chain(),
         );
     app.add_systems(FixedUpdate, flare_tick.after(play_sounds));
+    app.add_systems(Update, emote::hide_ball.after(draw));
 }
 
 /// The sun's lens flare's `rand()` draws each tick it shows (clear or cloudy).
