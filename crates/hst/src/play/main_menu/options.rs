@@ -33,6 +33,8 @@ pub(super) enum Opt {
     MenuMusic,
     MatchMusic,
     Downloads,
+    /// B339: how many store downloads run at once.
+    AtOnce,
     /// B289: what to do with an online lobby's mods.
     OnlineMods,
     /// M20: online chat shown.
@@ -68,7 +70,7 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, Me
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
-const MODS: &[Opt] = &[Downloads, OnlineMods, Chat];
+const MODS: &[Opt] = &[Downloads, AtOnce, OnlineMods, Chat];
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
 /// B289: Online Mod Downloads' values.
@@ -116,6 +118,7 @@ fn label(o: Opt) -> &'static str {
         MenuMusic => "Menu Music",
         MatchMusic => "Match Music",
         Downloads => "Upscaled Downloads",
+        AtOnce => "Downloads at Once",
         OnlineMods => "Online Mod Downloads",
         Chat => "Chat",
         Renderer => "Renderer",
@@ -146,6 +149,7 @@ fn about(o: Opt) -> &'static str {
         MenuMusic => "Play music in the menus.",
         MatchMusic => "Play each court's music during a match.",
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
+        AtOnce => "How many mods the mod store downloads side by side (Download all, or several installs). Auto: 3 on a computer, 2 in a browser, 1 on a phone; a browser keeps each one in memory until it's saved, so it allows fewer.",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
@@ -177,8 +181,14 @@ fn choices(o: Opt) -> Vec<String> {
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
+        AtOnce => (0..=super::max_downloads()).map(at_once_name).collect(),
         _ => words(&["Off", "On"]),
     }
+}
+
+/// B339: a Downloads at Once value's word (0 Auto).
+fn at_once_name(n: usize) -> String {
+    if n == 0 { "Auto".into() } else { n.to_string() }
 }
 
 fn on_off(on: bool) -> String {
@@ -224,6 +234,7 @@ impl Settings {
             MenuMusic => self.0[1] = !self.0[1],
             MatchMusic => self.0[2] = !self.0[2],
             Downloads => self.0[UPSCALED_DOWNLOADS] = !self.0[UPSCALED_DOWNLOADS],
+            AtOnce => self.8 = (self.8 as isize + d).rem_euclid(super::max_downloads() as isize + 1) as u8,
             OnlineMods => self.4 = cycle(&ASK_VALUES.map(|(a, _)| a), self.4, d),
             Chat => {
                 self.0[CHAT] = !self.0[CHAT];
@@ -256,6 +267,7 @@ impl Settings {
             MenuMusic => on_off(self.0[1]),
             MatchMusic => on_off(self.0[2]),
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
+            AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
             Chat => on_off(self.0[CHAT]),
             Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
@@ -660,5 +672,12 @@ mod tests {
         assert!(!s.0[0] && s.0[UPSCALED_DOWNLOADS]);
         s.step(Aspect, -1);
         assert_eq!(s.value(Aspect), ASPECTS[ASPECTS.len() - 1]);
+        // B339: Downloads at Once steps Auto, 1..=8 and wraps; its side panel lists the same
+        assert_eq!((s.value(AtOnce), choices(AtOnce).len()), ("Auto".into(), 9));
+        s.step(AtOnce, -1);
+        assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once()), ("8", 8));
+        s.step(AtOnce, 1);
+        s.step(AtOnce, 1);
+        assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once(), Settings::parse(&s.text()) == s), ("1", 1, true));
     }
 }

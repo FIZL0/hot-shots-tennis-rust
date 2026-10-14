@@ -3,7 +3,8 @@
 //! beside the game on desktop; `modfs::install`); ✕ on an installed mod opens Remove / Cancel beside it (B202's child
 //! buttons, `child.rs`, for every press that needs a second word).
 //! Browse mods lists the mod store (`modstore.rs`: Verified = merged on the store's `main`, Installed / Update by the
-//! zip's sha256); ✕ downloads, checks and installs one. Upload my mod signs in with a Hugging Face write token (the
+//! zip's sha256); ✕ downloads, checks and installs one (B339: queued ones download side by side, as many at once as
+//! Settings → Online & Mods → Downloads at Once says). Upload my mod signs in with a Hugging Face write token (the
 //! token page opens, the player copies one, Paste token pastes it) and then, after the rule and Upload,
 //! commits an installed mod to the store as a pull request (`modstore::publish`); Upload all (B250) queues every one, in
 //! the background with a status beside each, and a re-upload goes over the player's earlier one. Its My public mods (M19) lists the
@@ -102,10 +103,11 @@ pub(super) struct View {
     pub(super) ask: Option<usize>,
     /// B255: Browse narrowed to one author's mods (whose list it is, and the row to go back to on the whole list).
     by: Option<By>,
-    /// B255: the installs waiting (Download all, or a press while one runs), the one under way, and each one's tag
-    /// by [`Entry::key`] (Queued, Downloading, Installed, Error) with what to say of it.
+    /// B255: the installs waiting (Download all, or a press while others run), the ones under way (B339: up to
+    /// Downloads at Once side by side), and each one's tag by [`Entry::key`] (Queued, Downloading, Installed, Error)
+    /// with what to say of it.
     queue: VecDeque<Entry>,
-    doing: Option<Entry>,
+    doing: Vec<Entry>,
     jobs: HashMap<String, (&'static str, String)>,
     /// B208: the web build on a touch device (no file picker, no sign-in): Add mod and Upload my mod are greyed, and
     /// choosing one puts up the "use the desktop app" popup (its row while up).
@@ -167,28 +169,44 @@ impl View {
             || self.installed(e).is_some_and(|(sha, dir)| *sha == e.meta.sha256 || !modstore::newer(&e.meta.version, &modstore::version(dir)))
     }
 
-    /// B255: queues `e`'s install, starting it if nothing else is under way.
-    fn enqueue(&mut self, e: Entry, upscaled: bool) {
-        if self.doing.is_none() && self.queue.is_empty() {
+    /// B255: queues `e`'s install, starting it if fewer than `at_once` are under way.
+    fn enqueue(&mut self, e: Entry, upscaled: bool, at_once: usize) {
+        if self.doing.is_empty() && self.queue.is_empty() {
             self.batch = (0, 0);
         }
         self.batch.1 += 1;
         self.jobs.insert(e.key(), ("Queued", format!("{} is waiting its turn.", e.meta.name)));
         self.queue.push_back(e);
-        self.next(upscaled);
+        self.next(upscaled, at_once);
     }
 
-    /// B255: starts the next queued install when none is under way.
-    fn next(&mut self, upscaled: bool) {
-        if self.doing.is_some() {
-            return;
+    /// B255: starts queued installs while fewer than `at_once` are under way (B339: they download side by side).
+    fn next(&mut self, upscaled: bool, at_once: usize) {
+        while self.doing.len() < at_once.max(1) {
+            let Some(e) = self.queue.pop_front() else { return };
+            self.busy = true;
+            self.status = format!("{}Downloading {} ({})...", self.count(), e.meta.name, mb(e.meta.size));
+            self.jobs.insert(e.key(), ("Downloading", format!("Downloading {}...", e.meta.name)));
+            // (the tests' queues fetch nothing)
+            #[cfg(not(test))]
+            modstore::install(&e, root(), upscaled);
+            #[cfg(test)]
+            let _ = upscaled;
+            self.doing.push(e);
         }
-        let Some(e) = self.queue.pop_front() else { return };
-        self.busy = true;
-        self.status = format!("{}Downloading {} ({})...", self.count(), e.meta.name, mb(e.meta.size));
-        self.jobs.insert(e.key(), ("Downloading", format!("Downloading {}...", e.meta.name)));
-        modstore::install(&e, root(), upscaled);
-        self.doing = Some(e);
+    }
+
+    /// B255: install `key`'s outcome `r` on its tag (B339: whichever of those under way it is; Add mod's pick, key
+    /// "", is none of them).
+    fn finish(&mut self, key: &str, r: &Result<String, String>) {
+        let Some(i) = self.doing.iter().position(|e| e.key() == key) else { return };
+        let e = self.doing.remove(i);
+        self.batch.0 += 1;
+        let job = match r {
+            Ok(_) => ("Installed", format!("Installed {}. Restart the game to play it.", e.meta.name)),
+            Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
+        };
+        self.jobs.insert(e.key(), job);
     }
 
     /// B335: "3/50 done. " while a batch of installs (Download all) is under way.
@@ -533,12 +551,16 @@ impl Menu {
         }
     }
 
-    /// B255: installs store mod `e` (queued behind any under way).
+    /// B255: installs store mod `e` (queued behind any under way), unless it's on its way already.
     fn install(&mut self, e: Entry, out: &mut Vec<Effect>) {
-        let up = self.settings.0[super::UPSCALED_DOWNLOADS];
-        let queued = self.add.doing.is_some();
+        if self.add.queue.iter().chain(&self.add.doing).any(|q| q.key() == e.key()) {
+            self.add.status = format!("{} is on its way already.", e.meta.name);
+            return out.push(Effect::Sound(1));
+        }
+        let (up, n) = (self.settings.0[super::UPSCALED_DOWNLOADS], self.settings.downloads_at_once());
+        let queued = self.add.doing.len() >= n;
         let name = e.meta.name.clone();
-        self.add.enqueue(e, up);
+        self.add.enqueue(e, up, n);
         if queued {
             self.add.status = format!("{name} is queued: it installs after the ones before it.");
         }
@@ -548,15 +570,16 @@ impl Menu {
     /// B255: Download all on an author's list or on their heading: queues every one of `list` (`author`'s mods) not
     /// installed at the same or a newer version.
     fn download_all(&mut self, author: &str, list: Vec<Entry>, out: &mut Vec<Effect>) {
-        let up = self.settings.0[super::UPSCALED_DOWNLOADS];
+        let (up, at_once) = (self.settings.0[super::UPSCALED_DOWNLOADS], self.settings.downloads_at_once());
         let todo: Vec<Entry> = list.iter().filter(|e| !self.add.skips(e)).cloned().collect();
         let (n, skipped) = (todo.len(), list.len() - todo.len());
         for e in todo {
-            self.add.enqueue(e, up);
+            self.add.enqueue(e, up, at_once);
         }
         let author = who(author);
         self.add.status = match (n, skipped) {
             (0, _) => format!("All of {author}'s mods are installed or queued already."),
+            (n, 0) if at_once > 1 && n > 1 => format!("Downloading {n} mods by {author}, {} at a time.", at_once.min(n)),
             (n, 0) => format!("Downloading {n} mods by {author}, one after another."),
             (n, k) => format!("Downloading {n} mods by {author} ({k} installed or queued already)."),
         };
@@ -629,7 +652,7 @@ impl Menu {
                     let a = a.to_string();
                     let list = self.add.entries().iter().filter(|e| e.meta.author == a).cloned().collect();
                     self.download_all(&a, list, out);
-                } else if self.add.busy && self.add.doing.is_none() {
+                } else if self.add.busy && self.add.doing.is_empty() {
                     self.add.status = "Wait for the store to finish first.".into();
                 } else if let Some(e) = self.add.hovered(s).cloned() {
                     let installed = self.add.state(&e) == Some("Installed");
@@ -1592,7 +1615,7 @@ fn page(
         }
         menu.add.status = format!("{}{s}", menu.add.count());
     }
-    let up = menu.settings.0[super::UPSCALED_DOWNLOADS];
+    let (up, at_once) = (menu.settings.0[super::UPSCALED_DOWNLOADS], menu.settings.downloads_at_once());
     for e in modstore::take() {
         let v = &mut menu.add;
         match e {
@@ -1612,17 +1635,8 @@ fn page(
                     }
                 }
             }
-            Event::Installed(r) => {
-                v.busy = false;
-                // B255: the queued install's tag, then the next one
-                if let Some(e) = v.doing.take() {
-                    v.batch.0 += 1;
-                    let job = match &r {
-                        Ok(_) => ("Installed", format!("Installed {}. Restart the game to play it.", e.meta.name)),
-                        Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
-                    };
-                    v.jobs.insert(e.key(), job);
-                }
+            Event::Installed(key, r) => {
+                v.finish(&key, &r);
                 v.refresh();
                 if r.is_ok() {
                     v.changed();
@@ -1632,12 +1646,18 @@ fn page(
                 v.status = match r {
                     // the browser's page says when it's saved
                     Ok(_) if cfg!(target_arch = "wasm32") => v.status.clone(),
-                    Ok(name) => format!("Installed {name}. Restart the game to play it."),
-                    Err(e) => format!("Not installed: {e}"),
+                    Ok(name) => format!("{}Installed {name}. Restart the game to play it.", v.count()),
+                    Err(e) => format!("{}Not installed: {e}", v.count()),
                 };
-                v.next(up);
+                v.busy = !v.doing.is_empty();
+                v.next(up, at_once);
             }
-            Event::Progress(s) => v.status = format!("{}{s}", v.count()),
+            Event::Progress(key, s) => {
+                if let Some(j) = v.jobs.get_mut(&key) {
+                    j.1 = s.clone();
+                }
+                v.status = format!("{}{s}", v.count());
+            }
             Event::Mine(r) => {
                 v.busy = false;
                 match r {
@@ -1903,7 +1923,7 @@ mod tests {
         assert_eq!(rows, ["bob:2", "b1", "b2", "ann:1", "a1", ":1", "x1"]);
         assert_eq!((m.add.rows(), m.add.head(4), m.add.hovered(5).map(|x| x.meta.id.as_str())), (8, Some(("ann", 1)), Some("a1")));
         // (something under way: the heading only queues)
-        m.add.doing = Some(e("zz", "zed"));
+        (m.settings.8, m.add.doing) = (1, vec![e("zz", "zed")]);
         let mut out = Vec::new();
         m.sel = 1;
         m.mods_step(ok(), &mut out);
@@ -2014,6 +2034,38 @@ mod tests {
         m.add.paste = false;
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// B339: Download all starts as many installs as Downloads at Once says and queues the rest; each one's outcome
+    /// (by its key) ends that one and starts the next; Add mod's pick, finishing meanwhile, ends none of them.
+    #[test]
+    fn downloads_side_by_side() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.settings.8 = 3;
+        let e = |id: &str| Entry { meta: Meta { id: id.into(), name: id.to_uppercase(), author: "ann".into(), sha256: id.repeat(32), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
+        let list: Vec<Entry> = ["a1", "a2", "a3", "a4", "a5"].map(e).into();
+        let mut out = Vec::new();
+        m.download_all("ann", list, &mut out);
+        let ids = |l: Vec<&Entry>| l.iter().map(|x| x.meta.id.clone()).collect::<Vec<_>>();
+        assert_eq!((ids(m.add.doing.iter().collect()), ids(m.add.queue.iter().collect())), (vec!["a1".to_string(), "a2".into(), "a3".into()], vec!["a4".to_string(), "a5".into()]));
+        assert!(m.add.status.ends_with("3 at a time."), "{}", m.add.status);
+        assert_eq!(m.add.jobs.get("ann/a4").map(|j| j.0), Some("Queued"));
+        assert_eq!(m.add.jobs.get("ann/a2").map(|j| j.0), Some("Downloading"));
+        m.add.finish("", &Ok("Picked".into()));
+        assert_eq!((m.add.doing.len(), m.add.batch), (3, (0, 5)));
+        m.add.finish("ann/a2", &Err("the store said 404".into()));
+        m.add.next(false, m.settings.downloads_at_once());
+        assert_eq!(ids(m.add.doing.iter().collect()), ["a1", "a3", "a4"]);
+        assert_eq!((m.add.jobs["ann/a2"].0, m.add.count().as_str()), ("Error", "1/5 done. "));
+        // a mod under way isn't queued again; one at a time leaves the rest waiting
+        m.install(e("a3"), &mut out);
+        assert_eq!((m.add.queue.len(), m.add.status.as_str()), (1, "A3 is on its way already."));
+        m.settings.8 = 1;
+        for k in ["ann/a1", "ann/a3"] {
+            m.add.finish(k, &Ok(String::new()));
+        }
+        m.add.next(false, m.settings.downloads_at_once());
+        assert_eq!((ids(m.add.doing.iter().collect()), m.add.queue.len()), (vec!["a4".to_string()], 1));
     }
 
     /// B250: Upload all opens Upload all / Cancel; it (and a mod's own Upload) queues the mods in the background
@@ -2158,7 +2210,7 @@ mod tests {
         assert!(m.add.status.contains("installed already") && m.add.child.is_none());
         // (something under way: Download all only queues, nothing is fetched here)
         let busy = e("zz", "zed", "1");
-        m.add.doing = Some(busy.clone());
+        (m.settings.8, m.add.doing) = (1, vec![busy.clone()]);
         // Download all, the first pill
         m.sel = 0;
         m.mods_step(ok(), &mut out);
