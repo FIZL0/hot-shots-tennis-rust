@@ -399,14 +399,26 @@ def finish(tid, n, sid, commits):
 
 
 def master():
-    """The master's tmux pane; started once, adopted by a restarted runner."""
+    """The master's tmux pane; started once, adopted by a restarted runner (only one this code started: an older one
+    has no idle hooks, so it's replaced while it holds no report)."""
+    mark = os.path.join(NOTES, 'master.pane')
+    if (old := panes().get('master')) and (open(mark).read() if os.path.exists(mark) else '') != old[0] \
+            and not os.path.exists(LOCK) and not os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD')):
+        sp.run(['tmux', 'kill-pane', '-t', old[0]])
+        log('master session had no idle hooks (an older runner\'s); replaced')
     if 'master' not in panes():
-        # its hooks stamp when a prompt goes in and when the turn ends: master_idle() reads those, like agent-stop.sh
-        touch = lambda f: [{'hooks': [{'type': 'command', 'command': shlex.join(['touch', os.path.join(NOTES, f)])}]}]
-        hooks = {'UserPromptSubmit': touch('master.busy'), 'Stop': touch('master.idle'), 'StopFailure': touch('master.idle')}
+        # its hooks stamp when a prompt goes in and when a turn ends with no background task left to wake it:
+        # master_idle() reads those, like agent-stop.sh
+        stamp = lambda f, cond='': [{'hooks': [{'type': 'command', 'command': cond + shlex.join(['touch', os.path.join(NOTES, f)])}]}]
+        done = stamp('master.idle', "jq -e '(.background_tasks // []) | length == 0' >/dev/null && ")
+        hooks = {'UserPromptSubmit': stamp('master.busy'), 'Stop': done, 'StopFailure': done}
         cmd = shlex.join(['claude', '--model', 'opus', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion',
                           '--settings', json.dumps({'hooks': hooks})])
+        for f in ('master.busy', 'master.idle'):  # a killed master's last stamp would read busy forever
+            if os.path.exists(os.path.join(NOTES, f)):
+                os.remove(os.path.join(NOTES, f))
         pane('master', ROOT, cmd)
+        open(mark, 'w').write(panes()['master'][0])
         log('master session started (window master)')
         time.sleep(20)  # let the TUI come up before the first report is typed into it
 
@@ -428,8 +440,7 @@ idle_since = None  # when the master's TUI was first seen idle while it holds th
 def master_idle():
     """Its last turn ended after its last prompt (the master's own Stop/UserPromptSubmit hooks, `master()`); no
     screen reading: a diff on screen with "come back… (14 s)" in it read as busy for 4 h (2026-10-14).
-    ponytail: a background task waking it mid-wait isn't a prompt, so it reads idle then; fine, hand() only types into an
-    empty box and master_busy() waits for its master.md line."""
+    A turn that ends with background tasks running doesn't count as idle: they wake it again without a prompt."""
     t = lambda f: os.path.getmtime(os.path.join(NOTES, f)) if os.path.exists(os.path.join(NOTES, f)) else 0
     return t('master.idle') >= t('master.busy')
 
