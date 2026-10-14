@@ -16,7 +16,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer's players are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, attrs = chars with 1P's △ card, coms = chars with 1P ready (the COM cards), chars-random = 1P on the Random card, chars4 = four humans on one portrait, mods = the custom page, mods-attrs = that with 1P's △ card, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -81,6 +81,14 @@ const ICON_STEP: f32 = 68.0;
 const ICON_TOP: f32 = 32.0;
 const ICON_PITCH: f32 = 72.0;
 const ICON_BOX: f32 = 86.0;
+/// B217: the Random card's centre, in the intermediate group's empty bottom-right corner; [`grid_step`]'s cell
+/// [`CHARS`].
+const RANDOM_CELL: (f32, f32) = (435.0, 295.0);
+
+/// B217: the dice for a Random pick (std's per-call hasher keys, never the match's RNG).
+fn dice() -> u64 {
+    std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0u8)
+}
 
 /// B190: the custom grid's fit to the window: as many columns as fit between the player cards (pinned to the window's
 /// sides) and as many rows as the frame's height holds.
@@ -362,6 +370,8 @@ struct Player {
     modded: bool,
     /// Select / −: plays the character with the other hand (`hand_swap`), kept across characters.
     swap: bool,
+    /// B217: on the Random card (the ? card until ready; readying draws the pick, `Menu::draw`).
+    random: bool,
 }
 
 impl Player {
@@ -529,6 +539,30 @@ impl Menu {
                 self.players[p].costume = c;
             }
         }
+    }
+
+    /// B217: a character open to player `p` (any disc character or custom one, a costume pack's costumes going with
+    /// its disc character) and one of its open costumes, each at random by `seed`; `None` if nothing's open.
+    fn draw(&self, p: usize, seed: u64) -> Option<(Who, usize)> {
+        let whos = (0..CHARS).map(Who::Disc).chain((0..self.mods.len()).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
+        let open: Vec<(Who, Vec<usize>)> =
+            whos.map(|w| (w, (0..self.costumes(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
+        let n = open.len() as u64;
+        let (w, cs) = open.get((seed % n.max(1)) as usize)?;
+        Some((*w, cs[(seed / n % cs.len() as u64) as usize]))
+    }
+
+    /// B217: player `p` on Random readies: the drawn pick put on their cursor (still on Random, so ○ shows the ? card
+    /// again). False if nothing's open.
+    fn roll_random(&mut self, p: usize) -> bool {
+        let Some((w, c)) = self.draw(p, dice()) else { return false };
+        let me = &mut self.players[p];
+        match w {
+            Who::Disc(ch) => (me.modded, me.cursor) = (false, GRID.iter().position(|g| g.0 == ch).unwrap_or(0)),
+            Who::Mod(i) => (me.modded, me.pick) = (true, i),
+        }
+        me.costume = c;
+        true
     }
 
     /// Player `p` picking again, on the page shown.
@@ -755,6 +789,7 @@ impl Menu {
                         for q in 0..self.players() {
                             if !self.players[q].ready {
                                 self.unready(q);
+                                self.players[q].random = false;
                             }
                         }
                         out.push(Sound(0));
@@ -764,7 +799,8 @@ impl Menu {
                 let n_mods = self.mods.len();
                 // B66: characters with no costume open to `p` (every one taken or failed to load) are passed over
                 let full_mod: Vec<bool> = (0..n_mods).map(|i| self.next_free(p, Who::Mod(i), 0, false).is_none()).collect();
-                let full_disc: Vec<bool> = (0..CHARS).map(|i| self.next_free(p, Who::Disc(GRID[i].0), 0, false).is_none()).collect();
+                let mut full_disc: Vec<bool> = (0..CHARS).map(|i| self.next_free(p, Who::Disc(GRID[i].0), 0, false).is_none()).collect();
+                full_disc.push(self.draw(p, 0).is_none());
                 let costume_to = |back: bool| self.next_free(p, self.who(p), (self.players[p].costume + if back { costumes - 1 } else { 1 }) % costumes, back);
                 let (next_c, prev_c) = (costume_to(false), costume_to(true));
                 let me = &mut self.players[p];
@@ -796,19 +832,24 @@ impl Menu {
                             }
                         }
                         let to = to as usize;
-                        if to != me.pick {
-                            me.pick = to;
+                        if to != me.pick || me.random {
+                            (me.pick, me.random) = (to, false);
                             me.costume = 0;
                             out.push(Sound(0));
                         }
                     } else if dx != 0.0 || dy != 0.0 {
-                        let mut to = grid_step(me.cursor, dx, dy);
-                        while full_disc[to] && to != me.cursor {
+                        // B217: the Random card is cell CHARS
+                        let at = if me.random { CHARS } else { me.cursor };
+                        let mut to = grid_step(at, dx, dy);
+                        while full_disc[to] && to != at {
                             let on = grid_step(to, dx, dy);
-                            to = if on == to { me.cursor } else { on };
+                            to = if on == to { at } else { on };
                         }
-                        if to != me.cursor {
-                            me.cursor = to;
+                        if to == CHARS && !me.random {
+                            me.random = true;
+                            out.push(Sound(0));
+                        } else if to != at {
+                            (me.cursor, me.random) = (to, false);
                             me.costume = 0;
                             out.push(Sound(0));
                         }
@@ -824,7 +865,7 @@ impl Menu {
                 // B66: landing on a taken costume moves on to the next free one
                 self.skip_taken();
                 if k.ok && !self.players[p].ready {
-                    if self.blocked(p) {
+                    if (self.players[p].random && !self.roll_random(p)) || self.blocked(p) {
                         out.push(Sound(1));
                     } else {
                         self.players[p].ready = true;
@@ -996,10 +1037,13 @@ impl Menu {
 
 /// The grid cell from `from` in direction (dx, dy): the nearest in that half-plane, sideways distance counted double.
 fn grid_step(from: usize, dx: f32, dy: f32) -> usize {
-    let (_, x0, y0) = GRID[from];
-    (0..CHARS)
+    // B217: cell CHARS is the Random card
+    let at = |i: usize| if i == CHARS { RANDOM_CELL } else { (GRID[i].1, GRID[i].2) };
+    let (x0, y0) = at(from);
+    (0..=CHARS)
         .filter_map(|i| {
-            let (along, side) = ((GRID[i].1 - x0) * dx + (GRID[i].2 - y0) * dy, ((GRID[i].1 - x0) * dy - (GRID[i].2 - y0) * dx).abs());
+            let (x, y) = at(i);
+            let (along, side) = ((x - x0) * dx + (y - y0) * dy, ((x - x0) * dy - (y - y0) * dx).abs());
             (along > 1.0).then_some((i, along + 2.0 * side))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1102,6 +1146,8 @@ const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
 const INFO: Tex = Tex::Sheet(EXTRA);
 const C00: Tex = Tex::Sheet(EXTRA + 3);
 const C02: Tex = Tex::Sheet(EXTRA + 5);
+/// The "?" court tile on `C02` (a random court; B217's Random card).
+const RANDOM_TILE: [f32; 4] = [96.0, 360.0, 92.0, 68.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -1342,7 +1388,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "chars-online" => Screen::Chars,
+        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "chars-online" | "chars-random" => Screen::Chars,
         "confirm" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -1366,6 +1412,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.custom = screen.starts_with("mods") && !menu.mods.is_empty();
         menu.players[0].card = screen.ends_with("attrs");
         menu.players[0].ready = screen == "coms";
+        menu.players[0].random = screen == "chars-random";
         // B64: the court / umpire picker open on Nakagawa River Courts / Lily, as the PCSX2 shots (`context/b64`)
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
@@ -1933,6 +1980,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         for (i, &(_, x, y)) in GRID.iter().enumerate() {
             d.hit([x - 32.0, y - 32.0, 64.0, 64.0], pointer::Act::Cell(i));
         }
+        // B217: the Random card (the confirm screen's "?" court tile), dark when nothing's open
+        let (rx, ry) = RANDOM_CELL;
+        let tint = if m.draw(lead, 0).is_none() { [50.0; 3] } else { WHITE };
+        d.q(Tex::Solid, [0.0; 4], [rx - 26.0, ry - 20.0, 52.0, 40.0], [110.0, 100.0, 90.0], 128.0);
+        d.q(C02, RANDOM_TILE, [rx - 24.0, ry - 18.0, 48.0, 36.0], tint, 128.0);
+        d.hit([rx - 26.0, ry - 20.0, 52.0, 40.0], pointer::Act::Cell(CHARS));
         let hint = if m.mods.is_empty() { String::new() } else { format!("Tab / Square: {} custom characters   ", m.mods.len()) };
         d.centred(&format!("{hint}Select / C: left or right hand"), 320.0, 159.0, 12.0, WHITE);
         if !m.mods.is_empty() {
@@ -1956,7 +2009,19 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         d.box3([x, y, 144.0, 168.0], 12.0, [Some(INK), Some(if picking || pl.ready { WHITE } else { [60.0; 3] }), Some(fill)], 128.0);
         // B221: a tap on a card readies its pick, on a ready one picks again
         d.hit([x, y, 144.0, 168.0], pointer::press(|k| if pl.ready { k.back = true } else { k.ok = true }));
-        if picking || pl.ready {
+        if picking && pl.random && !pl.ready {
+            // B217: the ? card until the pick is drawn on ready
+            d.q(C02, RANDOM_TILE, [x + 14.0, y + 36.0, 116.0, 86.0], WHITE, 128.0);
+            d.label("Random", x + 72.0, y + 142.0, 20.0, 128.0, GOLD);
+            d.text(&format!("{}P", p + 1), x + 6.0, y + 4.0, 22.0, WHITE);
+            if !pl.modded && !m.custom {
+                d.anchor = Anchor::Centre;
+                let (fx, fy) = RANDOM_CELL;
+                d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [fx - 40.0 + 10.0 * (p % 2) as f32, fy - 8.0 + 12.0 * (p / 2) as f32, 48.0, 24.0], COLOURS[p], 128.0);
+                d.text(&format!("{}P", p + 1), fx - 4.0 + 14.0 * (p % 2) as f32, fy - 32.0 + 14.0 * (p / 2) as f32, 16.0, COLOURS[p]);
+                d.anchor = Anchor::Sides;
+            }
+        } else if picking || pl.ready {
             if pl.card {
                 let (style, grades) = modded.map_or((text.style[c], text.grades[c]), |i| text.mods[i]);
                 attribute_card(d, p, style, &grades, x, y);
@@ -2034,6 +2099,9 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text) {
         d.anchor = Anchor::Centre;
     }
     match m.who(lead) {
+        _ if m.players[lead].random && !m.players[lead].ready => {
+            d.info("Random: a character and costume drawn from the disc and custom characters when you're ready.")
+        }
         Who::Mod(i) => {
             let md = &m.mods[i];
             let s = if md.costumes.len() == 1 { "" } else { "s" };
@@ -2814,6 +2882,50 @@ mod tests {
         assert_eq!(go(&mut m, |p| &mut p.left), 0, "the list's start");
         assert_eq!(go(&mut m, |p| &mut p.down), 8);
         assert_eq!(go(&mut m, |p| &mut p.up), 0);
+    }
+
+    /// B217: Random locked in many times lands on disc characters (a costume pack's costumes too), custom ones and
+    /// their costumes beyond the first, never on a costume someone's ready on; picking again goes back to the ? card; a computer's
+    /// Random draws the same way.
+    #[test]
+    fn random_card_draws_disc_and_mods() {
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let three = |i: usize| crate::mods::Mod { id: format!("m{i}"), costumes: vec!["a".into(), "b".into(), "c".into()], ..fake_mod(i) };
+        let pack = crate::mods::Mod { id: "pack".into(), costumes: vec!["a".into(), "b".into()], costume_of: Some(0), ..fake_mod(0) };
+        let mut m = Menu { screen: Screen::Chars, doubles: true, mods: vec![three(1), three(2), pack], seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        // taken: 2P ready on Jun's costume 4, the computer's 3P on the first mod's costume 2
+        m.players[1] = Player { cursor: GRID.iter().position(|g| g.0 == 2).unwrap(), costume: 3, ready: true, ..default() };
+        m.players[2] = Player { modded: true, pick: 0, costume: 1, ready: true, ..default() };
+        let taken = [(Who::Disc(2), 3), (Who::Mod(0), 1)];
+        // ↓↓ from the top row's right end reaches the Random card
+        m.players[0].cursor = 3;
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        assert!(!m.players[0].random);
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        assert!(m.players[0].random);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..3000 {
+            m.step(Dev::Keys, press(|p| &mut p.ok));
+            assert!(m.players[0].ready);
+            let pick = m.pick(0);
+            assert!(!taken.contains(&pick), "{pick:?} is taken");
+            seen.insert(pick);
+            // ○'s picking again (here 1P's ○ would go to the computers', the humans all ready)
+            m.unready(0);
+            assert!(m.players[0].random);
+        }
+        assert!(seen.iter().any(|&(w, c)| matches!(w, Who::Disc(_)) && c > 0), "disc costumes beyond the first");
+        assert!(seen.contains(&(Who::Mod(2), 1)), "the costume pack's");
+        assert!(seen.contains(&(Who::Mod(1), 2)) && seen.contains(&(Who::Mod(0), 2)), "custom characters' costumes");
+        assert_eq!(seen.len(), 14 * 10 + 2 + 3 + 3 - taken.len(), "every open pick comes up");
+        // the computer's 4P on Random, driven by 1P once the humans are ready
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        m.players[3].random = true;
+        assert_eq!(m.driven(Dev::Keys), Some(3));
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert!(m.players[3].ready && m.screen == Screen::Confirm);
+        let picks: Vec<_> = (0..4).map(|p| m.pick(p)).collect();
+        assert!((0..4).all(|p| (0..4).all(|q| p == q || picks[p] != picks[q])), "{picks:?}");
     }
 
     #[test]
