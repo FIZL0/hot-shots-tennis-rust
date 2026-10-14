@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = the roster filtered to the mods, confirm) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -1242,6 +1242,11 @@ const CONFIRM: Tex = Tex::Sheet(15);
 const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
 const C00: Tex = Tex::Sheet(EXTRA + 3);
 const C02: Tex = Tex::Sheet(EXTRA + 5);
+/// B192: court `k`'s picture (`MENU/WALL/COURTnn.XB` → `Confirmation_Courtnn.tm2`, 568×256), the original's confirm
+/// screen backdrop.
+const fn court_pic(k: usize) -> Tex {
+    Tex::Sheet(EXTRA + 6 + k)
+}
 /// The "?" court tile on `C02` (a random court; B217's Random card).
 const RANDOM_TILE: [f32; 4] = [96.0, 360.0, 92.0, 68.0];
 
@@ -1436,6 +1441,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     ] {
         sheets.push((name.into(), read(&mut iso, xb, &format!("/{name}.tm2"))));
     }
+    // B192: each court's picture behind the confirm screen's players ([`court_pic`])
+    for k in 0..COURTS {
+        let name = format!("confirmation_court{k:02}");
+        sheets.push((name.clone(), read(&mut iso, &format!("MENU/WALL/COURT{k:02}.XB"), &format!("/{name}.tm2"))));
+    }
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(|s| s.1.as_slice()));
     art.extend(sheets.iter().map(|(name, d)| super::menu_art::image(&mut images, d, name)));
     let glyphs = glyphs(&font);
@@ -1495,7 +1505,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
         "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
-        "confirm" | "confirm-random" | "courts" | "umpires" => Screen::Confirm,
+        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
@@ -1526,6 +1536,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
             menu.picking = Some(if sel == 1 { 8 } else { 2 });
+        }
+        // B192: the confirm screen on Nakagawa River Courts and Lily, as the PCSX2 shots (`context/b192`)
+        if screen == "confirm-court" {
+            (menu.court, menu.umpire) = (8, 2);
         }
         if screen == "chars4" {
             // four humans on one portrait: their hands' offsets keep them apart (B156)
@@ -1573,7 +1587,7 @@ struct Draw<'a> {
 
 const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
-const TITLES: [(&str, [f32; 3]); 7] = [
+const TITLES: [(&str, [f32; 3]); 8] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
     ("Settings", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
@@ -1581,6 +1595,7 @@ const TITLES: [(&str, [f32; 3]); 7] = [
     ("Confirm Settings", [55.0, 80.0, 42.0]),
     ("Mods", [110.0, 65.0, 75.0]),
     ("Lobby", [55.0, 80.0, 42.0]),
+    ("Select Court", [55.0, 80.0, 42.0]),
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];
@@ -2316,7 +2331,11 @@ fn team_boxes(d: &mut Draw, col: [f32; 4], doubles: bool) {
 
 /// B295: the help line's box under the seats, `s` word-wrapped onto its two lines (shrunk to fit).
 fn help_line(d: &mut Draw, col: [f32; 4], doubles: bool, s: &str) {
-    let [x, y, w, h] = help_rect(col, doubles);
+    help_box(d, help_rect(col, doubles), s);
+}
+
+/// The help box at `[x, y, w, h]`.
+fn help_box(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &str) {
     d.box3([x, y, w, h], 10.0, [None, None, Some(WHITE)], 96.0);
     let mut size = 13.0;
     let lines = loop {
@@ -2387,62 +2406,20 @@ fn seat_row(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &SeatRow, end: f32) {
 /// them, the side card with the court (its surface and ball meters) and umpire, the court / sets / games / umpire
 /// rows and Start under it. The original's pickers (`picker`) take the bottom as before.
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
+    if m.picking.is_some() && m.sel == 1 {
+        return court_screen(d, m, text, hand_x);
+    }
     d.frame(4, 8);
     let (col, [sx, sy, sw, _]) = m.grid.split();
     let [l, t, ..] = m.grid.reach();
     let mode = format!("{} · {} set{}, {} games", if m.doubles { "Doubles" } else { "Singles" }, SETS[m.sets], if SETS[m.sets] == 1 { "" } else { "s" }, m.games);
     d.outlined(|d| d.text(&mode, l + 8.0, t + 48.0, 20.0, GOLD));
-    // the flame behind the teams' groups, the VS over the gap between them
-    let gap = team_box(col, 1 + m.doubles as usize, 1)[1] - TEAM_GAP / 2.0;
-    let vs = [col[0] + col[2] / 2.0, gap];
-    flame::draw(d, m, vs);
-    team_boxes(d, col, m.doubles);
-    d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [vs[0] - 32.0, vs[1] - 24.0, 64.0, 48.0], WHITE, 128.0);
-    for p in 0..m.players() {
-        let pl = m.players[p];
-        let remote = m.remote(p).filter(|s| s.human());
-        let human = m.seats[p].is_some() || remote.is_some();
-        let name = match m.who(p) {
-            _ if pl.random => "Random".to_string(),
-            Who::Mod(i) => m.mods[i].name.clone(),
-            Who::Disc(c) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[c]).to_string(),
-        };
-        let (who, costume) = m.pick(p);
-        let (style, c) = match who {
-            Who::Mod(i) => (text.mods[i].0, m.mods[i].donor),
-            Who::Disc(c) => (text.style[c], c),
-        };
-        let owner = match remote {
-            Some(s) => m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online".to_string(), |n| n.clone()),
-            None if human => dev_name(m.seats[p], pads),
-            None => "COM".into(),
-        };
-        // B264: a Random pick stays hidden until the match starts
-        let line = if pl.random { owner } else { format!("{owner} · {} · Costume {}", STYLE_NAMES[style], costume + 1) };
-        let rank = RANK_NAMES.get(com_rank(&text.ranks, c, costume, m.doubles)).copied().unwrap_or("COM");
-        let chip = if human { ("Ready", Some(CHIP_READY)) } else { (rank, Some(CHIP_COM)) };
-        let row = SeatRow { p, face: Some(cell_face(m.cell(p))), name: &name, faint: false, who: &line, chip, filled: true, on: false };
-        seat_row(d, seat_rect(col, m.doubles, p), &row, 0.0);
-    }
-
+    stage(d, m, text, pads, [col[0], col[1], col[2], col[3] - 48.0]);
     // the side card: the court's band, its surface and meters, the umpire
     d.box3([sx, sy, sw, 122.0], 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
     let court = if m.court == COURTS { "Random Court".to_string() } else { format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court)) };
     court_band(d, [sx, sy, sw], &court);
-    if m.court < COURTS {
-        let s = SURFACE[m.court];
-        let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
-        d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], sx + 10.0, sy + 52.0, 16.0, sw - 20.0, tint));
-        // B141a: the icons and balls are ours (`menu_art::pill_layers`)
-        for (g, (icon, n)) in [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)].into_iter().enumerate() {
-            let x = sx + 10.0 + (sw - 20.0) / 2.0 * g as f32;
-            let k = 18.0 / icon[3];
-            d.q(Tex::Pill, icon, [x, sy + 72.0, icon[2] * k, 18.0], WHITE, 128.0);
-            for b in 0..4 {
-                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + icon[2] * k + 2.0 + 13.0 * b as f32, sy + 74.0, 13.0, 13.0], WHITE, 128.0);
-            }
-        }
-    }
+    court_meters(d, m, [sx + 10.0, sy + 52.0, sw - 20.0]);
     // the umpire's round face (the "?" tile for a random one) and name
     let u = m.umpire as usize;
     let (face, uname) = match u {
@@ -2470,7 +2447,124 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
         3 => text.msg(325),
         _ => text.msg(328),
     };
-    help_line(d, col, m.doubles, info);
+    help_box(d, [col[0], col[1] + col[3] - 40.0, col[2], 40.0], info);
+}
+
+/// The court's surface (from `[x, y]`) and its bounce and speed meters under it, across `w`; nothing for Random.
+fn court_meters(d: &mut Draw, m: &Menu, [x0, y, w]: [f32; 3]) {
+    if m.court < COURTS {
+        let s = SURFACE[m.court];
+        let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
+        d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], x0, y, 16.0, w, tint));
+        // B141a: the icons and balls are ours (`menu_art::pill_layers`)
+        for (g, (icon, n)) in [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)].into_iter().enumerate() {
+            let x = x0 + w / 2.0 * g as f32;
+            let k = 18.0 / icon[3];
+            d.q(Tex::Pill, icon, [x, y + 20.0, icon[2] * k, 18.0], WHITE, 128.0);
+            for b in 0..4 {
+                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + icon[2] * k + 2.0 + 13.0 * b as f32, y + 22.0, 13.0, 13.0], WHITE, 128.0);
+            }
+        }
+    }
+}
+
+/// B192: court `k`'s picture over `dst`, cropped (never stretched) to its shape: Random's "?" tile on a dark field.
+fn court_picture(d: &mut Draw, k: usize, [x, y, w, h]: [f32; 4]) {
+    if k >= COURTS {
+        d.q(Tex::Solid, [0.0; 4], [x, y, w, h], [30.0, 45.0, 28.0], 128.0);
+        let t = (h * 0.3).min(w * 0.3);
+        d.q(C02, RANDOM_TILE, [x + w / 2.0 - t * 0.68, y + h * 0.35 - t / 2.0, t * 1.35, t], [70.0; 3], 128.0);
+        return;
+    }
+    let (pw, ph) = (568.0, 256.0);
+    let src = if w / h > pw / ph { let sh = pw * h / w; [0.0, (ph - sh) / 2.0, pw, sh] } else { let sw = ph * w / h; [(pw - sw) / 2.0, 0.0, sw, ph] };
+    d.q(court_pic(k), src, [x, y, w, h], WHITE, 128.0);
+}
+
+/// B192: the confirm screen's stage (`[x, y, w, h]`), after the original's: the court's picture, the chosen players
+/// standing on it as 3D models in their costumes (`previews.rs`, mods too), the teams either side of the original's
+/// flame and VS, each player's play style, tag and status under them. A Random pick stays a "?" (B264).
+fn stage(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], [x, y, w, h]: [f32; 4]) {
+    d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+    let (ix, iy, iw, ih) = (x + 5.0, y + 5.0, w - 10.0, h - 10.0);
+    court_picture(d, m.court, [ix, iy, iw, ih]);
+    // the labels' shade along the foot
+    let foot = 64.0;
+    d.q(Tex::Solid, [0.0; 4], [ix, iy + ih - foot, iw, foot], [0.0; 3], 60.0);
+    let n = m.players();
+    let per = 1 + m.doubles as usize;
+    let gap = 56.0;
+    let slot = (iw - gap) / n as f32;
+    let vs = [ix + iw / 2.0, iy + (ih - foot) * 0.45];
+    flame::draw(d, m, vs);
+    for p in 0..n {
+        let (team, i) = (p / per, p % per);
+        let cx = ix + team as f32 * (iw + gap) / 2.0 + slot * (i as f32 + 0.5);
+        // the model's card shape (the select's 4:5): full height over the foot, narrower where the slots are
+        let mut ph = ih - foot + 12.0;
+        let pw = (ph * 0.8).min(slot * 1.6);
+        ph = pw / 0.8;
+        let pl = m.players[p];
+        if pl.random {
+            let t = (slot * 0.6).min(70.0);
+            d.q(C02, RANDOM_TILE, [cx - t * 0.68, iy + ih - foot - t - 8.0, t * 1.35, t], WHITE, 128.0);
+        } else {
+            d.q(Tex::Preview(p), [0.0; 4], [cx - pw / 2.0, iy + ih - foot + 12.0 - ph, pw, ph], WHITE, 128.0);
+        }
+        let (who, _) = m.pick(p);
+        let c = match who {
+            Who::Mod(i) => m.mods[i].donor,
+            Who::Disc(c) => c,
+        };
+        let style = match who {
+            Who::Mod(i) => text.mods[i].0,
+            Who::Disc(c) => text.style[c],
+        };
+        let remote = m.remote(p).filter(|s| s.human());
+        let human = m.seats[p].is_some() || remote.is_some();
+        let name = match who {
+            _ if pl.random => "Random".to_string(),
+            Who::Mod(i) => m.mods[i].name.clone(),
+            Who::Disc(c) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[c]).to_string(),
+        };
+        let owner = match remote {
+            Some(s) => m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online".to_string(), |n| n.clone()),
+            None if human => dev_name(m.seats[p], pads),
+            None => RANK_NAMES.get(com_rank(&text.ranks, c, m.pick(p).1, m.doubles)).copied().unwrap_or("COM").into(),
+        };
+        let lw = (slot - 6.0).min(150.0);
+        let ly = iy + ih - foot + 4.0;
+        if !pl.random {
+            d.outlined(|d| d.label(STYLE_NAMES[style], cx, ly, 12.0, lw, GOLD));
+        }
+        d.box3([cx - lw / 2.0, ly + 15.0, lw, 24.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
+        d.label(&format!("{}P {name}", p + 1), cx, ly + 19.0, 16.0, lw - 10.0, WHITE);
+        let chip = if human { CHIP_READY } else { CHIP_COM };
+        d.pill_at([cx - lw / 2.0 + 8.0, ly + 41.0, lw - 16.0, 16.0], [[60.0; 3], WHITE, WHITE], 128.0);
+        d.label(&owner, cx, ly + 43.0, 11.0, lw - 26.0, chip);
+    }
+    d.q(CONFIRM, [448.0, 264.0, 64.0, 48.0], [vs[0] - 32.0, vs[1] - 24.0, 64.0, 48.0], WHITE, 128.0);
+}
+
+/// B192: Select Court as its own screen (ours; the original swaps its confirm rows for the strip): the hovered
+/// court's picture fills the window behind the title, its name, surface and meters on a card, the original's strip
+/// of court tiles along the foot (`picker`).
+fn court_screen(d: &mut Draw, m: &Menu, text: &Text, hand_x: f32) {
+    d.frame(7, 8);
+    let [l, t, r, b] = m.grid.reach();
+    let (vx, vy, vw, vh) = (l - 12.0, t, r - l + 24.0, b - t + 18.0);
+    // under the title bar, over the wall
+    let at = d.out.len();
+    court_picture(d, m.court, [vx, vy, vw, vh]);
+    let pic: Vec<Quad> = d.out.drain(at..).collect();
+    d.out.splice(1..1, pic);
+    let court = if m.court == COURTS { "Random Court".to_string() } else { format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court)) };
+    let cw = 260.0;
+    let (cx, cy) = (l + 8.0, t + 56.0);
+    d.box3([cx, cy, cw, if m.court < COURTS { 90.0 } else { 44.0 }], 14.0, [Some(INK), Some(WHITE), Some([20.0, 30.0, 18.0])], 100.0);
+    d.outlined(|d| left(d, &court, cx + 12.0, cy + 10.0, 22.0, cw - 24.0, WHITE));
+    court_meters(d, m, [cx + 12.0, cy + 42.0, cw - 24.0]);
+    picker(d, m, text, hand_x);
 }
 
 /// B295: the confirm screen's rows on the side card: Start (big, at its foot), then Court, Sets, Games, Umpire under
