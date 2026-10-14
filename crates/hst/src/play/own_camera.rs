@@ -31,7 +31,10 @@ pub(super) struct OwnCam {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate)));
+    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate)))
+        // B230: made with the match, so the intro (which holds the fixed ticks) already shows this machine's side
+        .add_systems(PostStartup, link.after(super::setup))
+        .add_systems(Update, listener);
 }
 
 /// Room seat index of player `i` among `n` (as `Pads::slot_of`).
@@ -60,7 +63,10 @@ fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCa
         && let Some(owner) = (0..n).find(|&i| peers[seat(i, n)] == Some(np.me.as_str()))
     {
         let view = g.cam.view;
-        commands.insert_resource(OwnCam { cam: Camera::from_view(view), prev: view, expect: view, owner, tick: 0, cut: false });
+        let mut cam = Camera::from_view(view);
+        cam.turned = g.players[owner].end < 0.0;
+        cam.cut();
+        commands.insert_resource(OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false });
     }
 }
 
@@ -103,10 +109,22 @@ fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netpla
 /// The views the picture blends between this frame: this machine's own camera's while the shared one shows the
 /// plain match view, else the shared camera's (`g.prev_view`, `g.cam.view`).
 pub(super) fn shown(g: &Game, own: Option<&OwnCam>) -> (View, View) {
+    // before the match's first tick (the intro holds them) neither camera has stepped: the view its first step cuts to
+    if g.instant.ticks == 0 {
+        let mut c = own.map_or(g.cam, |o| o.cam);
+        let players: Vec<_> = g.players.iter().map(|p| p.pos).collect();
+        c.step(&Scene { players: &players, ball: g.flight.ball.pos });
+        return (c.view, c.view);
+    }
     match own {
         Some(o) if g.cam.view == o.expect => (o.prev, o.cam.view),
         _ => (g.prev_view, g.cam.view),
     }
+}
+
+/// Positional sounds are heard from the end this machine's match camera looks from (`audio::set_turned`).
+fn listener(g: Option<Res<Game>>, own: Option<Res<OwnCam>>) {
+    crate::audio::set_turned(g.is_some_and(|g| own.map_or(g.cam.turned, |o| o.cam.turned)));
 }
 
 #[cfg(test)]

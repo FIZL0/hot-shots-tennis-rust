@@ -8,7 +8,21 @@ use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, snd::{self, Bank, KeyOn, Level, Voice}, xb::Archive};
 use hst_sim::sound;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// The listener sits behind the +z baseline instead of the original's fixed −z one (B230): positional sounds turn
+/// round with the match camera this machine shows, so left and right stay on screen's left and right.
+static TURNED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_turned(on: bool) {
+    TURNED.store(on, Ordering::Relaxed);
+}
+
+/// A bearing (whole degrees) as heard from the listener's end.
+fn heard(angle: i32) -> i32 {
+    if TURNED.load(Ordering::Relaxed) { (angle + 180) % 360 } else { angle }
+}
 
 /// Output samples per 60 Hz frame.
 const FRAME: usize = 48_000 / 60;
@@ -224,6 +238,8 @@ impl Mix {
 
     /// The play call's part of the level for `p` at `pos`.
     fn level(&self, p: sound::Play, pos: [f32; 3]) -> Level {
+        // turned: the listener's end and facing turned round the court's centre, as the sound's spot the other way
+        let pos = if TURNED.load(Ordering::Relaxed) { [-pos[0], pos[1], -pos[2]] } else { pos };
         let (angle, dist) = sound::place(pos);
         let seq = sound::stereo(sound::falloff(p.volume, dist), angle, &self.stereo).map(|x| x as u32);
         Level { seq, bank: self.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
@@ -540,7 +556,7 @@ impl Sound {
     pub fn turn(&self, id: u64, volume: i32, angle: i32) {
         let mut m = self.0.lock().unwrap();
         let m = &mut *m;
-        let seq = sound::stereo(volume, angle, &m.stereo).map(|x| x as u32);
+        let seq = sound::stereo(volume, heard(angle), &m.stereo).map(|x| x as u32);
         m.follow(id);
         m.playing.iter_mut().filter(|q| q.id == id).for_each(|q| q.level.seq = seq);
         for (v, .., level) in m.voices.iter_mut().filter(|v| v.2 == id) {
@@ -553,7 +569,7 @@ impl Sound {
     pub fn play_toward(&self, bank: &Arc<SoundBank>, p: sound::Play, angle: i32) -> u64 {
         let level = {
             let m = self.0.lock().unwrap();
-            let seq = sound::stereo(p.volume, angle, &m.stereo).map(|x| x as u32);
+            let seq = sound::stereo(p.volume, heard(angle), &m.stereo).map(|x| x as u32);
             Level { seq, bank: m.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
         };
         self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of(p.slot))
