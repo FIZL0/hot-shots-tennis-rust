@@ -1768,7 +1768,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars4" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "sets" | "games" => Screen::Confirm,
         "online" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -1829,6 +1829,22 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             // four humans on one portrait: their hands' offsets keep them apart (B156)
             menu.seats = [Some(Dev::Keys); 4];
             menu.players.iter_mut().for_each(|p| p.cursor = 6);
+        }
+        // B353: humans on the keyboard and pads (`chars2`: 1P keys, 2P a pad, ready; `chars4-pads`: 2P–4P pads), so
+        // the shared legend shows both devices' glyphs
+        if screen == "chars2" || screen == "chars4-pads" {
+            let pad = |i: u32| Some(Dev::Pad(Entity::from_raw_u32(1_000_000 + i).unwrap()));
+            let n = if screen == "chars2" { 2 } else { 4 };
+            for p in 1..n {
+                menu.seats[p] = pad(p as u32);
+                menu.bots[p] = false;
+                menu.players[p].cursor = 6;
+            }
+            // 2P readied on another character (Carol) than 1P's, so 1P's ✕ stays "Ready"
+            if screen == "chars2" {
+                menu.players[1].cursor = 7;
+                menu.players[1].ready = true;
+            }
         }
         mods_screen::sample(&mut menu, &screen);
         // B306: the one roster, 1P on the first mod (scrolled to it)
