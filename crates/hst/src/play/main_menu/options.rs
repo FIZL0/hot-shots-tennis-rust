@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -37,12 +37,24 @@ pub(super) enum Opt {
     Chat,
     /// B273: the browser build's renderer.
     Renderer,
+    /// B118: the on-screen pad buzzes on each press.
+    Vibration,
 }
 use Opt::*;
 
-/// The Settings tabs, in order, and the pages they open.
-pub(super) const TABS: [(&str, Screen); 5] =
-    [("Display", Screen::Display), ("Graphics", Screen::Graphics), ("Sound", Screen::Sound), ("Controls", Screen::Controls), ("Online & Mods", Screen::ModSettings)];
+/// The Settings tabs, in order, and the pages they open; Mobile (B118) only on a touch screen (`tabs_shown`).
+pub(super) const TABS: [(&str, Screen); 6] = [
+    ("Display", Screen::Display),
+    ("Graphics", Screen::Graphics),
+    ("Sound", Screen::Sound),
+    ("Controls", Screen::Controls),
+    ("Online & Mods", Screen::ModSettings),
+    ("Mobile", Screen::Mobile),
+];
+/// The tabs on show: Mobile's phone-only options on a touch screen.
+pub(super) fn tabs_shown() -> &'static [(&'static str, Screen)] {
+    if super::touch_page() { &TABS } else { &TABS[..5] }
+}
 /// `page`'s tab.
 pub(super) fn tab(page: Screen) -> usize {
     TABS.iter().position(|(_, s)| *s == page).unwrap_or(0)
@@ -55,6 +67,8 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, Sh
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = &[Downloads, OnlineMods, Chat];
+/// B118: phone-only options (later: control size and opacity).
+const MOBILE: &[Opt] = &[Vibration];
 /// B289: Online Mod Downloads' values.
 const ASK_VALUES: [(Ask, &str); 3] = [(Ask::Each, "Ask"), (Ask::Always, "Always"), (Ask::Never, "Never")];
 
@@ -65,6 +79,7 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
         Screen::Graphics => GRAPHICS,
         Screen::Sound => SOUND,
         Screen::ModSettings => MODS,
+        Screen::Mobile => MOBILE,
         _ => &[],
     }
 }
@@ -101,6 +116,7 @@ fn label(o: Opt) -> &'static str {
         OnlineMods => "Online Mod Downloads",
         Chat => "Chat",
         Renderer => "Renderer",
+        Vibration => "Vibration",
     }
 }
 
@@ -129,6 +145,7 @@ fn about(o: Opt) -> &'static str {
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         Chat => "Show the online lobby's and match's text chat (Enter, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
+        Vibration => "Buzz briefly on each press of the on-screen controls (where the phone can).",
     }
 }
 
@@ -201,6 +218,7 @@ impl Settings {
                 crate::chat::HIDDEN.store(!self.0[CHAT], std::sync::atomic::Ordering::Relaxed);
             }
             Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
+            Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
         }
     }
 
@@ -228,6 +246,7 @@ impl Settings {
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
             Chat => on_off(self.0[CHAT]),
             Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
+            Vibration => on_off(self.0[VIBRATION]),
         }
     }
 }
@@ -250,8 +269,9 @@ impl Menu {
     /// Settings row (closes the pause overlay).
     pub(super) fn step_tabs(&mut self, k: Press, out: &mut Vec<Effect>) {
         if k.prev || k.next {
-            let n = TABS.len();
-            self.go(TABS[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
+            let tabs = tabs_shown();
+            let n = tabs.len();
+            self.go(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
         } else if k.back {
             self.sel = 2;
             self.screen = Screen::Main;
@@ -289,19 +309,19 @@ fn tabs(d: &mut Draw, m: &Menu) {
     // right of the title's tab (`Draw::frame`), to the window's right edge (the strip spans the view less 12 a side)
     let x0 = d.width(super::TITLES[1].0, 30.0) + 88.0;
     let room = m.grid.strip[2] + 24.0 - x0 - 8.0;
-    let ws: Vec<f32> = TABS.iter().map(|(l, _)| d.width(l, 15.0) + 22.0).collect();
-    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (TABS.len() - 1) as f32)).min(1.0);
-    d.anchor = super::super::widescreen::Anchor::Span;
-    let mut x = x0;
-    for (i, ((words, s), w)) in TABS.iter().zip(&ws).enumerate() {
+    let tabs = tabs_shown();
+    let ws: Vec<f32> = tabs.iter().map(|(l, _)| d.width(l, 15.0) + 22.0).collect();
+    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (tabs.len() - 1) as f32)).min(1.0);
+    // in the centred screen's units from the view's top-left (`Span` would stretch a tab past 640 to the edge)
+    let (mut x, top) = (x0 + m.grid.strip[0] - 12.0, m.grid.strip[1] - 46.0);
+    for (i, ((words, s), w)) in tabs.iter().zip(&ws).enumerate() {
         let on = *s == m.screen;
-        let b = [x, 3.0, w * k, 24.0];
+        let b = [x, top + 3.0, w * k, 24.0];
         d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
-        d.label(words, x + w * k / 2.0, 7.5, 15.0, (w - 18.0) * k, if on { WHITE } else { BROWN });
+        d.label(words, x + w * k / 2.0, top + 7.5, 15.0, (w - 18.0) * k, if on { WHITE } else { BROWN });
         d.hit(b, pointer::Act::Tab(i));
         x += (w + 6.0) * k;
     }
-    d.anchor = super::super::widescreen::Anchor::Centre;
 }
 
 /// `s` broken at spaces to lines `w` wide at `size` from (x, y), `gap` px apart; the y under its last line.
@@ -450,7 +470,7 @@ mod tests {
     fn every_page() {
         let mut m = Menu { sel: 2, ..default() };
         m.step(Dev::Keys, press(|k| &mut k.ok));
-        for (_, s) in TABS {
+        for &(_, s) in tabs_shown() {
             assert_eq!((m.screen, m.sel), (s, 0));
             let n = if s == Screen::Controls { controls::action_names().count() } else { page(s).len() };
             for want in (1..n).chain([0]) {
@@ -482,7 +502,7 @@ mod tests {
         }
         assert_eq!(m.screen, TABS[0].1);
         m.step(Dev::Keys, press(|k| &mut k.prev));
-        assert_eq!(m.screen, TABS[4].1);
+        assert_eq!(m.screen, tabs_shown().last().unwrap().1);
         m.step(Dev::Keys, press(|k| &mut k.back));
         assert_eq!((m.screen, m.sel), (Screen::Main, 2));
     }

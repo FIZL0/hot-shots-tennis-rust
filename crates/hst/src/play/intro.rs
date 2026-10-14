@@ -364,7 +364,7 @@ fn show(intro: Option<Res<Intro>>, mut camera: Query<(&mut Transform, &mut Proje
     let v = intro.shot.rolled();
     let b = |p: [f32; 3]| Vec3::new(p[0], -p[1], -p[2]);
     *t = Transform::from_translation(b(v.eye)).looking_to(b(v.rot[2]), -b(v.rot[1]));
-    let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::aspect);
+    let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::scene_aspect);
     if let Projection::Perspective(p) = &mut *proj {
         p.fov = 2.0 * (v.fov.tan() * SHOWN_ASPECT.max(1.0 / aspect)).atan();
     }

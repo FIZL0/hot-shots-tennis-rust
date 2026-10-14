@@ -214,6 +214,8 @@ fn follow_window(
         let k = g.scale as f32 / 100.0;
         ((size((pw * k).floor(), (ph * k).floor()), k), (size(pw, ph), 1.0))
     };
+    // B118: a two-player phone match upright lays the HUD out turned a quarter (the composite turns it back)
+    let hud = if crate::play::widescreen::turned(Vec2::new(pw, ph)) { Extent3d { width: hud.height, height: hud.width, ..hud } } else { hud };
     let sampler = if g.original { ImageSampler::nearest() } else { ImageSampler::Default };
     for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
@@ -327,7 +329,7 @@ fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<P
     if !g.original {
         return;
     }
-    let aspect = crate::play::widescreen::aspect(w);
+    let aspect = crate::play::widescreen::scene_aspect(w);
     for (mut cam, proj) in &mut q {
         if let Projection::Perspective(p) = proj {
             let clip = PerspectiveProjection { aspect_ratio: aspect, ..p.clone() }.get_clip_from_view();
