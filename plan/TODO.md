@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B289** Settings: an **Online mod downloads** setting (Ask / Always / Never) so the choice made at the online mod prompt ("Download, always" / "Never download") can be changed later (user 2026-10-14); today it's only set from the prompt. Persist with the other settings, the prompt reads it → play/main_menu.rs (SETTING_NAMES, Settings) · play/main_menu/online.rs (ASK_ROWS) · mods_online.rs (Ask)
 - [ ] **B290** Settings menu rework (user 2026-10-14): reorganize the whole Settings menu, it isn't in a good order yet. Group into clear pages (e.g. Graphics, Sound, Controls, Online/Mods), move stray toggles (Upscaled Textures/Downloads, music, mod downloads) where they belong, consistent row style; any aspect ratio → play/main_menu.rs (Screen::Settings/Graphics/Sound/Controls, layout) · play/main_menu/legend.rs
 - [ ] **B291** Controls screen rework (user 2026-10-14): binds are drawn as floating text, make them match the menu's row/panel style; split into two tabs, **Controller** and **Keyboard & Mouse**, the Controller tab showing button icons (△ ○ ✕ □, L1/R1, d-pad, sticks) instead of names; rebinding still works per seat; any aspect ratio → play/main_menu.rs (Screen::Controls, layout) · play/controls.rs (Bindings, Action) · play/main_menu/legend.rs
 - [ ] **B265** Lobby/character select: computer (COM) seats shouldn't show "READY TO GO" — it covers their rank text; leave it off for COMs — crates/hst/src/play/main_menu/

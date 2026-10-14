@@ -38,6 +38,7 @@ use super::panel;
 use super::widescreen::Anchor;
 use crate::Args;
 use crate::graphics::Graphics;
+use crate::mods_online::Ask;
 use crate::audio::{Sound, SoundBank, Volumes};
 
 pub use super::widescreen::ASPECT;
@@ -186,9 +187,10 @@ pub(super) const FONT: [&str; 15] = [
 // ---------------------------------------------------------------- settings
 
 /// The enhancements, each on or off (all on by default), the graphics settings, the volumes (B235) and the aspect
-/// ratio (B117, a `widescreen::ASPECTS` index), saved in `settings.txt`.
+/// ratio (B117, a `widescreen::ASPECTS` index) and what to do with an online lobby's mods (B289: the lobby's
+/// prompt asks, or its "Download, always" / "Never download" answer), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 4], Graphics, Volumes, u8);
+pub struct Settings([bool; 4], Graphics, Volumes, u8, Ask);
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). The Settings screen's
 /// row 0 is the Aspect Ratio; these switches are rows 1 on.
 const SETTING_NAMES: [&str; 4] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads"];
@@ -196,9 +198,9 @@ const SETTING_LABELS: [&str; 4] = ["Upscaled Textures", "Menu Music", "Match Mus
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
-/// The Settings screen's first row and row pitch: nine rows above the description bar, as the Graphics screen's.
+/// The Settings screen's first row and row pitch: ten rows above the description bar, as the Graphics screen's.
 pub(super) const SETTINGS_TOP: f32 = GRAPHICS_TOP;
-pub(super) const SETTINGS_PITCH: f32 = 39.5;
+pub(super) const SETTINGS_PITCH: f32 = GRAPHICS_PITCH;
 /// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
 /// Downloads, `modstore::install`).
 fn locked(i: usize) -> bool {
@@ -212,6 +214,9 @@ fn switch(row: usize) -> Option<usize> {
 const GRAPHICS_ROW: usize = SETTING_NAMES.len() + 1;
 const SOUND_ROW: usize = GRAPHICS_ROW + 1;
 const CONTROLS_ROW: usize = SOUND_ROW + 1;
+/// B289: Online Mod Downloads, the row after Controls.
+const ASK_ROW: usize = CONTROLS_ROW + 1;
+const ASK_VALUES: [(Ask, &str); 3] = [(Ask::Each, "Ask"), (Ask::Always, "Always"), (Ask::Never, "Never")];
 /// B235: the Sound screen's sliders (`Volumes`' order), 0..=10 each.
 const SOUND_LABELS: [&str; 4] = ["Master", "Music", "Sound Effects", "Voices"];
 /// The Graphics screen's first row and row pitch (640×448): its ten rows fit between the title tab (to y 40) and the
@@ -232,7 +237,7 @@ fn default_aspect() -> u8 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect())
+        Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each)
     }
 }
 
@@ -247,7 +252,9 @@ impl Settings {
         let mut s = Settings::default();
         let (mut downloads, mut aspect, mut wide) = (None, None, None);
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
-            if k.trim() == "aspect" {
+            if k.trim() == "online_mods" {
+                s.4 = Ask::parse(v).unwrap_or(s.4);
+            } else if k.trim() == "aspect" {
                 aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
             } else if k.trim() == "widescreen" {
                 // before B117's aspect ratio: on was Auto, off the 4:3 picture
@@ -270,7 +277,7 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &self.1.text() + &self.2.text()
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text()
     }
 
     /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
@@ -738,7 +745,7 @@ impl Menu {
                 }
             }
             Screen::Settings => {
-                rows(CONTROLS_ROW + 2, &mut self.sel, &mut out);
+                rows(ASK_ROW + 2, &mut self.sel, &mut out);
                 let s = self.sel;
                 if s == 0 && (k.ok || k.left || k.right) {
                     let n = super::widescreen::ASPECTS.len() as u8;
@@ -758,7 +765,11 @@ impl Menu {
                     self.go(Screen::Sound, &mut out);
                 } else if k.ok && s == CONTROLS_ROW {
                     self.go(Screen::Controls, &mut out);
-                } else if (k.ok && s > CONTROLS_ROW) || k.back {
+                } else if s == ASK_ROW && (k.ok || k.left || k.right) {
+                    let list = ASK_VALUES.map(|(a, _)| a);
+                    self.settings.4 = cycle(&list, self.settings.4, if k.left { -1 } else { 1 });
+                    out.extend([Sound(0), SaveSettings]);
+                } else if (k.ok && s > ASK_ROW) || k.back {
                     self.sel = 2;
                     self.screen = Screen::Main;
                     out.push(Sound(1));
@@ -1489,8 +1500,15 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
 
     let fresh = kept.is_none();
     // first run (no settings.txt) on a Steam Deck: its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect());
-    let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| Settings::parse(&t));
+    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each);
+    let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
+        let mut s = Settings::parse(&t);
+        // B289: an older build kept the lobby prompt's answer in the online mod cache
+        if !t.contains("online_mods") {
+            s.4 = Ask::load(&crate::mods_online::cache(&args.iso)).unwrap_or(s.4);
+        }
+        s
+    });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
     // back from a match: its pause menu may have changed them (B126)
     if let Ok(s) = saved {
@@ -1910,10 +1928,13 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.frame(1, 6);
             let mut labels: Vec<String> = vec!["Aspect Ratio".into()];
             labels.extend(SETTING_LABELS.iter().map(|s| s.to_string()));
-            labels.extend(["Graphics".into(), "Sound".into(), "Controls".into(), "Back".into()]);
+            labels.extend(["Graphics".into(), "Sound".into(), "Controls".into(), "Online Mod Downloads".into(), "Back".into()]);
             d.rows_locked(&labels, m.sel, 120.0, SETTINGS_TOP, 300.0, hand_x, SETTINGS_PITCH, |i| switch(i).is_some_and(locked));
             d.text(super::widescreen::ASPECTS[m.settings.3 as usize], 440.0, SETTINGS_TOP + 7.0, 24.0, GOLD);
             d.hit([420.0, SETTINGS_TOP, 100.0, 38.0], pointer::Act::Row(0, pointer::OK));
+            let y = SETTINGS_TOP + SETTINGS_PITCH * ASK_ROW as f32;
+            d.text(ASK_VALUES.iter().find(|(a, _)| *a == m.settings.4).unwrap().1, 440.0, y + 7.0, 24.0, GOLD);
+            d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(ASK_ROW, pointer::OK));
             for (i, on) in m.settings.0.iter().enumerate() {
                 let (on, y) = (&(*on && !locked(i)), SETTINGS_TOP + SETTINGS_PITCH * (i + 1) as f32);
                 d.text(if *on { "ON" } else { "OFF" }, 440.0, y + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
@@ -1929,6 +1950,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
                 5 => "Resolution, shadows, frame limit and vsync.".into(),
                 6 => "The volume of the music, the sound effects and the voices.".into(),
                 7 => "Change the keys and buttons (controls.txt).".into(),
+                ASK_ROW => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).".into(),
                 _ => text.msg(190).to_string(),
             });
         }
@@ -2876,7 +2898,7 @@ mod tests {
     #[test]
     fn settings_down_reaches_every_row() {
         let mut m = Menu { screen: Screen::Settings, ..default() };
-        let rows = CONTROLS_ROW + 2;
+        let rows = ASK_ROW + 2;
         for want in (1..rows).chain([0]) {
             assert_eq!(m.step(Dev::Keys, press(|k| &mut k.down)), [Effect::Sound(0)]);
             assert_eq!((m.screen, m.sel), (Screen::Settings, want));
@@ -2895,13 +2917,13 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true], Graphics::LOW, Volumes::default(), 3);
+        let s = Settings([true, false, false, true], Graphics::LOW, Volumes::default(), 3, Ask::Each);
         assert_eq!(Settings::parse(&s.text()), s);
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true], d, Volumes::default(), 0));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true], d, Volumes::default(), 0));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d, Volumes::default(), 0));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true], d, Volumes::default(), 0, Ask::Each));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -2909,13 +2931,18 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true], d, Volumes::default(), 0));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true], d, Volumes::default(), 0, Ask::Each));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true], d, Volumes::default(), 0).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true], d, Volumes::default(), 0).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true], d, Volumes::default(), 0, Ask::Each).flags().contains(&"--music".to_string()));
+        // B289: the online mod answer round-trips; an unknown word keeps Ask
+        let mut a = Settings::default();
+        a.4 = Ask::Never;
+        assert_eq!(Settings::parse(&a.text()), a);
+        assert_eq!(Settings::parse("online_mods = maybe\n").4, Ask::Each);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false], d, Volumes::default(), 1).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false], d, Volumes::default(), 1, Ask::Each).flags()[..2], ["--no-upscale", "--music"]);
         // the preset row steps through the presets; changing any other row makes it Custom
         let mut s = Settings::default();
         s.graphics_step(0, 1);

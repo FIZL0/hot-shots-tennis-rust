@@ -245,17 +245,18 @@ pub enum Ask {
 impl Ask {
     const WORDS: [(Ask, &str); 3] = [(Ask::Always, "always"), (Ask::Never, "never"), (Ask::Each, "ask")];
 
-    /// The choice saved in `cache`, `None` before the first ask.
-    pub fn load(cache: &Path) -> Option<Ask> {
-        let t = std::fs::read_to_string(cache.join("ask.txt")).ok()?;
-        Ask::WORDS.iter().find(|(_, w)| t.trim() == *w).map(|(a, _)| *a)
+    /// `word`'s choice (as `word()` writes it in settings.txt).
+    pub fn parse(word: &str) -> Option<Ask> {
+        Ask::WORDS.iter().find(|(_, w)| word.trim() == *w).map(|(a, _)| *a)
     }
 
-    pub fn save(self, cache: &Path) {
-        let w = Ask::WORDS.iter().find(|(a, _)| *a == self).unwrap().1;
-        if let Err(e) = std::fs::create_dir_all(cache).and_then(|_| std::fs::write(cache.join("ask.txt"), w)) {
-            warn!("{}: {e}", cache.display());
-        }
+    pub fn word(self) -> &'static str {
+        Ask::WORDS.iter().find(|(a, _)| *a == self).unwrap().1
+    }
+
+    /// The choice an older build saved in `cache` (before B289 moved it into settings.txt), `None` if none.
+    pub fn load(cache: &Path) -> Option<Ask> {
+        Ask::parse(&std::fs::read_to_string(cache.join("ask.txt")).ok()?)
     }
 }
 
@@ -348,8 +349,9 @@ mod tests {
         // `{}` isn't a mod: nothing stays in the cache
         assert!(unpack(&p, hash(&p), &tmp.join("cache")).is_err());
         assert!(!tmp.join("cache").join(format!("{:016x}", hash(&p))).exists());
-        Ask::Each.save(&tmp.join("cache"));
-        assert_eq!(Ask::load(&tmp.join("cache")), Some(Ask::Each));
+        std::fs::write(tmp.join("ask.txt"), "never").unwrap();
+        assert_eq!(Ask::load(&tmp), Some(Ask::Never));
+        assert!(Ask::WORDS.iter().all(|(a, _)| Ask::parse(a.word()) == Some(*a)));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
