@@ -301,7 +301,14 @@ addEventListener('touchstart', e => {
 // the canvas and the pad: the page's own inputs and links (file pick, code entry, Reload) keep their taps.
 const ours = t => t instanceof Element && (t.tagName === 'CANVAS' || root.contains(t));
 for (const t of ['touchstart', 'touchmove']) addEventListener(t, e => { if (ours(e.target)) e.preventDefault(); }, { passive: false });
-for (const t of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart']) addEventListener(t, e => { if (ours(e.target)) e.preventDefault(); }, { passive: false });
+// B256: a selection, select-all or callout starts nowhere on the page but in a text input (the boot text, the ISO
+// page and anything outside the canvas took them before), and one that got through anyway (iOS select-all) is dropped
+const typing = t => t instanceof Element && t.matches('input, textarea, [contenteditable]');
+for (const t of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart']) addEventListener(t, e => { if (!typing(e.target)) e.preventDefault(); }, { passive: false, capture: true });
+document.addEventListener('selectionchange', () => {
+  const s = getSelection();
+  if (s && !s.isCollapsed && !typing(document.activeElement)) s.removeAllRanges();
+});
 const guard = () => inGame() && history.pushState({ hst: 1 }, '', location.href);
 // pushed on a tap: Chrome skips entries a page added before any user activation
 addEventListener('pointerdown', function once() {
