@@ -104,7 +104,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
     ));
     let composite = materials.add(Composite { scene: scene.clone(), hud: hud.clone() });
     let out = commands
-        .spawn((Camera2d, Camera { order: 51, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
+        .spawn((Camera2d, Camera { order: 51, output_mode: bevy::camera::CameraOutputMode::Write { blend_state: None, clear_color: ClearColorConfig::Custom(Color::BLACK) }, ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
         .id();
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
