@@ -247,7 +247,9 @@ pub(crate) fn pose<F: bevy::ecs::query::QueryFilter, M: EffectMaterial>(effect: 
         }
     }
     for (h, a) in view.materials.iter().zip(&effect.alphas) {
-        if let Some(mut mat) = materials.get_mut(h) {
+        if materials.get(h).is_some_and(|mat| mat.std_ref().base_color.alpha() != *a)
+            && let Some(mut mat) = materials.get_mut(h)
+        {
             mat.std().base_color.set_alpha(*a);
         }
     }
@@ -336,6 +338,7 @@ impl bevy::pbr::MaterialExtension for SortOnly {
 pub(crate) trait EffectMaterial: Material {
     fn new(m: StandardMaterial) -> Self;
     fn std(&mut self) -> &mut StandardMaterial;
+    fn std_ref(&self) -> &StandardMaterial;
 }
 
 impl EffectMaterial for StandardMaterial {
@@ -343,6 +346,9 @@ impl EffectMaterial for StandardMaterial {
         m
     }
     fn std(&mut self) -> &mut StandardMaterial {
+        self
+    }
+    fn std_ref(&self) -> &StandardMaterial {
         self
     }
 }
@@ -353,6 +359,41 @@ impl EffectMaterial for Fx {
     }
     fn std(&mut self) -> &mut StandardMaterial {
         &mut self.base
+    }
+    fn std_ref(&self) -> &StandardMaterial {
+        &self.base
+    }
+}
+
+/// Effect meshes [`fill`] has emptied (true) or filled again since [`hide_empty`] last ran.
+static EMPTIED: std::sync::Mutex<Vec<(AssetId<Mesh>, bool)>> = std::sync::Mutex::new(Vec::new());
+
+/// Shown on no camera while its mesh is [`fill`]'s empty placeholder.
+#[derive(Component)]
+struct Emptied;
+
+pub fn plugin(app: &mut App) {
+    app.add_systems(PostUpdate, hide_empty.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
+}
+
+/// B328: an effect with nothing to draw (most of them, most of the time) still cost a draw of its degenerate
+/// triangle; on no render layer it's skipped by every view, shadows included. Its `Visibility` stays the effect's own.
+fn hide_empty(mut commands: Commands, q: Query<(Entity, &Mesh3d, Has<Emptied>, Has<bevy::camera::visibility::RenderLayers>)>) {
+    let changes = std::mem::take(&mut *EMPTIED.lock().unwrap());
+    if changes.is_empty() {
+        return;
+    }
+    let empty: std::collections::HashMap<_, _> = changes.into_iter().collect();
+    for (e, m, ours, layers) in &q {
+        match empty.get(&m.id()) {
+            Some(true) if !layers => {
+                commands.entity(e).insert((Emptied, bevy::camera::visibility::RenderLayers::none()));
+            }
+            Some(false) if ours => {
+                commands.entity(e).remove::<(Emptied, bevy::camera::visibility::RenderLayers)>();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -374,6 +415,7 @@ pub(crate) fn fill(meshes: &mut Assets<Mesh>, h: &Handle<Mesh>, mut pos: Vec<[f3
         return;
     }
     let Some(mut mesh) = meshes.get_mut(h) else { return };
+    EMPTIED.lock().unwrap().push((h.id(), index == [0, 0, 0]));
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
@@ -572,8 +614,12 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
         *v = if fx.glow.life > 0 { Visibility::Visible } else { Visibility::Hidden };
         let turn = GLOW_TURN * fx.glow.life as f32 / GLOW_FRAMES as f32;
         *t = Transform::from_translation(fx.pos).with_rotation(glow_turn(fx.vel, turn));
-        if let Some(mut m) = materials.get_mut(&look.0) {
-            m.base.base_color = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
+        // (written only when it changes: a written material is prepared and uploaded again, B328)
+        let colour = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
+        if materials.get(&look.0).is_some_and(|m| m.base.base_color != colour)
+            && let Some(mut m) = materials.get_mut(&look.0)
+        {
+            m.base.base_color = colour;
         }
     }
     let f = &fx.flight;

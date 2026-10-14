@@ -358,6 +358,8 @@ fn fps_counter(
             if k > 0.0 { format!("{:.0}x{:.0}", w.physical_width() as f32 * k, w.physical_height() as f32 * k) } else { "640x448".into() }
         });
         let gpu = adapter.map_or(String::new(), |a| format!("{:?} {}", a.backend, a.name));
+        // and to the log (the browser's console: Safari's Web Inspector on a phone)
+        info!("frame split ms: frame {:.2} game {:.2} sim {:.2} render {:.2} idle {:.2} meshes {shown} cast {cast}", a(frame), a(game), a(sim), a(render), a((frame - game - render).max(0.0)));
         text.0 = format!(
             "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
             a(frame),
