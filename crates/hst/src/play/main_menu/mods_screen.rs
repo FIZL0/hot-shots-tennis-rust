@@ -704,6 +704,25 @@ pub(super) fn reload_due(m: &Menu) -> bool {
     m.add.changed && m.add.ask.is_none()
 }
 
+/// The main screen's Mods picture: which installed mods are the store's (their zips' sha256), read once at startup
+/// so its Updates and Store facts are known before the Mods page has been opened.
+pub(super) fn prime(m: &mut Menu) {
+    if m.add.have.is_empty() {
+        m.add.have = m.mods.iter().filter_map(|md| modstore::stamp(&md.dir).map(|s| (format!("{}/{}", s.author, md.id), (s.sha256, md.dir.clone())))).collect();
+    }
+}
+
+/// The installed mods' folders the store has an update for, once it's listed.
+pub(super) fn updates(m: &Menu) -> Option<Vec<&Path>> {
+    let store = m.add.store.as_ref()?;
+    Some(store.iter().filter(|e| m.add.state(e) == Some("Update")).filter_map(|e| m.add.installed(e)).map(|(_, dir)| dir.as_path()).collect())
+}
+
+/// How many of the store's mods aren't installed, once it's listed.
+pub(super) fn fresh_len(m: &Menu) -> Option<usize> {
+    Some(m.add.store.as_ref()?.iter().filter(|e| !m.add.have.contains_key(&e.key())).count())
+}
+
 /// The store's mod count, once listed.
 pub(super) fn store_len(m: &Menu) -> Option<usize> {
     m.add.store.as_ref().map(Vec::len)

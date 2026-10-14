@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -209,7 +209,9 @@ fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>)
         }
     }
     // B297: the main screen's New in the store column, on a window wide enough for it
-    if menu.screen == Screen::Main && home::columns(menu.grid.extra).3.is_some() && mods_screen::store_len(&menu).is_none() {
+    // (and for the Mods row's Updates and Store facts while it's highlighted: the listing is cached an hour)
+    let mods_row = menu.main_rows().get(menu.sel) == Some(&home::Row::Mods);
+    if menu.screen == Screen::Main && (mods_row || home::columns(menu.grid.extra).3.is_some()) && mods_screen::store_len(&menu).is_none() {
         menu.want_store();
     }
 }
@@ -480,6 +482,9 @@ struct Menu {
     mods: Vec<crate::mods::Mod>,
     /// B306: the select roster's first row on view (kept on the shown player, [`Menu::page`]).
     scroll: usize,
+    /// The custom roster's indices, newest installed first (each `mod.json`'s time, read once at startup; folder
+    /// order where there's no time, as in the browser): the main screen's Mods picture.
+    newest: Vec<usize>,
     /// B296: the player whose pick the select's detail panel shows: the last one to press anything there.
     focus: usize,
     /// M1n: (custom roster entry, costume) whose model failed to load in the select: L1 / R1 pass it, it can't be
@@ -528,6 +533,7 @@ impl Default for Menu {
             rebinding: None,
             mods: Vec::new(),
             scroll: 0,
+            newest: Vec::new(),
             focus: 0,
             broken: default(),
             net: online::View::default(),
@@ -1335,6 +1341,9 @@ enum Tex {
     Icon(Who),
     /// The main screen's face icons: [`Icons`]' only, nothing drawn until it's baked (no sheet square standing in).
     Face(Who),
+    /// A plain fill (as `Solid`) drawn only once that face is baked: covers what stands in for it until then (the
+    /// main screen's Mods tiles' initials).
+    Cover(Who),
     /// Our button pill's layers (`menu_art::pill_layers`).
     Pill,
 }
@@ -1505,6 +1514,14 @@ fn com_rank(ranks: &[u8], character: usize, costume: usize, doubles: bool) -> us
     ranks.get(row).map_or(0, |&r| r as usize)
 }
 
+/// `mods`' indices, newest installed first (its `mod.json`'s time; ties and no time keep folder order).
+fn newest(mods: &[crate::mods::Mod]) -> Vec<usize> {
+    let time = |m: &crate::mods::Mod| crate::modfs::size(&m.dir.join("mod.json")).and_then(|s| s.1);
+    let mut v: Vec<(usize, Option<std::time::SystemTime>)> = mods.iter().map(time).enumerate().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v.into_iter().map(|(i, _)| i).collect()
+}
+
 /// `word.tm2`'s ink span per glyph (cell x + first inked column, cell y, width), from its alpha.
 fn glyphs(font: &[u8]) -> std::collections::HashMap<char, (f32, f32, f32)> {
     let pic = hst_data::tim2::decode_alpha8(font).expect("TIM2").remove(0);
@@ -1651,6 +1668,13 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.rematch = true;
         menu.seats[0] = Some(Dev::Keys);
         menu.players[1].cursor = 9;
+    }
+    if fresh {
+        menu.newest = newest(&menu.mods);
+        mods_screen::prime(&mut menu);
+    }
+    if fresh && screen == "main-mods" {
+        menu.sel = menu.main_at(home::Row::Mods);
     }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
@@ -3109,6 +3133,7 @@ fn draw(
     icons: Res<Icons>,
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
+    images: Res<Assets<Image>>,
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -3156,6 +3181,11 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Cover(w) if icons.0.contains_key(&w) => art.0[0].clone(),
+            Tex::Cover(_) => {
+                *vis = Visibility::Hidden;
+                continue;
+            }
             Tex::Face(w) => match icons.0.get(&w) {
                 Some(h) => h.clone(),
                 None => {
@@ -3179,7 +3209,12 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
+        if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
+            let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
+            img.rect = Some(Rect::new(u * k, v * k, (u + w) * k, (v + h) * k));
+        }
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale / super::menu_art::wall_k() } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
