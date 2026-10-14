@@ -9,7 +9,8 @@
 //! the background with a status beside each, and a re-upload goes over the player's earlier one. Its My public mods (M19) lists the
 //! signed-in player's own uploads (`modstore::mine`); Take down takes one down (`modstore::remove`). Every page is a list on the left and
 //! the hovered mod on the right, as the select's cards: its picture, △ card and details. The select's roster is
-//! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; on Add mod the page's own
+//! built when the game starts, so Reload brings changes into it. Mouse and touch: a tap on a row chooses it; an uploader's heading's Fold / Show chip folds
+//! their mods (B337); on Add mod the page's own
 //! file input lies over the row, so the tap that opens the picker is the browser's own (iOS opens a picker only
 //! inside a real tap).
 
@@ -308,6 +309,11 @@ fn who(author: &str) -> &str {
 
 /// Where a move from row `sel` goes (`acts` pills side by side in a row over the list, `n` rows in all): ←→ between
 /// the pills, ↓ from them to the first mod, ↑ from the first mod back to them; ↑↓ wrap round the whole page.
+/// B337: what a tap on a heading's fold chip presses: ← folds the uploader's mods away, → shows them again.
+fn fold_press(folded: bool) -> Press {
+    Press { left: !folded, right: folded, ..Press::default() }
+}
+
 fn nav(sel: usize, acts: usize, n: usize, k: Press) -> usize {
     let mods = n > acts;
     if sel < acts {
@@ -1116,23 +1122,31 @@ fn card(d: &mut Draw, [x, y, w, h]: [f32; 4], c: &Card, on: bool) {
 
 /// An uploader's heading over their mods: "BY <name> · N mods" with a thin line to its "Download all N" chip (gold
 /// while chosen: a press downloads them all).
-/// (B335: "+" before it while their mods are folded away.)
-fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: bool, folded: bool) {
+/// (B335: "+" before it while their mods are folded away. B337: a "Fold" / "Show" chip before Download all, the
+/// mouse's and finger's ← / →; its rect is returned for the hit.)
+fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: bool, folded: bool) -> [f32; 4] {
     use super::options::MUTED;
     let chip = format!("Download all {n}");
     let cw = d.width(&chip, 12.0) + 20.0;
     let cx = x + w - cw - 6.0;
     let ty = y + h - 22.0;
+    let fold = if folded { "Show" } else { "Fold" };
+    let fw = d.width("Show", 12.0).max(d.width("Fold", 12.0)) + 20.0;
+    let fx = cx - fw - 6.0;
     let title = format!("{}BY {} - {n} mod{}", if folded { "+ " } else { "" }, who(author).to_uppercase(), if n == 1 { "" } else { "s" });
-    let size = 14.0 * ((cx - x - 30.0) / d.width(&title, 14.0).max(1.0)).min(1.0);
-    super::left(d, &title, x + 4.0, ty + (14.0 - size) / 2.0 + 2.0, size, cx - x - 30.0, if on { BROWN } else { MUTED });
+    let size = 14.0 * ((fx - x - 30.0) / d.width(&title, 14.0).max(1.0)).min(1.0);
+    super::left(d, &title, x + 4.0, ty + (14.0 - size) / 2.0 + 2.0, size, fx - x - 30.0, if on { BROWN } else { MUTED });
     let lx = x + 12.0 + d.width(&title, size);
-    if cx - 8.0 > lx {
-        d.box3([lx, ty + 9.0, cx - 8.0 - lx, 1.5], 0.75, [None, None, Some(if on { BROWN } else { [100.0, 92.0, 90.0] })], 128.0);
+    if fx - 8.0 > lx {
+        d.box3([lx, ty + 9.0, fx - 8.0 - lx, 1.5], 0.75, [None, None, Some(if on { BROWN } else { [100.0, 92.0, 90.0] })], 128.0);
     }
     let fill = if on { [128.0, 110.0, 40.0] } else { [56.0, 56.0, 67.0] };
     d.pill_at([cx, ty, cw, 20.0], [INK, if on { WHITE } else { [100.0; 3] }, fill], 128.0);
     d.label(&chip, cx + cw / 2.0, ty + 4.0, 12.0, cw - 8.0, WHITE);
+    // the fold chip stays grey: a press on the heading is Download all, not this
+    d.pill_at([fx, ty, fw, 20.0], [INK, if on { WHITE } else { [100.0; 3] }, [56.0, 56.0, 67.0]], 128.0);
+    d.label(fold, fx + fw / 2.0, ty + 4.0, 12.0, fw - 8.0, WHITE);
+    [fx, ty, fw, 20.0]
 }
 
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
@@ -1162,7 +1176,15 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         } else if let Some(c) = card_of(m, r) {
             card(d, rect, &c, on);
         } else if let Some((a, n)) = v.head(r) {
-            heading(d, rect, a, n, on, v.folded.contains(a));
+            let folded = v.folded.contains(a);
+            let chip = heading(d, rect, a, n, on, folded);
+            d.hit(rect, super::pointer::Act::Row(r, super::pointer::OK));
+            // B337: the fold chip, drawn later so it's on top of the heading's own hit: a tap is ← (or → while folded)
+            d.hit(chip, super::pointer::Act::Row(r, fold_press(folded)));
+            if on {
+                hand = Some(rect);
+            }
+            continue;
         }
         d.hit(rect, super::pointer::Act::Row(r, super::pointer::OK));
         if on {
@@ -1921,6 +1943,21 @@ mod tests {
         assert_eq!((m.sel, m.add.rows(), m.add.fold_at(1)), (1, 6, Some(("bob".into(), true))));
         m.mods_step(r, &mut out);
         assert_eq!((m.sel, m.add.rows()), (1, 8));
+        // B337: a tap on the heading's Fold chip folds them too, its Show chip shows them; the rest of the heading is
+        // still Download all
+        use super::super::pointer::{Act, OK, tests::{act_at, hits}};
+        let tap = |m: &mut Menu, folded: bool| {
+            let h = hits(m).0.into_iter().find(|h| h.act == Act::Row(1, fold_press(folded))).expect("fold chip");
+            let [x, y, w, hh] = h.rect;
+            assert_eq!(act_at(m, x + w / 2.0, y + hh / 2.0), Some(h.act));
+            m.point(super::super::Dev::Keys, h.act, true);
+        };
+        m.sel = 4;
+        tap(&mut m, false);
+        assert_eq!((m.sel, m.add.rows(), m.add.fold_at(1)), (1, 6, Some(("bob".into(), true))));
+        tap(&mut m, true);
+        assert_eq!((m.sel, m.add.rows(), m.add.fold_at(1)), (1, 8, Some(("bob".into(), false))));
+        assert!(hits(&m).0.iter().any(|h| h.act == Act::Row(1, OK)));
         // Upload: Sign in and Upload all side by side, then the mods
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
