@@ -36,7 +36,7 @@ pub(super) enum Act {
 }
 
 /// ✕.
-pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false };
+pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false, hear: false };
 
 pub(super) fn press(f: impl FnOnce(&mut Press)) -> Act {
     let mut k = Press::default();
@@ -385,14 +385,15 @@ pub(super) mod tests {
         tap(&mut m, cx, cy); // Select Court
         assert_eq!(m.picking, Some(m.court));
         let was = m.court;
-        let (px, py) = centre(super::super::court_rects(&m)[4]);
+        let (px, py) = centre(super::super::strip_rects(&m).0[5]);
         tap(&mut m, px, py);
         assert_eq!(m.court, super::super::STRIP[4]);
-        let (ox, oy) = centre(super::super::confirm_rects(&m)[0]);
-        tap(&mut m, ox, oy);
+        tap(&mut m, 320.0, 200.0); // the picture: off the strip
         assert_eq!((m.picking, m.court), (None, was));
         tap(&mut m, cx, cy);
+        let (px, py) = centre(super::super::strip_rects(&m).0[5]);
         tap(&mut m, px, py);
+        let (px, py) = centre(super::super::strip_rects(&m).0[5]);
         tap(&mut m, px, py);
         assert!(m.picking.is_none() && m.court == super::super::STRIP[4]);
         let [x, y, w, h] = super::super::confirm_rects(&m)[0];
