@@ -269,24 +269,24 @@ fn save_desync(w: &World, why: &str) -> String {
 /// The states differ at tick `t`: logged every time, the first time also the report and a note on screen; the match
 /// plays on.
 pub(super) fn desync(w: &mut World, (t, ours, theirs): (u32, u64, u64)) {
-    // a tick from before a resync: already mended, but a peer that took the host's state before its own check caught
-    // up still reports it once
-    let stale = w.resource::<Netplay>().resync.stale(t);
-    if stale && w.resource::<Netplay>().note.is_some() {
+    // B249: a guest's checksums can tell it only after it took the host's state: still noted and saved, once
+    let np = w.resource::<Netplay>();
+    let mended = np.resync.stale(t);
+    if mended && np.note.is_some() {
         return;
     }
     let why = format!("{DESYNC} at tick {t} (hash {ours:016x}, a peer's {theirs:016x})");
     warn!("online: {why}");
-    if !stale {
+    if !mended {
         super::resync::ask(&mut w.resource_mut::<Netplay>());
-    }
-    if w.resource::<Netplay>().desynced {
-        return;
+        if w.resource::<Netplay>().desynced {
+            return;
+        }
     }
     let path = save_desync(w, &why);
     info!("online: inputs saved to {path}");
     let mut np = w.resource_mut::<Netplay>();
-    np.desynced = !stale;
+    np.desynced = !mended;
     np.note = Some((format!("{why}: playing on.\nInputs saved to {path}"), NOTE));
 }
 
