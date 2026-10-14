@@ -168,6 +168,8 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
     // ponytail: 60 m covers the match camera's view of the far baseline; raise it if a cut-away looks past that
     #[cfg(all(target_arch = "wasm32", not(feature = "webgpu")))]
     let (size, cascades, far) = (2048, 1, 60.0);
+    // B287: the first cascade covers the whole court from either baseline camera; past it the jungle's tall canopy
+    // shadows on the far half faded out
     #[cfg(not(all(target_arch = "wasm32", not(feature = "webgpu"))))]
     let (size, cascades, far) = if g.shadows == Shadows::Low { (1024, 2, 120.0) } else { (2048, 4, 120.0) };
     if map.size != size {
@@ -175,7 +177,7 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
     }
     for (e, mut l) in &mut lights {
         l.shadow_maps_enabled = g.shadows != Shadows::Off;
-        commands.entity(e).insert(CascadeShadowConfigBuilder { num_cascades: cascades, first_cascade_far_bound: 30.0, maximum_distance: far, ..default() }.build());
+        commands.entity(e).insert(CascadeShadowConfigBuilder { num_cascades: cascades, first_cascade_far_bound: 80.0, maximum_distance: far, ..default() }.build());
     }
 }
 

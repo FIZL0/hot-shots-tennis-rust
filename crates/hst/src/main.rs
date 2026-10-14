@@ -871,14 +871,16 @@ fn gs_models_anim(
             let Some(mat) = mats.materials.get(mi) else { continue };
             let wrap = model.wrap.get(mi).copied().unwrap_or([0, 0]);
             // B161: see-through texels blended rather than cut (the hole, TEST 20..29) and no GS levels: our own
+            let padded = mat.texture.and_then(|t| pow2(&mats.textures[t]));
+            let tex = |t: usize| padded.as_ref().unwrap_or(&mats.textures[t]);
             let own_mips = (stem.contains("_h01_") || (20..=29).contains(&i16::from_le_bytes([mat.header[0x1e], mat.header[0x1f]])))
-                .then(|| mat.texture.and_then(|t| cutout_mips(&mats.textures[t])))
+                .then(|| mat.texture.and_then(|t| cutout_mips(tex(t))))
                 .flatten();
-            let texture = mat.texture.map(|t| {
-                let mut img = image(&mats.textures[t]);
+            let texture = mat.texture.map(|i| {
+                let mut img = image(tex(i));
                 img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
                 // the mip levels TEX1 MXL lets the GS use; gs.wgsl picks one from the view depth
-                let t = &mats.textures[t];
+                let t = tex(i);
                 if !t.mips.is_empty() && !t.rgba.is_empty() {
                     img.texture_descriptor.mip_level_count = 1 + t.mips.len() as u32;
                     img.data.as_mut().unwrap().extend(t.mips.iter().flatten());
@@ -893,7 +895,7 @@ fn gs_models_anim(
                     address_mode_v: mode(wrap[1]),
                     ..ImageSamplerDescriptor::linear()
                 });
-                textures::add_mtl(images, img, t)
+                textures::add_mtl(images, img, &mats.textures[i])
             });
             let key = |pi: usize| (packets[pi].prim & 0x70, anim.uv_track(mi, pi), packets[pi].uv_swap, packets[pi].flags & 2);
             let mut keys: Vec<_> = (0..packets.len()).map(|pi| (key(pi), pi)).collect();
@@ -961,6 +963,38 @@ fn cutout_mips(t: &mtl::Texture) -> Option<Vec<Vec<u8>>> {
         (w, h, prev) = (nw, nh, next);
     }
     Some(out)
+}
+
+/// The texture padded to the power-of-two size the GS samples it over (TEX0 TW/TH) by repeating its last column and
+/// row, or `None` if it already is one. B287: court 8's midground hedge is 256×320 with UVs over 512 rows; stretched
+/// over 320 its cut-out tree tops fell off the top of the strip, leaving a flat-topped wall against the sky (court 3's
+/// backdrop, 192 of 256 rows, too).
+/// ponytail: the GS reads whatever VRAM holds past the stored rows; the UVs seen stay inside them, so edge texels do
+fn pow2(t: &mtl::Texture) -> Option<mtl::Texture> {
+    let (w, h) = (t.width.max(1).next_power_of_two(), t.height.max(1).next_power_of_two());
+    if (w, h) == (t.width, t.height) || t.rgba.is_empty() {
+        return None;
+    }
+    let pad = |px: &[u8], (sw, sh): (u32, u32), (dw, dh): (u32, u32)| {
+        let mut out = Vec::with_capacity((4 * dw * dh) as usize);
+        for y in 0..dh {
+            for x in 0..dw {
+                out.extend_from_slice(&px[4 * (y.min(sh - 1) * sw + x.min(sw - 1)) as usize..][..4]);
+            }
+        }
+        out
+    };
+    let level = |l: usize| ((t.width >> l).max(1), (t.height >> l).max(1));
+    let to = |l: usize| ((w >> l).max(1), (h >> l).max(1));
+    Some(mtl::Texture {
+        width: w,
+        height: h,
+        rgba: pad(&t.rgba, level(0), to(0)),
+        mips: t.mips.iter().enumerate().map(|(l, m)| pad(m, level(l + 1), to(l + 1))).collect(),
+        psm: t.psm,
+        levels: Vec::new(),
+        clut: Vec::new(),
+    })
 }
 
 fn image(t: &mtl::Texture) -> Image {
@@ -1297,4 +1331,20 @@ fn window_icon(mut done: Local<bool>, _main_thread: bevy::ecs::system::NonSendMa
             *done = true;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pow2_pads_with_edge_texels() {
+        let t = |w: u32, h: u32| mtl::Texture { width: w, height: h, rgba: (0..w * h * 4).map(|i| (i / 4) as u8).collect(), mips: Vec::new(), psm: 0, levels: Vec::new(), clut: Vec::new() };
+        assert!(pow2(&t(4, 4)).is_none());
+        // 3×3 → 4×4: texel (x, y) = 3y + x, the last column and row repeated
+        let p = pow2(&t(3, 3)).unwrap();
+        let px: Vec<u8> = p.rgba.chunks(4).map(|c| c[0]).collect();
+        assert_eq!((p.width, p.height), (4, 4));
+        assert_eq!(px, [0, 1, 2, 2, 3, 4, 5, 5, 6, 7, 8, 8, 6, 7, 8, 8]);
+    }
 }
