@@ -1941,6 +1941,8 @@ fn ticker_text(
     let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
     *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
     let share = super::widescreen::window_share(&window);
+    // the quads' parent (the view) in physical pixels
+    let px = window.single().map_or(Vec2::ZERO, |w| super::widescreen::view_size(w) * w.scale_factor());
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
     (cnode.left, cnode.width) = (Val::Percent(left), Val::Percent(width));
     let (top, height) = super::widescreen::vplace(404.0, 32.0, super::widescreen::window_aspect(&window), Anchor::Span);
@@ -3000,6 +3002,9 @@ fn draw(
             (left, top) = (left + (width - side / vs.x) / 2.0, top + (height - side / vs.y) / 2.0);
             (width, height) = (side / vs.x, side / vs.y);
         }
+        // edges on whole physical pixels: abutting quads (a box's nine slices) computed apart could round to either
+        // side of an edge on a half pixel and leave a one-pixel seam showing what's behind
+        let [(left, width), (top, height)] = [(left, width, px.x), (top, height, px.y)].map(|(a, len, p)| snap(a, len, p));
         node.left = Val::Percent(left);
         node.top = Val::Percent(top);
         node.width = Val::Percent(width);
@@ -3007,6 +3012,17 @@ fn draw(
         turn.rotation = Rot2::radians(quad.angle);
         *vis = Visibility::Inherited;
     }
+}
+
+/// A quad's `start, len` (percent of a `p`-pixel parent) with both edges rounded to whole pixels, each edge from its
+/// own position so two quads sharing an edge share its pixel. `p` 0: as given.
+fn snap(start: f32, len: f32, p: f32) -> (f32, f32) {
+    if p <= 0.0 {
+        return (start, len);
+    }
+    let edge = |e: f32| (e / 100.0 * p).round() / p * 100.0;
+    let a = edge(start);
+    (a, edge(start + len) - a)
 }
 
 /// The menu's BGM tracks, `bgmm_04`..`bgmm_06`.
@@ -3140,6 +3156,18 @@ mod tests {
         };
         let (disc, mods) = (name(CHAR_NAMES[0]), name("Anya"));
         assert!(!disc.is_empty() && disc[0] == mods[0] && disc.iter().chain(&mods).all(|&q| q == disc[0]));
+    }
+
+    /// A 2160-pixel-high view: a box's middle and bottom slices on the 3P row meet on a half pixel (238 units); snapped,
+    /// the middle slice ends on the pixel the bottom one starts on, so no seam shows the team box through the row.
+    #[test]
+    fn abutting_quads_share_a_pixel() {
+        let pct = |y: f32| y / 4.48;
+        let (p, y) = (2160.0, 216.0);
+        let (mid, bottom) = (snap(pct(y + 12.0), pct(10.0), p), snap(pct(y + 22.0), pct(12.0), p));
+        let px = |e: f32| e / 100.0 * p;
+        assert_eq!(px(mid.0 + mid.1).round(), px(bottom.0).round());
+        assert!((px(mid.0 + mid.1) - px(mid.0 + mid.1).round()).abs() < 1e-3, "on a whole pixel");
     }
 
     #[test]

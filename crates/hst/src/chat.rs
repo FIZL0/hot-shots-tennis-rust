@@ -132,7 +132,7 @@ fn input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut typed: MessageReader<KeyboardInput>,
     pads: Query<&Gamepad>,
-    tap: Query<&Interaction, (With<Tap>, Changed<Interaction>)>,
+    (mut mouse, mut touches, window, tap): (ResMut<ButtonInput<MouseButton>>, ResMut<Touches>, Query<&Window, With<bevy::window::PrimaryWindow>>, Query<TapNode, With<Tap>>),
     time: Res<Time<Real>>,
     mut was: Local<bool>,
 ) {
@@ -156,7 +156,8 @@ fn input(
         }
     }
     let enter = [KeyCode::Enter, KeyCode::NumpadEnter];
-    if !chat.open && (keys.any_just_pressed(enter) || tap.iter().any(|i| *i == Interaction::Pressed)) {
+    let tapped = !chat.open && tapped(&mut mouse, &mut touches, window.single().ok(), tap.single().ok().filter(|t| t.3.get()).map(|(n, at, t, _)| (n, at, t.physical_size().as_vec2())));
+    if !chat.open && (keys.any_just_pressed(enter) || tapped) {
         chat.open = true;
         typed.clear();
         keys.reset_all();
@@ -214,6 +215,31 @@ fn input(
     };
 }
 
+type TapNode = (&'static ComputedNode, &'static UiGlobalTransform, &'static ComputedUiRenderTargetInfo, &'static InheritedVisibility);
+
+/// Whether a click or a touch went down on Chat; it's taken, so the menu under it doesn't get it too. Hit-tested
+/// here: Bevy's `Interaction` only works for a UI camera drawing to the window, and ours draws into `hud_gamma`'s
+/// image (the view's rect of the window, B117).
+fn tapped(mouse: &mut ButtonInput<MouseButton>, touches: &mut Touches, win: Option<&Window>, tap: Option<(&ComputedNode, &UiGlobalTransform, Vec2)>) -> bool {
+    let (Some(win), Some((node, at, target))) = (win, tap) else { return false };
+    #[allow(unused_mut)]
+    let mut size = Vec2::new(win.width(), win.height());
+    // the browser's touches and mouse are in the page's CSS px (as the menus' `pointer`)
+    #[cfg(target_arch = "wasm32")]
+    if let Some(css) = crate::web::page_size() {
+        size = css;
+    }
+    let view = crate::play::widescreen::view(size);
+    let on = |p: Vec2| view.size().min_element() > 0.0 && node.contains_point(*at, (p - view.min) / view.size() * target);
+    if mouse.just_pressed(MouseButton::Left) && win.cursor_position().is_some_and(on) {
+        mouse.clear_just_pressed(MouseButton::Left);
+        return true;
+    }
+    let ids: Vec<_> = touches.iter_just_pressed().filter(|t| on(t.position())).map(|t| t.id()).collect();
+    ids.iter().for_each(|&id| _ = touches.clear_just_pressed(id));
+    !ids.is_empty()
+}
+
 /// The phone's keyboard (the browser's code-entry input) up while the box is open on a touch page.
 fn phone(was: &mut bool, on: bool) {
     if std::mem::replace(was, on) != on {
@@ -230,7 +256,7 @@ fn draw(
     chat: Res<Chat>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     root: Query<(Entity, &mut Visibility), With<Root>>,
-    mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor)>,
+    mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && net.is_some_and(|n| n.in_room());
     let mut root = root;
@@ -252,7 +278,7 @@ fn draw(
     let start = chat.lines.len().saturating_sub(SHOWN);
     let shown = &chat.lines[start..];
     let busy = chat.open || chat.phrase.is_some();
-    for (row, mut text, mut font, mut colour) in &mut rows {
+    for (row, mut text, mut font, mut colour, mut shadow) in &mut rows {
         let (s, alpha, c) = match row.0 {
             i if i < SHOWN => match shown.get(i) {
                 Some(l) => {
@@ -282,6 +308,11 @@ fn draw(
         if colour.0 != c {
             colour.0 = c;
         }
+        // the shadow fades with its line: a hidden Chat or an old line leaves no dark copy behind
+        let sc = TextShadow::default().color.with_alpha(TextShadow::default().color.alpha() * alpha);
+        if shadow.color != sc {
+            shadow.color = sc;
+        }
     }
 }
 
@@ -299,7 +330,7 @@ fn spawn(commands: &mut Commands) {
         for i in 0..=SHOWN {
             p.spawn(row(i));
         }
-        p.spawn((Tap, Button, Node { align_self: AlignSelf::FlexStart, ..default() })).with_children(|b| {
+        p.spawn((Tap, Node { align_self: AlignSelf::FlexStart, ..default() })).with_children(|b| {
             b.spawn(row(SHOWN + 1));
         });
     });
@@ -315,6 +346,52 @@ mod tests {
         assert_eq!(clean("a\u{7}b\u{202e}c\u{0}"), Some("abc".into()));
         assert_eq!(clean(" \u{1b} "), None);
         assert_eq!(clean(&"x".repeat(200)).map(|s| s.len()), Some(MAX));
+    }
+
+    /// A click on Chat opens the box and is taken from the menus; one beside it isn't. The UI's image is half the
+    /// window's size (as `hud_gamma`'s at a low scale), so the point is mapped into it.
+    #[test]
+    fn click_on_chat_is_taken() {
+        let mut win = Window::default();
+        win.resolution.set(800.0, 600.0);
+        // Chat: 40×20 image px centred at (30, 250) of a 400×300 image = window (40..80, 480..520)
+        let node = ComputedNode { size: Vec2::new(40.0, 20.0), ..default() };
+        let at = UiGlobalTransform::from_translation(Vec2::new(30.0, 250.0));
+        let mut touches = Touches::default();
+        for (p, hit) in [(Vec2::new(60.0, 500.0), true), (Vec2::new(200.0, 500.0), false)] {
+            win.set_cursor_position(Some(p));
+            let mut mouse = ButtonInput::<MouseButton>::default();
+            mouse.press(MouseButton::Left);
+            assert_eq!(tapped(&mut mouse, &mut touches, Some(&win), Some((&node, &at, Vec2::new(400.0, 300.0)))), hit);
+            assert_eq!(mouse.just_pressed(MouseButton::Left), !hit, "{p}");
+        }
+    }
+
+    /// In a lobby, Enter opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
+    #[test]
+    fn enter_types_and_sends() {
+        use bevy::input::{ButtonState, InputPlugin};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin)).add_plugins(plugin);
+        let (net, mut rx) = Net::wired();
+        net.enter_room();
+        app.insert_resource(net);
+        app.update();
+        let key = |app: &mut App, code, logical_key| {
+            for state in [ButtonState::Pressed, ButtonState::Released] {
+                app.world_mut().write_message(KeyboardInput { key_code: code, logical_key: Key::clone(&logical_key), state, text: None, repeat: false, window: Entity::PLACEHOLDER });
+                app.update();
+            }
+        };
+        key(&mut app, KeyCode::Enter, Key::Enter);
+        assert!(app.world().resource::<Chat>().open, "Enter opens the box");
+        key(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        key(&mut app, KeyCode::KeyI, Key::Character("i".into()));
+        assert!(!app.world().resource::<ButtonInput<KeyCode>>().get_just_pressed().any(|_| true), "the menus see no key");
+        key(&mut app, KeyCode::Enter, Key::Enter);
+        let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).filter_map(|c| if let Cmd::Chat(t) = c { Some(t) } else { None }).collect();
+        assert_eq!(sent, ["hi"]);
+        assert!(!app.world().resource::<Chat>().open);
     }
 
     #[test]

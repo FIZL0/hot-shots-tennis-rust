@@ -776,6 +776,12 @@ impl Net {
         (Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }, rx)
     }
 
+    /// This test `Net` in a lobby (`in_room`), as a `Room` or `Hosting` event would put it.
+    #[cfg(test)]
+    pub fn enter_room(&self) {
+        self.in_room.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn send(&self, c: Cmd) {
         if matches!(c, Cmd::Leave | Cmd::Find | Cmd::Join(..) | Cmd::Quick(_)) {
             self.in_room.store(false, std::sync::atomic::Ordering::Relaxed);
