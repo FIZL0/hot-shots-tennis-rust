@@ -2236,6 +2236,12 @@ fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], [x, y]
     }
 }
 
+/// B354: the △ card's scale on a `cw` × `ch` player card: the height between the hand tag and the Stats pill, at most
+/// 55% of the width, never above the original's size.
+fn card_scale(cw: f32, ch: f32) -> f32 {
+    ((ch - 56.0) / 158.0).min(cw * 0.55 / 144.0).min(1.0)
+}
+
 /// B347: a pick's △ grades: the disc character's from the MENU overlay, a mod's from its TParam.csv row (`mod_grades`).
 fn grades_of(text: &Text, w: Who) -> [u8; 5] {
     match w {
@@ -2402,9 +2408,11 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
             let fw = rw.min(rh * 92.0 / 68.0);
             d.q(C02, RANDOM_TILE, [x + cw - fw - 8.0, cy + (ch - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
         } else if pl.card {
-            // B347: the △ card in the render's place, as large as the card's height and half its width allow
-            let s = (rh / 158.0).min(cw * 0.6 / 144.0).min(1.0);
-            attribute_card(d, p, style_of(m.who(p)), &grades_of(text, m.who(p)), [x + cw - 144.0 * s - 6.0, cy + (ch - 158.0 * s) / 2.0 - 2.0 * s], s);
+            // B347: the △ card in the render's place; B354: between the hand tag and the Stats pill, so neither covers
+            // it, and no wider than 55% of the card (the style line and name keep the left)
+            let s = card_scale(cw, ch);
+            let top = cy + 28.0 + (ch - 54.0 - 158.0 * s) / 2.0;
+            attribute_card(d, p, style_of(m.who(p)), &grades_of(text, m.who(p)), [x + cw - 144.0 * s - 6.0, top - 2.0 * s], s);
         } else {
             d.q(Tex::Preview(p), [0.0; 4], [x + cw - rw - 4.0, cy + 4.0, rw, rh], WHITE, 128.0);
         }
@@ -2444,16 +2452,20 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
             }
         }
         if !pl.random {
-            left(d, STYLE_NAMES[style_of(m.who(p))], x + 10.0, cy + 36.0, 13.0, cw - 20.0, WHITE);
+            // B354: left of the △ card when it is up
+            let sw = if pl.card { cw - 144.0 * card_scale(cw, ch) - 24.0 } else { cw - 20.0 };
+            left(d, STYLE_NAMES[style_of(m.who(p))], x + 10.0, cy + 36.0, 13.0, sw, WHITE);
         }
         if pl.ready {
             d.outlined(|d| d.text("Ready!", x + 10.0, cy + 52.0, 18.0, GOLD));
         }
         let name = name_of(p);
         let size = 26.0f32.min(ch * 0.22);
-        let nw = d.width(&name, size).min(cw - 20.0);
+        // B354: clear of the Stats / Picture pill on the right
+        let room = cw - 20.0 - if pl.random { 0.0 } else { 58.0 };
+        let nw = d.width(&name, size).min(room);
         let ny = cy + ch - size - 8.0;
-        d.outlined(|d| d.label(&name, x + 10.0 + nw / 2.0, ny, size, cw - 20.0, WHITE));
+        d.outlined(|d| d.label(&name, x + 10.0 + nw / 2.0, ny, size, room, WHITE));
         // the costume and hand: L1 / R1 and Select / − (or a tap on the chip's halves, on the hand tag)
         let py = ny - 21.0;
         if pl.ready {
