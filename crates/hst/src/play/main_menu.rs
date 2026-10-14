@@ -952,6 +952,7 @@ impl Menu {
                 } else if k.back && self.online() {
                     self.back_to_online(&mut out);
                 } else if k.back {
+                    self.add.play = None;
                     self.sel = self.main_at(home::Row::Local);
                     self.screen = Screen::Main;
                     out.push(Sound(1));
@@ -966,10 +967,15 @@ impl Menu {
                             *p = Player::default();
                         }
                         self.scroll = 0;
+                        let play = self.add.play.take();
                         if self.online() {
                             // B195: into the lobby first (seats held), then its character select
                             self.online_open(&mut out);
                         } else {
+                            // the Mods page's Play with: its mod on 1P's cursor
+                            if let Some(j) = play.filter(|&j| j < self.own_mods()) {
+                                self.put(0, Some(Who::Mod(j)));
+                            }
                             self.go(Screen::Chars, &mut out);
                         }
                     } else if k.up || k.down {
@@ -1208,7 +1214,15 @@ impl Menu {
                 }
             }
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
-            Screen::Mods => self.mods_step(k, &mut out),
+            Screen::Mods => {
+                self.mods_step(k, &mut out);
+                // Play with: a local match from the mode choice, the mod put on 1P's cursor at the select
+                if self.add.play.is_some() {
+                    self.rematch = false;
+                    self.seats = [Some(dev), None, None, None];
+                    self.go(Screen::Mode, &mut out);
+                }
+            }
             _ => {}
         }
         out

@@ -51,6 +51,8 @@ const CARD_PITCH: f32 = 45.0;
 /// B255: Browse's child buttons on a store mod.
 const INSTALL: &str = "Install";
 const BY: &str = "By author";
+/// An installed mod's child button: a local match as it.
+const PLAY: &str = "Play with";
 
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
 
@@ -110,6 +112,16 @@ pub(super) struct View {
     /// choosing one puts up the "use the desktop app" popup (its row while up).
     phone: bool,
     nophone: Option<usize>,
+    /// "Play with" on an installed mod: its place in the select's roster, put on player 1's cursor when the local
+    /// select opens (the mode choice comes first; `Menu::step` takes it there).
+    pub(super) play: Option<usize>,
+}
+
+/// A row under Browse's pills: an uploader's heading (who, how many of their mods) or one of their mods.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Item<'a> {
+    Head(&'a str, usize),
+    Mod(&'a Entry),
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +187,11 @@ impl View {
         self.doing = Some(e);
     }
 
+    /// Whether ←→ move from row `sel` (between pills side by side), for the legend.
+    pub(super) fn sideways(&self, sel: usize) -> bool {
+        self.child.is_none() && self.nophone.is_none() && sel < self.acts() && self.acts() > 1
+    }
+
     /// The page's pills above its list (the first rows): Installed, Add mod and Reload; Browse, Refresh (an author's
     /// list: Download all and All mods); Upload, the account and Upload all; Mine, Refresh.
     fn acts(&self) -> usize {
@@ -185,13 +202,47 @@ impl View {
         }
     }
 
-    /// The pills, then the mods (installed ones, or the store's).
+    /// The pills, then the mods (installed ones, or the store's with their uploaders' headings).
     fn rows(&self) -> usize {
         self.acts()
             + match self.page {
                 Page::Installed | Page::Upload => self.list.len(),
-                Page::Browse | Page::Mine => self.entries().len(),
+                Page::Browse | Page::Mine => self.items().len(),
             }
+    }
+
+    /// The store's rows under the pills: on Browse's whole list, each uploader's heading then their mods (uploaders
+    /// in the store's order, the unknown one last); an author's list and My uploads, just the mods.
+    fn items(&self) -> Vec<Item<'_>> {
+        let all = self.entries();
+        if self.page != Page::Browse || self.by.is_some() {
+            return all.iter().map(Item::Mod).collect();
+        }
+        let mut who: Vec<&str> = Vec::new();
+        for e in all {
+            if !who.contains(&e.meta.author.as_str()) {
+                who.push(&e.meta.author);
+            }
+        }
+        if let Some(i) = who.iter().position(|a| a.is_empty()) {
+            let a = who.remove(i);
+            who.push(a);
+        }
+        let mut out = Vec::with_capacity(all.len() + who.len());
+        for a in who {
+            let theirs: Vec<&Entry> = all.iter().filter(|e| e.meta.author == a).collect();
+            out.push(Item::Head(a, theirs.len()));
+            out.extend(theirs.into_iter().map(Item::Mod));
+        }
+        out
+    }
+
+    /// The uploader whose heading is row `sel` (empty: unknown), and how many mods they have.
+    fn head(&self, sel: usize) -> Option<(&str, usize)> {
+        match self.items().get(sel.checked_sub(self.acts())?) {
+            Some(Item::Head(a, n)) => Some((*a, *n)),
+            _ => None,
+        }
     }
 
     /// The installed mod on row `sel`, if it's one.
@@ -218,7 +269,43 @@ impl View {
 
     /// The browse entry under the cursor.
     fn hovered(&self, sel: usize) -> Option<&Entry> {
-        matches!(self.page, Page::Browse | Page::Mine).then(|| self.entries().get(sel.checked_sub(self.acts())?)).flatten()
+        if !matches!(self.page, Page::Browse | Page::Mine) {
+            return None;
+        }
+        match self.items().get(sel.checked_sub(self.acts())?) {
+            Some(Item::Mod(e)) => Some(*e),
+            _ => None,
+        }
+    }
+}
+
+/// An uploader's name on their heading (`""`: the store doesn't say).
+fn who(author: &str) -> &str {
+    if author.is_empty() { "unknown uploader" } else { author }
+}
+
+/// Where a move from row `sel` goes (`acts` pills side by side in a row over the list, `n` rows in all): ←→ between
+/// the pills, ↓ from them to the first mod, ↑ from the first mod back to them; ↑↓ wrap round the whole page.
+fn nav(sel: usize, acts: usize, n: usize, k: Press) -> usize {
+    let mods = n > acts;
+    if sel < acts {
+        if k.left || (k.up && !mods) {
+            (sel + acts - 1) % acts
+        } else if k.right || (k.down && !mods) {
+            (sel + 1) % acts
+        } else if k.down {
+            acts
+        } else if k.up {
+            n - 1
+        } else {
+            sel
+        }
+    } else if k.down {
+        if sel + 1 < n { sel + 1 } else { 0 }
+    } else if k.up {
+        if sel == acts { 0 } else { sel - 1 }
+    } else {
+        sel
     }
 }
 
@@ -351,6 +438,7 @@ impl Menu {
         use Effect::Sound;
         let s = c.row;
         match self.add.page {
+            Page::Installed if c.opts[i] == PLAY => self.play_with(s - TOP, out),
             Page::Installed => self.remove(s - TOP, out),
             Page::Upload if s == 0 => {
                 let v = &mut self.add;
@@ -435,20 +523,20 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
-    /// B255: Download all on an author's list: queues every one of their mods not installed at the same or a newer
-    /// version.
-    fn download_all(&mut self, out: &mut Vec<Effect>) {
-        let Some(b) = self.add.by.clone() else { return };
+    /// B255: Download all on an author's list or on their heading: queues every one of `list` (`author`'s mods) not
+    /// installed at the same or a newer version.
+    fn download_all(&mut self, author: &str, list: Vec<Entry>, out: &mut Vec<Effect>) {
         let up = self.settings.0[super::UPSCALED_DOWNLOADS];
-        let todo: Vec<Entry> = b.list.iter().filter(|e| !self.add.skips(e)).cloned().collect();
-        let (n, skipped) = (todo.len(), b.list.len() - todo.len());
+        let todo: Vec<Entry> = list.iter().filter(|e| !self.add.skips(e)).cloned().collect();
+        let (n, skipped) = (todo.len(), list.len() - todo.len());
         for e in todo {
             self.add.enqueue(e, up);
         }
+        let author = who(author);
         self.add.status = match (n, skipped) {
-            (0, _) => format!("All of {}'s mods are installed or queued already.", b.author),
-            (n, 0) => format!("Downloading {n} mods by {}, one after another.", b.author),
-            (n, k) => format!("Downloading {n} mods by {} ({k} installed or queued already).", b.author),
+            (0, _) => format!("All of {author}'s mods are installed or queued already."),
+            (n, 0) => format!("Downloading {n} mods by {author}, one after another."),
+            (n, k) => format!("Downloading {n} mods by {author} ({k} installed or queued already)."),
         };
         out.push(Effect::Sound(if n == 0 { 1 } else { 2 }));
     }
@@ -473,8 +561,9 @@ impl Menu {
     /// The list's own press (no child open).
     fn list_step(&mut self, k: Press, n: usize, out: &mut Vec<Effect>) {
         use Effect::Sound;
-        if k.up || k.down {
-            self.sel = if k.down { (self.sel + 1) % n } else { (self.sel + n - 1) % n };
+        let to = nav(self.sel, self.add.acts(), n, k);
+        if to != self.sel {
+            self.sel = to;
             if !matches!(self.add.page, Page::Upload | Page::Mine) && !self.add.busy {
                 self.add.status.clear();
             }
@@ -492,8 +581,8 @@ impl Menu {
             Page::Browse => {
                 if s == 1 && self.add.by.is_some() {
                     self.mods_back(out);
-                } else if s == 0 && self.add.by.is_some() {
-                    self.download_all(out);
+                } else if let Some(b) = self.add.by.clone().filter(|_| s == 0) {
+                    self.download_all(&b.author, b.list, out);
                 } else if s == 0 {
                     if !self.add.busy {
                         self.add.busy = true;
@@ -501,6 +590,11 @@ impl Menu {
                         modstore::list(true);
                     }
                     out.push(Sound(2));
+                } else if let Some((a, _)) = self.add.head(s) {
+                    // an uploader's heading: Download all of theirs
+                    let a = a.to_string();
+                    let list = self.add.entries().iter().filter(|e| e.meta.author == a).cloned().collect();
+                    self.download_all(&a, list, out);
                 } else if self.add.busy && self.add.doing.is_none() {
                     self.add.status = "Wait for the store to finish first.".into();
                 } else if let Some(e) = self.add.hovered(s).cloned() {
@@ -626,10 +720,23 @@ impl Menu {
             // desktop: only a store download / Add mod install (`mods/<id>`) is the game's to delete; a folder put in
             // by hand (a pack, a link to the mods repo, a renamed folder) is left to whoever put it there
             if cfg!(not(target_arch = "wasm32")) && !crate::modfs::installed_by_game(root(), &dir, &id) {
-                self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
-                out.push(Sound(0));
+                self.open_child(&[PLAY], format!("Play a match as {name}? (Added by hand: delete {} to remove it.)", dir.display()), out);
             } else {
-                self.open_child(&["Remove"], format!("Remove {name}? Reload then takes it out of the select."), out);
+                self.open_child(&[PLAY, "Remove"], format!("Play a match as {name}, or remove it (Reload then takes it out of the select)?"), out);
+            }
+        }
+    }
+
+    /// Play with on installed mod `i`: a local match with it on player 1's cursor, from the mode choice; one added
+    /// since the game started isn't in the select yet (Reload first).
+    fn play_with(&mut self, i: usize, out: &mut Vec<Effect>) {
+        let md = &self.add.list[i];
+        match mod_of(self, &md.dir).filter(|&j| j < self.own_mods()) {
+            // (`Menu::step` goes to the mode choice, with its sound)
+            Some(j) => self.add.play = Some(j),
+            None => {
+                self.add.status = format!("{} isn't in the select yet: Reload first.", md.name);
+                out.push(Effect::Sound(1));
             }
         }
     }
@@ -910,10 +1017,8 @@ fn card_of(m: &Menu, r: usize) -> Option<Card> {
     }
     let e = v.hovered(r)?;
     let mt = &e.meta;
-    let mut sub = if mt.source.is_empty() { String::new() } else { format!("From {}", mt.source) };
-    if !mt.author.is_empty() && v.by.is_none() {
-        sub = if sub.is_empty() { format!("by {}", mt.author) } else { format!("{sub} - by {}", mt.author) };
-    }
+    // (who uploaded it is its heading's, or the author's list's title)
+    let sub = if mt.source.is_empty() { String::new() } else { format!("From {}", mt.source) };
     let mut chips = Vec::new();
     if e.verified {
         chips.push(("Verified", GREEN));
@@ -961,6 +1066,26 @@ fn card(d: &mut Draw, [x, y, w, h]: [f32; 4], c: &Card, on: bool) {
     super::left(d, &c.sub, tx, y + 22.0 + (11.0 - ss) / 2.0, ss, tw, [118.0; 3]);
 }
 
+/// An uploader's heading over their mods: "BY <name> · N mods" with a thin line to its "Download all N" chip (gold
+/// while chosen: a press downloads them all).
+fn heading(d: &mut Draw, [x, y, w, h]: [f32; 4], author: &str, n: usize, on: bool) {
+    use super::options::MUTED;
+    let chip = format!("Download all {n}");
+    let cw = d.width(&chip, 12.0) + 20.0;
+    let cx = x + w - cw - 6.0;
+    let ty = y + h - 22.0;
+    let title = format!("BY {} · {n} mod{}", who(author).to_uppercase(), if n == 1 { "" } else { "s" });
+    let size = 14.0 * ((cx - x - 30.0) / d.width(&title, 14.0).max(1.0)).min(1.0);
+    super::left(d, &title, x + 4.0, ty + (14.0 - size) / 2.0 + 2.0, size, cx - x - 30.0, if on { BROWN } else { MUTED });
+    let lx = x + 12.0 + d.width(&title, size);
+    if cx - 8.0 > lx {
+        d.box3([lx, ty + 9.0, cx - 8.0 - lx, 1.5], 0.75, [None, None, Some(if on { BROWN } else { [100.0, 92.0, 90.0] })], 128.0);
+    }
+    let fill = if on { [128.0, 110.0, 40.0] } else { [56.0, 56.0, 67.0] };
+    d.pill_at([cx, ty, cw, 20.0], [INK, if on { WHITE } else { [100.0; 3] }, fill], 128.0);
+    d.label(&chip, cx + cw / 2.0, ty + 4.0, 12.0, cw - 8.0, WHITE);
+}
+
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let v = &m.add;
     d.frame(5, 6);
@@ -987,6 +1112,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
         } else if let Some(c) = card_of(m, r) {
             card(d, rect, &c, on);
+        } else if let Some((a, n)) = v.head(r) {
+            heading(d, rect, a, n, on);
         }
         d.hit(rect, super::pointer::Act::Row(r, super::pointer::OK));
         if on {
@@ -1040,6 +1167,7 @@ fn info(m: &Menu) -> String {
         (Page::Browse, 0) if let Some(b) = &v.by => format!("Install every mod by {} you don't have yet.", b.author),
         (Page::Browse, 0) => "Read the store's list again.".into(),
         (Page::Browse, 1) if v.by.is_some() => "Back to every mod in the store.".into(),
+        (Page::Browse, s) if let Some((a, n)) = v.head(s) => format!("{n} mod{} by {}: press to download every one you don't have yet.", if n == 1 { "" } else { "s" }, who(a)),
         (Page::Browse, s) => match v.hovered(s) {
             Some(e) if v.jobs.contains_key(&e.key()) => v.jobs[&e.key()].1.clone(),
             Some(e) => match v.state(e) {
@@ -1154,7 +1282,11 @@ fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
         }
         return;
     }
-    if name.is_empty() {
+    if let Some((a, n)) = v.head(m.sel) {
+        // an uploader's heading
+        name = format!("By {}", who(a));
+        meta = format!("{n} mod{} in the store", if n == 1 { "" } else { "s" });
+    } else if name.is_empty() {
         // a pill: its name and what it does
         name = pill_words(v).get(m.sel).cloned().unwrap_or_default();
     }
@@ -1316,8 +1448,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.status = "Open token page, make a token (Write) there and copy it, then Paste token.".into();
         m.sel = 0;
     } else if screen == "addmods" && std::env::var("HST_CHILD").is_ok() && !v.list.is_empty() {
-        v.child = Some(Child::new(TOP, &["Remove"]));
-        v.status = format!("Remove {}? Reload then takes it out of the select.", v.list[0].name);
+        v.child = Some(Child::new(TOP, &[PLAY, "Remove"]));
+        v.status = format!("Play a match as {}, or remove it (Reload then takes it out of the select)?", v.list[0].name);
         m.sel = TOP;
     } else if screen.starts_with("phonemods") {
         v.phone = true;
@@ -1625,13 +1757,13 @@ mod tests {
         m.sel = TOP;
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec!["Remove", "Cancel"] }));
-        assert!(m.add.status.starts_with("Remove Screen?"));
+        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec![PLAY, "Remove", "Cancel"] }));
+        assert!(m.add.status.starts_with("Play a match as Screen"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.add.child.is_none(), m.screen, m.sel), (true, Screen::Mods, TOP));
         m.mods_step(ok(), &mut out);
         m.mods_step(Press { up: true, ..default() }, &mut out);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(2)));
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && crate::modfs::is_file(&root().join("t_screen/mod.json")));
         m.mods_step(ok(), &mut out);
@@ -1642,9 +1774,9 @@ mod tests {
         assert_eq!(at(&m, p[0] + 10.0, p[1] + 5.0), None);
         assert_eq!(at(&m, r[1][0] + 10.0, r[1][1] + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
         assert_eq!(super::super::pointer::tests::hits(&m).1, Some(super::super::pointer::press(|k| k.back = true)));
-        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), false);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
-        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(0, super::super::pointer::OK), true);
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(2, super::super::pointer::OK), false);
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(2)));
+        m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), true);
         assert!(!crate::modfs::is_file(&root().join("t_screen/mod.json")));
         assert!(m.add.status.starts_with("Removed Screen"));
         m.sel = 0;
@@ -1674,8 +1806,76 @@ mod tests {
         m.add.list = vec![Mod { dir: root().join("pack/p"), ..a_mod("p", "P") }];
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.child, None);
-        assert!(m.add.status.starts_with("P was added by hand"), "{}", m.add.status);
+        assert_eq!(m.add.child.map(|c| c.opts), Some(vec![PLAY, "Cancel"]));
+        assert!(m.add.status.contains("Added by hand"), "{}", m.add.status);
+    }
+
+    /// Play with on an installed mod: the mode choice, then the select with it on 1P's cursor; one not in the
+    /// select's roster yet says Reload instead.
+    #[test]
+    fn play_with_a_mod() {
+        use super::super::Dev::Keys;
+        let mut m = Menu { screen: Screen::Mods, sel: TOP, ..default() };
+        m.mods = vec![a_mod("x", "X"), a_mod("t_play", "P")];
+        m.add.list = vec![a_mod("t_play", "P"), a_mod("t_new", "N")];
+        m.step(Keys, ok());
+        assert_eq!(m.add.child.as_ref().map(|c| c.opts[0]), Some(PLAY));
+        m.step(Keys, ok());
+        assert_eq!((m.screen, m.add.play, m.seats[0]), (Screen::Mode, Some(1), Some(Keys)));
+        m.step(Keys, ok());
+        assert_eq!(m.screen, Screen::Assign);
+        m.step(Keys, ok());
+        assert_eq!((m.screen, m.players[0].modded, m.players[0].pick, m.add.play), (Screen::Chars, true, 1, None));
+        // a mod added since the start isn't in the select
+        let mut m = Menu { screen: Screen::Mods, sel: TOP + 1, ..default() };
+        m.add.list = vec![a_mod("t_play", "P"), a_mod("t_new", "N")];
+        m.step(Keys, ok());
+        m.step(Keys, ok());
+        assert_eq!((m.screen, m.add.play), (Screen::Mods, None));
+        assert!(m.add.status.contains("Reload first"), "{}", m.add.status);
+    }
+
+    /// Browse groups the store's mods under their uploaders' headings (the store's order, the unknown one last); a
+    /// heading's press queues all of that uploader's mods. ←→ move between pills side by side, ↓ into the list, ↑
+    /// back out.
+    #[test]
+    fn headings_and_side_by_side() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let e = |id: &str, who: &str| Entry {
+            meta: Meta { id: id.into(), name: id.into(), author: who.into(), sha256: id.repeat(32), size: 1, ..Default::default() },
+            rev: "main".into(),
+            verified: true,
+        };
+        m.add.store = Some(vec![e("x1", ""), e("b1", "bob"), e("a1", "ann"), e("b2", "bob")]);
+        m.mods_page(Page::Browse, 0);
+        let rows: Vec<_> = m.add.items().iter().map(|i| match i {
+            Item::Head(a, n) => format!("{a}:{n}"),
+            Item::Mod(e) => e.meta.id.clone(),
+        }).collect();
+        assert_eq!(rows, ["bob:2", "b1", "b2", "ann:1", "a1", ":1", "x1"]);
+        assert_eq!((m.add.rows(), m.add.head(4), m.add.hovered(5).map(|x| x.meta.id.as_str())), (8, Some(("ann", 1)), Some("a1")));
+        // (something under way: the heading only queues)
+        m.add.doing = Some(e("zz", "zed"));
+        let mut out = Vec::new();
+        m.sel = 1;
+        m.mods_step(ok(), &mut out);
+        let ids: Vec<_> = m.add.queue.iter().map(|x| x.meta.id.clone()).collect();
+        assert_eq!(ids, ["b1", "b2"]);
+        assert!(m.add.status.starts_with("Downloading 2 mods by bob"), "{}", m.add.status);
+        m.sel = 6;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.status.contains("by unknown uploader"), "{}", m.add.status);
+        // Upload: Sign in and Upload all side by side, then the mods
+        m.mods_page(Page::Upload, 0);
+        m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
+        let mut go = |k: Press| {
+            m.mods_step(k, &mut Vec::new());
+            m.sel
+        };
+        let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
+        assert_eq!([go(r), go(r), go(l), go(d), go(d), go(u), go(u), go(u)], [1, 0, 1, UP_TOP, UP_TOP + 1, UP_TOP, 0, UP_TOP + 1]);
+        // no mods under the pills: ↑↓ go between them
+        assert_eq!((nav(0, 2, 2, d), nav(1, 2, 2, d), nav(0, 2, 2, u)), (1, 0, 1));
     }
 
     /// A long list scrolls to keep the cursor on screen, and taps land on the drawn rows.
@@ -1684,7 +1884,7 @@ mod tests {
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = (0..20).map(|i| a_mod(&format!("m{i}"), &format!("M{i}"))).collect();
         let mut out = Vec::new();
-        for _ in 0..10 {
+        for _ in 0..9 {
             m.mods_step(Press { down: true, ..default() }, &mut out);
         }
         // the cursor's mod (the 9th) is the last card shown
@@ -1698,7 +1898,7 @@ mod tests {
         // the gap between two cards goes to the nearer one
         let first = rect(&m, TOP + m.add.top);
         assert_eq!(at(first[0] + 10.0, first[1] + CARD_H + 1.0), Some(super::super::pointer::Act::Row(TOP + m.add.top, super::super::pointer::OK)));
-        (0..10).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
+        (0..9).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
         assert_eq!((m.sel, m.add.top), (0, 0));
         // 4:3 fills the window: Add mod's own place
         let (r, a) = (add_rect(&m, 4.0 / 3.0, 1.0).unwrap(), rect(&m, 0));
@@ -1720,10 +1920,10 @@ mod tests {
         assert_eq!((m.add.page, m.sel), (Page::Installed, 0));
         // E: the next tab, Browse (Refresh, then the entries)
         m.mods_step(Press { next: true, ..default() }, &mut out);
-        assert_eq!((m.add.page, m.sel, m.add.rows()), (Page::Browse, 0, 4));
+        assert_eq!((m.add.page, m.sel, m.add.rows()), (Page::Browse, 0, 5));
         let tags: Vec<_> = m.add.entries().iter().map(|x| m.add.state(x)).collect();
         assert_eq!(tags, [Some("Installed"), Some("Update"), None]);
-        m.sel = 1;
+        m.sel = 2;
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.contains("installed already") && !m.add.busy);
         let r = rect(&m, 2);
@@ -1889,7 +2089,7 @@ mod tests {
             have.push((format!("ann/{id}"), ("x".into(), dir)));
         }
         m.add.have = have.into_iter().collect();
-        m.mods_page(Page::Browse, 4);
+        m.mods_page(Page::Browse, 5);
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec![INSTALL, BY, "Cancel"]));
@@ -1920,7 +2120,7 @@ mod tests {
         assert_eq!(ids(&Vec::from(m.add.queue.clone())), ["a3", "a1"]);
         assert!(m.add.status.contains("is queued"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
-        assert_eq!((m.add.page, m.sel, m.add.entries().len()), (Page::Browse, 4, 5));
+        assert_eq!((m.add.page, m.sel, m.add.entries().len()), (Page::Browse, 5, 5));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
         assert!(modstore::newer("1.10", "1.9") && !modstore::newer("1.0", "1") && !modstore::newer("", "1") && modstore::newer("2", ""));
