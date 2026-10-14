@@ -5,7 +5,7 @@
 // controller is connected. In the menus, which also take taps (B221), the stick is a fixed circle at the bottom left so
 // taps anywhere else reach the menu; in a match it appears wherever the left thumb lands.
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
-// goes fullscreen in landscape on the first tap (where the browser allows it; an installed app starts that way).
+// goes fullscreen on the first tap, either way up (B112) (where the browser allows it; an installed app starts that way).
 
 // every AudioContext the game makes, resumed on the next gesture
 const contexts = [];
@@ -37,9 +37,8 @@ const coarse = matchMedia('(pointer: coarse)');
 const unlock = () => {
   for (const c of contexts) if (c.state !== 'running') c.resume().catch(() => {});
   if (coarse.matches && !document.fullscreenElement && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) {
-    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
-      .then(() => screen.orientation?.lock?.('landscape'))
-      .catch(() => {});
+    // B112: either way up; the game lays out for the window's shape and follows a turn live
+    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
   }
 };
 for (const e of ['pointerup', 'touchend', 'keydown']) addEventListener(e, unlock, { capture: true });
@@ -94,9 +93,8 @@ const css = `
 #touch button::after { content: ''; position: absolute; inset: calc(var(--u) * -.2); border-radius: inherit; }
 #touch button.small { border-radius: calc(var(--u) * .3); width: calc(var(--u) * 1.5); height: calc(var(--u) * .7);
   font-size: calc(var(--u) * .3); opacity: .7; }
-#rotate { display: none; position: fixed; inset: 0; z-index: 20; background: #000; color: #eee; align-items: center;
-  justify-content: center; text-align: center; font: 20px system-ui, sans-serif; padding: 16px; }
-@media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
+/* B112: upright, the pad sits under the picture (the 4:3 screen is letterboxed mid-height), sized by the width */
+@media (orientation: portrait) { #touch { --u: min(12vw, 7vh); } #touch .zone { top: 50%; } }
 `;
 // face buttons in a diamond for the right thumb, shoulders and Select/Start along the top
 const right = (x, y) => `right: calc(env(safe-area-inset-right) + var(--u) * ${x}); bottom: calc(env(safe-area-inset-bottom) + var(--u) * ${y})`;
@@ -117,10 +115,6 @@ root.hidden = true;
 root.innerHTML = `<style>${css}</style><div class="zone"><div class="base" hidden></div><div class="knob" hidden></div></div>`
   + layout.map(([k, label, pos, cls = '']) => `<button data-b="${k}" class="${cls}" style="${pos}">${label}</button>`).join('');
 document.body.append(root);
-const rotate = document.createElement('div');
-rotate.id = 'rotate';
-rotate.textContent = 'Turn your device sideways to play.';
-document.body.append(rotate);
 
 const stamp = () => (pad.timestamp = performance.now());
 const set = (k, on) => {
