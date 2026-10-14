@@ -411,6 +411,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B258** Solo singles/doubles: let the human pick the COM's character (user 2026-10-13): playing singles or doubles alone, character select doesn't let you choose the CPU's character, it just puts Ashley in. Auto-fill the empty seats with COM as now, but each COM seat gets its own card in the select that any human can take over with ✕/A to pick its character (and back out to leave it COM) — crates/hst/src/play/main_menu.rs (seats/select), play/main_menu/ (character select)
 - [x] **B263** Lobby player icons: stylized borders (a frame in the game's UI style) instead of plain boxes around circle pfps — crates/hst/src/play/main_menu/
 - [x] **B289** Settings: an **Online mod downloads** setting (Ask / Always / Never) so the choice made at the online mod prompt ("Download, always" / "Never download") can be changed later (user 2026-10-14); today it's only set from the prompt. Persist with the other settings, the prompt reads it → play/main_menu.rs (SETTING_NAMES, Settings) · play/main_menu/online.rs (ASK_ROWS) · mods_online.rs (Ask)
+- [x] **B290** Settings menu rework (user 2026-10-14): reorganize the whole Settings menu, it isn't in a good order yet. Group into clear pages (e.g. Graphics, Sound, Controls, Online/Mods), move stray toggles (Upscaled Textures/Downloads, music, mod downloads) where they belong, consistent row style; any aspect ratio → play/main_menu.rs (Screen::Settings/Graphics/Sound/Controls, layout) · play/main_menu/legend.rs
 
 
 ### Shots

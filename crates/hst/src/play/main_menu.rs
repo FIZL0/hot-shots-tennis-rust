@@ -49,6 +49,7 @@ pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
 mod online;
+mod options;
 mod mods_screen;
 mod pointer;
 mod trace;
@@ -191,41 +192,12 @@ pub(super) const FONT: [&str; 15] = [
 /// prompt asks, or its "Download, always" / "Never download" answer), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings([bool; 4], Graphics, Volumes, u8, Ask);
-/// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). The Settings screen's
-/// row 0 is the Aspect Ratio; these switches are rows 1 on.
+/// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
+/// Settings screen's pages (`options.rs`).
 const SETTING_NAMES: [&str; 4] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads"];
-const SETTING_LABELS: [&str; 4] = ["Upscaled Textures", "Menu Music", "Match Music", "Upscaled Downloads"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
-/// The Settings screen's first row and row pitch: ten rows above the description bar, as the Graphics screen's.
-pub(super) const SETTINGS_TOP: f32 = GRAPHICS_TOP;
-pub(super) const SETTINGS_PITCH: f32 = GRAPHICS_PITCH;
-/// The switches the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
-/// Downloads, `modstore::install`).
-fn locked(i: usize) -> bool {
-    cfg!(target_arch = "wasm32") && (i == 0 || i == UPSCALED_DOWNLOADS)
-}
-/// The switch on Settings row `row`, if it's one.
-fn switch(row: usize) -> Option<usize> {
-    row.checked_sub(1).filter(|&i| i < SETTING_NAMES.len())
-}
-/// The Settings screen's rows after the switches.
-const GRAPHICS_ROW: usize = SETTING_NAMES.len() + 1;
-const SOUND_ROW: usize = GRAPHICS_ROW + 1;
-const CONTROLS_ROW: usize = SOUND_ROW + 1;
-/// B289: Online Mod Downloads, the row after Controls.
-const ASK_ROW: usize = CONTROLS_ROW + 1;
-const ASK_VALUES: [(Ask, &str); 3] = [(Ask::Each, "Ask"), (Ask::Always, "Always"), (Ask::Never, "Never")];
-/// B235: the Sound screen's sliders (`Volumes`' order), 0..=10 each.
-const SOUND_LABELS: [&str; 4] = ["Master", "Music", "Sound Effects", "Voices"];
-/// The Graphics screen's first row and row pitch (640×448): its ten rows fit between the title tab (to y 40) and the
-/// description bar (y 404).
-const GRAPHICS_TOP: f32 = 46.0;
-const GRAPHICS_PITCH: f32 = 35.5;
-const GRAPHICS_ALL: [&str; 9] = ["Preset", "Resolution", "Shadows", "Frame Limit", "Show FPS", "VSync", "Original Mode", "Anti-aliasing", "Display"];
-/// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display row.
-const GRAPHICS_LABELS: &[&str] = if cfg!(target_arch = "wasm32") { GRAPHICS_ALL.split_at(8).0 } else { &GRAPHICS_ALL };
 
 /// Upscaled textures and menu music on, match music off (user 2026-10-12).
 const SETTING_DEFAULTS: [bool; 4] = [true, true, false, true];
@@ -239,12 +211,6 @@ impl Default for Settings {
     fn default() -> Self {
         Settings(SETTING_DEFAULTS, Graphics::default(), Volumes::default(), default_aspect(), Ask::Each)
     }
-}
-
-/// The next (`d` = 1) or previous (−1) of `list` after `cur` (the first if `cur` isn't in it).
-fn cycle<T: PartialEq + Copy>(list: &[T], cur: T, d: isize) -> T {
-    let i = list.iter().position(|x| *x == cur).map_or(0, |i| (i as isize + d).rem_euclid(list.len() as isize) as usize);
-    list[i]
 }
 
 impl Settings {
@@ -278,44 +244,6 @@ impl Settings {
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
         format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text()
-    }
-
-    /// Change graphics row `row` (`GRAPHICS_LABELS`) one step in direction `d`.
-    fn graphics_step(&mut self, row: usize, d: isize) {
-        use crate::graphics::{FPS, MSAA, SCALES, SHADOWS};
-        let g = &mut self.1;
-        match row {
-            0 => {
-                let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
-                let n = cycle(&names, g.preset(), d);
-                *g = Graphics { windowed: g.windowed, show_fps: g.show_fps, ..Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1 };
-            }
-            1 => g.scale = cycle(&SCALES, g.scale, d),
-            2 => g.shadows = cycle(&SHADOWS, g.shadows, d),
-            3 => g.fps = cycle(&FPS, g.fps, d),
-            4 => g.show_fps = !g.show_fps,
-            5 => g.vsync = !g.vsync,
-            6 => g.original = !g.original,
-            8 => g.windowed = !g.windowed,
-            _ => g.msaa = cycle(&MSAA, g.msaa, d),
-        }
-    }
-
-    /// The value shown beside graphics row `row`.
-    fn graphics_value(&self, row: usize) -> String {
-        let g = &self.1;
-        match row {
-            0 => g.preset().into(),
-            1 => format!("{} %", g.scale),
-            2 => ["Off", "Low", "High"][g.shadows as usize].into(),
-            3 if g.fps == 0 => "Uncapped".into(),
-            3 => format!("{} fps", g.fps),
-            4 => if g.show_fps { "On" } else { "Off" }.into(),
-            5 => if g.vsync { "On" } else { "Off" }.into(),
-            6 => if g.original { "On" } else { "Off" }.into(),
-            8 => if g.windowed { "Window" } else { "Fullscreen" }.into(),
-            _ => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
-        }
     }
 
     pub(crate) fn path(iso: &str) -> std::path::PathBuf {
@@ -366,11 +294,15 @@ enum Screen {
     /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
     /// switch, measured per screen).
     Main,
+    /// B290: the list of pages, and the option pages (`options.rs`).
     Settings,
+    Display,
     Graphics,
     /// B235: the volume sliders.
     Sound,
     Controls,
+    /// Online & Mods: what the mod store and online lobbies download.
+    ModSettings,
     Mode,
     Assign,
     Chars,
@@ -764,60 +696,12 @@ impl Menu {
                 }
             }
             Screen::Settings => {
-                rows(ASK_ROW + 2, &mut self.sel, &mut out);
-                let s = self.sel;
-                if s == 0 && (k.ok || k.left || k.right) {
-                    let n = super::widescreen::ASPECTS.len() as u8;
-                    self.settings.3 = (self.settings.3 + if k.left { n - 1 } else { 1 }) % n;
-                    out.extend([Sound(0), SaveSettings]);
-                } else if let Some(i) = switch(s).filter(|&i| !locked(i))
-                    && (k.ok || k.left || k.right)
-                {
-                    self.settings.0[i] = !self.settings.0[i];
-                    if i == 0 {
-                        self.settings.0[UPSCALED_DOWNLOADS] = self.settings.0[0];
-                    }
-                    out.extend([Sound(0), SaveSettings]);
-                } else if k.ok && s == GRAPHICS_ROW {
-                    self.go(Screen::Graphics, &mut out);
-                } else if k.ok && s == SOUND_ROW {
-                    self.go(Screen::Sound, &mut out);
-                } else if k.ok && s == CONTROLS_ROW {
-                    self.go(Screen::Controls, &mut out);
-                } else if s == ASK_ROW && (k.ok || k.left || k.right) {
-                    let list = ASK_VALUES.map(|(a, _)| a);
-                    self.settings.4 = cycle(&list, self.settings.4, if k.left { -1 } else { 1 });
-                    out.extend([Sound(0), SaveSettings]);
-                } else if (k.ok && s > ASK_ROW) || k.back {
-                    self.sel = 2;
-                    self.screen = Screen::Main;
-                    out.push(Sound(1));
-                }
+                rows(options::HUB.len() + 1, &mut self.sel, &mut out);
+                self.step_hub(k, &mut out);
             }
-            Screen::Graphics => {
-                rows(GRAPHICS_LABELS.len() + 1, &mut self.sel, &mut out);
-                let s = self.sel;
-                if s < GRAPHICS_LABELS.len() && (k.ok || k.left || k.right) {
-                    self.settings.graphics_step(s, if k.left { -1 } else { 1 });
-                    out.extend([Sound(0), SaveSettings]);
-                } else if k.ok || k.back {
-                    self.sel = GRAPHICS_ROW;
-                    self.screen = Screen::Settings;
-                    out.push(Sound(1));
-                }
-            }
-            Screen::Sound => {
-                rows(SOUND_LABELS.len() + 1, &mut self.sel, &mut out);
-                let s = self.sel;
-                if s < SOUND_LABELS.len() && (k.left || k.right) {
-                    let v = &mut self.settings.2 .0[s];
-                    *v = if k.left { v.saturating_sub(1) } else { (*v + 1).min(10) };
-                    out.extend([Sound(0), SaveSettings]);
-                } else if (k.ok && s == SOUND_LABELS.len()) || k.back {
-                    self.sel = SOUND_ROW;
-                    self.screen = Screen::Settings;
-                    out.push(Sound(1));
-                }
+            Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => {
+                rows(options::page(self.screen).len() + 1, &mut self.sel, &mut out);
+                self.step_page(k, &mut out);
             }
             Screen::Controls => {
                 if self.rebinding.is_some() {
@@ -829,9 +713,7 @@ impl Menu {
                     self.rebinding = Some(self.sel);
                     out.push(Sound(2));
                 } else if (k.ok && self.sel == n) || k.back {
-                    self.sel = CONTROLS_ROW;
-                    self.screen = Screen::Settings;
-                    out.push(Sound(1));
+                    self.back_to_hub(&mut out);
                 }
             }
             Screen::Mode if host == Some(dev) => {
@@ -1541,8 +1423,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
         "settings" => Screen::Settings,
+        "display" => Screen::Display,
         "graphics" => Screen::Graphics,
         "sound" => Screen::Sound,
+        "mod-settings" => Screen::ModSettings,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
@@ -1950,88 +1834,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.info(&info);
             mods_screen::ask_layout(&mut d, m, hand_x);
         }
-        Screen::Settings => {
-            d.frame(1, 6);
-            let mut labels: Vec<String> = vec!["Aspect Ratio".into()];
-            labels.extend(SETTING_LABELS.iter().map(|s| s.to_string()));
-            labels.extend(["Graphics".into(), "Sound".into(), "Controls".into(), "Online Mod Downloads".into(), "Back".into()]);
-            d.rows_locked(&labels, m.sel, 120.0, SETTINGS_TOP, 300.0, hand_x, SETTINGS_PITCH, |i| switch(i).is_some_and(locked));
-            d.text(super::widescreen::ASPECTS[m.settings.3 as usize], 440.0, SETTINGS_TOP + 7.0, 24.0, GOLD);
-            d.hit([420.0, SETTINGS_TOP, 100.0, 38.0], pointer::Act::Row(0, pointer::OK));
-            let y = SETTINGS_TOP + SETTINGS_PITCH * ASK_ROW as f32;
-            d.text(ASK_VALUES.iter().find(|(a, _)| *a == m.settings.4).unwrap().1, 440.0, y + 7.0, 24.0, GOLD);
-            d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(ASK_ROW, pointer::OK));
-            for (i, on) in m.settings.0.iter().enumerate() {
-                let (on, y) = (&(*on && !locked(i)), SETTINGS_TOP + SETTINGS_PITCH * (i + 1) as f32);
-                d.text(if *on { "ON" } else { "OFF" }, 440.0, y + 7.0, 24.0, if *on { GOLD } else { [70.0; 3] });
-                d.hit([420.0, y, 100.0, 38.0], pointer::Act::Row(i + 1, pointer::OK));
-            }
-            d.info(&match m.sel {
-                0 => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.".to_string(),
-                1 | 4 if locked(0) => "Upscaled textures aren't available in the browser.".into(),
-                1 => "Use the upscaled textures in mods/texture-replacements.".into(),
-                2 => "Play music in the menus.".into(),
-                3 => "Play each court's music during a match.".into(),
-                4 => "Download mods' upscaled textures from the mod store (most of a mod's size).".into(),
-                5 => "Resolution, shadows, frame limit and vsync.".into(),
-                6 => "The volume of the music, the sound effects and the voices.".into(),
-                7 => "Change the keys and buttons (controls.txt).".into(),
-                ASK_ROW => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).".into(),
-                _ => text.msg(190).to_string(),
-            });
-        }
-        Screen::Graphics => {
-            d.frame(1, 6);
-            let mut labels: Vec<String> = GRAPHICS_LABELS.iter().map(|s| s.to_string()).collect();
-            labels.push("Back".into());
-            // nine rows: closer than the other screens' to clear the description bar (y 404)
-            d.rows_at(&labels, m.sel, 120.0, GRAPHICS_TOP, 300.0, hand_x, GRAPHICS_PITCH);
-            for i in 0..GRAPHICS_LABELS.len() {
-                let (y, rgb) = (GRAPHICS_TOP + GRAPHICS_PITCH * i as f32, if i == m.sel { WHITE } else { [40.0; 3] });
-                d.text(&m.settings.graphics_value(i), 440.0, y + 7.0, 24.0, rgb);
-                // B221: the value's arrows (a tap on its left half steps back, on its right half on)
-                d.text("<", 424.0, y + 7.0, 24.0, rgb);
-                d.text(">", 614.0, y + 7.0, 24.0, rgb);
-                d.hit([420.0, y, 100.0, GRAPHICS_PITCH], pointer::Act::Row(i, Press { left: true, ..default() }));
-                d.hit([520.0, y, 115.0, GRAPHICS_PITCH], pointer::Act::Row(i, Press { right: true, ..default() }));
-            }
-            d.info(match m.sel {
-                0 => "Default draws at full quality; Steam Deck and Low trade detail for frame rate.",
-                1 => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
-                2 => "Off, or the shadow map's detail (Low: smaller and fewer cascades).",
-                3 => "The most frames drawn a second (the game itself always runs at 60 Hz).",
-                4 => "Show the frame rate in the top-right corner, in the menus and in a match.",
-                5 => "Wait for the display between frames: no tearing, at most its refresh rate.",
-                6 => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
-                7 => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
-                8 if GRAPHICS_LABELS.len() > 8 => "Borderless fullscreen on the current monitor, or a window.",
-                _ => "Back to the settings.",
-            });
-        }
-        Screen::Sound => {
-            d.frame(1, 6);
-            let mut labels: Vec<String> = SOUND_LABELS.iter().map(|s| s.to_string()).collect();
-            labels.push("Back".into());
-            d.rows_at(&labels, m.sel, 120.0, 90.0, 300.0, hand_x, 44.0);
-            for (i, v) in m.settings.2 .0.iter().enumerate() {
-                let (y, rgb) = (90.0 + 44.0 * i as f32, if i == m.sel { WHITE } else { [40.0; 3] });
-                // the slider: a dark track, filled gold to the volume, with its arrows (a tap on the left half turns
-                // it down, on the right half up, as the Graphics screen's values)
-                d.text("<", 424.0, y + 7.0, 24.0, rgb);
-                d.text(">", 614.0, y + 7.0, 24.0, rgb);
-                d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 160.0, 10.0], [15.0; 3], 128.0);
-                d.q(Tex::Solid, [0.0; 4], [444.0, y + 14.0, 16.0 * *v as f32, 10.0], if i == m.sel { GOLD } else { [100.0, 90.0, 40.0] }, 128.0);
-                d.hit([420.0, y, 104.0, 38.0], pointer::Act::Row(i, Press { left: true, ..default() }));
-                d.hit([524.0, y, 111.0, 38.0], pointer::Act::Row(i, Press { right: true, ..default() }));
-            }
-            d.info(match m.sel {
-                0 => "The volume of everything.",
-                1 => "The menu and match music and the jingles.",
-                2 => "The court, the crowd, the weather and the menu sounds.",
-                3 => "The players' and the umpire's voices.",
-                _ => "Back to the settings.",
-            });
-        }
+        Screen::Settings => options::hub_layout(&mut d, m, hand_x),
+        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => {
             d.frame(1, 6);
             let names: Vec<_> = controls::action_names().collect();
@@ -2830,7 +2634,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Settings | Screen::Graphics | Screen::Sound | Screen::Controls => Some(0),
+            Screen::Main | Screen::Settings | Screen::Display | Screen::Graphics | Screen::Sound | Screen::Controls | Screen::ModSettings => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
@@ -2935,41 +2739,6 @@ mod tests {
         assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
     }
 
-    /// B235: Settings → Sound; ← / → step a slider (clamped to 0..=10) and save; the volumes round-trip settings.txt.
-    #[test]
-    fn sound_sliders() {
-        let mut m = Menu { screen: Screen::Settings, sel: SOUND_ROW, ..default() };
-        m.step(Dev::Keys, press(|k| &mut k.ok));
-        assert_eq!(m.screen, Screen::Sound);
-        m.step(Dev::Keys, press(|k| &mut k.down));
-        let fx = m.step(Dev::Keys, press(|k| &mut k.left));
-        assert!(fx.contains(&Effect::SaveSettings));
-        m.step(Dev::Keys, press(|k| &mut k.right));
-        m.step(Dev::Keys, press(|k| &mut k.right));
-        assert_eq!(m.settings.2, Volumes([10, 10, 10, 10]));
-        (0..12).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
-        assert_eq!(m.settings.2, Volumes([10, 0, 10, 10]));
-        assert_eq!(Settings::parse(&m.settings.text()), m.settings);
-        m.step(Dev::Keys, press(|k| &mut k.back));
-        assert_eq!((m.screen, m.sel), (Screen::Settings, SOUND_ROW));
-    }
-
-    /// B220: ↓ walks every Settings row to Back, then wraps to the first (↑ the other way), changing nothing; and every
-    /// row, Back included, is drawn above the description bar (y 404), so the hand never goes out of sight.
-    #[test]
-    fn settings_down_reaches_every_row() {
-        let mut m = Menu { screen: Screen::Settings, ..default() };
-        let rows = ASK_ROW + 2;
-        for want in (1..rows).chain([0]) {
-            assert_eq!(m.step(Dev::Keys, press(|k| &mut k.down)), [Effect::Sound(0)]);
-            assert_eq!((m.screen, m.sel), (Screen::Settings, want));
-        }
-        m.step(Dev::Keys, press(|k| &mut k.up));
-        assert_eq!(m.sel, rows - 1);
-        assert_eq!(m.settings, Settings::default());
-        assert!(SETTINGS_TOP + SETTINGS_PITCH * (rows - 1) as f32 + 38.0 <= 404.0);
-    }
-
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
         let mut p = Press::default();
         *f(&mut p) = true;
@@ -3004,22 +2773,6 @@ mod tests {
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
         assert_eq!(Settings([false, false, true, false], d, Volumes::default(), 1, Ask::Each).flags()[..2], ["--no-upscale", "--music"]);
-        // the preset row steps through the presets; changing any other row makes it Custom
-        let mut s = Settings::default();
-        s.graphics_step(0, 1);
-        assert_eq!(s.1, Graphics::STEAM_DECK);
-        s.graphics_step(0, -1);
-        assert_eq!(s.1, d);
-        s.graphics_step(1, -1);
-        assert_eq!((s.1.scale, s.graphics_value(0).as_str()), (85, "Custom"));
-        // the display row survives a preset change and keeps the preset's name
-        s.graphics_step(8, 1);
-        s.graphics_step(4, 1);
-        s.graphics_step(0, 1);
-        assert_eq!((s.1.windowed, s.1.show_fps, s.graphics_value(0).as_str(), s.graphics_value(8).as_str()), (true, true, "Default", "Window"));
-        assert!(Settings::parse(&s.text()).1.show_fps && s.flags().contains(&"--show-fps".into()));
-        s.graphics_step(6, 1);
-        assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
     }
 
     #[test]
