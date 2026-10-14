@@ -2291,13 +2291,18 @@ fn rank_pill(d: &mut Draw, r: usize, rgb: [f32; 3], x: f32, y: f32) {
 const FACE_FILL: [f32; 3] = [110.0, 100.0, 90.0];
 
 /// B263: a round face icon `icon` (a `Tex`, its source rect) in a frame `size` across centred on (x, y), in the
-/// cards' style: our round box's warm fill under the face, its ink rim and white ring over the face's edge (both dark
-/// with it where every costume is taken).
+/// cards' style: a thin ink rim and white ring (dark with the face where every costume is taken) round a warm fill,
+/// stacked discs of our pill's outer stadium.
 fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f32, tint: [f32; 3]) {
-    let (dst, f) = ([x - size / 2.0, y - size / 2.0, size, size], size * 0.4);
-    d.box3(dst, size / 2.0, [None, None, Some(FACE_FILL)], 128.0);
+    let ring = if tint == WHITE { WHITE } else { [60.0; 3] };
+    for (inset, rgb) in [(0.0, INK), (1.5, ring), (3.0, FACE_FILL)] {
+        let r = size / 2.0 - inset;
+        for (src, dst) in super::menu_art::pill_quads(0, [x - r, y - r, 2.0 * r, 2.0 * r]) {
+            d.q(Tex::Pill, src, dst, rgb, 128.0);
+        }
+    }
+    let f = size / 2.0 - 3.5;
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
-    d.box3(dst, size / 2.0, [Some(INK), Some(if tint == WHITE { WHITE } else { [60.0; 3] }), None], 128.0);
 }
 
 /// The custom page as the disc grid: one framed group, a face square per mod with its icon and name, the hand and
