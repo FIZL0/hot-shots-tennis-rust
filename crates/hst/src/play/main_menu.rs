@@ -2727,7 +2727,12 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     // its middle square inside its edge lines; just her name beside it
     let ([fu, fv, w, h], fh) = (face.1, 26.0);
     let (src, fw) = if face.1 == RANDOM_TILE { ([fu + (w - h) / 2.0 + 4.0, fv + 4.0, h - 8.0, h - 8.0], fh) } else { (face.1, fh * w / h) };
-    d.q(face.0, src, [sx + 22.0 - fw / 2.0, sy + 106.0 - fh / 2.0, fw, fh], WHITE, 128.0);
+    if face.1 == RANDOM_TILE {
+        // B356: the "?" in the same circle as a disc face: its dark rim and white ring, the tile clipped round inside
+        random_face(d, src, [sx + 22.0, sy + 106.0], fh);
+    } else {
+        d.q(face.0, src, [sx + 22.0 - fw / 2.0, sy + 106.0 - fh / 2.0, fw, fh], WHITE, 128.0);
+    }
     left(d, &uname, sx + 40.0, sy + 99.0, 14.0, sw - 50.0, BROWN);
     let rects = confirm_rects(m);
     let rows: [String; CONFIRM_ROWS] = ["Start the match!".into(), "Select Court".into(), format!("Sets  {}", SETS[m.sets]), format!("Games  {}", m.games), "Select Umpire".into()];
@@ -2766,6 +2771,21 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
         _ => text.msg(328),
     };
     help_box(d, [col[0], col[1] + col[3] - 40.0, col[2], 40.0], info);
+}
+
+/// B356: the random umpire's icon `size` across centred on `[x, y]`, round like the disc's umpire faces: their dark
+/// rim and white ring (stacked discs of our pill's outer stadium), the "?" tile's square `src` clipped to the circle
+/// inside them.
+fn random_face(d: &mut Draw, src: [f32; 4], [x, y]: [f32; 2], size: f32) {
+    for (inset, rgb) in [(0.0, [36.0, 35.0, 34.0]), (0.7, WHITE)] {
+        let r = size / 2.0 - inset;
+        for (src, dst) in super::menu_art::pill_quads(0, [x - r, y - r, 2.0 * r, 2.0 * r]) {
+            d.q(Tex::Pill, src, dst, rgb, 128.0);
+        }
+    }
+    let r = size / 2.0 - 2.2;
+    d.q(C02, src, [x - r, y - r, 2.0 * r, 2.0 * r], WHITE, 128.0);
+    d.out.last_mut().unwrap().round = [r; 4];
 }
 
 /// The court's surface (from `[x, y]`) and its bounce and speed meters under it, across `w`; nothing for Random.
