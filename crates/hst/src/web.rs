@@ -266,6 +266,20 @@ pub fn cards_keep(prefix: &str) {
     });
 }
 
+/// B259: drop (and delete from OPFS) every card `gone` names.
+pub fn cards_drop(gone: impl Fn(&str) -> bool) {
+    let mut cards = CARDS.lock().unwrap();
+    let Some(cards) = cards.as_mut() else { return };
+    let drop = page_fn("hstCardDrop");
+    cards.retain(|name, _| {
+        let keep = !gone(name);
+        if !keep && let Some(f) = &drop {
+            let _ = f.call1(&JsValue::NULL, &name.as_str().into());
+        }
+        keep
+    });
+}
+
 fn page_fn(name: &str) -> Option<js_sys::Function> {
     js_sys::Reflect::get(&web_sys::window().unwrap(), &name.into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok())
 }
