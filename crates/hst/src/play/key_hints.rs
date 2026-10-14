@@ -1,6 +1,6 @@
 //! B301 (ours, by the user's request): the match's keyboard hints. While the keyboard plays a seat and was the last
 //! device used, the menus' legend strip (`main_menu::legend`, bottom right under the 4:3 screen's description bar, in
-//! keycaps) lists the match's keys from `controls.txt`: move, the three shots, serve, the emotes and pause. A pad or a
+//! keycaps) lists the match's keys from `controls.txt`: move, the three shots (which serve too), the emotes and pause. A pad or a
 //! touch hides it (switching live, as the legend does), and so does the Key Hints setting (Settings → Display,
 //! `key_hints` in settings.txt, on by default). Whatever else fills the legend (the pause menu, its Settings screens,
 //! the result screen) takes the strip instead. Presentation only: nothing here reaches the sim.
@@ -23,7 +23,6 @@ fn items(bind: &Bindings) -> Vec<Item> {
         (Act::Key, "Topspin", caps(&[Action::Normal])),
         (Act::Key, "Slice", caps(&[Action::Cut])),
         (Act::Key, "Lob", caps(&[Action::Lob])),
-        (Act::Key, "Serve", caps(&[Action::Serve])),
         (Act::Key, "Emotes", caps(&[Action::EmoteUp, Action::EmoteDown, Action::EmoteLeft, Action::EmoteRight])),
     ];
     // `menu.rs`: Esc pauses (fixed, not in controls.txt)
@@ -54,7 +53,7 @@ fn hints_follow_the_bindings_and_the_keyboard() {
     let (b, _) = Bindings::parse("topspin = Z\nlob = PadNorth\n");
     let got: Vec<_> = items(&b).into_iter().map(|i| format!("{} {}", i.label, i.keys.join(" "))).collect();
     // lob has no key left: no entry
-    assert_eq!(got, ["Move W A S D", "Topspin Z", "Slice K", "Serve Space", "Emotes 1 2 3 4", "Pause Esc"]);
+    assert_eq!(got, ["Move W A S D", "Topspin Z", "Slice K", "Emotes 1 2 3 4", "Pause Esc"]);
     assert!(shown(true, Last::Keys, true, false));
     assert!(!shown(false, Last::Keys, true, false), "setting off");
     assert!(!shown(true, Last::Pad(Entity::PLACEHOLDER), true, false), "pad last used");

@@ -76,7 +76,7 @@ graphics preset. Touch check: `tools/web_touch.mjs` (phone viewport, taps, offli
 Doubles by default (`--singles` for 1v1). Player 1 = keyboard + controller 1, player 2 (player 1's partner; the opponent in singles) = controller 2
 when connected, players 3 and 4 (the other team) = controllers 3 and 4 when connected; the other slots are CPU. `--pads a,b,c,d` seats
 1P..4P instead (`k` keyboard, a pad index, `-` CPU; the main menu passes it), e.g. `--pads -,k` = CPU 1P, keyboard 2P. WASD/left stick/d-pad move (and aim at contact, screen-relative) ·
-J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net at contact: flat; pulled back with slice: drop · J/Space/A/Start serve ·
+J/A (✕) topspin · K/B (○) slice · L/Y (△) lob — stick toward the net at contact: flat; pulled back with slice: drop · any shot button serves (as its toss: ✕ strong, ○ weak, △ underhand) · Space/X (□) replay after a point ·
 C/Select swap hand at character select (no free camera, B218).
 Rebind any of these in `controls.txt` beside the ISO (written with the defaults on first run). Controllers can be
 plugged and unplugged mid-match: each keeps its slot, a new one takes the first free slot. **Steam / Big Picture**: add the

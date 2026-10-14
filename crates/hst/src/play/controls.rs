@@ -23,8 +23,9 @@ pub enum Action {
     Cut,
     /// △: lob.
     Lob,
-    /// Serve only (keyboard Space by default; ✕ serves too, as the original).
-    Serve,
+    /// □: asks for the post-point's instant replay (`instant_replay`). There's no serve action: the shot buttons serve,
+    /// as the original (B119; an older file's `serve = …` line is ignored).
+    Replay,
     /// Select: swap the character's hand at character select (`camera`, its old name, kept for existing files).
     Camera,
     /// Emotes (`play::emote`), as the right stick flicked up, down, left, right.
@@ -42,7 +43,7 @@ const ACTIONS: [(Action, &str); 13] = [
     (Action::Normal, "topspin"),
     (Action::Cut, "slice"),
     (Action::Lob, "lob"),
-    (Action::Serve, "serve"),
+    (Action::Replay, "replay"),
     (Action::Camera, "camera"),
     (Action::EmoteUp, "emote_up"),
     (Action::EmoteDown, "emote_down"),
@@ -73,7 +74,7 @@ impl Default for Bindings {
             vec![K(C::KeyJ), Pad(P::South)],
             vec![K(C::KeyK), Pad(P::East)],
             vec![K(C::KeyL), Pad(P::North)],
-            vec![K(C::Space)],
+            vec![K(C::Space), Pad(P::West)],
             vec![K(C::KeyC), Pad(P::Select)],
             vec![K(C::Digit1)],
             vec![K(C::Digit2)],
@@ -138,8 +139,8 @@ impl Bindings {
                 continue;
             };
             let Some(i) = ACTIONS.iter().position(|(_, n)| *n == action.trim()) else {
-                // the free camera's turn keys (gone, B218) in an older file
-                if matches!(action.trim(), "turn_left" | "turn_right") {
+                // the free camera's turn keys (gone, B218) and the serve key (gone, B119) in an older file
+                if matches!(action.trim(), "turn_left" | "turn_right" | "serve") {
                     continue;
                 }
                 errors.push(format!("unknown action: {}", action.trim()));
@@ -482,6 +483,35 @@ mod tests {
         assert!(!key(&mut app, true));
         assert!(app.world().resource::<ButtonInput<KeyCode>>().pressed(KeyCode::KeyJ));
         assert!(!key(&mut app, true));
+    }
+
+    /// B119: no serve binding. ✕ (keyboard J, pad South) latches the topspin press the serve tosses on (press 0 →
+    /// `Toss::Strong`), never the □ replay request; an older file's `serve = …` line loads without an error.
+    #[test]
+    fn cross_serves_on_keyboard_and_pad() {
+        let (b, errors) = Bindings::parse("serve = Space\ntopspin = J PadSouth\n");
+        assert_eq!((b, errors), (Bindings::default(), vec![]));
+        assert!(!action_names().any(|n| n == "serve"));
+        let slot = |key: Option<KeyCode>, pad: Option<GamepadButton>| {
+            let mut w = World::new();
+            let mut keys = ButtonInput::<KeyCode>::default();
+            key.map(|k| keys.press(k));
+            w.insert_resource(keys);
+            w.insert_resource(super::super::Pads::default());
+            w.init_resource::<Bindings>();
+            w.init_resource::<PadSlots>();
+            if let Some(p) = pad {
+                let mut g = Gamepad::default();
+                g.digital_mut().press(p);
+                w.spawn(g);
+            }
+            w.run_system_cached(super::super::read_input).unwrap();
+            let s = w.resource::<super::super::Pads>().slots[0];
+            (s.shot, s.serve)
+        };
+        assert_eq!(slot(Some(KeyCode::KeyJ), None), (Some(0), false));
+        assert_eq!(slot(None, Some(GamepadButton::South)), (Some(0), false));
+        assert_eq!(slot(Some(KeyCode::Space), None), (None, true), "Space is □, the replay request");
     }
 
     #[test]
