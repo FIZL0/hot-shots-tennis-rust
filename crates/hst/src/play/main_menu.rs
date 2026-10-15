@@ -262,8 +262,10 @@ pub(super) const FONT: [&str; 15] = [
 /// pads' button icons (B362: a `legend::LAYOUTS` index, 0 Auto), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
-/// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
-const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
+/// B273: the browser's renderer setting, each as its settings.txt / web/index.html word and its Settings row's word
+/// (B316: the row's value and choices both come from here): Auto (WebGPU when the browser has an adapter), WebGPU,
+/// WebGL2.
+const RENDERERS: [(&str, &str); 3] = [("auto", "Auto"), ("webgpu", "WebGPU"), ("webgl2", "WebGL2")];
 /// The Menu Size setting's values: Auto (0), then 50% to 150% in tenths.
 const MENU_SIZES: [u8; 12] = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
@@ -321,7 +323,7 @@ impl Settings {
             } else if k.trim() == "button_icons" {
                 s.9 = legend::LAYOUTS.iter().position(|l| l.1 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "renderer" {
-                s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
+                s.5 = RENDERERS.iter().position(|r| r.0 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
                 aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
             } else if k.trim() == "widescreen" {
@@ -379,7 +381,7 @@ impl Settings {
 
     /// B273: the renderer is the browser build's alone.
     fn renderer_line(&self) -> String {
-        if cfg!(target_arch = "wasm32") { format!("renderer = {}\n", RENDERERS[self.5 as usize]) } else { String::new() }
+        if cfg!(target_arch = "wasm32") { format!("renderer = {}\n", RENDERERS[self.5 as usize].0) } else { String::new() }
     }
 
     pub(crate) fn path(iso: &str) -> std::path::PathBuf {
@@ -3324,7 +3326,7 @@ fn step(
                         warn!("{}: {e}", path.display());
                     }
                     #[cfg(target_arch = "wasm32")]
-                    crate::web::renderer(RENDERERS[menu.settings.5 as usize]);
+                    crate::web::renderer(RENDERERS[menu.settings.5 as usize].0);
                 }
                 Effect::Quit => {
                     exit.write(AppExit::Success);
