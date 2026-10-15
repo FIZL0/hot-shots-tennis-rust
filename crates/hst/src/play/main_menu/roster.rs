@@ -34,6 +34,8 @@ const TILE: f32 = 84.0;
 const TILE_GAP: f32 = 6.0;
 const BAR: f32 = 6.0;
 const HEADING: f32 = 22.0;
+/// B426: the least of a row that shows under the grid's last whole line.
+const PEEK: f32 = 12.0;
 /// The pills go on two rows in a column narrower than this inside (px).
 const PILLS_W: f32 = 290.0;
 
@@ -183,7 +185,7 @@ impl Columns {
     /// B382: player `p`'s column's lines on view in `v`: each heading's section and box, each tile's place
     /// (`tabs::flat`), cell and box.
     pub fn laid(&self, p: usize, v: &View) -> (Vec<(usize, [f32; 4])>, Vec<(usize, Option<Who>, [f32; 4])>) {
-        let [x, mut y, w, _] = self.parts(p).grid;
+        let [x, mut y, w, h] = self.parts(p).grid;
         let [tw, th] = self.tile;
         let (mut heads, mut tiles) = (Vec::new(), Vec::new());
         for &l in &v.lines[v.top..v.end] {
@@ -196,6 +198,16 @@ impl Columns {
                 }
             }
             y += self.line_h(l) + self.gap[1];
+        }
+        // B426: the next row's top in what's left under the last whole line (so a heading at the foot isn't all
+        // there is of its section), its boxes cut at the grid's foot
+        let left = h + self.parts(p).grid[1] - y;
+        if let Some(&Line::Tiles(s, i)) = v.lines.get(v.end)
+            && left >= PEEK * PY
+        {
+            for (j, &c) in v.secs[s].cells[i..].iter().take(self.cols).enumerate() {
+                tiles.push((tabs::flat(&v.secs, s, i + j), c, [x + (tw + self.gap[0]) * j as f32, y, tw, th.min(left)]));
+            }
         }
         (heads, tiles)
     }
@@ -234,6 +246,28 @@ impl Menu {
     pub(super) fn tile_rect(&self, p: usize, k: usize) -> Option<[f32; 4]> {
         self.columns().laid(p, &self.view(p)).1.into_iter().find(|t| t.0 == k).map(|t| t.2)
     }
+}
+
+/// B426: the quads from `from` on cut off at `foot` (down the menu's units), their pictures with them; the corners
+/// on the cut square.
+fn cut(d: &mut Draw, from: usize, foot: f32) {
+    let mut rest = d.out.split_off(from);
+    rest.retain_mut(|q| {
+        let [_, y, _, h] = q.dst;
+        if y + h <= foot {
+            return true;
+        }
+        let keep = foot - y;
+        if keep <= 0.0 {
+            return false;
+        }
+        q.src[3] *= keep / h;
+        q.dst[3] = keep;
+        q.round[2] = 0.0;
+        q.round[3] = 0.0;
+        true
+    });
+    d.out.append(&mut rest);
 }
 
 /// A box `[x, y, w, h]` filled `rgb`, its corners rounded `r` mockup px.
@@ -453,7 +487,11 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         heading(d, &v.secs[k], rect, &s);
         d.hit(rect, pointer::Act::Section(p, k));
     }
-    for (k, cell, rect) in tiles {
+    let foot = at.grid[1] + at.grid[3];
+    for (k, cell, hit) in tiles {
+        // B426: a row peeking under the last whole line comes cut at the grid's foot: drawn whole, then cut
+        let rect = [hit[0], hit[1], c.tile[0], c.tile[1]];
+        let n0 = d.out.len();
         let on = active && Some(k) == mine_at;
         if on {
             ringed(d, rect, 10.0, 3.0, s.ring, s.sel);
@@ -471,7 +509,8 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         if let Some(w) = cell && m.favorite(w) {
             tabs::star(d, rect);
         }
-        d.hit(rect, pointer::Act::Cell(p, k));
+        cut(d, n0, foot);
+        d.hit(hit, pointer::Act::Cell(p, k));
     }
     // the scroll bar: its thumb the lines on view over all of them
     let total = v.lines.len();
