@@ -522,7 +522,8 @@ fn sync(
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
     let mut quads = match slide.incoming() {
         // B192: and the confirm screen's players
-        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm) => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        // B370: and the lobby's seat cards
+        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm | Screen::Lobby) => layout(&menu, &art.2, &bind, &[], 0.0).0,
         _ => Vec::new(),
     };
     let dx = slide.incoming().map_or(0.0, |s| s.0);

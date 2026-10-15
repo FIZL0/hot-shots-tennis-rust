@@ -177,11 +177,15 @@ pub struct Pick {
     /// Drawn by the Random card: the lobby shows "Random", not who it drew (the mod still streams as any).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub random: bool,
+    /// B370: the select's hand toggle (Select / −): the match plays the character with the other hand
+    /// (`--swap-hands`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swap: bool,
 }
 
 impl Pick {
     pub fn disc(char: usize, costume: usize) -> Pick {
-        Pick { char, costume, r#mod: None, random: false }
+        Pick { char, costume, r#mod: None, random: false, swap: false }
     }
 }
 
@@ -259,6 +263,9 @@ pub struct Room {
     /// same code and QR as the host's and can pass the lobby on. Never the long ticket (B224).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub short: String,
+    /// B370: each guest's last round trip to the host (ms, by peer), for the lobby's cards.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ping: std::collections::BTreeMap<String, u32>,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -276,6 +283,11 @@ pub struct Live {
     /// B234: the mod's own name, for peers that don't have it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// B370: the hand toggle and the Random card, as they change (the lobby's cards follow them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swap: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub random: bool,
 }
 
 impl Room {
@@ -1676,6 +1688,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => {
                 broadcast(&joined, &Msg::Ping(micros(t0)));
+                // B370: the round trips the lobby's cards show, to everyone when one moves (5 ms steps)
+                let ms: std::collections::BTreeMap<String, u32> = joined.iter().filter_map(|(p, ..)| Some((p.clone(), (rtt.get(p)?.as_millis() as u32).div_ceil(5) * 5))).collect();
+                if starting.is_none() && ms != room.ping {
+                    room.ping = ms;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
             }
             // B215: the countdown's next second (shown on every peer), and at 0 the start
             _ = n0_future::time::sleep(next_second(count)), if count.is_some() => {
