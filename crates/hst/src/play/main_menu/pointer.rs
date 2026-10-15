@@ -21,8 +21,12 @@ use super::{Dev, Effect, Menu, Press, Screen};
 pub(super) enum Act {
     /// Row `i` of the screen's list: hovering selects it, a tap selects it and presses `k` (usually ✕).
     Row(usize, Press),
-    /// A character select tile: the roster's `i`th (B306).
-    Cell(usize),
+    /// A character select tile: player `p`'s column's, the roster's `i`th (B306, B368: `Cell(p, i)`).
+    Cell(usize, usize),
+    /// B368: player `p`'s column's grid (under its tiles): the wheel and a finger's drag scroll it.
+    Grid(usize),
+    /// B368: player `p`'s column's grid scrolled `d` rows (sent by the wheel and drags, never hit-tested).
+    Scroll(usize, i32),
     /// A court tile or umpire card in the confirm screen's picker: a tap hovers it, a tap on the hovered one keeps it.
     Pick(usize),
     /// A button: a tap is this press.
@@ -123,8 +127,9 @@ impl Menu {
                     out.extend(self.step(dev, k));
                 }
             }
-            Act::Cell(i) => {
-                let Some(p) = self.driven(dev) else { return out };
+            Act::Cell(q, i) => {
+                // B368: only the column the pointer's device picks for
+                let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
                 self.focus = p;
                 if self.players[p].ready {
                     return out;
@@ -146,6 +151,12 @@ impl Menu {
                     out.extend(self.step(dev, OK));
                 }
             }
+            Act::Scroll(p, d) => {
+                if self.scroll_by(p, d) {
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Grid(_) => {}
             Act::Pick(v) if tap => {
                 let court = self.sel == 1;
                 if v == if court { self.court } else { self.umpire as usize } {
@@ -243,7 +254,12 @@ pub(in crate::play) fn pointer(
     };
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
-    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_)));
+    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..)));
+    // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
+    let column = |a: Option<Act>| match a {
+        Some(Act::Cell(p, _) | Act::Grid(p)) => Some(p),
+        _ => None,
+    };
     // touch
     for t in touches.iter_just_pressed() {
         if st.finger.is_none() {
@@ -256,7 +272,14 @@ pub(in crate::play) fn pointer(
             let d = (t.position() - *last) / size * if turned { -448.0 } else { 448.0 };
             let step = |v: f32| if v.abs() >= DRAG { v.signum() as i32 } else { 0 };
             let (sx, sy) = (step(d.x * size.x / size.y), step(d.y));
-            if sx != 0 || sy != 0 {
+            if let Some(p) = column(at(*start, SLOP_TOUCH)) {
+                // B368: a drag on a select column's grid scrolls that column, up and down only
+                if sy != 0 {
+                    *dragged = true;
+                    *last = t.position();
+                    out(Some(Act::Scroll(p, -sy)), true);
+                }
+            } else if sx != 0 || sy != 0 {
                 *dragged = true;
                 *last = t.position();
                 // the finger pulls the list: up moves the cursor down
@@ -309,7 +332,11 @@ pub(in crate::play) fn pointer(
     while st.wheel.abs() >= 1.0 {
         let up = st.wheel > 0.0;
         st.wheel -= st.wheel.signum();
-        out(Some(press(|k| (k.up, k.down) = (up, !up))), true);
+        // B368: over a select column, the wheel scrolls its grid
+        match st.mouse.and_then(|c| column(at(c, SLOP))) {
+            Some(p) => out(Some(Act::Scroll(p, if up { -1 } else { 1 })), true),
+            None => out(Some(press(|k| (k.up, k.down) = (up, !up))), true),
+        }
     }
 }
 

@@ -199,7 +199,7 @@ impl Menu {
             }
         }
         self.players[i].ready = false;
-        self.scroll = 0;
+        self.scroll = [0; 4];
         self.net.edit = Some(i);
         self.net.status.clear();
         self.go(Screen::Chars, out);
