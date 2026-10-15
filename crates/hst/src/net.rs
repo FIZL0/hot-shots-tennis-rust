@@ -868,6 +868,14 @@ impl Net {
         let _ = self.cmd.send(c);
     }
 
+    /// M108: sends `Cmd::Leave` when called, from any thread (an Android app gone to the background, its frames stopped).
+    pub fn leaver(&self) -> impl Fn() + Send + 'static {
+        let cmd = self.cmd.clone();
+        move || {
+            let _ = cmd.send(Cmd::Leave);
+        }
+    }
+
     /// M20: the chat lines heard since the last call (`poll` takes them out of the events).
     pub fn chats(&self) -> Vec<(String, String, String)> {
         std::mem::take(&mut self.chats.lock().unwrap())

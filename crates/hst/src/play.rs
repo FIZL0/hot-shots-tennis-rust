@@ -44,6 +44,8 @@ use crate::effects;
 use crate::{Args, GameSpace, Orbit};
 use snapshot::Const;
 
+#[cfg(any(target_os = "android", test))]
+pub mod background;
 mod ball_shadow;
 mod smash_marker;
 mod bodyhit;

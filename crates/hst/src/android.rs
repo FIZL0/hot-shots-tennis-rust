@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use jni::objects::{JObject, JValue};
 use jni::{JNIEnv, JavaVM};
@@ -133,9 +133,92 @@ pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<
     }
 }
 
+/// M108: how long an online match keeps its connection with the app in the background, so a quick look elsewhere
+/// doesn't drop the peers (they see a stall: they go on waiting for a silent peer up to `recover::SILENT`).
+const GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+/// The activity is paused (home, recents, screen off, the file picker on top), and how many pauses there have been.
+static PAUSED: AtomicBool = AtomicBool::new(false);
+static PAUSES: AtomicU32 = AtomicU32::new(0);
+/// The online match's leave while one is on (`play::background::leaver`, kept by `background`), and whether a
+/// pause has used it.
+static LEAVE: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+static LEFT: AtomicBool = AtomicBool::new(false);
+
+/// M108: the activity's lifecycle (the patched winit's `lifecycle` hook, on the event loop's thread). Paused, the
+/// audio goes silent and stands still (the game's frames stop by themselves: winit draws nothing until it's resumed);
+/// an online match leaves after [`GRACE`] unless it's back by then. Finished (swiped away in recents, closed): the
+/// process ends rather than idling on with no activity.
+fn lifecycle(phase: winit::platform::android::lifecycle::Phase) {
+    use winit::platform::android::lifecycle::Phase;
+    eprintln!("activity {phase:?}");
+    match phase {
+        Phase::Pause | Phase::Stop => {
+            if PAUSED.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            crate::audio::set_muted(true);
+            let n = PAUSES.fetch_add(1, Ordering::Relaxed) + 1;
+            if LEAVE.lock().unwrap().is_some() {
+                std::thread::spawn(move || {
+                    std::thread::sleep(GRACE);
+                    if PAUSED.load(Ordering::Relaxed) && PAUSES.load(Ordering::Relaxed) == n
+                        && let Some(leave) = LEAVE.lock().unwrap().take()
+                    {
+                        eprintln!("online match left: in the background for {GRACE:?}");
+                        leave();
+                        LEFT.store(true, Ordering::Relaxed);
+                    }
+                });
+            }
+        }
+        Phase::Resume => {
+            if PAUSED.swap(false, Ordering::Relaxed) {
+                crate::audio::set_muted(false);
+            }
+        }
+        // not a destroy to make it again (a configuration change the manifest doesn't take on itself)
+        Phase::Destroy if ask("isFinishing") == Some(true) => std::process::exit(0),
+        Phase::Start | Phase::Destroy => {}
+    }
+}
+
+/// Hooks [`lifecycle`] up; call before the app runs.
+pub fn watch_lifecycle() {
+    winit::platform::android::lifecycle::set_hook(lifecycle);
+}
+
+/// M108, each frame (`First`, before the match's ticks): keeps [`LEAVE`] up to date, and on the first frame after a
+/// pause, tells the match (`play::background::back`).
+pub fn background(w: &mut World, mut seen: Local<u32>) {
+    let pauses = PAUSES.load(Ordering::Relaxed);
+    if PAUSED.load(Ordering::Relaxed) {
+        return;
+    }
+    if *seen != pauses {
+        *seen = pauses;
+        crate::play::background::back(w, LEFT.swap(false, Ordering::Relaxed));
+    }
+    let leave = crate::play::background::leaver(w);
+    let mut l = LEAVE.lock().unwrap();
+    match leave {
+        Some(f) if l.is_none() => *l = Some(Box::new(f)),
+        None => *l = None,
+        _ => {}
+    }
+}
+
 /// A method of the running `HstActivity` (no arguments, returns `int` or `void`: 0), on the calling thread (attached to
 /// the VM for good). `None` if the call failed.
 fn call(name: &str, sig: &str) -> Option<i32> {
+    invoke(name, sig, |v| Some(v.i().unwrap_or(0)))
+}
+
+/// A `boolean` method of the running activity, as [`call`].
+fn ask(name: &str) -> Option<bool> {
+    invoke(name, "()Z", |v| v.z().ok())
+}
+
+fn invoke<T>(name: &str, sig: &str, value: impl FnOnce(jni::objects::JValueOwned) -> Option<T>) -> Option<T> {
     let app = bevy::android::ANDROID_APP.get()?;
     // SAFETY: the VM and the activity outlive the process's native code; `JObject` doesn't free what it wraps
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
@@ -146,7 +229,7 @@ fn call(name: &str, sig: &str) -> Option<i32> {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
     }
-    r.ok().map(|v| v.i().unwrap_or(0))
+    value(r.ok()?)
 }
 
 #[derive(Resource)]

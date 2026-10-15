@@ -213,3 +213,25 @@ pub mod gamepad {
         crate::platform_impl::take_pad_events()
     }
 }
+
+/// The activity's lifecycle (opentennis patch, M108). Winit only reports the window's surface coming and going
+/// (`Resumed`/`Suspended`); Android pauses and stops an activity (home, recents, screen off) without always taking
+/// the surface, and an app's audio and network threads run on regardless. The hook runs on the event loop's
+/// thread as each change comes in, even while the app's own updates have stopped.
+#[cfg(android_platform)]
+pub mod lifecycle {
+    /// An `Activity` callback, as android-activity's `MainEvent` reports it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Phase {
+        Start,
+        Resume,
+        Pause,
+        Stop,
+        Destroy,
+    }
+
+    /// Calls `hook` on every lifecycle change from here on (replacing any earlier hook).
+    pub fn set_hook(hook: fn(Phase)) {
+        crate::platform_impl::set_lifecycle_hook(hook)
+    }
+}

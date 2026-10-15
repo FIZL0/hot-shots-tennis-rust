@@ -50,6 +50,20 @@ pub(crate) fn take_pad_events() -> Vec<PadEvent> {
     PAD_EVENTS.lock().unwrap().drain(..).collect()
 }
 
+/// The app's activity lifecycle hook (`platform::android::lifecycle`, an opentennis patch).
+static LIFECYCLE_HOOK: Mutex<Option<fn(crate::platform::android::lifecycle::Phase)>> = Mutex::new(None);
+
+pub(crate) fn set_lifecycle_hook(hook: fn(crate::platform::android::lifecycle::Phase)) {
+    *LIFECYCLE_HOOK.lock().unwrap() = Some(hook);
+}
+
+fn lifecycle(phase: crate::platform::android::lifecycle::Phase) {
+    let hook = *LIFECYCLE_HOOK.lock().unwrap();
+    if let Some(hook) = hook {
+        hook(phase);
+    }
+}
+
 /// Whether an input `source` (`InputDevice.SOURCE_*` bits) is a gamepad's or a joystick's.
 fn is_pad_source(source: u32) -> bool {
     source & 0x0000_0400 != 0 || source & 0x0100_0000 != 0
@@ -289,10 +303,12 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Start => {
                     // XXX: how to forward this state to applications?
                     warn!("TODO: forward onStart notification to application");
+                    lifecycle(crate::platform::android::lifecycle::Phase::Start);
                 },
                 MainEvent::Resume { .. } => {
                     debug!("App Resumed - is running");
                     self.running = true;
+                    lifecycle(crate::platform::android::lifecycle::Phase::Resume);
                 },
                 MainEvent::SaveState { .. } => {
                     // XXX: how to forward this state to applications?
@@ -302,15 +318,18 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Pause => {
                     debug!("App Paused - stopped running");
                     self.running = false;
+                    lifecycle(crate::platform::android::lifecycle::Phase::Pause);
                 },
                 MainEvent::Stop => {
                     // XXX: how to forward this state to applications?
                     warn!("TODO: forward onStop notification to application");
+                    lifecycle(crate::platform::android::lifecycle::Phase::Stop);
                 },
                 MainEvent::Destroy => {
                     // XXX: maybe exit mainloop to drop things before being
                     // killed by the OS?
                     warn!("TODO: forward onDestroy notification to application");
+                    lifecycle(crate::platform::android::lifecycle::Phase::Destroy);
                 },
                 MainEvent::InsetsChanged { .. } => {
                     // XXX: how to forward this state to applications?

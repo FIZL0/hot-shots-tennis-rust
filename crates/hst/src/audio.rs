@@ -19,6 +19,13 @@ pub fn set_turned(on: bool) {
     TURNED.store(on, Ordering::Relaxed);
 }
 
+/// M108: the app is in the background (`android.rs`): the mixer stands still where it is and the output is silence.
+static MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_muted(on: bool) {
+    MUTED.store(on, Ordering::Relaxed);
+}
+
 /// A bearing (whole degrees) as heard from the listener's end.
 fn heard(angle: i32) -> i32 {
     if TURNED.load(Ordering::Relaxed) { (angle + 180) % 360 } else { angle }
@@ -768,7 +775,11 @@ impl Iterator for StreamDecoder {
     fn next(&mut self) -> Option<f32> {
         if self.at == self.buf.len() {
             self.buf.clear();
-            self.mix.lock().unwrap().render(&mut self.buf);
+            if MUTED.load(Ordering::Relaxed) {
+                self.buf.resize(FRAME * 2, 0.0);
+            } else {
+                self.mix.lock().unwrap().render(&mut self.buf);
+            }
             self.at = 0;
         }
         self.at += 1;
