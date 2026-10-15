@@ -261,7 +261,15 @@ fn save_desync(w: &mut World, why: &str) -> String {
     let iso = w.get_resource::<crate::Args>().map_or(String::new(), |a| a.iso.clone());
     let unix = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let me: String = np.me.chars().take(8).collect();
-    let path = crate::net::Online::path(&iso).with_file_name(format!("desync-{unix}-{me}.json"));
+    // tests running at once (threads, processes) share one folder and the names host/g: two desyncs in the same
+    // second took each other's report (one test deleted the file the other then expected)
+    let path = if cfg!(test) {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("hst-desync-{}-{n}-{me}.json", std::process::id()))
+    } else {
+        crate::net::Online::path(&iso).with_file_name(format!("desync-{unix}-{me}.json"))
+    };
     let pads: Vec<[[u8; 6]; 4]> = np.lock.log.iter().map(|t| t.map(wire)).collect();
     let json = serde_json::json!({ "why": why, "room": np.room, "me": np.me, "pads": pads, "state_tick": np.state.0, "state": np.state.1 });
     #[cfg(target_arch = "wasm32")]
