@@ -990,6 +990,9 @@ fn gs_models_anim(
     for_models(data, keep, |stem, model, mats| {
         let _pre = textures::prefetch(&mats);
         let anim = hst_sim::court_anim::CourtAnim::new(&model, tracks(&stem, "uva", 4).as_ref(), tracks(&stem, "mta", 1).as_ref(), &mats.materials);
+        // P32: a hole material whose alpha the `.MTA` animates, or whose texture a live reload can change, keeps its
+        // blended draws whole
+        let fixed_alpha = tracks(&stem, "mta", 1).is_none() && std::env::var_os("HST_TEXTURE_RELOAD").is_none();
         let mut parts = Vec::new();
         for (mi, packets) in model.materials.iter().enumerate() {
             let Some(mat) = mats.materials.get(mi) else { continue };
@@ -1035,7 +1038,52 @@ fn gs_models_anim(
                 if own_mips.is_some() {
                     draws.iter_mut().for_each(|g| g.uniform.screen_lod = 1.0);
                 }
-                parts.push((mesh, draws, (mi, first)));
+                // P32: each of the hole's two draws keeps only the triangles with a pixel it can draw (the indoor
+                // court's floor is faded, its walls solid); a scrolling texture (`.UVA`) keeps them all
+                let mut split = Vec::new();
+                if stem.contains("_h01_") && fixed_alpha && k.1.is_none() {
+                    let see = texture.as_ref().and_then(|t| images.get(t)).and_then(gs::SeeThrough::new);
+                    if let (Some(Indices::U32(idx)), true) = (mesh.indices(), texture.is_none() || see.is_some()) {
+                        let alpha: Vec<f32> = match mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
+                            Some(bevy::mesh::VertexAttributeValues::Float32x4(c)) => c.iter().map(|c| c[3]).collect(),
+                            _ => Vec::new(),
+                        };
+                        let uv: &[[f32; 2]] = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+                            Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv,
+                            _ => &[],
+                        };
+                        let can = |test| gs::hole_triangles(test, idx, &alpha, uv, mat.color[3], see.as_ref());
+                        let (ge, lt) = (can(gs::Test::Ge80), can(gs::Test::Lt80));
+                        // where every pixel passes A ≥ 0x80 the test is left out (an opaque draw without discard:
+                        // tile GPUs' hidden-surface removal works on it)
+                        let mut whole = Vec::new();
+                        for g in std::mem::take(&mut draws) {
+                            let pieces: Vec<(gs::GsMaterial, Vec<bool>)> = match g.key.test {
+                                gs::Test::Lt80 => vec![(g, lt.clone())],
+                                gs::Test::Ge80 => {
+                                    let always = gs::GsMaterial { key: gs::GsKey { test: gs::Test::Always, ..g.key }, ..g.clone() };
+                                    vec![(always, lt.iter().map(|&l| !l).collect()), (g, ge.iter().zip(&lt).map(|(&g, &l)| g && l).collect())]
+                                }
+                                _ => vec![(g, vec![true; idx.len() / 3])],
+                            };
+                            for (g, keep) in pieces {
+                                if keep.iter().all(|&k| k) {
+                                    whole.push(g);
+                                } else if keep.iter().any(|&k| k) {
+                                    let kept: Vec<u32> = idx.chunks(3).zip(&keep).filter(|(_, k)| **k).flat_map(|(t, _)| t.iter().copied()).collect();
+                                    let mut part = mesh.clone();
+                                    part.insert_indices(Indices::U32(kept));
+                                    split.push((part, vec![g], (mi, first)));
+                                }
+                            }
+                        }
+                        draws = whole;
+                    }
+                }
+                if !draws.is_empty() {
+                    parts.push((mesh, draws, (mi, first)));
+                }
+                parts.extend(split);
             }
         }
         out.push((stem, parts, anim));

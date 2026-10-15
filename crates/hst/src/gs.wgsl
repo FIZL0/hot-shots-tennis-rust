@@ -336,7 +336,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if a8 < 128.0 { discard; }
 #endif
 #ifdef GS_LT80
-    if a8 >= 128.0 { discard; }
+    // P32: alpha 0 blends to the frame buffer as it was (SrcAlpha·Cs + (1 − SrcAlpha)·Cd, or + 0 for `@add`), so the
+    // hole's see-through texels are left out before the blend
+    if a8 >= 128.0 || a <= 0.0 { discard; }
 #endif
 #ifdef GS_HDR
     // G5: the GS's 8-bit clamp left to the tonemapper, which rolls off what is brighter than 1 (hud_gamma.rs)
