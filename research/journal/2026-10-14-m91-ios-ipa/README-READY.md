@@ -61,3 +61,11 @@ vertices). Big stalls only at loads (match start 1.5 s, result → menu 0.9 s). 
 (37k lines): now winit=warn. Added RenderDiagnosticsPlugin on iOS, logging the 8 slowest passes every 0.5 s
 (GPU time if Metal gives timestamps), and prep/enc/submit in the frame split. Next log says which pass the call
 model costs.
+
+## Build 2015: second profile (Grand Indoor Palace, stage 7, same settings, fps cap 120)
+40 fps through the match (25 ms frames): game ~5 ms, render 19 ms = prep 13.7 + enc 3.1 + submit 1.9. `prep`
+(main app end → render graph begin) includes Bevy's swapchain acquire (`prepare_windows`), i.e. waiting for the GPU:
+the menu, one mesh at 60 fps, shows prep 10.5 ms too. CPU work is ~11 ms a frame, so the palace is GPU-bound at 100%
+scale (2556×1179, 2x MSAA, HDR scene image). Metal gave no GPU timestamps through RenderDiagnosticsPlugin (CPU-only
+pass times, all <0.1 ms): removed again. The 20.8 s "frame" was the app suspended (lifecycle Suspended/Running).
+Next: A/B on the palace at Scale 50–70% and MSAA off to size the GPU levers.

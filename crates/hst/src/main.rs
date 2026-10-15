@@ -311,7 +311,7 @@ fn start(argv: Vec<String>) {
     let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
     app.add_plugins(plugins);
     #[cfg(target_os = "ios")]
-    app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, (ios::heartbeat, ios::log_passes));
+    app.add_systems(Last, ios::heartbeat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]

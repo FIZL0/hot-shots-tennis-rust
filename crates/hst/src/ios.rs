@@ -100,24 +100,6 @@ pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<
     }
 }
 
-/// Every 0.5 s, the render passes that took longest (Bevy's render diagnostics: GPU time where Metal gives timestamps,
-/// else CPU time), to tell a GPU-bound frame from a CPU-bound one.
-pub fn log_passes(d: Res<bevy::diagnostic::DiagnosticsStore>, time: Res<Time<Real>>, mut next: Local<f32>) {
-    let t = time.elapsed_secs();
-    if t < *next {
-        return;
-    }
-    *next = t + 0.5;
-    let mut passes: Vec<(f64, String)> = d
-        .iter()
-        .filter(|g| g.path().as_str().starts_with("render/") && g.path().as_str().contains("elapsed_"))
-        .filter_map(|g| Some((g.average()?, g.path().as_str().trim_start_matches("render/").to_string())))
-        .collect();
-    passes.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let top: Vec<String> = passes.iter().take(8).map(|(ms, p)| format!("{p} {ms:.2}")).collect();
-    eprintln!("passes ms at {t:.1}s: {}", top.join(", "));
-}
-
 /// `LogPlugin::custom_layer`: the engine's log as text on stderr (bevy only sends it to os_log on iOS).
 pub fn log_layer(_: &mut App) -> Option<BoxedLayer> {
     Some(Box::new(tracing_subscriber::fmt::Layer::default().with_ansi(false).with_writer(std::io::stderr)))
