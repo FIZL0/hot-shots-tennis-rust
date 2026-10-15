@@ -280,10 +280,8 @@ pub(super) fn card(iso: &str, m: &Mod) -> Option<Vec<u8>> {
 /// [`ICON_READS`] new ones a frame so a page turn doesn't stall.
 fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<Who>>) {
     let page: Vec<Who> = match menu.screen {
-        Screen::Chars => {
-            let (start, roster) = menu.page();
-            roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect()
-        }
+        // B368: every column's tiles on view
+        Screen::Chars => menu.on_view(),
         // the main screen's pictures' faces (`home::faces`), as the baker draws them
         Screen::Main => super::home::faces(&menu),
         Screen::Mods => super::mods_screen::faces(&menu),

@@ -218,9 +218,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
-            if !me.random {
-                v.push((Act::Card, if me.card { "Picture" } else { "Stats" }));
-            }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
@@ -454,6 +451,33 @@ fn pad_style(vendor: u16, layout: u8, deck: bool) -> Style {
 
 /// B362: the connected pads' styles (each once, in pad order), as [`note_pads`] last saw them.
 static PADS: Mutex<Vec<Style>> = Mutex::new(Vec::new());
+/// B368: each connected pad's style, as [`note_pads`] last saw them.
+static PAD_STYLES: Mutex<Vec<(Entity, Style)>> = Mutex::new(Vec::new());
+
+/// B368: the button art device `dev` (None: the keyboard) shows, as its legend's.
+fn dev_style(dev: Option<Entity>) -> Style {
+    if let Some(s) = forced() {
+        return s;
+    }
+    let Some(e) = dev else { return Style::Keys };
+    let known = PAD_STYLES.lock().ok().and_then(|v| v.iter().find(|(p, _)| *p == e).map(|(_, s)| *s));
+    known.unwrap_or_else(|| pad_style(0, LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1")))
+}
+
+/// B368: the names on `dev`'s buttons for `act` as the legend draws them (a keyboard's keys, Q / E; a pad's L1 / R1
+/// or LB / RB, its Select as "Create" on a PlayStation pad): the select's costume and hand pills label theirs.
+pub(super) fn button_names(dev: Option<Entity>, act: Act, bind: &Bindings) -> Vec<String> {
+    let it = item(act, "", &[]);
+    let it = Item { keys: menu_keys(act, bind), ..it };
+    glyphs(dev_style(dev), &it)
+        .into_iter()
+        .filter_map(|g| match g {
+            Glyph::Cap(s) => Some(s),
+            Glyph::Shoulder(s) | Glyph::Small(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect()
+}
 
 /// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
 /// it names one, for `--shot`s without the pad), then the keyboard's Enter.
@@ -469,6 +493,12 @@ pub(crate) fn join_styles() -> Vec<Style> {
 fn note_pads(pads: Query<(Entity, &Gamepad)>, all: Query<&Gamepad>) {
     let mut ps: Vec<_> = pads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
     ps.sort();
+    let each: Vec<(Entity, Style)> = ps.iter().map(|&e| (e, style_of(Some(e), &all))).collect();
+    if let Ok(mut p) = PAD_STYLES.lock()
+        && *p != each
+    {
+        *p = each;
+    }
     let mut v: Vec<Style> = Vec::new();
     for s in ps.into_iter().map(|e| style_of(Some(e), &all)) {
         if !v.contains(&s) {
