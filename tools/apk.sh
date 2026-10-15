@@ -52,6 +52,8 @@ cat >"$out/AndroidManifest.xml" <<'EOF'
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36"/>
   <uses-feature android:glEsVersion="0x00030000"/>
   <uses-permission android:name="android.permission.INTERNET"/>
+  <!-- B455: mDNS (LAN lobbies) needs Wi-Fi multicast (HstActivity's MulticastLock) -->
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
   <application android:label="OpenTennis" android:icon="@mipmap/ic_launcher"
       android:roundIcon="@mipmap/ic_launcher_round" android:hasCode="true" android:extractNativeLibs="false"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
@@ -70,7 +72,7 @@ rm -rf "$out/classes" && mkdir -p "$out/classes" "$out/dex"
 javac -nowarn --release 17 -classpath "$JAR" -d "$out/classes" $(find crates/hst/android -name '*.java')
 "$BT/d8" --release --min-api 26 --lib "$JAR" --output "$out/dex" $(find "$out/classes" -name '*.class')
 # a release (tools/release.sh, HST_VERSION=v1.2.3) names its version; versionCode 10203 keeps each release an upgrade
-ver=${HST_VERSION#v}; ver=${ver%%-*}
+ver=${HST_VERSION:-}; ver=${ver#v}; ver=${ver%%-*}
 vargs=()
 [[ $ver =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] && vargs=(--replace-version --version-name "${HST_VERSION#v}" \
     --version-code $((BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3])))
