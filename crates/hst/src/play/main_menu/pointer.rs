@@ -35,6 +35,8 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B369: player `p`'s column's category tab `i` (`tabs.rs`): a tap switches them to it.
+    Category(usize, usize),
 }
 
 /// ✕.
@@ -129,13 +131,16 @@ impl Menu {
                 }
             }
             Act::Cell(q, i) => {
-                // B368: only the column the pointer's device picks for
+                // B368: only the column the pointer's device picks for; its tiles are its player's tab's (B369)
                 let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
+                let tabs = self.tabs();
+                let tab = &tabs[self.tab_at(p, &tabs)];
                 self.focus = p;
                 if self.players[p].ready {
                     return out;
                 }
-                let Some(&c) = self.roster().get(i) else { return out };
+                let Some(&c) = tab.cells.get(i) else { return out };
+                self.players[p].tab = tab.id;
                 if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
                     if self.full(p, c) {
@@ -178,6 +183,17 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
+            Act::Category(q, i) if tap => {
+                let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
+                self.focus = p;
+                let tabs = self.tabs();
+                if !self.players[p].ready && i < tabs.len() && i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i) {
+                    self.skip_taken();
+                    self.follow(p);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Category(..) => {}
         }
         out
     }

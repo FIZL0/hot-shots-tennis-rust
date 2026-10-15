@@ -44,7 +44,7 @@ pub(crate) enum Act {
     Card,
     /// L1 / R1: the costume; the Settings tab (B294).
     Costume,
-    /// □ / Tab: the disc or custom page.
+    /// □ / Tab: the select's favourite (B369).
     Page,
     /// Select: the hand.
     Hand,
@@ -219,6 +219,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
+            // B369: □ in or out of the favourites (not Random)
+            if !me.ready && !me.random {
+                v.push((Act::Page, "Favourite"));
+            }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
@@ -376,7 +380,7 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
 /// group per player: each action once, in the select's order, its labels where players differ joined ("Cancel /
 /// Leave").
 fn shared(groups: Vec<Group>) -> Vec<Group> {
-    const ORDER: [Act; 7] = [Act::Page, Act::Move, Act::Costume, Act::Hand, Act::Ok, Act::Back, Act::Chat];
+    const ORDER: [Act; 7] = [Act::Move, Act::Costume, Act::Hand, Act::Page, Act::Ok, Act::Back, Act::Chat];
     let rank = |a: Act| ORDER.iter().position(|&o| o == a).unwrap_or(ORDER.len());
     if groups.is_empty() {
         return groups;

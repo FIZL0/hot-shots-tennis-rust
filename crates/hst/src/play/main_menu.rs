@@ -54,6 +54,7 @@ mod online;
 mod options;
 mod mods_screen;
 mod pointer;
+mod tabs;
 mod trace;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
@@ -371,7 +372,7 @@ struct Press {
     /// L1 / R1: the costume.
     prev: bool,
     next: bool,
-    /// □ / Tab: the select roster's next filter (B296).
+    /// □ / Tab: the highlighted character in or out of the favourites (B369).
     page: bool,
     /// Select / − (keyboard: the camera key, C): the hand toggle.
     hand: bool,
@@ -421,6 +422,8 @@ struct Player {
     swap: bool,
     /// B217: on the Random card (the ? card until ready; readying draws the pick, `Menu::draw`).
     random: bool,
+    /// B369: the category tab the player browses (`tabs.rs`).
+    tab: u8,
 }
 
 impl Player {
@@ -502,6 +505,8 @@ struct Menu {
     editing: Option<Settings>,
     /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
     switch: Option<(u8, usize)>,
+    /// B369: the select's favourite characters (`favourites.txt`).
+    favs: tabs::Favourites,
 }
 
 impl Default for Menu {
@@ -538,6 +543,7 @@ impl Default for Menu {
             calls: 0,
             editing: None,
             switch: None,
+            favs: default(),
         }
     }
 }
@@ -556,6 +562,8 @@ enum Effect {
     Online(online::Fx),
     /// The umpire picker's Preview Voice: umpire, voice program, key (`hst_sim::umpire`'s banks).
     Hear(u8, u8, u8),
+    /// B369: `favourites.txt` written.
+    SaveFavourites,
 }
 
 impl Menu {
@@ -712,7 +720,7 @@ impl Menu {
 
     /// B306 / B368: the roster and the first tile on view in player `p`'s column (`scroll`'s row, kept on the roster).
     fn page(&self, p: usize) -> (usize, Vec<Option<Who>>) {
-        let roster = self.roster();
+        let roster = self.tab_cells(p);
         let c = self.columns();
         let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
         (self.scroll[p].min(last) * c.cols, roster)
@@ -720,7 +728,7 @@ impl Menu {
 
     /// B368: player `p`'s column scrolled as little as shows their tile.
     fn follow(&mut self, p: usize) {
-        let roster = self.roster();
+        let roster = self.tab_cells(p);
         let c = self.columns();
         let row = roster.iter().position(|w| *w == self.cell(p)).unwrap_or(0) / c.cols;
         let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
@@ -731,7 +739,7 @@ impl Menu {
     /// B368: player `p`'s column's grid scrolled `d` rows (the wheel, a drag), its tile free to leave the view.
     fn scroll_by(&mut self, p: usize, d: i32) -> bool {
         let c = self.columns();
-        let last = self.roster().len().div_ceil(c.cols).saturating_sub(c.rows);
+        let last = self.tab_cells(p).len().div_ceil(c.cols).saturating_sub(c.rows);
         let to = (self.scroll[p].min(last) as i32 + d).clamp(0, last as i32) as usize;
         std::mem::replace(&mut self.scroll[p], to) != to
     }
@@ -1118,41 +1126,20 @@ impl Menu {
                     self.players[p].swap = !self.players[p].swap;
                     out.push(Sound(0));
                 }
-                if !self.players[p].ready {
-                    let d = (k.right as i32 - k.left as i32) + (k.down as i32 - k.up as i32) * self.columns().cols as i32;
-                    if d != 0 {
-                        let roster = self.roster();
-                        let at = roster.iter().position(|c| *c == self.cell(p));
-                        // B66: past a full one the same way, staying put at the edge (the grid doesn't wrap)
-                        let to = match at {
-                            None => roster.iter().position(|&c| !self.full(p, c)),
-                            Some(at) => {
-                                let mut to = at as i32;
-                                loop {
-                                    to += d;
-                                    if !(0..roster.len() as i32).contains(&to) {
-                                        let edge = to.clamp(0, roster.len() as i32 - 1) as usize;
-                                        break Some(if self.full(p, roster[edge]) { at } else { edge });
-                                    }
-                                    if !self.full(p, roster[to as usize]) {
-                                        break Some(to as usize);
-                                    }
-                                }
-                            }
-                        };
-                        if let Some(to) = to && Some(to) != at {
-                            self.put(p, roster[to]);
-                            self.follow(p);
-                            out.push(Sound(0));
-                        }
+                // B369: □ a favourite (not Random's), the moves on the player's tab
+                if k.page && !self.players[p].ready && !self.players[p].random {
+                    self.toggle_favourite(p, &mut out);
+                }
+                if !self.players[p].ready && self.tab_move(p, k) {
+                    self.follow(p);
+                    out.push(Sound(0));
+                }
+                if !self.players[p].ready && (k.prev || k.next) {
+                    // M1n / B66: past a costume that failed to load or that someone else is ready on
+                    if let Some(c) = if k.next { next_c } else { prev_c } {
+                        self.players[p].costume = c;
                     }
-                    if k.prev || k.next {
-                        // M1n / B66: past a costume that failed to load or that someone else is ready on
-                        if let Some(c) = if k.next { next_c } else { prev_c } {
-                            self.players[p].costume = c;
-                        }
-                        out.push(Sound(0));
-                    }
+                    out.push(Sound(0));
                 }
                 // B66: landing on a taken costume moves on to the next free one
                 self.skip_taken();
@@ -1750,6 +1737,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
     menu.umpire = menu.settings.6;
+    if fresh {
+        menu.favs = tabs::load(&args.iso);
+    }
     // back from a match: its pause menu may have changed them (B126)
     if let Ok(s) = saved {
         menu.settings = s;
@@ -3122,6 +3112,12 @@ fn step(
                     });
                     commands.insert_resource(crate::mode::Next(Some(crate::match_mode(&args.iso, &a, back))));
                 }
+                Effect::SaveFavourites => {
+                    let path = tabs::path(&args.iso);
+                    if let Err(e) = crate::store::write(&path, tabs::text(&menu.favs)) {
+                        warn!("{}: {e}", path.display());
+                    }
+                }
                 Effect::Hear(u, program, key) => {
                     let Some(s) = &sound else { continue };
                     let bank = voice.0.entry(u).or_insert_with(|| Iso::open(&args.iso).ok().and_then(|mut iso| crate::audio::umpire_bank(&mut iso, u, 0)).map(Arc::new)).clone();
@@ -3672,8 +3668,7 @@ mod tests {
             m.step(Dev::Keys, press(f));
             m.cell(0)
         };
-        // B306: the one roster: the Random card, the disc's 14, then the mods (B368: a window wide enough for 8 a row
-        // in each of the 4 columns)
+        // B369: the mods' own tab (8 a row here), ← past its first tile to Hot Shots' row 0, its last tile
         m.grid = Grid::fit(4.0 / 3.0);
         while m.columns().cols < 8 {
             m.grid.view[2] += 1.0;
@@ -3681,15 +3676,14 @@ mod tests {
         assert_eq!(m.columns().cols, 8);
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(2)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)));
-        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[CHARS - 1].0)), "the disc's last");
+        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[6].0)), "Hot Shots' first row's last");
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(0)));
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)));
-        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the roster's end");
+        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the tab's end");
         assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)));
-        for _ in 0..3 {
-            go(&mut m, |p| &mut p.up);
-        }
-        assert_eq!(m.cell(0), None, "up the first column to the Random card");
+        assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)), "↑ never changes the tab");
+        go(&mut m, |p| &mut p.left);
+        assert_eq!(go(&mut m, |p| &mut p.up), None, "↑ on the first row: its first tile, the Random card");
     }
 
     /// B269: with 3 computer players added in doubles, 1P picking Random leaves each next COM's cursor on Random, so
@@ -4093,8 +4087,14 @@ mod tests {
     fn roster_scrolls_to_the_cursor() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), Some(pad), None, None], grid: Grid::fit(4.0 / 3.0), ..default() };
+        // B369: both on the mods' tab
+        let mods = m.tabs().last().unwrap().id;
+        for p in 0..2 {
+            m.put(p, Some(Who::Mod(0)));
+            m.players[p].tab = mods;
+        }
         let c = m.columns();
-        assert!(c.per() < m.roster().len());
+        assert!(c.per() < m.tab_cells(0).len());
         let down = |m: &mut Menu| {
             m.step(Dev::Keys, press(|p| &mut p.down));
         };
@@ -4116,13 +4116,13 @@ mod tests {
         assert_eq!((m.scroll[1], m.cell(1), m.scroll[0]), (3, was, mine));
         assert_eq!(m.point(Dev::Keys, pointer::Act::Scroll(1, 1), false), [], "1P's device doesn't scroll 2P's column");
         assert!(m.scroll_by(1, -10) && m.scroll[1] == 0 && !m.scroll_by(1, -1), "not past the top");
-        let last = m.roster().len().div_ceil(c.cols) - c.rows;
+        let last = m.tab_cells(1).len().div_ceil(c.cols) - c.rows;
         m.scroll_by(1, 1000);
         assert_eq!(m.scroll[1], last, "not past the bottom");
         // a tap on a tile there picks it
         let k = m.page(1).0 + 1;
         m.point(pad, pointer::Act::Cell(1, k), false);
-        assert_eq!(m.cell(1), m.roster()[k]);
+        assert_eq!(m.cell(1), m.tab_cells(1)[k]);
     }
 
     fn hits_chars(m: &Menu) -> Vec<pointer::Act> {

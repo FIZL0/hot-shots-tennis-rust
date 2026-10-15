@@ -1,7 +1,7 @@
 //! B368: the character select (`Screen::Chars`: the local roster, the phone duo's and, until B370's lobby, an online
 //! room's) as one column per player (`plan/B368.md`, the approved 1280×720 mockup). Each column is its player's own:
 //! the header (seat, character, device), the costume and hand pills, the 3D preview beside the play style and stats
-//! card, a tab row (B369's categories; one "All" tab for now), and a grid of face tiles that scrolls inside that column
+//! card, a tab row (B369's categories, `tabs.rs`), and a grid of face tiles that scrolls inside that column
 //! only. Sizes are the mockup's pixels at 720 lines ([`PY`] units down, [`PX`] across, so a tile is square on screen);
 //! a narrower column fits fewer tiles a row (13 / 6 / 4 / 3 for 1–4 columns at 16:9), a taller view more rows.
 
@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::super::widescreen::Anchor;
-use super::{C02, CHAR_NAMES, Dev, Draw, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tabs, tile_face};
 
 /// One mockup pixel in the menu's units: down, and across (a unit across is 14/15 of one down on screen: 640 across
 /// a 4:3 screen 448 high).
@@ -373,14 +373,9 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         d.centred("Ready!", px + area / 2.0, py + ph - rh - 6.0 * PY + 4.0 * PY, 16.0 * PY, hex(BG));
     }
 
-    // the tabs (B369's categories): one "All" for now
+    // the tabs (B369's categories)
     let (start, roster) = m.page(p);
-    let [tx, ty, _, tth] = at.tabs;
-    let tab = format!("All {}", roster.len());
-    let ts = 13.0 * PY;
-    let tabw = d.width(&tab, ts) + 20.0 * PX;
-    rounded(d, [tx, ty, tabw, tth], tth / PY / 2.0, s.ring, 128.0);
-    d.centred(&tab, tx + tabw / 2.0, ty + (tth - ts) / 2.0, ts, hex(BG));
+    tabs::row(d, m, p, at.tabs);
 
     // the grid: the tiles on view, this player's darker with a rim in the seat's colour
     let mine_cell = m.cell(p);
@@ -398,6 +393,9 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         let (tex, src) = tile_face(cell);
         d.q(tex, src, [cx + inset * PX, cy + inset * PY, cw - 2.0 * inset * PX, ch - 2.0 * inset * PY], if full { [45.0; 3] } else { WHITE }, if active { 128.0 } else { 70.0 });
         d.out.last_mut().unwrap().round = [(10.0 - inset) * PX; 4];
+        if let Some(w) = cell && m.favourite(w) {
+            tabs::star(d, rect);
+        }
         d.hit(rect, pointer::Act::Cell(p, k));
     }
     // the scroll bar: its thumb the rows on view over all of them
@@ -433,8 +431,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
 
     // the footer: the tab and where the tile is in it
     let [fx, fy, fw, fh] = at.foot;
-    let at_k = roster.iter().position(|w| *w == mine_cell).unwrap_or(0) + 1;
-    let line = format!("All   {at_k} of {}", roster.len());
+    let line = tabs::foot(m, p);
     let fs = 12.0 * PY;
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
