@@ -151,8 +151,9 @@ impl Menu {
                     out.extend(self.step(dev, OK));
                 }
             }
+            // B368: a column scrolls for its own player's device
             Act::Scroll(p, d) => {
-                if self.scroll_by(p, d) {
+                if self.driven(dev) == Some(p) && self.scroll_by(p, d) {
                     out.push(Effect::Sound(0));
                 }
             }
@@ -396,13 +397,13 @@ pub(super) mod tests {
         assert_eq!(m.screen, Screen::Chars);
         // B361: the mode bar over the roster only shows the mode (singles for one device)
         assert!(!m.doubles);
-        // a face (B296: roster cell 1 + its place in the disc grid, after the Random card): 1P moves there and is
-        // ready; then the face for the computer's pick
-        let [x, y, w, h] = m.grid.cell(6);
+        // a face (B296: roster cell 1 + its place in the disc grid, after the Random card) in 1P's column (B368): 1P
+        // moves there and is ready; then the face for the computer's pick, in its column
+        let [x, y, w, h] = m.columns().cell(0, 6);
         tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[0].ready && m.players[0].cursor == 5);
-        let [x, y, ..] = m.grid.cell(10);
-        tap(&mut m, x + 4.0, y + 4.0);
+        let [x, y, w, h] = m.columns().cell(1, 10);
+        tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
         // the court picker (B257: a pill grid): a pill hovers it, a tap off (the side card) puts it back, the hovered
@@ -464,17 +465,19 @@ pub(super) mod tests {
     }
 
     /// Hit rects follow their quads: on 16:9 the select (B296) reaches past the middle 4:3 to the window's sides,
-    /// its Random card left of it.
+    /// 1P's column's Random card left of it, the computer's column's tiles its own (B368).
     #[test]
     fn wide_window_hits() {
         let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let h = hits(&m).0;
         let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, 1.0, SLOP);
-        for k in [0, 10] {
-            let [x, y, w, hh] = m.grid.cell(k);
-            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(k)));
+        let c = m.columns();
+        for (p, k) in [(0, 0), (0, 10), (1, 0), (1, 10)] {
+            let [x, y, w, hh] = c.cell(p, k);
+            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(p, k)));
         }
-        assert!(m.grid.cell(0)[0] + m.grid.cell(0)[2] < 0.0, "left of the 4:3 screen");
+        assert!(c.cell(0, 0)[0] + c.cell(0, 0)[2] < 0.0, "left of the 4:3 screen");
+        assert!(c.cell(1, 0)[0] > 320.0, "2P's column right of the middle");
         assert_eq!(at(-200.0, 300.0), None, "off the window");
     }
 

@@ -3615,9 +3615,13 @@ mod tests {
             m.step(Dev::Keys, press(f));
             m.cell(0)
         };
-        // B306: the one roster: the Random card, the disc's 14, then the mods (8 a row here)
+        // B306: the one roster: the Random card, the disc's 14, then the mods (B368: a window wide enough for 8 a row
+        // in each of the 4 columns)
         m.grid = Grid::fit(4.0 / 3.0);
-        assert_eq!(m.grid.cols, 8);
+        while m.columns().cols < 8 {
+            m.grid.view[2] += 1.0;
+        }
+        assert_eq!(m.columns().cols, 8);
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(2)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[CHARS - 1].0)), "the disc's last");
@@ -3783,25 +3787,17 @@ mod tests {
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
     }
 
-    /// B347: △ on the select swaps the player's render for the attribute card and back, ready or not, and stays up
-    /// across characters; on Random it does nothing (the pick stays hidden).
+    /// B368: △ on the select does nothing (B347's attribute card is always up beside the preview now).
     #[test]
-    fn triangle_shows_the_attribute_card() {
-        // 2P a human too, so a ready 1P's keys stay 1P's (not on to the computer's pick)
+    fn triangle_does_nothing_on_the_select() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
         m.players[0].cursor = 6;
-        let card = press(|p| &mut p.card);
-        assert_eq!(m.step(Dev::Keys, card), [Sound(0)]);
-        assert!(m.players[0].card);
-        m.step(Dev::Keys, press(|p| &mut p.right));
-        assert!(m.players[0].card, "kept on the next character");
-        m.players[0].ready = true;
-        m.step(Dev::Keys, card);
-        assert!(!m.players[0].card);
-        m.players[0] = Player { random: true, ..default() };
-        assert_eq!(m.step(Dev::Keys, card), []);
-        assert!(!m.players[0].card);
+        let was = format!("{m:?}");
+        assert_eq!(m.step(Dev::Keys, press(|p| &mut p.card)), []);
+        assert_eq!(m.step(pad, press(|p| &mut p.card)), []);
+        m.focus = 0; // the last device pressed
+        assert_eq!(format!("{m:?}"), was);
     }
 
     /// B64: ✕ on Select Court / Select Umpire opens its picker; B257: ←→↑↓ walk the court grid (three to a row, no wrap),
@@ -3989,63 +3985,87 @@ mod tests {
         assert_eq!(m.args(&[]).iter().skip_while(|x| *x != "--pads").nth(1).unwrap(), "-,k");
     }
 
-    /// B306: the select's tiles: the disc roster at any aspect on one view at up to the max size, a hundred mods
-    /// shrinking them to the min and scrolling; tiles square, filling the width, over the cards, the cards over the
-    /// description bar, all in the view.
+    /// B368: the select's player columns at any aspect, 1 to 4 of them: side by side in the view, apart, over the
+    /// legend strip; each part of a column inside its card, in order down it; tiles square on screen, filling the grid's
+    /// width, at least a row on view; at 16:9 13 / 6 / 4 / 3 a row (the mockup's).
     #[test]
     fn select_fits_the_window() {
         use super::super::widescreen::{share, vplace, vshare};
-        assert_eq!(Grid::fit(4.0 / 3.0).cols, 8);
-        assert!(Grid::fit(16.0 / 9.0).cols > 8 && Grid::fit(21.0 / 9.0).cols > Grid::fit(16.0 / 9.0).cols);
+        let inside = |r: [f32; 4], c: [f32; 4]| r[0] >= c[0] - 1e-3 && r[1] >= c[1] - 1e-3 && r[0] + r[2] <= c[0] + c[2] + 1e-3 && r[1] + r[3] <= c[1] + c[3] + 1e-3;
         for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
             let (ex, ey) = ((640.0 / share(a) - 640.0) / 2.0, (448.0 / vshare(a) - 448.0) / 2.0);
-            let ticker = vplace(404.0, 32.0, a, Anchor::Span).0;
-            for n in [1 + CHARS, 1 + CHARS + 30, 1 + CHARS + 100] {
-                let g = Grid::fit_n(a, n, 1.0);
-                assert!(g.tile >= TILE_MIN - 1e-3 && g.tile <= TILE_MAX + 1e-3, "{a} {n} {g:?}");
-                assert_eq!(g.scrolls, g.per() < n, "{a} {n}");
-                let last = g.cell(g.per().min(n) - 1);
-                let [tx, ty, tw, th] = g.tiles;
-                assert!(last[1] + last[3] <= ty + th + 1e-3 && ty + th < g.cards[1], "{a} {n}");
-                let right = g.cell(g.cols - 1);
-                let lane = if g.scrolls { SCROLL_W } else { 0.0 };
-                assert!((right[0] + right[2] - (tx + tw - lane)).abs() < 1e-2, "{a} {n}: the columns fill the width");
-                for r in [g.tiles, g.cards] {
-                    assert!(r[0] >= -ex && r[0] + r[2] <= 640.0 + ex + 1e-3 && r[1] >= -ey, "{a} {r:?}");
-                    let (t, h) = vplace(r[1], r[3], a, Anchor::Centre);
-                    assert!(t + h <= ticker + 1e-3, "{a} {r:?}");
+            let legend = vplace(436.0, 12.0, a, Anchor::Span).0;
+            let g = Grid::fit(a);
+            for n in 1..=4 {
+                let c = roster::columns(g.view, n);
+                assert!(c.rows >= 1 && c.cols >= 1, "{a} {n} {c:?}");
+                assert!(((c.tile[0] / roster::PX) - (c.tile[1] / roster::PY)).abs() < 1e-3, "{a} {n}: square tiles");
+                for p in 0..n {
+                    let at = c.parts(p);
+                    let card = at.card;
+                    assert!(card[0] >= -ex && card[0] + card[2] <= 640.0 + ex + 1e-3 && card[1] >= -ey, "{a} {n} {card:?}");
+                    let (t, h) = vplace(card[1], card[3], a, Anchor::Centre);
+                    assert!(t + h <= legend + 1e-3, "{a} {n} {card:?}");
+                    let rows = [at.head, at.pills, at.preview, at.tabs, at.grid, at.foot];
+                    for (i, r) in rows.iter().enumerate() {
+                        assert!(inside(*r, card) && r[3] > 0.0, "{a} {n} {p} part {i} {r:?} in {card:?}");
+                        if i > 0 {
+                            assert!(rows[i - 1][1] + rows[i - 1][3] <= r[1] + 1e-3, "{a} {n} {p} part {i} overlaps");
+                        }
+                    }
+                    assert!(inside(at.bar, card) && at.grid[0] + at.grid[2] < at.bar[0], "{a} {n} {p}");
+                    let last = c.cell(p, c.per() - 1);
+                    assert!(inside(last, at.grid), "{a} {n} {p}: {last:?} in {:?}", at.grid);
+                    let right = c.cell(p, c.cols - 1);
+                    assert!((right[0] + right[2] - (at.grid[0] + at.grid[2])).abs() < 1e-2, "{a} {n}: the tiles fill the width");
+                    if p > 0 {
+                        let prev = c.parts(p - 1).card;
+                        assert!(prev[0] + prev[2] < card[0], "{a} {n} {p}: apart");
+                    }
                 }
             }
-            let disc = Grid::fit_n(a, 1 + CHARS, 1.0);
-            assert!(!disc.scrolls, "{a}: the disc roster on one view");
-            if a >= 4.0 / 3.0 {
-                assert!(Grid::fit_n(a, 1 + CHARS + 100, 1.0).tile < disc.tile, "{a}: mods shrink the tiles");
+            if (a - 16.0 / 9.0).abs() < 1e-3 {
+                assert_eq!((1..=4).map(|n| roster::columns(g.view, n).cols).collect::<Vec<_>>(), [13, 6, 4, 3]);
             }
         }
     }
 
-    /// B306: the roster scrolls only as far as keeps the shown player's tile in view.
+    /// B306: the roster scrolls only as far as keeps the shown player's tile in view; B368: each column on its own, the
+    /// wheel / a drag moving one column's view and no cursor.
     #[test]
     fn roster_scrolls_to_the_cursor() {
-        let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), None, None, None], ..default() };
-        m.grid = Grid::fit_n(4.0 / 3.0, m.roster().len(), 1.0);
-        assert!(m.grid.scrolls);
-        let rows = m.grid.rows;
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), Some(pad), None, None], grid: Grid::fit(4.0 / 3.0), ..default() };
+        let c = m.columns();
+        assert!(c.per() < m.roster().len());
         let down = |m: &mut Menu| {
             m.step(Dev::Keys, press(|p| &mut p.down));
-            m.scroll = m.page().0 / m.grid.cols;
         };
-        for _ in 0..rows - 1 {
+        for _ in 0..c.rows - 1 {
             down(&mut m);
         }
-        assert_eq!(m.scroll, 0, "still on the first view");
+        assert_eq!(m.scroll, [0; 4], "still on the first view");
         down(&mut m);
-        assert_eq!(m.scroll, 1);
-        let start = m.page().0;
+        assert_eq!(m.scroll, [1, 0, 0, 0], "1P's column only");
+        let start = m.page(0).0;
         let acts = hits_chars(&m);
-        assert!(acts.contains(&pointer::Act::Cell(start)) && !acts.contains(&pointer::Act::Cell(start - 1)));
+        assert!(acts.contains(&pointer::Act::Cell(0, start)) && !acts.contains(&pointer::Act::Cell(0, start - 1)));
+        assert!(acts.contains(&pointer::Act::Cell(1, 0)), "2P's column still at the top");
         m.step(Dev::Keys, press(|p| &mut p.up));
-        assert_eq!(m.page().0 / m.grid.cols, 1, "moving back up inside the view doesn't scroll");
+        assert_eq!(m.page(0).0 / c.cols, 1, "moving back up inside the view doesn't scroll");
+        // 2P's column scrolled by the wheel: its own view moves, its pick and 1P's don't
+        let (was, mine) = (m.cell(1), m.scroll[0]);
+        assert_eq!(m.point(pad, pointer::Act::Scroll(1, 3), false), [Sound(0)]);
+        assert_eq!((m.scroll[1], m.cell(1), m.scroll[0]), (3, was, mine));
+        assert_eq!(m.point(Dev::Keys, pointer::Act::Scroll(1, 1), false), [], "1P's device doesn't scroll 2P's column");
+        assert!(m.scroll_by(1, -10) && m.scroll[1] == 0 && !m.scroll_by(1, -1), "not past the top");
+        let last = m.roster().len().div_ceil(c.cols) - c.rows;
+        m.scroll_by(1, 1000);
+        assert_eq!(m.scroll[1], last, "not past the bottom");
+        // a tap on a tile there picks it
+        let k = m.page(1).0 + 1;
+        m.point(pad, pointer::Act::Cell(1, k), false);
+        assert_eq!(m.cell(1), m.roster()[k]);
     }
 
     fn hits_chars(m: &Menu) -> Vec<pointer::Act> {
