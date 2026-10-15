@@ -321,3 +321,9 @@ per frame. What each did and what changed:
   `Feet::tick`'s reads, the rare branches aren't separately exercised.
 - Profiles on a heavily shared machine; no idle-machine fps numbers (P35's umbrella re-bench).
 - Not run on wasm/iOS/Android; no platform code changed. No PCSX2 comparison: no gameplay change (hash identical).
+
+## P48 — GPU `bin_unpacking` (2026-10-15)
+One unpacking dispatch per batch set, and every non-bindless `GsMaterial` is a batch set of its own: ~350 dispatches
+of ~1.3 meshes each per frame. The 3D cameras now draw directly (`NoIndirectDrawing`; `HST_INDIRECT=1` = old).
+GPU frame on the 9070 XT ~1.3 → ~0.6 ms, iGPU −0.4–0.5 ms, Phone preset on the iGPU stand-in 131 → 139 fps.
+Details: `p48-bin-unpacking.md`.

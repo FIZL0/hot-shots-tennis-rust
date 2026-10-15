@@ -3,7 +3,7 @@
 # `--stage N --court N`: the stage is what is drawn, the court its physics)
 # in a floating 1280×800 window (the Steam Deck's size; HST_WINDOW overrides) on workspace 1, unfocused,
 # with `HST_FPS=1`'s log in LOG (every 5 s: fps, frame-time spread with 1 %/0.1 % lows and jitter, CPU ms/frame); killed after SECONDS. HST_GPU=igpu draws on the CPU's integrated Radeon (weaker than the
-# Deck's 8 CUs: a stand-in for its GPU class); HST_SLOW=1 adds tools/slow.sh's 2-core CPU limit; HST_ENV adds environment (e.g. `HST_PASSES=1`: per-pass GPU ms in LOG; `HST_PRESENT=fifo|mailbox|immediate`: that present mode); HST_WRAP prefixes the command (e.g. `samply record --save-only -o P --`).
+# Deck's 8 CUs: a stand-in for its GPU class); HST_SLOW=1 adds tools/slow.sh's 2-core CPU limit; HST_ENV adds environment (e.g. `HST_PASSES=1`: per-pass GPU ms in LOG; `HST_PRESENT=fifo|mailbox|immediate`: that present mode; `HST_INDIRECT=1`: Bevy's indirect draws back, P48); HST_WRAP prefixes the command (e.g. `samply record --save-only -o P --`).
 set -e
 cd "$(dirname "$0")/.."
 log=$(realpath -m "$1"); secs=$2; shift 2

@@ -237,6 +237,13 @@ pub fn plugin(app: &mut App) {
     // does, Metal doesn't), logged every 5 s: which pass a heavy court spends its GPU time in
     if std::env::var_os("HST_PASSES").is_some() {
         app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, log_passes);
+        if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            r.add_systems(bevy::render::Render, log_unpacking.in_set(bevy::render::RenderSystems::Cleanup));
+        }
+    }
+    // P48: direct draws for the 3D cameras; `HST_INDIRECT=1` keeps Bevy's GPU-built indirect ones (bench knob)
+    if std::env::var("HST_INDIRECT").map_or(true, |v| v == "0") {
+        app.add_systems(PostUpdate, direct_draws);
     }
     // `HST_MAIN8=1` (P34): an 8-bit main texture for the 3D cameras; on by default on iOS (tile GPU), `HST_MAIN8=0` off
     if std::env::var("HST_MAIN8").map_or(cfg!(target_os = "ios"), |v| v != "0") {
@@ -253,6 +260,21 @@ pub fn plugin(app: &mut App) {
 fn main8(mut commands: Commands, q: Query<Entity, (With<crate::hud_gamma::Scene>, With<bevy::camera::Hdr>)>) {
     for e in &q {
         commands.entity(e).remove::<bevy::camera::Hdr>().insert(bevy::core_pipeline::tonemapping::DebandDither::Disabled);
+    }
+}
+
+/// P48: the 3D cameras draw directly instead of through Bevy's GPU-built indirect draws. Indirect drawing groups a
+/// view's meshes into batch sets, one per pipeline and material bind group, and every frame runs one `bin_unpacking`
+/// compute dispatch per batch set before the draws. `GsMaterial` isn't bindless, so each of the court's materials is a
+/// batch set of its own: a match had ~350 dispatches of 1–2 meshes each (~440 meshes; `HST_PASSES=1` logs it), whose
+/// fixed per-dispatch cost made the pass the biggest on the GPU (0.65 ms of ~1.3 on an RX 9070 XT, more than the
+/// opaque draws' 0.21), plus ~0.3 ms CPU to record them and ~0.2 ms to rebuild their bind groups. With batch sets that
+/// small there was nothing for a multi-draw to merge, so the draws themselves cost the same. Shadow cascades already
+/// draw directly (Bevy only culls them on the GPU in its occlusion-culling mode), and where multi-draw-indirect-count
+/// is missing (Metal, WebGPU, GL) Bevy draws directly anyway: the change is Vulkan/DX12 only (desktop, Steam Deck).
+fn direct_draws(mut commands: Commands, q: Query<Entity, (With<Camera3d>, Without<bevy::render::view::NoIndirectDrawing>)>) {
+    for e in &q {
+        commands.entity(e).insert(bevy::render::view::NoIndirectDrawing);
     }
 }
 
@@ -301,6 +323,30 @@ fn log_passes(d: Res<bevy::diagnostic::DiagnosticsStore>, time: Res<Time<Real>>,
     eprintln!("passes {kind} ms at {t:.0} s: {}", top.join(", "));
 }
 
+/// `HST_PASSES=1` (P48): every 5 s, what Bevy's `bin_unpacking` compute pass did last frame: one dispatch per batch
+/// set (pipeline + material bind group + vertex/index slab) of each binned phase (opaque, alpha mask, prepass,
+/// shadow) of each view (the cameras and every shadow cascade), and how many mesh instances they unpacked in all.
+fn log_unpacking(b: Res<bevy::render::batching::gpu_preprocessing::BinUnpackingBuffers>, mut next: Local<f32>) {
+    let t = f32::from_bits(NOW.load(Ordering::Relaxed));
+    if t < *next {
+        return;
+    }
+    *next = t + 5.0;
+    let (mut views, mut jobs, mut instances, mut biggest) = (std::collections::HashSet::new(), 0, 0, 0);
+    for (key, v) in &b.view_phase_buffers {
+        let all = v.indexed_unpacking_jobs.iter().chain(&v.non_indexed_unpacking_jobs);
+        if v.indexed_unpacking_jobs.is_empty() && v.non_indexed_unpacking_jobs.is_empty() {
+            continue;
+        }
+        views.insert(key.view);
+        for j in all {
+            jobs += 1;
+            instances += j.mesh_instance_count;
+            biggest = biggest.max(j.mesh_instance_count);
+        }
+    }
+    eprintln!("bin unpacking at {t:.0} s: {jobs} dispatches over {} (view, phase)s of {} views, {instances} instances (largest batch set {biggest})", b.view_phase_buffers.len(), views.len());
+}
 
 /// The Mesh setting where the loaders read it (`MESH`).
 fn mesh_detail(g: Res<Graphics>) {
