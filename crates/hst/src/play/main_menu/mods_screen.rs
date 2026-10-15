@@ -123,6 +123,10 @@ pub(super) struct View {
     batch: (usize, usize),
     /// B373: the kind tab every page lists (`mods_kind.rs`).
     pub(super) kind: Kind,
+    /// B383: the installed mods as the grid's tiles (Show → Installed; [`View::relist`]).
+    inst: Vec<Entry>,
+    /// B383: the last press was a pad's (the search box's ✕ then opens the keyboard on screen).
+    pub(super) pad: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +148,69 @@ impl View {
         self.umpires = crate::mods::list_kind(root(), &crate::mods::Kind::Umpire);
         self.have = self.list.iter().chain(&self.courts).chain(&self.umpires).filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
         self.child = None;
+        self.relist();
+    }
+
+    /// B383: the installed mods as tiles (Show → Installed): a store mod's own listing (its picture, its Update), else
+    /// an entry made from its `mod.json` and the select's card (`rev` "local:<folder>": no store picture, the
+    /// select's drawing instead).
+    pub(super) fn relist(&mut self) {
+        let store = self.store.as_deref().unwrap_or_default();
+        let all = [(&self.list, Kind::Character), (&self.courts, Kind::Court), (&self.umpires, Kind::Umpire)];
+        self.inst = all
+            .into_iter()
+            .flat_map(|(l, k)| l.iter().map(move |m| (m, k)))
+            .map(|(m, kind)| {
+                let stamp = modstore::stamp(&m.dir);
+                if let Some(e) = stamp.as_ref().and_then(|s| store.iter().find(|e| e.meta.author == s.author && e.meta.id == m.id)) {
+                    return e.clone();
+                }
+                let player = kind == Kind::Character;
+                let stats = self.stats.get(&m.dir).filter(|_| player);
+                let (author, sha256, verified) = stamp.map(|s| (s.author, s.sha256, s.verified)).unwrap_or_default();
+                let meta = modstore::Meta {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    source: m.source.clone(),
+                    author,
+                    version: modstore::version(&m.dir),
+                    sha256,
+                    style: stats.map(|s| s.0 as u8),
+                    grades: stats.map(|s| s.1),
+                    hand: player.then_some(if m.hand < 0.0 { -1 } else { 1 }),
+                    costumes: player.then_some(m.costumes.len() as u32),
+                    like: player.then_some(m.donor as u8),
+                    kind,
+                    ..Default::default()
+                };
+                Entry { meta, rev: format!("local:{}", m.dir.display()), verified }
+            })
+            .collect();
+    }
+
+    /// B383: Browse, Installed and My uploads are the picture grid (Show in its rail picks which); Upload is a list.
+    pub(super) fn grid(&self) -> bool {
+        self.page != Page::Upload
+    }
+
+    /// B383: tile `e`'s installed folder (a store mod's install, or an installed mod's own tile).
+    fn dir_of<'a>(&'a self, e: &'a Entry) -> Option<&'a Path> {
+        self.installed(e).map(|(_, d)| d.as_path()).or_else(|| e.rev.strip_prefix("local:").map(Path::new))
+    }
+
+    /// B383: each kind's mods, on the store or installed (by `mods_kind::KINDS`): which tabs the row shows.
+    fn kind_totals(&self) -> [usize; 4] {
+        mods_kind::KINDS.map(|k| self.store.iter().flatten().filter(|e| e.meta.kind == k).count() + self.of_kind(k).len())
+    }
+
+    /// B383: the kind tabs shown (a kind with no mods hidden, the chosen one always).
+    pub(super) fn kinds_shown(&self) -> Vec<Kind> {
+        mods_kind::shown(self.kind, self.kind_totals())
+    }
+
+    /// B383: the legend's kind switch (L2 / R2), while there's another kind to switch to.
+    pub(super) fn kind_switch(&self) -> Option<(super::legend::Act, &'static str)> {
+        (self.kinds_shown().len() > 1).then_some((super::legend::Act::Kind, "Kind"))
     }
 
     fn changed(&mut self) {
@@ -154,6 +221,7 @@ impl View {
     fn entries(&self) -> &[Entry] {
         match (&self.page, &self.by) {
             (Page::Mine, _) => self.mine.as_deref().unwrap_or_default(),
+            (Page::Installed, _) => &self.inst,
             (_, Some(b)) => &b.list,
             _ => self.store.as_deref().unwrap_or_default(),
         }
@@ -231,21 +299,12 @@ impl View {
         if mods_kind::coming(self.kind).is_some() {
             return 0;
         }
-        match self.page {
-            Page::Installed => TOP,
-            Page::Upload => UP_TOP,
-            Page::Browse => self.browse_acts(),
-            Page::Mine => 1,
-        }
+        if self.grid() { self.browse_acts() } else { UP_TOP }
     }
 
     /// The pills, then the mods (installed ones, or the store's with their uploaders' headings).
     fn rows(&self) -> usize {
-        self.acts()
-            + match self.page {
-                Page::Installed | Page::Upload => self.locals().len(),
-                Page::Browse | Page::Mine => self.items().len(),
-            }
+        self.acts() + if self.grid() { self.items().len() } else { self.locals().len() }
     }
 
     /// The store's mods under the pills: Browse's tiles (searched, filtered, sorted), My uploads as listed; only
@@ -254,13 +313,18 @@ impl View {
         if mods_kind::coming(self.kind).is_some() {
             return Vec::new();
         }
-        if self.page == Page::Browse { self.tiles() } else { self.entries().iter().filter(|e| e.meta.kind == self.kind).collect() }
+        if self.grid() { self.tiles() } else { Vec::new() }
     }
 
     /// The installed mod on row `sel`, if it's one.
     fn local(&self, sel: usize) -> Option<&Mod> {
         match self.page {
-            Page::Installed | Page::Upload => self.locals().get(sel.checked_sub(self.acts())?),
+            Page::Upload => self.locals().get(sel.checked_sub(self.acts())?),
+            // B383: an Installed tile's mod
+            Page::Installed => {
+                let dir = self.dir_of(self.hovered(sel)?)?;
+                self.locals().iter().find(|m| bare(&m.dir) == bare(dir))
+            }
             Page::Browse | Page::Mine => None,
         }
     }
@@ -315,11 +379,16 @@ impl View {
 
     /// The browse entry under the cursor.
     fn hovered(&self, sel: usize) -> Option<&Entry> {
-        if !matches!(self.page, Page::Browse | Page::Mine) {
+        if !self.grid() {
             return None;
         }
         self.items().get(sel.checked_sub(self.acts())?).copied()
     }
+}
+
+/// A mod folder without the `./` the roster's paths keep (`root` drops it).
+fn bare(p: &Path) -> PathBuf {
+    p.strip_prefix(".").unwrap_or(p).to_path_buf()
 }
 
 /// An uploader's name on their heading (`""`: the store doesn't say).
@@ -364,6 +433,7 @@ impl Menu {
     pub(super) fn mods_open(&mut self, out: &mut Vec<Effect>) {
         self.add.status.clear();
         self.add.top = 0;
+        self.add.b.show = grid::Show::All;
         self.mods_page(Page::Browse, 0);
         self.go(Screen::Mods, out);
     }
@@ -374,6 +444,14 @@ impl Menu {
         self.add.by = None;
         self.add.top = 0;
         self.sel = sel;
+        // B383: Show in the rail says which grid it is; the search box waits for a press
+        self.add.b.show = match p {
+            Page::Installed => grid::Show::Installed,
+            Page::Mine => grid::Show::Mine,
+            _ if matches!(self.add.b.show, grid::Show::Installed | grid::Show::Mine) => grid::Show::All,
+            _ => self.add.b.show,
+        };
+        (self.add.b.focus, self.add.b.osk, self.add.b.tile_at) = (false, None, 0);
         self.add.status = match p {
             Page::Upload => RULE.into(),
             _ => String::new(),
@@ -382,7 +460,7 @@ impl Menu {
             self.add.account = modstore::account().map(|a| a.0);
         }
         if p == Page::Mine && self.add.account.is_none() {
-            self.add.status = "Sign in on the Upload tab to see your uploads.".into();
+            self.add.status = "Sign in with Upload (top right) to see your uploads.".into();
         }
         if p == Page::Mine && self.add.mine.is_none() && !self.add.busy {
             self.read_mine();
@@ -394,8 +472,8 @@ impl Menu {
         }
     }
 
-    /// The tab `i` (`PAGES`), from Q/E, L1/R1 or a tap; on a phone Upload and My uploads put up the popup (no
-    /// sign-in there).
+    /// Page `i` (`PAGES`): B383: the header's Upload button (a tap on it on Upload: back to the grid), the rail's
+    /// Show; on a phone Upload and My uploads put up the popup (no sign-in there).
     pub(super) fn mods_tab(&mut self, i: usize, out: &mut Vec<Effect>) {
         if PAGES[i] == self.add.page && self.add.by.is_none() {
             return;
@@ -418,7 +496,39 @@ impl Menu {
         self.add.child = None;
         self.add.by = None;
         self.add.top = 0;
+        // B383: the search box (not typing into it) after every switch; another kind's games are another list
         self.sel = 0;
+        let b = &mut self.add.b;
+        (b.focus, b.tile_at, b.rail_at, b.game) = (false, 0, 0, None);
+        out.push(Effect::Sound(0));
+    }
+
+    /// B383: Show `s` in the rail: Everything, Updates and Wish list filter the store's mods, Installed and My
+    /// uploads are their own grids; a filter keeps the cursor on its option, another page puts it on the search box.
+    fn mods_show(&mut self, s: grid::Show, out: &mut Vec<Effect>) {
+        let to = match s {
+            grid::Show::Installed => Page::Installed,
+            grid::Show::Mine => Page::Mine,
+            _ => Page::Browse,
+        };
+        if self.add.phone && to == Page::Mine {
+            self.add.nophone = Some(2);
+            return out.push(Effect::Sound(1));
+        }
+        let page = to != self.add.page;
+        if page || self.add.by.is_some() {
+            self.mods_page(to, 0);
+        }
+        self.add.b.show = s;
+        if s == grid::Show::Wish {
+            self.add.wish();
+        }
+        (self.add.top, self.add.b.tile_at) = (0, 0);
+        if let Some(i) = self.add.rail().iter().position(|o| *o == grid::Opt::Show(s)) {
+            // another page (Installed, My uploads, back to the store's) starts on the search box like a kind switch
+            self.sel = if page { 0 } else { 2 + self.add.words().len() + i };
+            self.add.b.rail_at = i;
+        }
         out.push(Effect::Sound(0));
     }
 
@@ -455,7 +565,7 @@ impl Menu {
         // B373: a kind the store doesn't carry yet has no rows: only the tabs and ○ do anything there
         if n == 0 {
             self.sel = 0;
-            if k.prev || k.next || k.kind_prev || k.kind_next {
+            if k.kind_prev || k.kind_next {
                 self.add.child = None;
             } else {
                 if k.back {
@@ -466,13 +576,16 @@ impl Menu {
         }
         self.sel = self.sel.min(n.max(1) - 1);
         if k.kind_prev || k.kind_next {
-            // B373: the kind tabs, round (an open child closes)
-            self.add.child = None;
-            self.mods_kind(mods_kind::step(self.add.kind, k.kind_prev), out);
+            // B373: the kind tabs, round (an open child closes); B383: only the ones shown
+            let to = mods_kind::step(self.add.kind, k.kind_prev, &self.add.kinds_shown());
+            if to != self.add.kind {
+                self.add.child = None;
+                self.mods_kind(to, out);
+            }
             return;
         }
         // B372: the on-screen keyboard takes every press while up; a press forgets the tile a tap chose
-        if self.add.page == Page::Browse && self.add.b.osk.is_some() {
+        if self.add.grid() && self.add.b.osk.is_some() {
             return self.osk_step(k, out);
         }
         if k != Press::default() {
@@ -484,13 +597,7 @@ impl Menu {
                 Got::Close => self.add.status = if self.add.page == Page::Upload { RULE.into() } else { String::new() },
                 Got::Pick(i) => self.child_pick(c, i, out),
             }
-        } else if k.prev || k.next {
-            // the tabs, round; a phone skips the ones it can't use
-            let at = PAGES.iter().position(|p| *p == self.add.page).unwrap_or(0);
-            let tabs = if self.add.phone { 2 } else { PAGES.len() };
-            let i = if k.next { (at + 1) % tabs } else { (at + tabs - 1) % tabs };
-            self.mods_tab(i, out);
-        } else if self.add.page == Page::Browse {
+        } else if self.add.grid() {
             if k.back {
                 self.mods_back(out);
             } else if self.browse_move(k) {
@@ -510,7 +617,11 @@ impl Menu {
         }
         let n = self.add.rows();
         self.sel = self.sel.min(n.max(1) - 1);
-        if self.add.page == Page::Browse && n > 0 {
+        if self.add.grid() && n > 0 {
+            // B383: the search box types only while it was pressed and the cursor is on it
+            if self.add.slot(self.sel) != grid::Slot::Search {
+                self.add.b.focus = false;
+            }
             return self.browse_scroll();
         }
         // the mods scroll under the pills; `top` is the first mod drawn
@@ -535,8 +646,9 @@ impl Menu {
         use Effect::Sound;
         let s = c.row;
         match self.add.page {
-            Page::Installed if s < TOP => self.remove_all(out),
-            Page::Installed => self.remove(s - TOP, out),
+            // B383: Remove all (a heading word), or Remove on an installed tile
+            Page::Installed if matches!(self.add.slot(s), grid::Slot::Word(_)) => self.remove_all(out),
+            Page::Installed => self.browse_remove(s, out),
             Page::Upload if s == 0 => {
                 let v = &mut self.add;
                 v.status = match (&v.account, i) {
@@ -636,9 +748,12 @@ impl Menu {
         out.push(Effect::Sound(if n == 0 { 1 } else { 2 }));
     }
 
-    /// ○: an author's list goes back to the whole store's, on the mod it was opened from; else the main menu.
+    /// ○: an author's list goes back to the whole store's, on the mod it was opened from; Upload to the grid; else
+    /// the main menu.
     fn mods_back(&mut self, out: &mut Vec<Effect>) {
-        if let Some(b) = self.add.by.as_ref().filter(|_| self.add.page == Page::Browse) {
+        if self.add.page == Page::Upload {
+            self.mods_page(Page::Browse, 0);
+        } else if let Some(b) = self.add.by.as_ref().filter(|_| self.add.page == Page::Browse) {
             self.sel = b.from;
             self.add.narrow(None, 0);
             self.add.status.clear();
@@ -744,7 +859,7 @@ impl Menu {
         if self.add.busy {
             self.add.status = "Wait for the store to finish first.".into();
         } else if s == 0 && self.add.account.is_none() {
-            self.add.status = "Sign in on the Upload tab to see your uploads.".into();
+            self.add.status = "Sign in with Upload (top right) to see your uploads.".into();
             out.push(Sound(1));
         } else if s == 0 {
             self.read_mine();
@@ -787,7 +902,8 @@ impl Menu {
                 self.open_child(&["Remove all"], format!("Remove all {n} mods the game installed (Reload then takes them out of the select)?"), out);
             }
         } else {
-            let m = &self.add.locals()[s - TOP];
+            // B383: an installed mod's tile
+            let Some(m) = self.add.local(s) else { return };
             let (name, dir) = (m.name.clone(), m.dir.clone());
             if ours(m) {
                 self.open_child(&["Remove"], format!("Remove {name} (Reload then takes it out of the select)?"), out);
@@ -888,7 +1004,7 @@ impl Menu {
 /// B205: mods changed since the start (the main menu's note on its Mods row) and the popup isn't up.
 /// B372: the legend on Browse (None: another page, or a child or popup up).
 pub(super) fn browse_legend(m: &Menu) -> Option<Vec<(super::legend::Act, &'static str)>> {
-    (m.add.page == Page::Browse && m.add.child.is_none() && m.add.nophone.is_none()).then(|| grid::legend(m))
+    (m.add.grid() && !m.add.empty_kind() && m.add.child.is_none() && m.add.nophone.is_none()).then(|| grid::legend(m))
 }
 
 pub(super) fn reload_due(m: &Menu) -> bool {
@@ -990,9 +1106,9 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 /// The list box and the side panel on the view `g` fits, from under the title band down to the legend strip: the
 /// panel right of the list (under it in a portrait window), as Settings' pages (`options::boxes`).
 fn boxes(g: &super::Grid) -> ([f32; 4], [f32; 4]) {
-    let [l, y, w, _] = g.strip;
-    // B373: under the kind tabs' row
-    let y = y + mods_kind::ROW_H;
+    let [l, _, w, _] = g.strip;
+    // B383: under the header's row on a narrow view (Upload and the downloads' pill), as the grid's
+    let y = grid::lay(g).rail[1];
     let bottom = g.detail[1] + g.detail[3] + 32.0;
     // a portrait view: the detail panel spans the width
     if g.detail[2] >= g.strip[2] {
@@ -1078,7 +1194,7 @@ fn mod_of(m: &Menu, dir: &Path) -> Option<usize> {
 /// this page is up, so its cards fill in without a select visit.
 pub(super) fn faces(m: &Menu) -> Vec<super::Who> {
     let v = &m.add;
-    if v.page == Page::Browse {
+    if v.grid() {
         return grid::faces(m);
     }
     let shown = shown(&m.grid);
@@ -1160,8 +1276,8 @@ fn card(d: &mut Draw, [x, y, w, h]: [f32; 4], c: &Card, on: bool) {
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let v = &m.add;
     d.frame(5, 6);
-    if v.page == Page::Browse && !v.empty_kind() {
-        // B372: the picture grid (it draws its own tabs, beside its search box)
+    if v.grid() && !v.empty_kind() {
+        // B372: the picture grid (B383: Browse, Installed and My uploads; it draws the header too)
         grid::layout(d, m, hand_x);
         if v.child.is_some() {
             side_panel(d, m, grid::lay(&m.grid).detail, hand_x);
@@ -1171,11 +1287,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
         return;
     }
-    let tabs = [format!("Browse {}", v.entries_len()), format!("Installed {}", v.installed_len()), "Upload".into(), "My mods".into()];
-    let words: Vec<&str> = tabs.iter().map(String::as_str).collect();
-    super::options::tab_row(d, m, 5, &words, PAGES.iter().position(|p| *p == v.page));
-    let g = &m.grid;
-    mods_kind::row(d, [g.strip[0], g.strip[1] - 2.0, g.strip[2], mods_kind::ROW_H], v.kind, v.kind_counts());
+    // B383: the header (the kinds, Upload, the downloads), then Upload's list or a kind still to come
+    grid::header(d, m, &grid::lay(&m.grid));
     let (list, side) = boxes(&m.grid);
     for b in [list, side] {
         d.box3(b, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
@@ -1212,10 +1325,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         mods_kind::empty(d, v.kind, list);
     } else if mods == 0 {
         let none = match v.page {
-            Page::Installed | Page::Upload => "No mods installed yet: Add mod, or the Browse tab.",
+            Page::Installed | Page::Upload => "No mods installed yet: install one from the store first.",
             Page::Browse if v.busy => "Reading the mod store...",
             Page::Browse => "Nobody has shared a mod yet.",
-            Page::Mine if v.account.is_none() => "Sign in on the Upload tab to see your uploads.",
+            Page::Mine if v.account.is_none() => "Sign in with Upload (top right) to see your uploads.",
             Page::Mine if v.busy => "Reading your uploads...",
             Page::Mine => "None of your mods are on the store.",
         };
@@ -1247,27 +1360,14 @@ fn info(m: &Menu) -> String {
         return v.status.clone();
     }
     match (v.page, m.sel) {
-        (Page::Installed, 0) if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
-        (Page::Installed, 0) => match v.kind {
-            Kind::Court => "Add a court from a mod .zip (its mod.json and court.glb).".into(),
-            Kind::Umpire => "Add an umpire from a mod .zip (its mod.json and voice calls).".into(),
-            _ => "Add a custom character from a mod .zip (its mod.json and models).".into(),
-        },
-        (Page::Installed, 1) => "Reload the game: added mods join the select, removed ones leave it.".into(),
-        (Page::Installed, s) => v.local(s).map_or(String::new(), |md| format!("{} ({}, {} of {}): press to remove it.", md.name, md.folder(), s - TOP + 1, v.locals().len())),
-        (Page::Browse, _) => grid::info(m),
+        // B383: the grids say it themselves
+        (Page::Browse | Page::Installed | Page::Mine, _) => grid::info(m),
         (Page::Upload, 0) => match &v.account {
             Some(name) => format!("Signed in to Hugging Face as {name}."),
             None => "Sign in to Hugging Face with a token, once: the game then uploads by itself.".into(),
         },
         (Page::Upload, 1) => "Upload every installed mod, in the background (ones already on the store as they are are skipped).".into(),
         (Page::Upload, _) => RULE.into(),
-        (Page::Mine, 0) => "Read your uploads from the store again.".into(),
-        (Page::Mine, s) => match v.hovered(s) {
-            Some(e) if e.verified => format!("{} is on the store (merged): press to ask for it to be deleted.", e.meta.name),
-            Some(e) => format!("{} is live from your pull request: press to take it down.", e.meta.name),
-            None => String::new(),
-        },
     }
 }
 
@@ -1465,7 +1565,7 @@ fn nophone(d: &mut Draw, row: &str) {
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
 /// shown, someone's folded; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, Upload
 /// all open, the first mods tagged with each upload state; `HST_CHILD=0`: none open, the first mod hovered) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
-/// mod's Remove open) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
+/// mod's Remove open; B383: the Installed grid) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
     v.refresh();
@@ -1530,8 +1630,10 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
             v.status = format!("{}Downloading {}...", v.count(), v.entries()[1].meta.name);
         }
         if screen == "mymods" {
-            (v.page, v.mine, v.account, v.child) = (Page::Mine, v.store.take(), Some("FIZL0".into()), Some(Child::new(2, &["Take down"])));
-            v.status = format!("Take {} off the store (closes its pull request)?", v.mine.as_ref().and_then(|l| l.get(1)).map_or("", |e| &e.meta.name));
+            (v.page, v.mine, v.account, v.b.show, v.b.offline) = (Page::Mine, v.store.take(), Some("FIZL0".into()), grid::Show::Mine, true);
+            m.sel = v.browse_acts() + 1;
+            v.child = Some(Child::new(m.sel, &["Take down"]));
+            v.status = format!("Take {} off the store (closes its pull request)?", v.hovered(m.sel).map_or("", |e| &e.meta.name));
         }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
@@ -1559,10 +1661,15 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.child = Some(Child::new(0, &["Open token page", "Paste token"]));
         v.status = "Open token page, make a token (Write) there and copy it, then Paste token.".into();
         m.sel = 0;
-    } else if screen == "addmods" && std::env::var("HST_CHILD").is_ok() && !v.list.is_empty() {
-        v.child = Some(Child::new(TOP, &["Remove"]));
-        v.status = format!("Remove {} (Reload then takes it out of the select)?", v.list[0].name);
-        m.sel = TOP;
+    } else if screen == "addmods" {
+        // B383: the Installed grid (Show → Installed), the first mod chosen; `HST_CHILD=1`: its Remove open
+        (v.b.show, v.b.offline) = (grid::Show::Installed, true);
+        v.relist();
+        m.sel = v.browse_acts();
+        if std::env::var("HST_CHILD").is_ok() && v.hovered(m.sel).is_some() {
+            v.child = Some(Child::new(m.sel, &["Remove"]));
+            v.status = format!("Remove {} (Reload then takes it out of the select)?", v.hovered(m.sel).map_or("", |e| &e.meta.name));
+        }
     } else if screen.starts_with("phonemods") {
         v.phone = true;
         m.sel = 0;
@@ -1578,9 +1685,9 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
 /// puts its file input.
 fn add_rect(m: &Menu, aspect: f32, k: f32) -> Option<[f32; 4]> {
     let (share, v) = widescreen::menu_shares(aspect, k);
-    let g = super::Grid::fit(aspect);
-    let [x, y, w, h] = row_rect(&m.add, boxes(&g).0, shown(&g), 0)?;
-    (m.screen == Screen::Mods && m.add.page == Page::Installed && !m.add.phone && m.add.nophone.is_none())
+    // B383: the Installed grid's Add mod word, where it was last drawn
+    let [x, y, w, h] = (*grid::ADD_AT.lock().unwrap_or_else(|e| e.into_inner()))?;
+    (m.screen == Screen::Mods && m.add.page == Page::Installed && !m.add.empty_kind() && !m.add.phone && m.add.nophone.is_none())
         .then(|| [x * share / 6.4 + 50.0 * (1.0 - share), y * v / 4.48 + 50.0 * (1.0 - v), w * share / 6.4, h * v / 4.48])
 }
 
@@ -1621,6 +1728,8 @@ fn page(
         if *on && let Some(art) = &art {
             let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.dir.clone(), *s)).collect();
             menu.add.stats = stats;
+            // (B383: the Installed grid's cards)
+            menu.add.relist();
         }
         if let Some(a) = &args {
             menu.add.iso = a.iso.clone();
@@ -1668,6 +1777,7 @@ fn page(
                     Ok(list) => {
                         v.status = format!("{} mods in the store.", list.len());
                         v.store = Some(list);
+                        v.relist();
                         if let Some(b) = v.by.take() {
                             v.narrow(Some(b.author), b.from);
                         }
@@ -1763,7 +1873,7 @@ fn page(
         }
     }
     let on = menu.screen == Screen::Mods;
-    if on && menu.add.page == Page::Browse {
+    if on && menu.add.grid() {
         browse_pictures(&mut menu, &mut shelf, &mut images);
     }
     // only its own rows: every other screen's cursor is `sel` too (past row 4 it snapped back: Settings, the lobby)
@@ -1922,6 +2032,18 @@ mod tests {
         row_rect(&m.add, boxes(&m.grid).0, shown(&m.grid), r).unwrap()
     }
 
+    /// B383: the Installed grid (Show → Installed) on the mods put in `list`; its first tile's cursor slot.
+    fn installed(m: &mut Menu) -> usize {
+        m.mods_page(Page::Installed, 0);
+        m.add.relist();
+        m.add.browse_acts()
+    }
+
+    /// B383: the heading's word `w`'s cursor slot.
+    fn word(m: &Menu, w: &str) -> usize {
+        2 + m.add.words().iter().position(|x| *x == w).unwrap()
+    }
+
     /// Held by the tests that run `page`: it takes every store event, one test's outcomes included.
     static PAGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1959,41 +2081,45 @@ mod tests {
         }
     }
 
-    /// The rows: Add mod, Reload, each installed mod; ✕ on a mod opens Remove / Cancel in the side panel (B202): ○ and Cancel close it, ↑↓ wrap in it, Remove removes the mod (from memory, and nothing else).
+    /// B383: Installed is a grid of the installed mods (Show → Installed); ✕ on one opens Remove / Cancel in the
+    /// side panel (B202): ○ and Cancel close it, ↑↓ wrap in it, Remove removes the mod (from memory, and nothing else).
     #[test]
     fn removes_from_the_child() {
         let mut m = Menu::default();
         crate::modfs::add(&root().join("t_screen/mod.json"), Vec::new().into());
         m.add.list = vec![a_mod("t_screen", "Screen"), a_mod("b", "B")];
         m.screen = Screen::Mods;
-        m.sel = TOP;
+        let t0 = installed(&mut m);
+        assert_eq!((m.add.b.show, m.add.rows()), (grid::Show::Installed, t0 + 2));
+        m.sel = t0;
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
-        assert_eq!(m.add.child, Some(Child { row: TOP, at: 0, opts: vec!["Remove", "Cancel"] }));
+        assert_eq!(m.add.child, Some(Child { row: t0, at: 0, opts: vec!["Remove", "Cancel"] }));
         assert!(m.add.status.starts_with("Remove Screen"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
-        assert_eq!((m.add.child.is_none(), m.screen, m.sel), (true, Screen::Mods, TOP));
+        assert_eq!((m.add.child.is_none(), m.screen, m.sel), (true, Screen::Mods, t0));
         m.mods_step(ok(), &mut out);
         m.mods_step(Press { up: true, ..default() }, &mut out);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (t0, Some(1)));
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && crate::modfs::is_file(&root().join("t_screen/mod.json")));
         m.mods_step(ok(), &mut out);
         // the pointer: only the child's buttons, a tap elsewhere is Back
         let at = |m: &Menu, x: f32, y: f32| super::super::pointer::tests::act_at(m, x, y);
-        let r = child_rects(m.add.child.as_ref().unwrap(), boxes(&m.grid).1);
-        let p = rect(&m, 0);
+        let r = child_rects(m.add.child.as_ref().unwrap(), grid::lay(&m.grid).detail);
+        let p = grid::lay(&m.grid).search;
         assert_eq!(at(&m, p[0] + 10.0, p[1] + 5.0), None);
         assert_eq!(at(&m, r[1][0] + 10.0, r[1][1] + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
         assert_eq!(super::super::pointer::tests::hits(&m).1, Some(super::super::pointer::press(|k| k.back = true)));
         m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(1, super::super::pointer::OK), false);
-        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (TOP, Some(1)));
+        assert_eq!((m.sel, m.add.child.as_ref().map(|c| c.at)), (t0, Some(1)));
         m.point(super::super::Dev::Keys, super::super::pointer::Act::Row(0, super::super::pointer::OK), true);
         assert!(!crate::modfs::is_file(&root().join("t_screen/mod.json")));
         assert!(m.add.status.starts_with("Removed Screen"));
+        // the header's search box is the top: ↑ stays
         m.sel = 0;
         m.mods_step(Press { up: true, ..default() }, &mut out);
-        assert_eq!(m.sel, m.add.rows() - 1);
+        assert_eq!(m.sel, 0);
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Mods)));
         // B205: back on the main menu the popup asks (Reload chosen) and takes the presses; Later closes it, the note stays
@@ -2024,25 +2150,29 @@ mod tests {
     /// A mod in a folder put in by hand (here a pack's) isn't removed: the press says where to delete it.
     #[test]
     fn hand_added_mods_stay() {
-        let mut m = Menu { screen: Screen::Mods, sel: TOP, ..default() };
+        let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = vec![Mod { dir: root().join("pack/p"), ..a_mod("p", "P") }];
+        m.sel = installed(&mut m);
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && m.add.status.contains("added by hand"), "{}", m.add.status);
         // nor by Remove all
-        m.sel = 2;
+        m.sel = word(&m, "Remove all");
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && m.add.status.starts_with("No mods"), "{}", m.add.status);
     }
 
-    /// B335: Remove all (Installed's third pill) asks, then removes every mod the game installed.
+    /// B335: Remove all (B383: a word in Installed's heading) asks, then removes every mod the game installed.
     #[test]
     fn remove_all_mods() {
-        let mut m = Menu { screen: Screen::Mods, sel: 2, ..default() };
+        let mut m = Menu { screen: Screen::Mods, ..default() };
         for id in ["t_all1", "t_all2"] {
             crate::modfs::add(&root().join(id).join("mod.json"), Vec::new().into());
         }
         m.add.list = vec![a_mod("t_all1", "A"), a_mod("t_all2", "B")];
+        installed(&mut m);
+        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Add mod", "Reload", "Remove all"]);
+        m.sel = word(&m, "Remove all");
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.child.as_ref().map(|c| c.opts.clone()), Some(vec!["Remove all", "Cancel"]));
@@ -2090,7 +2220,7 @@ mod tests {
         let left = rail.iter().position(|o| *o == grid::Opt::Left(true)).unwrap();
         let upd = rail.iter().position(|o| *o == grid::Opt::Show(grid::Show::Updates)).unwrap();
         assert_eq!((m.add.count_of(&rail[1]), m.add.count_of(&rail[left]), m.add.count_of(&rail[upd])), (2, 2, 1));
-        let r0 = 1 + m.add.words().len();
+        let r0 = 2 + m.add.words().len();
         let mut out = Vec::new();
         m.sel = r0 + left;
         m.mods_step(ok(), &mut out);
@@ -2119,20 +2249,29 @@ mod tests {
         assert_eq!(m.sel, t0);
         // ↑ to the chosen sort's word (Uploader), ↑ to the search box, ↓ back to the sort word, ↓ into the grid
         m.mods_step(u, &mut out);
-        assert_eq!(m.sel, 1 + 2);
+        assert_eq!(m.sel, 2 + 2);
         m.mods_step(u, &mut out);
         assert_eq!(m.sel, 0);
         m.mods_step(d, &mut out);
         m.mods_step(d, &mut out);
         assert_eq!(m.sel, t0);
+        // B383: → from the search box to Upload, ↓ from it to the heading's last word, ← back
+        m.sel = 0;
+        m.mods_step(r, &mut out);
+        assert_eq!((m.sel, m.add.slot(1)), (1, grid::Slot::Upload));
+        m.mods_step(d, &mut out);
+        assert_eq!(m.sel, 2 + m.add.words().len() - 1);
+        m.sel = 1;
+        m.mods_step(l, &mut out);
+        assert_eq!(m.sel, 0);
         // a sort word's press sorts
-        m.sel = 2;
+        m.sel = 3;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.b.sort, names(&m)[0].as_str()), (grid::Sort::Az, "Alma"));
-        // the legend says what a tile's buttons do
+        // the legend says what a tile's buttons do; one kind of mod: no kind switch (B383)
         m.sel = t0 + 2;
         let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
-        assert_eq!(l, ["Move", "Update", "More by", "Wish list", "Tab", "Kind", "Back"]);
+        assert_eq!(l, ["Move", "Update", "More by", "Wish list", "Back"]);
         // Upload: Sign in and Upload all side by side, then the mods
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
@@ -2146,11 +2285,13 @@ mod tests {
         assert_eq!((nav(0, 2, 2, d), nav(1, 2, 2, d), nav(0, 2, 2, u)), (1, 0, 1));
     }
 
-    /// A long list scrolls to keep the cursor on screen, and taps land on the drawn rows.
+    /// Upload's long list scrolls to keep the cursor on screen, and taps land on the drawn rows; the browser's file
+    /// input sits on Installed's Add mod word.
     #[test]
     fn scrolls_and_taps() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = (0..20).map(|i| a_mod(&format!("m{i}"), &format!("M{i}"))).collect();
+        m.mods_page(Page::Upload, 0);
         let mut out = Vec::new();
         for _ in 0..9 {
             m.mods_step(Press { down: true, ..default() }, &mut out);
@@ -2158,19 +2299,26 @@ mod tests {
         // the cursor's mod (the 9th) is the last card shown
         let n = shown(&m.grid);
         assert!(n < 9);
-        assert_eq!((m.sel, m.add.top), (TOP + 8, 9 - n));
-        let at = |x: f32, y: f32| super::super::pointer::tests::act_at(&m, x, y);
-        let r = rect(&m, TOP + 8);
-        assert_eq!(at(r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Row(TOP + 8, super::super::pointer::OK)));
-        assert!(row_rect(&m.add, boxes(&m.grid).0, n, TOP + 9).is_none());
+        assert_eq!((m.sel, m.add.top), (UP_TOP + 8, 9 - n));
+        let at = |m: &Menu, x: f32, y: f32| super::super::pointer::tests::act_at(m, x, y);
+        let r = rect(&m, UP_TOP + 8);
+        assert_eq!(at(&m, r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Row(UP_TOP + 8, super::super::pointer::OK)));
+        assert!(row_rect(&m.add, boxes(&m.grid).0, n, UP_TOP + 9).is_none());
         // the gap between two cards goes to the nearer one
-        let first = rect(&m, TOP + m.add.top);
-        assert_eq!(at(first[0] + 10.0, first[1] + CARD_H + 1.0), Some(super::super::pointer::Act::Row(TOP + m.add.top, super::super::pointer::OK)));
+        let first = rect(&m, UP_TOP + m.add.top);
+        assert_eq!(at(&m, first[0] + 10.0, first[1] + CARD_H + 1.0), Some(super::super::pointer::Act::Row(UP_TOP + m.add.top, super::super::pointer::OK)));
         (0..9).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
         assert_eq!((m.sel, m.add.top), (0, 0));
-        // 4:3 fills the window: Add mod's own place
-        let (r, a) = (add_rect(&m, 4.0 / 3.0, 1.0).unwrap(), rect(&m, 0));
-        assert!((r[0] - a[0] / 6.4).abs() < 1e-4 && (r[2] - a[2] / 6.4).abs() < 1e-4);
+        // B383: the header's Upload button is lit here; a tap on it goes back to the grid
+        assert!(add_rect(&m, 4.0 / 3.0, 1.0).is_none());
+        let u = grid::lay(&m.grid).upload;
+        assert_eq!(at(&m, u[0] + 10.0, u[1] + 5.0), Some(super::super::pointer::Act::Tab(0)));
+        // 4:3 fills the window: Add mod's own place (as last drawn)
+        installed(&mut m);
+        let w = word(&m, "Add mod");
+        let a = super::super::pointer::tests::hits(&m).0.into_iter().find(|h| h.act == super::super::pointer::Act::Row(w, super::super::pointer::OK)).unwrap().rect;
+        let r = add_rect(&m, 4.0 / 3.0, 1.0).unwrap();
+        assert!((r[0] - a[0] / 6.4).abs() < 1e-4 && (r[2] - a[2] / 6.4).abs() < 1e-4, "{r:?} {a:?}");
     }
 
     /// Browse tags each store mod by what's installed (same zip: Installed, another: Update); pressing an installed
@@ -2239,6 +2387,9 @@ mod tests {
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.is_none() && m.add.paste && m.add.status.starts_with("Checking"));
         m.add.paste = false;
+        // B383: ○ on Upload goes back to the grid, ○ there to the main menu
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.screen, m.add.page, m.sel), (Screen::Mods, Page::Browse, 0));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
     }
@@ -2304,9 +2455,9 @@ mod tests {
         assert_eq!(m.add.status, "Those are uploading already.");
         // the menu stays usable meanwhile: My uploads and back
         m.add.mine = Some(Vec::new());
-        m.mods_step(Press { next: true, ..default() }, &mut out);
-        assert_eq!(m.add.page, Page::Mine);
-        m.mods_step(Press { prev: true, ..default() }, &mut out);
+        m.mods_show(grid::Show::Mine, &mut out);
+        assert_eq!((m.add.page, m.sel), (Page::Mine, 0));
+        m.mods_tab(2, &mut out);
         assert_eq!(m.add.page, Page::Upload);
         super::super::pointer::tests::hits(&m);
         // each mod's outcome lands beside it (here both fail packing), the last one said in the status bar
@@ -2327,58 +2478,64 @@ mod tests {
         panic!("no outcomes: {:?}", app.world().resource::<Menu>().add.ups);
     }
 
-    /// B208: on a phone Add mod is greyed and it and the Upload tab put up the popup instead (no picker, no page); ✕,
-    /// ○ or a tap anywhere closes it; Q/E skip Upload and My uploads; Browse still opens; the file input stays off.
+    /// B208: on a phone Add mod (B383: Installed's word) and the header's Upload are greyed and put up the popup
+    /// instead (no picker, no page), as does Show → My uploads; ✕, ○ or a tap anywhere closes it; the other Shows
+    /// still open; the file input stays off.
     #[test]
     fn phone_rows_greyed() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.phone = true;
+        m.add.store = Some(Vec::new());
+        installed(&mut m);
         let mut out = Vec::new();
-        for (row, close) in [(0, ok()), (2, Press { back: true, ..default() })] {
-            m.sel = 0;
-            if row == 0 {
-                m.mods_step(ok(), &mut out);
+        for (row, close) in [(0, ok()), (2, Press { back: true, ..default() }), (2, ok())] {
+            m.sel = if row == 0 { word(&m, "Add mod") } else { 1 };
+            if row == 2 && close.ok {
+                m.mods_show(grid::Show::Mine, &mut out);
             } else {
-                m.mods_tab(2, &mut out);
+                m.mods_step(ok(), &mut out);
             }
             assert_eq!((m.add.nophone, m.add.page, m.add.busy), (Some(row), Page::Installed, false));
             // the popup takes the moves
+            let at = m.sel;
             m.mods_step(Press { down: true, ..default() }, &mut out);
-            assert_eq!((m.sel, m.add.nophone), (0, Some(row)));
+            assert_eq!((m.sel, m.add.nophone), (at, Some(row)));
             m.mods_step(close, &mut out);
             assert_eq!((m.screen, m.add.nophone), (Screen::Mods, None));
         }
         assert!(add_rect(&m, 4.0 / 3.0, 1.0).is_none());
         use super::super::pointer::{Act, OK, tests::act_at};
-        m.add.nophone = Some(1);
+        m.add.nophone = Some(2);
         assert_eq!(act_at(&m, 320.0, ASK_TOP), Some(Act::Press(OK)));
         assert_eq!(act_at(&m, 10.0, 300.0), None);
         m.add.nophone = None;
-        m.add.store = Some(Vec::new());
-        m.mods_step(Press { prev: true, ..default() }, &mut out);
-        assert_eq!(m.add.page, Page::Browse);
-        m.mods_step(Press { next: true, ..default() }, &mut out);
+        m.mods_show(grid::Show::All, &mut out);
+        assert_eq!((m.add.page, m.add.nophone), (Page::Browse, None));
+        m.mods_show(grid::Show::Installed, &mut out);
         assert_eq!((m.add.page, m.add.nophone), (Page::Installed, None));
     }
 
-    /// M19: My public mods needs an account; its entries open Take down (a PR's, it closes) or Ask to delete (a merged
-    /// one's) under the Refresh pill; Back returns to the main menu.
+    /// M19: My public mods needs an account; B383: it's a grid (Show → My uploads) whose tiles open Take down (a
+    /// PR's, it closes) or Ask to delete (a merged one's) in the side panel; Back returns to the main menu.
     #[test]
     fn my_public_mods() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
         let mut out = Vec::new();
         let e = |id: &str, rev: &str| Entry { meta: Meta { id: id.into(), name: id.into(), ..Default::default() }, rev: rev.into(), verified: rev == "main" };
         m.add.mine = Some(vec![e("a", "refs/pr/4"), e("b", "main")]);
-        m.mods_tab(3, &mut out);
+        m.add.store = Some(Vec::new());
+        m.mods_show(grid::Show::Mine, &mut out);
         m.add.account = Some("me".into());
-        assert_eq!((m.add.page, m.sel, m.add.rows(), m.add.busy), (Page::Mine, 0, 3, false));
-        m.mods_step(Press { down: true, ..default() }, &mut out);
+        let t0 = m.add.browse_acts();
+        assert_eq!((m.add.page, m.add.b.show, m.sel, m.add.rows(), m.add.busy), (Page::Mine, grid::Show::Mine, 0, t0 + 2, false));
+        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Refresh"]);
+        m.sel = t0;
         m.mods_step(ok(), &mut out);
-        assert!(m.add.child.as_ref().is_some_and(|c| c.row == 1 && c.opts[0] == "Take down") && m.add.status.contains("closes its pull request"));
+        assert!(m.add.child.as_ref().is_some_and(|c| c.row == t0 && c.opts[0] == "Take down") && m.add.status.contains("closes its pull request"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
-        m.mods_step(Press { down: true, ..default() }, &mut out);
+        m.mods_step(Press { right: true, ..default() }, &mut out);
         m.mods_step(ok(), &mut out);
-        assert!(m.add.child.as_ref().is_some_and(|c| c.row == 2 && c.opts[0] == "Ask to delete") && m.add.status.contains("maintainer"));
+        assert!(m.add.child.as_ref().is_some_and(|c| c.row == t0 + 1 && c.opts[0] == "Ask to delete") && m.add.status.contains("maintainer"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
@@ -2428,7 +2585,7 @@ mod tests {
         let busy = e("zz", "zed", "1");
         (m.settings.8, m.add.doing) = (1, vec![busy.clone()]);
         // Download all, the heading's fourth word
-        m.sel = 1 + 3;
+        m.sel = word(&m, "Download all");
         m.mods_step(ok(), &mut out);
         assert_eq!(ids(&Vec::from(m.add.queue.clone())), ["a3"]);
         assert_eq!(m.add.jobs.get("ann/a3").map(|j| j.0), Some("Queued"));
@@ -2467,25 +2624,33 @@ mod tests {
         let ids = |m: &Menu| m.add.items().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
         let r2 = Press { kind_next: true, ..default() };
         let l2 = Press { kind_prev: true, ..default() };
+        // B383: the one tab row: the kinds with mods (a pack in the store isn't installable yet: no Texture packs tab)
+        assert_eq!(m.add.kinds_shown(), [Kind::Character, Kind::Court, Kind::Umpire]);
         for page in PAGES {
-            (m.add.page, m.add.kind, m.sel) = (page, Kind::Character, 0);
-            let local = matches!(page, Page::Installed | Page::Upload);
-            if local {
+            m.mods_page(page, 0);
+            m.add.relist();
+            m.add.kind = Kind::Character;
+            let local = page == Page::Upload;
+            let names = |m: &Menu| if local { m.add.locals().iter().map(|x| x.id.clone()).collect() } else { ids(m) };
+            if page == Page::Installed {
+                assert_eq!(names(&m), ["a", "b"]);
+                assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
+            } else if local {
                 assert_eq!(m.add.rows() - m.add.acts(), 2, "{page:?}");
                 assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
             } else {
-                assert_eq!(ids(&m), ["c1", "c2"], "{page:?}");
+                assert_eq!(names(&m), ["c1", "c2"], "{page:?}");
                 assert_eq!(m.add.kind_counts(), [2, 1, 1, 0], "a pack in the store isn't installable yet");
             }
-            // R2 to Courts: the court only, installed or in the store
+            // R2 to Courts: the court only, installed or in the store; on the search box, not typing
+            m.sel = 3;
             m.mods_step(r2, &mut out);
-            assert_eq!(m.add.kind, Kind::Court, "{page:?}");
+            assert_eq!((m.add.kind, m.sel, m.add.b.focus), (Kind::Court, 0, false), "{page:?}");
             assert!(!m.add.empty_kind());
-            if local {
-                assert_eq!(m.add.rows() - m.add.acts(), 1);
-                assert_eq!(m.add.local(m.add.acts()).unwrap().id, "gag_c01");
-            } else {
-                assert_eq!(ids(&m), ["court"], "{page:?}");
+            match page {
+                Page::Installed => assert_eq!(names(&m), ["gag_c01"]),
+                Page::Upload => assert_eq!(m.add.local(m.add.acts()).unwrap().id, "gag_c01"),
+                _ => assert_eq!(names(&m), ["court"], "{page:?}"),
             }
             if page == Page::Browse {
                 assert!(m.add.rail().iter().all(|o| !matches!(o, grid::Opt::Style(_) | grid::Opt::Left(_))));
@@ -2493,36 +2658,31 @@ mod tests {
             // and Umpires
             m.mods_step(r2, &mut out);
             assert_eq!(m.add.kind, Kind::Umpire);
-            if local {
-                assert_eq!(m.add.local(m.add.acts() + 1).unwrap().id, "gag_ump01");
-            } else {
-                assert_eq!(ids(&m), ["ump"], "{page:?}");
+            match page {
+                Page::Installed => assert_eq!(names(&m), ["gag_ump00", "gag_ump01"]),
+                Page::Upload => assert_eq!(m.add.local(m.add.acts() + 1).unwrap().id, "gag_ump01"),
+                _ => assert_eq!(names(&m), ["ump"], "{page:?}"),
             }
-            // R2 to Texture packs: nothing to choose, the empty state's words name M5
-            m.mods_step(r2, &mut out);
-            assert_eq!((m.add.kind, m.add.rows(), m.sel), (Kind::Textures, 0, 0), "{page:?}");
-            assert!(info(&m).contains("mods/texture-replacements/"));
-            for k in [ok(), Press { down: true, ..default() }, Press { card: true, ..default() }] {
-                m.mods_step(k, &mut out);
-                assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Textures, 0));
-            }
-            // L2 back to Umpires, R2 on round; a tap on Characters' tab back
-            m.mods_step(l2, &mut out);
-            assert_eq!(m.add.kind, Kind::Umpire);
-            m.mods_step(r2, &mut out);
+            // R2 round to Characters (Texture packs is hidden), L2 back; a tap on Characters' tab
             m.mods_step(r2, &mut out);
             assert_eq!(m.add.kind, Kind::Character);
+            m.mods_step(l2, &mut out);
+            assert_eq!(m.add.kind, Kind::Umpire);
             m.add.kind = Kind::Court;
             let tab = super::super::pointer::tests::hits(&m).0.into_iter().find(|h| h.act == super::super::pointer::Act::Kind(0)).unwrap().rect;
             assert_eq!(super::super::pointer::tests::act_at(&m, tab[0] + 4.0, tab[1] + 4.0), Some(super::super::pointer::Act::Kind(0)));
             m.point(super::super::Dev::Keys, super::super::pointer::Act::Kind(0), true);
             assert_eq!(m.add.kind, Kind::Character);
-            // Q / E still change the page from an empty kind, which stays chosen
+            // Texture packs (if it's ever chosen): nothing to choose, the empty state's words name M5
             m.add.kind = Kind::Textures;
-            m.mods_step(Press { next: true, ..default() }, &mut out);
-            assert_eq!(m.add.kind, Kind::Textures);
-            assert_ne!(m.add.page, page);
-            m.add.page = page;
+            m.sel = 0;
+            assert_eq!(m.add.rows(), 0, "{page:?}");
+            assert!(info(&m).contains("mods/texture-replacements/"));
+            for k in [ok(), Press { down: true, ..default() }, Press { card: true, ..default() }] {
+                m.mods_step(k, &mut out);
+                assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Textures, 0));
+            }
+            assert_eq!(m.add.kinds_shown(), [Kind::Character, Kind::Court, Kind::Umpire, Kind::Textures]);
         }
         // Download all by an uploader leaves the other kinds out
         m.add.page = Page::Browse;
@@ -2535,7 +2695,7 @@ mod tests {
         m.add.by = None;
         m.add.kind = Kind::Textures;
         let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
-        assert_eq!(acts.iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), ["Tab", "Kind", "Back"]);
+        assert_eq!(acts.iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), ["Kind", "Back"]);
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
     }
@@ -2621,6 +2781,19 @@ mod tests {
             f(&mut k);
             k
         };
+        // B383: the box never takes the keys by itself; from the keyboard ✕ types into it in place, and leaving it
+        // (or ✕ again) stops
+        assert_eq!((m.sel, m.add.b.focus, m.add.b.osk), (0, false, None));
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.b.focus, m.add.b.osk), (true, None));
+        m.mods_step(ok(), &mut out);
+        assert!(!m.add.b.focus);
+        m.mods_step(ok(), &mut out);
+        m.mods_step(p(|k| k.down = true), &mut out);
+        assert_eq!((m.sel != 0, m.add.b.focus), (true, false));
+        m.sel = 0;
+        // a pad's ✕ opens the on-screen keyboard
+        m.add.pad = true;
         m.mods_step(ok(), &mut out);
         assert_eq!(m.add.b.osk, Some(0));
         // K is the second row's first key; then I (row one, column nine)
