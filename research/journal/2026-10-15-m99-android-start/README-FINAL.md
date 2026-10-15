@@ -41,3 +41,6 @@ Note: at first my emulator didn't start (the AVD was locked by another agent's `
 commands went to that agent's emulator (5584): an uninstall/reinstall of the app and an ISO push, which I removed
 again. From then on I used my own `-read-only -port 5620` instance. Parallel agents should always pass
 `-read-only -port N` and `adb -s`.
+
+Update (M104): the black menu was the first loading screen, which stays up ~5–6 min on SwiftShader (600-frame cap).
+The menu shows after it, with the pack and with the ISO alike. See 2026-10-15-m104-android-black-menu.
