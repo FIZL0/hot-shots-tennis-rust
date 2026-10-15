@@ -946,6 +946,16 @@ impl Menu {
         self.local_roster() && self.seats[0] == Some(dev)
     }
 
+    /// Local doubles: a seated human other than 1P switches team with □ / Tab, onto the other team's first computer
+    /// seat (teams are seats 0–1 and 2–3); their pick goes with them and the computer's takes their old seat.
+    fn team_switch(&self, dev: Dev) -> Option<(usize, usize)> {
+        if !(self.local_roster() && self.doubles) {
+            return None;
+        }
+        let p = (1..4).find(|&p| self.seats[p] == Some(dev))?;
+        (if p < 2 { 2..4 } else { 0..2 }).find(|&q| self.seats[q].is_none()).map(|q| (p, q))
+    }
+
     /// B331: the local roster (not online): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
     fn local_roster(&self) -> bool {
@@ -1181,6 +1191,14 @@ impl Menu {
                 // B375: 1P's device (only) swaps Singles ↔ Doubles with □ / Tab (or a tap on the mode pill)
                 if k.page && self.can_swap(dev) {
                     self.swap_mode(true);
+                    out.push(Sound(0));
+                    return out;
+                }
+                // the other humans' □ / Tab: the other team (doubles)
+                if k.page && let Some((p, q)) = self.team_switch(dev) {
+                    self.seats.swap(p, q);
+                    self.players.swap(p, q);
+                    self.scroll.swap(p, q);
                     out.push(Sound(0));
                     return out;
                 }
@@ -4269,6 +4287,29 @@ mod tests {
         assert_eq!((flag("--chars"), flag("--outfits")), ("0,0".into(), "0,0".into()));
         let mods: Vec<_> = a.windows(3).filter(|w| w[0] == "--slot-mod").map(|w| (w[1].clone(), w[2].clone())).collect();
         assert_eq!(mods, [("0".into(), "mods/z".into()), ("1".into(), "mods/x".into())]);
+    }
+
+    /// A third device makes the local roster doubles with 2P across the net; □ moves a non-1P human to the other
+    /// team (onto a computer's seat, picks following), 1P's □ stays Singles / Doubles.
+    #[test]
+    fn doubles_team_switch() {
+        let (ok, page) = (press(|p| &mut p.ok), press(|p| &mut p.page));
+        let (a, b) = (Dev::Pad(Entity::from_raw_u32(1).unwrap()), Dev::Pad(Entity::from_raw_u32(2).unwrap()));
+        let mut m = Menu::default();
+        m.local_start(Dev::Keys, &mut Vec::new());
+        m.step(a, ok);
+        m.step(b, ok);
+        assert!(m.doubles);
+        assert_eq!(m.seats, [Some(Dev::Keys), Some(b), Some(a), None]);
+        m.players[2].cursor = 5;
+        m.step(a, page);
+        assert_eq!(m.seats, [Some(Dev::Keys), Some(b), Some(a), None], "no computer seat on 1P's team: stays");
+        m.step(b, page);
+        assert_eq!(m.seats, [Some(Dev::Keys), None, Some(a), Some(b)], "b to the other team");
+        m.step(a, page);
+        assert_eq!((m.seats, m.players[1].cursor), ([Some(Dev::Keys), Some(a), None, Some(b)], 5), "a joins 1P, pick with it");
+        m.step(Dev::Keys, page);
+        assert!(!m.doubles, "1P's □ still swaps the mode");
     }
 
     /// B79: Select flips the hand. Ashley (right) + Select and Will (left) + Select go to the match as

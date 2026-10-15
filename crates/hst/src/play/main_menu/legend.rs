@@ -231,6 +231,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.can_swap(dev) || m.online_can_swap(dev) {
                 v.push((Act::Page, "Singles / Doubles"));
             }
+            if m.team_switch(dev).is_some() {
+                v.push((Act::Page, "Switch team"));
+            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
