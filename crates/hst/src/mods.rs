@@ -92,6 +92,9 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     let err = |m: String| format!("{}: {m}", at.display());
     let text = crate::modfs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
     let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
+    if let k @ (Kind::Court | Kind::Umpire | Kind::Other(_)) = Kind::of(&j) {
+        return Err(err(format!("`kind` is {k}: not a character mod")));
+    }
     let num = |v: &serde_json::Value, what: &str, max: u64| v.as_u64().filter(|&n| n <= max).map(|n| n as usize).ok_or_else(|| err(format!("`{what}` must be a number 0..={max}")));
     // shown as plain text, length-capped (M16)
     let text = |k: &str| j[k].as_str().filter(|t| (1..=64).contains(&t.chars().count())).map(str::to_string).ok_or_else(|| err(format!("`{k}` must be a string of 1 to 64 characters")));
@@ -184,10 +187,53 @@ fn game(source: &str) -> String {
     source.split(" (").next().unwrap_or("").trim().to_string()
 }
 
+/// What a mod is (`mod.json` `kind`, M8f1; the mods repo's `standard/HST-COURT-UMPIRE-STANDARD.md` §1): absent or
+/// `character` a player, `court` a venue, `umpire` a chair umpire; any other value a kind this build doesn't know
+/// yet (skipped quietly, not broken).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    Character,
+    Court,
+    Umpire,
+    Other(String),
+}
+
+impl Kind {
+    pub fn of(manifest: &serde_json::Value) -> Kind {
+        match manifest.get("kind") {
+            None | Some(serde_json::Value::Null) => Kind::Character,
+            Some(k) => match k.as_str() {
+                Some("character") => Kind::Character,
+                Some("court") => Kind::Court,
+                Some("umpire") => Kind::Umpire,
+                _ => Kind::Other(k.to_string().chars().take(64).collect()),
+            },
+        }
+    }
+
+    /// The kind of the mod in `dir`; a missing or unreadable `mod.json` counts as a character (so `read` names
+    /// what's wrong with it).
+    pub fn of_dir(dir: &Path) -> Kind {
+        crate::modfs::read_to_string(&dir.join("mod.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).map_or(Kind::Character, |j| Kind::of(&j))
+    }
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Kind::Character => f.write_str("`character`"),
+            Kind::Court => f.write_str("`court`"),
+            Kind::Umpire => f.write_str("`umpire`"),
+            Kind::Other(k) => f.write_str(k),
+        }
+    }
+}
+
 /// Every mod under `root` (the select's custom roster, sorted by folder); a broken one is left out with its
 /// `<path>: <reason>` logged.
 /// A folder without a `mod.json` is searched one level down (a pack, e.g. `mods/hst-mods` → the mods repo's `out/mods`);
-/// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly.
+/// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly, and so are mods of
+/// another `Kind` (courts, umpires).
 pub fn list(root: &Path) -> Vec<Mod> {
     let sub = crate::modfs::read_dir;
     // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods); a dot folder is an
@@ -195,7 +241,7 @@ pub fn list(root: &Path) -> Vec<Mod> {
     let mut dirs: Vec<PathBuf> =
         sub(root).into_iter().filter(|d| !d.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
-    dirs.iter().filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
+    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }
 
 /// TParam.csv's column headers, line breaks as spaces.
@@ -1525,6 +1571,26 @@ mod tests {
         for bad in [ok.replace("\"donor\"", "\"costume_of\":3,\"donor\""), pack.replace("\"ai_row\":3", "\"ai_row\":4"), pack.replace("\"costume_of\":3", "\"costume_of\":14")] {
             assert!(try_(&bad).is_err(), "accepted {bad}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M8f1: courts, umpires and kinds this build doesn't know stay off the character roster, quietly; `read`
+    /// refuses them as characters; no `kind` is a character.
+    #[test]
+    fn other_kinds_stay_off_the_roster() {
+        let dir = std::env::temp_dir().join(format!("hst-kind-test-{}", std::process::id()));
+        for (k, want) in [("court", Kind::Court), ("umpire", Kind::Umpire), ("textures", Kind::Other("\"textures\"".into()))] {
+            std::fs::create_dir_all(dir.join(k)).unwrap();
+            std::fs::write(dir.join(k).join("mod.json"), format!(r#"{{"standard": 1, "kind": "{k}", "id": "x_{k}", "name": "X"}}"#)).unwrap();
+            assert_eq!(Kind::of_dir(&dir.join(k)), want);
+            assert!(read(&dir.join(k)).unwrap_err().contains("not a character mod"), "{k}");
+        }
+        std::fs::create_dir_all(dir.join("plain")).unwrap();
+        std::fs::write(dir.join("plain/mod.json"), r#"{"standard": 1, "id": "x", "name": "X"}"#).unwrap();
+        assert_eq!(Kind::of_dir(&dir.join("plain")), Kind::Character);
+        assert!(read(&dir.join("plain")).unwrap_err().contains("costumes"));
+        assert_eq!(Kind::of(&serde_json::json!({"kind": "character"})), Kind::Character);
+        assert!(list(&dir).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
