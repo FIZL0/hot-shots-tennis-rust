@@ -8,11 +8,12 @@
 //! Verified bit-exact against the game's runtime shot-parameter table (2912 madd/add/sub/mul results).
 #![deny(clippy::float_arithmetic)]
 
-fn daz(x: f32) -> f32 {
+/// Denormals read as zero (keeping the sign), on the EE FPU and VU0 alike.
+pub(crate) fn daz(x: f32) -> f32 {
     if x.is_subnormal() { 0.0f32.copysign(x) } else { x }
 }
 
-/// Round an f64 toward zero to f32 (also how the game's soft-float double → float conversion rounds).
+/// Round an f64 toward zero to f32 (also how VU0 rounds, and how the game's soft-float double → float conversion rounds).
 pub fn chop(x: f64) -> f32 {
     let r = x as f32;
     let r = if (r as f64).abs() > x.abs() { f32::from_bits(r.to_bits() - 1) } else { r };

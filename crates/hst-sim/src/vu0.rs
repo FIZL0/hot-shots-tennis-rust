@@ -3,18 +3,9 @@
 //! and multiply-add is a rounded product followed by a rounded add.
 #![deny(clippy::float_arithmetic)]
 
+use crate::ps2::{chop, daz};
+
 pub type V4 = [f32; 4];
-
-fn daz(x: f32) -> f32 {
-    if x.is_subnormal() { 0.0f32.copysign(x) } else { x }
-}
-
-/// Round toward zero to f32. `x` must be the exact result or close enough that the f32 neighbourhood is right.
-fn chop(x: f64) -> f32 {
-    let r = x as f32;
-    let r = if (r as f64).abs() > x.abs() { f32::from_bits(r.to_bits() - 1) } else { r };
-    daz(r)
-}
 
 /// IEEE add rounded toward zero. The f64 sum alone can round away an addend that is far smaller, so the
 /// rounding error (TwoSum) decides the direction: x + tiny of opposite sign truncates to the next f32 down.
