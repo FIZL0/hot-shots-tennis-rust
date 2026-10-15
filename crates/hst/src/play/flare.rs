@@ -169,6 +169,10 @@ fn draw(
         if b.pos.is_empty() {
             continue;
         }
+        // hidden, it waits for the next frame it's on: each `get_mut` re-uploads the mesh (B357)
+        if !on {
+            continue;
+        }
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             *m = b.mesh();
         }

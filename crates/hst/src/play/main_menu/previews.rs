@@ -280,10 +280,8 @@ pub(super) fn card(iso: &str, m: &Mod) -> Option<Vec<u8>> {
 /// [`ICON_READS`] new ones a frame so a page turn doesn't stall.
 fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<Who>>) {
     let page: Vec<Who> = match menu.screen {
-        Screen::Chars => {
-            let (start, roster) = menu.page();
-            roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect()
-        }
+        // B368: every column's tiles on view
+        Screen::Chars => menu.on_view(),
         // the main screen's pictures' faces (`home::faces`), as the baker draws them
         Screen::Main => super::home::faces(&menu),
         Screen::Mods => super::mods_screen::faces(&menu),
@@ -524,7 +522,8 @@ fn sync(
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
     let mut quads = match slide.incoming() {
         // B192: and the confirm screen's players
-        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm) => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        // B370: and the lobby's seat cards
+        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm | Screen::Lobby) => layout(&menu, &art.2, &bind, &[], 0.0).0,
         _ => Vec::new(),
     };
     let dx = slide.incoming().map_or(0.0, |s| s.0);

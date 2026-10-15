@@ -604,6 +604,14 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
         "--pads".into(),
         super::controls::Seat::flag(&seats),
     ]);
+    // M8f3: the host's umpire mod, heard by a peer that has it (the donor, `--umpire`, times it either way)
+    if let Some((id, _)) = room.umpire_mod.as_ref().filter(|_| !room.vanilla) {
+        a.extend(["--umpire-mod-id".into(), id.clone()]);
+    }
+    // B370: the select's hand toggles, by match slot
+    if order.iter().any(|&s| pick(s).is_some_and(|p| p.swap)) {
+        a.extend(["--swap-hands".into(), order.iter().map(|&s| if pick(s).is_some_and(|p| p.swap) { "1" } else { "0" }).collect::<Vec<_>>().join(",")]);
+    }
     a.extend(extra.iter().cloned());
     a
 }
@@ -696,6 +704,26 @@ mod tests {
         let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
         assert_eq!((flag("--chars"), flag("--outfits")), ("5,7,6,8".into(), "2,1,0,2".into()));
         assert_eq!((flag("--pads"), flag("--court"), flag("--sets"), flag("--games")), ("99,k,0,99".into(), "3".into(), "2".into(), "3".into()));
+        assert!(!a.contains(&"--swap-hands".to_string()), "no toggle on: no flag");
+        // B370: 2P's (the guest's first) hand toggle, at its match slot
+        let mut room = room;
+        room.seats[1].as_mut().unwrap().pick.swap = true;
+        let a = flags(&room, "host", &[None, None], &[]);
+        assert_eq!(a[a.iter().position(|x| x == "--swap-hands").unwrap() + 1], "0,0,1,0");
+    }
+
+    /// M8f3: the host's umpire mod goes in the flags by id (each peer looks it up under its own `mods/`, the donor
+    /// `--umpire` either way); none in a vanilla lobby.
+    #[test]
+    fn flags_carry_the_umpire_mod_id() {
+        use crate::net::{Pick, Seat};
+        let s = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
+        let mut room = Room { umpire: 2, umpire_mod: Some(("gag_ump00".into(), "Umpire 00".into())), seats: vec![s("host"), s("g")], ..Default::default() };
+        let a = flags(&room, "g", &[None], &[]);
+        let flag = |a: &[String], f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        assert_eq!((flag(&a, "--umpire"), flag(&a, "--umpire-mod-id")), (Some("2".into()), Some("gag_ump00".into())));
+        room.vanilla = true;
+        assert_eq!(flag(&flags(&room, "g", &[None], &[]), "--umpire-mod-id"), None);
     }
 
     /// The court intro online (B42e): the guest's ✕ on its intro tick 10 skips on both machines at tick 10 + delay,
@@ -1003,6 +1031,37 @@ mod tests {
             let _ = Lockstep::new;
         }
 
+        /// C2: one machine's mashed doubles match, every tick's state hash written to `HST_HASH_TRACE` (one hex line
+        /// a tick, `HST_HASH_TICKS` ticks, default 30000, or until the match of `HST_HASH_GAMES` games, default 1, ends). Run before and after a change
+        /// that must not change the sim and diff the files:
+        /// `HST_HASH_TRACE=context/c2/a.txt tools/check.sh -p hst hash_trace -- --ignored` (~1 min optimised).
+        #[test]
+        #[ignore]
+        fn hash_trace() {
+            let path = std::env::var("HST_HASH_TRACE").expect("HST_HASH_TRACE=file");
+            let ticks: u32 = std::env::var("HST_HASH_TICKS").map_or(30_000, |t| t.parse().unwrap());
+            REPLAYS.set(false);
+            let mut room = room(0);
+            room.games = std::env::var("HST_HASH_GAMES").map_or(1, |g| g.parse().unwrap());
+            room.seats.iter_mut().for_each(|s| s.as_mut().unwrap().peer = "host".into());
+            let mut a = app(&room, "replay");
+            let mut np = a.world_mut().remove_resource::<Netplay>().unwrap();
+            let mut out = String::new();
+            let mut last = [tick_input::IDLE; 4];
+            for t in 0..ticks {
+                out += &format!("{:016x}\n", super::super::snapshot::state_hash(a.world_mut()));
+                if a.world().resource::<Game>().match_stats.result.is_some() {
+                    break;
+                }
+                np.lock.tick = t;
+                let now = [0, 1, 2, 3].map(|s| np.mashed(s));
+                run_on(a.world_mut(), now, last);
+                a.world_mut().run_schedule(FixedUpdate);
+                last = now;
+            }
+            std::fs::write(path, out).unwrap();
+        }
+
         // ---------------------------------------------------------------- rollback (M2h)
 
         use super::super::super::rollback::{self, Rollback};
@@ -1149,8 +1208,10 @@ mod tests {
                         take(apps[1 - i].world_mut(), Event::Match(m));
                     }
                 }
-                if gone.is_some() && !hidden {
-                    let w = apps[1].world();
+                // B376: a cut-away or an instant replay has the shared camera (the harness's replays can start on the
+                // tick after a cut-away's first, and a replay's first tick cuts): those aren't flips
+                let w = apps[1].world();
+                if gone.is_some() && !hidden && !w.resource::<Game>().instant.replaying && !w.resource::<cutaway::Director>().showing() {
                     let g = w.resource::<Game>();
                     own.push(own_camera::shown(g, w.get_resource()) != own_camera::shown(g, None));
                 }

@@ -27,6 +27,10 @@ const SIZE: UVec2 = UVec2::new((256.0 * PAD) as u32, (128.0 * PAD) as u32);
 /// fingers of `cursor.ani`, fingertip right as the original's; the camera sees `PAD` times it.
 const VIEW: [f32; 3] = [-0.11, -0.02, 0.35];
 
+/// The camera drawing the hand's image.
+#[derive(Component)]
+pub(in crate::play) struct CursorCamera;
+
 #[derive(Resource)]
 pub(in crate::play) struct Cursor {
     pub(in crate::play) image: Handle<Image>,
@@ -82,6 +86,7 @@ pub(in crate::play) fn setup(
         Transform::from_xyz(x, y, 10.0),
         AmbientLight { brightness: 50.0, ..default() },
         layers,
+        CursorCamera,
     ));
     commands.insert_resource(Cursor { image, effect, shown, acc: 0.0, at: Vec::new() });
 }
@@ -95,10 +100,18 @@ pub(in crate::play) fn tick(
     mut q: Query<(&mut Visibility, &mut MorphWeights)>,
     mut joints: Query<&mut Transform>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cam: Query<&mut Camera, With<CursorCamera>>,
 ) {
     let Some(mut cursor) = cursor else { return };
     let c = &mut *cursor;
     let at: Vec<_> = hands.iter().filter(|(img, _, vis)| img.image == c.image && vis.get()).map(|(_, n, _)| (n.left, n.top)).collect();
+    // no hand on screen (a match, a replay): its camera stops drawing (B359); `show` turns it back on
+    if at.is_empty()
+        && let Ok(mut cam) = cam.single_mut()
+        && cam.is_active
+    {
+        cam.is_active = false;
+    }
     if at != c.at {
         c.at = at;
         c.effect.start();
@@ -113,4 +126,17 @@ pub(in crate::play) fn tick(
         }
     }
     crate::effects::pose(&c.effect, &c.shown, &mut q, &mut joints, &mut materials);
+}
+
+/// The hand's camera back on the frame a hand quad shows (after visibility is propagated, before the frame is
+/// drawn), so a menu opening never shows a stale image. Only ever turns it on: `tick` turns it off, a frame later,
+/// and the loading screen's pipeline warm-up can still turn it on to compile the hand's pipelines.
+pub(in crate::play) fn show(cursor: Option<Res<Cursor>>, hands: Query<(&ImageNode, &InheritedVisibility)>, mut cam: Query<&mut Camera, With<CursorCamera>>) {
+    let Some(cursor) = cursor else { return };
+    if let Ok(mut cam) = cam.single_mut()
+        && !cam.is_active
+        && hands.iter().any(|(img, vis)| img.image == cursor.image && vis.get())
+    {
+        cam.is_active = true;
+    }
 }

@@ -20,3 +20,6 @@ opt-level = 1
 gilrs-core = { path = "third_party/gilrs-core" }
 # B328: WebGPU device limits/features read once instead of from the browser on every draw (src/backend/webgpu.rs)
 wgpu = { path = "third_party/wgpu" }
+# B385: on CPU batching (WebGL2) an unbatchable mesh with no batch data this frame keeps its slot and is skipped, instead of
+# shifting the dynamic offsets and indexing past their end (render_phase/mod.rs, batching/no_gpu_preprocessing.rs)
+bevy_render = { path = "third_party/bevy_render" }

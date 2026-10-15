@@ -2,6 +2,7 @@
 //! recording. A sample is the vsync counter followed by fixed RAM regions: the pad manager, the match globals,
 //! the match object, the ball object and two regions of each of the four player objects. Tests replay these
 //! frames through the port and diff them; `cargo run -p hst-sim --bin replay` dumps them.
+#![deny(clippy::float_arithmetic)]
 
 pub const GLOBALS_ADDR: usize = 0x422f80;
 const PAD: usize = 4;

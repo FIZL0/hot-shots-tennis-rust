@@ -6,10 +6,13 @@
 //!
 //! Voices are (program, key) of her voice bank (`gag_vcNN`, sound slot 5). Program 0 holds the score words
 //! (keys 0..4 the server's points love..40, 4 + n the receiver's, 8 "all", 9 deuce, 10 advantage, 11/12 server /
-//! receiver, 13 deuce again), program 1 the calls (key = judge call − 1), program 2 the announcements (0 tiebreak,
-//! 1 game, 2 set, 3 change ends, 4 match). A two-part call plays its second word when the first voice ends, or
+//! receiver, 13 deuce again: no disc umpire has a take for it, so it's silent), program 1 the calls (key = judge
+//! call − 1), program 2 the announcements (0 tiebreak, 1 game, 2 set, 3 change ends, 4 match). Words checked by
+//! transcript of the five disc banks (M8f2). A two-part call plays its second word when the first voice ends, or
 //! at the latest after the first word's countdown.
+#![deny(clippy::float_arithmetic)]
 
+use crate::ps2::{F, f32s};
 use crate::score::{Event, Score};
 
 /// Motions: idle, turned to her right, turned to her left (anims `_h`, `_r`, `_l`).
@@ -99,9 +102,9 @@ impl Umpire {
 
     /// Back to her seat state: no call, idle, facing the court centre, the eye on the ball.
     fn reset(&mut self, ball: [f32; 3]) {
-        let (x, z) = (0.0 - self.pos[0], 0.0 - self.pos[2]);
-        let n = 1.0 / (x * x + z * z).sqrt();
-        self.forward = [x * n, z * n];
+        let (x, z) = (F::ZERO - self.pos[0], F::ZERO - self.pos[2]);
+        let n = F::ONE / (x * x + z * z).sqrt();
+        self.forward = f32s([x * n, z * n]);
         (self.look, self.look_ticks, self.look_step) = (Look::Centre, 0, [0.0; 3]);
         (self.rally, self.seen, self.calling, self.part, self.keys, self.programs) = (false, false, false, -1, [0; 2], [0; 2]);
         (self.over, self.motion, self.eye) = (false, IDLE, ball);
@@ -249,10 +252,10 @@ impl Umpire {
         }
         // both ease the eye back to the centre over 10 ticks
         if self.look_ticks == 0 {
-            self.look_step = std::array::from_fn(|k| (CENTRE[k] - self.eye[k]) * 0.1);
+            self.look_step = std::array::from_fn(|k| ((F(CENTRE[k]) - self.eye[k]) * 0.1).0);
         }
         if self.look_ticks < 10 {
-            self.eye = std::array::from_fn(|k| self.eye[k] + self.look_step[k]);
+            self.eye = std::array::from_fn(|k| (F(self.eye[k]) + self.look_step[k]).0);
             self.head = self.eye;
             self.look_ticks += 1;
         }

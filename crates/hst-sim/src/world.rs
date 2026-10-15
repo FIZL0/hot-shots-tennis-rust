@@ -2,9 +2,10 @@
 //! model stands (world matrix from the plant record, its inverse into model space, bounding sphere) and the 20 m
 //! grid of cells the live ball looks props up in. Angles and bounds on the FPU (`ps2`), matrices on VU0 (`vu0`).
 //! Matrices are 4 rows of 4, row vectors (`p' = p · M`, translation in row 3); game space is Y-down.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
-use crate::vu0::{self, V4};
+use crate::ps2::F;
+use crate::vu0::{self, V4, Vf};
 
 pub type M4 = [V4; 4];
 
@@ -20,30 +21,30 @@ pub const CELL: f32 = 20.0;
 /// (sin θ, cos θ) for |θ| ≤ π: cos is the sine polynomial at π/2 − |θ|, sin = ±√(1 − cos²) (VU0 Q square root).
 pub fn sincos(t: f32) -> (f32, f32) {
     let neg = t < 0.0;
-    let x = if neg { ps2::add(HALF_PI, t) } else { ps2::sub(HALF_PI, t) };
-    let x2 = vu0::mul(x, x);
-    let x3: V4 = std::array::from_fn(|k| vu0::mul(vu0::mul(SIN[k], x), x2));
-    let x5: V4 = std::array::from_fn(|k| if k < 3 { vu0::mul(x3[k], x2) } else { x3[k] });
-    let x7: V4 = std::array::from_fn(|k| if k < 2 { vu0::mul(x5[k], x2) } else { x5[k] });
-    let x9 = vu0::mul(x7[0], x2);
-    let s = vu0::add(vu0::add(vu0::add(vu0::add(vu0::add(0.0, x), x3[3]), x5[2]), x7[1]), x9);
-    let s = vu0::add(0.0, s);
-    let q = vu0::add(0.0, vu0::sqrt(vu0::sub(1.0, vu0::mul(s, s))));
-    (if neg { vu0::sub(0.0, q) } else { vu0::add(0.0, q) }, s)
+    let x = Vf(if neg { F(HALF_PI) + t } else { F(HALF_PI) - t }.0);
+    let x2 = x * x;
+    let x3: [Vf; 4] = std::array::from_fn(|k| SIN[k] * x * x2);
+    let x5: [Vf; 4] = std::array::from_fn(|k| if k < 3 { x3[k] * x2 } else { x3[k] });
+    let x7: [Vf; 4] = std::array::from_fn(|k| if k < 2 { x5[k] * x2 } else { x5[k] });
+    let x9 = x7[0] * x2;
+    let s = 0.0 + x + x3[3] + x5[2] + x7[1] + x9;
+    let s = 0.0 + s;
+    let q = 0.0 + (1.0 - s * s).sqrt();
+    (if neg { 0.0 - q } else { 0.0 + q }.0, s.0)
 }
 
 /// Rotation about Y (rows (c, 0, −s), (0, 1, 0), (s, 0, c)), built in a zeroed register as the game does.
 pub fn rot_y(t: f32) -> M4 {
     let (s, c) = sincos(t);
-    let z = 0.0;
-    [[vu0::add(z, c), z, vu0::sub(z, s), z], [z, vu0::add(z, 1.0), z, z], [vu0::add(z, s), z, vu0::add(z, c), z], [z, z, z, vu0::add(z, 1.0)]]
+    let (s, c, one, z) = (Vf(s), Vf(c), Vf(1.0), 0.0);
+    [[(z + c).0, z, (z - s).0, z], [z, (z + one).0, z, z], [(z + s).0, z, (z + c).0, z], [z, z, z, (z + one).0]]
 }
 
 /// Rotation about X (rows (1, 0, 0), (0, c, s), (0, −s, c)).
 pub fn rot_x(t: f32) -> M4 {
     let (s, c) = sincos(t);
-    let z = 0.0;
-    [[vu0::add(z, 1.0), z, z, z], [z, vu0::add(z, c), vu0::add(z, s), z], [z, vu0::sub(z, s), vu0::add(z, c), z], [z, z, z, vu0::add(z, 1.0)]]
+    let (s, c, one, z) = (Vf(s), Vf(c), Vf(1.0), 0.0);
+    [[(z + one).0, z, z, z], [z, (z + c).0, (z + s).0, z], [z, (z - s).0, (z + c).0, z], [z, z, z, (z + one).0]]
 }
 
 /// `a` then `b`: every row of `a` through `b`.
@@ -55,8 +56,8 @@ pub fn mat_mul(a: &M4, b: &M4) -> M4 {
 pub fn inverse(m: &M4) -> M4 {
     let t = m[3];
     let r: [V4; 3] = std::array::from_fn(|k| [m[0][k], m[1][k], m[2][k], 0.0]);
-    let v: [f32; 3] = std::array::from_fn(|k| vu0::madd(vu0::madd(vu0::mul(r[0][k], t[0]), r[1][k], t[1]), r[2][k], t[2]));
-    [r[0], r[1], r[2], [vu0::sub(0.0, v[0]), vu0::sub(0.0, v[1]), vu0::sub(0.0, v[2]), t[3]]]
+    let v: [Vf; 3] = std::array::from_fn(|k| (Vf(r[0][k]) * t[0]).madd(r[1][k], t[1]).madd(r[2][k], t[2]));
+    [r[0], r[1], r[2], [(0.0 - v[0]).0, (0.0 - v[1]).0, (0.0 - v[2]).0, t[3]]]
 }
 
 /// A plant-record code character as a number: '0'–'9', then 'A'… = 10… (signed byte, as the game reads it).
@@ -70,28 +71,29 @@ fn digit(c: u8) -> f32 {
 /// (n·2π/36, folded into ±π). A tree within 1 m (horizontally) of the origin is the net post: it stands unrotated
 /// at the origin, and the flag that marks it is returned.
 pub fn place(category: u8, pos: [f32; 3], yaw: f32, code: [u8; 4]) -> (M4, bool) {
+    const NEG_PI: f32 = -PI;
     let mut m = IDENTITY;
     m[3] = [pos[0], pos[1], pos[2], 1.0];
     m = mat_mul(&mat_mul(&IDENTITY, &rot_y(yaw)), &m);
     if (17..=19).contains(&category) {
         if code[1] != 0 {
-            let mut a = ps2::div(ps2::mul(PI, digit(code[1])), 36.0);
+            let mut a = F(PI) * digit(code[1]) / 36.0;
             if a > HALF_PI {
-                a = ps2::add(a, -PI);
+                a = a + NEG_PI;
             }
-            m = mat_mul(&mat_mul(&IDENTITY, &rot_x(a)), &m);
+            m = mat_mul(&mat_mul(&IDENTITY, &rot_x(a.0)), &m);
         }
         if code[0] != 0 {
-            let mut a = ps2::div(ps2::mul(TWO_PI, digit(code[0])), 36.0);
+            let mut a = F(TWO_PI) * digit(code[0]) / 36.0;
             if a > PI {
-                a = ps2::sub(a, TWO_PI);
-            } else if a < -PI {
-                a = ps2::add(TWO_PI, a);
+                a = a - TWO_PI;
+            } else if a < NEG_PI {
+                a = TWO_PI + a;
             }
-            m = mat_mul(&mat_mul(&IDENTITY, &rot_y(a)), &m);
+            m = mat_mul(&mat_mul(&IDENTITY, &rot_y(a.0)), &m);
         }
     }
-    if category == 17 && ps2::sqrt(ps2::madd(ps2::mul(m[3][2], m[3][2]), m[3][0], m[3][0])) < 1.0 {
+    if category == 17 && (F(m[3][2]) * m[3][2]).madd(m[3][0], m[3][0]).sqrt() < 1.0 {
         return (IDENTITY, true);
     }
     (m, false)
@@ -120,15 +122,15 @@ pub fn instance(world: M4, scale: f32, local: &M4, center: V4, radius: f32) -> P
         let mut s = world;
         for row in &mut s[..3] {
             for v in &mut row[..3] {
-                *v = vu0::mul(*v, scale);
+                *v = (Vf(*v) * scale).0;
             }
         }
-        let k = ps2::div(1.0, scale);
+        let k = (1.0 / F(scale)).0;
         let d = [[k, 0.0, 0.0, 0.0], [0.0, k, 0.0, 0.0], [0.0, 0.0, k, 0.0], [0.0, 0.0, 0.0, 1.0]];
         (s, mat_mul(&inverse(&world), &d))
     };
     let node = mat_mul(local, &scaled);
-    Prop { world, to_model, node, node_unscaled: mat_mul(local, &world), center: vu0::transform(&node, center), radius: ps2::mul(scale, radius) }
+    Prop { world, to_model, node, node_unscaled: mat_mul(local, &world), center: vu0::transform(&node, center), radius: (F(scale) * radius).0 }
 }
 
 /// Order of the game's prop list for `n` props created in order: the first, then the rest newest first
@@ -164,14 +166,14 @@ impl Grid {
 
 /// Cell index of a coordinate: floor-like for negatives by stepping one cell down first, then truncating.
 pub fn cell_of(v: f32) -> i32 {
-    let v = if v < 0.0 { ps2::sub(v, CELL) } else { v };
-    ps2::div(v, CELL) as i32
+    let v = if v < 0.0 { F(v) - CELL } else { F(v) };
+    (v / CELL).0 as i32
 }
 
 fn bounds(spheres: impl Iterator<Item = (V4, f32)>) -> ([f32; 3], [f32; 3]) {
-    let (mut lo, mut hi) = ([f32::MAX; 3], [-f32::MAX; 3]);
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for (c, r) in spheres {
-        for p in [std::array::from_fn::<f32, 3, _>(|k| ps2::sub(c[k], r)), std::array::from_fn(|k| ps2::add(c[k], r))] {
+        for p in [std::array::from_fn::<f32, 3, _>(|k| (F(c[k]) - r).0), std::array::from_fn(|k| (F(c[k]) + r).0)] {
             for k in 0..3 {
                 if p[k] < lo[k] {
                     lo[k] = p[k];

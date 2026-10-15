@@ -1,7 +1,8 @@
 //! The game's `sinf`, `cosf`, `tanf`, `acosf`, `atanf` and `atan2f` (fdlibm's float versions as compiled into the original, with its own
 //! rounding of the constants), on PS2 float arithmetic.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2::{add, div, mul, sub};
+use crate::ps2::F;
 
 const fn f(b: u32) -> f32 {
     f32::from_bits(b)
@@ -13,41 +14,43 @@ fn trunc_i(x: f32) -> i32 {
 }
 
 /// __kernel_sinf(x, y, iy).
-fn k_sin(x: f32, y: f32, iy: bool) -> f32 {
+fn k_sin(x: f32, y: f32, iy: bool) -> F {
     if x.to_bits() & 0x7fff_ffff <= 0x31ff_ffff && trunc_i(x) == 0 {
-        return x;
+        return F(x);
     }
-    let z = mul(x, x);
-    let v = mul(z, x);
-    let mut r = add(mul(z, f(0x2f2e_c9d2)), f(0xb2d7_2f34));
-    r = add(mul(z, r), f(0x3638_ef1a));
-    r = add(mul(z, r), f(0xb950_0d01));
-    r = add(mul(z, r), f(0x3c08_8889));
+    let (x, y) = (F(x), F(y));
+    let z = x * x;
+    let v = z * x;
+    let mut r = z * f(0x2f2e_c9d2) + f(0xb2d7_2f34);
+    r = z * r + f(0x3638_ef1a);
+    r = z * r + f(0xb950_0d01);
+    r = z * r + f(0x3c08_8889);
     if !iy {
-        add(x, mul(v, add(mul(z, r), f(0xbe2a_aaaa))))
+        x + v * (z * r + f(0xbe2a_aaaa))
     } else {
-        sub(x, sub(sub(mul(z, sub(mul(y, 0.5), mul(v, r))), y), mul(v, f(0xbe2a_aaaa))))
+        x - (z * (y * 0.5 - v * r) - y - v * f(0xbe2a_aaaa))
     }
 }
 
 /// __kernel_cosf(x, y).
-fn k_cos(x: f32, y: f32) -> f32 {
+fn k_cos(x: f32, y: f32) -> F {
     let ix = x.to_bits() & 0x7fff_ffff;
     if ix <= 0x31ff_ffff && trunc_i(x) == 0 {
-        return 1.0;
+        return F::ONE;
     }
-    let z = mul(x, x);
-    let mut r = add(mul(z, f(0xad47_d74e)), f(0x310f_74f5));
-    r = add(mul(z, r), f(0xb493_f27b));
-    r = add(mul(z, r), f(0x37d0_0d00));
-    r = add(mul(z, r), f(0xbab6_0b60));
-    r = add(mul(z, r), f(0x3d2a_aaaa));
-    let zr = mul(z, r);
+    let (x, y) = (F(x), F(y));
+    let z = x * x;
+    let mut r = z * f(0xad47_d74e) + f(0x310f_74f5);
+    r = z * r + f(0xb493_f27b);
+    r = z * r + f(0x37d0_0d00);
+    r = z * r + f(0xbab6_0b60);
+    r = z * r + f(0x3d2a_aaaa);
+    let zr = z * r;
     if ix <= 0x3e99_9999 {
-        sub(1.0, sub(mul(z, 0.5), sub(mul(z, zr), mul(x, y))))
+        1.0 - (z * 0.5 - (z * zr - x * y))
     } else {
         let qx = if ix > 0x3f48_0000 { f(0x3e90_0000) } else { f(ix - 0x0100_0000) };
-        sub(sub(1.0, qx), sub(sub(mul(z, 0.5), qx), sub(mul(z, zr), mul(x, y))))
+        F::ONE - qx - (z * 0.5 - qx - (z * zr - x * y))
     }
 }
 
@@ -66,80 +69,82 @@ fn rem_pio2(x: f32) -> (i32, f32, f32) {
         (f(0x3fc9_0f80), f(0x3735_4442), f(0x3735_43ff), f(0x2e85_a308), f(0x2e85_a300), f(0x248d_3131));
     if ix <= 0x4016_cbe3 {
         // |x| ~<= 3π/4: one step
-        let s = if hx > 0 { 1.0 } else { -1.0 };
-        let mut z = add(x, -s * p1);
+        let s = if hx > 0 { F::ONE } else { F(-1.0) };
+        let mut z = x + -s * p1;
         let (y0, y1) = if ix & !0xf != 0x3fc9_0fd0 {
-            let y0 = add(z, -s * p1t);
-            (y0, add(sub(z, y0), -s * p1t))
+            let y0 = z + -s * p1t;
+            (y0, z - y0 + -s * p1t)
         } else {
-            z = add(z, -s * p2);
-            let y0 = add(z, -s * p2t);
-            (y0, add(sub(z, y0), -s * p2t))
+            z += -s * p2;
+            let y0 = z + -s * p2t;
+            (y0, z - y0 + -s * p2t)
         };
-        return (if hx > 0 { 1 } else { -1 }, y0, y1);
+        return (if hx > 0 { 1 } else { -1 }, y0.0, y1.0);
     }
     assert!(ix <= 0x4349_0f80, "sinf argument out of the ported range: {x}");
-    let t = x.abs();
-    let n = trunc_i(add(mul(t, f(0x3f22_f984)), 0.5));
-    let fn_ = n as f32;
-    let mut r = sub(t, mul(fn_, p1));
-    let mut w = mul(fn_, p1t);
-    let mut y0 = sub(r, w);
+    let t = F(x.abs());
+    let n = trunc_i((t * f(0x3f22_f984) + 0.5).0);
+    let fn_ = F(n as f32);
+    let mut r = t - fn_ * p1;
+    let mut w = fn_ * p1t;
+    let mut y0 = r - w;
     if !(n < 32 && (ix as u32 & 0xffff_ff00) != NPIO2_HW[n as usize - 1]) {
         let j = ix >> 23;
-        let i = j - ((y0.to_bits() >> 23) & 0xff) as i32;
+        let i = j - ((y0.0.to_bits() >> 23) & 0xff) as i32;
         if i > 8 {
             let t0 = r;
-            w = mul(fn_, p2);
-            r = sub(t0, w);
-            w = sub(mul(fn_, p2t), sub(sub(t0, r), w));
-            y0 = sub(r, w);
-            let i = j - ((y0.to_bits() >> 23) & 0xff) as i32;
+            w = fn_ * p2;
+            r = t0 - w;
+            w = fn_ * p2t - (t0 - r - w);
+            y0 = r - w;
+            let i = j - ((y0.0.to_bits() >> 23) & 0xff) as i32;
             if i > 25 {
                 let t0 = r;
-                w = mul(fn_, p3);
-                r = sub(t0, w);
-                w = sub(mul(fn_, p3t), sub(sub(t0, r), w));
-                y0 = sub(r, w);
+                w = fn_ * p3;
+                r = t0 - w;
+                w = fn_ * p3t - (t0 - r - w);
+                y0 = r - w;
             }
         }
     }
-    let y1 = sub(sub(r, y0), w);
-    if hx < 0 { (-n, -y0, -y1) } else { (n, y0, y1) }
+    let y1 = r - y0 - w;
+    if hx < 0 { (-n, (-y0).0, (-y1).0) } else { (n, y0.0, y1.0) }
 }
 
 pub fn sinf(x: f32) -> f32 {
     if !x.is_finite() {
         // NaN for NaN and ±inf, as fdlibm (a mod's degenerate pose can feed one in)
-        return x - x;
+        return (F(x) - x).0;
     }
     if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fd8 {
-        return k_sin(x, 0.0, false);
+        return k_sin(x, 0.0, false).0;
     }
     let (n, y0, y1) = rem_pio2(x);
-    match n & 3 {
+    let r = match n & 3 {
         0 => k_sin(y0, y1, true),
         1 => k_cos(y0, y1),
         2 => -k_sin(y0, y1, true),
         _ => -k_cos(y0, y1),
-    }
+    };
+    r.0
 }
 
 pub fn cosf(x: f32) -> f32 {
     if !x.is_finite() {
         // NaN for NaN and ±inf, as fdlibm (a mod's degenerate pose can feed one in)
-        return x - x;
+        return (F(x) - x).0;
     }
     if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fd8 {
-        return k_cos(x, 0.0);
+        return k_cos(x, 0.0).0;
     }
     let (n, y0, y1) = rem_pio2(x);
-    match n & 3 {
+    let r = match n & 3 {
         0 => k_cos(y0, y1),
         1 => -k_sin(y0, y1, true),
         2 => -k_cos(y0, y1),
         _ => k_sin(y0, y1, true),
-    }
+    };
+    r.0
 }
 
 const TAN_T: [u32; 13] = [
@@ -148,50 +153,50 @@ const TAN_T: [u32; 13] = [
 ];
 
 /// __kernel_tanf(x, y, iy): tan(x + y) for iy 1, −1/tan for iy −1.
-fn k_tan(x: f32, y: f32, iy: i32) -> f32 {
+fn k_tan(x: f32, y: f32, iy: i32) -> F {
     let hx = x.to_bits() as i32;
     let ix = hx & 0x7fff_ffff;
     if ix <= 0x317f_ffff && trunc_i(x) == 0 {
-        return if ix | (iy + 1) == 0 { div(1.0, x.abs()) } else if iy == 1 { x } else { div(-1.0, x) };
+        return if ix | (iy + 1) == 0 { 1.0 / F(x.abs()) } else if iy == 1 { F(x) } else { -1.0 / F(x) };
     }
     let big = ix > 0x3f2c_a13f;
     let (x, y) = if big {
-        let (x, y) = if hx < 0 { (-x, -y) } else { (x, y) };
-        (add(sub(f(0x3f49_0fda), x), sub(f(0x3322_2167), y)), 0.0)
+        let (x, y) = if hx < 0 { (-F(x), -F(y)) } else { (F(x), F(y)) };
+        (f(0x3f49_0fda) - x + (f(0x3322_2167) - y), F::ZERO)
     } else {
-        (x, y)
+        (F(x), F(y))
     };
     let t = TAN_T.map(f);
-    let z = mul(x, x);
-    let w = mul(z, z);
-    let s = mul(z, x);
-    let r = add(t[1], mul(w, add(t[3], mul(w, add(t[5], mul(w, add(t[7], mul(w, add(t[9], mul(w, t[11]))))))))));
-    let v = mul(z, add(t[2], mul(w, add(t[4], mul(w, add(t[6], mul(w, add(t[8], mul(w, add(t[10], mul(w, t[12])))))))))));
-    let r = add(add(y, mul(z, add(mul(s, add(r, v)), y))), mul(t[0], s));
-    let w = add(x, r);
+    let z = x * x;
+    let w = z * z;
+    let s = z * x;
+    let r = t[1] + w * (t[3] + w * (t[5] + w * (t[7] + w * (t[9] + w * t[11]))));
+    let v = z * (t[2] + w * (t[4] + w * (t[6] + w * (t[8] + w * (t[10] + w * t[12])))));
+    let r = y + z * (s * (r + v) + y) + t[0] * s;
+    let w = x + r;
     if big {
         let v = iy as f32;
         let sign = (1 - ((hx >> 30) & 2)) as f32;
-        return mul(sign, sub(v, { let d = sub(x, sub(div(mul(w, w), add(w, v)), r)); add(d, d) }));
+        return sign * (v - { let d = x - (w * w / (w + v) - r); d + d });
     }
     if iy == 1 {
         return w;
     }
     // −1/w, the reciprocal refined from its high half
-    let chop = |a: f32| f(a.to_bits() & 0xffff_f000);
+    let chop = |a: F| F(f(a.0.to_bits() & 0xffff_f000));
     let z = chop(w);
-    let v = sub(r, sub(z, x));
-    let a = div(-1.0, w);
+    let v = r - (z - x);
+    let a = -1.0 / w;
     let t = chop(a);
-    add(t, mul(a, add(add(mul(t, z), 1.0), mul(t, v))))
+    t + a * (t * z + 1.0 + t * v)
 }
 
 pub fn tanf(x: f32) -> f32 {
     if x.to_bits() & 0x7fff_ffff <= 0x3f49_0fda {
-        return k_tan(x, 0.0, 1);
+        return k_tan(x, 0.0, 1).0;
     }
     let (n, y0, y1) = rem_pio2(x);
-    k_tan(y0, y1, 1 - ((n & 1) << 1))
+    k_tan(y0, y1, 1 - ((n & 1) << 1)).0
 }
 
 const ATAN_HI: [u32; 4] = [0x3eed6338, 0x3f490fda, 0x3f7b985d, 0x3fc90fda];
@@ -205,35 +210,35 @@ pub fn atanf(x0: f32) -> f32 {
     let hx = x0.to_bits() as i32;
     let ix = hx & 0x7fff_ffff;
     if ix > 0x507f_ffff {
-        let (hi, lo) = (f(ATAN_HI[3]), f(ATAN_LO[3]));
-        return if hx > 0 { add(hi, lo) } else { sub(-hi, lo) };
+        let (hi, lo) = (F(f(ATAN_HI[3])), f(ATAN_LO[3]));
+        return if hx > 0 { (hi + lo).0 } else { (-hi - lo).0 };
     }
     let (x, id) = if ix <= 0x3edf_ffff {
-        if ix <= 0x30ff_ffff && 1.0 < add(x0, f(0x7149_f2c9)) {
+        if ix <= 0x30ff_ffff && 1.0 < F(x0) + f(0x7149_f2c9) {
             return x0;
         }
-        (x0, -1)
+        (F(x0), -1)
     } else {
-        let x = x0.abs();
+        let x = F(x0.abs());
         if ix <= 0x3f97_ffff {
-            if ix <= 0x3f2f_ffff { (div(sub(add(x, x), 1.0), add(x, 2.0)), 0) } else { (div(sub(x, 1.0), add(x, 1.0)), 1) }
+            if ix <= 0x3f2f_ffff { ((x + x - 1.0) / (x + 2.0), 0) } else { ((x - 1.0) / (x + 1.0), 1) }
         } else if ix <= 0x401b_ffff {
-            (div(sub(x, 1.5), add(mul(x, 1.5), 1.0)), 2)
+            ((x - 1.5) / (x * 1.5 + 1.0), 2)
         } else {
-            (div(-1.0, x), 3)
+            (-1.0 / x, 3)
         }
     };
     let a = AT.map(f);
-    let z = mul(x, x);
-    let w = mul(z, z);
-    let s1 = mul(z, add(a[0], mul(w, add(a[2], mul(w, add(a[4], mul(w, add(a[6], mul(w, add(a[8], mul(w, a[10])))))))))));
-    let s2 = mul(w, add(a[1], mul(w, add(a[3], mul(w, add(a[5], mul(w, add(a[7], mul(w, a[9])))))))));
+    let z = x * x;
+    let w = z * z;
+    let s1 = z * (a[0] + w * (a[2] + w * (a[4] + w * (a[6] + w * (a[8] + w * a[10])))));
+    let s2 = w * (a[1] + w * (a[3] + w * (a[5] + w * (a[7] + w * a[9]))));
     if id < 0 {
-        return sub(x, mul(x, add(s1, s2)));
+        return (x - x * (s1 + s2)).0;
     }
     let id = id as usize;
-    let z = sub(f(ATAN_HI[id]), sub(sub(mul(x, add(s1, s2)), f(ATAN_LO[id])), x));
-    if hx < 0 { -z } else { z }
+    let z = f(ATAN_HI[id]) - (x * (s1 + s2) - f(ATAN_LO[id]) - x);
+    if hx < 0 { (-z).0 } else { z.0 }
 }
 
 /// atan2f(y, x); denormals count as zero.
@@ -250,27 +255,28 @@ pub fn atan2f(y: f32, x: f32) -> f32 {
     if iy <= 0x007f_ffff {
         match m {
             2 => return f(PI),
-            3 => return -f(PI),
+            3 => return (-F(f(PI))).0,
             _ => return y,
         }
     }
     if ix <= 0x007f_ffff {
-        return if hy < 0 { -f(HALF_PI) } else { f(HALF_PI) };
+        return if hy < 0 { (-F(f(HALF_PI))).0 } else { f(HALF_PI) };
     }
     let k = (iy - ix) >> 23;
     let z = if k >= 61 {
-        f(HALF_PI)
+        F(f(HALF_PI))
     } else if hx < 0 && k < -60 {
-        0.0
+        F::ZERO
     } else {
-        atanf(div(y, x).abs())
+        F(atanf((F(y) / x).0.abs()))
     };
-    match m {
+    let r = match m {
         0 => z,
         1 => -z,
-        2 => sub(f(PI), sub(z, f(PI_LO))),
-        _ => sub(sub(z, f(PI_LO)), f(PI)),
-    }
+        2 => f(PI) - (z - f(PI_LO)),
+        _ => z - f(PI_LO) - f(PI),
+    };
+    r.0
 }
 
 /// acosf(x): fdlibm's float version as the original compiled it (its sqrtf is the exact bit-by-bit one).
@@ -279,17 +285,19 @@ pub fn acosf(x: f32) -> f32 {
     const PIO2_HI: f32 = f(0x3fc9_0fda);
     const PIO2_LO: f32 = f(0x33a2_2168);
     // p(z)/q(z) with the game's constant order: p = z·(pS0 + z·(pS1 + … z·pS5)), q = 1 + z·(qS1 + … z·qS4)
-    let pq = |z: f32| {
-        let mut p = add(mul(z, f(0x3811_ef08)), f(0x3a4f_7f04));
+    let pq = |z: F| {
+        let mut p = z * f(0x3811_ef08) + f(0x3a4f_7f04);
         for c in [0xbd24_1146, 0x3e4e_0aa8, 0xbea6_b08f, 0x3e2a_aaaa] {
-            p = add(mul(z, p), f(c));
+            p = z * p + f(c);
         }
-        let mut q = add(mul(z, f(0x3d9d_c62d)), f(0xbf30_3360));
+        let mut q = z * f(0x3d9d_c62d) + f(0xbf30_3360);
         for c in [0x4001_572c, 0xc019_d138] {
-            q = add(mul(z, q), f(c));
+            q = z * q + f(c);
         }
-        div(mul(z, p), add(mul(z, q), 1.0))
+        z * p / (z * q + 1.0)
     };
+    // its sqrtf: correctly rounded, like the host's
+    let sqrtf = |z: F| F(z.0.sqrt());
     let hx = x.to_bits() as i32;
     let ix = hx & 0x7fff_ffff;
     if ix == 0x3f80_0000 {
@@ -298,45 +306,45 @@ pub fn acosf(x: f32) -> f32 {
     if ix > 0x3f80_0000 {
         return f32::NAN;
     }
+    let x = F(x);
     if ix < 0x3f00_0000 {
         if ix <= 0x2300_0000 {
             return PIO2_HI;
         }
-        let r = pq(mul(x, x));
-        return sub(PIO2_HI, sub(x, sub(PIO2_LO, mul(x, r))));
+        let r = pq(x * x);
+        return (PIO2_HI - (x - (PIO2_LO - x * r))).0;
     }
     if hx < 0 {
-        let z = mul(add(x, 1.0), 0.5);
+        let z = (x + 1.0) * 0.5;
         let r = pq(z);
-        let s = z.sqrt();
-        let w = sub(mul(r, s), PIO2_LO);
-        let t = add(s, w);
-        return sub(PI, add(t, t));
+        let s = sqrtf(z);
+        let w = r * s - PIO2_LO;
+        let t = s + w;
+        return (PI - (t + t)).0;
     }
-    let z = mul(sub(1.0, x), 0.5);
-    let s = z.sqrt();
-    let df = f(s.to_bits() & 0xffff_f000);
-    let c = div(sub(z, mul(df, df)), add(s, df));
+    let z = (1.0 - x) * 0.5;
+    let s = sqrtf(z);
+    let df = F(f(s.0.to_bits() & 0xffff_f000));
+    let c = (z - df * df) / (s + df);
     let r = pq(z);
-    let t = add(df, add(mul(r, s), c));
-    add(t, t)
+    let t = df + (r * s + c);
+    (t + t).0
 }
 
-fn hi(x: f32) -> f32 {
-    f(x.to_bits() & 0xffff_f000)
+fn hi(x: F) -> F {
+    F(f(x.0.to_bits() & 0xffff_f000))
 }
 
 /// __ieee754_powf(x, y) for x > 0 and y of moderate size (the game raises speeds to 1.1). It is fdlibm's,
 /// as compiled into the original: its own constant roundings and the old `t_h` seed (`+ 0x40000`, unmasked).
 pub fn powf(x: f32, y: f32) -> f32 {
-    use crate::ps2::{div, sub};
     if y == 0.5 && x.is_sign_positive() && x.is_finite() {
         return x.sqrt(); // its sqrtf: the exact bit-by-bit one
     }
     // a negative x to a fractional power is fdlibm's (x − x) / (x − x): 0/0, +max on the EE (a swing trail with no
     // frames left asks it)
     if x < 0.0 && x.to_bits() & 0x7fff_ffff >= 0x80_0000 && x != -1.0 && y.fract() != 0.0 && y.abs() < 1.0e8 {
-        return div(sub(x, x), sub(x, x));
+        return ((F(x) - x) / (F(x) - x)).0;
     }
     // ponytail: x ≤ 0 otherwise, |y| ≥ 2^27, |x| near 1 with huge y and over/underflow aren't ported; the game never asks
     assert!(x > 0.0 && x.is_finite() && y.abs() < 1.0e8, "powf({x}, {y})");
@@ -347,10 +355,7 @@ pub fn powf(x: f32, y: f32) -> f32 {
         return x;
     }
     if y == 2.0 {
-        return crate::ps2::mul(x, x);
-    }
-    if y == 2.0 {
-        return mul(x, x);
+        return (F(x) * x).0;
     }
     let (bp, dp_h, dp_l) = ([1.0, 1.5], [0.0, f(0x3f15_c000)], [0.0, f(0x35d1_cfdc)]);
     let ix = x.to_bits();
@@ -366,69 +371,70 @@ pub fn powf(x: f32, y: f32) -> f32 {
         ix -= 0x80_0000;
         0
     };
-    let ax = f(ix);
+    let ax = F(f(ix));
     // log2(ax) as t1 + t2
-    let u = sub(ax, bp[k]);
-    let v = div(1.0, add(ax, bp[k]));
-    let ss = mul(u, v);
+    let u = ax - bp[k];
+    let v = 1.0 / (ax + bp[k]);
+    let ss = u * v;
     let s_h = hi(ss);
-    let t_h = f(((ix >> 1) | 0x2000_0000) + ((k as u32) << 21) + 0x4_0000);
-    let t_l = sub(ax, sub(t_h, bp[k]));
-    let s_l = mul(v, sub(sub(u, mul(s_h, t_h)), mul(s_h, t_l)));
-    let s2 = mul(ss, ss);
-    let mut r = f(0x3e53_f142);
+    let t_h = F(f(((ix >> 1) | 0x2000_0000) + ((k as u32) << 21) + 0x4_0000));
+    let t_l = ax - (t_h - bp[k]);
+    let s_l = v * (u - s_h * t_h - s_h * t_l);
+    let s2 = ss * ss;
+    let mut r = F(f(0x3e53_f142));
     for c in [0x3e6c_3254, 0x3e8b_a304, 0x3eaa_aaab, 0x3edb_6db7, 0x3f19_9999] {
-        r = add(mul(s2, r), f(c));
+        r = s2 * r + f(c);
     }
-    let r = add(mul(mul(s2, s2), r), mul(s_l, add(s_h, ss)));
-    let s2 = mul(s_h, s_h);
-    let t_h = hi(add(add(s2, 3.0), r));
-    let t_l = sub(r, sub(sub(t_h, 3.0), s2));
-    let u = mul(s_h, t_h);
-    let v = add(mul(s_l, t_h), mul(t_l, ss));
-    let p_h = hi(add(u, v));
-    let p_l = sub(v, sub(p_h, u));
-    let z_h = mul(p_h, f(0x3f76_3800));
-    let z_l = add(add(mul(p_h, f(0x369d_c39f)), mul(p_l, f(0x3f76_384e))), dp_l[k]);
+    let r = s2 * s2 * r + s_l * (s_h + ss);
+    let s2 = s_h * s_h;
+    let t_h = hi(s2 + 3.0 + r);
+    let t_l = r - (t_h - 3.0 - s2);
+    let u = s_h * t_h;
+    let v = s_l * t_h + t_l * ss;
+    let p_h = hi(u + v);
+    let p_l = v - (p_h - u);
+    let z_h = p_h * f(0x3f76_3800);
+    let z_l = p_h * f(0x369d_c39f) + p_l * f(0x3f76_384e) + dp_l[k];
     let t = n as f32;
-    let t1 = hi(add(add(add(z_h, z_l), dp_h[k]), t));
-    let t2 = sub(z_l, sub(sub(sub(t1, t), dp_h[k]), z_h));
+    let t1 = hi(z_h + z_l + dp_h[k] + t);
+    let t2 = z_l - (t1 - t - dp_h[k] - z_h);
     // y·log2(x) as p_h + p_l, then 2^that
-    let y1 = hi(y);
-    let p_l = add(mul(sub(y, y1), t1), mul(y, t2));
-    let mut p_h = mul(y1, t1);
-    let z = add(p_l, p_h);
-    let jz = z.to_bits() as i32;
+    let y1 = hi(F(y));
+    let p_l = (y - y1) * t1 + y * t2;
+    let mut p_h = y1 * t1;
+    let z = p_l + p_h;
+    let jz = z.0.to_bits() as i32;
     let i = jz & 0x7fff_ffff;
     assert!(i < 0x42fc_0000, "powf({x}, {y}) out of range");
     let mut n = 0;
     if i > 0x3f00_0000 {
         let m = jz + (0x80_0000 >> ((i >> 23) - 0x7e));
         let e = ((m >> 23) & 0xff) - 0x7f;
-        p_h = sub(p_h, f((m & !(0x7f_ffff >> e)) as u32));
+        p_h -= f((m & !(0x7f_ffff >> e)) as u32);
         n = ((m & 0x7f_ffff) | 0x80_0000) >> (23 - e);
         if jz < 0 {
             n = -n;
         }
     }
-    let t = hi(add(p_l, p_h));
-    let v = add(mul(sub(p_l, sub(t, p_h)), f(0x3f31_7217)), mul(t, f(0x35bf_be8c)));
-    let z = add(mul(t, f(0x3f31_7200)), v);
-    let w = sub(v, sub(z, mul(t, f(0x3f31_7200))));
-    let t = mul(z, z);
-    let mut r = f(0x3331_bb4b);
+    let t = hi(p_l + p_h);
+    let v = (p_l - (t - p_h)) * f(0x3f31_7217) + t * f(0x35bf_be8c);
+    let z = t * f(0x3f31_7200) + v;
+    let w = v - (z - t * f(0x3f31_7200));
+    let t = z * z;
+    let mut r = F(f(0x3331_bb4b));
     for c in [0xb5dd_ea0e, 0x388a_b354, 0xbb36_0b60, 0x3e2a_aaaa] {
-        r = add(mul(t, r), f(c));
+        r = t * r + f(c);
     }
-    let t1 = sub(z, mul(t, r));
-    let r = sub(div(mul(z, t1), sub(t1, 2.0)), add(w, mul(z, w)));
-    let z = sub(1.0, sub(r, z));
-    let j = z.to_bits() as i32 + (n << 23);
+    let t1 = z - t * r;
+    let r = z * t1 / (t1 - 2.0) - (w + z * w);
+    let z = 1.0 - (r - z);
+    let j = z.0.to_bits() as i32 + (n << 23);
     assert!(j >> 23 > 0, "powf({x}, {y}) underflows");
     f(j as u32)
 }
 
 #[cfg(test)]
+#[allow(clippy::float_arithmetic)] // host references
 mod tests {
     #[test]
     fn close_to_host_pow() {
@@ -467,26 +473,29 @@ mod tests {
 /// The game's table sine: a quarter turn in 256 steps (sin rounded to six decimals; nine steps a millionth off),
 /// read linearly between steps.
 pub fn table_sin(x: f32) -> f32 {
-    use crate::ps2::{add, madd, mul, sub};
     static TABLE: std::sync::OnceLock<[f32; 258]> = std::sync::OnceLock::new();
-    let t = TABLE.get_or_init(|| {
-        std::array::from_fn(|i| {
-            if i > 256 {
-                return 0.0;
-            }
-            let off = match i {
-                59 => -1.0,
-                79 | 93 | 110 | 145 | 209 | 214 | 226 | 248 => 1.0,
-                _ => 0.0,
-            };
-            (((musl::sin(i as f64 * std::f64::consts::PI / 512.0) * 1e6).round() + off) / 1e6) as f32
-        })
-    });
-    let (sign, mut x) = if x < 0.0 { (-1.0, -x) } else { (1.0, x) };
+    let t = TABLE.get_or_init(sin_table);
+    let (sign, mut x) = if x < 0.0 { (-1.0, -F(x)) } else { (1.0, F(x)) };
     if x > std::f32::consts::FRAC_PI_2 {
-        x = sub(std::f32::consts::PI, x);
+        x = std::f32::consts::PI - x;
     }
-    let at = mul(f32::from_bits(0x4322_f983), x);
-    let i = at as i32 as usize;
-    mul(sign, madd(add(0.0, t[i]), sub(at, i as f32), sub(t[i + 1], t[i])))
+    let at = f(0x4322_f983) * x;
+    let i = at.0 as i32 as usize;
+    (sign * (F::ZERO + t[i]).madd(at - i as f32, F(t[i + 1]) - t[i])).0
+}
+
+/// `table_sin`'s table, rebuilt in host f64: the game ships it as data.
+#[allow(clippy::float_arithmetic)]
+fn sin_table() -> [f32; 258] {
+    std::array::from_fn(|i| {
+        if i > 256 {
+            return 0.0;
+        }
+        let off = match i {
+            59 => -1.0,
+            79 | 93 | 110 | 145 | 209 | 214 | 226 | 248 => 1.0,
+            _ => 0.0,
+        };
+        (((musl::sin(i as f64 * std::f64::consts::PI / 512.0) * 1e6).round() + off) / 1e6) as f32
+    })
 }

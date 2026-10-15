@@ -4,9 +4,12 @@
 //! view orbits a subject frame (a player's ground spot facing the way they face), sits at the shot's distance
 //! with the framing offset, then widens and tilts so the subject's head stays in the picture, and keeps clear of
 //! the ground. Game space (Y down); views are rows right, down, forward and an eye, as [`crate::camera::View`].
-//! Plain f32 like the match camera: the view never feeds back into play.
+//! Arithmetic through `ps2::F` like the match camera: the view never feeds back into play.
+
+#![deny(clippy::float_arithmetic)]
 
 use crate::camera::View;
+use crate::ps2::{F, fs};
 pub use hst_data::exe::{CameraShot, ReplayCameras};
 
 pub type M4 = [[f32; 4]; 4];
@@ -61,15 +64,15 @@ fn compile(script: &[(u8, f32)], mirror: bool) -> Vec<Vec<Key>> {
             break;
         }
         let mut v = match op {
-            0x0e => v * 0.008726646,
-            0x0f | 0x0c | 0x0b | 0x07 | 0x06 | 0x05 => v * 0.017453292,
+            0x0e => (F(v) * 0.008726646).0,
+            0x0f | 0x0c | 0x0b | 0x07 | 0x06 | 0x05 => (F(v) * 0.017453292).0,
             _ => v,
         };
         if op == 0x0b || op == 0x02 {
-            v = -v;
+            v = (-F(v)).0;
         }
         if mirror && matches!(op, 8 | 0x0f | 4 | 0x0c | 3 | 7 | 6 | 1) {
-            v = -v;
+            v = (-F(v)).0;
         }
         if op == 0x0e {
             fov = v;
@@ -81,7 +84,7 @@ fn compile(script: &[(u8, f32)], mirror: bool) -> Vec<Vec<Key>> {
     let mut keys: Vec<Vec<Key>> = vec![Vec::new(); CHANNELS];
     let mut count = [0usize; CHANNELS];
     let (mut kind, mut time, mut ease, mut ease_out, mut timed) = (0u8, 0.0f32, 1.0f32, 0.0f32, 0);
-    let (mut hfov, mut vfov) = (40.0f32, musl::atanf(musl::tanf(40.0f32) * 0.7));
+    let (mut hfov, mut vfov) = (40.0f32, musl::atanf((F(musl::tanf(40.0)) * 0.7).0));
     let mut first = true;
     for (op, v) in buf {
         match op {
@@ -110,14 +113,14 @@ fn compile(script: &[(u8, f32)], mirror: bool) -> Vec<Vec<Key>> {
         let (ch, value) = match op {
             0x0e => {
                 hfov = v;
-                vfov = musl::atanf(musl::tanf(v) * 0.7);
+                vfov = musl::atanf((F(musl::tanf(v)) * 0.7).0);
                 (0x0e, v)
             }
-            4 => (0x0f, musl::atanf(v * musl::tanf(hfov))),
-            3 => (0x0c, musl::atanf(v * musl::tanf(hfov))),
-            2 => (0x0b, musl::atanf(v * musl::tanf(vfov))),
-            1 => (6, v * hfov),
-            0 => (5, v * vfov),
+            4 => (0x0f, musl::atanf((F(v) * musl::tanf(hfov)).0)),
+            3 => (0x0c, musl::atanf((F(v) * musl::tanf(hfov)).0)),
+            2 => (0x0b, musl::atanf((F(v) * musl::tanf(vfov)).0)),
+            1 => (6, (F(v) * hfov).0),
+            0 => (5, (F(v) * vfov).0),
             op => (op as usize, v),
         };
         if !(5..CHANNELS).contains(&ch) || count[ch] >= 0x20 {
@@ -172,13 +175,13 @@ impl Channel {
     }
 
     fn lerp(&mut self) {
-        let mut t = 1.0 - self.left as f32 / self.frames;
+        let mut t = (1.0 - F(self.left as f32) / self.frames).0;
         let e = if self.ease != 0.0 { self.ease } else { 1.0 };
         if 0.0 < e && 0.0 <= self.ease_out {
-            t = musl::powf(musl::powf(t, musl::powf(1.0 - t, self.ease_out)), e);
+            t = musl::powf(musl::powf(t, musl::powf((1.0 - F(t)).0, self.ease_out)), e);
         }
         let (a, b) = (self.keys[self.to - 1].value, self.keys[self.to].value);
-        self.value = t * (b - a) + a;
+        self.value = (t * (F(b) - a) + a).0;
     }
 
     fn step(&mut self) {
@@ -196,49 +199,55 @@ impl Channel {
 
 /// Row-vector matrix product `b · a` (the game's `dst = b × a`).
 pub(crate) fn mul(a: &M4, b: &M4) -> M4 {
-    std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| b[r][k] * a[k][c]).sum()))
+    std::array::from_fn(|r| {
+        let b = fs(b[r]);
+        std::array::from_fn(|c| (b[0] * a[0][c] + b[1] * a[1][c] + b[2] * a[2][c] + b[3] * a[3][c]).0)
+    })
 }
 pub(crate) fn rot_y(t: f32) -> M4 {
     let (s, c) = musl::sincosf(t);
-    [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    [[c, 0.0, (-F(s)).0, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
 pub(crate) fn rot_x(t: f32) -> M4 {
     let (s, c) = musl::sincosf(t);
-    [[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, -s, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    [[1.0, 0.0, 0.0, 0.0], [0.0, c, s, 0.0], [0.0, (-F(s)).0, c, 0.0], [0.0, 0.0, 0.0, 1.0]]
 }
 pub const IDENTITY: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 /// A point in the camera's frame (x right, y down, z forward).
 fn local(cam: &M4, p: [f32; 3]) -> [f32; 3] {
-    let d = [p[0] - cam[3][0], p[1] - cam[3][1], p[2] - cam[3][2]];
-    std::array::from_fn(|i| d[0] * cam[i][0] + d[1] * cam[i][1] + d[2] * cam[i][2])
+    let d: [F; 3] = std::array::from_fn(|i| F(p[i]) - cam[3][i]);
+    std::array::from_fn(|i| (d[0] * cam[i][0] + d[1] * cam[i][1] + d[2] * cam[i][2]).0)
 }
 
 fn cross(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0], 0.0]
+    let (a, b) = (fs(a), fs(b));
+    [(a[1] * b[2] - a[2] * b[1]).0, (a[2] * b[0] - a[0] * b[2]).0, (a[0] * b[1] - a[1] * b[0]).0, 0.0]
 }
 
 fn normalize(v: [f32; 4]) -> [f32; 4] {
+    let v = fs(v);
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    [v[0] / l, v[1] / l, v[2] / l, 0.0]
+    [(v[0] / l).0, (v[1] / l).0, (v[2] / l).0, 0.0]
 }
 
 /// Vertical angle of `v` above the horizon (Y down).
 pub(crate) fn pitch(v: [f32; 4]) -> f32 {
-    musl::atan2f(-v[1], (v[0] * v[0] + v[2] * v[2]).sqrt())
+    let v = fs(v);
+    musl::atan2f((-v[1]).0, (v[0] * v[0] + v[2] * v[2]).sqrt().0)
 }
 
 /// Wrapped difference a − b.
 pub(crate) fn diff(a: f32, b: f32) -> f32 {
-    use std::f32::consts::TAU;
-    let d = (a + std::f32::consts::PI) - (b + std::f32::consts::PI);
+    use std::f32::consts::{PI, TAU};
+    let d = (F(a) + PI) - (F(b) + PI);
     let (p, m) = (d + TAU, d - TAU);
     if (p.abs() <= d.abs() || m.abs() <= d.abs()) && m.abs() <= p.abs() {
-        m
+        m.0
     } else if p.abs() <= d.abs() || m.abs() <= d.abs() {
-        p
+        p.0
     } else {
-        d
+        d.0
     }
 }
 
@@ -287,7 +296,7 @@ impl Shot {
             c.step();
         }
         if self.byte(0x4c) != 0 && self.byte(0x4d) != 0 {
-            self.yaw_held += self.yaw_over;
+            self.yaw_held = (F(self.yaw_held) + self.yaw_over).0;
         }
         self.build(&frame);
     }
@@ -302,10 +311,11 @@ impl Shot {
         let (p, y) = (pitch(f), musl::atan2f(f[0], f[2]));
         let mut cam = mul(&rot_y(y), &rot_x(p));
         // framing: the eye moves so the subject sits off-centre by the framing angles
-        let a11 = musl::atanf(musl::tanf(self.ch(11)) * musl::cosf(self.ch(12)));
+        let a11 = musl::atanf((F(musl::tanf(self.ch(11))) * musl::cosf(self.ch(12))).0);
         let o = mul(&mul(&cam, &rot_y(self.ch(12))), &rot_x(a11));
         let d = self.ch(13);
-        cam[3] = [basis[3][0] - o[2][0] * d, basis[3][1] - o[2][1] * d, basis[3][2] - o[2][2] * d, 1.0];
+        let eye = |i: usize| (F(basis[3][i]) - F(o[2][i]) * d).0;
+        cam[3] = [eye(0), eye(1), eye(2), 1.0];
         // a second subject (a frame with w ≠ 0): the view turns to face it across the court plane
         let second = frame(self.byte(3))[3];
         if second[3] != 0.0 {
@@ -318,29 +328,29 @@ impl Shot {
             let ch15 = self.ch(15);
             if ch15 != 0.0 {
                 let reach = musl::hypotf(a0[0], a0[2]);
-                let v = [a0[0] - b0[0], 0.0, a0[2] - b0[2]];
-                let gap = musl::hypotf(v[0], v[2]);
+                let v = [F(a0[0]) - b0[0], F::ZERO, F(a0[2]) - b0[2]];
+                let gap = F(musl::hypotf(v[0].0, v[2].0));
                 let ang = diff(ch15, self.ch(12)).abs();
-                let mut beta = musl::asinf(reach * musl::sinf(ang) / gap);
+                let mut beta = musl::asinf((reach * F(musl::sinf(ang)) / gap).0);
                 let side = gap / musl::sinf(ang);
-                let len = (reach + gap).max(side * musl::sinf(PI - (ang + beta)));
+                let len = (reach + gap).max(side * musl::sinf((PI - (F(ang) + beta)).0));
                 if ch15 < self.ch(12) {
-                    beta = -beta;
+                    beta = (-F(beta)).0;
                 }
-                let (sn, cs) = musl::sincosf(-beta);
-                let r = [v[0] * cs + v[2] * sn, 0.0, -v[0] * sn + v[2] * cs];
+                let (sn, cs) = musl::sincosf((-F(beta)).0);
+                let r = [v[0] * cs + v[2] * sn, F::ZERO, -v[0] * sn + v[2] * cs];
                 let inv = 1.0 / (r[0] * r[0] + r[2] * r[2]).sqrt();
-                aim = [r[0] * inv * len + b0[0], 0.0, r[2] * inv * len + b0[2]];
+                aim = [(r[0] * inv * len + b0[0]).0, 0.0, (r[2] * inv * len + b0[2]).0];
             }
-            let (dx, dz) = (b0[0] - aim[0], b0[2] - aim[2]);
-            let mut yaw = musl::atan2f(dx, dz) - ch15;
+            let (dx, dz) = (F(b0[0]) - aim[0], F(b0[2]) - aim[2]);
+            let mut yaw = F(musl::atan2f(dx.0, dz.0)) - ch15;
             if yaw > PI {
                 yaw -= TAU;
-            } else if yaw < -PI {
+            } else if yaw < -F(PI) {
                 yaw += TAU;
             }
             // the turn is made from the aim point: the eye moves there
-            let mut turn = rot_y(yaw);
+            let mut turn = rot_y(yaw.0);
             turn[3] = [aim[0], aim[1], aim[2], 1.0];
             cam = mul(&cam, &turn);
         }
@@ -348,12 +358,12 @@ impl Shot {
         self.fov = self.ch(14);
         // keep the eye above the ground, looking at the subject
         let clear = self.float(0xac);
-        if clear != 0.0 && 0.0 < self.cam[3][1] + clear {
-            let up = self.cam[3][1] + clear;
-            self.cam[3][1] -= up;
-            let l = local(&self.cam, [basis[3][0], basis[3][1], basis[3][2]]);
-            let a = musl::asinf(up / (l[2] * l[2] + l[1] * l[1]).sqrt());
-            self.cam = mul(&self.cam, &rot_x(-a));
+        if clear != 0.0 && 0.0 < F(self.cam[3][1]) + clear {
+            let up = F(self.cam[3][1]) + clear;
+            self.cam[3][1] = (F(self.cam[3][1]) - up).0;
+            let l = fs(local(&self.cam, [basis[3][0], basis[3][1], basis[3][2]]));
+            let a = musl::asinf((up / (l[2] * l[2] + l[1] * l[1]).sqrt()).0);
+            self.cam = mul(&self.cam, &rot_x((-F(a)).0));
         }
         // a second point kept within a vertical band
         let band = self.float(0x90);
@@ -385,12 +395,20 @@ impl Shot {
     /// eased pull. The yaw left over once the pull is at its limit is held for the next frames (record 0x4d).
     fn frame_target(&mut self, frame: &impl Fn(u8) -> M4) {
         use std::f32::consts::{PI, TAU};
-        let wrap = |a: f32| if PI < a { a - TAU } else if a < -PI { a + TAU } else { a };
-        let sign = |a: f32| if a < 0.0 { -1.0 } else { 1.0 };
+        let wrap = |a: F| {
+            if PI < a {
+                a - TAU
+            } else if a < -F(PI) {
+                a + TAU
+            } else {
+                a
+            }
+        };
+        let sign = |a: F| if a < 0.0 { -1.0 } else { 1.0 };
         // ponytail: the record 0x14 blend of these from (4, 1, 1) over 90 frames and the eye move of record 0x49
         // are left out: no cut-away sets them
-        let (p_off, p_dead, p_scale, p_ease) = (self.float(0x50), self.float(0x54), self.float(0x58), self.float(0x5c));
-        let (y_off, y_dead, y_scale, y_ease) = (self.float(0x60), self.float(0x64), self.float(0x68), self.float(0x6c));
+        let [p_off, p_dead, p_scale, p_ease] = [0x50, 0x54, 0x58, 0x5c].map(|o| F(self.float(o)));
+        let [y_off, y_dead, y_scale, y_ease] = [0x60, 0x64, 0x68, 0x6c].map(|o| F(self.float(o)));
         let target = frame(match self.byte(0x48) {
             9 => 19,
             b => b,
@@ -400,28 +418,28 @@ impl Shot {
         if self.byte(0x4c) != 0 && self.byte(0x4d) != 0 {
             let f = r[2];
             let eye = r[3];
-            r = mul(&rot_y(wrap(musl::atan2f(f[0], f[2]) + self.yaw_held)), &rot_x(pitch(f)));
+            r = mul(&rot_y(wrap(F(musl::atan2f(f[0], f[2])) + self.yaw_held).0), &rot_x(pitch(f)));
             r[3] = eye;
         }
         let (fov, vfov) = (self.fov, self.vfov());
-        let d = [target[0] - r[3][0], target[1] - r[3][1], target[2] - r[3][2], target[3] - r[3][3]];
+        let d: [f32; 4] = std::array::from_fn(|i| (F(target[i]) - r[3][i]).0);
         self.yaw_over = 0.0;
         let mut yaw = wrap(y_off * fov + musl::atan2f(r[2][0], r[2][2]));
-        let (mut ey, mut pull_y) = (0.0, 0.0);
+        let (mut ey, mut pull_y) = (F::ZERO, F::ZERO);
         if self.byte(0x4c) != 0 {
-            ey = diff(musl::atan2f(d[0], d[2]), yaw);
+            ey = F(diff(musl::atan2f(d[0], d[2]), yaw.0));
             if y_dead != 0.0 {
-                pull_y = musl::atanf(y_dead * musl::tanf(fov));
+                pull_y = F(musl::atanf((y_dead * musl::tanf(fov)).0));
                 let lim = pull_y * y_scale;
                 if self.byte(0x70) != 0 && 1.0 < ey.abs() / lim {
                     ey = lim * sign(ey);
                 }
                 let mut t = (ey.abs() / lim).min(1.0);
                 if t == 1.0 {
-                    self.yaw_over = diff(ey, lim * sign(ey));
+                    self.yaw_over = diff(ey.0, (lim * sign(ey)).0);
                 }
                 if y_ease != 0.0 {
-                    t = 1.0 - musl::powf(1.0 - t, y_ease);
+                    t = 1.0 - F(musl::powf((1.0 - t).0, y_ease.0));
                 }
                 pull_y = -pull_y * t * sign(ey);
                 ey += pull_y;
@@ -429,18 +447,18 @@ impl Shot {
             yaw = wrap(yaw + wrap(ey));
         }
         let mut pch = wrap(p_off * vfov + pitch(r[2]));
-        let mut ep = 0.0;
+        let mut ep = F::ZERO;
         if self.byte(0x4a) != 0 {
-            let e = diff(pitch(d), pch);
+            let e = F(diff(pitch(d), pch.0));
             if self.byte(0x4b) == 0 || 0.0 <= e {
-                let mut pull = 0.0;
+                let mut pull = F::ZERO;
                 if p_dead != 0.0 {
-                    let a = musl::atanf(p_dead * musl::tanf(vfov));
+                    let a = F(musl::atanf((p_dead * musl::tanf(vfov)).0));
                     let mut t = (e.abs() / (a * p_scale)).min(1.0);
                     if p_ease != 0.0 {
-                        t = 1.0 - musl::powf(1.0 - t, p_ease);
+                        t = 1.0 - F(musl::powf((1.0 - t).0, p_ease.0));
                     }
-                    pull = musl::atanf(musl::tanf(-a * t * sign(e)) * musl::cosf(pull_y));
+                    pull = F(musl::atanf((F(musl::tanf((-a * t * sign(e)).0)) * musl::cosf(pull_y.0)).0));
                 }
                 ep = wrap(e + pull);
             }
@@ -449,7 +467,7 @@ impl Shot {
         if ep == 0.0 && ey == 0.0 {
             return;
         }
-        self.cam = mul(&rot_y(yaw), &rot_x(pch));
+        self.cam = mul(&rot_y(yaw.0), &rot_x(pch.0));
         self.cam[3] = r[3];
     }
 
@@ -470,14 +488,15 @@ impl Shot {
             m[3] = frame(self.byte(2))[3];
         }
         let o = [self.ch(8), self.ch(9), self.ch(10)];
-        let pos: [f32; 4] = std::array::from_fn(|i| m[3][i] + m[2][i] * o[2] + m[0][i] * o[0] + m[1][i] * o[1]);
+        let pos: [f32; 4] =
+            std::array::from_fn(|i| (F(m[3][i]) + F(m[2][i]) * o[2] + F(m[0][i]) * o[0] + F(m[1][i]) * o[1]).0);
         let look = if self.byte(3) != 0 { self.byte(3) } else { self.byte(1) };
         if look == 0 {
             m[3] = pos;
             return m;
         }
         let t = frame(look)[3];
-        let mut z = normalize([t[0] - pos[0], t[1] - pos[1], t[2] - pos[2], t[3] - pos[3]]);
+        let mut z = normalize(std::array::from_fn(|i| (F(t[i]) - pos[i]).0));
         let mut x = normalize(cross(m[1], z));
         let mut y = normalize(cross(z, x));
         if self.byte(5) != 0 {
@@ -489,35 +508,36 @@ impl Shot {
     }
 
     fn vfov(&self) -> f32 {
-        musl::atanf(musl::tanf(self.fov) * 0.7)
+        musl::atanf((F(musl::tanf(self.fov)) * 0.7).0)
     }
 
     /// Widen and tilt up so `point` stays within `amount` of the half-height above centre (35° at most).
     fn head(&mut self, amount: f32, point: [f32; 3]) {
         let vfov = self.vfov();
-        let l = local(&self.cam, point);
+        let l = fs(local(&self.cam, point));
         let z = l[2].abs();
-        let lim = amount * z * musl::tanf(vfov);
+        let lim = F(amount) * z * musl::tanf(vfov);
         let over = -l[1] - lim;
-        let mut d = (musl::atanf((lim + over) / amount / z) - musl::atanf(lim / z)) * 0.5;
-        if 0.610_865_24 < vfov + d {
-            d = 0.610_865_24 - vfov;
+        let mut d = (F(musl::atanf(((lim + over) / amount / z).0)) - musl::atanf((lim / z).0)) * 0.5;
+        if 0.610_865_24 < F(vfov) + d {
+            d = 0.610_865_24 - F(vfov);
         }
         if 0.0 < d {
-            self.fov = musl::atanf(musl::tanf(vfov + d) / 0.7);
-            self.cam = mul(&self.cam, &rot_x(d));
+            self.fov = musl::atanf((F(musl::tanf((F(vfov) + d).0)) / 0.7).0);
+            self.cam = mul(&self.cam, &rot_x(d.0));
         }
     }
 
     /// Tilt so `point` stays above (`below` false) or below the band of `amount` × the vertical half-angle.
     fn band(&mut self, amount: f32, point: [f32; 3], below: bool) {
-        let lim = musl::atanf(amount * musl::tanf(self.vfov()));
-        let v = [point[0] - self.cam[3][0], point[1] - self.cam[3][1], point[2] - self.cam[3][2], 0.0];
+        let lim = -F(musl::atanf((F(amount) * musl::tanf(self.vfov())).0));
+        let d = |i: usize| (F(point[i]) - self.cam[3][i]).0;
+        let v = [d(0), d(1), d(2), 0.0];
         let a = diff(pitch(v), pitch(self.cam[2]));
-        if !below && 0.0 < diff(-lim, a) {
-            self.cam = mul(&self.cam, &rot_x(diff(a, -lim)));
-        } else if below && diff(-lim, a) < 0.0 {
-            self.cam = mul(&self.cam, &rot_x(-diff(-lim, a)));
+        if !below && 0.0 < diff(lim.0, a) {
+            self.cam = mul(&self.cam, &rot_x(diff(a, lim.0)));
+        } else if below && diff(lim.0, a) < 0.0 {
+            self.cam = mul(&self.cam, &rot_x((-F(diff(lim.0, a))).0));
         }
     }
 
@@ -754,14 +774,15 @@ pub fn reaction_spot(p: [f32; 4], motion: usize, character: i32, rows: [[f32; 4]
 pub fn corner_frame(spot: [f32; 4]) -> M4 {
     let mut best = (99.0, [0.0, 0.0]);
     for c in [[-5.485, -11.885], [5.485, -11.885], [-5.485, 11.885], [5.485, 11.885]] {
-        let d = ((c[0] - spot[0]) * (c[0] - spot[0]) + (c[1] - spot[2]) * (c[1] - spot[2])).sqrt();
+        let (dx, dz) = (F(c[0]) - spot[0], F(c[1]) - spot[2]);
+        let d = (dx * dx + dz * dz).sqrt().0;
         if d < best.0 && 5.0 < d {
             best = (d, c);
         }
     }
     let [x, z] = best.1;
     let up = [0.0, 1.0, 0.0, 0.0];
-    let f = normalize([-x, 0.0, -z, 0.0]);
+    let f = normalize([(-F(x)).0, 0.0, (-F(z)).0, 0.0]);
     let r = normalize(cross(up, f));
     [r, up, normalize(cross(r, up)), [x, 0.0, z, 1.0]]
 }
@@ -773,15 +794,15 @@ pub fn corner_frame(spot: [f32; 4]) -> M4 {
 pub fn subject_frames(head: &M4, spine: &M4) -> [M4; 4] {
     let up = [0.0, 1.0, 0.0, 0.0];
     let (h, s) = (head[3], spine[3]);
-    let mut z = [-head[2][0], -head[2][1], -head[2][2], -head[2][3]];
-    if z[0] * -spine[2][0] + z[2] * -spine[2][2] < 0.0 || head[0][1].abs() < 0.4 {
-        z = normalize([h[0] - s[0], 0.0, h[2] - s[2], 0.0]);
+    let mut z = head[2].map(|v| (-F(v)).0);
+    if F(z[0]) * -F(spine[2][0]) + F(z[2]) * -F(spine[2][2]) < 0.0 || head[0][1].abs() < 0.4 {
+        z = normalize([(F(h[0]) - s[0]).0, 0.0, (F(h[2]) - s[2]).0, 0.0]);
     }
     let x = normalize(cross(up, z));
     let z = normalize(cross(x, up));
-    let p = [h[0], h[1] - 0.2, h[2], h[3]];
+    let p = [h[0], (F(h[1]) - 0.2).0, h[2], h[3]];
     let at = |pos| [x, up, z, pos];
-    [at([p[0], 0.0, p[2], p[3]]), at([p[0], p[1] - 0.2, p[2], p[3]]), at(p), at(s)]
+    [at([p[0], 0.0, p[2], p[3]]), at([p[0], (F(p[1]) - 0.2).0, p[2], p[3]]), at(p), at(s)]
 }
 
 /// Facing along `dir` (normalized) at `pos`, rolled upright: x = up × z, y = z × x. The game builds the ball's
@@ -797,8 +818,8 @@ pub fn facing(dir: [f32; 4], pos: [f32; 4]) -> M4 {
 /// 0.2 m above the head along it and 0.2 m higher still.
 pub fn head_frame(head: &M4, left: bool) -> M4 {
     let s = if left { -1.0 } else { 1.0 };
-    let r = |i: usize, k: f32| [head[i][0] * k, head[i][1] * k, head[i][2] * k, head[i][3] * k];
-    let p: [f32; 4] = std::array::from_fn(|i| head[3][i] - 0.2 * head[0][i] - if i == 1 { 0.2 } else { 0.0 });
+    let r = |i: usize, k: f32| head[i].map(|v| (F(v) * k).0);
+    let p: [f32; 4] = std::array::from_fn(|i| (F(head[3][i]) - 0.2 * F(head[0][i]) - if i == 1 { 0.2 } else { 0.0 }).0);
     [r(1, s), r(0, 1.0), r(2, -1.0), p]
 }
 
@@ -831,11 +852,19 @@ pub fn intro_script(dat: &[u8]) -> Vec<(u8, f32)> {
             // the eye as framing angles and a distance from the court centre, seen from the view without roll
             let cam = mul(&rot_y(y.to_radians()), &rot_x(p.to_radians()));
             let l = local(&cam, eye);
-            let l = [-l[0], -l[1], -l[2], 0.0];
+            let l = [(-F(l[0])).0, (-F(l[1])).0, (-F(l[2])).0, 0.0];
             let (yl, pl) = (musl::atan2f(l[0], l[2]), pitch(l));
-            let a = musl::atanf(musl::tanf(pl) / musl::cosf(yl));
-            let d = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
-            out.extend([(0xb, -a.to_degrees()), (0xc, yl.to_degrees()), (0xd, d), (8, 0.0), (9, 0.0), (10, 0.0)]);
+            let a = musl::atanf((F(musl::tanf(pl)) / musl::cosf(yl)).0);
+            let e = fs(eye);
+            let d = (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt().0;
+            out.extend([
+                (0xb, (-F(a.to_degrees())).0),
+                (0xc, yl.to_degrees()),
+                (0xd, d),
+                (8, 0.0),
+                (9, 0.0),
+                (10, 0.0),
+            ]);
         } else {
             out.extend([(8, eye[0]), (9, eye[1]), (10, eye[2]), (0xb, 0.0), (0xc, 0.0), (0xd, 0.0)]);
         }
@@ -877,8 +906,8 @@ impl Shot {
         let mut v = self.view();
         let (s, c) = musl::sincosf(self.ch(7));
         let [r, d, _] = v.rot;
-        v.rot[0] = std::array::from_fn(|i| r[i] * c + d[i] * s);
-        v.rot[1] = std::array::from_fn(|i| d[i] * c - r[i] * s);
+        v.rot[0] = std::array::from_fn(|i| (F(r[i]) * c + F(d[i]) * s).0);
+        v.rot[1] = std::array::from_fn(|i| (F(d[i]) * c - F(r[i]) * s).0);
         v
     }
 }
