@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 hst-data = { path = "../hst-data" }
 # the PS2 arithmetic (EE FPU, VU0), C library maths and random generators the game links: our own crate
-ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.2.0", features = ["serde"] }
+ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.3.0", features = ["serde"] }
 
 # musl's libm in pure Rust: the same transcendental results on every target (std's come from each platform's libm)
 musl = { package = "libm", version = "0.2.16" }

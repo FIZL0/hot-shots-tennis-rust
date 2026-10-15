@@ -2600,7 +2600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -6040,16 +6040,16 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "ps2-float"
-version = "0.2.0"
-source = "git+https://github.com/FIZL0/ps2-float?tag=v0.2.0#817751d2d1efadbec4fad9f4eda6fead93115360"
+version = "0.3.0"
+source = "git+https://github.com/FIZL0/ps2-float?tag=v0.3.0#647eefb110ef56a0e4f5faaef0970ae5bcfa45f0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ps2-oracle"
-version = "0.1.1"
-source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.1#f9e908284ed87e28bb7abee5c64d537bb1267e5d"
+version = "0.1.2"
+source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.2#ad5cf1da1f2556a61c5a2762f1d71c4da47863d3"
 dependencies = [
  "ps2-float",
 ]
