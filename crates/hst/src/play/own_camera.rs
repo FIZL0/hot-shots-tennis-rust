@@ -36,7 +36,10 @@ pub(super) struct OwnCam {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate), plain.after(super::simulate)))
+    // B376: `plain` after every system that puts a cut-away, replay or change-ends view on the shared camera (all
+    // before `start_effects`); only after `simulate` it could run first, find the plain view and keep the picture
+    // on this machine's camera through the post-point (the host's Steam Deck showed no cut-away)
+    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate), plain.after(super::start_effects)))
         // B230: made with the match, so the intro (which holds the fixed ticks) already shows this machine's side
         .add_systems(PostStartup, link.after(super::setup))
         .add_systems(Update, listener);
@@ -165,6 +168,21 @@ fn listener(g: Option<Res<Game>>, own: Option<Res<OwnCam>>) {
 #[cfg(test)]
 mod tests {
     use super::cam_of;
+    use bevy::prelude::*;
+
+    /// B376: deciding whether the picture shows this machine's camera waits for every system that moves the shared
+    /// one off the plain view; unordered, the executor could run it first and hide the cut-aways online.
+    #[test]
+    fn the_own_camera_waits_for_the_cutaway_and_replay_cameras() {
+        let mut app = App::new();
+        app.add_plugins((super::super::cutaway::plugin, super::super::change_ends::plugin, super::plugin));
+        app.world_mut().schedule_scope(FixedUpdate, |w, s| s.initialize(w).unwrap());
+        let s = app.get_schedule(FixedUpdate).unwrap();
+        let names: std::collections::HashMap<_, _> = s.systems().unwrap().map(|(k, sys)| (k, sys.name().to_string())).collect();
+        let pairs = s.graph().conflicting_systems().iter().map(|(a, b, _)| format!("{} / {}", names[a], names[b]));
+        let bad: Vec<_> = pairs.filter(|n| n.contains("own_camera::plain")).collect();
+        assert!(bad.is_empty(), "unordered with the own camera's check: {bad:?}");
+    }
 
     #[test]
     fn each_human_follows_its_machines_first_player() {

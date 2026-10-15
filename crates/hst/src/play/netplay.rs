@@ -1149,8 +1149,10 @@ mod tests {
                         take(apps[1 - i].world_mut(), Event::Match(m));
                     }
                 }
-                if gone.is_some() && !hidden {
-                    let w = apps[1].world();
+                // B376: a cut-away or an instant replay has the shared camera (the harness's replays can start on the
+                // tick after a cut-away's first, and a replay's first tick cuts): those aren't flips
+                let w = apps[1].world();
+                if gone.is_some() && !hidden && !w.resource::<Game>().instant.replaying && !w.resource::<cutaway::Director>().showing() {
                     let g = w.resource::<Game>();
                     own.push(own_camera::shown(g, w.get_resource()) != own_camera::shown(g, None));
                 }
