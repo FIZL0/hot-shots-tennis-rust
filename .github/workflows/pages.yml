@@ -105,14 +105,14 @@ jobs:
         run: |
           cargo build --release -p hst
           mkdir -p dist/linux
-          strip -o dist/linux/hst target/release/hst
-          cp crates/hst/icon/hst.png dist/linux/hst.png
-          printf '[Desktop Entry]\nType=Application\nName=Hot Shots Tennis\nExec=hst\nIcon=hst\nStartupWMClass=hst\nCategories=Game;\n' > dist/linux/hst.desktop
-          tar -czf hst-linux-x86_64.tar.gz -C dist/linux .
+          strip -o dist/linux/opentennis target/release/hst
+          cp crates/hst/icon/hst.png dist/linux/opentennis.png
+          printf '[Desktop Entry]\nType=Application\nName=OpenTennis\nExec=opentennis\nIcon=opentennis\nStartupWMClass=opentennis\nCategories=Game;\n' > dist/linux/opentennis.desktop
+          tar -czf opentennis-linux-x86_64.tar.gz -C dist/linux .
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: hst-linux-x86_64.tar.gz
+          path: opentennis-linux-x86_64.tar.gz
   windows:
     if: ${{ !inputs.prebuilt && github.event_name != 'release' }}
     runs-on: ubuntu-latest
@@ -127,12 +127,12 @@ jobs:
           export HST_SITE=${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
             cargo build --release -p hst --target x86_64-pc-windows-gnu
-          x86_64-w64-mingw32-strip -o hst.exe target/x86_64-pc-windows-gnu/release/hst.exe
-          zip -q hst-windows-x86_64.zip hst.exe
+          x86_64-w64-mingw32-strip -o opentennis.exe target/x86_64-pc-windows-gnu/release/hst.exe
+          zip -q opentennis-windows-x86_64.zip opentennis.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: hst-windows-x86_64.zip
+          path: opentennis-windows-x86_64.zip
   # a prebuilt run has only the website: it updates the beta site, not the release, and only when opentennis.dev
   # doesn't already show it
   beta:
@@ -164,7 +164,7 @@ jobs:
               "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
               "Beta in the browser: https://beta.opentennis.dev/" > notes.md
             gh release create beta --prerelease --latest=false --target "$GITHUB_SHA" --title "Beta (${GITHUB_SHA::7})" \
-              --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip web.tar.gz
+              --notes-file notes.md opentennis-linux-x86_64.tar.gz opentennis-windows-x86_64.zip web.tar.gz
           fi
           if [ -n "$DISPATCH" ]; then
             GH_TOKEN=$DISPATCH gh api repos/FIZL0/opentennis-beta/dispatches -f event_type=beta

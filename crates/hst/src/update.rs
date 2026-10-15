@@ -10,9 +10,9 @@
 //! B374: a release build (`tools/release.sh` builds it with `HST_VERSION=v1.2.3`) asks GitHub for the latest `v*`
 //! release instead, at start and every half hour, unless Settings' Check for Updates is off or `--no-update-check`
 //! was given; no network, a rate limit or bad JSON say nothing. A newer one (semver order, `-beta.N` before the
-//! release) is offered; Update downloads the platform's bare binary beside the game as `hst.new`, checks it against
+//! release) is offered; Update downloads the platform's bare binary beside the game as `opentennis.new`, checks it against
 //! the release's `SHA256SUMS` (signed with minisign, the key in [`PUBLIC_KEY`]), swaps it in (Windows can't replace
-//! a running .exe: it becomes `hst.exe.old`, removed at the next start) and starts it with the same arguments. A game
+//! a running .exe: it becomes `opentennis.exe.old`, removed at the next start) and starts it with the same arguments. A game
 //! whose folder can't be written (installed system-wide, Flatpak, Steam) only gets the release page.
 //! `HST_UPDATE_API=<url>` checks another releases/latest JSON (a local test server); `HST_UPDATE_NOW=1` installs what
 //! it finds without waiting for the button (an unattended end-to-end run).
@@ -35,9 +35,9 @@ pub static NO_CHECK_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// This platform's bare binary on a release.
 #[cfg(not(target_arch = "wasm32"))]
 const ASSET: Option<&str> = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-    Some("hst-linux-x86_64")
+    Some("opentennis-linux-x86_64")
 } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-    Some("hst-windows-x86_64.exe")
+    Some("opentennis-windows-x86_64.exe")
 } else {
     None
 };
@@ -365,15 +365,15 @@ pub fn refused(why: String) -> String {
 }
 
 /// `files` (this platform's binary, `SHA256SUMS`, `SHA256SUMS.sig`) installed over `exe`: the binary downloads to
-/// `hst.new` beside it, the sums' signature is checked against `key` and the binary's sha256 against them, then it
-/// takes `exe`'s place. Any failure leaves `exe` as it was and no `hst.new`.
+/// `opentennis.new` beside it, the sums' signature is checked against `key` and the binary's sha256 against them, then it
+/// takes `exe`'s place. Any failure leaves `exe` as it was and no `opentennis.new`.
 #[cfg(not(target_arch = "wasm32"))]
 async fn install(files: &[String; 3], exe: &std::path::Path, key: &str, shown: &dyn Fn(u64, u64)) -> Result<(), String> {
     let name = files[0].rsplit('/').next().unwrap_or_default().to_string();
     let sums = fetch(&files[1], 1 << 16).await?;
     let sig = fetch(&files[2], 1 << 12).await?;
     let want = signed_sum(&sums, &sig, key, &name)?;
-    let new = exe.with_file_name("hst.new");
+    let new = exe.with_file_name("opentennis.new");
     let got = download(&files[0], &new, shown).await;
     let ok = got.and_then(|h| if h == want { Ok(()) } else { Err(format!("{name}'s checksum doesn't match the signed one")) });
     let ok = ok.and_then(|()| swap(&new, exe, cfg!(windows)));
@@ -456,13 +456,13 @@ mod tests {
     /// sums of a "new build" (`new build\n`), and sums with a wrong hash.
     const KEY: &str = "RWSQ5w0RqGoDi4KnWBhChEqUso5dxFH1nak5duxZx2zo6s4u2egvJax0";
     const BIN: &[u8] = b"new build\n";
-    const SUMS: &str = "288765569ab03c0fbf107b0f870fb74c42fff3d4b295613911a955cf8e967492  hst-linux-x86_64\n";
+    const SUMS: &str = "288765569ab03c0fbf107b0f870fb74c42fff3d4b295613911a955cf8e967492  opentennis-linux-x86_64\n";
     const SIG: &str = "untrusted comment: signature from minisign secret key
 RUSQ5w0RqGoDi6jwVeaA/GtPLpxdzDNwQO1jNzLYDADrNabXEnqVzDJjI6MkdiQT3NgoxVAV9LgQ/+A8kMG8FR/fFS/n+8yd8QY=
 trusted comment: test
 F9WQVPrL8BcKeSVTj0BaTdQk0lS3OiStQCX+6FNn7jjbCWv/kjUou4gx5rWBwQh24ISxNfD453Ja4QgzirHvDA==
 ";
-    const BAD_SUMS: &str = "0000000000000000000000000000000000000000000000000000000000000000  hst-linux-x86_64\n";
+    const BAD_SUMS: &str = "0000000000000000000000000000000000000000000000000000000000000000  opentennis-linux-x86_64\n";
     const BAD_SUMS_SIG: &str = "untrusted comment: signature from minisign secret key
 RUSQ5w0RqGoDi1hPsTAYT7b2pJgKaKTOQ2IdyqX7ZqetooC+J72NhsjC7keNuXDrNe2LkQkeLHgj1Ef9WMaFcPIxzWVWIZIzDA0=
 trusted comment: test
@@ -498,19 +498,19 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
     fn release(tag: &str, sums: &str, sig: &str) -> String {
         // the JSON names the files' server, so it comes from a second one
         let files: HashMap<String, Vec<u8>> =
-            [("/hst-linux-x86_64", BIN.to_vec()), ("/SHA256SUMS", sums.as_bytes().to_vec()), ("/SHA256SUMS.sig", sig.as_bytes().to_vec())].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+            [("/opentennis-linux-x86_64", BIN.to_vec()), ("/SHA256SUMS", sums.as_bytes().to_vec()), ("/SHA256SUMS.sig", sig.as_bytes().to_vec())].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         let base = serve(files);
         let asset = |n: &str| serde_json::json!({ "name": n, "browser_download_url": format!("{base}/{n}") });
         let j = serde_json::json!({
             "tag_name": tag, "draft": false, "html_url": format!("{base}/page"),
-            "assets": [asset("hst-linux-x86_64"), asset("SHA256SUMS"), asset("SHA256SUMS.sig"), asset("hst-linux-x86_64.tar.gz")],
+            "assets": [asset("opentennis-linux-x86_64"), asset("SHA256SUMS"), asset("SHA256SUMS.sig"), asset("opentennis-linux-x86_64.tar.gz")],
         });
         let api = serve([("/latest".to_string(), j.to_string().into_bytes())].into());
         format!("{api}/latest")
     }
 
     /// The check → verify → swap path against a local server: a newer release replaces the game file (and on the
-    /// Windows path leaves the old one as `.old`); a bad signature or checksum keeps the old file and no `hst.new`;
+    /// Windows path leaves the old one as `.old`); a bad signature or checksum keeps the old file and no `opentennis.new`;
     /// the same or an older version isn't offered.
     #[test]
     fn newer_release_swaps_and_bad_ones_keep_the_old_game() {
@@ -524,7 +524,7 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
             p
         };
         let quiet = |_: u64, _: u64| {};
-        let asset = Some("hst-linux-x86_64");
+        let asset = Some("opentennis-linux-x86_64");
 
         // same version: nothing
         let api = release("v0.1.0-beta.9", SUMS, SIG);
@@ -535,17 +535,17 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
         let f = rt.block_on(check(&api, "v0.1.0-beta.8", asset)).unwrap().expect("offered");
         assert_eq!(f.tag, "v0.1.0-beta.9");
         let files = f.files.expect("files");
-        let exe = game("hst");
+        let exe = game("opentennis");
         rt.block_on(install(&files, &exe, KEY, &quiet)).unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), BIN);
-        assert!(!dir.join("hst.new").exists());
+        assert!(!dir.join("opentennis.new").exists());
         #[cfg(unix)]
         assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&exe).unwrap().permissions()) & 0o111, 0o111);
 
-        // Windows' renames: hst.exe → hst.exe.old, hst.new → hst.exe
-        let win = game("hst.exe");
-        std::fs::write(dir.join("hst.new"), BIN).unwrap();
-        swap(&dir.join("hst.new"), &win, true).unwrap();
+        // Windows' renames: opentennis.exe → opentennis.exe.old, opentennis.new → opentennis.exe
+        let win = game("opentennis.exe");
+        std::fs::write(dir.join("opentennis.new"), BIN).unwrap();
+        swap(&dir.join("opentennis.new"), &win, true).unwrap();
         assert_eq!(std::fs::read(&win).unwrap(), BIN);
         assert_eq!(std::fs::read(old(&win)).unwrap(), b"old build\n");
 
@@ -556,11 +556,11 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
             (release("v0.1.0-beta.9", BAD_SUMS, BAD_SUMS_SIG), KEY),
         ] {
             let f = rt.block_on(check(&api, "v0.1.0-beta.8", asset)).unwrap().unwrap();
-            let exe = game("hst");
+            let exe = game("opentennis");
             let e = rt.block_on(install(&f.files.unwrap(), &exe, key, &quiet)).unwrap_err();
             assert!(e.contains("signature") || e.contains("checksum"), "{e}");
             assert_eq!(std::fs::read(&exe).unwrap(), b"old build\n");
-            assert!(!dir.join("hst.new").exists());
+            assert!(!dir.join("opentennis.new").exists());
         }
 
         // no binary for this platform: offered (the page), nothing to install
@@ -588,6 +588,6 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
         let j = serde_json::json!({ "tag_name": "beta", "assets": [] });
         assert_eq!(found(&j, "v0.0.1", ASSET), None);
         let j = serde_json::json!({ "tag_name": "v2.0.0", "html_url": "p", "assets": [{ "name": "SHA256SUMS", "browser_download_url": "s" }] });
-        assert_eq!(found(&j, "v1.0.0", Some("hst-linux-x86_64")), Some(Found { tag: "v2.0.0".into(), page: "p".into(), files: None }));
+        assert_eq!(found(&j, "v1.0.0", Some("opentennis-linux-x86_64")), Some(Found { tag: "v2.0.0".into(), page: "p".into(), files: None }));
     }
 }

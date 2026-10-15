@@ -1,10 +1,10 @@
 #!/bin/bash
-# tools/release.sh VERSION [notes.md] [publish] — a full release (v1.0.0, "Hot Shots Tennis Remastered 1.0.0"): set
+# tools/release.sh VERSION [notes.md] [publish] — a full release (v1.0.0, "OpenTennis 1.0.0"): set
 # crates/hst's version to VERSION (a "Release vVERSION" commit if it changes), build Linux + Windows + the unsigned
 # iOS IPA (tools/build.sh all) + the Android APK (tools/apk.sh, signed with this machine's ~/.android/debug.keystore:
 # keep that file, a phone only takes an update signed with the same key), sign SHA256SUMS with the minisign key (~/.config/hst/release.key, asks its password) and upload to GitHub:
-#   hst-windows-x86_64.zip  hst-linux-x86_64.tar.gz  hst-ios.ipa  hst-android.apk   what players download
-#   hst-windows-x86_64.exe  hst-linux-x86_64             the bare binaries the updater fetches (plan/B374.md)
+#   opentennis-windows-x86_64.zip  opentennis-linux-x86_64.tar.gz  opentennis-ios.ipa  opentennis-android.apk   what players download
+#   opentennis-windows-x86_64.exe  opentennis-linux-x86_64             the bare binaries the updater fetches (plan/B374.md)
 #   SHA256SUMS  SHA256SUMS.sig
 # VERSION with a suffix (1.1.0-rc.1) is a pre-release, never Latest. notes.md is the "New in …" list (Markdown
 # bullets); without it, the commit subjects since the last v* tag (required for the first release). A draft unless
@@ -52,14 +52,14 @@ HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
 HST_VERSION=$tag tools/apk.sh
 out=dist/release
 rm -rf "$out" && mkdir -p "$out"
-tar -czf "$out/hst-linux-x86_64.tar.gz" -C dist/linux .
-(cd dist/windows && zip -q "../release/hst-windows-x86_64.zip" hst.exe)
-cp dist/linux/hst "$out/hst-linux-x86_64"
-cp dist/windows/hst.exe "$out/hst-windows-x86_64.exe"
-cp dist/ios/hst-ios.ipa "$out/hst-ios.ipa"
-cp dist/hst.apk "$out/hst-android.apk"
-(cd "$out" && sha256sum hst-* > SHA256SUMS)
-minisign -S -s "$key" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -t "Hot Shots Tennis Remastered $tag"
+tar -czf "$out/opentennis-linux-x86_64.tar.gz" -C dist/linux .
+(cd dist/windows && zip -q "../release/opentennis-windows-x86_64.zip" opentennis.exe)
+cp dist/linux/opentennis "$out/opentennis-linux-x86_64"
+cp dist/windows/opentennis.exe "$out/opentennis-windows-x86_64.exe"
+cp dist/ios/opentennis-ios.ipa "$out/opentennis-ios.ipa"
+cp dist/opentennis.apk "$out/opentennis-android.apk"
+(cd "$out" && sha256sum opentennis-* > SHA256SUMS)
+minisign -S -s "$key" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -t "OpenTennis $tag"
 # the game checks against the key built into it (update.rs): refuse a release it would turn down
 minisign -V -P "$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";/\1/p' crates/hst/src/update.rs)" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -q \
     || { echo "SHA256SUMS.sig doesn't match update.rs's PUBLIC_KEY: wrong key?" >&2; exit 1; }
@@ -67,17 +67,17 @@ minisign -V -P "$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";/\1/p' crates
 body=$out/notes.md
 {
     [ -z "$pre" ] || { echo "> **Pre-release:** a test build of the next version."; echo; }
-    echo "A remaster of *Hot Shots Tennis* (PS2, 2007): the original's AI, physics, shots and timing, played on today's"
+    echo "OpenTennis is a remaster of *Hot Shots Tennis* (PS2, 2007): the original's AI, physics, shots and timing, played on today's"
     echo "screens at any resolution and aspect ratio, with online play and character mods."
     echo
     echo "## Download"
     echo
     echo "| Platform | File | How to play |"
     echo "|---|---|---|"
-    echo "| **Windows** 10/11 | [\`hst-windows-x86_64.zip\`](https://github.com/$repo/releases/download/$tag/hst-windows-x86_64.zip) | Unzip, then drop your ISO on \`hst.exe\` |"
-    echo "| **Linux** / **Steam Deck** | [\`hst-linux-x86_64.tar.gz\`](https://github.com/$repo/releases/download/$tag/hst-linux-x86_64.tar.gz) | Unpack, then \`./hst \"Hot Shots Tennis (USA).iso\"\` |"
-    echo "| **iPhone** / **iPad** (iOS 15+) | [\`hst-ios.ipa\`](https://github.com/$repo/releases/download/$tag/hst-ios.ipa) | Unsigned: sign and install it yourself (AltStore, Sideloadly…), then put your ISO in Files → On My iPhone → Hot Shots. Needs a controller |"
-    echo "| **Android** 8+ | [\`hst-android.apk\`](https://github.com/$repo/releases/download/$tag/hst-android.apk) | Install it (allow unknown apps), then pick your ISO on first start |"
+    echo "| **Windows** 10/11 | [\`opentennis-windows-x86_64.zip\`](https://github.com/$repo/releases/download/$tag/opentennis-windows-x86_64.zip) | Unzip, then drop your ISO on \`opentennis.exe\` |"
+    echo "| **Linux** / **Steam Deck** | [\`opentennis-linux-x86_64.tar.gz\`](https://github.com/$repo/releases/download/$tag/opentennis-linux-x86_64.tar.gz) | Unpack, then \`./opentennis \"Hot Shots Tennis (USA).iso\"\` |"
+    echo "| **iPhone** / **iPad** (iOS 15+) | [\`opentennis-ios.ipa\`](https://github.com/$repo/releases/download/$tag/opentennis-ios.ipa) | Unsigned: sign and install it yourself (AltStore, Sideloadly…), then put your ISO in Files → On My iPhone → OpenTennis. Needs a controller |"
+    echo "| **Android** 8+ | [\`opentennis-android.apk\`](https://github.com/$repo/releases/download/$tag/opentennis-android.apk) | Install it (allow unknown apps), then pick your ISO on first start |"
     echo "| **Browser** | [opentennis.dev](https://opentennis.dev/) | Nothing to install |"
     echo
     echo "## What you need"
@@ -100,6 +100,6 @@ body=$out/notes.md
     echo "Want the newest changes before the next release? Try the [beta](https://github.com/$repo/releases/tag/beta) or [beta.opentennis.dev](https://beta.opentennis.dev/)."
 } > "$body"
 git push -q origin HEAD
-gh release create "$tag" --target "$(git rev-parse HEAD)" --title "Hot Shots Tennis Remastered $version" \
-    --notes-file "$body" $pre $publish "$out"/hst-* "$out"/SHA256SUMS "$out"/SHA256SUMS.sig
+gh release create "$tag" --target "$(git rev-parse HEAD)" --title "OpenTennis $version" \
+    --notes-file "$body" $pre $publish "$out"/opentennis-* "$out"/SHA256SUMS "$out"/SHA256SUMS.sig
 echo "$tag: $([ "$publish" = --draft ] && echo "draft, publish it on GitHub" || echo published)"
