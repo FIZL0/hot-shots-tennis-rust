@@ -452,8 +452,8 @@ fn preview(d: &mut Draw, i: usize, random: bool, hide: bool, [x, y, w, h]: [f32;
         return;
     }
     let ph = h - 4.0;
-    let pw = (ph * 0.8).min(w - 4.0);
-    let ph = pw / 0.8;
+    let pw = (ph * super::super::previews::CARD_W).min(w - 4.0);
+    let ph = pw / super::super::previews::CARD_W;
     d.q(Tex::Preview(i), [0.0; 4], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
 }
 

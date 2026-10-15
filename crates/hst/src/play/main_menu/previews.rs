@@ -87,6 +87,11 @@ const KEEP_MODELS: usize = 6;
 const KEEP_PNGS: usize = 48;
 /// Seconds a card's hover holds before its live model replaces the PNG.
 const SETTLE: f32 = 0.3;
+/// B402: a menu unit's width over its height on screen (the 640×448 screen shown 4:3: 448 / 480).
+pub(super) const UNIT_W: f32 = 14.0 / 15.0;
+/// B402: a preview's width over its height in menu units, for a picture that is the bake's 4:5 on screen (the PNG
+/// and the live drawing then show the same proportions).
+pub(super) const CARD_W: f32 = 0.8 / UNIT_W;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(inspect::plugin)
@@ -604,7 +609,8 @@ fn sync(
                         Who::Disc(c) => c,
                         Who::Mod(i) => menu.mods[i].donor,
                     };
-                    let image = inspect::target(&mut images, (Vec2::new(q.dst[2], q.dst[3]) * scale).as_uvec2());
+                    // B402: its on-screen pixels (a menu unit is narrower than tall), so it draws the shape it shows
+                    let image = inspect::target(&mut images, (Vec2::new(q.dst[2] * UNIT_W, q.dst[3]) * scale).as_uvec2());
                     let cam = inspect::spawn_into(&mut commands, &data, c, hand, 1 + p, image.clone());
                     commands.entity(cam).insert(Card(p));
                     let shown = if cover.is_some() { Visibility::Hidden } else { Visibility::Inherited };

@@ -2646,8 +2646,8 @@ fn stage(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], [x, y, w, h]: [f3
         let cx = ix + team as f32 * (iw + gap) / 2.0 + slot * (i as f32 + 0.5);
         // the model's card shape (the select's 4:5): full height over the foot, narrower where the slots are
         let mut ph = ih - foot + 12.0;
-        let pw = (ph * 0.8).min(slot * 1.6);
-        ph = pw / 0.8;
+        let pw = (ph * previews::CARD_W).min(slot * 1.6);
+        ph = pw / previews::CARD_W;
         let pl = m.players[p];
         if pl.random {
             let t = (slot * 0.6).min(70.0);
