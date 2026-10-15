@@ -126,13 +126,13 @@ pub(super) fn vs_disc(d: &mut Draw, [vx, vy, vw, _]: [f32; 4]) {
     d.centred("VS", vx + vw / 2.0, vy + vw / 2.0 - 8.0, 16.0, [127.5, 77.5, 30.5]);
 }
 
-/// The court card: court `k`'s picture, COURT over `name`, "OK: change" with `change`; gold-rimmed with `sel`.
-pub(super) fn court_card(d: &mut Draw, k: usize, name: &str, [x, y, w, h]: [f32; 4], sel: bool, change: bool) {
+/// The court card: court value `c`'s picture, COURT over `name`, "OK: change" with `change`; gold-rimmed with `sel`.
+pub(super) fn court_card(d: &mut Draw, m: &super::Menu, c: usize, name: &str, [x, y, w, h]: [f32; 4], sel: bool, change: bool) {
     d.box3([x, y, w, h], 12.0, [Some(INK), Some(if sel { super::GOLD } else { WHITE }), Some(PAPER)], 128.0);
     let ph = h - 34.0;
     let pic = [x + 3.0, y + 3.0, w - 6.0, ph];
     let first = d.out.len();
-    super::court_picture(d, k, pic);
+    super::court_picture(d, m, c, pic);
     let rr = 12.0 * 11.0 / 16.0 - (3.0 - 12.0 * 4.0 / 16.0);
     d.out[first..].iter_mut().filter(|q| q.dst == pic).for_each(|q| q.round = [rr, rr, 0.0, 0.0]);
     let ny = y + 3.0 + ph + 3.0;

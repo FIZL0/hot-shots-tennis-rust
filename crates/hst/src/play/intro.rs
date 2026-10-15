@@ -92,9 +92,10 @@ const BANNER_SOUND: u32 = 17;
 #[derive(Resource)]
 pub(super) struct SystemBank(pub(super) Option<std::sync::Arc<SoundBank>>);
 
-/// The title plate's sheets (`CourtPreview_00`, the court's name, `info`) and the court's plate row.
+/// The title plate's sheets (`CourtPreview_00`, the court's name, `info`) and the court's plate row; set when the
+/// name is a court mod's (B401: `pause::label`'s row, centred over the underline, in place of the layout court's).
 #[derive(Resource)]
-struct PlateArt([Handle<Image>; 3], [u8; 3]);
+struct PlateArt([Handle<Image>; 3], [u8; 3], bool);
 
 #[derive(Component)]
 struct PlateSlot(usize);
@@ -165,6 +166,7 @@ fn start(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+    court: Option<Res<crate::mods_court::MatchCourt>>,
 ) {
     let on = match std::env::var("HST_INTRO").as_deref() {
         // B196: a rejoiner comes into the match under way
@@ -223,11 +225,14 @@ fn start(
     let banner = Banner { effect, shown, root, ui, sheets, sets: g.rules.sets, games: g.rules.games };
     commands.insert_resource(Intro { shot: Shot::intro(&shots, &dat), frames, ticks, at: 0, acc: 0.0, banner, banner_tick: frames + 2, heard: None, press: false, gallery: Gallery::default(), rng });
     let row = hst_data::exe::court_plates(&iso.read("SCUS_976.10").expect("main program")).expect("supported disc")[n];
-    let art = ["/courtpreview_00.tm2".to_string(), format!("/courtpreview_name{n:02}.tm2"), "/2d/info.tm2".into()].map(|name| {
+    let mut art = ["/courtpreview_00.tm2".to_string(), format!("/courtpreview_name{n:02}.tm2"), "/2d/info.tm2".into()].map(|name| {
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name));
         super::panel::image(&mut images, &arc.read(e.unwrap_or_else(|| panic!("{name} in INPANE"))).expect("INPANE bytes"))
     });
-    commands.insert_resource(PlateArt(art, row));
+    if let Some(c) = &court {
+        art[1] = super::main_menu::pause::label(&mut iso, &mut images, &c.0.name);
+    }
+    commands.insert_resource(PlateArt(art, row, court.is_some()));
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     commands.spawn((full, GlobalZIndex(1))).with_children(|p| {
         for i in 0..20 {
@@ -423,12 +428,16 @@ fn draw_plate(
     let quads = intro.filter(|i| i.showing() && i.at > 0).map_or(vec![], |i| plate(art.1, i.at));
     let share = widescreen::window_share(&window);
     for (PlateSlot(i), mut img, mut node, mut vis) in &mut q {
-        let Some(&(sheet, [u, v, w, h], [x, y, dw, dh], [r, g, b, a], anchor)) = quads.get(*i) else {
+        let Some(&(sheet, [u, v, w, h], [mut x, y, mut dw, dh], [r, g, b, a], anchor)) = quads.get(*i) else {
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
         img.image = art.0[sheet].clone();
         img.rect = Some(Rect::new(u, v, u + w, v + h));
+        if sheet == 1 && art.2 {
+            // a court mod's name row, whole, centred over the underline (16–504)
+            (img.rect, x, dw) = (None, 260.0 - 128.0, 256.0);
+        }
         img.color = Color::srgba(r as f32 / 128.0, g as f32 / 128.0, b as f32 / 128.0, a as f32 / 128.0);
         let (left, width) = widescreen::place(x, dw, share, anchor);
         let (top, height) = widescreen::vplace(y, dh, widescreen::window_aspect(&window), anchor);

@@ -194,7 +194,7 @@ fn side_panel(d: &mut Draw, m: &Menu, text: &Text, g: &Geo, rows: &[[f32; 4]; su
     let picking = m.picking.is_some();
     // the court card: its picture, COURT over its name, "OK: change" while it's the chosen row
     let sel = m.sel == 1 && !picking;
-    frame::court_card(d, m.court_layout(m.court), &m.court_title(text, m.court), g.court, sel, sel);
+    frame::court_card(d, m, m.court, &m.court_title(text, m.court), g.court, sel, sel);
     d.hit(rows[1], pointer::Act::Row(1, pointer::OK));
     // the pills: Mode and Handicap say how it's set up (Handicap's Off until the original's handicaps are in, B40g1);
     // Sets and Games are rows, their ‹ › for OK then ←→
