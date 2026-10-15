@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, SWAY_LOD, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -53,6 +53,8 @@ pub(super) enum Opt {
     MergeMeshes,
     /// B364: the characters' share of triangles (`Graphics::mesh`, `lod.rs`).
     Mesh,
+    /// B344: far/unseen characters' sway less often.
+    SwayLod,
 }
 use Opt::*;
 
@@ -76,7 +78,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -134,6 +136,7 @@ fn label(o: Opt) -> &'static str {
         BatchCrowd => "Batch Crowd",
         MergeMeshes => "Merge Court Meshes",
         Mesh => "Mesh",
+        SwayLod => "Sway LOD",
     }
 }
 
@@ -171,6 +174,7 @@ fn about(o: Opt) -> &'static str {
         Vibration => vibration_about(),
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
         BatchCrowd => "Draw identical court creatures together in one draw, from the next match. Off by default: no measurable gain.",
+        SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
     }
 }
 
@@ -287,6 +291,10 @@ impl Settings {
             BatchCrowd => g.batch_crowd = !g.batch_crowd,
             MergeMeshes => g.merge_meshes = !g.merge_meshes,
             Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
+            SwayLod => {
+                self.0[SWAY_LOD] = !self.0[SWAY_LOD];
+                crate::noise::set_lod(self.0[SWAY_LOD], false);
+            }
         }
     }
 
@@ -323,6 +331,7 @@ impl Settings {
             Vibration => on_off(self.0[VIBRATION]),
             FewerShadows => on_off(g.fewer_shadows),
             BatchCrowd => on_off(g.batch_crowd),
+            SwayLod => on_off(self.0[SWAY_LOD]),
         }
     }
 }
@@ -844,5 +853,9 @@ mod tests {
         s.step(AtOnce, 1);
         s.step(AtOnce, 1);
         assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once(), Settings::parse(&s.text()) == s), ("1", 1, true));
+        // B344: Sway LOD, off by default, saved
+        assert_eq!(s.value(SwayLod), "Off");
+        s.step(SwayLod, 1);
+        assert!(s.0[SWAY_LOD] && s.text().contains("sway_lod = on") && Settings::parse(&s.text()) == s);
     }
 }

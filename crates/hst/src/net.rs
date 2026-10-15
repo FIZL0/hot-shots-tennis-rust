@@ -2336,8 +2336,12 @@ pub fn code_in(text: &str) -> Option<String> {
 /// The short codes' symbols: digits and capitals without the look-alikes 0/O and 1/I (32^4 ≈ 1M codes).
 pub const SYMBOLS: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 pub const SHORT: usize = 4;
-/// The browser build's page: a lobby link is this with `?code=<short code>`.
-pub const SITE: &str = "https://opentennis.dev/";
+/// The browser build's page: a lobby link is this with `?code=<short code>`. Beta builds are built with
+/// `HST_SITE=https://beta.opentennis.dev/` (pages.yml), so their links open the beta site.
+pub const SITE: &str = match option_env!("HST_SITE") {
+    Some(s) if !s.is_empty() => s,
+    _ => "https://opentennis.dev/",
+};
 /// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
 /// theirs there too.
 const PKARR: &str = "https://relay.pkarr.org";
