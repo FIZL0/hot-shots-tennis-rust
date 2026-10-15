@@ -8,13 +8,20 @@
 //! screen in `match_stats.rs`); [`draw`] lays it out on the strip under the description bar (640×448 y 436..448,
 //! spanning the window as the bar does) at the 4:3 screen's scale, shrinking the row to fit, never stretched.
 //!
-//! `HST_LEGEND=keys|xbox|ps|deck` draws every device in that style (for `--shot`s without the pad).
+//! B362: a pad's style follows the pad (PlayStation by Sony's vendor id, Switch by Nintendo's, Steam Deck by Valve's,
+//! else Xbox) unless the Button Icons setting (Settings → Display, `button_icons` in settings.txt) picks one for
+//! every pad: PlayStation, Xbox, Switch or Generic (position dots, numbered shoulders). The same art stands in the
+//! menus' "Press ✕ / Enter to join" hints ([`Buttons`], [`join_styles`]).
+//!
+//! `HST_LEGEND=keys|xbox|ps|deck|switch|generic` draws every device in that style (for `--shot`s without the pad).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use super::super::controls::{self, Action, Bindings};
@@ -59,7 +66,22 @@ pub(crate) enum Style {
     Xbox,
     Ps,
     Deck,
+    /// B362: Nintendo's letters (A right, B bottom, X top, Y left), L / R, ZL / ZR, − / +.
+    Switch,
+    /// B362: no maker's: the four face buttons as dots with the one meant filled, L1 / R1, L2 / R2, Select / Start.
+    Generic,
 }
+
+impl Style {
+    pub(crate) const ALL: [Style; 6] = [Style::Keys, Style::Xbox, Style::Ps, Style::Deck, Style::Switch, Style::Generic];
+}
+
+/// B362: the Button Icons setting's values (a [`LAYOUT`]): Auto (each pad's own), then one style for every pad.
+pub(crate) const LAYOUTS: [(&str, &str, Option<Style>); 5] =
+    [("Auto", "auto", None), ("PlayStation", "ps", Some(Style::Ps)), ("Xbox", "xbox", Some(Style::Xbox)), ("Switch", "switch", Some(Style::Switch)), ("Generic", "generic", Some(Style::Generic))];
+
+/// B362: the Button Icons setting, as the main menu last had it (a [`LAYOUTS`] index).
+pub(crate) static LAYOUT: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Item {
@@ -393,22 +415,94 @@ pub(super) fn fill(menu: Res<Menu>, last: Res<Last>, bind: Res<Bindings>, mut le
 
 // ---------------------------------------------------------------- the last device used
 
-fn style_of(dev: Option<Entity>, pads: &Query<&Gamepad>) -> Style {
+/// `HST_LEGEND`'s style, if it names one.
+fn forced() -> Option<Style> {
     match std::env::var("HST_LEGEND").as_deref() {
-        Ok("keys") => return Style::Keys,
-        Ok("xbox") => return Style::Xbox,
-        Ok("ps") => return Style::Ps,
-        Ok("deck") => return Style::Deck,
-        _ => {}
+        Ok("keys") => Some(Style::Keys),
+        Ok("xbox") => Some(Style::Xbox),
+        Ok("ps") => Some(Style::Ps),
+        Ok("deck") => Some(Style::Deck),
+        Ok("switch") => Some(Style::Switch),
+        Ok("generic") => Some(Style::Generic),
+        _ => None,
+    }
+}
+
+fn style_of(dev: Option<Entity>, pads: &Query<&Gamepad>) -> Style {
+    if let Some(s) = forced() {
+        return s;
     }
     let Some(e) = dev else { return Style::Keys };
-    // SteamOS sets `SteamDeck=1`; its built-in pad comes through Steam's Valve-ID'd virtual pad
-    let vendor = pads.get(e).ok().and_then(|g| g.vendor_id()).unwrap_or(0);
+    pad_style(pads.get(e).ok().and_then(|g| g.vendor_id()).unwrap_or(0), LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1"))
+}
+
+/// A pad's style: the Button Icons setting's (`layout`, a [`LAYOUTS`] index) when it picks one, else by the pad's
+/// USB vendor id. SteamOS sets `SteamDeck=1` (`deck`); its built-in pad comes through Steam's Valve-ID'd virtual pad.
+fn pad_style(vendor: u16, layout: u8, deck: bool) -> Style {
+    if let Some((_, _, Some(s))) = LAYOUTS.get(layout as usize) {
+        return *s;
+    }
     match vendor {
-        _ if std::env::var("SteamDeck").as_deref() == Ok("1") => Style::Deck,
+        _ if deck => Style::Deck,
         0x054c => Style::Ps,
         0x28de => Style::Deck,
+        0x057e => Style::Switch,
         _ => Style::Xbox,
+    }
+}
+
+/// B362: the connected pads' styles (each once, in pad order), as [`note_pads`] last saw them.
+static PADS: Mutex<Vec<Style>> = Mutex::new(Vec::new());
+
+/// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
+/// it names one, for `--shot`s without the pad), then the keyboard's Enter.
+pub(crate) fn join_styles() -> Vec<Style> {
+    let mut v = PADS.lock().map(|p| p.clone()).unwrap_or_default();
+    if let Some(s) = forced().filter(|s| *s != Style::Keys) {
+        v = vec![s];
+    }
+    v.push(Style::Keys);
+    v
+}
+
+fn note_pads(pads: Query<(Entity, &Gamepad)>, all: Query<&Gamepad>) {
+    let mut ps: Vec<_> = pads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
+    ps.sort();
+    let mut v: Vec<Style> = Vec::new();
+    for s in ps.into_iter().map(|e| style_of(Some(e), &all)) {
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    }
+    if let Ok(mut p) = PADS.lock()
+        && *p != v
+    {
+        *p = v;
+    }
+}
+
+/// B362: each style's ✕ (the keyboard's Enter), for the menus' join hints, and its width / height.
+#[derive(Resource, Default)]
+pub(crate) struct Buttons(pub HashMap<Style, (Handle<Image>, f32)>);
+
+/// `style`'s ✕ (bottom face button; the keyboard's Enter).
+fn ok_glyph(style: Style) -> Glyph {
+    if style == Style::Keys { Glyph::Cap("Enter".into()) } else { Glyph::Face(style, 0) }
+}
+
+/// [`ok_glyph`]'s width / height.
+pub(crate) fn ok_aspect(style: Style) -> f32 {
+    static W: std::sync::OnceLock<[f32; 6]> = std::sync::OnceLock::new();
+    let w = W.get_or_init(|| Style::ALL.map(|s| draw_glyph(&ok_glyph(s)).width() as f32 / H as f32));
+    w[Style::ALL.iter().position(|s| *s == style).unwrap_or(0)]
+}
+
+fn bake_buttons(mut images: ResMut<Assets<Image>>, mut buttons: ResMut<Buttons>) {
+    for s in Style::ALL {
+        let p = draw_glyph(&ok_glyph(s));
+        let (w, h) = (p.width(), p.height());
+        let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+        buttons.0.insert(s, (images.add(img), w as f32 / h as f32));
     }
 }
 
@@ -454,6 +548,8 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         return it.keys.iter().cloned().map(Glyph::Cap).collect();
     }
     let ps = style == Style::Ps;
+    // Switch: L / R, ZL / ZR, − / +; Generic: numbered shoulders, Select / Start
+    let (sw, generic) = (style == Style::Switch, style == Style::Generic);
     match it.act {
         Act::Move => vec![Glyph::Dpad([true; 4])],
         Act::UpDown => vec![Glyph::Dpad([true, true, false, false])],
@@ -462,13 +558,15 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Back => vec![Glyph::Face(style, 1)],
         Act::Page => vec![Glyph::Face(style, 2)],
         Act::Card => vec![Glyph::Face(style, 3)],
-        Act::Costume if ps => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
+        Act::Costume if sw => vec![Glyph::Shoulder("L"), Glyph::Shoulder("R")],
+        Act::Costume if ps || generic => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume if style == Style::Deck => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume => vec![Glyph::Shoulder("LB"), Glyph::Shoulder("RB")],
-        Act::Chat if ps || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
+        Act::Chat if sw => vec![Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")],
+        Act::Chat if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
         Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
-        Act::Hand => vec![Glyph::Small(if ps { "Create" } else { "Select" })],
-        Act::Start => vec![Glyph::Small(if ps { "Options" } else { "Menu" })],
+        Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
+        Act::Start => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
     }
 }
@@ -556,9 +654,21 @@ fn draw_glyph(g: &Glyph) -> Pixmap {
                     };
                     stroke_rgb(&mut out, &pb.finish().expect("shape"), c, 4.0, Transform::identity());
                 }
+                Style::Generic => {
+                    // the four buttons' places (bottom, right, left, top), the meant one filled
+                    disc(&mut out, DARK);
+                    for (k, (dx, dy)) in [(0.0, 11.0), (11.0, 0.0), (-11.0, 0.0), (0.0, -11.0)].into_iter().enumerate() {
+                        let p = tiny_skia::PathBuilder::from_circle(26.0 + dx, cy + dy, 5.5).expect("dot");
+                        if k == *i as usize {
+                            fill_rgb(&mut out, &p, WHITE, Transform::identity());
+                        } else {
+                            stroke_rgb(&mut out, &p, RIM, 2.0, Transform::identity());
+                        }
+                    }
+                }
                 _ => {
-                    let letter = ["A", "B", "X", "Y"][*i as usize];
-                    let (fill, ink) = if *style == Style::Deck {
+                    let letter = if *style == Style::Switch { ["B", "A", "Y", "X"] } else { ["A", "B", "X", "Y"] }[*i as usize];
+                    let (fill, ink) = if matches!(style, Style::Deck | Style::Switch) {
                         (DARK, WHITE)
                     } else {
                         ([[70, 170, 60], [215, 60, 60], [50, 115, 220], [230, 180, 30]][*i as usize], WHITE)
@@ -761,9 +871,10 @@ pub(crate) fn plugin(app: &mut App) {
     }
     app.init_resource::<Legend>()
         .init_resource::<Chips>()
+        .init_resource::<Buttons>()
         .insert_resource(Last::Keys)
-        .add_systems(Startup, setup)
-        .add_systems(PreUpdate, track.after(bevy::input::InputSystems))
+        .add_systems(Startup, (setup, bake_buttons))
+        .add_systems(PreUpdate, (track, note_pads).after(bevy::input::InputSystems))
         .add_systems(PostUpdate, draw.before(bevy::ui::UiSystems::Layout));
 }
 
@@ -796,6 +907,26 @@ mod tests {
         for (style, want) in [(Style::Xbox, "Select"), (Style::Deck, "Select"), (Style::Ps, "Create")] {
             assert_eq!(glyphs(style, &it), vec![Glyph::Small(want)], "{style:?}");
         }
+    }
+
+    /// B362: a pad's style by its vendor unless Button Icons picks one; Switch and Generic name their own buttons.
+    #[test]
+    fn button_icons_pick_the_style() {
+        assert_eq!([0x054c, 0x057e, 0x28de, 0x045e, 0].map(|v| pad_style(v, 0, false)), [Style::Ps, Style::Switch, Style::Deck, Style::Xbox, Style::Xbox]);
+        assert_eq!(pad_style(0x054c, 0, true), Style::Deck, "on a Steam Deck");
+        for (k, (_, _, s)) in LAYOUTS.iter().enumerate().skip(1) {
+            assert_eq!([0x054c, 0x057e, 0x28de].map(|v| pad_style(v, k as u8, true)), [s.unwrap(); 3], "{k}: every pad");
+        }
+        let it = |act| Item { act, label: String::new(), keys: vec![] };
+        assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
+        assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")]);
+        assert_eq!(glyphs(Style::Switch, &it(Act::Hand)), [Glyph::Small("-")]);
+        assert_eq!(glyphs(Style::Generic, &it(Act::Start)), [Glyph::Small("Start")]);
+        // the font draws Switch's - and +
+        use ab_glyph::Font;
+        assert!(['-', '+'].iter().all(|&c| font().glyph_id(c).0 != 0));
+        // every style's ✕ is drawn, the keyboard's Enter wider than a face button
+        assert!(Style::ALL.iter().all(|&s| ok_aspect(s) > 0.5) && ok_aspect(Style::Keys) > ok_aspect(Style::Ps));
     }
 
     /// Every screen's legend (each state reachable with the d-pad from a start, on that screen) lists exactly the

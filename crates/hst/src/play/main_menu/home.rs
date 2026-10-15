@@ -7,7 +7,7 @@
 //! uniformly at any aspect ratio.
 
 use super::{
-    CARD_FILL, CHAR_NAMES, COURTS, Draw, GOLD, INK, Menu, SETS, Tex, Text, WHITE, Who, face_frame, mods_screen, options, pointer,
+    CARD_FILL, CHAR_NAMES, COURTS, Draw, GOLD, INK, Menu, SETS, Tex, Text, WHITE, Who, face_frame, legend, mods_screen, options, pointer,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -379,18 +379,42 @@ fn device_tiles(d: &mut Draw, seats: &[(&str, String)], [x, y, w, _]: [f32; 4]) 
                 d.box3(r, 8.0, [None, None, Some([40.0, 36.0, 44.0])], 40.0);
                 dashed(d, r, 8.0, [72.0, 66.0, 78.0]);
                 d.centred(&p, cx, r[1] + 22.0, 16.0, WHITE);
-                // "Press ✕ / Enter": the cross a small round button (the font has no ✕)
-                let a = d.width("Press ", 8.5);
-                let b = d.width(" / Enter", 8.5);
-                let lx = cx - (a + 11.0 + b) / 2.0;
-                d.text("Press ", lx, r[1] + 50.0, 8.5, WHITE);
-                d.pill_at([lx + a, r[1] + 48.5, 11.0, 11.0], [WHITE, WHITE, [40.0, 36.0, 44.0]], 128.0);
-                d.centred("x", lx + a + 5.5, r[1] + 48.5, 9.0, WHITE);
-                d.text(" / Enter", lx + a + 11.0, r[1] + 50.0, 8.5, WHITE);
-                d.centred("to join", cx, r[1] + 61.0, 8.5, WHITE);
+                // B362: "Press ✕ / Enter" in the pads' and the keyboard's button art
+                press_hint(d, "", cx, r[1] + 49.0, 8.5, tw - 8.0, WHITE);
+                d.centred("to join", cx, r[1] + 62.0, 8.5, WHITE);
             }
         }
     }
+}
+
+/// B362: what an open seat's card says (`press_hint` draws it in buttons).
+pub(super) const JOIN: &str = "Press ✕ / Enter to join";
+
+/// B362: "Press" and each connected pad's ✕ then the keyboard's Enter, a slash between, in the legend's button art
+/// (`legend::join_styles`, as the Button Icons setting has them), then `tail`: centred on `cx`, the words `size`
+/// high from `y`, the buttons a little taller around their middle, all shrunk as one to fit `max` wide.
+pub(super) fn press_hint(d: &mut Draw, tail: &str, cx: f32, y: f32, size: f32, max: f32, rgb: [f32; 3]) {
+    let styles = legend::join_styles();
+    let ih = size * 1.6;
+    let (head, slash) = (d.width("Press ", size), d.width(" / ", size));
+    let icons: f32 = styles.iter().map(|&s| legend::ok_aspect(s) * ih).sum::<f32>() + slash * (styles.len() - 1) as f32;
+    let full = head + icons + d.width(tail, size);
+    let k = (max / full.max(1.0)).min(1.0);
+    let y = y + size * (1.0 - k) / 2.0;
+    let (size, ih) = (size * k, ih * k);
+    let mut x = cx - full * k / 2.0;
+    d.text("Press ", x, y, size, rgb);
+    x += head * k;
+    for (n, &s) in styles.iter().enumerate() {
+        if n > 0 {
+            d.text(" / ", x, y, size, rgb);
+            x += slash * k;
+        }
+        let iw = legend::ok_aspect(s) * ih;
+        d.q(Tex::Button(s), [0.0; 4], [x, y + size / 2.0 - ih / 2.0, iw, ih], WHITE, 128.0);
+        x += iw;
+    }
+    d.text(tail, x, y, size, rgb);
 }
 
 /// A device's line drawing centred on (cx, cy) in white over the tile's fill `bg`: a keyboard, a pad or a phone.
