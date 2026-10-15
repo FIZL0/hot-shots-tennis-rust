@@ -225,3 +225,9 @@ HUD all draw. 708 tests pass.
 - A creature that is shown again resumes its spring (hair) from the state it was put away in, against its new pose:
   a possible one-off settle, not seen; presentation only, no sim state.
 - Not run on wasm/iOS/Android; plain ECS changes, no platform code.
+
+## P48 — GPU `bin_unpacking` (2026-10-15)
+One unpacking dispatch per batch set, and every non-bindless `GsMaterial` is a batch set of its own: ~350 dispatches
+of ~1.3 meshes each per frame. The 3D cameras now draw directly (`NoIndirectDrawing`; `HST_INDIRECT=1` = old).
+GPU frame on the 9070 XT ~1.3 → ~0.6 ms, iGPU −0.4–0.5 ms, Phone preset on the iGPU stand-in 131 → 139 fps.
+Details: `p48-bin-unpacking.md`.
