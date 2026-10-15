@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>Hot Shots Tennis</title>
+<title>OpenTennis</title>
+<meta name="description" content="OpenTennis: a from-scratch, open-source rewrite of the PS2 game Hot Shots Tennis that plays exactly like the original. Runs in your browser from your own disc image; also on Windows, Linux, Android and iOS. Online play and mods.">
+<link rel="stylesheet" href="site.css">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon.svg">
+<link rel="icon" href="logo.svg">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -22,7 +24,6 @@
   *, *::before, *::after { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
   /* iOS won't type into an input under a user-select: none parent; the token paste / join code keep their own taps */
   input, textarea { user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; touch-action: manipulation; }
-  #disc { max-width: 32em; margin: 0 auto; padding: 2em 16px; }
   /* B333: the page and the canvas are as big as the visible screen right now (--app-w/-h, kept up to date below), not
      a size read once on load: iOS Safari can open with its toolbar's height still unsettled and leave an empty bar
      ("chin") until the phone is turned. 100dvh before the script runs. The canvas is pinned to the top left so a
@@ -60,15 +61,181 @@
 <body>
 <input id="modzip" type="file" accept=".zip,application/zip" hidden aria-label="Add mod">
 <input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Lobby code">
+<!-- M96: the site (site.css, site.js): what the page shows before a disc is imported, and with `?site` after. -->
 <div id="disc" hidden>
-  <p>Pick your own <b>Hot Shots Tennis (USA)</b> disc image (SCUS-97610). The game copies what it needs (≈ 170 MB)
-     into this browser's storage once; the ISO isn't needed after that.</p>
-  <input id="iso" type="file" accept=".iso">
-  <p id="status"></p>
+  <div class="discord"><div class="wrap">
+    <span><b>OpenTennis has a Discord.</b> Find people to play, share mods, report bugs.</span>
+    <a class="pill small discord-pill" href="https://discord.gg/kCkz5hFNXG" target="_blank" rel="noopener">Join the Discord</a>
+  </div></div>
+  <header class="band" style="--shot: url(shots/rally-autumn.jpg)"><div class="wrap">
+    <img class="logo" src="logo.svg" alt="OpenTennis" width="1040" height="820">
+    <div class="title">
+      <h1>Tennis, the way it played on PS2.</h1>
+      <p class="lede">OpenTennis is a from-scratch rewrite of Hot Shots Tennis. It plays the same as the original, ball
+        for ball, and it runs in your browser. You bring the disc.</p>
+      <div class="row">
+        <a class="pill gold" href="#play" data-new>Pick your ISO</a>
+        <a class="pill gold" href="#play" data-have hidden>Play</a>
+        <a class="pill" href="https://github.com/FIZL0/opentennis" target="_blank" rel="noopener">Open source on GitHub</a>
+      </div>
+    </div>
+  </div></header>
+
+  <section id="play"><div class="wrap">
+    <div class="pick">
+      <div class="panel">
+        <span class="head gold" data-new>Play in your browser</span>
+        <span class="head gold" data-have hidden>Your disc is ready</span>
+        <p data-new>Pick a disc image of your own copy of the game. OpenTennis copies what it needs (about 170 MB) into this
+          browser's storage once. Nothing is uploaded, and after that you don't need the ISO.</p>
+        <p data-have hidden>This browser already holds the game's data from your disc. Play goes straight to the main
+          menu.</p>
+        <label class="pill gold big" for="iso" data-new>Pick your ISO</label>
+        <input id="iso" type="file" accept=".iso" data-new>
+        <button class="pill gold big" id="playnow" data-have hidden>Play</button>
+        <div class="progress" hidden><i></i></div>
+        <p id="status" role="status"></p>
+        <div class="needs">
+          <b>Needs:</b> Hot Shots Tennis, US release, <b>SCUS-97610 v1.00</b>, as an <b>.iso</b>.
+          <span class="no">JP/EU discs won't work</span> (Minna no Tennis, Everybody's Tennis).
+        </div>
+      </div>
+      <div class="panel">
+        <span class="head">How it works</span>
+        <ol class="steps">
+          <li><div><b>Rip your disc</b>Make an .iso of a Hot Shots Tennis disc you own (ImgBurn, dd, or your PS2 tools).</div></li>
+          <li><div><b>Pick it here</b>The game reads it on this device, in this browser. Nothing leaves your computer or phone.</div></li>
+          <li><div><b>Play</b>With a controller, keyboard or touch. It keeps working offline, and you can add it to your home screen.</div></li>
+        </ol>
+      </div>
+    </div>
+  </div></section>
+
+  <section id="about"><div class="wrap">
+    <h2 class="h">About</h2>
+    <div class="grid">
+      <div class="panel card">
+        <span class="head sky">The original</span>
+        <h3>Hot Shots Tennis</h3>
+        <p class="meta">Clap Hanz · Sony Computer Entertainment · PlayStation 2 · 2007 (US) · SCUS-97610</p>
+        <p>The tennis game from the makers of Hot Shots Golf: big-headed characters, a simple shot system with a lot of
+          depth, and very good computer opponents. Released in Japan as Minna no Tennis and in Europe as Everybody's
+          Tennis.</p>
+        <p class="note">OpenTennis is a fan project. It isn't affiliated with or endorsed by Sony or Clap Hanz, and it
+          contains none of their data: everything the game shows or plays is read from your own disc while it runs.</p>
+      </div>
+      <div class="panel card">
+        <span class="head">The rewrite</span>
+        <h3>OpenTennis</h3>
+        <p class="meta">Rust · Bevy · open source</p>
+        <p>Written from scratch in Rust on the Bevy engine. The ball physics, shots, AI, rules and timing are ported from
+          the original and checked against it running in an emulator, bit for bit and frame for frame. The same inputs
+          give the same match.</p>
+        <p>The rendering is new: any resolution and aspect ratio, widescreen, upscaled textures and a high frame rate.</p>
+        <div class="chips"><span class="chip">Bit-exact gameplay</span><span class="chip">Online play</span>
+          <span class="chip">Up to 4 players</span><span class="chip">Mods</span><span class="chip">Widescreen</span></div>
+      </div>
+    </div>
+    <div class="tiles">
+      <a class="tile here" href="#play"><b>Browser</b><span>Right here: Chrome, Edge, Safari</span></a>
+      <a class="tile" href="https://github.com/FIZL0/opentennis/releases/latest" target="_blank" rel="noopener"><b>Windows</b><span>10 / 11</span></a>
+      <a class="tile" href="https://github.com/FIZL0/opentennis/releases/latest" target="_blank" rel="noopener"><b>Linux</b><span>and Steam Deck</span></a>
+      <a class="tile" href="https://github.com/FIZL0/opentennis/releases/latest" target="_blank" rel="noopener"><b>Android</b><span>8 and later (APK)</span></a>
+      <a class="tile" href="https://github.com/FIZL0/opentennis/releases/latest" target="_blank" rel="noopener"><b>iPhone / iPad</b><span>iOS 15+, sideloaded</span></a>
+    </div>
+    <div class="grid" style="margin-top: clamp(14px, 2.4vw, 24px)">
+      <div class="panel">
+        <span class="head gold">Online</span>
+        <p>Host a lobby and share its code or link, or join a public one. Rollback netcode keeps a match smooth over the
+          internet; the match is the same on every screen because the game is.</p>
+      </div>
+      <div class="panel">
+        <span class="head gold">Play anywhere</span>
+        <p>Controllers, keyboard, or on-screen touch controls on a phone. The browser version works offline once loaded
+          and installs as an app.</p>
+      </div>
+    </div>
+  </div></section>
+
+  <section id="mods"><div class="wrap">
+    <h2 class="h">Mods</h2>
+    <div class="grid">
+      <div class="panel">
+        <span class="head">Characters, courts, umpires</span>
+        <p>Add characters from other games, new courts and new umpires. A mod character plays on the same physics and AI
+          as the stock cast, with its own stats.</p>
+        <p>Browse and install mods in the game (Mods › Browse), or add a .zip of your own. Players share mods through the
+          mod store on Hugging Face; to upload, sign in under <a href="#accounts">Settings &amp; files</a> or in the game.</p>
+        <p>Making one? The mod standard, a tutorial and the tools are in
+          <a href="https://github.com/FIZL0/opentennis-mods" target="_blank" rel="noopener">opentennis-mods</a>.</p>
+      </div>
+      <figure>
+        <img src="shots/menu-chars.jpg" alt="The character select with mod characters" loading="lazy" onerror="this.hidden = true">
+        <figcaption>The character select with mod characters, in OpenTennis.</figcaption>
+      </figure>
+    </div>
+  </div></section>
+
+  <section id="settings"><div class="wrap">
+    <h2 class="h">Settings &amp; files</h2>
+    <p class="sub">Change settings without starting the game. Everything here lives in this browser only; changes apply the
+      next time the game starts.</p>
+    <div class="grid">
+      <div class="panel">
+        <span class="head">Player</span>
+        <div class="rows">
+          <div class="r"><span>Username</span><span class="end"><input type="text" id="username" maxlength="24" placeholder="Player" autocomplete="nickname" spellcheck="false"><button class="pill small" id="namesave">Save</button></span></div>
+        </div>
+        <p class="note" id="namenote">Shown on your lobby seats online, and the name a hosted lobby is listed under.</p>
+        <span class="head sky" id="accounts" style="margin-top: .6em">Accounts</span>
+        <div class="rows" id="hf"></div>
+        <p class="note">Your token stays in this browser and is only ever sent to Hugging Face. It is the only login the
+          game keeps.</p>
+      </div>
+      <div class="panel">
+        <span class="head">Storage</span>
+        <div id="storage"><p class="note">Measuring…</p></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top: clamp(14px, 2.4vw, 24px)">
+      <div class="panel">
+        <span class="head">Settings</span>
+        <div id="prefs"></div>
+      </div>
+      <div class="panel">
+        <span class="head">Installed mods</span>
+        <div id="modlist"></div>
+      </div>
+    </div>
+  </div></section>
+
+  <section id="donate"><div class="wrap">
+    <h2 class="h">Donate</h2>
+    <div class="grid">
+      <div class="panel">
+        <span class="head gold">Support my work</span>
+        <p>OpenTennis is free, and always will be: no paid builds, no locked features, no early access. If you'd like to
+          support my work, you can chip in on Ko-fi. What it has taken so far:</p>
+        <div class="stats" id="stats" hidden></div>
+        <a class="pill gold big" href="https://ko-fi.com/fizlo" target="_blank" rel="noopener">Chip in on Ko-fi</a>
+      </div>
+      <figure>
+        <img src="shots/rally-grass.jpg" alt="A rally on a grass court" loading="lazy" onerror="this.hidden = true">
+        <figcaption>A rally on grass, in OpenTennis.</figcaption>
+      </figure>
+    </div>
+  </div></section>
+
+  <footer><div class="wrap">
+    <nav><a href="#play">Play</a><a href="#about">About</a><a href="#mods">Mods</a><a href="#settings">Settings &amp; files</a><a href="#donate">Donate</a>
+      <a href="https://discord.gg/kCkz5hFNXG" target="_blank" rel="noopener">Discord</a><a href="https://github.com/FIZL0/opentennis" target="_blank" rel="noopener">GitHub</a></nav>
+    <p>OpenTennis is an unofficial fan project, not affiliated with Sony Interactive Entertainment or Clap Hanz. Hot Shots
+      Tennis is their trademark. This site hosts no game data: you bring your own disc.</p>
+  </div></footer>
 </div>
 <!-- what the page is doing until the game draws (web.rs `shown`), or why it stopped -->
 <div id="boot"><div id="step">Loading…</div><div id="help" hidden>
-  <a href="">Reload</a><span> · </span><a id="gl" href="?webgl2">Try WebGL2</a><span> · </span><a href="?forget">Pick the ISO again</a><span> · </span><a id="copy" href="" hidden>Copy the error</a></div></div>
+  <a href="">Reload</a><span> · </span><a id="gl" href="?webgl2">Try WebGL2</a><span> · </span><a href="?site#settings">Settings &amp; files</a><span> · </span><a href="?forget">Pick the ISO again</a><span> · </span><a id="copy" href="" hidden>Copy the error</a></div></div>
 <script>
 // A LAN answer's link (M2k, `net/rtc.rs`), opened by the host scanning a guest's screen: hand it to the game's tab
 // and stop here (the game isn't loaded twice).
@@ -257,6 +424,27 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
   setInterval(check, 600000);
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
 }
+say('Opening this browser\'s storage…');
+const dir = await navigator.storage.getDirectory();
+const q = new URLSearchParams(location.search);
+if (q.has('forget')) {
+  await dir.removeEntry('disc.pack').catch(() => {});
+  q.delete('forget');
+  location.search = q.toString();
+  await new Promise(() => {});
+}
+// M96: no disc imported yet, or `?site`: the site (site.js), before any of the game is downloaded; it returns once a
+// disc is imported or Play is pressed
+{
+  const hasPack = await dir.getFileHandle('disc.pack').then(() => true, () => false);
+  if (!hasPack || q.has('site')) {
+    clearTimeout(stuck);
+    boot.hidden = true;
+    const { landing } = await import('./site.js');
+    await landing(dir, hasPack);
+    boot.hidden = false;
+  }
+}
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
 // (`?webgl2` forces it), or Settings → Display → Renderer (B273: `renderer` in settings.txt, which the game keeps in
@@ -331,15 +519,6 @@ window.hstWebGL2 = why => {
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
 const { default: init, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
-say('Opening this browser\'s storage…');
-const dir = await navigator.storage.getDirectory();
-const status = document.getElementById('status');
-const q = new URLSearchParams(location.search);
-if (q.has('forget')) {
-  await dir.removeEntry('disc.pack').catch(() => {});
-  q.delete('forget');
-  location.search = q.toString();
-}
 
 // the game's wasm, with how much of it has arrived
 async function wasm() {
@@ -398,7 +577,6 @@ async function start() {
   boot.hidden = false;
   say('Reading the disc pack…');
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
-  document.getElementById('disc').hidden = true;
   // (a phone's first run picks its graphics preset in the game: main_menu.rs `first`, graphics.rs PHONE)
   await init({ module_or_path: wasm() });
   say('Starting…');
@@ -527,26 +705,9 @@ async function start() {
 try {
   await start();
 } catch (e) {
+  // the pack went missing (forgotten in another tab): the site, to pick the ISO again
   if (e.name !== 'NotFoundError') throw e;
-  clearTimeout(stuck);
-  boot.hidden = true;
-  document.getElementById('disc').hidden = false;
-  document.getElementById('iso').onchange = ev => {
-    const file = ev.target.files[0];
-    if (!file) return;
-    status.textContent = 'Importing…';
-    const w = new Worker('./worker.js', { type: 'module' });
-    w.onmessage = async ({ data }) => {
-      if (data.progress) status.textContent = `Importing… ${Math.floor(100 * data.progress[0] / data.progress[1])}%`;
-      else if (data.error) status.textContent = `Couldn't import ${file.name}: ${data.error}`;
-      else if (data.hash) {
-        status.textContent = 'Imported. The ISO is no longer needed; you can delete it.';
-        w.terminate();
-        await start();
-      }
-    };
-    w.postMessage(file);
-  };
+  location.reload();
 }
 </script>
 </body>

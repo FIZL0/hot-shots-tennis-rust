@@ -573,7 +573,7 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
 
     #[test]
     fn versions_in_semver_order() {
-        let order = ["v0.1.0-beta.1", "v0.1.0-beta.2", "v0.1.0-beta.10", "v0.1.0-beta", "v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0-beta.1", "v1.0.0", "v1.10.0"];
+        let order = ["v0.1.0-alpha.1", "v0.1.0-alpha.2", "v0.1.0-alpha.10", "v0.1.0-beta", "v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0-beta.1", "v1.0.0", "v1.10.0"];
         for (i, a) in order.iter().enumerate() {
             for (j, b) in order.iter().enumerate() {
                 assert_eq!(newer(a, b), i > j, "{a} vs {b}");

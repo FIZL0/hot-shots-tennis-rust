@@ -36,9 +36,11 @@ if (AC) {
   };
 }
 const coarse = matchMedia('(pointer: coarse)');
+// M96: the site (index.html #disc, a scrolling page) is up: no pad, no fullscreen, no edge-swipe guard
+const site = () => document.getElementById('disc')?.hidden === false;
 const unlock = () => {
   for (const c of contexts) if (c.state !== 'running') c.resume().catch(() => {});
-  if (coarse.matches && !document.fullscreenElement && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) {
+  if (coarse.matches && !site() && !document.fullscreenElement && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) {
     // B112: either way up (the game follows a turn live)
     document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => {});
   }
@@ -358,7 +360,7 @@ window.hstTouchBuzz = vibrate => {
 };
 const update = () => {
   // gone when the game stops (index.html `fail`): its Reload must take the taps
-  const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
+  const want = touched && !anyReal() && !site() && !document.getElementById('boot')?.classList.contains('err');
   if (want !== shown) {
     shown = want;
     touch.root.hidden = !want;
@@ -378,7 +380,7 @@ for (const e of ['gamepadconnected', 'gamepaddisconnected']) addEventListener(e,
 // iOS Safari / Android Chrome edge swipes go back a page (and leave the game) despite `overscroll-behavior: none`:
 // swallow touches that start at the left/right edge (pointer events, so the touch stick, still fire), and keep a
 // spare history entry that a back gesture getting through only pops. Not on the ISO import page.
-const inGame = () => !document.getElementById('disc')?.offsetParent;
+const inGame = () => !site();
 addEventListener('touchstart', e => {
   // the touch that just landed (B165: `touches[0]` is the first one still held, so a stick thumb near the edge used to
   // swallow every other finger's touches too)
@@ -393,10 +395,10 @@ for (const t of ['touchstart', 'touchmove']) addEventListener(t, e => { if (ours
 // B256: a selection, select-all or callout starts nowhere on the page but in a text input (the boot text, the ISO
 // page and anything outside the canvas took them before), and one that got through anyway (iOS select-all) is dropped
 const typing = t => t instanceof Element && t.matches('input, textarea, [contenteditable]');
-for (const t of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart']) addEventListener(t, e => { if (!typing(e.target)) e.preventDefault(); }, { passive: false, capture: true });
+for (const t of ['gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart']) addEventListener(t, e => { if (!typing(e.target) && !site()) e.preventDefault(); }, { passive: false, capture: true });
 document.addEventListener('selectionchange', () => {
   const s = getSelection();
-  if (s && !s.isCollapsed && !typing(document.activeElement)) s.removeAllRanges();
+  if (s && !s.isCollapsed && !typing(document.activeElement) && !site()) s.removeAllRanges();
 });
 const guard = () => inGame() && history.pushState({ hst: 1 }, '', location.href);
 // pushed on a tap: Chrome skips entries a page added before any user activation

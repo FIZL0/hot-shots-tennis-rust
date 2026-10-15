@@ -17,5 +17,7 @@ build() {
 }
 build pkg
 build pkg-webgpu "--features webgpu"
+# M96: the site's pictures, our own renderer's promo shots (docs/screenshots, AGENT.md), copied in at build time
+mkdir -p web/shots && cp docs/screenshots/*.jpg web/shots/
 # B317: the build's commit, which an open page polls to offer a Refresh once a newer one is deployed (index.html)
 git rev-parse --short=7 HEAD 2>/dev/null > web/version.txt || date +%s > web/version.txt

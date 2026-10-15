@@ -1,7 +1,7 @@
 {
-  "name": "Hot Shots Tennis",
-  "short_name": "Hot Shots",
-  "description": "Hot Shots Tennis, played from your own disc image.",
+  "name": "OpenTennis",
+  "short_name": "OpenTennis",
+  "description": "OpenTennis: Hot Shots Tennis rewritten, played from your own disc image.",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
