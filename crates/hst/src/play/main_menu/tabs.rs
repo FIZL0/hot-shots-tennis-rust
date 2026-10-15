@@ -70,11 +70,9 @@ pub(super) fn path(iso: &str) -> std::path::PathBuf {
     super::Settings::path(iso).with_file_name("favorites.txt")
 }
 
-/// The saved favorites (none if there's no file yet). Before B394 the file was `favourites.txt`: read that if
-/// there's no `favorites.txt` yet (the next save writes the new name).
+/// The saved favorites (none if there's no file yet).
 pub(super) fn load(iso: &str) -> Favorites {
     crate::store::read_to_string(path(iso))
-        .or_else(|_| crate::store::read_to_string(path(iso).with_file_name("favourites.txt")))
         .map(|t| parse(&t))
         .unwrap_or_default()
 }
