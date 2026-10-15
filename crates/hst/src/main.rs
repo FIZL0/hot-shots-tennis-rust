@@ -257,6 +257,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
         }
         (None, None) => None,
     };
+    // M8f4: its model on the chair, whichever way it was picked
+    *mods::umpire::CHOSEN.lock().unwrap() = umpire_mod.as_ref().map(|u| u.dir.clone());
     if let Some(u) = umpire_mod.as_ref().filter(|_| !umpire_given) {
         umpire = u.donor;
     }
