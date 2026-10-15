@@ -168,7 +168,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let host = m.seats[0] == Some(dev);
     let s = m.sel;
     match m.screen {
-        Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
+        Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
         Screen::Main if m.main_rows().get(s) == Some(&super::home::Row::Update) => v.extend([(Act::UpDown, "Move"), (Act::Ok, crate::update::button()), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { "Quit" } else { "Choose" })]),

@@ -842,7 +842,8 @@ const ASK_TOP: f32 = 226.0;
 
 impl Menu {
     /// B205: one press on the main menu while the popup is up (it takes them all): up/down/left/right move between
-    /// Reload and Later, ✕ chooses, ○ is Later. Returns whether the popup was up.
+    /// Reload and Later, ✕ chooses; ○ does nothing (B387: only Later closes it, and Browse then keeps a Reload pill
+    /// while the change stands). Returns whether the popup was up.
     pub(super) fn ask_step(&mut self, k: Press, out: &mut Vec<Effect>) -> bool {
         let Some(a) = self.add.ask else { return false };
         if k.up || k.down || k.left || k.right {
@@ -855,7 +856,7 @@ impl Menu {
                 self.add.status = e;
                 self.add.ask = None;
             }
-        } else if k.ok || k.back {
+        } else if k.ok {
             self.add.ask = None;
             out.push(Effect::Sound(1));
         }
@@ -946,8 +947,8 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
         d.out.remove(i);
     }
-    // B221: a tap off the popup is Later
-    d.popup(Some(super::pointer::Act::Row(1, super::pointer::OK)));
+    // B387: a tap off the popup does nothing, as ○: only Later closes it
+    d.popup(None);
     d.anchor = super::Anchor::Span;
     d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
     d.anchor = super::Anchor::Centre;
@@ -1442,6 +1443,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
     v.kind = std::env::var("HST_KIND").ok().and_then(|k| k.parse::<usize>().ok()).and_then(|i| mods_kind::KINDS.get(i).copied()).unwrap_or_default();
     if screen == "browsemods" || screen == "mymods" {
         v.page = Page::Browse;
+        // B387: `HST_RELOAD=1`: mods changed (Later chosen), the heading's Reload shown
+        v.changed = std::env::var_os("HST_RELOAD").is_some();
         v.store = Some(
             v.list.iter().take(if screen == "browsemods" { 60 } else { 9 }).enumerate().map(|(i, md)| {
                 let meta = modstore::Meta {
@@ -1948,6 +1951,10 @@ mod tests {
         assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Mods)));
         // B205: back on the main menu the popup asks (Reload chosen) and takes the presses; Later closes it, the note stays
         assert_eq!(m.add.ask, Some(0));
+        // B387: ○ doesn't close it, only Later does
+        let out = m.step(super::super::Dev::Keys, Press { back: true, ..default() });
+        assert_eq!((m.add.ask, m.screen), (Some(0), Screen::Main));
+        assert!(out.is_empty(), "{out:?}");
         let out = m.step(super::super::Dev::Keys, Press { down: true, ..default() });
         assert_eq!((m.add.ask, m.sel), (Some(1), m.main_at(super::super::home::Row::Mods)));
         assert_eq!(out, [Effect::Sound(0)]);
@@ -1959,6 +1966,12 @@ mod tests {
         assert_eq!(m.screen, Screen::Mods);
         m.mods_step(Press { back: true, ..default() }, &mut Vec::new());
         assert_eq!((m.screen, m.add.ask), (Screen::Main, None));
+        // B387: after Later, Browse (where Mods opens) keeps a Reload in its heading, as Installed's pill
+        m.step(super::super::Dev::Keys, ok());
+        assert_eq!((m.screen, m.add.page), (Screen::Mods, Page::Browse));
+        assert_eq!(m.add.words().last(), Some(&"Reload"));
+        m.add.changed = false;
+        assert!(!m.add.words().contains(&"Reload"));
     }
 
     /// A mod in a folder put in by hand (here a pack's) isn't removed: the press says where to delete it.

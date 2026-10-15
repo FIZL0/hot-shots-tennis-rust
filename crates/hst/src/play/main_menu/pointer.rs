@@ -529,13 +529,13 @@ pub(super) mod tests {
         assert_eq!(at(-200.0, 300.0), None, "off the window");
     }
 
-    /// Popups: a tap off the mods' Reload / Later popup is Later; the lobby's topics close on Cancel.
+    /// Popups: a tap off the mods' Reload / Later popup does nothing (B387: only Later closes it); Later closes it.
     #[test]
     fn taps_outside_popups() {
         let mut m = Menu::default();
         m.add.ask = Some(0);
-        assert_eq!(hits(&m).1, Some(Act::Row(1, OK)));
-        let fx = tap(&mut m, 40.0, 400.0);
+        assert_eq!(hits(&m).1, None);
+        let fx = m.point(super::super::Dev::Keys, Act::Row(1, OK), true);
         assert_eq!((m.add.ask, m.screen), (None, Screen::Main));
         assert_eq!(fx.last(), Some(&Effect::Sound(1)));
     }
