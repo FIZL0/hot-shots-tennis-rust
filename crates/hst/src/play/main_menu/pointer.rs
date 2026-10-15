@@ -622,19 +622,22 @@ pub(super) mod tests {
             frame(&mut app, &mut m, at, n);
             assert_eq!(m.sel, copy + 1, "frame {n}");
         }
-        // the name entry with the mouse resting on E: the pad walks every key and button
+        // the name entry (B441: the keyboard popup) with the mouse resting on E: the pad walks every key and button
         let mut m = Menu { screen: Screen::Code, sel: 4, net: super::super::online::View { naming: true, ..default() }, ..default() };
         let at = centre(&m, 4);
-        // the name's 40 keys, then Delete Clear Save Back
+        // the popup's 40 keys, ten a row, then Space Delete Clear Save
         let keys = 40;
         let mut seen = std::collections::BTreeSet::new();
         for n in 0..(keys + 4) * 2 {
             frame(&mut app, &mut m, at, n);
             seen.insert(m.sel);
-            let row_end = if m.sel < keys { m.sel % 8 == 7 } else { m.sel == keys + 3 };
+            let row_end = if m.sel < keys { m.sel % 10 == 9 } else { m.sel == keys + 3 };
             // → along the row (it wraps), then ↓ at its end
             m.step(Dev::Keys, right);
             if row_end {
+                // the row's first key (↓ from the wide keys lands on the second)
+                frame(&mut app, &mut m, at, n);
+                seen.insert(m.sel);
                 m.step(Dev::Keys, Press { down: true, ..default() });
             }
         }
