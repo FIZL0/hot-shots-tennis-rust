@@ -4,7 +4,7 @@
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
 //! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
-//! time paused, until the next mode's render pipelines are built; the BGM stops with the old mode. Leaving a running
+//! time paused, until the next mode's render pipelines are built and its uploads are done; the BGM stops with the old mode. Leaving a running
 //! mode, its last frame zooms up about the screen centre while it fades out over the loading screen first, as the
 //! original's menu → match handoff looks (similar, not frame-matched: user 2026-10-11).
 
@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy::window::{Monitor, PrimaryWindow};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 type Build = Box<dyn FnOnce(&mut App) + Send + Sync>;
 type Cover = Box<dyn FnOnce(&mut World, Entity) + Send + Sync>;
@@ -89,7 +89,7 @@ struct Base {
 }
 
 /// The loading screen: `up` frames shown before the switch, then `after` frames since it, `idle` of them in a row
-/// with no pipeline compiling.
+/// with no pipeline compiling and the render side settled ([`Unsettled`]).
 #[derive(Component, Default)]
 pub(crate) struct Loading {
     up: u32,
@@ -125,9 +125,33 @@ impl Compiling {
     }
 }
 
+/// P31: the render side's last frame didn't settle yet: it uploaded new textures or meshes (a material whose textures
+/// land late isn't specialised, so its pipelines aren't queued yet: `Compiling` can read 0 before they are) or took
+/// longer than [`SETTLED`] (an upload, a compile holding a lock, the GPU catching up). Without a renderer it never is.
+#[derive(Resource, Clone, Default)]
+struct Unsettled(Arc<AtomicBool>);
+
+/// The longest render frame (from the last one's end) that counts as settled.
+const SETTLED: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the render frame that just ended uploaded something or took long (`Unsettled`), since `last` ended.
+fn unsettled(
+    images: Res<bevy::render::render_asset::ExtractedAssets<bevy::render::texture::GpuImage>>,
+    meshes: Res<bevy::render::render_asset::ExtractedAssets<bevy::render::mesh::RenderMesh>>,
+    u: Res<Unsettled>,
+    mut last: Local<Option<bevy::platform::time::Instant>>,
+) {
+    let now = bevy::platform::time::Instant::now();
+    let slow = last.is_some_and(|t| now.saturating_duration_since(t) > SETTLED);
+    *last = Some(now);
+    u.0.store(slow || !images.added.is_empty() || !meshes.added.is_empty(), Ordering::Relaxed);
+}
+
 pub fn plugin(app: &mut App) {
     let compiling = Compiling::default();
+    let settle = Unsettled::default();
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        r.insert_resource(settle.clone()).add_systems(bevy::render::Render, unsettled.in_set(bevy::render::RenderSystems::Cleanup));
         r.insert_resource(compiling.clone()).add_systems(
             bevy::render::Render,
             (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| {
@@ -141,6 +165,7 @@ pub fn plugin(app: &mut App) {
     }
     app.init_resource::<Next>()
         .insert_resource(compiling)
+        .insert_resource(settle)
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
         .add_systems(First, unwarm.before(switch))
@@ -323,18 +348,20 @@ fn show_loading(world: &mut World) {
     }
 }
 
-/// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling
-/// (10 s at most), and starts game time again.
+/// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling and nothing
+/// left uploading (10 s at most), and starts game time again.
 fn loaded(world: &mut World) {
     let compiling = world.get_resource::<Compiling>().map_or(0, |c| c.0.load(Ordering::Relaxed));
+    let unsettled = world.get_resource::<Unsettled>().is_some_and(|u| u.0.load(Ordering::Relaxed));
     let mut q = world.query::<(Entity, &mut Loading)>();
     let Some((e, mut l)) = q.iter_mut(world).next().filter(|(_, l)| l.built) else { return };
     l.after += 1;
-    l.idle = if compiling == 0 { l.idle + 1 } else { 0 };
+    l.idle = if compiling == 0 && !unsettled { l.idle + 1 } else { 0 };
     if (l.after < 5 || l.idle < 3) && l.after < 600 {
         return;
     }
-    info!("loading screen down after {} frames", l.after);
+    info!("loading screen down after {} frames at {:.2} s", l.after, crate::stall::since_start());
+    crate::stall::watch();
     world.entity_mut(e).despawn();
     if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
         t.unpause();

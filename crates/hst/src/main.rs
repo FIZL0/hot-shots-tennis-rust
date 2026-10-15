@@ -51,6 +51,7 @@ mod sandbox;
 mod shade;
 mod shadow;
 mod spring;
+mod stall;
 mod textures;
 mod update;
 mod vertex_patch;
@@ -393,7 +394,7 @@ fn start(argv: Vec<String>) {
     app.add_plugins(play::touch_pad::plugin);
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
-        app.add_systems(Last, (log_fps, log_assets));
+        app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
     }
     if std::env::var_os("HST_KEYS").is_some() {
         app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
