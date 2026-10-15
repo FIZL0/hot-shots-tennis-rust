@@ -444,13 +444,16 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     }
     let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
     let Some(sheet) = sheet else { return super::panel::image(images, data) };
-    // P50: while a mode starts, on the async pool (`land` puts it in when it's done)
-    if let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get().filter(|_| DEFER.get()) {
-        let handle = images.reserve_handle();
-        let data = data.to_vec();
-        BUILDING.lock().unwrap().push((handle.clone(), pool.spawn(async move { rebuilt(&data, &name, sheet) })));
-        crate::textures::ours(handle.id(), Vec2::splat(K as f32));
-        return handle;
+    // P50: while a mode starts, handed off (`crate::jobs`; `land` puts it in when it's done)
+    if DEFER.get() {
+        // B409: a step at a time, so the browser draws frames in between
+        let mut steps = Steps::new(data, &name, sheet);
+        if let Some(job) = crate::jobs::spawn_steps(move || steps.step()) {
+            let handle = images.reserve_handle();
+            BUILDING.lock().unwrap().push((handle.clone(), job));
+            crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+            return handle;
+        }
     }
     let handle = images.add(rebuilt(data, &name, sheet));
     crate::textures::ours(handle.id(), Vec2::splat(K as f32));
@@ -463,10 +466,10 @@ thread_local! {
 }
 
 /// P50: rebuilt sheets still being drawn on the async pool, each with the handle it goes in.
-static BUILDING: std::sync::Mutex<Vec<(Handle<Image>, bevy::tasks::Task<Image>)>> = std::sync::Mutex::new(Vec::new());
+static BUILDING: std::sync::Mutex<Vec<(Handle<Image>, crate::jobs::Job<Image>)>> = std::sync::Mutex::new(Vec::new());
 
 /// P50: sheets [`image`] rebuilds on this thread from now (`on`) are drawn on the async pool, not right away: a mode's
-/// start (`mode.rs`) has them drawn on the other cores (one at a time between frames in the browser) while it goes on,
+/// start (`mode.rs`) has them drawn on the other cores (a frame's budget at a time in the browser, B409) while it goes on,
 /// and waits for them ([`building`]). A whole menu's took 0.5 s of one frame on desktop.
 pub(crate) fn defer(on: bool) {
     DEFER.set(on);
@@ -481,7 +484,7 @@ pub(crate) fn building() -> bool {
 pub(crate) fn land(images: Option<ResMut<Assets<Image>>>) {
     let Some(mut images) = images else { return };
     BUILDING.lock().unwrap().retain_mut(|(handle, task)| {
-        let Some(img) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) else { return true };
+        let Some(img) = task.poll() else { return true };
         // its mode already gone: nothing to put it in
         let _ = images.insert(handle.id(), img);
         false
@@ -489,39 +492,92 @@ pub(crate) fn land(images: Option<ResMut<Assets<Image>>>) {
 }
 
 /// Sheet `name` (`data`, one of ours) rebuilt.
-fn rebuilt(data: &[u8], name: &str, sheet: &Sheet) -> Image {
-    let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
-    let (w, h) = (pic.width as usize, pic.height as usize);
-    let mut labels = sheet.labels.to_vec();
-    let mut shadow = false;
-    if let Some(words) = sheet.title {
-        let (x, y, lw, lh) = title_box(&pic.rgba, w, h);
-        labels.push((x, y, lw, lh, words));
-        shadow = true;
-    }
-    let chars: Vec<(u16, u16, u16, u16, String)> = if name == "word" { glyph_boxes(&pic.rgba, w) } else { vec![] };
-    labels.extend(chars.iter().map(|(x, y, lw, lh, c)| (*x, *y, *lw, *lh, c.as_str())));
-    let pills = PILLS.iter().find(|p| p.0 == name).map_or(&[][..], |p| p.1);
-    let mut out = rebuild(w, h, &pic.rgba, pills, &labels, if name == "word" { BOLD } else { HEAVY }, shadow);
-    if !sheet.stamps.is_empty() {
-        let font = ab_glyph::FontRef::try_from_slice(HEAVY).expect("menu font");
-        // a ring's outer pixels lie a little past its cell: clear round every cell before any is stamped
-        for &((x, y, w, h), ..) in sheet.stamps {
-            clear(&mut out, [x as f32 - 4.0, y as f32 - 4.0, w as f32 + 8.0, h as f32 + 8.0]);
-        }
-        for &((x, y, w, h), words, l) in sheet.stamps {
-            stamp(&mut out, &font, [x as f32, y as f32, w as f32, h as f32], words, &l);
+fn rebuilt(data: &[u8], name: &str, sheet: &'static Sheet) -> Image {
+    let mut steps = Steps::new(data, name, sheet);
+    loop {
+        if let Some(img) = steps.step() {
+            return img;
         }
     }
-    if let Some(icons) = sheet.icons {
-        icons(&mut out);
-    }
-    if let Ok(dir) = std::env::var("HST_MENU_ART") {
-        let _ = image::save_buffer(format!("{dir}/{name}.png"), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
-    }
-    let (w, h) = (out.width(), out.height());
-    Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
 }
+
+/// B409: sheet `name` rebuilt a step at a time ([`Steps::step`]), each a few ms: the browser draws frames between
+/// them (`jobs`), where one whole sheet was 0.2-0.3 s of a frame on desktop and over a second on a phone.
+struct Steps {
+    name: String,
+    sheet: &'static Sheet,
+    redo: Rebuild,
+    /// The stamps drawn so far (their cells cleared first).
+    stamps: Option<usize>,
+    /// The finished sheet's pixels, unpremultiplied so far.
+    pixels: Option<Vec<u8>>,
+}
+
+impl Steps {
+    fn new(data: &[u8], name: &str, sheet: &'static Sheet) -> Steps {
+        let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
+        let (w, h) = (pic.width as usize, pic.height as usize);
+        let mut labels: Vec<(u16, u16, u16, u16, String)> = sheet.labels.iter().map(|&(x, y, lw, lh, t)| (x, y, lw, lh, t.to_string())).collect();
+        let mut shadow = false;
+        if let Some(words) = sheet.title {
+            let (x, y, lw, lh) = title_box(&pic.rgba, w, h);
+            labels.push((x, y, lw, lh, words.to_string()));
+            shadow = true;
+        }
+        if name == "word" {
+            labels.extend(glyph_boxes(&pic.rgba, w));
+        }
+        let pills = PILLS.iter().find(|p| p.0 == name).map_or(&[][..], |p| p.1);
+        let redo = Rebuild::new(w, h, &pic.rgba, pills, labels, if name == "word" { BOLD } else { HEAVY }, shadow);
+        Steps { name: name.to_string(), sheet, redo, stamps: None, pixels: None }
+    }
+
+    /// Does the next piece; the image once it's all done.
+    fn step(&mut self) -> Option<Image> {
+        if !self.redo.step() {
+            return None;
+        }
+        let out = &mut self.redo.out;
+        let stamps = self.sheet.stamps;
+        if !stamps.is_empty() && self.stamps.is_none_or(|n| n < stamps.len()) {
+            let Some(n) = self.stamps else {
+                // a ring's outer pixels lie a little past its cell: clear round every cell before any is stamped
+                for &((x, y, w, h), ..) in stamps {
+                    clear(out, [x as f32 - 4.0, y as f32 - 4.0, w as f32 + 8.0, h as f32 + 8.0]);
+                }
+                self.stamps = Some(0);
+                return None;
+            };
+            let font = ab_glyph::FontRef::try_from_slice(HEAVY).expect("menu font");
+            let ((x, y, w, h), words, l) = stamps[n];
+            stamp(out, &font, [x as f32, y as f32, w as f32, h as f32], words, &l);
+            self.stamps = Some(n + 1);
+            return None;
+        }
+        let Some(px) = &mut self.pixels else {
+            if let Some(icons) = self.sheet.icons {
+                icons(out);
+            }
+            if let Ok(dir) = std::env::var("HST_MENU_ART") {
+                let _ = image::save_buffer(format!("{dir}/{}.png", self.name), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
+            }
+            self.pixels = Some(Vec::with_capacity(out.data().len()));
+            return None;
+        };
+        let all = out.pixels();
+        let at = px.len() / 4;
+        let to = (at + BAND).min(all.len());
+        px.extend(all[at..to].iter().map(|c| c.demultiply()).flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()]));
+        if to < all.len() {
+            return None;
+        }
+        let (w, h) = (out.width(), out.height());
+        Some(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, self.pixels.take().unwrap(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD))
+    }
+}
+
+/// B409: output pixels a step of [`Steps`] / [`Rebuild`] goes through (scaled up or unpremultiplied).
+const BAND: usize = 1 << 16;
 
 /// A menu wall (graph paper: a dark line every 16 texels, a faint one between) drawn again clean at `K`×: a column or
 /// row that is mostly one line colour on the disc is that line, the hand-drawn wobble and dashes are dropped. Each
@@ -573,28 +629,75 @@ pub(crate) fn unpremultiply(p: Pixmap) -> Vec<u8> {
 }
 
 /// The sheet at `K`×: labels erased and set again, the rest snapped sharp.
-fn rebuild(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: &[Label], font: &[u8], shadow: bool) -> Pixmap {
-    let mut rgba: Vec<[f32; 4]> = rgba8.chunks(4).map(|c| [c[0], c[1], c[2], c[3]].map(|v| v as f32 / 255.0)).collect();
-    let styles: Vec<Style> = labels.iter().map(|l| Style::sample(&rgba, w, h, l)).collect();
-    for (&(x, y, lw, lh, t), s) in labels.iter().zip(&styles) {
-        // an outline's faint outer pixel lies just past the ink box (left behind, it reads as a cut-off outline round
-        // the new one); a title's old shadow stands 2 px down and right of its words
-        let m = (s.width > 0.0) as u16;
-        let (x, y) = (x.saturating_sub(m), y.saturating_sub(m));
-        let pad = 2 * m + if shadow { 3 } else { 0 };
-        erase(&mut rgba, w, h, &(x, y, (lw + pad).min(w as u16 - x), (lh + pad).min(h as u16 - y), t));
-    }
-    let mut out = upscale(&rgba, w, h);
-    for &(x, y, pw, ph) in pills {
+fn rebuild(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: &[Label], font: &'static [u8], shadow: bool) -> Pixmap {
+    let labels = labels.iter().map(|&(x, y, lw, lh, t)| (x, y, lw, lh, t.to_string())).collect();
+    let mut r = Rebuild::new(w, h, rgba8, pills, labels, font, shadow);
+    while !r.step() {}
+    r.out
+}
+
+/// [`rebuild`] a step at a time (B409): the disc picture with its labels erased, then scaled up a band of rows a step,
+/// the pills, then a label a step.
+struct Rebuild {
+    w: usize,
+    h: usize,
+    /// The erased picture, premultiplied, so a colour doesn't bleed out of a transparent neighbour.
+    pm: Vec<[f32; 4]>,
+    pills: Vec<(u16, u16, u16, u16, [Vec<u8>; 3])>,
+    labels: Vec<(u16, u16, u16, u16, String)>,
+    styles: Vec<Style>,
+    font: &'static [u8],
+    shadow: bool,
+    out: Pixmap,
+    /// Output rows scaled up so far, then labels set (past the rows).
+    at: usize,
+}
+
+impl Rebuild {
+    fn new(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: Vec<(u16, u16, u16, u16, String)>, font: &'static [u8], shadow: bool) -> Rebuild {
+        let mut rgba: Vec<[f32; 4]> = rgba8.chunks(4).map(|c| [c[0], c[1], c[2], c[3]].map(|v| v as f32 / 255.0)).collect();
+        let styles: Vec<Style> = labels.iter().map(|&(x, y, lw, lh, ref t)| Style::sample(&rgba, w, h, &(x, y, lw, lh, t))).collect();
+        for (&(x, y, lw, lh, ref t), s) in labels.iter().zip(&styles) {
+            // an outline's faint outer pixel lies just past the ink box (left behind, it reads as a cut-off outline round
+            // the new one); a title's old shadow stands 2 px down and right of its words
+            let m = (s.width > 0.0) as u16;
+            let (x, y) = (x.saturating_sub(m), y.saturating_sub(m));
+            let pad = 2 * m + if shadow { 3 } else { 0 };
+            erase(&mut rgba, w, h, &(x, y, (lw + pad).min(w as u16 - x), (lh + pad).min(h as u16 - y), t));
+        }
         // colours from the disc bar: rim and ring at the top middle, the fill halfway down left of the words
-        let at = |dx: u16, dy: u16| rgba8[((y + dy) as usize * w + (x + dx) as usize) * 4..][..3].to_vec();
-        pill(&mut out, x, y, pw, ph, [at(pw / 2, 0), at(pw / 2, 2), at(20, ph / 2)]);
+        let pills = pills
+            .iter()
+            .map(|&(x, y, pw, ph)| {
+                let at = |dx: u16, dy: u16| rgba8[((y + dy) as usize * w + (x + dx) as usize) * 4..][..3].to_vec();
+                (x, y, pw, ph, [at(pw / 2, 0), at(pw / 2, 2), at(20, ph / 2)])
+            })
+            .collect();
+        let pm = rgba.iter().map(|c| [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]).collect();
+        let out = Pixmap::new(w as u32 * K, h as u32 * K).expect("sheet size");
+        Rebuild { w, h, pm, pills, labels, styles, font, shadow, out, at: 0 }
     }
-    let font = ab_glyph::FontRef::try_from_slice(font).expect("menu font");
-    for (l, s) in labels.iter().zip(&styles) {
-        label(&mut out, &font, l, s, shadow);
+
+    /// Does the next piece; true once it's all done.
+    fn step(&mut self) -> bool {
+        let oh = self.out.height() as usize;
+        if self.at < oh {
+            let to = (self.at + (BAND / self.out.width() as usize).max(1)).min(oh);
+            upscale(&self.pm, self.w, self.h, &mut self.out, self.at..to);
+            self.at = to;
+            if to == oh {
+                for (x, y, pw, ph, cols) in std::mem::take(&mut self.pills) {
+                    pill(&mut self.out, x, y, pw, ph, cols);
+                }
+            }
+            return false;
+        }
+        let Some(&(x, y, w, h, ref t)) = self.labels.get(self.at - oh) else { return true };
+        let font = ab_glyph::FontRef::try_from_slice(self.font).expect("menu font");
+        label(&mut self.out, &font, &(x, y, w, h, t), &self.styles[self.at - oh], self.shadow);
+        self.at += 1;
+        self.at - oh == self.labels.len()
     }
-    out
 }
 
 /// A stadium in `cols` (rim, ring, fill), outer edge on the disc box, 2 disc px each for the rim and ring.
@@ -1027,14 +1130,11 @@ fn glyph_boxes(rgba: &[u8], w: usize) -> Vec<(u16, u16, u16, u16, String)> {
 }
 
 /// `K`× bilinear, then wherever the four disc pixels under it differ a lot, the edge between them snapped to a pixel.
-fn upscale(px: &[[f32; 4]], w: usize, h: usize) -> Pixmap {
-    let (ow, oh) = (w * K as usize, h * K as usize);
-    let mut out = Pixmap::new(ow as u32, oh as u32).expect("sheet size");
-    // premultiplied, so a colour doesn't bleed out of a transparent neighbour
-    let pm: Vec<[f32; 4]> = px.iter().map(|c| [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]).collect();
+fn upscale(pm: &[[f32; 4]], w: usize, h: usize, out: &mut Pixmap, rows: std::ops::Range<usize>) {
+    let ow = w * K as usize;
     let at = |x: isize, y: isize| pm[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize];
     let data = out.pixels_mut();
-    for oy in 0..oh {
+    for oy in rows {
         let fy = (oy as f32 + 0.5) / K as f32 - 0.5;
         let (y0, ty) = (fy.floor() as isize, fy - fy.floor());
         for ox in 0..ow {
@@ -1062,7 +1162,6 @@ fn upscale(px: &[[f32; 4]], w: usize, h: usize) -> Pixmap {
             data[oy * ow + ox] = tiny_skia::PremultipliedColorU8::from_rgba(u(c[0]), u(c[1]), u(c[2]), (a * 255.0 + 0.5) as u8).expect("premultiplied");
         }
     }
-    out
 }
 
 /// `s` as one path in font units (y down), and its advance.

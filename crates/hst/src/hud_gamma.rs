@@ -19,6 +19,7 @@
 //! ponytail: UI pieces overlapping each other still blend in linear among themselves; only their sum goes over the
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraProjection, ImageRenderTarget, RenderTarget};
 use bevy::image::ImageSampler;
 use bevy::prelude::*;

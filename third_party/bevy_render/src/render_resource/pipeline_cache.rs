@@ -653,7 +653,18 @@ impl PipelineCache {
             }
         }
 
+        // hst (B409): in the browser a pipeline is created right here on the page's only thread (WebGL compiles and
+        // links it before returning), and a mode's start queues dozens at once: 0.3-0.4 s of one frame on desktop,
+        // seconds on a phone, with the page frozen. Once this frame's budget is used, the queued ones wait for the
+        // next frame (still waiting, so counted as compiling).
+        #[cfg(target_arch = "wasm32")]
+        let until = bevy_platform::time::Instant::now() + core::time::Duration::from_millis(12);
         for id in waiting_pipelines {
+            #[cfg(target_arch = "wasm32")]
+            if matches!(pipelines[id].state, CachedPipelineState::Queued) && bevy_platform::time::Instant::now() >= until {
+                self.waiting_pipelines.insert(id);
+                continue;
+            }
             self.process_pipeline(&mut pipelines[id], id);
         }
 
