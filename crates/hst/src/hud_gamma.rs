@@ -19,19 +19,18 @@
 //! ponytail: UI pieces overlapping each other still blend in linear among themselves; only their sum goes over the
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
 
-use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraProjection, ImageRenderTarget, RenderTarget};
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureFormat};
-use bevy::shader::ShaderRef;
+use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy::window::PrimaryWindow;
+
+mod out;
 
 pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "hud_gamma.wgsl");
-    bevy::asset::embedded_asset!(app, "persist.wgsl");
-    app.add_plugins((UiMaterialPlugin::<Composite>::default(), UiMaterialPlugin::<Mix>::default()))
-        .add_systems(Startup, setup)
+    out::plugin(app);
+    app.add_systems(Startup, setup)
         .add_systems(Update, encode_pbr_output)
         .add_systems(PostUpdate, (retarget, clear, follow_window, persist).chain().before(bevy::camera::CameraUpdateSystems))
         .add_systems(PostUpdate, pixel_aspect.after(bevy::camera::CameraUpdateSystems));
@@ -41,62 +40,21 @@ pub fn plugin(app: &mut App) {
 struct Targets {
     scene: Handle<Image>,
     hud: Handle<Image>,
-    /// The composite of the scene, of `last[0]` and of `last[1]`: the node swaps between them, as changing what one
-    /// samples prepares its bind group again, every frame of a match (B357).
-    composite: [Handle<Composite>; 3],
-    /// The node showing one of them.
-    node: Entity,
-    /// The camera putting the composite on the window: only in the view (B117's fixed aspect ratios), black around it.
+    /// The camera putting the composite on the window (`out`): only in the view (B117's fixed aspect ratios), black
+    /// around it.
     out: Entity,
-    /// The persistence's two images, cameras and mixes: frame parity `i` draws `mixes[i]` into `last[i]` with
-    /// cameras[i], from the scene and `last[1 - i]`.
+    /// The persistence's two images: frame parity `i` mixes the scene and `last[1 - i]` into `last[i]`.
     last: [Handle<Image>; 2],
-    cameras: [Entity; 2],
-    mixes: [Handle<Mix>; 2],
 }
 
 /// Present while a match runs (the game's match scene turns its frame persistence on, menus have none).
 #[derive(Resource)]
 pub struct Persist;
 
-#[derive(AsBindGroup, Asset, TypePath, Clone)]
-struct Mix {
-    #[texture(0)]
-    #[sampler(3)]
-    scene: Handle<Image>,
-    #[texture(1)]
-    last: Handle<Image>,
-    /// x: how much of the last frame; y: the sun glare's FIX (0 = none), zw: its texel in uv (vec4 for WebGL's
-    /// 16-byte uniforms)
-    #[uniform(2)]
-    weight: Vec4,
-}
-
-impl UiMaterial for Mix {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://hst/persist.wgsl".into()
-    }
-}
-
-#[derive(AsBindGroup, Asset, TypePath, Clone)]
-struct Composite {
-    #[texture(0)]
-    #[sampler(2)]
-    scene: Handle<Image>,
-    #[texture(1)]
-    hud: Handle<Image>,
-}
-
-impl UiMaterial for Composite {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://hst/hud_gamma.wgsl".into()
-    }
-}
-
 /// The composite camera's layer, so no sprite or mesh of the game's ends up on it.
 const LAYER: usize = 31;
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<Composite>>, mut mixes: ResMut<Assets<Mix>>) {
+fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let target = |f| Image::new_target_texture(1, 1, f, None);
     let (scene, hud) = (images.add(target(TextureFormat::Rgba8Unorm)), images.add(target(TextureFormat::Rgba8UnormSrgb)));
     commands.spawn((
@@ -106,40 +64,11 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         IsDefaultUiCamera,
         Msaa::Off,
     ));
-    // HDR like the scene cameras, so the mix lands in the image unencoded
+    // raw like the scene image, so the mix lands in it unencoded
     let last = [(); 2].map(|_| images.add(target(TextureFormat::Rgba8Unorm)));
-    let composite = [&scene, &last[0], &last[1]].map(|shown| materials.add(Composite { scene: shown.clone(), hud: hud.clone() }));
-    let out = commands
-        .spawn((Camera2d, Camera { order: 51, output_mode: bevy::camera::CameraOutputMode::Write { blend_state: None, clear_color: ClearColorConfig::Custom(Color::BLACK) }, ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
-        .id();
-    let node = commands
-        .spawn((
-            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-            MaterialNode(composite[0].clone()),
-            UiTargetCamera(out),
-        ))
-        .id();
-    let mixes = [0, 1].map(|i| mixes.add(Mix { scene: scene.clone(), last: last[1 - i].clone(), weight: Vec4::ZERO }));
-    let cameras = [0, 1].map(|i| {
-        let cam = commands
-            .spawn((
-                Camera2d,
-                Camera { order: 48 + i as isize, is_active: false, ..default() },
-                RenderTarget::Image(ImageRenderTarget { handle: last[i].clone(), scale_factor: 1.0 }),
-                bevy::camera::Hdr,
-                bevy::core_pipeline::tonemapping::DebandDither::Disabled,
-                Msaa::Off,
-                RenderLayers::layer(LAYER - 1),
-            ))
-            .id();
-        commands.spawn((
-            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-            MaterialNode(mixes[i].clone()),
-            UiTargetCamera(cam),
-        ));
-        cam
-    });
-    commands.insert_resource(Targets { scene, hud, composite, node, out, last, cameras, mixes });
+    let out = commands.spawn(out::camera()).id();
+    commands.insert_resource(out::Frame { scene: scene.clone(), hud: hud.clone(), last: last.clone(), mix: None });
+    commands.insert_resource(Targets { scene, hud, out, last });
 }
 
 /// A 3D camera drawing into the scene image.
@@ -194,11 +123,8 @@ fn follow_window(
     g: Res<crate::graphics::Graphics>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<Composite>>,
-    mut mixes: ResMut<Assets<Mix>>,
     mut targets: Query<&mut RenderTarget>,
     mut cams: Query<&mut Camera>,
-    mut stale: Local<u8>,
 ) {
     let Ok(w) = window.single() else { return };
     // B117: the images are the view's size, the composite drawn only there
@@ -224,25 +150,12 @@ fn follow_window(
     for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
-            *stale = 2;
         }
     }
     // the composite samples whichever of these it shows
     for h in [&t.scene, &t.last[0], &t.last[1]] {
         if images.get(h).is_some_and(|i| i.sampler != sampler) {
             images.get_mut(h).unwrap().sampler = sampler.clone();
-            *stale = 2;
-        }
-    }
-    // the material's bind group holds the old texture views until it is prepared again, which can happen before the
-    // resized images are: again the frame after
-    if *stale > 0 {
-        *stale -= 1;
-        for c in &t.composite {
-            materials.get_mut(c).map(|m| m.into_inner());
-        }
-        for m in &t.mixes {
-            mixes.get_mut(m).map(|m| m.into_inner());
         }
     }
     for mut target in &mut targets {
@@ -262,9 +175,8 @@ fn follow_window(
     }
 }
 
-/// Each frame in a match: this parity's camera mixes the last frame into the scene, and the composite shows that.
+/// Each frame in a match: this parity's mix of the last frame into the scene, shown by the composite (`out`).
 /// The game mixes 25 % per 60 Hz frame; at a higher frame rate more per frame, so the trail fades as fast.
-#[allow(clippy::too_many_arguments)]
 fn persist(
     on: Option<Res<Persist>>,
     time: Res<Time<Real>>,
@@ -272,40 +184,24 @@ fn persist(
     sun: Option<Res<crate::shadow::Sun>>,
     view: Query<(&Projection, &Transform), With<crate::Orbit>>,
     images: Res<Assets<Image>>,
-    mut cams: Query<&mut Camera>,
-    mut mixes: ResMut<Assets<Mix>>,
-    mut node: Query<&mut MaterialNode<Composite>>,
+    mut frame: ResMut<out::Frame>,
     mut parity: Local<usize>,
 ) {
     *parity ^= 1;
     let i = *parity;
-    for (k, &e) in t.cameras.iter().enumerate() {
-        if let Ok(mut c) = cams.get_mut(e)
-            && c.is_active != (on.is_some() && k == i)
-        {
-            c.is_active = !c.is_active;
-        }
-    }
-    let shown = if on.is_some() {
-        if let Some(mut m) = mixes.get_mut(&t.mixes[i]) {
-            let fix = match (sun, view.single()) {
-                (Some(sun), Ok((Projection::Perspective(p), tf))) if crate::weather::now() < 2 => glare(sun.light, p, tf.rotation),
-                _ => 0.0,
-            };
-            // the game's field texel: 640 columns per 4:3 width, 224 lines
-            let size = images.get(&t.scene).map_or(UVec2::ONE, |i| i.size()).as_vec2();
-            let texel = Vec2::new(size.y * 4.0 / 3.0 / 640.0 / size.x, 1.0 / 224.0);
-            let w = if fix > 0.0 { 0.0 } else { 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0)) };
-            m.weight = Vec4::new(w, fix, texel.x, texel.y);
-        }
-        &t.composite[1 + i]
-    } else {
-        &t.composite[0]
-    };
-    if let Ok(mut n) = node.get_mut(t.node)
-        && n.0 != *shown
-    {
-        n.0 = shown.clone();
+    let mix = on.map(|_| {
+        let fix = match (sun, view.single()) {
+            (Some(sun), Ok((Projection::Perspective(p), tf))) if crate::weather::now() < 2 => glare(sun.light, p, tf.rotation),
+            _ => 0.0,
+        };
+        // the game's field texel: 640 columns per 4:3 width, 224 lines
+        let size = images.get(&t.scene).map_or(UVec2::ONE, |i| i.size()).as_vec2();
+        let texel = Vec2::new(size.y * 4.0 / 3.0 / 640.0 / size.x, 1.0 / 224.0);
+        let w = if fix > 0.0 { 0.0 } else { 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0)) };
+        (i, Vec4::new(w, fix, texel.x, texel.y))
+    });
+    if frame.mix != mix {
+        frame.mix = mix;
     }
 }
 
