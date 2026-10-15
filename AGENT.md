@@ -57,6 +57,8 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
 go under `tools/pcsx2.sh <cmd>`; pine.py tools take the same lock by themselves. In a parallel run `HST_PCSX2=N` gives
 each agent its own PCSX2 copy (tools, pad, PINE and lock all follow it). When you're done with the game for your task,
 close yours: `tools/pcsx2.sh tools/pcsx2-hst.sh stop` (waits for anything mid-use). Never `pkill pcsx2-qt`.
+Wine (Windows build checks): always `WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all wine …` so a fresh prefix doesn't pop the
+mono/gecko install dialogs on the user's desktop.
 Never `rm` with a glob (`rm -f context/x/*`): Claude Code's rm check prompts even in bypass mode and unattended
 runs sit on it until it auto-denies. Write each run to a fresh `context/<task>/runN/`, or let the tool overwrite its files.
 
