@@ -62,7 +62,7 @@ pub fn log_to_files(dir: &std::path::Path) {
     // the frame-rate log (`main.rs` log_fps, log_assets; `graphics.rs` log_draws) every 5 s: the phone's only profiler
     // SAFETY: first thing in android_main, before any thread of ours reads the environment
     unsafe { std::env::set_var("HST_FPS", "1") };
-    eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
+    eprintln!("OpenTennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
     // a close with no log line and no crash report says nothing: these say which kind of end it was
     unsafe {
         libc::atexit(on_exit);
@@ -203,7 +203,7 @@ fn page(mut commands: Commands) {
             ..default()
         })
         .with_children(|p| {
-            p.spawn((Text::new("Hot Shots Tennis"), font(7.0), TextColor(Color::srgb(1.0, 0.85, 0.3))));
+            p.spawn((Text::new("OpenTennis"), font(7.0), TextColor(Color::srgb(1.0, 0.85, 0.3))));
             p.spawn((Node { max_width: vmin(140), ..default() }, Text::new(INTRO), font(3.6), TextLayout::justify(Justify::Center)));
             p.spawn((
                 Button,

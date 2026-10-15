@@ -1,4 +1,4 @@
-//! iOS start-up (M91): the app's Documents folder (Files app → On My iPhone > Hot Shots) holds the ISO, settings.txt,
+//! iOS start-up (M91): the app's Documents folder (Files app → On My iPhone > OpenTennis) holds the ISO, settings.txt,
 //! mods/ and `hst-log.txt`, this launch's log (stderr, panics and the engine's log; iOS shows nothing else without a
 //! Mac). Writing the log also makes iOS list the folder in Files, which it only does once there's a file in it.
 
@@ -123,7 +123,7 @@ pub fn no_disc() -> ! {
                     Node { max_width: percent(85), ..default() },
                     Text::new(
                         "Hot Shots Tennis needs your disc image.\n\n\
-                         In the Files app, open On My iPhone > Hot Shots\n\
+                         In the Files app, open On My iPhone > OpenTennis\n\
                          (the folder with this app's icon), put your\n\
                          Hot Shots Tennis (USA) ISO in it, then close and reopen this app.",
                     ),

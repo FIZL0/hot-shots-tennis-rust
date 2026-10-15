@@ -1,8 +1,8 @@
 #!/bin/bash
 # tools/build.sh [linux|windows|ios|all] — optimised (release) builds of the game into dist/:
-#   dist/linux/hst        run: ./hst "Hot Shots Tennis (USA).iso"
-#   dist/windows/hst.exe  run: drop the ISO on hst.exe, or `hst.exe "Hot Shots Tennis (USA).iso"`
-#   dist/ios/hst-ios.ipa  unsigned (M91): the player signs it (AltStore, Sideloadly…); the ISO goes in its Files folder.
+#   dist/linux/opentennis        run: ./opentennis "Hot Shots Tennis (USA).iso"
+#   dist/windows/opentennis.exe  run: drop the ISO on opentennis.exe, or `opentennis.exe "Hot Shots Tennis (USA).iso"`
+#   dist/ios/opentennis-ios.ipa  unsigned (M91): the player signs it (AltStore, Sideloadly…); the ISO goes in its Files folder.
 #                         Needs the iOS SDK once: tools/ios-sdk.py Xcode_*.xip (see tools/ios-build.sh)
 # mods/ and settings.txt live beside the ISO, not the binary. No game data goes into dist/.
 # Windows is cross-compiled with MinGW. One-time setup (Arch):
@@ -29,17 +29,17 @@ linux() {
         $sdk sh -ec '
             [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
             /cache/cargo/bin/cargo build --release -p hst'
-    mkdir -p dist/linux
-    strip -o dist/linux/hst target/steamrt/release/hst
-    # the icon on Wayland/X11 docks (the window's app id is "hst"): hst.desktop into ~/.local/share/applications, hst.png into
-    # ~/.local/share/icons, hst on the PATH
-    cp crates/hst/icon/hst.png dist/linux/hst.png
-    printf '[Desktop Entry]\nType=Application\nName=Hot Shots Tennis\nExec=hst\nIcon=hst\nStartupWMClass=hst\nCategories=Game;\n' > dist/linux/hst.desktop
+    rm -rf dist/linux && mkdir -p dist/linux  # the tarball is the whole folder: nothing stale in it
+    strip -o dist/linux/opentennis target/steamrt/release/hst
+    # the icon on Wayland/X11 docks (the window's app id is "opentennis"): opentennis.desktop into ~/.local/share/applications, opentennis.png into
+    # ~/.local/share/icons, opentennis on the PATH
+    cp crates/hst/icon/hst.png dist/linux/opentennis.png
+    printf '[Desktop Entry]\nType=Application\nName=OpenTennis\nExec=opentennis\nIcon=opentennis\nStartupWMClass=opentennis\nCategories=Game;\n' > dist/linux/opentennis.desktop
     local need glibc=2.31
-    need=$(objdump -T dist/linux/hst | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-    echo "dist/linux/hst needs $need (sniper has GLIBC_$glibc)"
+    need=$(objdump -T dist/linux/opentennis | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+    echo "dist/linux/opentennis needs $need (sniper has GLIBC_$glibc)"
     if [ "$(printf '%s\n' "${need#GLIBC_}" $glibc | sort -V | tail -1)" != $glibc ]; then
-        echo "dist/linux/hst needs $need, newer than GLIBC_$glibc: won't start on SteamOS" >&2
+        echo "dist/linux/opentennis needs $need, newer than GLIBC_$glibc: won't start on SteamOS" >&2
         exit 1
     fi
 }
@@ -53,15 +53,15 @@ windows() {
     # crt-static: no MinGW runtime DLLs to ship beside the .exe
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
         cargo build --release -p hst --target $t
-    mkdir -p dist/windows
-    x86_64-w64-mingw32-strip -o dist/windows/hst.exe target/$t/release/hst.exe
-    echo "dist/windows/hst.exe"
+    rm -rf dist/windows && mkdir -p dist/windows
+    x86_64-w64-mingw32-strip -o dist/windows/opentennis.exe target/$t/release/hst.exe
+    echo "dist/windows/opentennis.exe"
 }
 
 case $what in
     linux) linux ;;
     windows) windows ;;
-    ios) mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/hst-ios.ipa ;;
-    all) linux; windows; mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/hst-ios.ipa ;;
+    ios) mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/opentennis-ios.ipa ;;
+    all) linux; windows; mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/opentennis-ios.ipa ;;
     *) echo "usage: tools/build.sh [linux|windows|ios|all]" >&2; exit 2 ;;
 esac

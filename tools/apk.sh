@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Native Android build: tools/apk.sh [--install] → dist/hst.apk (NativeActivity, no gradle; the activity's few lines of
+# Native Android build: tools/apk.sh [--install] → dist/opentennis.apk (NativeActivity, no gradle; the activity's few lines of
 # Java, crates/hst/android/, go through javac + d8).
 # HST_ABIS="arm64-v8a x86_64" adds the emulator's ABI (default: phones only, arm64-v8a).
 # Needs ~/Android/Sdk (build-tools, platforms/android-36, ndk) and `rustup target add aarch64-linux-android x86_64-linux-android`.
@@ -82,7 +82,7 @@ vargs=()
 key=$HOME/.android/debug.keystore
 [ -f "$key" ] || keytool -genkeypair -keystore "$key" -storepass android -alias androiddebugkey -keypass android \
     -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US" >/dev/null
-"$BT/apksigner" sign --ks "$key" --ks-pass pass:android --out dist/hst.apk "$out/aligned.apk"
-echo "dist/hst.apk ($(du -h dist/hst.apk | cut -f1))"
-[ "${1:-}" = --install ] && "$SDK/platform-tools/adb" install -r dist/hst.apk
+"$BT/apksigner" sign --ks "$key" --ks-pass pass:android --out dist/opentennis.apk "$out/aligned.apk"
+echo "dist/opentennis.apk ($(du -h dist/opentennis.apk | cut -f1))"
+[ "${1:-}" = --install ] && "$SDK/platform-tools/adb" install -r dist/opentennis.apk
 exit 0

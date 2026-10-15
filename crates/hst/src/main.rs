@@ -317,7 +317,7 @@ fn main() {
         *play::netplay::PENDING.lock().unwrap() = Some(started);
         argv = rest.unwrap_or_default();
     }
-    // B374: where the game's file is, before an update swaps it; a Windows update's leftover hst.exe.old goes
+    // B374: where the game's file is, before an update swaps it; a Windows update's leftover opentennis.exe.old goes
     update::cleanup();
     disc::resolve(&mut argv);
     start(argv);
@@ -373,7 +373,7 @@ fn start(argv: Vec<String>) {
     // a `--shot` window, or any run under the unattended runners (HST_BG=1), has its own title so the desktop can keep
     // test windows out of the way (tools/shot.sh); those runs are also silent
     let bg = args.shot.is_some() || std::env::var_os("HST_BG").is_some();
-    let title = if bg { "Hot Shots Tennis (shot)" } else { "Hot Shots Tennis" };
+    let title = if bg { "Hot Shots Tennis (shot)" } else { "OpenTennis" };
     // borderless fullscreen on the current monitor unless `--windowed`/settings say otherwise; test windows stay windows
     // (a browser only allows fullscreen from a click, so the web build stays in its page)
     graphics::KEEP_WINDOWED.store(windowed || bg || cfg!(target_arch = "wasm32"), std::sync::atomic::Ordering::Relaxed);
@@ -395,7 +395,7 @@ fn start(argv: Vec<String>) {
         // P47: `HST_SYNC_PIPELINES=1` compiles pipelines on the render thread, as the browser and macOS always do
         synchronous_pipeline_compilation: std::env::var_os("HST_SYNC_PIPELINES").is_some(),
         ..default()
-    }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
+    }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("opentennis".into()), present_mode, mode, resolution, ..default() }), ..default() });
     // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame,
     // and warns of each event it hands over while redrawing (P49: 14.5k of a 4-minute log's 15.8k lines)
     #[cfg(target_os = "ios")]
