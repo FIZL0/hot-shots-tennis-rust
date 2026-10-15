@@ -39,7 +39,7 @@ pub(super) fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
 }
 
 /// The touch pad's id (web/touch.js `pad.id`), as gilrs names it.
-fn is_touch(name: &str) -> bool {
+pub(super) fn is_touch(name: &str) -> bool {
     name.starts_with("Touch controls")
 }
 

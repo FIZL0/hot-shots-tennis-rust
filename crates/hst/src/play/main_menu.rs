@@ -2168,6 +2168,12 @@ impl Draw<'_> {
     }
 }
 
+/// B405: the controllers among the readable pads' names (gilrs' `Name`): the on-screen pad (web/touch.js,
+/// `touch_pad.rs`) isn't one, the home screen shows it as the Touch seat.
+fn controllers<'a>(names: impl Iterator<Item = Option<&'a str>>) -> usize {
+    names.filter(|n| !n.is_some_and(super::emote::is_touch)).count()
+}
+
 /// A device's name on the assignment screen.
 fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
     match d {
@@ -2257,15 +2263,15 @@ fn ticker_text(
 }
 
 fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> (Vec<Quad>, String) {
-    let d = drawn(m, text, bind, pads, hand_x);
+    let d = drawn(m, text, bind, pads, pads.len(), hand_x);
     (d.out, d.said)
 }
 
-/// The screen's quads, words and hit rects.
-fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x: f32) -> Draw<'a> {
+/// The screen's quads, words and hit rects. `controllers`: the pads plugged in, the on-screen pad not counted (B405).
+fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], controllers: usize, hand_x: f32) -> Draw<'a> {
     let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
-        Screen::Main => home::layout(&mut d, m, text, pads.len(), hand_x),
+        Screen::Main => home::layout(&mut d, m, text, controllers, hand_x),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
         Screen::Mode => {
@@ -3161,7 +3167,7 @@ fn draw(
     menu: Res<Menu>,
     art: Option<Res<Art>>,
     bind: Res<Bindings>,
-    gamepads: Query<(Entity, &Gamepad)>,
+    gamepads: Query<(Entity, &Gamepad, Option<&Name>)>,
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
     mut ticker: ResMut<Ticker>,
@@ -3176,13 +3182,15 @@ fn draw(
     buttons: Option<Res<legend::Buttons>>,
 ) {
     let Some(art) = art else { return };
-    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
+    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
     pads.sort();
+    // B405: the on-screen pad (web/touch.js, `touch_pad.rs`) is the home screen's Touch seat, not a controller
+    let controllers = controllers(gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(_, _, n)| n.map(|n| n.as_str())));
     // the original's menu hand wags in place (`cursor.rs`), it doesn't swing out and back as the pause menu's
     let hand_x = 0.0;
     // the description ticker counts the original's 60 Hz frames from its text's change
     ticker.1 += time.delta_secs() * 60.0;
-    let d = drawn(&menu, &art.2, &bind, &pads, hand_x);
+    let d = drawn(&menu, &art.2, &bind, &pads, controllers, hand_x);
     *hits = pointer::Hits(d.hits, d.outside);
     let (quads, said) = (d.out, d.said);
     // the text flies in when a page opens, not on every new selection or status line
@@ -3383,6 +3391,14 @@ pub fn plugin(app: &mut App) {
 mod tests {
     use super::*;
     use Effect::*;
+
+    /// B405: the browser's and the iPhone's on-screen pads aren't counted as controllers on the home screen.
+    #[test]
+    fn touch_pad_is_no_controller() {
+        let names = [Some("Touch controls (STANDARD GAMEPAD)"), Some("Touch controls (iPhone)"), Some("Xbox Controller"), None];
+        assert_eq!(controllers(names.into_iter()), 2);
+        assert_eq!(controllers(names[..2].iter().copied()), 0);
+    }
 
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]
@@ -4198,7 +4214,7 @@ mod tests {
         for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
             let mut m = Menu { screen: Screen::Chars, doubles: true, mods: (0..100).map(|i| crate::mods::Mod { name: "Longer Name".into(), source: format!("Game {}", i % 7), ..fake_mod(i % 14) }).collect(), seats: [Some(Dev::Keys); 4], grid: Grid::fit(a), ..default() };
             m.players[3].ready = true;
-            let n = drawn(&m, &t, &Bindings::default(), &[], 0.0).out.len();
+            let n = drawn(&m, &t, &Bindings::default(), &[], 0, 0.0).out.len();
             assert!(n < POOL * 9 / 10, "{a}: {n} quads");
         }
     }

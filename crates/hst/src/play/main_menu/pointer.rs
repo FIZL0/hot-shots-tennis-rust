@@ -405,7 +405,7 @@ pub(super) mod tests {
     /// The screen's hits as drawn, and what a press outside them does.
     pub(in crate::play::main_menu) fn hits(m: &Menu) -> (Vec<Hit>, Option<Act>) {
         let t = text_with_mods(m.mods.len());
-        let d = drawn(m, &t, &Bindings::default(), &[], 0.0);
+        let d = drawn(m, &t, &Bindings::default(), &[], 0, 0.0);
         (d.hits, d.outside)
     }
 

@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B405** **Touch pad counted as a pad on Local**: with the on-screen pad (web/touch.js, iPhone play/touch_pad.rs) the main menu's Local tiles show Touch + "Pad 1" and the header "1 pad" though no controller is connected; don't count the touch pad there → crates/hst/src/play/main_menu/home.rs
 - [~] **B403** v1 release: take new screenshots (README/release page) and rename the git repo to opentennis BLOCKED: held for the v1 release (user 2026-10-15)
 - [ ] **B401** Get a Grip modded courts not fully working: the Get a Grip courts should be selectable on the court select screen, show an icon like other courts do, and work properly when played on (user 2026-10-15) → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/previews.rs · crates/hst/src/play/mod_match.rs
 - [ ] **B400** Get a Grip umpire mods lack icons and previews: in the Mods screen, the umpire mods from Get a Grip should show an icon in the grid and a preview like other mod kinds do; add them (user 2026-10-15) → crates/hst/src/play/main_menu/umpire_mods.rs · crates/hst/src/play/main_menu/previews.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs

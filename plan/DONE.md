@@ -565,6 +565,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B394** Use the American spelling "favorites" in all wording: anywhere the game text says "favourites" (the British spelling), it should say "favorites" instead, since we are not British (user 2026-10-15) → crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/mods_screen.rs
 - [x] **M8f6** (in M8f) Court mod loader: a court mod draws in place of its layout court's visuals, collision/judging/chair from the disc layout (replays unchanged); the court select lists them; its ambience and BGM; `--court-mod DIR` → `mods.rs` · `main.rs` court models · `hst-sim/src/court.rs` · `audio.rs` · `play/main_menu.rs` | j: 2026-10-14-m8f-courts-umpires
 - [x] **B392** Online play skips character select and singles/doubles select: when going to online play, skip the character select and the singles/doubles select screens and go straight to the roster; the host gets the singles and doubles button swap brought over from those screens (user 2026-10-15) → crates/hst/src/play/main_menu/online.rs · crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/online/lobby.rs
+- [x] **B405** **Touch pad counted as a pad on Local**: with the on-screen pad (web/touch.js, iPhone play/touch_pad.rs) the main menu's Local tiles show Touch + "Pad 1" and the header "1 pad" though no controller is connected; don't count the touch pad there → crates/hst/src/play/main_menu/home.rs
 
 
 ### Shots
