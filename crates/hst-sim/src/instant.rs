@@ -4,8 +4,9 @@
 //! It runs once per point in a match (practice has none), after the scoreboard has awarded the point. It also
 //! keeps two flags of the replay recorder: `allowed` (the point may still replay; set here unless the rally
 //! ran too long or the replay option cut it) and `recorded` (the rally left enough recorded shots to replay).
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::F;
 
 /// What the decision reads. Player indices are 0..4; `None` where the game keeps −1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -77,9 +78,9 @@ pub struct Decision {
 
 /// The ball's speed in km/h, as the game computes it.
 pub fn speed_kmh(v: [f32; 3]) -> f32 {
-    let acc = ps2::madd(ps2::mul(v[1], v[1]), v[0], v[0]);
-    let s = ps2::sqrt(ps2::madd(acc, v[2], v[2]));
-    ps2::div(ps2::mul(3600.0, ps2::mul(60.0, s)), 1000.0)
+    let acc = (F(v[1]) * v[1]).madd(v[0], v[0]);
+    let s = acc.madd(v[2], v[2]).sqrt();
+    (3600.0 * (60.0 * s) / 1000.0).0
 }
 
 /// A bounce's distances past the side line and the base line (singles lines while serving, `wide` for the
@@ -87,11 +88,11 @@ pub fn speed_kmh(v: [f32; 3]) -> f32 {
 fn past_lines(p: [f32; 2], shots: i32, wide: bool) -> (f32, f32) {
     if shots < 2 {
         // the service box: nearer of the centre line and the side line
-        let x = p[0].abs();
+        let x = F(p[0].abs());
         let d = x - 4.115;
-        (if x.abs() <= d.abs() { x } else { d }, p[1].abs() - 6.4)
+        (if x.abs() <= d.abs() { x.0 } else { d.0 }, (F(p[1].abs()) - 6.4).0)
     } else {
-        (p[0].abs() - if wide { 5.485 } else { 4.115 }, p[1].abs() - 11.885)
+        ((F(p[0].abs()) - if wide { 5.485 } else { 4.115 }).0, (F(p[1].abs()) - 11.885).0)
     }
 }
 

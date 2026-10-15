@@ -4,8 +4,9 @@
 //! archetypes stored on disc; record `r` = character id + 3 is that character's blend of them, with weights
 //! from a per-record row. A record is 13 f32: [0..3) aim/launch, [3..7) middle group, [7..13) spin (deg),
 //! first-bounce spin (deg), curve terms, first-bounce restitution pair.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::F;
 
 /// Stride of one shot class, one kind and one record, in floats (as in the game's table).
 const CLASS: usize = 0x451;
@@ -53,7 +54,7 @@ impl ShotParams {
                     let blend = |out: &mut [f32; REC], wt: f32, fields: std::ops::Range<usize>| {
                         for f in fields {
                             let (from, to) = if wt >= 0.0 { (a(REC + f), a(f)) } else { (a(REC + f), a(2 * REC + f)) };
-                            out[f] = ps2::lerp(from, to, wt.abs());
+                            out[f] = F(from).lerp(to, wt.abs()).0;
                         }
                     };
                     blend(&mut out, wa, 0..3);
@@ -66,7 +67,7 @@ impl ShotParams {
                         wb = w(weights, r, 0x1c);
                     }
                     blend(&mut out, wb, 7..13);
-                    let wm = ps2::lerp(wa, wb, mid);
+                    let wm = F(wa).lerp(wb, mid).0;
                     blend(&mut out, wm, 3..7);
                     t[o..o + REC].copy_from_slice(&out);
                 }
@@ -84,7 +85,7 @@ impl ShotParams {
     /// (weight > 0) or 2 (weight < 0).
     pub fn variant(&self, class: usize, kind: usize, r: usize, weight: f32) -> [f32; REC] {
         let (rec, to) = (self.record(class, kind, r), self.record(class, kind, if weight > 0.0 { 0 } else { 2 }));
-        std::array::from_fn(|f| ps2::lerp(rec[f], to[f], weight.abs()))
+        std::array::from_fn(|f| F(rec[f]).lerp(to[f], weight.abs()).0)
     }
 
     /// Whole table in the game's layout (for verification).
@@ -95,7 +96,7 @@ impl ShotParams {
 
 /// A record's launch spin (field 7, degrees) in the ball's radians, rounded as the game's FPU does.
 pub fn spin(record: &[f32]) -> f32 {
-    ps2::mul(record[7], 0.017453292)
+    (F(record[7]) * 0.017453292).0
 }
 
 /// Record index of a character (pc00 = 0 … pc13 = 13).
@@ -110,33 +111,33 @@ pub fn record_of(character: usize) -> usize {
 /// The records' side angle (field 10) is zero for every stroke and volley, so the side rotation and the
 /// left-hander spin flip that hang on it never apply here.
 pub fn rally_spin(record: &[f32], class: usize, kind: usize, hit: [f32; 3], target: [f32; 3]) -> (f32, f32, f32) {
-    let clamp01 = |x: f32| x.clamp(0.0, 1.0);
-    let near_net = |over: f32| clamp01(ps2::div(ps2::sub(11.885, hit[2].abs()), over));
-    let (mut spin, mut first, mut rest) = (spin(record), ps2::mul(record[9], 0.017453292), record[11]);
+    let clamp01 = |x: F| x.clamp(0.0, 1.0);
+    let near_net = |over: f32| clamp01((F(11.885) - hit[2].abs()) / over);
+    let (mut spin, mut first, mut rest) = (F(spin(record)), F(record[9]) * 0.017453292, F(record[11]));
     if class == 1 {
         match kind {
             2 => {
-                let mut low = ps2::sub(1.0, ps2::div(-hit[1], 2.0).min(1.0));
+                let mut low = 1.0 - (-F(hit[1]) / 2.0).min(1.0);
                 let mut net = near_net(8.0);
-                net = ps2::mul(net, net); // powf(net, 2), which fdlibm answers as net·net
-                if 1.0 < ps2::add(low, net) {
-                    low = ps2::div(low, ps2::add(low, net));
-                    net = ps2::div(net, ps2::add(low, net));
+                net = net * net; // powf(net, 2), which fdlibm answers as net·net
+                if 1.0 < low + net {
+                    low = low / (low + net);
+                    net = net / (low + net);
                 }
-                let lift = |w: f32, top: f32| ps2::madd(ps2::add(0.0, 1.0), w, ps2::sub(top, 1.0));
-                spin = ps2::mul(ps2::mul(spin, lift(low, 2.5)), lift(net, 3.0));
+                let lift = |w: F, top: f32| (F::ZERO + 1.0).madd(w, F(top) - 1.0);
+                spin = spin * lift(low, 2.5) * lift(net, 3.0);
             }
             3 => {
-                let long = clamp01(ps2::div(ps2::sub(ps2::sub(target[2], hit[2]).abs(), 4.5), ps2::sub(10.0, 4.5)));
-                spin = ps2::madd(ps2::add(0.0, spin), ps2::mul(200.0, 0.017453292), ps2::sub(1.0, long));
+                let long = clamp01(((F(target[2]) - hit[2]).abs() - 4.5) / (F(10.0) - 4.5));
+                spin = (F::ZERO + spin).madd(F(200.0) * 0.017453292, 1.0 - long);
             }
-            4 => first = ps2::mul(first, ps2::madd(ps2::add(0.0, 1.0), near_net(8.0), ps2::sub(0.4, 1.0))),
+            4 => first *= (F::ZERO + 1.0).madd(near_net(8.0), F(0.4) - 1.0),
             _ => {}
         }
     }
     if record[12] != 0.0 {
-        let low = clamp01(ps2::div(-hit[1], 1.5));
-        rest = ps2::madd(ps2::add(0.0, rest), ps2::mul(low, ps2::sub(1.0, near_net(8.0))), ps2::sub(record[12], rest));
+        let low = clamp01(-F(hit[1]) / 1.5);
+        rest = (F::ZERO + rest).madd(low * (1.0 - near_net(8.0)), F(record[12]) - rest);
     }
-    (spin, first, rest)
+    (spin.0, first.0, rest.0)
 }

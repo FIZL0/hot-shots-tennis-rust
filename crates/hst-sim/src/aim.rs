@@ -3,10 +3,18 @@
 //! Drawn from the AIParam row's angle width, length mix (`key_level`), special return rate and base level mix,
 //! and from where both players stand (`position::zone_in`, the finer `fine_zone`). Floats on the FPU (`ps2`), the
 //! turn on VU0 (`world`).
+#![deny(clippy::float_arithmetic)]
 
 use crate::ai::AiParams;
 use crate::position::zone_in;
-use crate::{ps2, vu0, world};
+use crate::ps2::{F, utof};
+use crate::{vu0, world};
+
+/// `fmodf`: its result is exact, so IEEE `%` is the game's.
+#[allow(clippy::float_arithmetic)]
+fn fmod(a: F, b: f32) -> F {
+    F(a.0 % b)
+}
 
 /// The aim (the AI's stick: x, y, z, w) and the plan byte the shot is played with.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -59,7 +67,7 @@ fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
 
 /// The MT word as a fraction of 2³².
 fn uniform(roll: &mut impl FnMut() -> u32) -> f32 {
-    ps2::mul(2.3283064e-10, ps2::utof(roll()))
+    (F(2.3283064e-10) * utof(roll())).0
 }
 
 fn width(singles: bool) -> f32 {
@@ -87,12 +95,12 @@ fn pick(u: i32, a: i32, b: i32) -> u8 {
 pub fn fine_zone(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
     let ax = p[0].abs();
     let s = if p[1] < 0.0 { 1.0 } else { -1.0 };
-    let d = ps2::sub(p[1].abs(), 1.5);
+    let d = (F(p[1].abs()) - 1.5).0;
     let Some(roll) = blur else {
-        let out = 0.0 < ps2::mul(p[0], s);
-        let col = if ax <= ps2::div(w, 3.0) {
+        let out = 0.0 < (F(p[0]) * s).0;
+        let col = if ax <= (F(w) / 3.0).0 {
             if out { 3 } else { 2 }
-        } else if ax <= ps2::div(ps2::mul(w, 2.0), 3.0) {
+        } else if ax <= (F(w) * 2.0 / 3.0).0 {
             if out { 4 } else { 1 }
         } else if out {
             5
@@ -102,19 +110,19 @@ pub fn fine_zone(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> 
         let band = [1.7308334, 3.4616668, 5.1925, 6.9233336, 8.654167].iter().take_while(|&&b| b < d).count();
         return (col, band as u8);
     };
-    let mut roll = || ps2::madd(ps2::add(0.0, 0.0), 1.0, ps2::mul(2.3283064e-10, ps2::utof(roll())));
-    let q = ps2::div(ps2::div(ps2::mul(w, 2.0), 6.0), 4.0);
-    let x = ps2::madd(ps2::add(0.0, w), p[0], s);
+    let mut roll = || (F::ZERO + 0.0).madd(1.0, F(2.3283064e-10) * utof(roll())).0;
+    let q = (F(w) * 2.0 / 6.0 / 4.0).0;
+    let x = (F::ZERO + w).madd(p[0], s).0;
     let mut col = 5;
     for k in 1..=5u8 {
-        let edge = ps2::div(ps2::mul(w, k as f32), 3.0);
-        let lo = ps2::sub(edge, q);
+        let edge = (F(w) * (k as f32) / 3.0).0;
+        let lo = (F(edge) - q).0;
         if x <= lo {
             col = k - 1;
             break;
         }
-        if x < ps2::add(edge, q) {
-            col = if roll() < ps2::div(ps2::sub(x, lo), ps2::mul(2.0, q)) { k } else { k - 1 };
+        if x < (F(edge) + q).0 {
+            col = if roll() < ((F(x) - lo) / (F(2.0) * q)).0 { k } else { k - 1 };
             break;
         }
     }
@@ -128,7 +136,7 @@ pub fn fine_zone(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> 
             break;
         }
         if d < hi {
-            band = k + (roll() < ps2::div(ps2::sub(d, lo), 0.8654167)) as u8;
+            band = k + (roll() < ((F(d) - lo) / 0.8654167).0) as u8;
             break;
         }
     }
@@ -141,7 +149,7 @@ impl AiParams {
     /// `key_level` mix (the middle zone: up to a third), turned by `side` (the AI's side sign).
     pub fn aim(&self, zone: (u8, u8), side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let (angle, lo, hi) = if zone == (1, 1) {
-            (ps2::madd(ps2::add(0.0, -180.0), 360.0, uniform(roll)), 0.0, f32::from_bits(0x3eaa_aaab))
+            ((F::ZERO + -180.0).madd(360.0, uniform(roll)).0, 0.0, f32::from_bits(0x3eaa_aaab))
         } else {
             let base = match zone {
                 (1, 0) => 0.0,
@@ -154,7 +162,7 @@ impl AiParams {
                 _ => -45.0,
             };
             let aw = self.angle_width;
-            let angle = ps2::add(base, ps2::madd(ps2::add(0.0, -aw), ps2::sub(aw, -aw), uniform(roll)));
+            let angle = (base + (F::ZERO + -F(aw)).madd(F(aw) - -F(aw), uniform(roll))).0;
             let r = percent(roll);
             let k = &self.key_level;
             let (third, two) = (f32::from_bits(0x3eaa_aaab), f32::from_bits(0x3f2a_aaab));
@@ -170,16 +178,16 @@ impl AiParams {
             };
             (angle, band.0, band.1)
         };
-        let mut rad = ps2::mul(f32::from_bits(0x3c8e_fa35), angle);
+        let mut rad = (F(f32::from_bits(0x3c8e_fa35)) * angle).0;
         if rad > world::PI {
-            rad = ps2::sub(ps2::add(world::PI, rad) % world::TWO_PI, world::PI);
-        } else if rad < -world::PI {
-            rad = ps2::add(world::PI, ps2::sub(rad, world::PI) % world::TWO_PI);
+            rad = (fmod(F(world::PI) + rad, world::TWO_PI) - world::PI).0;
+        } else if rad < -F(world::PI) {
+            rad = (F(world::PI) + fmod(F(rad) - world::PI, world::TWO_PI)).0;
         }
         let m = world::mat_mul(&world::IDENTITY, &world::rot_y(rad));
         let v = vu0::transform(&m, [0.0, 0.0, 1.0, 0.0]);
-        let len = ps2::madd(ps2::add(0.0, lo), ps2::sub(hi, lo), uniform(roll));
-        v.map(|c| ps2::mul(ps2::mul(c, -side), len))
+        let len = (F::ZERO + lo).madd(F(hi) - lo, uniform(roll)).0;
+        v.map(|c| (F(c) * -F(side) * len).0)
     }
 
     /// The singles NET rally routine's aim (its shots and dives; once taken for the aim at a return of serve).
@@ -192,7 +200,7 @@ impl AiParams {
         let (_, md) = zone_in(l.me, w, None);
         let s = if 0.0 <= l.opp[1] { -1.0 } else { 1.0 };
         let u = percent(roll);
-        let away = if 0.0 < ps2::mul(l.opp[0], s) { 0 } else { 2 };
+        let away = if 0.0 < (F(l.opp[0]) * s).0 { 0 } else { 2 };
         if l.kind == 3 {
             if md == 0 && od == 0 && chance(roll, 50) {
                 if let Some(stick) = body(l) {
@@ -241,8 +249,8 @@ impl AiParams {
         let (_, md) = zone_in(l.me, w, None);
         let s = if 0.0 <= l.opp[1] { -1.0 } else { 1.0 };
         let u = percent(roll);
-        let near = ps2::mul(ps2::sub(l.opp[1], l.mark[1]), s) <= 1.5;
-        let low = 0.2 <= if l.kind < 2 { ps2::sub(l.contact_y, l.heights[1]) } else { 0.0 };
+        let near = ((F(l.opp[1]) - l.mark[1]) * s).0 <= 1.5;
+        let low = 0.2 <= if l.kind < 2 { (F(l.contact_y) - l.heights[1]).0 } else { 0.0 };
         let by_fine = if fine < 3 { 2 } else { 0 };
         let (x, d, plan) = if l.opp_kind == 3 && l.kind != 4 {
             (by_fine, 2, 0xc)
@@ -435,9 +443,9 @@ fn lane_or(roll: &mut impl FnMut() -> u32, p: i32, a: u8, b: u8) -> u8 {
 
 /// The unit direction from `from` to `to` on the ground (x, z), 1/√ as the game takes it.
 fn toward(from: [f32; 2], to: [f32; 2]) -> [f32; 2] {
-    let (dx, dz) = (ps2::sub(to[0], from[0]), ps2::sub(to[1], from[1]));
-    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx)));
-    [ps2::mul(dx, inv), ps2::mul(dz, inv)]
+    let (dx, dz) = ((F(to[0]) - from[0]).0, (F(to[1]) - from[1]).0);
+    let inv = (1.0 / (F(dz) * dz).madd(dx, dx).sqrt()).0;
+    [(F(dx) * inv).0, (F(dz) * inv).0]
 }
 
 impl AiParams {
@@ -457,16 +465,16 @@ impl AiParams {
     pub fn aim_at(&self, me: [f32; 2], at: [f32; 2], side: f32, singles: bool, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let w = width(singles);
         let d = toward(me, at);
-        let reach = ps2::div(ps2::add(11.885, me[1].abs()), d[1].abs());
-        let mut x = ps2::madd(ps2::add(0.0, me[0]), d[0], reach);
+        let reach = ((F(11.885) + me[1].abs()) / d[1].abs()).0;
+        let mut x = (F::ZERO + me[0]).madd(d[0], reach).0;
         let depth = if x.abs() <= w {
             11.885
         } else {
-            x = if d[0] < 0.0 { -w } else { w };
-            ps2::mul(ps2::div(ps2::sub(x, me[0]), d[0]), d[1].abs())
+            x = if d[0] < 0.0 { (-F(w)).0 } else { w };
+            ((F(x) - me[0]) / d[0] * d[1].abs()).0
         };
-        let (x0, z0) = (ps2::div(x, w), ps2::div(ps2::sub(depth, 4.4425), 4.4425));
-        let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(z0, z0), x0, x0)));
+        let (x0, z0) = ((F(x) / w).0, ((F(depth) - 4.4425) / 4.4425).0);
+        let inv = (1.0 / (F(z0) * z0).madd(x0, x0).sqrt()).0;
         let r = percent(roll);
         let k = &self.key_level;
         let f = |b: u32| f32::from_bits(b);
@@ -479,18 +487,18 @@ impl AiParams {
         } else {
             (f(0x3f4c_cccd), 1.0)
         };
-        let len = ps2::madd(ps2::add(0.0, lo), ps2::sub(hi, lo), uniform(roll));
-        let v = [ps2::mul(ps2::mul(x0, inv), len), 0.0, ps2::mul(ps2::mul(z0, inv), len), 0.0];
+        let len = (F::ZERO + lo).madd(F(hi) - lo, uniform(roll)).0;
+        let v = [(F(x0) * inv * len).0, 0.0, (F(z0) * inv * len).0, 0.0];
         let aw = self.angle_width;
-        let mut rad = ps2::mul(f32::from_bits(0x3c8e_fa35), ps2::madd(ps2::add(0.0, -aw), ps2::sub(aw, -aw), uniform(roll)));
+        let mut rad = (f32::from_bits(0x3c8e_fa35) * (F::ZERO + -F(aw)).madd(F(aw) - -F(aw), uniform(roll))).0;
         if rad > world::PI {
-            rad = ps2::sub(ps2::add(world::PI, rad) % world::TWO_PI, world::PI);
-        } else if rad < -world::PI {
-            rad = ps2::add(world::PI, ps2::sub(rad, world::PI) % world::TWO_PI);
+            rad = (fmod(F(world::PI) + rad, world::TWO_PI) - world::PI).0;
+        } else if rad < -F(world::PI) {
+            rad = (F(world::PI) + fmod(F(rad) - world::PI, world::TWO_PI)).0;
         }
         let m = world::mat_mul(&world::IDENTITY, &world::rot_y(rad));
         let mut v = vu0::transform(&m, v);
-        v[2] = ps2::mul(v[2], side);
+        v[2] = (F(v[2]) * side).0;
         v
     }
 
@@ -507,17 +515,17 @@ impl AiParams {
             let x = any_open(open_lanes(z1.0, z2.0), roll);
             return Aim { stick: aim((x, 0), roll), plan: 0x10 };
         }
-        let half = |a: f32, b: f32| ps2::mul(ps2::add(a, b), 0.5);
+        let half = |a: f32, b: f32| ((F(a) + b) * 0.5).0;
         let mid = [half(l.opp[0][0], l.opp[1][0]), half(l.opp[0][1], l.opp[1][1])];
         let dir = toward(l.me, mid);
         // the line between the opponents, from the nearer to the farther one
         let (n, f) = if l.opp[0][1].abs() < l.opp[1][1].abs() { (0, 1) } else { (1, 0) };
-        let (dx, dz) = (ps2::sub(l.opp[f][0], l.opp[n][0]), ps2::sub(l.opp[f][1], l.opp[n][1]));
-        let len = ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx));
-        let (ux, uz) = if 0.0 < len { (ps2::mul(dx, ps2::div(1.0, len)), ps2::mul(dz, ps2::div(1.0, len))) } else { (dx, dz) };
-        let (ex, ez) = (ps2::sub(l.opp[0][0], l.opp[1][0]), ps2::sub(l.opp[0][1], l.opp[1][1]));
-        let gap = ps2::sqrt(ps2::madd(ps2::mul(ez, ez), ex, ex));
-        let dot = ps2::madd(ps2::mul(dir[0], ux), dir[1], uz).abs();
+        let (dx, dz) = ((F(l.opp[f][0]) - l.opp[n][0]).0, (F(l.opp[f][1]) - l.opp[n][1]).0);
+        let len = (F(dz) * dz).madd(dx, dx).sqrt().0;
+        let (ux, uz) = if 0.0 < len { ((dx * (F(1.0) / len)).0, (dz * (F(1.0) / len)).0) } else { (dx, dz) };
+        let (ex, ez) = ((F(l.opp[0][0]) - l.opp[1][0]).0, (F(l.opp[0][1]) - l.opp[1][1]).0);
+        let gap = (F(ez) * ez).madd(ex, ex).sqrt().0;
+        let dot = (F(dir[0]) * ux).madd(dir[1], uz).0.abs();
         // its lane down the line is open past a deep opponent, or (from the middle) both side lanes are
         let line = mx ^ 2;
         let open = match mx {
@@ -719,7 +727,7 @@ impl AiParams {
 /// How far a bounce lies past the nearer of the side line (half width `w`) and the end line (`l` from the net),
 /// negative inside: the game's measure.
 pub fn out_by(at: [f32; 2], w: f32, l: f32) -> f32 {
-    let (x, z) = (ps2::sub(at[0].abs(), w), ps2::sub(at[1].abs(), l));
+    let (x, z) = ((F(at[0].abs()) - w).0, (F(at[1].abs()) - l).0);
     if z.abs() <= x.abs() { z } else { x }
 }
 
@@ -730,24 +738,24 @@ fn body(l: &Look) -> Option<[f32; 4]> {
     let (mut x, mut z) = (l.opp[0], l.opp[1]);
     let az = l.opp[1].abs();
     if az < 3.0 {
-        let gap = ps2::sub(3.0, az);
-        let dx = ps2::div(ps2::mul(gap, ps2::sub(l.opp[0], l.me[0])), ps2::sub(l.opp[1], l.me[1])).abs();
+        let gap = (F(3.0) - az).0;
+        let dx = (gap * (F(l.opp[0]) - l.me[0]) / (F(l.opp[1]) - l.me[1])).0.abs();
         let sx = if l.opp[0] < 0.0 { -1.0 } else { 1.0 };
-        x = ps2::mul(ps2::add(dx, l.opp[0].abs()), sx);
-        z = ps2::mul(gap, if l.opp[1] < 0.0 { -1.0 } else { 1.0 });
+        x = ((F(dx) + l.opp[0].abs()) * sx).0;
+        z = (F(gap) * (if l.opp[1] < 0.0 { -1.0 } else { 1.0 })).0;
     }
     if x.abs() > 4.115 {
         return None;
     }
-    let a8 = ps2::div(ps2::sub(z.abs(), 7.4425), 4.4425);
-    let a0 = ps2::div(x, 4.115);
+    let a8 = ((F(z.abs()) - 7.4425) / 4.4425).0;
+    let a0 = (F(x) / 4.115).0;
     let m = if a0.abs() <= a8.abs() { a8.abs() } else { a0.abs() };
-    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(a8, a8), a0, a0)));
-    let mut v = [ps2::mul(a0, inv), 0.0, ps2::mul(a8, inv), 0.0];
+    let inv = (1.0 / (F(a8) * a8).madd(a0, a0).sqrt()).0;
+    let mut v = [(F(a0) * inv).0, 0.0, (F(a8) * inv).0, 0.0];
     if m < 1.0 {
-        v = v.map(|c| ps2::mul(c, m));
+        v = v.map(|c| (F(c) * m).0);
     }
-    v[2] = ps2::mul(v[2], if z < 0.0 { -1.0 } else { 1.0 });
+    v[2] = (F(v[2]) * (if z < 0.0 { -1.0 } else { 1.0 })).0;
     Some(v)
 }
 
@@ -770,13 +778,13 @@ pub fn button(plan: u8) -> u8 {
 /// A stick value through the pad's byte (1..=255 about 0x80) and back, unsigned.
 fn pad_abs(x: f32) -> f32 {
     let half = if x < 0.0 { -0.5 } else { 0.5 };
-    let b = (ps2::add(ps2::mul(x, 127.0), half) as i32 + 0x80).clamp(1, 255);
-    ps2::div((b - 0x80) as f32, 127.0).abs()
+    let b = ((F(x) * 127.0 + half).0 as i32 + 0x80).clamp(1, 255);
+    (F((b - 0x80) as f32) / 127.0).0.abs()
 }
 
 /// Snapped down to the pad's 1/127 steps.
 fn pad_step(v: f32) -> f32 {
-    ps2::mul((ps2::div(v, 0.007874016) as i32) as f32, 0.007874016)
+    (F(((F(v) / 0.007874016).0 as i32) as f32) * 0.007874016).0
 }
 
 impl AiParams {
@@ -803,12 +811,12 @@ impl AiParams {
     /// player's end. Only z changes (0 when x is 0).
     pub fn lock_stick(&self, kept: u8, stick: [f32; 4], side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let [x, y, z, w] = stick;
-        let len = ps2::sqrt(ps2::add(ps2::mul(x, x), ps2::mul(z, z)));
-        let along = |z: f32| ps2::mul(ps2::mul(side, z), ps2::div(1.0, len));
-        let bend = |k: f32| if x == 0.0 { 0.0 } else { pad_step(ps2::mul(ps2::mul(side, pad_abs(x)), k)) };
+        let len = (F(x) * x + F(z) * z).sqrt().0;
+        let along = |z: f32| (F(side) * z * (F(1.0) / len)).0;
+        let bend = |k: f32| if x == 0.0 { 0.0 } else { pad_step((F(side) * pad_abs(x) * k).0) };
         let z = if len <= 0.0 {
             z
-        } else if kept == 2 && -along(z) >= std::f32::consts::FRAC_1_SQRT_2 && chance(roll, self.kind_lock[1]) {
+        } else if kept == 2 && -F(along(z)) >= std::f32::consts::FRAC_1_SQRT_2 && chance(roll, self.kind_lock[1]) {
             bend(-0.96568877)
         } else if kept == 1 && along(z) >= 0.5 && chance(roll, self.kind_lock[0]) {
             bend(0.55430907)
@@ -866,8 +874,8 @@ impl AiParams {
         let (zone, wide, follow) = self.serve_zone(level, swing, ad, lefty, roll);
         let mut spot = None;
         if follow && (self.style == 1 || self.style == 3 && chance(roll, 80)) {
-            let x = ps2::madd(if swing == 3 { 0.0 } else { 1.3716666 }, 1.3716666, ps2::mul(2.3283064e-10, ps2::utof(roll())));
-            spot = Some([ps2::mul(ps2::mul(x, if ad { 1.0 } else { -1.0 }), side), ps2::mul(-reach, side)]);
+            let x = F(if swing == 3 { 0.0 } else { 1.3716666 }).madd(1.3716666, F(2.3283064e-10) * utof(roll())).0;
+            spot = Some([(F(x) * (if ad { 1.0 } else { -1.0 }) * side).0, (-F(reach) * side).0]);
         }
         let dash = chance(roll, self.net_dash_rate) || spot.is_some();
         (self.serve_stick(zone, wide, side, roll), dash, spot)
@@ -895,7 +903,7 @@ impl AiParams {
 
     fn serve_stick(&self, zone: (u8, u8), wide: bool, side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let mut s = self.aim(zone, side, roll);
-        if !wide && zone.1 == 1 && ps2::mul(s[2], side) > 0.0 {
+        if !wide && zone.1 == 1 && (F(s[2]) * side).0 > 0.0 {
             s[2] = 0.0;
         }
         s

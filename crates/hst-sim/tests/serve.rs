@@ -120,12 +120,11 @@ fn match_s05_serves() {
                     let (hand, apex) = serve::toss_points(&d, toss, &player);
                     let rec_hand = [0x3eb0, 0x3eb4, 0x3eb8].map(|o| fr.player_f32(p, o));
                     let rec_apex = [0x3e90, 0x3e94, 0x3e98].map(|o| fr.player_f32(p, o));
-                    let close = |x: [f32; 3], y: [f32; 3], e: f32| (0..3).all(|j| (x[j] - y[j]).abs() < e);
                     assert_eq!([hand, apex].map(|v| v.map(f32::to_bits)), [rec_hand, rec_apex].map(|v| v.map(f32::to_bits)), "{name} vsync {} p{p} (character {}) {toss:?}: hand {hand:?} vs {rec_hand:?}, apex {apex:?} vs {rec_apex:?}", fr.vsync(), character(&ram, p));
                     carol += (character(&ram, p) == 6) as i32;
                     let vel = serve::toss_velocity(rec_hand, rec_apex);
                     let rec_vel = v3(fr.live_ball(), 0x130);
-                    assert!(close(vel, rec_vel, 1e-5), "{name} vsync {} p{p}: toss velocity {vel:?} vs {rec_vel:?}", fr.vsync());
+                    assert_eq!(vel.map(f32::to_bits), rec_vel.map(f32::to_bits), "{name} vsync {} p{p}: toss velocity {vel:?} vs {rec_vel:?}", fr.vsync());
                     tosses += 1;
                 }
                 if pu8(fr, p, 0x3fa6) == 3 && pu8(a, p, 0x3fa6) != 3 {
