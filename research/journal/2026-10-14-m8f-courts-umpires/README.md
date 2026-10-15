@@ -36,3 +36,6 @@ One README per task; iterations below, newest last.
   court, any camera; `court_mod.rs` `clear_view`); the exporter names c05's basket goals (and other pieces behind
   the near baseline in HST's view) so (HST-MODS 68606db); break-only gimmicks stand still. c05's turned eye is
   inside a building → M8f5a4.
+- `7-GOLF-VENUES-SURVEY-FINAL.md` — M8f10 done (survey): Fore!/Open Tee 2/Out of Bounds height maps and placements
+  decoded, court spots per hole (HST-MODS `tools/venues/`, `notes/venues.md`); no umpires in any; Open Tee 2
+  Nakagawa h07 has real tennis courts. Exports → M8f10a1 (Nakagawa), M8f10a2 (Fore!), M8f10a3 (Out of Bounds).
