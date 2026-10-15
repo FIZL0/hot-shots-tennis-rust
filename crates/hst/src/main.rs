@@ -363,6 +363,8 @@ fn start(argv: Vec<String>) {
     app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
+    // the umpire's calls' (P33)
+    app.add_plugins(MaterialPlugin::<effects::OnTop>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     app.add_plugins(graphics::plugin).insert_resource(gfx);

@@ -205,6 +205,7 @@ fn start(
     let at = Vec3::new((BANNER_AT[0] - 320.0) / 320.0 * half, (BANNER_AT[1] - 224.0) / 224.0 * half * SHOWN_ASPECT, CALL_DISTANCE);
     commands.entity(shown.root).insert(Transform::from_translation(at).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)).with_scale(Vec3::splat(BANNER_SCALE)));
     commands.entity(root).insert_recursive::<Children>(bevy::camera::visibility::RenderLayers::layer(CALL_LAYER));
+    commands.entity(shown.root).insert(super::popups::OnCallCamera);
     let sheets = ["/inpane_start00.tm2", "/inpane_start01.tm2", "/inpane_start02.tm2"].map(|name| {
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name)).unwrap_or_else(|| panic!("{name} in INPANE"));
         super::panel::image(&mut images, &arc.read(e).expect("INPANE bytes"))
