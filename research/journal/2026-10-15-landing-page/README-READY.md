@@ -29,3 +29,10 @@ style: grid paper, gold top bar, white panels with thick dark outlines, outlined
 M PLUS Rounded 1c. Sections: hero (Pick your ISO), 3 steps, About (original / rewrite cards + platform pills),
 Settings & files, Donate (counts + Chip in), footer. Everything wraps to one column on a phone.
 Discord invite (user): https://discord.gg/kCkz5hFNXG
+
+## v4 (artifact version 15)
+- Header nav removed. The page now opens with a full-width Discord join banner and the OpenTennis logo
+  (`context/logo/open-tennis-logo.svg`). The site uses a copy with the black background rect taken out and the
+  viewBox cropped to the art (195 108 1040 820). Do the same when it moves into `web/`.
+- "Share mods on Discord" button removed. Settings intro now reads "Change settings without starting the game."
+  The "mod didn't load" row is gone.
