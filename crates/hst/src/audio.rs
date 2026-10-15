@@ -245,6 +245,9 @@ impl Looping {
     }
 }
 
+/// B442 (user 2026-10-15): the menu's select cue at about 80% of full (0x80): it stood out over the cursor tick.
+pub const MENU_SELECT_VOLUME: i32 = 0x68;
+
 /// B235: the volume settings' groups. Presentation only: applied to the output, never to a play's level.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
@@ -635,7 +638,7 @@ impl Sound {
     /// B203: a menu cue (system bank key `key`, centred, full volume) that cuts the one before it, so mashing
     /// buttons or a held direction's repeat never stacks cues louder than one press. B307: the cursor move (key 0)
     /// only cuts the cursor move before it, so a select/back cue still sounding plays out under it; any other cue
-    /// cuts both.
+    /// cuts both. B442: the select cue (key 2) plays a little under full ([`MENU_SELECT_VOLUME`]).
     pub fn play_menu(&self, bank: &Arc<SoundBank>, key: u8) -> u64 {
         let lane = usize::from(key != 0);
         let mut m = self.0.lock().unwrap();
@@ -644,7 +647,8 @@ impl Sound {
         m.playing.retain(|q| !cut.contains(&q.id));
         m.voices.retain(|v| !cut.contains(&v.2));
         drop(m);
-        let id = self.play_centre(bank, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
+        let volume = if key == 2 { MENU_SELECT_VOLUME } else { 0x80 };
+        let id = self.play_centre(bank, sound::Play { slot: 9, program: 0, key, volume, speed: 1.0 });
         self.0.lock().unwrap().menu[lane] = id;
         id
     }
