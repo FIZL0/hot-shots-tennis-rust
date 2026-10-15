@@ -1189,7 +1189,8 @@ mod tests {
     #[test]
     fn package_then_install() {
         let mods = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods");
-        let Some(dir) = std::fs::read_dir(mods).ok().and_then(|d| d.flatten().map(|e| e.path()).filter(|p| p.join("mod.json").is_file()).min()) else {
+        // the first character mod (court and umpire mods share the folder)
+        let Some(dir) = std::fs::read_dir(mods).ok().and_then(|d| d.flatten().map(|e| e.path()).filter(|p| crate::mods::read(p).is_ok()).min()) else {
             return eprintln!("no mods in {mods} (skipped)");
         };
         let m = crate::mods::read(&dir).unwrap();

@@ -47,3 +47,6 @@ One README per task; iterations below, newest last.
   (HST-MODS e05ece6, `tools/psp2gltf/export_opentee2_court.py`). The near court sits on HST's origin, lines exact at the
   outer edges, surface clay (earth courts), Western layout. HST now draws untextured glTF vertex colour at full
   brightness (`court_mod.rs`).
+- `10-FORE-COURTS-FINAL.md` — M8f10a2 done: `fore2gltf court` (HST-MODS 5411330) exports 14 of Fore!'s 15 courses as
+  court mods: the flattest survey spot on drawn ground, hole ground + plants + sky moved onto HST's court, a laid
+  grass court (slab, lines, net, chair), Jungle/Greece by run-off. Course 14 (mini golf) has no spot on drawn ground.
