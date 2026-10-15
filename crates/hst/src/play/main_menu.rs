@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ does nothing there).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -500,6 +500,8 @@ struct Menu {
     calls: usize,
     /// B326: a Settings page's row is being changed (row `sel`), with the settings it opened on (○ puts them back).
     editing: Option<Settings>,
+    /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
+    switch: Option<(u8, usize)>,
 }
 
 impl Default for Menu {
@@ -535,6 +537,7 @@ impl Default for Menu {
             rematch: false,
             calls: 0,
             editing: None,
+            switch: None,
         }
     }
 }
@@ -958,6 +961,9 @@ impl Menu {
         }
         let host = self.seats[0];
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
+            return out;
+        }
+        if self.switch_step(k, &mut out) {
             return out;
         }
         match self.screen {
@@ -1752,7 +1758,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
-        "settings" | "display" => Screen::Display,
+        "settings" | "display" | "renderer" => Screen::Display,
         "graphics" => Screen::Graphics,
         "sound" | "sound-edit" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
@@ -1790,6 +1796,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
+    }
+    // B327: the Renderer switch's popup up, on WebGL2
+    if fresh && screen == "renderer" {
+        menu.switch = Some((2, 0));
     }
     if !fresh && menu.screen != Screen::Lobby {
         (menu.screen, menu.sel) = (Screen::Main, 0);
