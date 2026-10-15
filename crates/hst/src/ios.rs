@@ -156,11 +156,14 @@ extern "C" fn tick(_: *mut std::ffi::c_void) {
         if g.is_null() {
             let class = objc_getClass(c"UIImpactFeedbackGenerator".as_ptr());
             if class.is_null() {
+                warn!("haptic: no UIImpactFeedbackGenerator");
                 return;
             }
             // UIImpactFeedbackStyleLight
             g = with_style(obj(class, sel_registerName(c"alloc".as_ptr())), sel_registerName(c"initWithStyle:".as_ptr()), 0);
             GENERATOR.store(g, Ordering::Relaxed);
+            // ponytail: unverified on a device; this line in hst-log.txt says the tick at least ran
+            info!("haptic: generator {g:?}");
         }
         if !g.is_null() {
             obj(g, sel_registerName(c"impactOccurred".as_ptr()));

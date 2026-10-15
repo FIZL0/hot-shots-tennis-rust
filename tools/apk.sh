@@ -20,24 +20,22 @@ for abi in ${HST_ABIS:-arm64-v8a}; do
     mkdir -p "$out/lib/$abi"
     "$T/llvm-strip" -o "$out/lib/$abi/libhst.so" target/$t/release/examples/libhst.so
 done
-# Launcher icon: the OpenTennis badge (web/logo.svg minus its black backdrop) on the court green. Adaptive foreground
-# is 108dp, the badge 64dp wide (its drawn corners stay inside the 72dp mask circle); legacy ones are 48dp square/round.
+# Launcher icon: the iPhone app's (web/icon.svg, the ball on the court green). Its 512 frame maps onto the 72dp the
+# adaptive mask shows (the ball, 42dp, inside the 66dp safe zone); the legacy icons are the whole frame at 48dp.
 bg='#1d5c3a'; res=$out/res; rm -rf "$res"; mkdir -p "$res/mipmap-anydpi-v26" "$res/values"
-sed '/<rect width="100%" height="100%" fill="#000"\/>/d' web/logo.svg | rsvg-convert -w 2800 | magick - -trim +repage "$out/badge.png"
-# Themed (Android 13+) monochrome layer: the launcher tints its alpha, so alpha = the badge's alpha × its brightness
-# (12–42% → 0–1): the black outlines drop out and the lettering, court lines and ball stand out of the ring.
-magick "$out/badge.png" \( +clone -alpha off -colorspace gray -level 12%,42% \) \( -clone 0 -alpha extract \) -delete 0 \
-    -compose multiply -composite "$out/mono_a.png"
-magick "$out/badge.png" -fill white -colorize 100 "$out/mono_a.png" -alpha off -compose copy-opacity -composite "$out/mono.png"
+sed '/<rect /d' web/icon.svg | rsvg-convert -w 1024 >"$out/badge.png"
+# Themed (Android 13+) monochrome layer: the launcher tints its alpha, so the ball with its seams cut out.
+sed -e '/<rect /d' -e 's|<circle |<mask id="m"><rect width="512" height="512" fill="#fff"/><path d="M137 160a170 170 0 0 1 0 192M375 160a170 170 0 0 0 0 192" fill="none" stroke="#000" stroke-width="16" stroke-linecap="round"/></mask><circle mask="url(#m)" |' \
+    -e '/<path d=.*stroke="#fff"/d' web/icon.svg | rsvg-convert -w 1024 >"$out/mono.png"
 dp() { awk "BEGIN{print int($1*$s+.5)}"; }
 for d in mdpi:1 hdpi:1.5 xhdpi:2 xxhdpi:3 xxxhdpi:4; do
     s=${d#*:}; dir=$res/mipmap-${d%:*}; mkdir -p "$dir"; a=$(dp 108); l=$(dp 48); r=$(awk "BEGIN{print 24*$s}")
-    magick -size ${a}x$a xc:none \( "$out/badge.png" -resize "$(dp 64)x" \) -gravity center -composite "$dir/ic_launcher_foreground.png"
-    magick -size ${a}x$a xc:none \( "$out/mono.png" -resize "$(dp 64)x" \) -gravity center -composite "$dir/ic_launcher_monochrome.png"
+    magick -size ${a}x$a xc:none \( "$out/badge.png" -resize "$(dp 72)x" \) -gravity center -composite "$dir/ic_launcher_foreground.png"
+    magick -size ${a}x$a xc:none \( "$out/mono.png" -resize "$(dp 72)x" \) -gravity center -composite "$dir/ic_launcher_monochrome.png"
     magick -size ${l}x$l xc:none -fill "$bg" -draw "roundrectangle 0,0 $((l-1)),$((l-1)) $(dp 8),$(dp 8)" \
-        \( "$out/badge.png" -resize "$(dp 44)x" \) -gravity center -composite "$dir/ic_launcher.png"
+        \( "$out/badge.png" -resize "${l}x" \) -gravity center -composite "$dir/ic_launcher.png"
     magick -size ${l}x$l xc:none -fill "$bg" -draw "circle $r,$r $r,0" \
-        \( "$out/badge.png" -resize "$(dp 40)x" \) -gravity center -composite "$dir/ic_launcher_round.png"
+        \( "$out/badge.png" -resize "${l}x" \) -gravity center -composite "$dir/ic_launcher_round.png"
 done
 echo "<resources><color name=\"ic_launcher_background\">$bg</color></resources>" >"$res/values/ic_launcher.xml"
 for n in ic_launcher ic_launcher_round; do

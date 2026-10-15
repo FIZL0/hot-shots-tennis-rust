@@ -56,25 +56,11 @@ let shown = false;
 let buzz = true;
 // B329: the buzz. Android's browsers have `navigator.vibrate` (Chrome skips it while the phone's ringer is on Silent, and
 // only after the page's first tap); 8 ms was too short for many phones' motors to be felt at all. iOS Safari has no
-// vibration API; since iOS 18 a switch checkbox flipped from a tap gives the system's light haptic tick, so an iPhone
-// gets that instead (nothing before iOS 18).
-const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// vibration API, and iOS 26.5 closed the switch-checkbox haptic trick, so an iPhone browser gets nothing.
 const vibrates = typeof navigator.vibrate === 'function';
-let tickLabel = null;
-if (!vibrates && ios) {
-  tickLabel = document.createElement('label');
-  tickLabel.setAttribute('aria-hidden', 'true');
-  tickLabel.style.cssText = 'position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden';
-  tickLabel.innerHTML = '<input type="checkbox" switch tabindex="-1">';
-  tickLabel.addEventListener('click', e => e.stopPropagation());
-  document.body.append(tickLabel);
-}
-const buzzOnce = () => {
-  if (vibrates) navigator.vibrate(15);
-  else tickLabel?.click();
-};
-// what the Vibration setting's text says: 'vibrate', 'ios' (the haptic tick) or 'none'
-window.hstVibration = () => (vibrates ? 'vibrate' : ios ? 'ios' : 'none');
+const buzzOnce = () => vibrates && navigator.vibrate(15);
+// what the Vibration setting's text says: 'vibrate' or 'none'
+window.hstVibration = () => (vibrates ? 'vibrate' : 'none');
 // B165: the game's polls, counted in animation frames. A tap shorter than a frame (or one that lands while the page is
 // busy, its down and up queued together) would come and go between two polls and never be seen: a button stays down
 // until a poll has seen it and a later frame has started, so every tap counts once.

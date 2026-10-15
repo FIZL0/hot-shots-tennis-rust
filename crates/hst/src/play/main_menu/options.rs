@@ -198,7 +198,6 @@ fn vibration_about() -> &'static str {
     match &*can {
         "haptic" => "A light haptic tick on each press of the on-screen controls.",
         "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",
-        "ios" => "iPhone: Safari has no vibration, so each press gives the light haptic tick of iOS 18 and later instead (nothing on older iOS).",
         _ => "This browser can't vibrate, so this does nothing here.",
     }
 }
