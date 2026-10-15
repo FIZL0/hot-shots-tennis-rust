@@ -824,7 +824,16 @@ fn face(m: &Menu, e: &Entry) -> Option<(Tex, [f32; 4])> {
     m.add.dir_of(e).and_then(|dir| super::face_of(m, dir))
 }
 
-/// One tile: its picture (or the loading shimmer, or its initial), the verified disc and Installed / Update pill
+/// An installed court mod's value on the court select (past the disc courts and Random): its tile and panel show
+/// the select's picture of it (its own `previews/court.png`, else its layout court's).
+fn court(m: &Menu, e: &Entry) -> Option<usize> {
+    let dir = m.add.dir_of(e)?;
+    // the menu's dirs keep `./mods`'s `./`, the Mods pages' drop it
+    let bare = |p: &std::path::Path| p.strip_prefix(".").unwrap_or(p).to_path_buf();
+    m.court_mods.iter().position(|x| bare(&x.dir) == bare(dir)).map(|i| super::super::COURTS + 1 + i)
+}
+
+/// One tile: its picture (or the loading shimmer, an installed court's select picture, or its initial), the verified disc and Installed / Update pill
 /// on it, an install's progress along its foot; its name and line under it, gold while chosen.
 fn tile(d: &mut Draw, m: &Menu, e: &Entry, [x, y, w, _]: [f32; 4], ph: f32, on: bool) {
     let v = &m.add;
@@ -842,6 +851,8 @@ fn tile(d: &mut Draw, m: &Menu, e: &Entry, [x, y, w, _]: [f32; 4], ph: f32, on: 
             let (pw, phh) = if aspect > w / ph { (w, w / aspect) } else { (ph * aspect, ph) };
             d.q(Tex::Thumb(slot), [0.0, 0.0, 1.0, 1.0], [x + (w - pw) / 2.0, y + (ph - phh) / 2.0, pw, phh], WHITE, 128.0);
         }
+        // (an installed court: its own picture while the store's loads, the same court.png)
+        _ if court(m, e).is_some() => super::super::court_picture(d, m, court(m, e).unwrap_or_default(), pic),
         _ => match face(m, e).filter(|_| state == Some(Pic::Missing)) {
             Some(f) => super::super::face_frame(d, f, x + w / 2.0, y + ph / 2.0, ph * 0.8, WHITE),
             None => {
@@ -1234,6 +1245,8 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     } else if let Some(Pic::Shown(slot, aspect)) = v.b.pics.get(&mt.sha256).copied().filter(|_| !e.rev.starts_with("local:")) {
         let (pw, phh) = if aspect > shot[2] / shot[3] { (shot[2], shot[2] / aspect) } else { (shot[3] * aspect, shot[3]) };
         d.q(Tex::Thumb(slot), [0.0, 0.0, 1.0, 1.0], [shot[0] + (shot[2] - pw) / 2.0, shot[1] + (shot[3] - phh) / 2.0, pw, phh], WHITE, 128.0);
+    } else if let Some(c) = court(m, e) {
+        super::super::court_picture(d, m, c, shot);
     } else if let Some(f) = face(m, e) {
         super::super::face_frame(d, f, shot[0] + shot[2] / 2.0, shot[1] + shot[3] / 2.0, shot[3] * 0.8, WHITE);
     } else {
