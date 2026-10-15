@@ -193,6 +193,11 @@ fn fps_name(fps: u32) -> String {
     if fps == 0 { "Uncapped".into() } else { format!("{fps} fps") }
 }
 
+/// B316: the words of the rows whose values are small indices, shared by [`choices`] and [`Settings::value`].
+const SHOW_FPS_NAMES: [&str; 3] = ["Off", "On", "Detailed"];
+const SHADOW_NAMES: [&str; 3] = ["Off", "Low", "High"];
+const MSAA_NAMES: [&str; 3] = ["Off", "2x", "4x"];
+
 /// B294: every value `o` can take, in order, as [`Settings::value`] words it (the side panel's choices).
 fn choices(o: Opt) -> Vec<String> {
     let words = |v: &[&str]| v.iter().map(|w| w.to_string()).collect();
@@ -203,9 +208,10 @@ fn choices(o: Opt) -> Vec<String> {
         MenuSize => MENU_SIZES.iter().map(|&t| menu_size_name(t)).collect(),
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
-        Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
-        ShowFps => words(&["Off", "On", "Detailed"]),
-        Renderer => words(&["Auto", "WebGPU", "WebGL2"]),
+        Shadows => words(&SHADOW_NAMES),
+        Msaa => words(&MSAA_NAMES),
+        ShowFps => words(&SHOW_FPS_NAMES),
+        Renderer => RENDERERS.iter().map(|(_, n)| n.to_string()).collect(),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
@@ -285,12 +291,12 @@ impl Settings {
             Display => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             Aspect => ASPECTS[self.3 as usize].into(),
             MenuSize => menu_size_name(self.7),
-            ShowFps => ["Off", "On", "Detailed"][g.show_fps.min(2) as usize].into(),
+            ShowFps => SHOW_FPS_NAMES[g.show_fps.min(2) as usize].into(),
             KeyHints => on_off(self.0[KEY_HINTS]),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
-            Shadows => ["Off", "Low", "High"][g.shadows as usize].into(),
-            Msaa => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
+            Shadows => SHADOW_NAMES[g.shadows as usize].into(),
+            Msaa => MSAA_NAMES[g.msaa.ilog2().min(2) as usize].into(),
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
@@ -304,7 +310,7 @@ impl Settings {
             AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
             Chat => on_off(self.0[CHAT]),
-            Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
+            Renderer => RENDERERS[self.5 as usize].1.into(),
             Vibration => on_off(self.0[VIBRATION]),
             FewerShadows => on_off(g.fewer_shadows),
             BatchCrowd => on_off(g.batch_crowd),
@@ -696,6 +702,24 @@ mod tests {
         set.step(MenuSize, -1);
         assert_eq!(set.value(MenuSize), "150%");
         assert!(set.text().contains("menu_size = 150\n") && Settings::parse(&set.text()) == set);
+    }
+
+    /// B316: every row's choices are its own values — stepping one round through any row (the web build's Renderer
+    /// too, which no native page shows) lands on each of its choices once and on nothing else.
+    #[test]
+    fn choices_are_each_rows_own_values() {
+        let all = [DISPLAY, &[Display, Renderer], GRAPHICS, SOUND, MODS, MOBILE].concat();
+        for o in all.into_iter().filter(|o| !matches!(o, Volume(_) | Preset)) {
+            let mut s = Settings::default();
+            let want = choices(o);
+            let seen: Vec<_> = (0..want.len()).map(|_| (s.value(o), s.step(o, 1)).0).collect();
+            assert_eq!((s.value(o), seen.len()), (seen[0].clone(), want.len()), "{o:?}");
+            assert!(want.iter().all(|c| seen.contains(c)), "{o:?}: {seen:?} vs {want:?}");
+        }
+        assert_eq!(choices(Renderer), ["Auto", "WebGPU", "WebGL2"]);
+        let mut s = Settings::default();
+        s.step(Renderer, -1);
+        assert_eq!(s.value(Renderer), "WebGL2");
     }
 
     /// B235: the sliders clamp to 0..=10 and the volumes round-trip settings.txt.
