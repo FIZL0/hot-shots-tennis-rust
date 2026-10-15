@@ -151,6 +151,13 @@ pub fn plugin(app: &mut App) {
     let compiling = Compiling::default();
     let settle = Unsettled::default();
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        // P46: the render app's schedules: those there now, the rest (added by later plugins) at the first extract
+        r.add_systems(bevy::render::ExtractSchedule, |w: &mut World, mut done: Local<bool>| {
+            if !std::mem::replace(&mut *done, true) {
+                one_thread(&mut w.resource_mut::<Schedules>());
+            }
+        });
+        one_thread(&mut r.world_mut().resource_mut::<Schedules>());
         r.insert_resource(settle.clone()).add_systems(bevy::render::Render, unsettled.in_set(bevy::render::RenderSystems::Cleanup));
         r.insert_resource(compiling.clone()).add_systems(
             bevy::render::Render,
@@ -164,6 +171,8 @@ pub fn plugin(app: &mut App) {
         );
     }
     app.init_resource::<Next>()
+        // P46: the base app's schedules (all but the running `PreStartup` and `Main`, which only runs the others)
+        .add_systems(PreStartup, |w: &mut World| one_thread(&mut w.resource_mut::<Schedules>()))
         .insert_resource(compiling)
         .insert_resource(settle)
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
@@ -187,6 +196,23 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostUpdate, (|w: &mut World| run(w, PostUpdate)).before(bevy::ui::UiSystems::Layout).before(warm))
         // before winit drops the windows on an `AppExit`
         .add_systems(Last, ((|w: &mut World| run(w, Last)), back).chain().before(bevy::window::ExitSystems));
+}
+
+/// P46: `schedules` run their systems one after another on the thread that runs the schedule, not as tasks on the
+/// task pool. Nearly all of the ~1000 system runs a frame (main world, render world, the mode's own) take a few µs or
+/// return at once, and the multi-threaded executor's per-system task spawn, wake-up and completion cost more than that
+/// (traced: ~690 executor ticks a frame); the few heavy systems still spread their own `par_iter`s over the pools.
+/// Paired runs side by side (4-bot doubles, a shared machine): the mode's schedules ~1.6 → ~0.5 ms a frame, the whole
+/// main world update about halved, the frame period ~15% shorter, CPU ~1.5 ms a frame less. The order is each
+/// schedule's own topological order (ordering constraints kept; ambiguous pairs run in one fixed order, not
+/// whichever task starts first). `HST_EXECUTOR=multi` keeps Bevy's multi-threaded executor, to compare.
+pub(crate) fn one_thread(schedules: &mut Schedules) {
+    if std::env::var("HST_EXECUTOR").is_ok_and(|v| v == "multi") {
+        return;
+    }
+    for (_, s) in schedules.iter_mut() {
+        s.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    }
 }
 
 /// B200: the running mode holds every press back too (an online match until every peer has loaded it).
@@ -280,6 +306,7 @@ fn switch(world: &mut World) {
     (next.build)(&mut app);
     std::mem::swap(app.world_mut(), world);
     let mut s = world.remove_resource::<Schedules>().expect("the mode's schedules");
+    one_thread(&mut s);
     world.insert_resource(schedules);
     for label in [PreStartup.intern(), Startup.intern(), PostStartup.intern()] {
         if let Some(mut x) = s.remove(label) {

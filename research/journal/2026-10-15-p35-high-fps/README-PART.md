@@ -171,3 +171,52 @@ Checked by eye (`tools/shot.sh`, `context/perf/p39/`): pause menu (`HST_PAUSE`),
   timed separately; not seen as a hitch in the shots' runs.
 - Absolute fps not compared: other agents loaded the CPU (bench ~100–160 fps both builds); only traced relative cost.
 - Not run on wasm/iOS/Android; the change is plain ECS, no platform code.
+
+## P46 — schedule and executor overhead (2026-10-15)
+
+Traced baseline (4-bot doubles, court 1, 1280×800, `tools/profile.sh`): ~990 system runs a frame (main + render
+world), ~200 of them ours, nearly all a few µs or an early return; **691 multithreaded-executor ticks a frame**
+(1.9 ms self traced), and the schedules' own self time (executor bookkeeping + waiting for task wake-ups) was large:
+PostUpdate 3.9 ms, Update 1.8, PreUpdate 0.8, FixedUpdate 0.8.
+
+Gating systems one by one with run conditions wouldn't remove that: a skipped system is cheap, but the hundreds that do
+run still pay a task spawn, wake-up and completion each. So instead (`mode.rs` `one_thread`): every schedule of the
+base app (at PreStartup), of the render app (at plugin time + the first extract for later ones) and of each mode
+(at its switch) runs on Bevy's `SingleThreadedExecutor`. Systems run back to back on the schedule's thread; the heavy
+ones still spread their own `par_iter`s over the task pools. Ordering constraints are kept; ambiguous pairs now run in
+the schedule's fixed topological order instead of whichever task started first. `HST_EXECUTOR=multi` restores Bevy's
+executor for comparisons.
+
+Measured with temporary instrumentation (per-frame wall time of the mode's schedule runs and of First..Last), A and B
+**run side by side at the same time** (the machine was at load 20–33 from other agents; sequential runs swung 2×):
+
+| | multi | single |
+|---|---:|---:|
+| mode schedules, median µs/frame (3 pairs) | 1870 / 1570 / 1540 | 735 / 455 / 460 |
+| main world First..Last, mode-only single vs everything single | 4600 / 3600 / 3350 | 2670 / 1750 / 1890 |
+| + render world single: frame period median µs | 6030 / 6930 / 3670 | 4340 / 4680 / 3190 |
+| final build, fps (3 pairs, 3 readings each) | 129–141 | 177–216 |
+| final build, CPU ms/frame | 8.0–9.2 | 5.7–6.9 |
+
+Traced after: 0 executor ticks; schedule self time PostUpdate 3874 → 707 µs, Update 1773 → 398, PreUpdate 816 → 265,
+FixedUpdate 792 → 121; `Main` inclusive ~10.4 → 6.4 ms (different load, compare loosely). Tables in `context/perf/p46/`.
+
+- `main_menu::cursor::tick` in a match: kept on purpose, the pause menu and its Settings screens show the 3D hand
+  (B179); with no hand on screen it returns after one query (P39), now without a task spawn.
+- `mode::plugin`'s closure ~10×/frame: that's one exclusive runner per schedule label of the running mode (First,
+  PreUpdate, RunFixedMainLoop, the Fixed* per tick, Update, PostUpdate, Last); labels the mode has no schedule for
+  return at once. Kept: they are what lets a mode own fresh schedules.
+- No per-system run conditions added: with the task overhead gone, an idle system costs well under a µs, and gating
+  ~30 sub-plugins would touch files other agents are editing for little.
+- `tools/trace_agg.py`: an end event now closes the innermost open span of its name (a span left open on the main
+  thread made it pair every later end wrongly: "1 frames").
+- `--shot`s of a match and the main menu (`context/perf/p46/`) look right.
+
+### Not verified / not 1:1
+- Not measured on an idle machine: every run shared the CPU with other agents' builds, PCSX2 copies and an hst bench.
+  On an idle 16-thread desktop the multi-threaded executor wakes threads faster, so the gain may be smaller; compare
+  there with `HST_EXECUTOR=multi tools/bench.sh …` vs plain (P35's re-measure).
+- Not run on the Deck, Android, iOS or the web (wasm32 was single-threaded already).
+- Online play: peers with different `HST_EXECUTOR` settings could, in principle, run an ambiguous pair of sim systems
+  in different orders; the netplay/rollback tests build their own app (not through `mode.rs`), so they don't cover
+  this. Default builds all use the single-threaded order, which is fixed, so peers agree.
