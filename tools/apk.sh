@@ -23,10 +23,16 @@ done
 # is 108dp, the badge 64dp wide (its drawn corners stay inside the 72dp mask circle); legacy ones are 48dp square/round.
 bg='#1d5c3a'; res=$out/res; rm -rf "$res"; mkdir -p "$res/mipmap-anydpi-v26" "$res/values"
 sed '/<rect width="100%" height="100%" fill="#000"\/>/d' web/logo.svg | rsvg-convert -w 2800 | magick - -trim +repage "$out/badge.png"
+# Themed (Android 13+) monochrome layer: the launcher tints its alpha, so alpha = the badge's alpha × its brightness
+# (12–42% → 0–1): the black outlines drop out and the lettering, court lines and ball stand out of the ring.
+magick "$out/badge.png" \( +clone -alpha off -colorspace gray -level 12%,42% \) \( -clone 0 -alpha extract \) -delete 0 \
+    -compose multiply -composite "$out/mono_a.png"
+magick "$out/badge.png" -fill white -colorize 100 "$out/mono_a.png" -alpha off -compose copy-opacity -composite "$out/mono.png"
 dp() { awk "BEGIN{print int($1*$s+.5)}"; }
 for d in mdpi:1 hdpi:1.5 xhdpi:2 xxhdpi:3 xxxhdpi:4; do
     s=${d#*:}; dir=$res/mipmap-${d%:*}; mkdir -p "$dir"; a=$(dp 108); l=$(dp 48); r=$(awk "BEGIN{print 24*$s}")
     magick -size ${a}x$a xc:none \( "$out/badge.png" -resize "$(dp 64)x" \) -gravity center -composite "$dir/ic_launcher_foreground.png"
+    magick -size ${a}x$a xc:none \( "$out/mono.png" -resize "$(dp 64)x" \) -gravity center -composite "$dir/ic_launcher_monochrome.png"
     magick -size ${l}x$l xc:none -fill "$bg" -draw "roundrectangle 0,0 $((l-1)),$((l-1)) $(dp 8),$(dp 8)" \
         \( "$out/badge.png" -resize "$(dp 44)x" \) -gravity center -composite "$dir/ic_launcher.png"
     magick -size ${l}x$l xc:none -fill "$bg" -draw "circle $r,$r $r,0" \
@@ -36,6 +42,7 @@ echo "<resources><color name=\"ic_launcher_background\">$bg</color></resources>"
 for n in ic_launcher ic_launcher_round; do
     echo '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
   <background android:drawable="@color/ic_launcher_background"/><foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+  <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>
 </adaptive-icon>' >"$res/mipmap-anydpi-v26/$n.xml"
 done
 rm -f "$out/res.zip"; "$BT/aapt2" compile --dir "$res" -o "$out/res.zip"

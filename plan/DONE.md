@@ -593,6 +593,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M8f10a3** Out of Bounds golf venues as court mods: as M8f10a2 from out/venues/oob.json (big-endian HMP, per-kind plant files in half_p10/p01.xb) with oob2gltf's .rem course models → ../opentennis-mods tools/oob2gltf, tools/venues, notes/venues.md | j: 2026-10-14-m8f-courts-umpires
 - [x] **M100** Android app icon (user 2026-10-15): the launcher icon (and round/adaptive versions) from web/logo.svg, the OpenTennis badge, packed by tools/apk.sh (aapt2 res/ mipmaps + android:icon in the manifest); app label OpenTennis. Done when the installed app shows the badge in the launcher and recents → tools/apk.sh · web/logo.svg
 - [x] **B410** Sophie's pigtail hair physics broken: her pigtails' hair physics do not work; the pigtails should move with physics as she moves (user 2026-10-15) → crates/hst/src/spring.rs · crates/hst/src/character.rs
+- [x] **M103** Android themed (monochrome) launcher icon for Android 13+ (user 2026-10-15): a single-colour silhouette of the OpenTennis badge as <monochrome> in mipmap-anydpi-v26/ic_launcher{,_round}.xml, drawn from web/logo.svg by tools/apk.sh like M100's icons (journal 2026-10-15-m100-android-icon). Done when the emulator with themed icons on shows the badge tinted, not the full-colour one → tools/apk.sh · web/logo.svg
 
 
 ### Shots
