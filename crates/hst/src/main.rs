@@ -408,6 +408,12 @@ fn start(argv: Vec<String>) {
     app.add_systems(Last, ios::heartbeat);
     #[cfg(target_os = "android")]
     app.add_systems(Last, android::heartbeat);
+    // M108: paused in the background: silent, stopped, an online match left after a grace
+    #[cfg(target_os = "android")]
+    {
+        android::watch_lifecycle();
+        app.add_systems(First, android::background);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
