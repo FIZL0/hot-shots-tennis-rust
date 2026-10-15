@@ -151,9 +151,16 @@ jobs:
           DISPATCH: ${{ secrets.BETA_DISPATCH_TOKEN }}
           PREBUILT: ${{ inputs.prebuilt }}
         run: |
-          # a stale run leaves it to the newer one: tagging a commit whose workflow files differ from main's is a
-          # workflow change, which github.token may not make (HTTP 403), and the delete below would leave no release
-          [ "$(gh api "repos/$GH_REPO/commits/main" -q .sha)" = "$GITHUB_SHA" ] || { echo "main moved on, skipping"; exit 0; }
+          # tagging a commit whose workflow files differ from main's is a workflow change, which github.token may not
+          # make (HTTP 403), and the delete below would leave no release: leave that to the newer run. Otherwise a
+          # stale run still publishes (skipping whenever main had moved on starved beta while merges kept landing),
+          # unless the beta already shows a newer commit.
+          wf=$(gh api "repos/$GH_REPO/compare/$GITHUB_SHA...main" -q '[.files[].filename|select(startswith(".github/workflows/"))]|length')
+          [ "$wf" = 0 ] || { echo "workflow files changed on main since, skipping"; exit 0; }
+          cur=$(gh api "repos/$GH_REPO/commits/beta" -q .sha 2>/dev/null || true)
+          if [ -n "$cur" ] && [ "$(gh api "repos/$GH_REPO/compare/$cur...$GITHUB_SHA" -q .status)" = behind ]; then
+            echo "beta already at newer ${cur::7}, skipping"; exit 0
+          fi
           if [ "$PREBUILT" = true ]; then
             gh release upload beta --clobber web.tar.gz
           else
