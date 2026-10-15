@@ -1,8 +1,6 @@
 // Shadow pass for court models (see gs.rs): the same alpha test as gs.wgsl, so cut-out leaves cast leaf shadows.
-// G1: also the depth + normal prepass of a camera with Ambient Occlusion on (`graphics::ao`), with the main pass's
-// vertex positions (gs.wgsl's morph and guard band) so its depth matches what the main pass draws.
 #import bevy_pbr::prepass_io::{Vertex, VertexOutput}
-#import bevy_pbr::{mesh_bindings::mesh, mesh_functions, skinning, morph, mesh_view_bindings::view}
+#import bevy_pbr::{mesh_bindings::mesh, mesh_functions, skinning, morph}
 #import bevy_pbr::view_transformations::position_world_to_clip
 #ifdef PREPASS_FRAGMENT
 #import bevy_pbr::prepass_io::FragmentOutput
@@ -67,15 +65,6 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;
 #endif
-#ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
-#ifdef VERTEX_NORMALS
-#ifdef SKINNED
-    out.world_normal = skinning::skin_normals(world_from_local, vertex.normal);
-#else
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, instance);
-#endif
-#endif
-#endif
 #ifdef VERTEX_COLORS
     out.color = vertex.color;
 #endif
@@ -84,20 +73,6 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #endif
 #ifdef VISIBILITY_RANGE_DITHER
     out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(instance, mesh_functions::get_world_from_local(instance)[3]);
-#endif
-#ifdef GS_GUARD
-    // gs.wgsl's guard band (the view prepass only; never the sun's)
-    let p = out.position;
-    let across = view.clip_from_view[1][1] * 0.75 / view.clip_from_view[0][0];
-#ifdef VERTEX_NORMALS
-    let ground = out.world_position.y < 1.0 && normalize(mesh_functions::mesh_normal_local_to_world(vertex.normal, instance)).y > 0.7;
-#else
-    let ground = false;
-#endif
-    if !ground && (abs(p.x) * across > 1280.0 / 278.5 * abs(p.w) || abs(p.y) > 1280.0 / 112.0 * abs(p.w)) {
-        let z = p.w * 0.0;
-        out.position = vec4(z / z);
-    }
 #endif
     return out;
 }
@@ -139,16 +114,6 @@ fn alpha_test(in: VertexOutput) {
 fn fragment(in: VertexOutput) -> FragmentOutput {
     alpha_test(in);
     var out: FragmentOutput;
-#ifdef NORMAL_PREPASS
-    // facing the camera: two-sided and mirrored parts show their back faces (and a skinned normal isn't unit)
-#ifdef VERTEX_NORMALS
-    var n = normalize(in.world_normal);
-    n = select(n, -n, dot(n, view.world_position - in.world_position.xyz) < 0.0);
-#else
-    let n = normalize(view.world_position - in.world_position.xyz);
-#endif
-    out.normal = vec4(n * 0.5 + vec3(0.5), 1.0);
-#endif
 #ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
     out.frag_depth = in.unclipped_depth;
 #endif

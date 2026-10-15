@@ -7,7 +7,7 @@
 use super::super::widescreen::ASPECTS;
 use super::{BROWN, CHAT, SWAY_LOD, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
-use crate::graphics::{AO, BLOOM, FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
+use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
 
 /// One option row.
@@ -26,16 +26,6 @@ pub(super) enum Opt {
     Scale,
     Shadows,
     Msaa,
-    /// G1: screen-space ambient occlusion (`Graphics::ao`).
-    Ao,
-    /// G3: bloom on the court's brightest parts (`Graphics::bloom`).
-    Bloom,
-    /// G5: HDR tonemapping (`Graphics::hdr`).
-    Hdr,
-    /// G4: contact-hardening sun shadows (`Graphics::soft_shadows`).
-    SoftShadows,
-    /// G6: averaged vertex normals on the court's props and the characters (`Graphics::smooth`).
-    Smooth,
     Fps,
     Vsync,
     Original,
@@ -90,7 +80,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, SoftShadows, Smooth, Fps, Vsync, Original, Mesh, Upscaled];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -111,9 +101,9 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
 }
 
 /// The options the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
-/// Downloads, `modstore::install`; G1: WebGL2's Ambient Occlusion, no compute shaders for Bevy's SSAO).
+/// Downloads, `modstore::install`).
 pub(super) fn locked(o: Opt) -> bool {
-    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads) || cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) && matches!(o, Ao | SoftShadows)
+    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
 }
 
 fn label(o: Opt) -> &'static str {
@@ -128,11 +118,6 @@ fn label(o: Opt) -> &'static str {
         Scale => "Resolution",
         Shadows => "Shadows",
         Msaa => "Anti-aliasing",
-        Ao => "Ambient Occlusion",
-        Bloom => "Bloom",
-        Hdr => "HDR",
-        SoftShadows => "Soft Shadows",
-        Smooth => "Smooth Normals",
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
@@ -166,14 +151,7 @@ fn about(o: Opt) -> &'static str {
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
-        SoftShadows if locked(o) => "Soft shadows need the WebGPU renderer.",
-        SoftShadows => "Not in the original: shadow edges sharp where things touch the ground and softer the higher what casts them is (a tree's canopy). Off in Original Mode.",
-        Ao if locked(o) => "Ambient occlusion needs the WebGPU renderer.",
-        Ao => "Not in the original: soft shade in corners and where things meet the ground (SSAO). Uses SMAA instead of MSAA for Anti-aliasing. Off in Original Mode.",
-        Bloom => "Not in the original: a soft glow around the brightest parts of the court (sunlit lines, sky, glare). Off in Original Mode.",
-        Hdr => "Not in the original: the court keeps light brighter than the PS2 could show and rolls the brightest parts off smoothly instead of clipping them to flat white or yellow (tonemapping). Off in Original Mode.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
-        Smooth => "Not in the original: light curved surfaces (rackets, posts, the courts' rounded props) smoothly instead of in flat facets; sharp edges stay sharp. Off in Original Mode. Applies to models loaded after a change (the next match).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
@@ -239,7 +217,6 @@ fn choices(o: Opt) -> Vec<String> {
         Mesh => MESHES.iter().map(|s| format!("{s} %")).collect(),
         Shadows => words(&SHADOW_NAMES),
         Msaa => words(&MSAA_NAMES),
-        Ao | Bloom => words(&SHADOW_NAMES),
         ShowFps => words(&SHOW_FPS_NAMES),
         Renderer => RENDERERS.iter().map(|(_, n)| n.to_string()).collect(),
         ButtonIcons => super::legend::LAYOUTS.iter().map(|l| l.0.to_string()).collect(),
@@ -285,13 +262,8 @@ impl Settings {
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
             Msaa => g.msaa = cycle(&MSAA, g.msaa, d),
-            Ao => g.ao = (g.ao as isize + d).rem_euclid(AO.len() as isize) as u8,
-            Bloom => g.bloom = (g.bloom as isize + d).rem_euclid(BLOOM.len() as isize) as u8,
-            SoftShadows => g.soft_shadows = !g.soft_shadows,
             Fps => g.fps = cycle(&FPS, g.fps, d),
-            Smooth => g.smooth = !g.smooth,
             Vsync => g.vsync = !g.vsync,
-            Hdr => g.hdr = !g.hdr,
             Original => g.original = !g.original,
             Cull => g.cull = !g.cull,
             // Upscaled Downloads follows Upscaled Textures (B227)
@@ -342,13 +314,8 @@ impl Settings {
             Scale => format!("{} %", g.scale),
             Shadows => SHADOW_NAMES[g.shadows as usize].into(),
             Msaa => MSAA_NAMES[g.msaa.ilog2().min(2) as usize].into(),
-            Ao => SHADOW_NAMES[g.ao.min(2) as usize].into(),
-            Bloom => SHADOW_NAMES[g.bloom.min(2) as usize].into(),
-            SoftShadows => on_off(g.soft_shadows),
             Fps => fps_name(g.fps),
-            Smooth => on_off(g.smooth),
             Vsync => on_off(g.vsync),
-            Hdr => on_off(g.hdr),
             Original => on_off(g.original),
             Cull => on_off(g.cull),
             Mesh => format!("{} %", g.mesh),
@@ -630,7 +597,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | SoftShadows | Smooth | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {

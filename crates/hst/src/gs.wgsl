@@ -45,10 +45,6 @@ struct VertexOutput {
 #else
     @location(9) @interpolate(linear) fog: f32,
 #endif
-#ifdef GS_AO
-    // G1: the share of the vertex's light that isn't the sun's (ambient + the second light), what SSAO occludes
-    @location(10) ambient: f32,
-#endif
 }
 
 #ifdef MORPH_TARGETS
@@ -152,15 +148,6 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
     let diffuse2 = lit * max(-dot(n, gs.light2_dir.xyz), 0.0);
     c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
-#ifdef GS_AO
-    let fill = dot(gs.ambient.rgb * (1.0 - x * 0.5) + gs.light2_color.rgb * diffuse2, vec3(1.0));
-    let sun = dot(gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse, vec3(1.0));
-    out.ambient = select(1.0, fill / (fill + sun), fill + sun > 0.0);
-#endif
-#else
-#ifdef GS_AO
-    out.ambient = 1.0;
-#endif
 #endif
     // VU1: F from the vertex's view depth (clip w), at most F near, then at least F far (MINI, MAX), FTOI to an
     // integer; both ends go towards 255 as the eye rises past 30 m (game y = −Bevy y)
@@ -179,92 +166,14 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     return out;
 }
 
-#ifdef GS_SOFT
-// G4 (Soft Shadows, not the original's): contact-hardening edges. A blocker search finds how high above the ground
-// the caster is along the sun; the penumbra's radius grows SOFT_SPREAD metres a metre of it, up to SOFT_MAX, so a
-// player's feet stay sharp and a tall tree's canopy blurs. `graphics::soft_shadows` turns it on by giving the view
-// Bevy's Temporal filter (its key's only spare state); this replaces Bevy's filter, so there is no temporal noise.
-// (the real sun's is ~0.005; 3× that reads as soft without washing out a tall pole's shadow)
-const SOFT_SPREAD: f32 = 0.015;
-const SOFT_MAX: f32 = 0.25;
-
-fn soft_cascade(i: u32, c: u32, pos: vec4<f32>) -> f32 {
-    let light = &view_bindings::lights.directional_lights[i];
-    let cascade = &(*light).cascades[c];
-    let texel = (*cascade).texel_size;
-    // Bevy's biases (`sample_directional_cascade`), the ground's normal up
-    let p = vec4(pos.xyz + (*light).shadow_normal_bias * texel * vec3(0.0, 1.0, 0.0) + (*light).shadow_depth_bias * (*light).direction_to_light.xyz, pos.w);
-    let ll = shadows::world_to_directional_light_local(i, c, p);
-    if ll.w == 0.0 {
-        return 1.0;
-    }
-    let layer = i32((*light).depth_texture_base_index + c);
-    let size = vec2<f32>(textureDimensions(view_bindings::directional_shadow_textures));
-    // the cascade is orthographic: shadow-map depth per metre along the light is its projection's z row's length
-    let m = (*cascade).clip_from_world;
-    let per_metre = length(vec3(m[0].z, m[1].z, m[2].z));
-    // blocker search, 6×6 texels over the widest penumbra (at most ~2 texels apart, so the estimate doesn't jump): the casters' mean depth (reversed Z: nearer the sun is
-    // larger; the ground itself doesn't cast)
-    let reach = SOFT_MAX / texel;
-    var sum = 0.0;
-    var n = 0.0;
-    for (var y = 0; y < 6; y++) {
-        for (var x = 0; x < 6; x++) {
-            let o = (vec2(f32(x), f32(y)) - 2.5) * 0.4 * reach;
-            let t = clamp(vec2<i32>(floor(ll.xy * size + o)), vec2(0), vec2<i32>(size) - 1);
-            let d = textureLoad(view_bindings::directional_shadow_textures, t, layer, 0);
-            if d > ll.z {
-                sum += d;
-                n += 1.0;
-            }
-        }
-    }
-    let height = select(0.0, (sum / max(n, 1.0) - ll.z) / per_metre, n > 0.0);
-    // PCF over the penumbra: k×k bilinear comparisons at most ~2 texels apart (k grows with it, fewer near contact)
-    let r = clamp(height * SOFT_SPREAD / texel, 1.0, reach);
-    let k = clamp(i32(ceil(r)) + 1, 3, 9);
-    let step = 2.0 * r / f32(k - 1);
-    var lit = 0.0;
-    for (var y = 0; y < k; y++) {
-        for (var x = 0; x < k; x++) {
-            let o = (vec2(f32(x), f32(y)) * step - r) / size;
-            lit += shadow_sampling::sample_shadow_map_hardware(ll.xy + o, ll.z, layer);
-        }
-    }
-    return lit / f32(k * k);
-}
-
-// as Bevy's `fetch_directional_shadow`, each cascade through `soft_cascade`
-fn soft_shadow(i: u32, pos: vec4<f32>, view_z: f32) -> f32 {
-    let light = &view_bindings::lights.directional_lights[i];
-    let c = shadows::get_cascade_index(i, view_z);
-    if c >= (*light).num_cascades {
-        return 1.0;
-    }
-    var shadow = soft_cascade(i, c, pos);
-    if c + 1u < (*light).num_cascades {
-        let far = (*light).cascades[c].far_bound;
-        let near = (1.0 - (*light).cascades_overlap_proportion) * far;
-        if -view_z >= near {
-            shadow = mix(shadow, soft_cascade(i, c + 1u, pos), (-view_z - near) / (far - near));
-        }
-    }
-    return shadow;
-}
-#endif
-
 // 1 lit, 0 in shadow: the first directional light that casts shadows (the match's sun)
 fn sun_visibility(in: VertexOutput) -> f32 {
     for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
         if (view_bindings::lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
             let v = view_bindings::view.view_from_world;
             let view_z = dot(vec4(v[0].z, v[1].z, v[2].z, v[3].z), in.world_position);
-#ifdef GS_SOFT
-            return soft_shadow(i, in.world_position, view_z);
-#else
             // receivers are the flat ground: up is its normal
             return shadows::fetch_directional_shadow(i, in.world_position, vec3(0.0, 1.0, 0.0), view_z, in.position.xy);
-#endif
         }
     }
     return 1.0;
@@ -305,11 +214,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 #else
     // untextured: the GS draws VU1's 8-bit colour as it is (0x80 is 128 of 255, not 1.0 as MODULATE makes it)
-#ifdef GS_HDR
-    rgb = (rgb + spec * 255.0 / 128.0) * 128.0 / 255.0;
-#else
     rgb = min(rgb + spec * 255.0 / 128.0, vec3(255.0 / 128.0)) * 128.0 / 255.0;
-#endif
 #endif
     // alpha test on the 8-bit value
     let a8 = floor(a * 128.0);
@@ -336,18 +241,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // hole's see-through texels are left out before the blend
     if a8 >= 128.0 || a <= 0.0 { discard; }
 #endif
-#ifdef GS_HDR
-    // G5: the GS's 8-bit clamp left to the tonemapper, which rolls off what is brighter than 1 (hud_gamma.rs)
-    rgb = max(rgb, vec3(0.0));
-#else
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
-#endif
-#ifdef GS_AO
-    // G1 (not the original's): the SSAO's visibility takes off the ambient share of the light, before the fog
-    // (Bevy's GTAO reads ≈ 0.89 on the open, flat court seen from the match camera: that is 1, unoccluded)
-    let ao = min(textureLoad(view_bindings::screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0).r / 0.89, 1.0);
-    rgb *= 1.0 - in.ambient * (1.0 - ao);
-#endif
 #ifdef GS_FOG
     // GS: the interpolated F truncated to 8 bits, (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values
 #ifdef GS_NO_LINEAR

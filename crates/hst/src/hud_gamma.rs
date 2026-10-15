@@ -16,15 +16,6 @@
 //! Instead of it, while the camera looks within ~37° of the sun in clear or cloudy weather, the game blurs the frame
 //! by half a texel twice (`glare`), more the closer to the sun and the higher the camera looks.
 //!
-//! G5 (Settings → Graphics → HDR, not the original's): the scene images turn `Rgba16Float`, `gs.wgsl` stops clamping its
-//! light sums to the GS's 8 bits (`GS_HDR`), and the composite tonemaps the scene (`HDR`) before the HUD goes over it.
-//! What it acts on: the same gamma-encoded PS2 values, only no longer clipped at 1. The game's lighting sums on
-//! those (vertex light × texel, up to 2× and more with the highlight) and the GS clips the result; there is no linear
-//! light to tonemap, and a filmic curve over the whole range would change every mid-tone of the original's look. So
-//! the curve is the identity up to `KNEE` and a shoulder above it that reaches white only at infinity, on the
-//! brightest channel with the others scaled alike (hue kept, where clipping each channel turns sunlit orange
-//! yellow), washing towards white the more it took off.
-//!
 //! ponytail: UI pieces overlapping each other still blend in linear among themselves; only their sum goes over the
 //! court in gamma. Fine while translucent HUD pieces don't stack; else draw the UI with raw (non-sRGB) values.
 
@@ -41,7 +32,7 @@ pub fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "persist.wgsl");
     app.add_plugins((UiMaterialPlugin::<Composite>::default(), UiMaterialPlugin::<Mix>::default()))
         .add_systems(Startup, setup)
-        .add_systems(Update, (encode_pbr_output, hdr))
+        .add_systems(Update, encode_pbr_output)
         .add_systems(PostUpdate, (retarget, clear, follow_window, persist).chain().before(bevy::camera::CameraUpdateSystems))
         .add_systems(PostUpdate, pixel_aspect.after(bevy::camera::CameraUpdateSystems));
 }
@@ -194,37 +185,6 @@ fn encode_pbr_output(mut events: MessageReader<AssetEvent<Shader>>, mut shaders:
     }
 }
 
-/// G5: HDR's shader defs, on the shaders themselves so every pipeline of theirs recompiles when it turns on or off:
-/// `GS_HDR` on `gs.wgsl` (no 8-bit clamp), `HDR` on the composite's (the tonemap). The images' format is
-/// `follow_window`'s.
-fn hdr(g: Res<crate::graphics::Graphics>, mut events: MessageReader<AssetEvent<Shader>>, mut shaders: ResMut<Assets<Shader>>) {
-    let loaded = events.read().any(|e| matches!(e, AssetEvent::Added { .. }));
-    if !g.is_changed() && !loaded {
-        return;
-    }
-    let on = g.hdr_on();
-    let ids: Vec<_> = shaders.iter().map(|(id, _)| id).collect();
-    for id in ids {
-        let Some(shader) = shaders.get(id) else { continue };
-        let def = if shader.path.ends_with("hst/gs.wgsl") {
-            "GS_HDR"
-        } else if shader.path.ends_with("hst/hud_gamma.wgsl") {
-            "HDR"
-        } else {
-            continue;
-        };
-        let has = shader.shader_defs.iter().any(|d| matches!(d, bevy::shader::ShaderDefVal::Bool(n, true) if n == def));
-        if has != on {
-            let defs = &mut shaders.get_mut(id).unwrap().shader_defs;
-            if on {
-                defs.push(def.into());
-            } else {
-                defs.retain(|d| !matches!(d, bevy::shader::ShaderDefVal::Bool(n, _) if n == def));
-            }
-        }
-    }
-}
-
 /// Both images at the window's physical size and scale factor, as the window target was; the scene's times the
 /// render scale setting (the composite upscales it). The original mode (`Graphics::original`) draws the scene at 448
 /// lines and 640 columns per 4:3 width (the PS2's non-square pixels, `pixel_aspect`) and the HUD at 448 lines, both
@@ -264,17 +224,6 @@ fn follow_window(
     for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
-            *stale = 2;
-        }
-    }
-    // G5: the scene's images hold light past 1 while HDR is on
-    let format = if g.hdr_on() { TextureFormat::Rgba16Float } else { TextureFormat::Rgba8Unorm };
-    for h in [&t.scene, &t.last[0], &t.last[1]] {
-        if images.get(h).is_some_and(|i| i.texture_descriptor.format != format) {
-            let mut i = images.get_mut(h).unwrap();
-            let mut new = Image::new_target_texture(scene.width, scene.height, format, None);
-            new.sampler = i.sampler.clone();
-            *i = new;
             *stale = 2;
         }
     }

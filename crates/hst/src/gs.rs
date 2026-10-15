@@ -540,8 +540,6 @@ impl Material for GsMaterial {
         }
     }
 
-    /// The view prepass only runs on a camera with Ambient Occlusion on (G1, `graphics::ao`): depth and normals for
-    /// its SSAO.
     fn enable_prepass() -> bool {
         true
     }
@@ -555,31 +553,13 @@ impl Material for GsMaterial {
         let k = key.bind_group_data;
         // ponytail: the shadow pass (Bevy's only DEPTH_PREPASS here) keeps both faces, as the shadows had before;
         // check against the game's caster draw if a one-sided prop's shadow looks wrong
-        // (a view with a depth prepass has DEPTH_PREPASS in its main pass's key too: the shadow pass is the prepass
-        // pipeline without normals; G1's view prepass, with them, culls and guards as the main pass)
-        let prepass = descriptor.vertex.shader_defs.iter().any(|d| matches!(d, bevy::shader::ShaderDefVal::Bool(n, true) if n == "PREPASS_PIPELINE"));
-        let shadow = prepass && !key.mesh_key.contains(bevy::pbr::MeshPipelineKey::NORMAL_PREPASS);
+        let shadow = descriptor.vertex.shader_defs.iter().any(|d| matches!(d, bevy::shader::ShaderDefVal::Bool(n, true) if n == "PREPASS_PIPELINE"));
         descriptor.primitive.cull_mode = (k.cull && !shadow).then_some(if k.mirror { bevy::render::render_resource::Face::Front } else { bevy::render::render_resource::Face::Back });
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never));
         }
         if k.guard && !shadow {
             descriptor.vertex.shader_defs.push("GS_GUARD".into());
-        }
-        // G1: an opaque or cut-out draw (the ones in the depth prepass) darkens by the SSAO; blended ones draw over it
-        let no_z = matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never);
-        if !prepass && key.mesh_key.contains(bevy::pbr::MeshPipelineKey::SCREEN_SPACE_AMBIENT_OCCLUSION) && k.blend.is_none() && !no_z {
-            descriptor.vertex.shader_defs.push("GS_AO".into());
-            if let Some(f) = descriptor.fragment.as_mut() {
-                f.shader_defs.push("GS_AO".into());
-            }
-        }
-        // G4: Soft Shadows (`graphics::soft_shadows` marks the view with Bevy's Temporal filter; not on WebGL2)
-        let filter = key.mesh_key & bevy::pbr::MeshPipelineKey::SHADOW_FILTER_METHOD_RESERVED_BITS;
-        if !prepass && filter == bevy::pbr::MeshPipelineKey::SHADOW_FILTER_METHOD_TEMPORAL && !cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) {
-            if let Some(f) = descriptor.fragment.as_mut() {
-                f.shader_defs.push("GS_SOFT".into());
-            }
         }
         // the browser build is WebGL2's (no noperspective)
         #[cfg(target_arch = "wasm32")]

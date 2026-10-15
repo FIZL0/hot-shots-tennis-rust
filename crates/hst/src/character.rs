@@ -435,8 +435,6 @@ fn parts_at<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut im
             .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weight)
             .with_inserted_indices(Indices::U32(idx));
         if detail {
-            // G6: Graphics → Smooth Normals
-            crate::smooth::normals(&mut mesh);
             crate::lod::detail(&mut mesh, &moving);
         }
         let morphed = morph.iter().flatten().any(|d| *d != [0.0; 3]);
@@ -692,8 +690,6 @@ pub fn disc_racket(
                 .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
                 .with_inserted_indices(Indices::U32(idx));
-            // G6: Graphics → Smooth Normals
-            crate::smooth::normals(&mut mesh);
             crate::lod::detail(&mut mesh, &[]);
             racket.push((meshes.add(mesh), rh.get(mi).cloned().unwrap_or_default()));
         }

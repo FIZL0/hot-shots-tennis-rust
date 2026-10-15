@@ -42,7 +42,6 @@ mod inspect;
 mod loading;
 mod mash;
 mod lod;
-mod smooth;
 mod mode;
 mod noise;
 mod play;
@@ -187,15 +186,12 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 roster = Some(inspect::Roster(disc, mods));
             }
             "--vsync" => gfx.vsync = true,
-            "--smooth-normals" => gfx.smooth = true,
             "--original" => gfx.original = true,
-            "--hdr" => gfx.hdr = true,
-            "--soft-shadows" => gfx.soft_shadows = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
             // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
             "--sway-lod" | "--sway_lod" => noise::set_lod(a.next().is_none_or(|v| v != "off"), true),
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--bloom" | "--fewer-shadows" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);
@@ -964,8 +960,6 @@ fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>, model: &mdl::Model) 
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
         .with_inserted_indices(Indices::U32(idx));
-    // G6: Graphics → Smooth Normals
-    smooth::normals(&mut mesh);
     Some(mesh)
 }
 
