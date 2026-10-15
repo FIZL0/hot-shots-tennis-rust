@@ -160,6 +160,16 @@ impl PartialOrd<f32> for F {
         self.0.partial_cmp(o)
     }
 }
+impl PartialEq<F> for f32 {
+    fn eq(&self, o: &F) -> bool {
+        *self == o.0
+    }
+}
+impl PartialOrd<F> for f32 {
+    fn partial_cmp(&self, o: &F) -> Option<std::cmp::Ordering> {
+        self.partial_cmp(&o.0)
+    }
+}
 
 impl std::ops::Neg for F {
     type Output = F;
