@@ -389,6 +389,8 @@ fn start(argv: Vec<String>) {
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
+    // M91a1: the iPhone's on-screen pad, kept through mode switches
+    app.add_plugins(play::touch_pad::plugin);
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, (log_fps, log_assets));
