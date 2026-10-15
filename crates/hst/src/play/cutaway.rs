@@ -86,7 +86,7 @@ fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M
     Some((bone(p, data, r.motion, t, pos, "Bip01Head")?, bone(p, data, r.motion, t, pos, "Bip01Spine2")?))
 }
 
-fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion)>) {
+pub(super) fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figure, &Motion)>) {
     // a replay runs on its own cameras (`replay_camera`); after the match-ending one its closing shot holds
     if g.instant.replaying {
         d.shot = None;
