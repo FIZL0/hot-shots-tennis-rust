@@ -147,8 +147,8 @@ struct Mix {
     /// B77: the plays the match re-levels every frame (`update`, `turn`: the flight whistle and rush, the flyover).
     followed: Vec<u64>,
     vol: Vol,
-    /// B203: the menu cue sounding, cut when the next starts.
-    menu: u64,
+    /// B203: the menu cues sounding, cut when the next of their lane starts; B307: [cursor move, every other cue].
+    menu: [u64; 2],
 }
 
 /// B235: the volume settings' groups. Presentation only: applied to the output, never to a play's level.
@@ -470,7 +470,7 @@ impl Sound {
     /// A mixer with no tables and no output, for tests that only follow plays.
     #[cfg(test)]
     pub fn bare() -> Self {
-        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 })))
+        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2] })))
     }
 
     /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
@@ -492,15 +492,19 @@ impl Sound {
     }
 
     /// B203: a menu cue (system bank key `key`, centred, full volume) that cuts the one before it, so mashing
-    /// buttons or a held direction's repeat never stacks cues louder than one press.
+    /// buttons or a held direction's repeat never stacks cues louder than one press. B307: the cursor move (key 0)
+    /// only cuts the cursor move before it, so a select/back cue still sounding plays out under it; any other cue
+    /// cuts both.
     pub fn play_menu(&self, bank: &Arc<SoundBank>, key: u8) -> u64 {
+        let lane = usize::from(key != 0);
         let mut m = self.0.lock().unwrap();
-        let last = m.menu;
-        m.playing.retain(|q| q.id != last);
-        m.voices.retain(|v| v.2 != last);
+        let menu = m.menu;
+        let cut = &menu[..lane + 1];
+        m.playing.retain(|q| !cut.contains(&q.id));
+        m.voices.retain(|v| !cut.contains(&v.2));
         drop(m);
         let id = self.play_centre(bank, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
-        self.0.lock().unwrap().menu = id;
+        self.0.lock().unwrap().menu[lane] = id;
         id
     }
 
@@ -510,7 +514,7 @@ impl Sound {
     pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
         let solo = {
             let m = self.0.lock().unwrap();
-            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2] }
         };
         let solo = Self(Arc::new(Mutex::new(solo)));
         let id = solo.play_centre(bank, p);
@@ -712,7 +716,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2] }
 }
 
 #[cfg(test)]
@@ -863,6 +867,29 @@ mod tests {
             eprintln!("one {one}, every {every} frames {mashed}");
             assert!(mashed <= one * 1.01, "every {every}: {mashed} > {one}");
         }
+    }
+
+    /// B307: a cursor move right after a select lets the select cue play out under it; a select cuts both.
+    #[test]
+    fn cursor_move_keeps_select() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let bank = Arc::new(SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").unwrap());
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        let mut out = Vec::new();
+        let select = sound.play_menu(&bank, 2);
+        sound.0.lock().unwrap().render(&mut out);
+        assert!(sound.playing(select));
+        let mut moves = Vec::new();
+        for _ in 0..3 {
+            moves.push(sound.play_menu(&bank, 0));
+            sound.0.lock().unwrap().render(&mut out);
+            assert!(sound.playing(select), "a cursor move cut the select cue");
+        }
+        assert!(moves[..2].iter().all(|&id| !sound.playing(id)), "cursor moves stacked");
+        let back = sound.play_menu(&bank, 1);
+        assert!(!sound.playing(select) && !sound.playing(moves[2]) && sound.playing(back));
     }
 
     /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono), play at the sequence's full
@@ -1018,6 +1045,6 @@ mod tests {
     }
 
     fn mix_clone(m: &Mix) -> Mix {
-        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2] }
     }
 }
