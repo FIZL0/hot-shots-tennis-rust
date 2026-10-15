@@ -517,7 +517,7 @@ impl Trail {
         self.reach = (F(life as f32) / length as f32).0;
         let x = std::f32::consts::PI * F(crate::libm::powf((1.0 - F(self.reach)).0, 0.5));
         if (-F(std::f32::consts::PI)..=F(std::f32::consts::PI)).contains(&x) {
-            self.width = (0.5 * F(crate::libm::table_sin(x.0))).0;
+            self.width = (0.5 * F(table_sin(x.0))).0;
             self.reach = crate::libm::powf(self.reach, 0.5);
         }
     }
@@ -858,4 +858,34 @@ impl Bounce {
         }
         self.seen = if contacts.is_empty() { 0 } else { bounces };
     }
+}
+
+/// The game's table sine: a quarter turn in 256 steps (sin rounded to six decimals; nine steps a millionth off),
+/// read linearly between steps.
+pub fn table_sin(x: f32) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; 258]> = std::sync::OnceLock::new();
+    let t = TABLE.get_or_init(sin_table);
+    let (sign, mut x) = if x < 0.0 { (-1.0, -F(x)) } else { (1.0, F(x)) };
+    if x > std::f32::consts::FRAC_PI_2 {
+        x = std::f32::consts::PI - x;
+    }
+    let at = f32::from_bits(0x4322_f983) * x;
+    let i = at.0 as i32 as usize;
+    (sign * (F::ZERO + t[i]).madd(at - i as f32, F(t[i + 1]) - t[i])).0
+}
+
+/// `table_sin`'s table, rebuilt in host f64: the game ships it as data.
+#[allow(clippy::float_arithmetic)]
+fn sin_table() -> [f32; 258] {
+    std::array::from_fn(|i| {
+        if i > 256 {
+            return 0.0;
+        }
+        let off = match i {
+            59 => -1.0,
+            79 | 93 | 110 | 145 | 209 | 214 | 226 | 248 => 1.0,
+            _ => 0.0,
+        };
+        (((musl::sin(i as f64 * std::f64::consts::PI / 512.0) * 1e6).round() + off) / 1e6) as f32
+    })
 }

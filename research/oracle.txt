@@ -2,6 +2,10 @@
 atan2f 111b60
 atanf 115970
 powf 1121f0
+sinf 115fb8
+cosf 115d18
+tanf 1160a0
+acosf 111398
 # AI run estimate (a0 player, a1 spot x,y,z): hst_sim::ai::Runner::frames_to
 ai_run_frames 35bc50
 # Instant replay decision (a0 = match object; the point message): hst_sim::instant::decide

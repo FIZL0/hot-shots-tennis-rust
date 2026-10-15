@@ -51,3 +51,34 @@ fn atanf() {
 fn powf() {
     check("powf", 20_000, |s| vec![input(s).abs().clamp(1e-6, 1e6), input(s).clamp(-4.0, 4.0)], |a| libm::powf(a[0], a[1]));
 }
+
+/// Inside the ported argument reduction (|x| ≤ 2^7·π/2): half any bit pattern in range, half [-8, 8].
+fn reduced(seed: &mut u64) -> f32 {
+    let x = input(seed);
+    if x.abs() <= 201.0 { x } else { x % 201.0 }
+}
+
+#[test]
+fn sinf() {
+    check("sinf", 20_000, |s| vec![reduced(s)], |a| libm::sinf(a[0]));
+}
+
+#[test]
+fn cosf() {
+    check("cosf", 20_000, |s| vec![reduced(s)], |a| libm::cosf(a[0]));
+}
+
+#[test]
+fn tanf() {
+    check("tanf", 20_000, |s| vec![reduced(s)], |a| libm::tanf(a[0]));
+}
+
+/// Inside [-1, 1] (outside it the port answers the host's NaN; the EE has none).
+#[test]
+fn acosf() {
+    let arg = |s: &mut u64| {
+        let x = input(s);
+        vec![if x.abs() <= 1.0 { x } else { x / 8.0 % 1.0 }]
+    };
+    check("acosf", 20_000, arg, |a| libm::acosf(a[0]));
+}

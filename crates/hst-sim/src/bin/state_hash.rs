@@ -67,7 +67,7 @@ fn main() {
     // one hash per function, so a mismatch names it
     const NAMES: [&str; 21] = ["musl::sinf", "musl::cosf", "musl::tanf", "musl::atanf", "musl::asinf", "musl::atan2f",
         "musl::atan2f'", "musl::hypotf", "musl::powf", "musl::sincosf.0", "musl::sincosf.1", "libm::sinf", "libm::cosf",
-        "libm::tanf", "libm::atanf", "libm::atan2f", "libm::acosf", "libm::powf", "libm::table_sin", "musl::tan",
+        "libm::tanf", "libm::atanf", "libm::atan2f", "libm::acosf", "libm::powf", "effect::table_sin", "musl::tan",
         "musl::sin"];
     let mut h: Vec<Fnv> = NAMES.iter().map(|_| Fnv::new()).collect();
     for i in -20000i32..=20000 {
@@ -78,7 +78,7 @@ fn main() {
         let r = [musl::sinf(x), musl::cosf(x), musl::tanf(x), musl::atanf(x), musl::asinf(x * 0.0499), musl::atan2f(x, y),
             musl::atan2f(y, -x), musl::hypotf(x, y), musl::powf(y, x * 0.1), s, c, libm::sinf(x), libm::cosf(x),
             libm::tanf(x * 0.1), libm::atanf(x), libm::atan2f(x, y), libm::acosf(x * 0.0499), libm::powf(y, 1.1),
-            libm::table_sin(x * 0.1)];
+            hst_sim::effect::table_sin(x * 0.1)];
         r.iter().zip(&mut h).for_each(|(&r, h)| h.f(r));
         h[19].d(musl::tan(x as f64 * 0.1));
         h[20].d(musl::sin(x as f64));
