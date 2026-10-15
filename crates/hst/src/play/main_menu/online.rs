@@ -469,7 +469,16 @@ impl Menu {
     /// B201: the select's panels as the lobby's seats: this machine's players moved into the seats it holds (in
     /// order), every other seat showing its player's live place (a computer's pick, ready; an open seat empty).
     pub(super) fn align(&mut self) {
-        let Some(r) = self.net.room.clone().filter(|_| self.online() && !self.net.me.is_empty() && !self.net.started) else { return };
+        if !self.online() || self.net.me.is_empty() || self.net.started {
+            return;
+        }
+        // P52: the room is lent out (not copied) while the seats follow it; nothing below reads `net.room`
+        let Some(r) = self.net.room.take() else { return };
+        self.align_to(&r);
+        self.net.room = Some(r);
+    }
+
+    fn align_to(&mut self, r: &Room) {
         let mine: Vec<usize> = (0..r.seats.len()).filter(|&i| r.seats[i].as_ref().is_some_and(|s| s.peer == self.net.me)).collect();
         let local: Vec<_> = (0..4).filter_map(|p| Some((self.seats[p]?, self.players[p]))).collect();
         if mine.len() != local.len() || r.seats.len() > 4 {
@@ -1222,7 +1231,16 @@ impl Menu {
     /// The lobby's mods, each to its looks: found here, fetched or a stand-in by the remembered answer, else asked
     /// (one at a time); once every one is settled, tell the host (the match waits for everyone).
     fn settle(&mut self, iso: &str, net: &Net) {
-        let Some(room) = self.net.room.clone().filter(|_| !self.net.started) else { return };
+        if self.net.started {
+            return;
+        }
+        // P52: lent out, not copied, as in `align`
+        let Some(room) = self.net.room.take() else { return };
+        self.settle_to(iso, net, &room);
+        self.net.room = Some(room);
+    }
+
+    fn settle_to(&mut self, iso: &str, net: &Net, room: &Room) {
         let cache = mo::cache(iso);
         // B281: the host's wait is over: the mod still asked about plays as its stand-in
         if room.stand_in

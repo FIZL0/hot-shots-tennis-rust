@@ -124,14 +124,17 @@ impl Lockstep {
     pub fn advance(&mut self, local: &[Pad]) -> ([Pad; 4], Msg) {
         let now = self.pending.remove(&self.tick).expect("the tick's pads").map(|p| p.expect("every seat's pad"));
         let at = self.tick + self.delay;
-        let mine = self.mine.clone();
+        // P52: lent out while the slot is borrowed, not copied
+        let mine = std::mem::take(&mut self.mine);
         let slot = self.slot(at);
         for (&s, &p) in mine.iter().zip(local) {
             slot[s] = Some(p);
         }
         self.log.push(now);
         self.tick += 1;
-        (now, Msg::Pads { tick: at, seats: mine.iter().zip(local).map(|(&s, &p)| (s as u8, wire(p))).collect() })
+        let msg = Msg::Pads { tick: at, seats: mine.iter().zip(local).map(|(&s, &p)| (s as u8, wire(p))).collect() };
+        self.mine = mine;
+        (now, msg)
     }
 
     /// This machine's hash before tick `t`; a mismatch with a peer's: (tick, ours, theirs).
@@ -372,19 +375,21 @@ pub(super) fn pump(w: &mut World) {
 pub(super) fn loaded(w: &mut World) {
     let covered = crate::mode::covered(w);
     let Some(mut np) = w.get_resource_mut::<Netplay>() else { return };
-    let me = np.me.clone();
-    if !covered && np.recover.loaded.insert(me.clone()) {
+    // P52: the name is copied only the once it goes in
+    if !covered && !np.recover.loaded.contains(&np.me) {
+        let me = np.me.clone();
+        np.recover.loaded.insert(me.clone());
         info!("online: loaded the match");
         np.out.push(Msg::Loaded(me));
     }
-    if np.recover.loading(&np.room).is_empty() {
+    if np.recover.all_loaded(&np.room) {
         w.remove_resource::<crate::mode::Hush>();
     }
 }
 
 /// B200: every peer has loaded the match (its ticks, the court intro's too, wait until then).
 pub(super) fn started(np: &Netplay) -> bool {
-    np.recover.loading(&np.room).is_empty()
+    np.recover.all_loaded(&np.room)
 }
 
 /// The match's tick gate: true runs the next tick on every seat's pads.
@@ -411,7 +416,8 @@ pub fn gate(w: &mut World) -> bool {
         }
     }
     // this machine's seats' pads (each seat's local device sits in the slot of the same number, `--pads`)
-    let mine = w.resource::<Netplay>().lock.mine.clone();
+    // P52: lent out (not copied) while the pads are read
+    let mine = std::mem::take(&mut w.resource_mut::<Netplay>().lock.mine);
     let mut local: Vec<Pad> = {
         let mut pads = w.resource_mut::<Pads>();
         mine.iter().map(|&s| tick_input::take(&mut pads.slots[s])).collect()
@@ -420,6 +426,7 @@ pub fn gate(w: &mut World) -> bool {
     if np.mash.is_some() {
         local = mine.iter().map(|&s| np.mashed(s)).collect();
     }
+    np.lock.mine = mine;
     let (now, msg) = np.lock.advance(&local);
     np.out.push(msg);
     np.stalled = 0.0;
