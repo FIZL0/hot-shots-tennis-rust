@@ -46,6 +46,7 @@ mod shade;
 mod shadow;
 mod spring;
 mod textures;
+mod update;
 mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;

@@ -212,6 +212,20 @@ for (const e of ['pointerdown', 'keydown', 'gamepadconnected']) addEventListener
 if (answer) await new Promise(() => {});
 // installable and playable offline (sw.js)
 navigator.serviceWorker?.register('sw.js').catch(() => {});
+// B317: a new build pushed while the page is open never reloads it: `version.txt` (the commit, tools/web.sh) as the
+// page loads, read again every 10 minutes and on coming back to the tab; once it differs, `hstLatest` holds the new
+// one and the game's main menu shows a New version card whose Refresh reloads into it (`update.rs`, sw.js fetches
+// the network first). Read before the game, so a deploy landing mid-load at worst offers a refresh into the same build.
+{
+  const read = () => fetch('version.txt', { cache: 'no-store' }).then(r => r.ok ? r.text() : '').then(t => t.trim(), () => '');
+  const loaded = await read();
+  const check = async () => {
+    const now = await read();
+    if (loaded && now && now !== loaded && /^[0-9a-f]{7,40}$/.test(now)) window.hstLatest = now;
+  };
+  setInterval(check, 600000);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
+}
 // First visit: the worker imports the picked ISO into OPFS `disc.pack`. Every visit after: read the pack, `run` it.
 // `?forget` drops the imported pack (pick the ISO again). WebGPU build when the browser has an adapter, else WebGL2
 // (`?webgl2` forces it), or Settings → Display → Renderer (B273: `renderer` in settings.txt, which the game keeps in

@@ -25,6 +25,7 @@ research/tools/wasmtime-*/
 /target-*/
 /web/pkg/
 /web/pkg-webgpu/
+/web/version.txt
 # M17 store listing cache and the player's Hugging Face token (written beside the game)
 mods-store.json
 hf-token.txt
