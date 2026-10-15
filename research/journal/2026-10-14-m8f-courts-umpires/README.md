@@ -32,3 +32,7 @@ One README per task; iterations below, newest last.
 - `6-STORE-FINAL.md` — M8f9 done: court and umpire mods upload, list (Courts / Umpires tabs) and install with
   `kind` in `meta.json` (`mods::read_any`); umpire heads on the Mods pages (B400). The parent still waits on M8f7
   (NPCs), M8f8 and M8f10.
+- `7-GAG-C05-GOALS-FINAL.md` — M8f5a3 done: standard §2 `__clear` (hidden while it stands between the eye and the
+  court, any camera; `court_mod.rs` `clear_view`); the exporter names c05's basket goals (and other pieces behind
+  the near baseline in HST's view) so (HST-MODS 68606db); break-only gimmicks stand still. c05's turned eye is
+  inside a building → M8f5a4.
