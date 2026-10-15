@@ -2,8 +2,10 @@
 //! the near baseline, attenuates it with distance on the floor plane and splits it into the sequence's left and
 //! right volume by the bearing.
 
+#![deny(clippy::float_arithmetic)]
+
 use crate::libm::atan2f;
-use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
+use crate::ps2::{F, fs};
 
 /// The listener: identity orientation at (0, 0, −10) in game space (the library's fixed listener, the only mode
 /// the game uses).
@@ -18,27 +20,27 @@ const NEAR: f32 = 10.0;
 /// Bearing from the listener in whole degrees (0..359, 0 straight ahead along +z) and floor distance in whole
 /// metres (0..128) of a sound at `pos`.
 pub fn place(pos: [f32; 3]) -> (i32, i32) {
-    let (dx, dz) = (sub(pos[0], LISTENER[0]), sub(pos[2], LISTENER[2]));
+    let (dx, dz) = (F(pos[0]) - LISTENER[0], F(pos[2]) - LISTENER[2]);
     let yaw = 0.0; // atan2 of the listener's identity forward axis
-    let a = msub(mul(add(PI, atan2f(dx, dz)), DEGREES), add(PI, yaw), DEGREES) as i32;
+    let a = ((PI + F(atan2f(dx.0, dz.0))) * DEGREES).msub(PI + F(yaw), DEGREES).0 as i32;
     let a = if a < 0 { a + 360 } else { a };
-    let d = sqrt(madd(mul(dz, dz), dx, dx)) as i32;
+    let d = (dz * dz).madd(dx, dx).sqrt().0 as i32;
     (a.clamp(0, 359), d.clamp(0, FAR))
 }
 
 /// `volume` (0..128) at `dist` metres: full up to 10 m, then linearly down to nothing at 128 m.
 pub fn falloff(volume: i32, dist: i32) -> i32 {
-    let v = volume as f32;
+    let v = F(volume as f32);
     let v = if dist as f32 <= NEAR {
         v
     } else if dist > FAR {
-        0.0
+        F::ZERO
     } else {
-        let span = sub(FAR as f32, NEAR);
-        let step = if span == 0.0 { 0.0 } else { div(v, span) };
-        msub(add(v, 0.0), step, sub(dist as f32, NEAR))
+        let span = F(FAR as f32) - NEAR;
+        let step = if span == 0.0 { F::ZERO } else { v / span };
+        (v + 0.0).msub(step, F(dist as f32) - NEAR)
     };
-    (v as i32).clamp(0, 128)
+    (v.0 as i32).clamp(0, 128)
 }
 
 /// The sequence's left and right volume for `volume` at bearing `angle`, from `exe::stereo_tables`. The tables'
@@ -177,7 +179,7 @@ pub fn step(weather: u8) -> Play {
 /// of the look, and within 5° or its depth through `view` near enough that `focal` over it passes 125.
 pub fn step_heard(eye: [f32; 4], look: [f32; 4], view: &[[f32; 4]; 4], focal: f32, at: [f32; 4]) -> bool {
     let cos = bearing_cos(eye, look, at);
-    cos >= COS_50 && (cos >= COS_5 || 125.0 < div(focal, crate::vu0::transform(view, at)[2]))
+    cos >= COS_50 && (cos >= COS_5 || 125.0 < F(focal) / crate::vu0::transform(view, at)[2])
 }
 
 /// cos 50° and cos 5°, the close views' bearing limits.
@@ -186,13 +188,14 @@ const COS_5: f32 = f32::from_bits(0x3f7f_069e);
 
 /// The cosine of the level bearing from `eye` to `at` against the level `look`.
 fn bearing_cos(eye: [f32; 4], look: [f32; 4], at: [f32; 4]) -> f32 {
-    let unit = |x: f32, z: f32| {
-        let q = div(1.0, sqrt(madd(mul(x, x), z, z)));
-        (mul(x, q), mul(z, q))
+    let unit = |x: F, z: F| {
+        let q = 1.0 / (x * x).madd(z, z).sqrt();
+        (x * q, z * q)
     };
+    let (look, eye, at) = (fs(look), fs(eye), fs(at));
     let (lx, lz) = unit(look[0], look[2]);
-    let (dx, dz) = unit(sub(at[0], eye[0]), sub(at[2], eye[2]));
-    madd(madd(mul(dz, lz), dx, lx), 0.0, 0.0)
+    let (dx, dz) = unit(at[0] - eye[0], at[2] - eye[2]);
+    (dz * lz).madd(dx, lx).madd(0.0, 0.0).0
 }
 
 /// The post-point camera (eye, level `look`, world→camera `view`, projection scale `focal` = 240 / tan of the
@@ -201,11 +204,11 @@ fn bearing_cos(eye: [f32; 4], look: [f32; 4], at: [f32; 4]) -> f32 {
 /// the look and near enough that `focal` over its depth passes 125 (80 within 5°).
 pub fn reaction_view(eye: [f32; 4], look: [f32; 4], view: &[[f32; 4]; 4], focal: f32, origin: [f32; 4], at: [f32; 4]) -> bool {
     let z = crate::vu0::transform(view, origin)[2];
-    if !(0.001 < z && div(mul(1.0, focal), z) < 1000.0) {
+    if !(0.001 < z && F(1.0) * focal / z < 1000.0) {
         return false;
     }
     let cos = bearing_cos(eye, look, at);
-    cos >= COS_50 && if cos >= COS_5 { 80.0 } else { 125.0 } < div(focal, crate::vu0::transform(view, at)[2])
+    cos >= COS_50 && if cos >= COS_5 { 80.0 } else { 125.0 } < F(focal) / crate::vu0::transform(view, at)[2]
 }
 
 /// A reaction voice: program, key range and the voice's key-memory slot (`Voice::key`).
@@ -331,7 +334,7 @@ impl Voice {
 
 /// The play-speed scale word the driver multiplies the pitch by: the speed clamped to 0..2, in 1/4096ths.
 pub fn speed_word(speed: f32) -> u32 {
-    (crate::ps2::mul(speed.clamp(0.0, 2.0), 4096.0) as i32) as u32
+    ((F(speed).clamp(0.0, 2.0) * 4096.0).0 as i32) as u32
 }
 
 /// The bounce sounds of one ball in play, all on the court bank (slot 0) program 2 at the bounce's contact point:
@@ -382,7 +385,8 @@ impl Bounces {
 
 /// The ball's speed as the game shows it: metres per frame to km/h.
 pub fn kmh(vel: [f32; 3]) -> f32 {
-    div(mul(mul(sqrt(madd(madd(mul(vel[2], vel[2]), vel[0], vel[0]), vel[1], vel[1])), 60.0), 3600.0), 1000.0)
+    let v = fs(vel);
+    ((v[2] * v[2]).madd(v[0], v[0]).madd(v[1], v[1]).sqrt() * 60.0 * 3600.0 / 1000.0).0
 }
 
 /// The whistle of a lob or a framed mis-hit, on the court bank (slot 0) program 5 key 2 at the ball: from the hit
@@ -408,7 +412,7 @@ impl Flight {
     /// the top at 8 m.
     /// ponytail: the instant replay's restarts (the app has none, P0b4d) are left out.
     pub fn start(h: &Hit, character: i32, special: bool, kmh: f32) -> Option<Flight> {
-        let v = mul(kmh, 0.9);
+        let v = (F(kmh) * 0.9).0;
         let serve = h.hits == 1;
         let kind = if h.branch == 4 { 5 } else { h.kind };
         if h.framed && kind != 3 {
@@ -472,15 +476,15 @@ impl Flight {
 /// The whistle's play speed at ball height `height` (|y|): `low` below 1 m, rising linearly by (2 − low) over `top`
 /// metres, 2 from `top` up. The start uses low 0 and top 10, every later frame low 0.3 and top 10.
 pub fn flight_speed(height: f32, low: f32, top: f32) -> f32 {
-    let h = height.abs();
+    let h = F(height).abs();
     let s = if h >= top {
-        2.0
+        F(2.0)
     } else if h < 1.0 {
-        low
+        F(low)
     } else {
-        add(mul(div(sub(2.0, low), top), sub(h, 1.0)).abs(), low)
+        ((2.0 - F(low)) / top * (h - 1.0)).abs() + low
     };
-    s.clamp(0.0, 2.0)
+    s.clamp(0.0, 2.0).0
 }
 
 /// The umpire's voice bank slot; the umpire's plays are not positional: 0x80 at the centre (`stereo` at bearing 0).
@@ -697,11 +701,11 @@ impl Gallery {
                     (true, _) => 5,
                 };
                 self.count += 1;
-                let speed = roll() as f32 * 2.3283064e-10 * (1.25 - 0.875) + 0.875;
+                let speed = (F(roll() as f32) * 2.3283064e-10 * (F(1.25) - 0.875) + 0.875).0;
                 out.push((Play { speed, ..play(GALLERY, 10, key, CHEER) }, STANDS[self.stand]));
                 self.stand = (self.stand + 1) % 8;
                 let every = if court == 5 { 70.0 } else { 40.0 };
-                self.next = (every * (1.0 - 0.7 * roll() as f32 * 2.3283064e-10)) as i32;
+                self.next = (F(every) * (1.0 - 0.7 * F(roll() as f32) * 2.3283064e-10)).0 as i32;
             }
         }
         if players < 2 || self.wait < 1 {
