@@ -151,8 +151,8 @@ mod tests {
     fn umpires_are_on_the_roster_and_play_a_rally() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods"));
         let ump: Vec<Mod> = mods::list(root).into_iter().filter(|m| m.id.starts_with("hst_umpire_")).collect();
-        if !Path::new(ISO).is_file() || ump.is_empty() {
-            return eprintln!("no ISO or umpire mods under mods/, skipped");
+        if !Path::new(ISO).is_file() || ump.len() < 5 {
+            return eprintln!("no ISO or not all five umpire mods under mods/, skipped");
         }
         if ump.iter().any(|m| m.dir.join("store.json").is_file()) {
             // installed one by one from the mod store, not the packaged set

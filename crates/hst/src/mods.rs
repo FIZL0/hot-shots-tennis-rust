@@ -241,13 +241,19 @@ impl std::fmt::Display for Kind {
 /// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly, and so are mods of
 /// another `Kind` (courts, umpires), and the [`dropped`] ones.
 pub fn list(root: &Path) -> Vec<Mod> {
+    dirs(root).iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).filter(|m| !dropped(&m.id) && !retired(&m.id, &m.source)).collect()
+}
+
+/// Every folder under `root` with a `mod.json`, any kind, sorted (`list`'s walk: packs one level down, dot folders
+/// left out).
+pub fn dirs(root: &Path) -> Vec<PathBuf> {
     let sub = crate::modfs::read_dir;
     // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods); a dot folder is an
     // install still being unpacked (`modfs::install_with`'s stage, B339: one may be while another lists)
     let mut dirs: Vec<PathBuf> =
         sub(root).into_iter().filter(|d| !d.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
-    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).filter(|m| !dropped(&m.id) && !retired(&m.id, &m.source)).collect()
+    dirs
 }
 
 /// B381: mods left off the custom roster and the store even when installed or uploaded — HST's own chair umpires

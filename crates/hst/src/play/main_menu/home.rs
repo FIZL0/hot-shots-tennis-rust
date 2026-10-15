@@ -209,10 +209,7 @@ fn name(r: Row) -> &'static str {
 
 /// The umpire's name, or Random.
 fn umpire(m: &Menu, text: &Text) -> String {
-    match m.umpire as usize {
-        super::UMPIRES => "Random".into(),
-        u => text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string(),
-    }
+    m.umpire_name(text, m.umpire as usize)
 }
 
 /// `s` from (x, y) at `size`, squeezed across to fit `max`.

@@ -604,6 +604,10 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
         "--pads".into(),
         super::controls::Seat::flag(&seats),
     ]);
+    // M8f3: the host's umpire mod, heard by a peer that has it (the donor, `--umpire`, times it either way)
+    if let Some((id, _)) = room.umpire_mod.as_ref().filter(|_| !room.vanilla) {
+        a.extend(["--umpire-mod-id".into(), id.clone()]);
+    }
     // B370: the select's hand toggles, by match slot
     if order.iter().any(|&s| pick(s).is_some_and(|p| p.swap)) {
         a.extend(["--swap-hands".into(), order.iter().map(|&s| if pick(s).is_some_and(|p| p.swap) { "1" } else { "0" }).collect::<Vec<_>>().join(",")]);
@@ -706,6 +710,20 @@ mod tests {
         room.seats[1].as_mut().unwrap().pick.swap = true;
         let a = flags(&room, "host", &[None, None], &[]);
         assert_eq!(a[a.iter().position(|x| x == "--swap-hands").unwrap() + 1], "0,0,1,0");
+    }
+
+    /// M8f3: the host's umpire mod goes in the flags by id (each peer looks it up under its own `mods/`, the donor
+    /// `--umpire` either way); none in a vanilla lobby.
+    #[test]
+    fn flags_carry_the_umpire_mod_id() {
+        use crate::net::{Pick, Seat};
+        let s = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
+        let mut room = Room { umpire: 2, umpire_mod: Some(("gag_ump00".into(), "Umpire 00".into())), seats: vec![s("host"), s("g")], ..Default::default() };
+        let a = flags(&room, "g", &[None], &[]);
+        let flag = |a: &[String], f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        assert_eq!((flag(&a, "--umpire"), flag(&a, "--umpire-mod-id")), (Some("2".into()), Some("gag_ump00".into())));
+        room.vanilla = true;
+        assert_eq!(flag(&flags(&room, "g", &[None], &[]), "--umpire-mod-id"), None);
     }
 
     /// The court intro online (B42e): the guest's ✕ on its intro tick 10 skips on both machines at tick 10 + delay,

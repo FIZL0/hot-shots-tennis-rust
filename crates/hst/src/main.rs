@@ -30,6 +30,7 @@ mod modfs;
 mod modstore;
 mod mods;
 mod mods_online;
+mod mods_umpire;
 mod net;
 mod chat;
 mod hud_gamma;
@@ -123,6 +124,8 @@ struct Cli {
     swap_hands: play::hand_swap::SwapHands,
     /// `--names a,,b`: the players' names by match slot (B371, `play::name_tags`).
     names: play::name_tags::Names,
+    /// M8f3: `--umpire-mod DIR`, or `--umpire-mod-id ID` (online: the room's, if installed under `mods/`).
+    umpire_mod: Option<mods_umpire::Umpire>,
 }
 
 fn parse(mut a: impl Iterator<Item = String>) -> Cli {
@@ -142,6 +145,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let mut slot_mods = Vec::new();
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
+    let (mut umpire_given, mut umpire_mod, mut umpire_mod_id) = (false, None, None);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -190,7 +194,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--windowed" => gfx.windowed = true,
             "--fullscreen" => gfx.windowed = false,
             "--music" => music = true,
-            "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
+            "--umpire" => (umpire, umpire_given) = (a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire), true),
+            "--umpire-mod" => umpire_mod = a.next(),
+            "--umpire-mod-id" => umpire_mod_id = a.next(),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
@@ -236,8 +242,24 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     }
     // per parse, so a match after an `--original` one gets the remastered menu sheets back
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
+    // M8f3: an umpire mod is heard over its donor; `--umpire` (the menu's and the online room's: the donor) keeps
+    // the timing whatever the mod's manifest says
+    let umpire_mod = match (umpire_mod, umpire_mod_id) {
+        (Some(dir), _) => mods_umpire::read(dir.as_ref()).map_err(|e| warn!("{e}")).ok(),
+        (None, Some(id)) => {
+            let found = mods_umpire::find(&play::main_menu::Settings::path(&iso).with_file_name("mods"), &id);
+            if found.is_none() {
+                info!("umpire mod {id} not installed: umpire {umpire} calls the match");
+            }
+            found
+        }
+        (None, None) => None,
+    };
+    if let Some(u) = umpire_mod.as_ref().filter(|_| !umpire_given) {
+        umpire = u.donor;
+    }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod }
 }
 
 // the browser build starts from `web::run` once the page has the disc pack
@@ -265,7 +287,7 @@ fn main() {
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
     let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
-    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names } = parse(argv.into_iter());
+    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
     if !args.archives.is_empty() && let Ok(mut iso) = Iso::open(&args.iso) {
@@ -368,7 +390,7 @@ fn start(argv: Vec<String>) {
         let a = args.clone();
         let first = mode::Mode::new(move |app| {
             app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
-            add_match(app, viewer_mod, mod_slot, slot_mods);
+            add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
         });
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
@@ -386,9 +408,12 @@ fn start(argv: Vec<String>) {
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
-/// player N (default 1st), its costume by `--outfits`.
-fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>) {
+/// player N (default 1st), its costume by `--outfits`; `umpire_mod` is heard in the chair (M8f3).
+fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>, umpire_mod: Option<mods_umpire::Umpire>) {
     app.add_plugins(play::plugin);
+    if let Some(u) = umpire_mod {
+        app.insert_resource(mods_umpire::MatchUmpire(u));
+    }
     slot_mods.extend(viewer_mod.map(|d| (mod_slot, d)));
     if !slot_mods.is_empty() {
         let mut mm = mods::MatchMod::default();
@@ -407,7 +432,7 @@ pub fn menu_mode(app: &mut App) {
 /// The menu's match in this app: `flags` read as on the command line (the settings' `--no-upscale` and
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
-    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
@@ -417,7 +442,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         let old = app.world().resource::<Args>();
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
         app.insert_resource(args).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
-        add_match(app, viewer_mod, mod_slot, slot_mods);
+        add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
     })
     .back(back)
     .cover(cover)
@@ -1400,6 +1425,24 @@ fn window_icon(mut done: Local<bool>, _main_thread: bevy::ecs::system::NonSendMa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M8f3: `--umpire-mod DIR` plays the mod over its donor (the donor in the chair unless `--umpire` says
+    /// otherwise, as the menu's and the online room's always do); `--umpire-mod-id` of a mod not installed: none.
+    #[test]
+    fn umpire_mod_flags() {
+        let dir = std::env::temp_dir().join(format!("hst-umpire-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"umpire","id":"u","name":"U","donor":1}"#).unwrap();
+        let cli = |f: &[&str]| parse(["x.iso", "--play"].iter().chain(f).map(|s| s.to_string()));
+        let d = dir.display().to_string();
+        let c = cli(&["--umpire-mod", &d]);
+        assert_eq!((c.args.umpire, c.umpire_mod.map(|u| u.id)), (1, Some("u".into())));
+        let c = cli(&["--umpire", "3", "--umpire-mod", &d]);
+        assert_eq!((c.args.umpire, c.umpire_mod.is_some()), (3, true));
+        let c = cli(&["--umpire", "2", "--umpire-mod-id", "not-installed-anywhere"]);
+        assert_eq!((c.args.umpire, c.umpire_mod.is_none()), (2, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn pow2_pads_with_edge_texels() {
