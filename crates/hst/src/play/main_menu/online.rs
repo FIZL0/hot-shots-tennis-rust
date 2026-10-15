@@ -202,6 +202,10 @@ impl Menu {
                 self.put(i, c);
                 self.skip_taken();
             }
+            // B311: on the costume the lobby has
+            if p.r#mod.is_none() && !p.random && self.cell(i) == Some(super::Who::Disc(p.char)) {
+                self.players[i].costume = p.costume;
+            }
         }
         self.players[i].ready = false;
         self.scroll = [0; 4];
@@ -525,6 +529,41 @@ impl Menu {
         (from..from + n).map(|j| super::GRID[(at + step * j).rem_euclid(n) as usize].0).find_map(|c| (0..nk).find_map(|k| free(c, k)))
     }
 
+    /// B311: a computer player added to open seat `i` starts on the cell the last pick readied on (B269: a character
+    /// on its first free costume, or a Random draw after a ready on the Random card), else on the pick an open seat
+    /// gets at Start; never on Random by itself, as the lobby keeps this pick when the select is left unreadied.
+    fn bot_added(&mut self, i: usize) -> Option<Pick> {
+        let first = self.bot_default(i)?;
+        match self.last {
+            Some(None) => self.bot_random(i, super::dice()),
+            Some(Some(c)) => {
+                self.players[i] = default();
+                self.put(i, Some(c));
+                self.skip_taken();
+                if self.blocked(i) {
+                    return Some(first);
+                }
+                // a disc character on its first costume the lobby's other seats don't hold (as `bot_pick`)
+                let p = self.wire(i);
+                let taken = self.bot_taken(i)?;
+                if p.r#mod.is_some() || !taken.contains(&(p.char, p.costume)) {
+                    return Some(p);
+                }
+                Some((0..super::COSTUMES).find(|&k| !taken.contains(&(p.char, k))).map_or(first, |k| Pick { costume: k, ..p }))
+            }
+            None => Some(first),
+        }
+    }
+
+    /// B311: the pick an open seat gets at Start (`Room::bots`): the first disc character in number order nobody
+    /// holds, else any with a free costume, on its first free costume (B66).
+    fn bot_default(&self, i: usize) -> Option<Pick> {
+        let taken = self.bot_taken(i)?;
+        let free = |c: usize| (0..super::COSTUMES).find(|&k| !taken.contains(&(c, k))).map(|k| Pick::disc(c, k));
+        let held = |c: usize| taken.iter().any(|t| t.0 == c);
+        (0..super::CHARS).filter(|&c| !held(c)).chain(0..super::CHARS).find_map(free)
+    }
+
     /// B217: a computer player added to open seat `i` starts on Random: a disc character with a costume nobody else
     /// has, then one of its free costumes, each at random by `seed` (the host draws; the pick travels as any bot's).
     fn bot_random(&self, i: usize, seed: u64) -> Option<Pick> {
@@ -808,8 +847,8 @@ impl Menu {
                     } else if bot.is_some() {
                         // B216: its character, costume and level on the select
                         self.edit_bot(i, None, out);
-                    } else if let Some(p) = self.bot_random(i, super::dice()) {
-                        // B217's random pick, then B216's select on it
+                    } else if let Some(p) = self.bot_added(i) {
+                        // B311's starting pick (B217's Random only after a Random ready), then B216's select on it
                         out.push(Effect::Online(Fx::Net(Cmd::Bot(i, Some(p.clone())))));
                         self.edit_bot(i, Some(&p), out);
                     }
@@ -2466,6 +2505,34 @@ mod tests {
         m.net.room.as_mut().unwrap().seats[3] = None;
         m.sel = m.items().iter().position(|it| *it == Item::Mode).unwrap();
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Doubles(false)));
+    }
+
+    /// B311: a computer player the host adds starts on the last pick readied, else the default an open seat gets at
+    /// Start, never on Random by itself; ○ leaves the lobby on that pick.
+    #[test]
+    fn an_added_computer_keeps_the_last_or_default_pick() {
+        let dev = super::super::Dev::Keys;
+        let net = |fx: &[Effect]| fx.iter().find_map(|e| if let Effect::Online(Fx::Net(c)) = e { Some(c.clone()) } else { None });
+        let add = |last: Option<Option<super::super::Who>>| {
+            let mut m = Menu { screen: Screen::Lobby, ..default() };
+            sample(&mut m);
+            (m.net.me, m.sel, m.net.go, m.seats[0], m.last) = ("host".into(), 2, Some(Go::Host), Some(dev), last);
+            let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { ok: true, ..default() })) else { panic!() };
+            (m, p)
+        };
+        // nothing readied yet: the first character nobody holds (the host has Sunny Day's 1 and its own 6)
+        let (mut m, p) = add(None);
+        assert_eq!((p.char, p.costume, p.random), (0, 0, false));
+        assert_eq!((m.players[3].char(), m.players[3].random), (0, false), "the select opens on it too");
+        assert_eq!(net(&m.step(dev, Press { back: true, ..default() })), None, "○ leaves the lobby's pick as it is");
+        assert_eq!(m.screen, Screen::Lobby);
+        // the last ready on the host's own character: its next free costume
+        let (m, p) = add(Some(Some(super::super::Who::Disc(6))));
+        assert_eq!((p.char, p.costume, p.random), (6, 1, false));
+        assert_eq!((m.players[3].char(), m.players[3].costume), (6, 1), "the select on the lobby's costume");
+        // the last ready on the Random card: a Random draw
+        let (m, p) = add(Some(None));
+        assert!(p.random && m.players[3].random);
     }
 
     /// B214: ←→↑↓ walk the Online screen's grid and the host's lobby grid (seats, then the buttons three to a row).
