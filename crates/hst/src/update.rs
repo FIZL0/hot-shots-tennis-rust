@@ -454,19 +454,19 @@ mod tests {
 
     /// A throwaway minisign key (made for this test, `minisign -G -W`; its secret is gone) and what it signed: the
     /// sums of a "new build" (`new build\n`), and sums with a wrong hash.
-    const KEY: &str = "RWSQ5w0RqGoDi4KnWBhChEqUso5dxFH1nak5duxZx2zo6s4u2egvJax0";
+    const KEY: &str = "RWQ0kP1JHGoSYVPgnwfOLD6H9XcVIKbCA5aEvP+d/2LBcSCrIyQt8NAf";
     const BIN: &[u8] = b"new build\n";
     const SUMS: &str = "288765569ab03c0fbf107b0f870fb74c42fff3d4b295613911a955cf8e967492  opentennis-linux-x86_64\n";
     const SIG: &str = "untrusted comment: signature from minisign secret key
-RUSQ5w0RqGoDi6jwVeaA/GtPLpxdzDNwQO1jNzLYDADrNabXEnqVzDJjI6MkdiQT3NgoxVAV9LgQ/+A8kMG8FR/fFS/n+8yd8QY=
+RUQ0kP1JHGoSYTAkgxWHTHHvP2pCY4h1ctSsWHKIjTxiY/z+oi8ZdJw/+Ic+bgMEt9JkFLTpaCISrwZqFiR08q2S1qJ9TjsC5wk=
 trusted comment: test
-F9WQVPrL8BcKeSVTj0BaTdQk0lS3OiStQCX+6FNn7jjbCWv/kjUou4gx5rWBwQh24ISxNfD453Ja4QgzirHvDA==
+TSJCWvsq7fomptfEpCRTH7MHbYfPh5RL3EmWX1QTPjCy7RS865E20JP3m5b2ihq7G1xZIzLnRRxEcuEEPA4vCA==
 ";
     const BAD_SUMS: &str = "0000000000000000000000000000000000000000000000000000000000000000  opentennis-linux-x86_64\n";
     const BAD_SUMS_SIG: &str = "untrusted comment: signature from minisign secret key
-RUSQ5w0RqGoDi1hPsTAYT7b2pJgKaKTOQ2IdyqX7ZqetooC+J72NhsjC7keNuXDrNe2LkQkeLHgj1Ef9WMaFcPIxzWVWIZIzDA0=
+RUQ0kP1JHGoSYUkaD1BQLExdG3UnXb09a7FadICs8hLXYf+CcHtNbhcCJjPMy5O25Txf3pnOSfMxNHwZrKRw3/Ke1KrOiMME6gU=
 trusted comment: test
-THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhlo/E4Bw==
+PGdwmy/sa9Kqh1f1dYqI+JP0Iweg2dLM/mEgnRNTVfsQ9pI1u5aeusKILuRdn61QcyAsnzeOSfS5RRAENygxBg==
 ";
 
     /// An HTTP server on localhost answering GETs from `files` (path → body), 404 otherwise. Its base URL.
