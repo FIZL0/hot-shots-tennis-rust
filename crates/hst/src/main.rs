@@ -41,7 +41,6 @@ mod loading;
 mod mash;
 mod lod;
 mod smooth;
-mod merge;
 mod mode;
 mod noise;
 mod play;
@@ -190,7 +189,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--show-fps-detailed" => gfx.show_fps = 2,
             // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
             "--sway-lod" | "--sway_lod" => noise::set_lod(a.next().is_none_or(|v| v != "off"), true),
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--bloom" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--bloom" | "--fewer-shadows" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);
@@ -296,7 +295,6 @@ fn main() {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
-    let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
     let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
@@ -311,10 +309,6 @@ fn start(argv: Vec<String>) {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
     let windowed = gfx.windowed;
-    // so does `--merge-meshes` (the browser's `?merge-meshes=off`, B342), over the menu's setting and a match's flags
-    if merge_flag {
-        graphics::MERGE_FORCED.store(1 + gfx.merge_meshes as u8, std::sync::atomic::Ordering::Relaxed);
-    }
     // the menu opens the window as settings.txt's graphics say, so it doesn't start fullscreen and then shrink
     if menu && let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
         for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
@@ -364,7 +358,7 @@ fn start(argv: Vec<String>) {
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, merge::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
@@ -500,7 +494,6 @@ fn load(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
     (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
-    gfx: Option<Res<graphics::Graphics>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
@@ -687,8 +680,6 @@ fn load(
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
-        // B328: the props' unblended parts drawn one mesh per material (B342: while Merge Court Meshes is on)
-        let mut merger = merge::Merger::new(gfx.as_deref().is_some_and(graphics::Graphics::merged));
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
@@ -708,7 +699,7 @@ fn load(
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let near = matches!(e.dir.as_str(), "tree" | "prop");
             let cast = p.code[3] != b'0' && (17..=19).contains(&p.category);
-            let e = merger.add(&mut commands, root, parts, t, cast, &meshes, &gs_materials);
+            let e = spawn(&mut commands, parts, t);
             // B185: the Grand Palais end houses: the match camera behind your baseline sits inside one
             if stem.starts_with("w-house") {
                 let b = parts.iter().filter_map(|(m, _)| bevy::camera::primitives::MeshAabb::compute_aabb(meshes.get(m)?)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), a| (lo.min(a.min().into()), hi.max(a.max().into())));
@@ -760,7 +751,6 @@ fn load(
                 spawn(&mut commands, &decal, Transform::default());
             }
         }
-        merger.finish(&mut commands, root, &mut meshes);
         look.sky = sky;
         if envir.is_some() {
             commands.insert_resource(look);

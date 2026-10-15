@@ -57,10 +57,8 @@ pub(super) enum Opt {
     Renderer,
     /// B118: the on-screen pad buzzes on each press.
     Vibration,
-    /// B343: the speed-up switches (`Graphics::fewer_shadows`, `batch_crowd`; B342: `merge_meshes`).
+    /// B343: the speed-up switch (`Graphics::fewer_shadows`).
     FewerShadows,
-    BatchCrowd,
-    MergeMeshes,
     /// B364: the characters' share of triangles (`Graphics::mesh`, `lod.rs`).
     Mesh,
     /// B344: far/unseen characters' sway less often.
@@ -90,7 +88,7 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, Cull, SwayLod] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] };
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, SoftShadows, Smooth, Fps, Vsync, Original, Mesh, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
@@ -151,8 +149,6 @@ fn label(o: Opt) -> &'static str {
         Vibration => "Vibration",
         UpdateCheck => "Check for Updates",
         FewerShadows => "Fewer Shadows",
-        BatchCrowd => "Batch Crowd",
-        MergeMeshes => "Merge Court Meshes",
         Mesh => "Mesh",
         SwayLod => "Sway LOD",
     }
@@ -179,7 +175,6 @@ fn about(o: Opt) -> &'static str {
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Smooth => "Not in the original: light curved surfaces (rackets, posts, the courts' rounded props) smoothly instead of in flat facets; sharp edges stay sharp. Off in Original Mode. Applies to models loaded after a change (the next match).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
-        MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
         Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
@@ -199,7 +194,6 @@ fn about(o: Opt) -> &'static str {
         Vibration => vibration_about(),
         UpdateCheck => "Look for a newer version when the game starts. The main menu offers it: Update downloads and checks it, then restarts the game into it (or opens its page where the game can't replace itself).",
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
-        BatchCrowd => "Draw identical court creatures together in one draw, from the next match. Off by default: no measurable gain.",
         SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
     }
 }
@@ -324,8 +318,6 @@ impl Settings {
                 crate::update::CHECK.store(self.0[UPDATE_CHECK], std::sync::atomic::Ordering::Relaxed);
             }
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
-            BatchCrowd => g.batch_crowd = !g.batch_crowd,
-            MergeMeshes => g.merge_meshes = !g.merge_meshes,
             Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
             SwayLod => {
                 self.0[SWAY_LOD] = !self.0[SWAY_LOD];
@@ -357,7 +349,6 @@ impl Settings {
             Vsync => on_off(g.vsync),
             Hdr => on_off(g.hdr),
             Original => on_off(g.original),
-            MergeMeshes => on_off(g.merge_meshes),
             Cull => on_off(g.cull),
             Mesh => format!("{} %", g.mesh),
             Upscaled => on_off(self.0[0]),
@@ -372,7 +363,6 @@ impl Settings {
             Vibration => on_off(self.0[VIBRATION]),
             UpdateCheck => on_off(self.0[UPDATE_CHECK]),
             FewerShadows => on_off(g.fewer_shadows),
-            BatchCrowd => on_off(g.batch_crowd),
             SwayLod => on_off(self.0[SWAY_LOD]),
         }
     }
