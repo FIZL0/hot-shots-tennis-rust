@@ -121,6 +121,8 @@ struct Cli {
     roster: Option<inspect::Roster>,
     /// `--swap-hands 1,0`: the select's hand toggle by match slot (`play::hand_swap`).
     swap_hands: play::hand_swap::SwapHands,
+    /// `--names a,,b`: the players' names by match slot (B371, `play::name_tags`).
+    names: play::name_tags::Names,
 }
 
 fn parse(mut a: impl Iterator<Item = String>) -> Cli {
@@ -133,6 +135,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let mut shot_at = 0.5;
     let mut sound = None;
     let mut swap_hands = play::hand_swap::SwapHands::default();
+    let mut names = play::name_tags::Names::default();
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
     let mut mod_slot = 0;
@@ -216,6 +219,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 std::process::exit(0);
             }
             "--swap-hands" => swap_hands = play::hand_swap::SwapHands::parse(&a.next().unwrap_or_default()),
+            "--names" => names = play::name_tags::Names::parse(&a.next().unwrap_or_default()),
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
@@ -233,7 +237,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     // per parse, so a match after an `--original` one gets the remastered menu sheets back
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names }
 }
 
 // the browser build starts from `web::run` once the page has the disc pack
@@ -259,7 +263,7 @@ fn main() {
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
     let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
-    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
+    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
     if !args.archives.is_empty() && let Ok(mut iso) = Iso::open(&args.iso) {
@@ -354,7 +358,7 @@ fn start(argv: Vec<String>) {
         });
         let a = args.clone();
         let first = mode::Mode::new(move |app| {
-            app.insert_resource(a).insert_resource(swap_hands).add_systems(Startup, load);
+            app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
             add_match(app, viewer_mod, mod_slot, slot_mods);
         });
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
@@ -394,7 +398,7 @@ pub fn menu_mode(app: &mut App) {
 /// The menu's match in this app: `flags` read as on the command line (the settings' `--no-upscale` and
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
-    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
@@ -403,7 +407,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         // the app's own `--shot` goes on through the match
         let old = app.world().resource::<Args>();
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
-        app.insert_resource(args).insert_resource(swap_hands).add_systems(Startup, load);
+        app.insert_resource(args).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
         add_match(app, viewer_mod, mod_slot, slot_mods);
     })
     .back(back)

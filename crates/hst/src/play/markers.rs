@@ -27,7 +27,7 @@ pub(super) const LAST: f32 = 1e4;
 
 /// One player's marker quad (its own material: tint and cell).
 #[derive(Component)]
-pub(super) struct Marker(usize, Handle<StandardMaterial>);
+pub(super) struct Marker(pub(super) usize, Handle<StandardMaterial>);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, setup.after(super::setup))
@@ -43,7 +43,7 @@ pub(super) fn shown(g: &Game) -> bool {
 }
 
 /// The marker's half-width at view depth `z` with `t` = tan(horizontal half-angle).
-fn half_width(z: f32, t: f32) -> f32 {
+pub(super) fn half_width(z: f32, t: f32) -> f32 {
     0.3 * (0.15 * z * t).max(1.0) * (0.2 * z * t).min(1.0)
 }
 
@@ -80,7 +80,7 @@ fn setup(
     }
 }
 
-fn draw(
+pub(super) fn draw(
     g: Res<Game>,
     pads: Res<Pads>,
     colours: Option<Res<Colours>>,

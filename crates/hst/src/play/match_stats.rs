@@ -518,6 +518,7 @@ fn setup(
                     Visibility::Hidden,
                 ));
             }
+            super::name_tags::pool(p, super::name_tags::RESULT);
         });
 }
 
@@ -709,6 +710,7 @@ fn draw(
     panel_art: Option<Res<panel::Art>>,
     board_art: Option<Res<popups::Art>>,
     colours: Option<Res<Colours>>,
+    (names, mut plates): (Option<Res<super::name_tags::Names>>, ResMut<super::name_tags::Plates>),
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
     mut fade: Query<&mut BackgroundColor, With<Fade>>,
 ) {
@@ -755,6 +757,14 @@ fn draw(
     } else if let Some(c) = cer.filter(|_| g.match_stats.result.is_some()) {
         quads = ceremony::quads(&c.plan, n > 2);
     }
+    // B371: named players' slot labels give way to their names
+    let label = |q: &Quad| match q.tex {
+        Tex::Text if q.src[0] == 0.0 && q.src[2] == 48.0 && q.src[1] >= 392.0 => Some(((q.src[1] - 392.0) / 24.0) as usize),
+        Tex::Slot => Some((q.src[0] / 40.0) as usize),
+        _ => None,
+    };
+    let slots: Vec<usize> = (0..n).map(slot).collect();
+    plates.0[super::name_tags::RESULT] = super::name_tags::take(&mut quads, names.as_deref(), &slots, label, |q| (q.dst, q.rgb, q.alpha));
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             vis.set_if_neq(Visibility::Hidden);

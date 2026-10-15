@@ -8,7 +8,7 @@
 //! dashed rim. Along the bottom: Characters, Copy link, Public, Leave and the help line.
 
 use super::super::{Draw, INK, Menu, Tex, WHITE, Who};
-use super::{Act, Item, OK, SETTINGS, name_of, shared, spinner, ticket_only};
+use super::{Act, Item, OK, SETTINGS, shared, spinner, ticket_only};
 use crate::net::Room;
 
 /// Seat colours (1P red, 2P yellow, 3P blue, 4P green), the mockup's: ring, card, well, soft words.
@@ -330,7 +330,7 @@ fn card(d: &mut Draw, m: &Menu, r: &Room, i: usize, [x, y, w, h]: [f32; 4], on: 
             Some(super::super::Dev::Pad(_)) => "You - Controller".into(),
             _ => "You".into(),
         },
-        _ => name_of(r, &s.peer),
+        _ => super::seat_name(m, r, i, &s.peer),
     };
     let tw = d.width(&tag, 14.0) + 6.0;
     let size = if mine { 24.0 } else { 18.0 };

@@ -288,6 +288,9 @@ pub struct Live {
     pub swap: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub random: bool,
+    /// B371: the player's own name (`main_menu::names`), "" for none: shown in place of "1P".."4P".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub player: String,
 }
 
 impl Room {

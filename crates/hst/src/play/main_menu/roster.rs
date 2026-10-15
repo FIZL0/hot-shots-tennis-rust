@@ -279,6 +279,12 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     for p in 0..c.n {
         column(d, m, text, bind, pads, &c, p, pointer_p == Some(p));
     }
+    // B371: the name pickers over their players' columns (at least 180 wide)
+    for p in 0..c.n {
+        let [x, y, w, h] = c.parts(p).card;
+        let nw = w.max(180.0).min(r - l);
+        super::names::draw(d, m, p, [(x + (w - nw) / 2.0).clamp(l, r - nw), y, nw, h]);
+    }
 }
 
 /// Player `p`'s column; `mine`: the pointer's device picks for it (its pills take taps).
@@ -309,9 +315,14 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     // the header: seat tag, the character's name, the device on the right, on one baseline
     let [hx, hy, hw, hh] = at.head;
     let (big, small) = (34.0 * PY, 16.0 * PY);
-    let tag = format!("{}P", p + 1);
+    // B371: the player's name in place of "1P" (a tap on it opens the name picker)
+    let tag = m.seat_tag(p);
+    let tag = ellipsis(d, &tag, small, hw * 0.3);
     d.text(&tag, hx, hy + hh - small - 2.0 * PY, small, s.ring);
     let tw = d.width(&tag, small) + 8.0 * PX;
+    if mine && m.seats[p].is_some() {
+        d.hit([hx - 4.0, hy, tw + 4.0, hh], pointer::press(|k| k.card = true));
+    }
     let device = match m.remote(p).filter(|s| s.human() && online) {
         Some(st) => m.net.room.as_ref().and_then(|r| r.names.get(&st.peer)).map_or("Online".to_string(), |n| n.clone()),
         None if m.seats[p] == Some(Dev::Open) => "Open".into(),

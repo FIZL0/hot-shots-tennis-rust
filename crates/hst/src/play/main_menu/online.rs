@@ -503,7 +503,7 @@ impl Menu {
                     super::Who::Mod(i) => (self.mods[i].donor, Some(self.mods[i].id.clone()), self.mods[i].name.clone()),
                 };
                 let pl = &self.players[p];
-                Live { char, costume, ready: pl.ready, r#mod: id, name, swap: pl.swap, random: pl.random }
+                Live { char, costume, ready: pl.ready, r#mod: id, name, swap: pl.swap, random: pl.random, player: self.player_name(p).unwrap_or_default() }
             })
             .collect()
     }
@@ -1093,6 +1093,13 @@ fn relay_name(cfg: &Online) -> String {
 }
 
 /// The name `peer`'s player gave (its ID's start if none).
+/// B371: the name on lobby seat `i`: its player's own (this machine's, or the one its machine sent with its pick),
+/// else its machine's.
+pub(super) fn seat_name(m: &Menu, r: &Room, i: usize, peer: &str) -> String {
+    let sent = || r.live_of(i).map(|l| super::names::clean(&l.player)).filter(|n| !n.is_empty());
+    m.player_name(i).or_else(sent).unwrap_or_else(|| name_of(r, peer))
+}
+
 fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
 }
@@ -1834,7 +1841,9 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
             super::Dev::Open => None,
         })
         .collect();
-    let flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    let mut flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    // B371: every player's own name over them (presentation only: not part of the match's state)
+    flags.extend(menu.online_name_flags(&room, &me));
     // the mods by match slot (as `netplay::flags` orders the seats): the wire's gameplay, the looks this machine has
     let order: &[usize] = if room.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
     let mut mm = crate::mods::MatchMod::default();

@@ -37,6 +37,8 @@ pub(super) enum Act {
     Tab(usize),
     /// B369: player `p`'s column's category tab `i` (`tabs.rs`): a tap switches them to it.
     Category(usize, usize),
+    /// B371: seat `p`'s name picker's row or key `i`: hovering selects it, a tap presses it.
+    Name(usize, usize),
 }
 
 /// ✕.
@@ -194,6 +196,7 @@ impl Menu {
                 }
             }
             Act::Category(..) => {}
+            Act::Name(p, i) => out = self.name_point(p, i, tap),
         }
         out
     }
