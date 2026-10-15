@@ -59,7 +59,7 @@ pub(crate) enum Act {
     Key,
     /// B320: text chat in an online lobby (`chat.rs`): T, a pad's R2 (phrases) and L2 (say it).
     Chat,
-    /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab.
+    /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab; B382: the character select's sections.
     Kind,
 }
 
@@ -233,8 +233,11 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             let me = m.players[p];
             if !me.ready {
-                // B391: on the tab row the moves pick a category, ✕ goes down onto its tiles
-                v.extend([(Act::Move, if me.on_tabs { "Category" } else { "Character" }), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
+                v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
+                // B382: L2 / R2 jump between the grid's sections (with more than one)
+                if m.sections().len() > 1 {
+                    v.push((Act::Kind, "Section"));
+                }
             }
             // B369 / B375: △ in or out of the favorites (not Random)
             if !me.ready && !me.random {
@@ -244,9 +247,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.seats[p] == Some(dev) {
                 v.push((Act::Name, "Name"));
             }
-            if !me.ready && me.on_tabs {
-                v.push((Act::Ok, "Characters"));
-            } else if !me.ready && !m.blocked(p) {
+            if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
             if me.ready {

@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-tabs / roster4-tabs = them with every cursor up on the tab row (B391), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -435,10 +435,8 @@ struct Player {
     swap: bool,
     /// B217: on the Random card (the ? card until ready; readying draws the pick, `Menu::draw`).
     random: bool,
-    /// B369: the category tab the player browses (`tabs.rs`).
+    /// B369 / B382: the roster section the cursor is in (`tabs.rs`: a favorite is in two).
     tab: u8,
-    /// B391: the cursor on the tab row (↑ from the grid's top row), not on a tile.
-    on_tabs: bool,
 }
 
 impl Player {
@@ -736,28 +734,28 @@ impl Menu {
         if self.focus < n && !self.players[self.focus].ready && self.focus != lead && self.seats[self.focus].is_some() { self.focus } else { lead }
     }
 
-    /// B306 / B368: the roster and the first tile on view in player `p`'s column (`scroll`'s row, kept on the roster).
-    fn page(&self, p: usize) -> (usize, Vec<Option<Who>>) {
-        let roster = self.tab_cells(p);
-        let c = self.columns();
-        let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
-        (self.scroll[p].min(last) * c.cols, roster)
-    }
-
-    /// B368: player `p`'s column scrolled as little as shows their tile.
+    /// B368: player `p`'s column scrolled as little as shows their tile; B382: its section's heading too while it's on
+    /// the section's first row.
     fn follow(&mut self, p: usize) {
-        let roster = self.tab_cells(p);
         let c = self.columns();
-        let row = roster.iter().position(|w| *w == self.cell(p)).unwrap_or(0) / c.cols;
-        let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
-        self.scroll[p] = self.scroll[p].min(row).max((row + 1).saturating_sub(c.rows)).min(last);
+        let secs = self.sections();
+        let lines = tabs::lines(&secs, c.cols);
+        let row = self.place(p, &secs).and_then(|k| tabs::unflat(&secs, k)).and_then(|(s, i)| lines.iter().position(|&l| l == tabs::Line::Tiles(s, i - i % c.cols)));
+        if let Some(row) = row {
+            let want = if row > 0 && matches!(lines[row - 1], tabs::Line::Head(_)) { row - 1 } else { row };
+            let mut top = self.scroll[p].min(want);
+            while top < row && c.fit(&lines, top) <= row - top {
+                top += 1;
+            }
+            self.scroll[p] = top.min(c.last_top(&lines));
+        }
         self.followed[p] = Some(self.cell(p));
     }
 
-    /// B368: player `p`'s column's grid scrolled `d` rows (the wheel, a drag), its tile free to leave the view.
+    /// B368: player `p`'s column's grid scrolled `d` lines (the wheel, a drag), its tile free to leave the view.
     fn scroll_by(&mut self, p: usize, d: i32) -> bool {
         let c = self.columns();
-        let last = self.tab_cells(p).len().div_ceil(c.cols).saturating_sub(c.rows);
+        let last = c.last_top(&tabs::lines(&self.sections(), c.cols));
         let to = (self.scroll[p].min(last) as i32 + d).clamp(0, last as i32) as usize;
         std::mem::replace(&mut self.scroll[p], to) != to
     }
@@ -1190,12 +1188,11 @@ impl Menu {
                     self.players[p].swap = !self.players[p].swap;
                     out.push(Sound(0));
                 }
-                // B369 / B375: △ a favorite (not Random's), the moves on the player's tab
+                // B369 / B375: △ a favorite (not Random's); B382: the moves and L2 / R2 on the grid
                 if k.card && !self.players[p].ready && !self.players[p].random {
                     self.toggle_favorite(p, &mut out);
                 }
-                let k = self.tabs_ok(p, k, &mut out);
-                if !self.players[p].ready && self.tab_move(p, k) {
+                if !self.players[p].ready && self.grid_move(p, k) {
                     self.follow(p);
                     out.push(Sound(0));
                 }
@@ -1817,7 +1814,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-tabs" | "roster4-tabs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -1935,11 +1932,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             }
             menu.players[menu.players() - 1].ready = n < menu.players();
         }
-        // B391: `rosterN-tabs`: every cursor up on the tab row, 2P on the last tab
-        if screen.ends_with("-tabs") {
-            menu.players.iter_mut().for_each(|p| p.on_tabs = true);
-            let tabs = menu.tabs();
-            menu.set_tab(1, &tabs, tabs.len() - 1);
+        // B382: `rosterN-favs`: four disc favorites (Favorites first), 1P on the second, 2P on the last section
+        if screen.ends_with("-favs") {
+            menu.favs = [0, 3, 5, 9].map(|c| format!("hst {c}")).into();
+            let secs = menu.sections();
+            menu.put_at(0, &secs, 1);
+            menu.jump(1, &secs, secs.len() - 1);
         }
         mods_screen::sample(&mut menu, &screen);
         // B368: `roster2-deep`: 2P on a mod far down, its column scrolled there, 1P's at the top
@@ -3578,8 +3576,7 @@ mod tests {
             m.step(Dev::Keys, press(f));
             m.cell(0)
         };
-        // B369: the mods' own tab (8 a row here), ← past its first tile to Hot Shots' row 0, its last tile
-        m.players[0].tab = m.tabs().last().unwrap().id;
+        // B382: the one grid (8 a row here): the mods' section under Hot Shots Tennis' two rows
         m.grid = Grid::fit(4.0 / 3.0);
         while m.columns().cols < 8 {
             m.grid.view[2] += 1.0;
@@ -3587,14 +3584,13 @@ mod tests {
         assert_eq!(m.columns().cols, 8);
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(2)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)));
-        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[6].0)), "Hot Shots' first row's last");
+        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[CHARS - 1].0)), "back past the section's start");
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(0)));
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)));
-        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the tab's end");
+        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the grid's end");
         assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)));
-        assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)), "↑ never changes the tab");
-        go(&mut m, |p| &mut p.left);
-        assert_eq!(go(&mut m, |p| &mut p.up), None, "↑ on the first row: its first tile, the Random card");
+        assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Disc(GRID[7].0)), "↑ over the heading");
+        assert_eq!(go(&mut m, |p| &mut p.up), None, "the Random card");
     }
 
     /// B269: with 3 computer players added in doubles, 1P picking Random leaves each next COM's cursor on Random, so
@@ -3968,7 +3964,7 @@ mod tests {
                     assert!(card[0] >= -ex && card[0] + card[2] <= 640.0 + ex + 1e-3 && card[1] >= -ey, "{a} {n} {card:?}");
                     let (t, h) = vplace(card[1], card[3], a, Anchor::Centre);
                     assert!(t + h <= legend + 1e-3, "{a} {n} {card:?}");
-                    let rows = [at.head, at.pills, at.preview, at.tabs, at.grid, at.foot];
+                    let rows = [at.head, at.pills, at.preview, at.grid, at.foot];
                     for (i, r) in rows.iter().enumerate() {
                         assert!(inside(*r, card) && r[3] > 0.0, "{a} {n} {p} part {i} {r:?} in {card:?}");
                         if i > 0 {
@@ -3976,10 +3972,19 @@ mod tests {
                         }
                     }
                     assert!(inside(at.bar, card) && at.grid[0] + at.grid[2] < at.bar[0], "{a} {n} {p}");
-                    let last = c.cell(p, c.per() - 1);
-                    assert!(inside(last, at.grid), "{a} {n} {p}: {last:?} in {:?}", at.grid);
-                    let right = c.cell(p, c.cols - 1);
-                    assert!((right[0] + right[2] - (at.grid[0] + at.grid[2])).abs() < 1e-2, "{a} {n}: the tiles fill the width");
+                    // B382: every heading and tile on view inside the grid, a full row across its width
+                    let secs = vec![tabs::Section { id: 2, name: "A".into(), cells: vec![None; 3] }, tabs::Section { id: 3, name: "B".into(), cells: vec![None; 60] }];
+                    let lines = tabs::lines(&secs, c.cols);
+                    let v = roster::View { end: c.fit(&lines, 0), secs, lines, top: 0 };
+                    let (heads, tiles) = c.laid(p, &v);
+                    assert!(!tiles.is_empty() && heads.len() >= 1, "{a} {n} {p}");
+                    for r in heads.iter().map(|h| h.1).chain(tiles.iter().map(|t| t.2)) {
+                        assert!(inside(r, at.grid), "{a} {n} {p}: {r:?} in {:?}", at.grid);
+                    }
+                    let right = tiles.iter().filter(|t| t.0 >= 3).nth(c.cols - 1).map(|t| t.2);
+                    if let Some(right) = right {
+                        assert!((right[0] + right[2] - (at.grid[0] + at.grid[2])).abs() < 1e-2, "{a} {n}: the tiles fill the width");
+                    }
                     if p > 0 {
                         let prev = c.parts(p - 1).card;
                         assert!(prev[0] + prev[2] < card[0], "{a} {n} {p}: apart");
@@ -3998,42 +4003,46 @@ mod tests {
     fn roster_scrolls_to_the_cursor() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), Some(pad), None, None], grid: Grid::fit(4.0 / 3.0), ..default() };
-        // B369: both on the mods' tab
-        let mods = m.tabs().last().unwrap().id;
+        // B382: both on the first mod, its section's heading the top line on view
         for p in 0..2 {
             m.put(p, Some(Who::Mod(0)));
-            m.players[p].tab = mods;
+            m.follow(p);
         }
         let c = m.columns();
-        assert!(c.per() < m.tab_cells(0).len());
+        let v = m.view(0);
+        let r = v.lines.iter().position(|&l| l == tabs::Line::Head(1)).unwrap();
+        let t = v.top;
+        assert!(t <= r && r + 1 < v.end && m.scroll[1] == t, "{v:?}");
+        assert!(v.end < v.lines.len());
         let down = |m: &mut Menu| {
             m.step(Dev::Keys, press(|p| &mut p.down));
         };
-        for _ in 0..c.rows - 1 {
+        for _ in r + 2..v.end {
             down(&mut m);
         }
-        assert_eq!(m.scroll, [0; 4], "still on the first view");
+        assert_eq!(m.scroll, [t, t, 0, 0], "still on the first view");
         down(&mut m);
-        assert_eq!(m.scroll, [1, 0, 0, 0], "1P's column only");
-        let start = m.page(0).0;
+        assert_eq!(m.scroll, [t + 1, t, 0, 0], "1P's column only");
+        let start = c.laid(0, &m.view(0)).1[0].0;
         let acts = hits_chars(&m);
         assert!(acts.contains(&pointer::Act::Cell(0, start)) && !acts.contains(&pointer::Act::Cell(0, start - 1)));
-        assert!(acts.contains(&pointer::Act::Cell(1, 0)), "2P's column still at the top");
+        assert!(acts.contains(&pointer::Act::Section(1, 1)), "2P's heading still on view");
         m.step(Dev::Keys, press(|p| &mut p.up));
-        assert_eq!(m.page(0).0 / c.cols, 1, "moving back up inside the view doesn't scroll");
+        assert_eq!(m.scroll[0], t + 1, "moving back up inside the view doesn't scroll");
         // 2P's column scrolled by the wheel: its own view moves, its pick and 1P's don't
         let (was, mine) = (m.cell(1), m.scroll[0]);
         assert_eq!(m.point(pad, pointer::Act::Scroll(1, 3), false), [Sound(0)]);
-        assert_eq!((m.scroll[1], m.cell(1), m.scroll[0]), (3, was, mine));
+        assert_eq!((m.scroll[1], m.cell(1), m.scroll[0]), (t + 3, was, mine));
         assert_eq!(m.point(Dev::Keys, pointer::Act::Scroll(1, 1), false), [], "1P's device doesn't scroll 2P's column");
-        assert!(m.scroll_by(1, -10) && m.scroll[1] == 0 && !m.scroll_by(1, -1), "not past the top");
-        let last = m.tab_cells(1).len().div_ceil(c.cols) - c.rows;
+        assert!(m.scroll_by(1, -100) && m.scroll[1] == 0 && !m.scroll_by(1, -1), "not past the top");
+        let last = c.last_top(&v.lines);
         m.scroll_by(1, 1000);
         assert_eq!(m.scroll[1], last, "not past the bottom");
+        assert_eq!(m.view(1).end, v.lines.len());
         // a tap on a tile there picks it
-        let k = m.page(1).0 + 1;
+        let (k, cell, _) = c.laid(1, &m.view(1)).1[1];
         m.point(pad, pointer::Act::Cell(1, k), false);
-        assert_eq!(m.cell(1), m.tab_cells(1)[k]);
+        assert_eq!(m.cell(1), cell);
     }
 
     fn hits_chars(m: &Menu) -> Vec<pointer::Act> {
@@ -4150,8 +4159,6 @@ mod tests {
         m.put(0, Some(Who::Mod(0)));
         m.put(1, Some(Who::Mod(0)));
         assert!(m.players[0].modded && m.players[1].modded);
-        // B390: on the mods' own tab (the select opens on All)
-        m.players[1].tab = m.tabs().last().unwrap().id;
         m.step(Dev::Keys, press(|p| &mut p.next));
         m.step(Dev::Keys, press(|p| &mut p.next));
         assert_eq!(m.players[0].costume, 0, "mod a has 2 costumes");
