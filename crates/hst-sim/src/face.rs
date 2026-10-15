@@ -3,6 +3,7 @@
 //! keep the previous face) and starts its clock with the motion's speed and looping; each frame the face clock
 //! wraps (looping) or clamps into its own length — the last key over all tracks, in frames — samples every track
 //! at time × ticks per frame, then adds the speed, as [`crate::motion::Clock`] with that length.
+#![deny(clippy::float_arithmetic)]
 
 use crate::ps2::{add, div, mul, sub};
 

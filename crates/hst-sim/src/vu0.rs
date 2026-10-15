@@ -1,6 +1,7 @@
 //! VU0 arithmetic as the reference emulator performs it (macro mode and micro programs): every operation is
 //! rounded toward zero (VU round mode "chop"), with no add/sub operand alignment step (that is an FPU quirk),
 //! and multiply-add is a rounded product followed by a rounded add.
+#![deny(clippy::float_arithmetic)]
 
 pub type V4 = [f32; 4];
 
@@ -17,6 +18,7 @@ fn chop(x: f64) -> f32 {
 
 /// IEEE add rounded toward zero. The f64 sum alone can round away an addend that is far smaller, so the
 /// rounding error (TwoSum) decides the direction: x + tiny of opposite sign truncates to the next f32 down.
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn add(a: f32, b: f32) -> f32 {
     let (a, b) = (daz(a) as f64, daz(b) as f64);
     let s = a + b;
@@ -26,9 +28,11 @@ pub fn add(a: f32, b: f32) -> f32 {
     let over = (r as f64 - s) - e; // r − exact sum
     daz(if over != 0.0 && r != 0.0 && (over > 0.0) == (r > 0.0) { f32::from_bits(r.to_bits() - 1) } else { r })
 }
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn sub(a: f32, b: f32) -> f32 {
     add(a, -b)
 }
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn mul(a: f32, b: f32) -> f32 {
     chop(daz(a) as f64 * daz(b) as f64)
 }
@@ -42,6 +46,7 @@ pub fn sqrt(x: f32) -> f32 {
     chop((daz(x).abs() as f64).sqrt())
 }
 /// Q-register divide, chopped; x/0 gives ±max.
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn div(a: f32, b: f32) -> f32 {
     let (a, b) = (daz(a), daz(b));
     if b == 0.0 {

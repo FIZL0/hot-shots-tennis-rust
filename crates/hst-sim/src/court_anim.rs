@@ -7,6 +7,7 @@
 //! tracks reach one packet the later one wins. `.MTA` tracks bind as the effects' do ([`crate::effect`]).
 //!
 //! [`Packet::uv_swap`]: hst_data::mdl::Packet::uv_swap
+#![deny(clippy::float_arithmetic)]
 
 use hst_data::{mdl::Model, mor::Tracks, mtl::Material};
 

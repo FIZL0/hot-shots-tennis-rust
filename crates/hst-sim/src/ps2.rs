@@ -6,6 +6,7 @@
 //! - divide and square root round to nearest (the emulator's separate divider round mode);
 //! - denormals read and write as zero.
 //! Verified bit-exact against the game's runtime shot-parameter table (2912 madd/add/sub/mul results).
+#![deny(clippy::float_arithmetic)]
 
 fn daz(x: f32) -> f32 {
     if x.is_subnormal() { 0.0f32.copysign(x) } else { x }
@@ -30,16 +31,19 @@ fn align(a: f32, b: f32) -> (f32, f32) {
     }
 }
 
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn add(a: f32, b: f32) -> f32 {
     let (a, b) = align(daz(a), daz(b));
     // the masked operands differ by at most 25 bits of exponent, so the f64 sum is exact
     chop(a as f64 + b as f64)
 }
 
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn sub(a: f32, b: f32) -> f32 {
     add(a, -b)
 }
 
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn mul(a: f32, b: f32) -> f32 {
     chop(daz(a) as f64 * daz(b) as f64) // a 24×24-bit product is exact in f64
 }
@@ -60,6 +64,7 @@ pub fn sqrt(x: f32) -> f32 {
 }
 
 /// `div.s`: the divider is configured round-to-nearest in the reference emulator; x/0 gives ±max.
+#[allow(clippy::float_arithmetic)] // the model itself, in host arithmetic
 pub fn div(a: f32, b: f32) -> f32 {
     let (a, b) = (daz(a), daz(b));
     if b == 0.0 {
