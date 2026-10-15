@@ -42,10 +42,15 @@ const ASSET: Option<&str> = if cfg!(all(target_os = "linux", target_arch = "x86_
     None
 };
 
-/// The newer build's commit (short), if one is out.
+/// The newer build's commit (short), if one is out. Not this build's own: the page's load-time `version.txt` can
+/// be a stale copy from around a deploy, so a later read "differs" while this wasm is already that commit.
 #[cfg(target_arch = "wasm32")]
 pub fn latest() -> Option<String> {
-    js_sys::Reflect::get(&web_sys::window()?.into(), &"hstLatest".into()).ok()?.as_string().filter(|s| !s.is_empty())
+    let ours = env!("HST_COMMIT").trim_end_matches('+');
+    js_sys::Reflect::get(&web_sys::window()?.into(), &"hstLatest".into())
+        .ok()?
+        .as_string()
+        .filter(|s| !s.is_empty() && !s.starts_with(ours) && !ours.starts_with(s.as_str()))
 }
 
 /// What the desktop check found and what an install is doing.
