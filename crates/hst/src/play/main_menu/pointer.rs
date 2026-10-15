@@ -190,7 +190,7 @@ impl Menu {
                     self.mods_tab(i, &mut out);
                 }
             }
-            Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
+            Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go_tab(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
             // B382: a tap on a section's heading: its first open tile
             Act::Section(q, i) if tap => {

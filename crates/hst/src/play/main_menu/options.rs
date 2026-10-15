@@ -442,12 +442,19 @@ impl Menu {
         } else if k.prev || k.next {
             let tabs = tabs_shown();
             let n = tabs.len();
-            self.go(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
+            self.go_tab(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
         } else if k.back {
             self.sel = self.main_at(super::home::Row::Settings);
             self.screen = Screen::Main;
             out.push(Effect::Sound(1));
         }
+    }
+
+    /// B442: open Settings tab `page` (L1 / R1, a tap on its pill) with the soft cursor tick, not the select cue.
+    pub(super) fn go_tab(&mut self, page: Screen, out: &mut Vec<Effect>) {
+        self.screen = page;
+        self.sel = 0;
+        out.push(Effect::Sound(0));
     }
 }
 
@@ -796,6 +803,19 @@ mod tests {
         assert_eq!(m.screen, tabs_shown().last().unwrap().1);
         m.step(Dev::Keys, press(|k| &mut k.back));
         assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Settings)));
+    }
+
+    /// B442: changing tab (R1, L1, a tap on a pill) plays the soft cursor tick, never the select cue.
+    #[test]
+    fn a_tab_change_ticks() {
+        let mut m = Menu::default();
+        m.screen = TABS[0].1;
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.next)), [Effect::Sound(0)]);
+        assert_eq!(m.screen, TABS[1].1);
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.prev)), [Effect::Sound(0)]);
+        assert_eq!(m.screen, TABS[0].1);
+        assert_eq!(m.point(Dev::Keys, pointer::Act::Tab(2), true), [Effect::Sound(0)]);
+        assert_eq!((m.screen, m.sel), (TABS[2].1, 0));
     }
 
     /// [`every_page`]'s checks of each of page `s`'s rows; B411: Graphics' Advanced row opens its page (✕, its rows
