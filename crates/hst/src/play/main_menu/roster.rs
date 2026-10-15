@@ -65,9 +65,6 @@ fn seat(p: usize) -> Seat {
     Seat { ring, sel, bg, well, tile, soft }
 }
 
-/// The grades' colours, A to F.
-const GRADES: [u32; 6] = [0xf08c00, 0xd6336c, 0x2f9e44, 0x1c7ed6, 0x9c36b5, 0x868e96];
-
 /// The select's player columns on a view (`Grid::view`): how many tiles a row and rows on view each column's grid
 /// has, and where each part of a column goes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -514,8 +511,8 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
 }
 
 /// The pink stats card in `[x, y, w, h]`: Serve, Stroke, Volley, Impact, Footwork, each grade's letter (A at 5, F at 0)
-/// in a light circle, "?" for a hidden pick.
-fn stats(d: &mut Draw, grades: Option<[u8; 5]>, [x, y, w, h]: [f32; 4]) {
+/// as the original draws it, "?" for a hidden pick. Browse mods' detail panel shows the same card.
+pub(super) fn stats(d: &mut Draw, grades: Option<[u8; 5]>, [x, y, w, h]: [f32; 4]) {
     rounded(d, [x, y, w, h], 10.0, hex(0xf58ac0), 128.0);
     let rh = (h - 8.0 * PY) / 5.0;
     let size = (rh * 0.62).min(14.0 * PY);
@@ -528,17 +525,21 @@ fn stats(d: &mut Draw, grades: Option<[u8; 5]>, [x, y, w, h]: [f32; 4]) {
         let room = w - 20.0 * PX - disc * PX / PY;
         let k_fit = (room / d.width(label, size).max(1.0)).min(1.0);
         ringed_text(d, label, x + 8.0 * PX, ry + (rh - size * k_fit) / 2.0, size * k_fit, WHITE);
+        // B384: the original's own letter (the attribute sheet's A-F: a gradient fill in the grade's colour with a dark
+        // rim, straight on the card, no badge); its 24-px cell the row's height up to 30 px (the letter fills 17 of it)
         let dw = disc * PX / PY;
         let (cx, cy) = (x + w - 8.0 * PX - dw, ry + (rh - disc) / 2.0);
-        rounded(d, [cx, cy, dw, disc], disc / PY / 2.0, hex(0xfff4fa), 128.0);
-        let (letter, rgb) = match grades {
+        match grades {
             Some(g) => {
-                let i = 5 - g[k].min(5) as usize;
-                (["A", "B", "C", "D", "E", "F"][i], hex(GRADES[i]))
+                let (i, c) = ((5 - g[k].min(5)) as f32, rh.min(30.0 * PY));
+                let cell = [cx + (dw - c * PX / PY) / 2.0, cy + (disc - c) / 2.0, c * PX / PY, c];
+                d.q(super::ATTRS, [232.0, 24.0 * i, 24.0, 24.0], cell, WHITE, 128.0);
             }
-            None => ("?", hex(0x868e96)),
-        };
-        let ls = disc * 0.8;
-        d.centred(letter, cx + dw / 2.0, cy + (disc - ls) / 2.0, ls, rgb);
+            None => {
+                let ls = disc * 0.72;
+                let lw = d.width("?", ls);
+                ringed_text(d, "?", cx + (dw - lw) / 2.0, cy + (disc - ls) / 2.0, ls, hex(0xc8ccd0));
+            }
+        }
     }
 }
