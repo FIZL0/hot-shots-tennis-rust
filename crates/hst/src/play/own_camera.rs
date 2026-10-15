@@ -59,21 +59,7 @@ fn cam_of(peers: &[Option<&str>]) -> Vec<usize> {
     (0..n).map(|i| peer(i).and_then(|p| (0..n).find(|&j| peer(j) == Some(p))).unwrap_or(i)).collect()
 }
 
-fn link(np: Option<Res<Netplay>>, mut g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, mut commands: Commands) {
-    // B118: two players on one phone, at its ends: the picture keeps 1P's end at the bottom (turned with it at a
-    // change of ends), and both sticks are screen-relative to it
-    if np.is_none()
-        && let Some(g) = g.as_mut().filter(|g| g.players.len() == 2)
-        && super::widescreen::SIDEWAYS.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        if g.cam_of != [0, 0] {
-            g.cam_of = vec![0, 0];
-        }
-        if own.is_none() {
-            commands.insert_resource(own_cam(&g, 0));
-        }
-        return;
-    }
+fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, mut commands: Commands) {
     let (Some(np), Some(mut g)) = (np, g) else { return };
     let n = g.players.len();
     let peers: Vec<_> =
@@ -110,7 +96,7 @@ pub(super) fn flipped(g: &Game, i: usize) -> bool {
 fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netplay>>) {
     let (Some(g), Some(mut o)) = (g, own) else { return };
     o.cut |= g.cam_cut;
-    // locally (B118) every tick is new
+    // without a lockstep (a test's own camera) every tick is new
     if let Some(np) = np {
         let tick = np.lock.log.len();
         if tick <= o.tick {
@@ -179,7 +165,7 @@ mod tests {
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    /// B315: with this machine's own camera on (1v1 on one phone, online), a post-point cut-away still takes the
+    /// B315: with this machine's own camera on (online), a post-point cut-away still takes the
     /// picture: from its second tick on (its first only picks the shot) the picture shows the shared camera's
     /// view, the shot's (skipped without the ISO).
     #[test]

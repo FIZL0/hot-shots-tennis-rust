@@ -1,4 +1,4 @@
-//! B368: the character select (`Screen::Chars`: the local roster, the phone duo's and, until B370's lobby, an online
+//! B368: the character select (`Screen::Chars`: the local roster and, until B370's lobby, an online
 //! room's) as one column per player (`plan/B368.md`, the approved 1280×720 mockup). Each column is its player's own:
 //! the header (seat, character, device), the costume and hand pills, the 3D preview beside the play style and stats
 //! card, a tab row (B369's categories, `tabs.rs`), and a grid of face tiles that scrolls inside that column

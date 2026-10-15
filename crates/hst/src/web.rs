@@ -270,15 +270,14 @@ pub fn touch_menu(on: bool) {
     }
 }
 
-/// B118: the page's on-screen pads: `duo` doubles them for two players on one phone (the second at the top, turned
-/// to face its player, both listed as pads), `buzz` the press vibration (Settings → Mobile). Sent when it changes.
-pub fn touch_pads(duo: bool, buzz: bool) {
+/// B118: the page's on-screen pad's press vibration (Settings → Mobile). Sent when it changes.
+pub fn touch_buzz(buzz: bool) {
     static SENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
-    let v = duo as u8 | (buzz as u8) << 1;
+    let v = buzz as u8;
     if SENT.swap(v, std::sync::atomic::Ordering::Relaxed) != v
-        && let Some(f) = page_fn("hstTouchPads")
+        && let Some(f) = page_fn("hstTouchBuzz")
     {
-        let _ = f.call2(&JsValue::NULL, &duo.into(), &buzz.into());
+        let _ = f.call1(&JsValue::NULL, &buzz.into());
     }
 }
 

@@ -502,9 +502,6 @@ struct Menu {
     /// B269: the roster cell the last pick readied on (`None` inside: the Random card); the next computer player's
     /// cursor starts there.
     last: Option<Option<Who>>,
-    /// B118: a 1v1 on this phone (the main menu's touch-only row): the on-screen pad doubled, the far player's at
-    /// the top turned to face them, until the menu is back.
-    duo: bool,
     /// B297: a local match was started from this menu this session; its setup is still here (the Rematch card).
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
@@ -548,7 +545,6 @@ impl Default for Menu {
             add: default(),
             paused: false,
             last: None,
-            duo: false,
             rematch: false,
             calls: 0,
             editing: None,
@@ -578,11 +574,6 @@ enum Effect {
 }
 
 impl Menu {
-    /// B118: 1v1 on this phone, 1P picked and 2P (at the far end) picking: the select turns a half turn to face them.
-    pub(super) fn turned(&self) -> bool {
-        self.duo && self.screen == Screen::Chars && self.players[0].ready && !self.players[1].ready
-    }
-
     fn players(&self) -> usize {
         if self.doubles { 4 } else { 2 }
     }
@@ -897,7 +888,7 @@ impl Menu {
             self.seats[..n].swap(0, q);
             return true;
         }
-        // B331: on a local roster (not the phone duo's) the seat goes back to the computer, open to the next ✕
+        // B331: on a local roster the seat goes back to the computer, open to the next ✕
         self.seats[p] = if self.screen == Screen::Chars && !self.local_roster() { Some(Dev::Open) } else { None };
         self.unready(p);
         // B361: down to two devices, a local roster goes back to singles
@@ -918,10 +909,10 @@ impl Menu {
         self.join_seat().is_some() || self.local_roster() && !self.doubles
     }
 
-    /// B331: the local roster (not online, not the phone duo's): devices join it with ✕; B361: its mode follows them
+    /// B331: the local roster (not online): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
     fn local_roster(&self) -> bool {
-        self.screen == Screen::Chars && !self.online() && !self.duo
+        self.screen == Screen::Chars && !self.online()
     }
 
     /// The seat a device's ✕ on the select takes: one held open for a device (B238), else on a local roster the
@@ -935,7 +926,6 @@ impl Menu {
     /// until a device joins with ✕; the Mods page's Play with puts its mod on 1P's cursor.
     fn local_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
         self.rematch = false;
-        self.duo = false;
         self.doubles = false;
         self.seats = [Some(dev), None, None, None];
         self.bots = [false; 4];
@@ -1016,7 +1006,6 @@ impl Menu {
                         }
                         Row::Settings => self.go(Screen::Display, &mut out),
                         Row::Mods => self.mods_open(&mut out),
-                        Row::Duo => self.duo_start(dev, &mut out),
                         Row::Update => crate::update::act(),
                         Row::Quit => out.push(Quit),
                     }
@@ -1313,29 +1302,6 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
-    /// B118: straight to the character select of a singles match of two humans on this phone: `dev` (the screen's
-    /// pad) is 1P, 2P's seat held open for the far end's pad (its ✕ takes it, B238).
-    fn duo_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
-        self.duo = true;
-        self.doubles = false;
-        self.seats = [Some(dev), Some(Dev::Open), None, None];
-        self.bots = [false; 4];
-        self.players = [Player::fresh(); 4];
-        self.scroll = [0; 4];
-        self.go(Screen::Chars, out);
-    }
-
-    /// B118: the duo ends when the menu leaves its select and confirmation (back past them, or a match over); while
-    /// on, 1P is the screen's own pad (a tap's `Keys` seat moved onto it).
-    fn duo_sync(&mut self, pads: &[Entity]) {
-        if self.duo && !matches!(self.screen, Screen::Chars | Screen::Confirm | Screen::Playing) {
-            self.duo = false;
-        }
-        if self.duo && self.seats[0] == Some(Dev::Keys) && let Some(&e) = pads.first() {
-            self.seats[0] = Some(Dev::Pad(e));
-        }
-    }
-
     /// The court and umpire the match gets: a random choice resolved by `roll`.
     fn venue(&self) -> (usize, u8) {
         let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court };
@@ -1581,18 +1547,6 @@ struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>, Text);
 #[derive(Component)]
 struct Slot(usize);
 
-/// The menu's root: turned a half turn while [`Menu::turned`] (the previews are its children too).
-#[derive(Component)]
-struct Turned;
-
-fn turn(menu: Res<Menu>, mut root: Query<&mut UiTransform, With<Turned>>) {
-    let want = if menu.turned() { Rot2::PI } else { Rot2::IDENTITY };
-    for mut t in &mut root {
-        if t.rotation != want {
-            t.rotation = want;
-        }
-    }
-}
 // four human cards on the select take ~760 (B156); the confirm screen needs more than 700 (B141a)
 // B296: a full roster page (64 cells) with four players' cards takes ~2.5k
 const POOL: usize = 3200;
@@ -1904,7 +1858,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     commands.insert_resource(menu);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-    commands.spawn((full, GlobalZIndex(10), Turned)).with_children(|p| {
+    commands.spawn((full, GlobalZIndex(10))).with_children(|p| {
         for i in 0..POOL {
             p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
@@ -2956,9 +2910,8 @@ fn step(
         }
         return;
     }
-    menu.duo_sync(&pads);
     #[cfg(target_arch = "wasm32")]
-    crate::web::touch_pads(menu.duo, menu.settings.0[VIBRATION]);
+    crate::web::touch_buzz(menu.settings.0[VIBRATION]);
     let dt = time.delta_secs();
     // B221: the pointer's acts (`pointer.rs`), as its device's
     let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();
@@ -3005,7 +2958,7 @@ fn step(
             dirs[i] = repeat.entry((id, i)).or_default().step(h, dt);
         }
         [k.up, k.down, k.left, k.right] = dirs;
-        if k != Press::default() && touch_page() && !menu.duo {
+        if k != Press::default() && touch_page() {
             menu.pad_takes_touch_seat(dev, &pads);
         }
         let mut fx = Vec::new();
@@ -3058,7 +3011,6 @@ fn step(
                         *launching = true;
                         continue;
                     }
-                    super::widescreen::SIDEWAYS.store(menu.duo, std::sync::atomic::Ordering::Relaxed);
                     info!("starting the match: {}", a.join(" "));
                     // the match in this app; its quit comes back to this menu as it is now
                     let (base, kept) = (args.clone(), menu.clone());
@@ -3300,7 +3252,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text, turn).chain(), bgm, cursor::tick))
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick))
         .add_systems(Last, cursor::show);
     // M14: the button legend
     legend::plugin(app);
@@ -3315,41 +3267,12 @@ pub fn plugin(app: &mut App) {
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));
-    // B118: a two-player phone match's turned HUD ends with it
-    app.add_systems(Startup, || super::widescreen::SIDEWAYS.store(false, std::sync::atomic::Ordering::Relaxed));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use Effect::*;
-
-    /// B118: 1v1 on this phone seats the tap's device as 1P (moved onto the screen's pad) and holds 2P open for the
-    /// far pad's ✕; backing out of the select ends it.
-    #[test]
-    fn phone_duo() {
-        let mut w = World::new();
-        let (near, far) = (w.spawn_empty().id(), w.spawn_empty().id());
-        let mut m = Menu::default();
-        let mut out = Vec::new();
-        m.duo_start(Dev::Keys, &mut out);
-        m.duo_sync(&[near, far]);
-        assert!(m.duo && !m.doubles && m.screen == Screen::Chars);
-        assert_eq!(m.seats, [Some(Dev::Pad(near)), Some(Dev::Open), None, None]);
-        let ok = Press { ok: true, ..default() };
-        m.step(Dev::Pad(far), ok);
-        assert_eq!(m.seats[1], Some(Dev::Pad(far)));
-        // 1P ready: the select turns to face 2P, whose pad the taps now are
-        assert!(!m.turned());
-        m.step(Dev::Pad(near), ok);
-        assert!(m.players[0].ready && m.turned());
-        assert_eq!(pointer::device(&m, &[near, far]), Dev::Pad(far));
-        m.step(Dev::Pad(far), ok);
-        assert!(!m.turned());
-        m.screen = Screen::Main;
-        m.duo_sync(&[near, far]);
-        assert!(!m.duo);
-    }
 
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]

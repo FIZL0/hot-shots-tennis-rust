@@ -272,7 +272,6 @@ pub(in crate::play) fn pointer(
     mut wheel: MessageReader<MouseWheel>,
     hits: Res<Hits>,
     time: Res<Time>,
-    menu: Option<Res<Menu>>,
     mut pending: ResMut<Pending>,
     mut st: Local<State>,
 ) {
@@ -289,12 +288,7 @@ pub(in crate::play) fn pointer(
     let off = widescreen::view(size).min;
     let size = widescreen::in_view(size, off).0;
     let aspect = size.x / size.y;
-    // B118: on the turned select a point's place in the view is the view's turned half a turn
-    let turned = menu.is_some_and(|m| m.turned());
-    let at = |p: Vec2, slop: f32| {
-        let v = (p - off) / size;
-        hit_at(&hits.0, if turned { Vec2::ONE - v } else { v }, aspect, widescreen::menu_scale(), slop)
-    };
+    let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, widescreen::menu_scale(), slop);
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
     let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..)));
@@ -314,7 +308,7 @@ pub(in crate::play) fn pointer(
     }
     if let Some((id, start, last, dragged)) = st.finger.as_mut() {
         if let Some(t) = touches.get_pressed(*id) {
-            let d = (t.position() - *last) / size * if turned { -448.0 } else { 448.0 };
+            let d = (t.position() - *last) / size * 448.0;
             let step = |v: f32| if v.abs() >= DRAG { v.signum() as i32 } else { 0 };
             let (sx, sy) = (step(d.x * size.x / size.y), step(d.y));
             if let Some(p) = column(at(*start, SLOP_TOUCH)) {
@@ -387,12 +381,6 @@ pub(in crate::play) fn pointer(
 
 /// The pointer's device: player 1's while it's a connected pad, else the keyboard (which a touch-only phone also is).
 pub(super) fn device(m: &Menu, pads: &[Entity]) -> Dev {
-    // B118: the turned select's taps are the far player's
-    if m.turned()
-        && let Some(d @ Dev::Pad(_)) = m.seats[1]
-    {
-        return d;
-    }
     match m.seats[0] {
         Some(Dev::Pad(e)) if pads.contains(&e) => Dev::Pad(e),
         _ => Dev::Keys,

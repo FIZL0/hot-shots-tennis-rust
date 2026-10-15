@@ -188,11 +188,6 @@ fn setup(mut commands: Commands, g: Res<Game>, names: Option<Res<Names>>, colour
     }
 }
 
-/// A view point (fractions of the 3D view, y down) → the HUD's (`widescreen::in_view`'s turn for a sideways phone
-/// match), as fractions of the HUD view.
-fn to_hud(p: Vec2, turned: bool) -> Vec2 {
-    if turned { Vec2::new(1.0 - p.y, p.x) } else { p }
-}
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn draw(
@@ -215,8 +210,7 @@ fn draw(
             *vis = Visibility::Hidden;
         }
     }
-    let turned = widescreen::turned(widescreen::view(win.size()).size());
-    // the HUD's logical size (`hud_gamma` draws it at the view's size, turned when `turned`)
+    // the HUD's logical size (`hud_gamma` draws it at the view's size)
     let hud = widescreen::view_size(win);
     let a = time.overstep_fraction();
     let t = g.cam.view.fov.tan();
@@ -239,7 +233,7 @@ fn draw(
             continue;
         }
         let frac = |n: Vec3| Vec2::new((n.x + 1.0) / 2.0, (1.0 - n.y) / 2.0);
-        let (foot, top) = (to_hud(frac(foot), turned), to_hud(frac(top), turned));
+        let (foot, top) = (frac(foot), frac(top));
         // the marker's on-screen height in HUD px: the tag takes the same
         let px = ((foot - top) * hud).length().max(4.0);
         let font = px * 0.42;
@@ -277,7 +271,6 @@ mod tests {
         assert_eq!(n.get(1), None);
         assert_eq!(n.get(2), Some("BO B"));
         assert_eq!(n.get(3), None);
-        assert_eq!(to_hud(Vec2::new(0.25, 0.1), true), Vec2::new(0.9, 0.25));
     }
 
     /// A named human's slot label comes out of the quads; a nameless one's and a COM's stay.

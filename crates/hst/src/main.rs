@@ -198,8 +198,6 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 pads = Some(std::array::from_fn(|i| v.get(i).copied().flatten()));
             }
             "--4x3" => play::main_menu::ASPECT.store(1, std::sync::atomic::Ordering::Relaxed),
-            // B118: the 1v1-on-a-phone layout (HUD turned for a portrait window, 1P's end kept at the bottom)
-            "--sideways" => play::widescreen::SIDEWAYS.store(true, std::sync::atomic::Ordering::Relaxed),
             // B117: Auto, 4:3, 16:9, 16:10, 21:9
             "--aspect" => {
                 let a = a.next().unwrap_or_default();

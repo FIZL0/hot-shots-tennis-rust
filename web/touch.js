@@ -39,10 +39,8 @@ const coarse = matchMedia('(pointer: coarse)');
 const unlock = () => {
   for (const c of contexts) if (c.state !== 'running') c.resume().catch(() => {});
   if (coarse.matches && !document.fullscreenElement && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) {
-    // B112: either way up (the game follows a turn live); B118's 1v1 on one phone holds it upright
-    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
-      .then(() => duo && screen.orientation?.lock?.('portrait'))
-      .catch(() => {});
+    // B112: either way up (the game follows a turn live)
+    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => {});
   }
 };
 for (const e of ['pointerup', 'touchend', 'keydown']) addEventListener(e, unlock, { capture: true });
@@ -52,9 +50,7 @@ const B = { cross: 0, circle: 1, square: 2, triangle: 3, l1: 4, r1: 5, select: 8
 const realPads = navigator.getGamepads?.bind(navigator) ?? (() => []);
 const anyReal = () => [...realPads()].some(g => g && g.connected);
 let shown = false;
-// B118: two players on one phone (the main menu's 1v1 on this phone): a second pad for the far end, turned to face
-// its player; and the press buzz (Settings → Mobile)
-let duo = false;
+// B118: the press buzz (Settings → Mobile)
 let buzz = true;
 // B329: the buzz. Android's browsers have `navigator.vibrate` (Chrome skips it while the phone's ringer is on Silent, and
 // only after the page's first tap); 8 ms was too short for many phones' motors to be felt at all. iOS Safari has no
@@ -89,12 +85,9 @@ const css = `
 .touch { position: fixed; left: 0; top: 0; width: var(--app-w, 100vw); height: var(--app-h, 100dvh); z-index: 10; pointer-events: none; user-select: none; -webkit-user-select: none;
   --u: min(7vw, 12.5vh); font: 600 calc(var(--u) * .42) system-ui, sans-serif; color: #fff; }
 .touch[hidden] { display: none; }
-/* B118: the far player's controls, the whole layer turned a half turn: its bottom is the screen's top */
-.touch.far { transform: rotate(180deg); }
-/* B314: the inset a layer's bottom keeps clear: the home indicator, or for the turned far layer the screen's top (the
-   Dynamic Island); its top keeps the screen's top clear (the near layer's shoulders, Select, Start) */
+/* B314: the inset the layer's bottom keeps clear (the home indicator); its top keeps the screen's top clear (the
+   shoulders, Select, Start) */
 .touch { --safe-b: env(safe-area-inset-bottom); }
-.touch.far { --safe-b: env(safe-area-inset-top); }
 .touch .zone { position: absolute; left: 0; top: 18%; bottom: 0; width: 45%; pointer-events: auto; touch-action: none; }
 .touch .base, .touch .knob { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); }
 .touch.menu .zone { top: auto; width: calc(var(--u) * 2.6); height: calc(var(--u) * 2.6); border-radius: 50%;
@@ -111,18 +104,13 @@ const css = `
 /* B312: chat, an icon on Select/Start's small button: right of Start; upright there's no room on that row (L1/R1 all
    but touch Select/Start), so it sits centred under the two */
 .touch button.chat { left: calc(50% + var(--u) * 2.4); top: calc(env(safe-area-inset-top) + var(--u) * .3); }
-@media (orientation: portrait) { .touch:not(.duo) button.chat { left: calc(50% - var(--u) * .75); top: calc(env(safe-area-inset-top) + var(--u) * 1.2); } }
+@media (orientation: portrait) { .touch button.chat { left: calc(50% - var(--u) * .75); top: calc(env(safe-area-inset-top) + var(--u) * 1.2); } }
 .touch button.chat svg { width: calc(var(--u) * .42); height: calc(var(--u) * .42); vertical-align: middle; fill: currentColor; }
 /* B112: upright, the pad sits under the picture (the 4:3 screen is letterboxed mid-height), sized by the width */
-@media (orientation: portrait) { .touch:not(.duo) { --u: min(12vw, 7vh); } .touch:not(.duo):not(.menu) .zone { top: 50%; } }
-/* B313: upright, the shoulders and Select/Start sit over the face buttons (as in B118's 1v1), not along the top edge:
+@media (orientation: portrait) { .touch { --u: min(12vw, 7vh); } .touch:not(.menu) .zone { top: 50%; } }
+/* B313: upright, the shoulders and Select/Start sit over the face buttons, not along the top edge:
    there the status bar and the notch (viewport-fit=cover) covered them, and the thumbs are at the bottom anyway */
 @media (orientation: portrait) { .touch button.small { top: auto !important; bottom: calc(env(safe-area-inset-bottom) + var(--u) * 4.1) !important; } }
-/* B118: each player's set at their own end (a phone upright: the bottom and top 45%), the shoulders and Select/Start
-   over the face buttons instead of along the screen's far edge */
-.touch.duo { --u: min(11vw, 6.5vh); }
-.touch.duo:not(.menu) .zone { top: calc(100% - var(--safe-b) - var(--u) * 4); }
-.touch.duo button.small { top: auto !important; bottom: calc(var(--safe-b) + var(--u) * 4.1) !important; }
 `;
 // face buttons in a diamond for the right thumb, shoulders and Select/Start along the top
 const right = (x, y) => `right: calc(env(safe-area-inset-right) + var(--u) * ${x}); bottom: calc(var(--safe-b) + var(--u) * ${y})`;
@@ -145,10 +133,8 @@ const style = document.createElement('style');
 style.textContent = css;
 document.head.append(style);
 
-// One player's on-screen pad: its own buttons, stick and fingers, listed as gamepad `index`. `far` is turned a half
-// turn (B118): it lays out the same in its own frame, and its stick reads in the screen's directions (the match's
-// sticks are screen-relative), so a push away from its player goes down the screen.
-const side = (index, far) => {
+// The on-screen pad: its buttons, stick and fingers, listed as gamepad `index`.
+const side = index => {
   const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
   const pad = {
     id: 'Touch controls (STANDARD GAMEPAD)',
@@ -163,12 +149,12 @@ const side = (index, far) => {
   const seenAt = {}; // button -> the frame a poll first saw it down
   const held = Object.fromEntries(Object.keys(B).map(k => [k, new Set()])); // button -> the pointers on it
   const root = document.createElement('div');
-  root.className = far ? 'touch far' : 'touch';
-  if (!far) root.id = 'touch';
+  root.className = 'touch';
+  root.id = 'touch';
   root.hidden = true;
   root.innerHTML = `<div class="zone"><div class="base" hidden></div><div class="knob" hidden></div></div>`
     + layout.map(([k, label, pos, cls = '']) => `<button data-b="${k}" class="${cls}" style="${pos}">${label}</button>`).join('')
-    + (far ? '' : chatButton);
+    + chatButton;
   document.body.append(root);
 
   const stamp = () => (pad.timestamp = performance.now());
@@ -231,10 +217,10 @@ const side = (index, far) => {
   const base = zone.querySelector('.base');
   const knob = zone.querySelector('.knob');
   let stick = null;
-  // a point on the screen → the zone's own frame (the far side's is turned)
+  // a point on the screen → the zone's own frame
   const local = (x, y) => {
     const r = zone.getBoundingClientRect();
-    return far ? { x: r.right - x, y: r.bottom - y } : { x: x - r.left, y: y - r.top };
+    return { x: x - r.left, y: y - r.top };
   };
   const place = (el, x, y) => { el.style.left = `${x}px`; el.style.top = `${y}px`; };
   const centre = el => { el.style.left = el.style.top = '50%'; };
@@ -254,11 +240,8 @@ const side = (index, far) => {
     const d = Math.hypot(dx, dy);
     if (d > R) (dx *= R / d), (dy *= R / d);
     place(knob, stick.x + dx, stick.y + dy);
-    // the match's sticks read in the screen's directions; in the menus the far one only drives the select, turned to
-    // face it (B118), so there it reads in its own
-    const turn = far && !menu ? -1 : 1;
-    pad.axes[0] = turn * dx / R;
-    pad.axes[1] = turn * dy / R;
+    pad.axes[0] = dx / R;
+    pad.axes[1] = dy / R;
     stamp();
   };
   const stickUp = id => {
@@ -331,22 +314,21 @@ const side = (index, far) => {
     },
   };
 };
-const sides = [side(16, false), side(17, true)];
+const touch = side(16);
 // B247: never listed next to a real pad, even before `update` hides the controls: a controller picked up between two
 // frames would otherwise take 2P's slot while the touch pad holds 1P's, and keep it after the touch pad goes (1P left
 // with none)
 navigator.getGamepads = () => {
-  for (const s of sides) s.poll();
+  touch.poll();
   const list = [...realPads()];
-  if (shown && !list.some(g => g && g.connected)) list.push(...sides.slice(0, duo ? 2 : 1).map(s => s.pad));
+  if (shown && !list.some(g => g && g.connected)) list.push(touch.pad);
   return list;
 };
 addEventListener('gesturestart', e => e.preventDefault());
-addEventListener('touchend', e => { for (const t of e.changedTouches) for (const s of sides) s.letGo(t.identifier); }, true);
-addEventListener('touchcancel', e => { for (const t of e.changedTouches) for (const s of sides) s.letGo(t.identifier); }, true);
+addEventListener('touchend', e => { for (const t of e.changedTouches) touch.letGo(t.identifier); }, true);
+addEventListener('touchcancel', e => { for (const t of e.changedTouches) touch.letGo(t.identifier); }, true);
 for (const t of ['touchstart', 'touchend', 'touchcancel']) addEventListener(t, e => {
-  const down = new Set([...e.touches].map(t => t.identifier));
-  for (const s of sides) s.keep(down);
+  touch.keep(new Set([...e.touches].map(t => t.identifier)));
 }, true);
 
 // shown on touch screens (or after any touch) while no real controller is connected; `?touch` forces them on
@@ -358,7 +340,7 @@ window.hstTouched = () => touched;
 window.hstRealPad = anyReal;
 window.hstTouchMenu = on => {
   menu = on;
-  for (const s of sides) s.menu(on);
+  touch.menu(on);
 };
 // B312: the chat button shown (online, chat on, its box closed), and the taps on it since the last call
 window.hstTouchChat = on => {
@@ -370,26 +352,17 @@ window.hstChatTaps = () => {
   chatTaps = 0;
   return chatShown ? n : 0;
 };
-// B118: the game's 1v1 on this phone (both pads, held upright) and the Mobile settings' vibration
-window.hstTouchPads = (two, vibrate) => {
+// B118: the Mobile settings' vibration
+window.hstTouchBuzz = vibrate => {
   buzz = vibrate;
-  if (two === duo) return;
-  duo = two;
-  for (const s of sides) s.root.classList.toggle('duo', duo);
-  if (document.fullscreenElement) (duo ? screen.orientation?.lock?.('portrait') : screen.orientation?.unlock?.())?.catch?.(() => {});
-  shown = !shown; // `update` lays both out again
-  update();
 };
 const update = () => {
   // gone when the game stops (index.html `fail`): its Reload must take the taps
   const want = touched && !anyReal() && !document.getElementById('disc')?.offsetParent && !document.getElementById('boot')?.classList.contains('err');
   if (want !== shown) {
     shown = want;
-    sides.forEach((s, i) => {
-      const on = want && (i === 0 || duo);
-      s.root.hidden = !on;
-      if (!on) s.reset();
-    });
+    touch.root.hidden = !want;
+    if (!want) touch.reset();
   }
 };
 const frame = () => {
@@ -415,7 +388,7 @@ addEventListener('touchstart', e => {
 // B113: iOS starts a text selection, the magnifier or the long-press callout from a drag on the stick or the canvas,
 // and zooms on a double tap or pinch: pointer events' preventDefault doesn't stop those, the touch events' does. Only
 // the canvas and the pad: the page's own inputs and links (file pick, code entry, Reload) keep their taps.
-const ours = t => t instanceof Element && (t.tagName === 'CANVAS' || sides.some(s => s.root.contains(t)));
+const ours = t => t instanceof Element && (t.tagName === 'CANVAS' || touch.root.contains(t));
 for (const t of ['touchstart', 'touchmove']) addEventListener(t, e => { if (ours(e.target)) e.preventDefault(); }, { passive: false });
 // B256: a selection, select-all or callout starts nowhere on the page but in a text input (the boot text, the ISO
 // page and anything outside the canvas took them before), and one that got through anyway (iOS select-all) is dropped

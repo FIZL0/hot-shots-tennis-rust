@@ -8,23 +8,11 @@
 //! menus) is drawn into the window's centred rect of that ratio (`view`), black bars fill the rest (`hud_gamma`'s
 //! composite camera draws only there). All the layouts here take the view's aspect, not the window's.
 //!
-//! B118: in a two-player phone match (`SIDEWAYS`) held upright, the HUD is laid out on the view turned a quarter turn
-//! (`hud_gamma` draws it turned back), so the score and pop-ups read from the phone's side, each player's panel at
-//! their own end (1P's at the bottom). `view_size`/`aspect`/`in_view` are the HUD's; the 3D cameras take `scene_aspect`.
-//!
 //! B314: in the browser the window is the canvas, which starts below the screen's top safe area (an iPhone's Dynamic
 //! Island, `web/index.html`), so the view here is already the shorter rect under it: HUD and menus never reach it.
 
 use bevy::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
-
-/// B118: a two-player phone match is on (set by the main menu at its start, cleared when the menu is back).
-pub static SIDEWAYS: AtomicBool = AtomicBool::new(false);
-
-/// Whether a `size` view's HUD is turned (B118): a two-player phone match in a portrait view.
-pub fn turned(size: Vec2) -> bool {
-    SIDEWAYS.load(Ordering::Relaxed) && size.x < size.y
-}
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 /// The Aspect Ratio setting's choices (index in `ASPECT`): Auto fills the window (B17's widescreen).
 pub const ASPECTS: [&str; 5] = ["Auto", "4:3", "16:9", "16:10", "21:9"];
@@ -47,10 +35,9 @@ fn view_at(size: Vec2, aspect: u8) -> Rect {
     Rect::from_center_size(size / 2.0, v)
 }
 
-/// The HUD's view size (logical px) in `w`: the view's, turned when `turned`.
+/// The HUD's view size (logical px) in `w`.
 pub fn view_size(w: &Window) -> Vec2 {
-    let v = view(Vec2::new(w.width(), w.height())).size();
-    if turned(v) { v.yx() } else { v }
+    view(Vec2::new(w.width(), w.height())).size()
 }
 
 /// The HUD's view width over height.
@@ -59,22 +46,15 @@ pub fn aspect(w: &Window) -> f32 {
     v.x / v.y.max(1.0)
 }
 
-/// The 3D picture's width over height (the view's, never turned).
+/// The 3D picture's width over height (the view's).
 pub fn scene_aspect(w: &Window) -> f32 {
-    let v = view(Vec2::new(w.width(), w.height())).size();
-    v.x / v.y.max(1.0)
+    aspect(w)
 }
 
-/// A point in a `size` window (or page) → the HUD's view size and the point in it (turned as `hud_gamma` draws it:
-/// the HUD's top along the view's right edge).
+/// A point in a `size` window (or page) → the HUD's view size and the point in it.
 pub fn in_view(size: Vec2, p: Vec2) -> (Vec2, Vec2) {
-    in_view_at(size, p, SIDEWAYS.load(Ordering::Relaxed))
-}
-
-fn in_view_at(size: Vec2, p: Vec2, sideways: bool) -> (Vec2, Vec2) {
     let v = view(size);
-    let (s, p) = (v.size().max(Vec2::ONE), p - v.min);
-    if sideways && s.x < s.y { (s.yx(), Vec2::new(s.y - p.y, p.x)) } else { (s, p) }
+    (v.size().max(Vec2::ONE), p - v.min)
 }
 
 /// A HUD root on the centred 4:3 screen.
@@ -252,18 +232,6 @@ fn placed_rects() {
     assert_eq!(place(512.0, 128.0, 0.75, Anchor::Span), (60.0, 40.0));
     // centred content stays on the 4:3 screen
     assert_eq!(place(320.0, 64.0, 0.75, Anchor::Centre), (50.0, 7.5));
-}
-
-#[test]
-fn sideways_hud() {
-    let in_view = |s, p| in_view_at(s, p, true);
-    // a portrait view turns a quarter left: the HUD's top-left is the view's bottom-left, its bottom-left (1P's
-    // panel) the view's bottom-right, so each player's panel is at their own end
-    let (s, p) = in_view(Vec2::new(400.0, 800.0), Vec2::new(0.0, 800.0));
-    assert_eq!((s, p), (Vec2::new(800.0, 400.0), Vec2::ZERO));
-    assert_eq!(in_view(Vec2::new(400.0, 800.0), Vec2::new(400.0, 800.0)).1, Vec2::new(0.0, 400.0));
-    // landscape doesn't
-    assert_eq!(in_view(Vec2::new(800.0, 400.0), Vec2::new(10.0, 20.0)).1, Vec2::new(10.0, 20.0));
 }
 
 #[test]
