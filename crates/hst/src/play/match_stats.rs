@@ -485,14 +485,19 @@ fn setup(
     for (xb, names) in [("AZUMA/PRIZE/OTHER.XB0", &TEXTURES[..]), ("AZUMA/INPANE/INPANE.XB0", &INPANE[..])] {
         let data = iso.read(xb).expect("archive on disc");
         let arc = Archive::parse(&data).expect("xb archive");
-        for name in names {
-            let e = arc
-                .entries
-                .iter()
-                .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
-                .unwrap_or_else(|| panic!("{name} in {xb}"));
-            art.push(super::menu_art::image(&mut images, &arc.read(e).expect("archive bytes"), name));
-        }
+        let sheets: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let e = arc
+                    .entries
+                    .iter()
+                    .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
+                    .unwrap_or_else(|| panic!("{name} in {xb}"));
+                (arc.read(e).expect("archive bytes"), *name)
+            })
+            .collect();
+        // B415: rebuilt together, on all cores
+        art.extend(super::menu_art::images(&mut images, &sheets.iter().map(|(d, n)| (d.as_slice(), *n)).collect::<Vec<_>>()));
         if xb.contains("PRIZE") {
             // game space (y down) → Bevy, as the call models
             let root = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default())).id();

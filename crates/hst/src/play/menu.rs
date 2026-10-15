@@ -526,7 +526,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
-    let mut art = TEXTURES
+    let sheets: Vec<_> = TEXTURES
         .iter()
         .map(|name| {
             let e = arc
@@ -534,9 +534,11 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
                 .iter()
                 .find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name))
                 .unwrap_or_else(|| panic!("{name} in INPANE"));
-            super::menu_art::image(&mut images, &arc.read(e).expect("INPANE bytes"), name)
+            (arc.read(e).expect("INPANE bytes"), *name)
         })
-        .collect::<Vec<_>>();
+        .collect();
+    // B415: rebuilt together, on all cores
+    let mut art = super::menu_art::images(&mut images, &sheets.iter().map(|(d, n)| (d.as_slice(), *n)).collect::<Vec<_>>());
     for s in LABELS {
         art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
     }

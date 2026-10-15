@@ -4,7 +4,9 @@
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
 //! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
-//! time paused, until the next mode's render pipelines are built and its uploads are done; the BGM stops with the old mode. Leaving a running
+//! time paused, until the next mode's render pipelines are built and its uploads are done; the BGM stops with the old mode. B415: the
+//! next mode's startup systems run spread over frames ([`BUDGET`] each, at least one system), so the window keeps answering
+//! and the loading screen keeps drawing through the build instead of one frame blocking for seconds. Leaving a running
 //! mode, its last frame zooms up about the screen centre while it fades out over the loading screen first, as the
 //! original's menu → match handoff looks (similar, not frame-matched: user 2026-10-11).
 
@@ -16,7 +18,7 @@ use bevy::input::gamepad::Gamepad;
 use bevy::prelude::*;
 use bevy::window::{Monitor, PrimaryWindow};
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 type Build = Box<dyn FnOnce(&mut App) + Send + Sync>;
@@ -242,6 +244,10 @@ fn run(world: &mut World, label: impl ScheduleLabel + Clone) {
 }
 
 fn switch(world: &mut World) {
+    if world.contains_resource::<Building>() {
+        step(world);
+        return;
+    }
     if world.resource::<Next>().0.is_none() {
         return;
     }
@@ -260,7 +266,7 @@ fn switch(world: &mut World) {
             l.up += 1;
             return;
         }
-        Some(mut l) => *l = Loading { up: l.up, built: true, ..default() },
+        Some(_) => {}
     }
     let next = world.resource_mut::<Next>().0.take().expect("checked");
     if !world.contains_resource::<Base>() {
@@ -281,12 +287,135 @@ fn switch(world: &mut World) {
     std::mem::swap(app.world_mut(), world);
     let mut s = world.remove_resource::<Schedules>().expect("the mode's schedules");
     world.insert_resource(schedules);
-    for label in [PreStartup.intern(), Startup.intern(), PostStartup.intern()] {
-        if let Some(mut x) = s.remove(label) {
-            x.run(world);
+    let turn = Arc::new(Mutex::new(Turn::default()));
+    for label in startup() {
+        if let Some(x) = s.get_mut(label) {
+            pace(x, &turn);
         }
     }
-    world.insert_resource(Running { s, back: next.back, leaving: false });
+    let start = bevy::platform::time::Instant::now();
+    let old = world.get_resource::<Assets<Mesh>>().map(|m| m.ids().collect()).unwrap_or_default();
+    world.insert_resource(Building { s, back: next.back, stage: 0, turn, frames: 0, longest: 0.0, start, old, held: vec![] });
+    step(world);
+}
+
+/// The startup schedules, in their order.
+fn startup() -> [bevy::ecs::intern::Interned<dyn ScheduleLabel>; 3] {
+    [PreStartup.intern(), Startup.intern(), PostStartup.intern()]
+}
+
+/// B415: how long one frame of a mode's build runs its startup systems before it hands the frame back (the first
+/// system of a frame always runs, however long it takes).
+const BUDGET: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// A mode being built: its schedules, its startup ones run a frame's [`BUDGET`] at a time, `stage` the one running.
+#[derive(Resource)]
+struct Building {
+    s: Schedules,
+    back: Option<Box<Mode>>,
+    stage: usize,
+    turn: Arc<Mutex<Turn>>,
+    frames: u32,
+    longest: f32,
+    start: bevy::platform::time::Instant,
+    /// The meshes there before the build.
+    old: HashSet<AssetId<Mesh>>,
+    /// The build's meshes kept from the render world, with their usage ([`hold_empty`]).
+    held: Vec<(AssetId<Mesh>, bevy::asset::RenderAssetUsages)>,
+}
+
+/// This frame's share of the build: when it started, whether a system ran in it, whether one was held back for the next.
+#[derive(Default)]
+struct Turn {
+    start: Option<bevy::platform::time::Instant>,
+    granted: bool,
+    held: bool,
+}
+
+/// Every system of a startup schedule runs once, in the schedule's order, when the frame's [`Turn`] lets it: a run
+/// condition on each (the schedule isn't built yet: they start uninitialised), one at a time on this thread so the
+/// budget is the frame's.
+fn pace(x: &mut Schedule, turn: &Arc<Mutex<Turn>>) {
+    x.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    let systems = &mut x.graph_mut().systems;
+    let keys: Vec<_> = systems.iter().map(|(k, ..)| k).collect();
+    for k in keys {
+        let turn = turn.clone();
+        let mine = move |mut ran: Local<bool>| {
+            if *ran {
+                return false;
+            }
+            let mut t = turn.lock().unwrap();
+            if t.granted && t.start.is_none_or(|s| s.elapsed() >= BUDGET) {
+                t.held = true;
+                return false;
+            }
+            t.granted = true;
+            *ran = true;
+            true
+        };
+        let c: bevy::ecs::schedule::BoxedCondition = Box::new(IntoSystem::into_system(mine));
+        if let Some(cs) = systems.get_conditions_mut(k) {
+            cs.push(bevy::ecs::schedule::ConditionWithAccess::new(c));
+        }
+    }
+}
+
+/// A mesh the build made empty, for the mode's first frames to fill (an effect's quads, the rain), stays out of the
+/// render world until the build is done: the frames between its steps would extract it empty (Bevy logs a
+/// use-after-free for a mesh with no vertices and fails to specialise a pipeline for it), which one blocking build
+/// never did.
+fn hold_empty(world: &mut World, b: &mut Building) {
+    use bevy::asset::RenderAssetUsages as U;
+    let Some(mut meshes) = world.get_resource_mut::<Assets<Mesh>>() else { return };
+    let empty = |m: &Mesh| m.asset_usage.contains(U::RENDER_WORLD) && m.try_attribute_option(Mesh::ATTRIBUTE_POSITION).is_ok_and(|p| p.is_none_or(|p| p.is_empty()));
+    let new: Vec<_> = meshes.iter().filter(|(id, m)| !b.old.contains(id) && empty(m)).map(|(id, _)| id).collect();
+    for id in new {
+        let Some(mut m) = meshes.get_mut(id) else { continue };
+        b.held.push((id, m.asset_usage));
+        m.asset_usage = U::MAIN_WORLD;
+    }
+}
+
+/// One frame of the build: the startup schedules run on from where the last frame stopped until a system is held
+/// back. Once all three got through without one, the mode runs and the loading screen waits on its first frames.
+fn step(world: &mut World) {
+    let start = bevy::platform::time::Instant::now();
+    let Some(mut b) = world.remove_resource::<Building>() else { return };
+    *b.turn.lock().unwrap() = Turn { start: Some(start), ..default() };
+    while let Some(&label) = startup().get(b.stage) {
+        b.turn.lock().unwrap().held = false;
+        if let Some(mut x) = b.s.remove(label) {
+            x.run(world);
+            b.s.insert(x);
+        }
+        if b.turn.lock().unwrap().held {
+            break;
+        }
+        b.stage += 1;
+    }
+    hold_empty(world, &mut b);
+    b.frames += 1;
+    b.longest = b.longest.max(start.elapsed().as_secs_f32() * 1000.0);
+    if b.stage < startup().len() {
+        world.insert_resource(b);
+        return;
+    }
+    for label in startup() {
+        b.s.remove(label);
+    }
+    if let Some(mut meshes) = world.get_resource_mut::<Assets<Mesh>>() {
+        for (id, usage) in std::mem::take(&mut b.held) {
+            if let Some(mut m) = meshes.get_mut(id) {
+                m.asset_usage = usage;
+            }
+        }
+    }
+    info!("mode built over {} frames in {:.2} s (longest {:.0} ms)", b.frames, b.start.elapsed().as_secs_f32(), b.longest);
+    world.insert_resource(Running { s: b.s, back: b.back, leaving: false });
+    for mut l in world.query::<&mut Loading>().iter_mut(world) {
+        l.built = true;
+    }
 }
 
 /// Before the loading screen: ask for the running mode's last frame and wait for it (10 frames at most: no window,
@@ -601,6 +730,37 @@ mod tests {
         assert!(sound.playing(menu) && sound.playing(blip));
         sound.endless();
         assert_eq!(sound.match_sounds(), 0, "the menu's sounds aren't tagged");
+    }
+
+    /// B415: a slow build runs over several frames, its startup systems in their order (PostStartup after all of
+    /// Startup), each once, and the mode's own schedules wait until it's done; the loading screen stays up throughout.
+    #[test]
+    fn a_slow_build_spreads_over_frames() {
+        #[derive(Resource, Default)]
+        struct Ran(Vec<u32>);
+        let slow = |n: u32| move |mut r: ResMut<Ran>| {
+            std::thread::sleep(BUDGET);
+            r.0.push(n);
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::window::WindowPlugin { primary_window: Some(Window::default()), exit_condition: bevy::window::ExitCondition::DontExit, ..default() }, plugin));
+        app.init_resource::<Ran>();
+        app.world_mut().resource_mut::<Next>().0 = Some(mode(1).and(move |app| {
+            app.add_systems(Startup, (slow(1), slow(2), slow(3)).chain()).add_systems(PostStartup, slow(4)).add_systems(PreStartup, slow(0));
+        }));
+        loading(&mut app);
+        let mut frames = 1;
+        while app.world().contains_resource::<Building>() {
+            assert!(!app.world().contains_resource::<Count>() || count(&app) == 0, "the mode's Update waits for its build");
+            assert!(covered(app.world_mut()));
+            app.update();
+            frames += 1;
+        }
+        assert_eq!(app.world().resource::<Ran>().0, [0, 1, 2, 3, 4]);
+        assert!(frames >= 5, "one slow system a frame: {frames}");
+        settle(&mut app);
+        assert!((101..200).contains(&count(&app)));
+        assert_eq!(app.world_mut().query::<&Thing>().iter(app.world()).count(), 1);
     }
 
     /// An unattended run's quit (`Quit` in with the `AppExit`: `--shot` done) quits even a mode with a way back.

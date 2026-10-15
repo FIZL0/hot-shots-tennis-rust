@@ -431,19 +431,35 @@ const OPTION_00: &[Label<'static>] = &[
 
 /// `data` (a TIM2 sheet called `name`) as an image: rebuilt if it's one of ours, else the disc's.
 pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
+    add(images, data, build(data, name))
+}
+
+/// [`image`] of each `(data, name)`, the rebuilds on all cores (B415: one at a time they held the menu's load for most
+/// of a second in one system).
+pub(crate) fn images(images: &mut Assets<Image>, sheets: &[(&[u8], &str)]) -> Vec<Handle<Image>> {
+    let built = crate::textures::parallel(sheets, |&(data, name)| build(data, name));
+    sheets.iter().zip(built).map(|(&(data, _), b)| add(images, data, b)).collect()
+}
+
+/// A [`build`] result in `images`: ours at `K`×, else the disc's sheet.
+fn add(images: &mut Assets<Image>, data: &[u8], built: Option<Image>) -> Handle<Image> {
+    let Some(img) = built else { return super::panel::image(images, data) };
+    let handle = images.add(img);
+    crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+    handle
+}
+
+/// `data` (a TIM2 sheet called `name`) rebuilt, if it's one of ours.
+fn build(data: &[u8], name: &str) -> Option<Image> {
     // match_stats names `info` by its folder ("/2d/info.tm2")
     let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
     if name.starts_with("wall_") && !OFF.load(Ordering::Relaxed) {
         let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
         let (w, h) = (pic.width as usize, pic.height as usize);
         let rgba = grid(&pic.rgba, w, h);
-        let img = Image::new(Extent3d { width: w as u32 * K, height: h as u32 * K, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-        let handle = images.add(img);
-        crate::textures::ours(handle.id(), Vec2::splat(K as f32));
-        return handle;
+        return Some(Image::new(Extent3d { width: w as u32 * K, height: h as u32 * K, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
     }
-    let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
-    let Some(sheet) = sheet else { return super::panel::image(images, data) };
+    let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed))?;
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
     let (w, h) = (pic.width as usize, pic.height as usize);
     let mut labels = sheet.labels.to_vec();
@@ -474,10 +490,7 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
         let _ = image::save_buffer(format!("{dir}/{name}.png"), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
     }
     let (w, h) = (out.width(), out.height());
-    let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    let handle = images.add(img);
-    crate::textures::ours(handle.id(), Vec2::splat(K as f32));
-    handle
+    Some(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD))
 }
 
 /// A menu wall (graph paper: a dark line every 16 texels, a faint one between) drawn again clean at `K`×: a column or

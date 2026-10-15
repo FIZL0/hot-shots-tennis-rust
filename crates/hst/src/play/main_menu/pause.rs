@@ -176,11 +176,16 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     ));
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
-    let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word"), super::panel::image(&mut images, &hand)];
     // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets (and B254's controller assignment's wall), the rest left empty
-    for (xb, name) in &super::SHEETS[..10] {
-        art.push(if name.ends_with("option") || *name == "option_00" || *name == "wall_playerselect" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
-    }
+    let picked: Vec<_> = super::SHEETS[..10]
+        .iter()
+        .map(|(xb, name)| (name.ends_with("option") || *name == "option_00" || *name == "wall_playerselect").then(|| (sheet(&mut iso, xb, &format!("/{name}.tm2")), *name)))
+        .collect();
+    // B415: rebuilt together, on all cores
+    let want: Vec<(&[u8], &str)> = std::iter::once((font.as_slice(), "word")).chain(picked.iter().flatten().map(|(d, n)| (d.as_slice(), *n))).collect();
+    let mut built = super::super::menu_art::images(&mut images, &want).into_iter();
+    let mut art = vec![solid, built.next().expect("word"), super::panel::image(&mut images, &hand)];
+    art.extend(picked.iter().map(|p| p.as_ref().and_then(|_| built.next()).unwrap_or_default()));
     // `Tex::Pill` is the last sheet, as in the main menu
     art.push(super::super::menu_art::pill_layers(&mut images));
     let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));

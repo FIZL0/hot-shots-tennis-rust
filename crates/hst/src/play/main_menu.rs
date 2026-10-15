@@ -1737,7 +1737,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         sheets.push((name.clone(), read(&mut iso, &format!("MENU/WALL/COURT{k:02}.XB"), &format!("/{name}.tm2"))));
     }
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(|s| s.1.as_slice()));
-    art.extend(sheets.iter().map(|(name, d)| super::menu_art::image(&mut images, d, name)));
+    art.extend(super::menu_art::images(&mut images, &sheets.iter().map(|(name, d)| (d.as_slice(), name.as_str())).collect::<Vec<_>>()));
     let glyphs = glyphs(&font);
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
