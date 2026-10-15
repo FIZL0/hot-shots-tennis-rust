@@ -311,7 +311,8 @@ fn switch(world: &mut World) {
         })
         .collect();
     let at = bevy::platform::time::Instant::now();
-    world.insert_resource(Starting { stages, slice, running: Running { s, back: next.back, leaving: false }, frames: 0, at });
+    let old = world.get_resource::<Assets<Mesh>>().map(|m| m.ids().collect()).unwrap_or_default();
+    world.insert_resource(Starting { stages, slice, running: Running { s, back: next.back, leaving: false }, frames: 0, at, old, held: vec![] });
 }
 
 /// P50: the new mode's start (its PreStartup, Startup and PostStartup systems, in order), run a slice a frame under
@@ -324,6 +325,26 @@ struct Starting {
     running: Running,
     frames: u32,
     at: bevy::platform::time::Instant,
+    /// The meshes there before the start.
+    old: HashSet<AssetId<Mesh>>,
+    /// The start's meshes kept from the render world, with their usage ([`hold_empty`]).
+    held: Vec<(AssetId<Mesh>, bevy::asset::RenderAssetUsages)>,
+}
+
+/// B415: a mesh the start made empty, for the mode's first frames to fill (an effect's quads, the rain), stays out of the
+/// render world until the start is done: the frames between its slices would extract it empty (Bevy logs a
+/// use-after-free for a mesh with no vertices and fails to specialise a pipeline for it), which one blocking start
+/// never did.
+fn hold_empty(world: &mut World, st: &mut Starting) {
+    use bevy::asset::RenderAssetUsages as U;
+    let Some(mut meshes) = world.get_resource_mut::<Assets<Mesh>>() else { return };
+    let empty = |m: &Mesh| m.asset_usage.contains(U::RENDER_WORLD) && m.try_attribute_option(Mesh::ATTRIBUTE_POSITION).is_ok_and(|p| p.is_none_or(|p| p.is_empty()));
+    let new: Vec<_> = meshes.iter().filter(|(id, m)| !st.old.contains(id) && empty(m)).map(|(id, _)| id).collect();
+    for id in new {
+        let Some(mut m) = meshes.get_mut(id) else { continue };
+        st.held.push((id, m.asset_usage));
+        m.asset_usage = U::MAIN_WORLD;
+    }
 }
 
 /// One frame's slice of a start: when it ends, and whether the stage it ran is through.
@@ -404,12 +425,20 @@ fn start(world: &mut World) {
         }
     }
     crate::play::menu_art::defer(false);
+    hold_empty(world, &mut st);
     // its menu sheets drawn on the other cores in too
     if !st.stages.is_empty() || crate::play::menu_art::building() {
         world.insert_resource(st);
         return;
     }
     crate::preload::clear();
+    if let Some(mut meshes) = world.get_resource_mut::<Assets<Mesh>>() {
+        for (id, usage) in std::mem::take(&mut st.held) {
+            if let Some(mut m) = meshes.get_mut(id) {
+                m.asset_usage = usage;
+            }
+        }
+    }
     info!("started in {} frames, {:.0} ms at {:.2} s", st.frames, st.at.elapsed().as_secs_f32() * 1e3, crate::stall::since_start());
     world.insert_resource(st.running);
     for mut l in world.query::<&mut Loading>().iter_mut(world) {
