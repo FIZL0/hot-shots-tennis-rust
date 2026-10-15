@@ -1380,7 +1380,7 @@ fn setup(
             Some(d) => d.clone(),
             None => {
                 let d = std::sync::Arc::new(
-                    character::load_disc(
+                    crate::preload::load_disc(
                         &mut iso,
                         c,
                         outfit,
