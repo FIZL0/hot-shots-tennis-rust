@@ -401,9 +401,9 @@ mod tests {
         n.step(Dev::Keys, press(|p| &mut p.card));
         assert!(n.favs.is_empty());
         assert_eq!((n.players[0].tab, n.cell(0)), (GAMES + 1, Some(Who::Mod(7))), "Golf, where it lives");
-        // Random has no favourite; a ready player's □ does nothing
+        // Random has no favourite; a ready player's △ does nothing
         n.put(0, None);
-        assert!(n.step(Dev::Keys, press(|p| &mut p.page)).is_empty());
+        assert!(n.step(Dev::Keys, press(|p| &mut p.card)).is_empty());
     }
 
     #[test]

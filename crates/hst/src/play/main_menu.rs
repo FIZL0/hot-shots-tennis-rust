@@ -3774,17 +3774,17 @@ mod tests {
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
     }
 
-    /// B368: △ on the select no longer swaps a card (the attribute card is always up); B371: it opens the device's own
-    /// seat's name picker.
+    /// B371 / B375: Start (keyboard N) on the select opens the device's own seat's name picker; a pad's Start is ✕ too,
+    /// but there it doesn't ready the pick.
     #[test]
-    fn triangle_opens_the_name_picker_on_the_select() {
+    fn start_opens_the_name_picker_on_the_select() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
         m.players[0].cursor = 6;
-        m.step(Dev::Keys, press(|p| &mut p.card));
-        assert!(m.naming(0) && !m.naming(1), "△ names the device's own player");
-        m.step(pad, press(|p| &mut p.card));
-        assert!(m.naming(1));
+        m.step(Dev::Keys, press(|p| &mut p.name));
+        assert!(m.naming(0) && !m.naming(1), "Start names the device's own player");
+        m.step(pad, Press { ok: true, name: true, ..default() });
+        assert!(m.naming(1) && !m.players[1].ready);
     }
 
     /// B64: ✕ on Select Court / Select Umpire opens its picker; B257: ←→↑↓ walk the court grid (three to a row, no wrap),
