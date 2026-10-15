@@ -1,8 +1,9 @@
 //! The original's stroke contact search: when a shot button is pressed, the player scans the ball's predicted
 //! path for the frame to hit it on, which branch (smash, volley, ground stroke) and which swing (forehand,
 //! backhand, body shot). Ported operation for operation; the path is the predictor's (court plane only).
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2::{add, div, madd, mul, sqrt, sub, utof};
+use crate::ps2::{F, utof};
 
 /// One predicted ball frame: position in game space (Y down) and bounces so far.
 #[derive(Clone, Copy, Debug)]
@@ -72,11 +73,11 @@ pub fn search(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, kind: i
     let horiz: Vec<f32> = path[..n]
         .iter()
         .map(|p| {
-            let (dx, dz) = (sub(p.pos[0], pos[0]), sub(p.pos[2], pos[2]));
-            sqrt(add(mul(dx, dx), mul(dz, dz)))
+            let (dx, dz) = ((F(p.pos[0]) - pos[0]).0, (F(p.pos[2]) - pos[2]).0);
+            (F(dx) * dx + F(dz) * dz).sqrt().0
         })
         .collect();
-    let depth = |ahead: f32, p: &PathPoint| sub(add(add(mul(ahead, facing), pos[2]), 0.0), p.pos[2]).abs();
+    let depth = |ahead: f32, p: &PathPoint| (F(ahead) * facing + pos[2] + 0.0 - p.pos[2]).0.abs();
     // ball on our half and at least 0.5 m from the net, with a nonzero timing grade
     let ours = |k: usize| {
         let z = path[k].pos[2];
@@ -94,9 +95,9 @@ pub fn search(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, kind: i
         }
         best
     };
-    let height = |k: usize| -path[k].pos[1];
+    let height = |k: usize| (-F(path[k].pos[1])).0;
     let swing = |branch, k: usize, body: bool, base: u8| {
-        let side = mul(sub(path[k].pos[0], pos[0]), facing);
+        let side = ((F(path[k].pos[0]) - pos[0]) * facing).0;
         let forehand = side >= 0.0;
         let other = if forehand { r.hand < 0.0 } else { r.hand >= 0.0 };
         Swing { branch, frame: k, ball: path[k].pos, forehand, body, anim: base + other as u8 }
@@ -106,17 +107,17 @@ pub fn search(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, kind: i
     if let Some(k) = smash {
         return Some(Swing { anim: 0x1f, ..swing(Branch::Smash, k, false, 0) });
     }
-    let wide = mul(r.reach, 1.3);
-    let volley = best(0, &|k| 0.0 <= height(k) && height(k) <= mul(r.volley_height, 1.3) && horiz[k] <= wide, &|k| depth(r.ahead, &path[k]));
+    let wide = (F(r.reach) * 1.3).0;
+    let volley = best(0, &|k| 0.0 <= height(k) && height(k) <= (F(r.volley_height) * 1.3).0 && horiz[k] <= wide, &|k| depth(r.ahead, &path[k]));
     if let Some(k) = volley {
         let low = height(k) < r.stroke_height;
-        let body = sub(path[k].pos[0], pos[0]).abs() <= if low { r.body_low } else { r.body_high };
+        let body = (F(path[k].pos[0]) - pos[0]).0.abs() <= if low { r.body_low } else { r.body_high };
         let base = if body { 0x1a } else if low { 0x18 } else { 0x16 };
         return Some(swing(Branch::Volley, k, body, base));
     }
-    let ground = best(1, &|k| height(k) <= add(r.base, wide) && horiz[k] <= wide, &|k| depth(r.ahead, &path[k]));
+    let ground = best(1, &|k| height(k) <= (F(r.base) + wide).0 && horiz[k] <= wide, &|k| depth(r.ahead, &path[k]));
     ground.map(|k| {
-        let body = sub(path[k].pos[0], pos[0]).abs() <= r.body_low;
+        let body = (F(path[k].pos[0]) - pos[0]).0.abs() <= r.body_low;
         let base = if body {
             0x1a
         } else {
@@ -161,28 +162,28 @@ pub struct Dive {
 /// The dive branch of the search, tried after `search` fails while the player runs: a player at `pos`, court end
 /// `end` (±1), facing `face` (x, z) and moving at `vel` (x, z per frame).
 pub fn dive(r: &Reach, path: &[PathPoint], pos: [f32; 3], end: f32, face: [f32; 2], vel: [f32; 2]) -> Option<Dive> {
-    let speed = mul(sqrt(add(mul(vel[0], vel[0]), mul(vel[1], vel[1]))), 1.25);
-    let wide = mul(r.reach, 1.3);
+    let speed = ((F(vel[0]) * vel[0] + F(vel[1]) * vel[1]).sqrt() * 1.25).0;
+    let wide = (F(r.reach) * 1.3).0;
     let (mut hit, mut miss): (Option<(usize, f32)>, Option<(usize, f32, f32)>) = (None, None);
     for (k, p) in path.iter().enumerate().take(DIVE_HORIZON).skip(5) {
-        let (z, h) = (p.pos[2], -p.pos[1]);
-        if !(z.abs() >= 0.5 && (z >= 0.0) != (end >= 0.0) && mul(r.stroke_height, 0.2) <= h && h <= mul(r.stroke_height, 1.8)) {
+        let (z, h) = (p.pos[2], (-F(p.pos[1])).0);
+        if !(z.abs() >= 0.5 && (z >= 0.0) != (end >= 0.0) && (F(r.stroke_height) * 0.2).0 <= h && h <= (F(r.stroke_height) * 1.8).0) {
             continue;
         }
-        let (dx, dz) = (sub(p.pos[0], pos[0]), sub(z, pos[2]));
-        let dist = sqrt(add(mul(dx, dx), mul(dz, dz)));
-        let inv = div(1.0, dist);
-        let dot = add(add(mul(face[1], mul(dz, inv)), mul(face[0], mul(dx, inv))), 0.0);
+        let (dx, dz) = ((F(p.pos[0]) - pos[0]).0, (F(z) - pos[2]).0);
+        let dist = (F(dx) * dx + F(dz) * dz).sqrt().0;
+        let inv = (F(1.0) / dist).0;
+        let dot = (face[1] * (F(dz) * inv) + face[0] * (F(dx) * inv) + 0.0).0;
         if dot < f32::from_bits(0x3f6c_835e) {
             continue; // more than 22.5° off the facing
         }
-        let lunge = mul(speed, k as f32);
-        let limit = add(lunge, wide);
+        let lunge = (F(speed) * (k as f32)).0;
+        let limit = (F(lunge) + wide).0;
         if !(limit < dist) && p.bounces <= 1 {
             if hit.is_none_or(|(_, best)| z.abs() > best) {
                 hit = Some((k, z.abs()));
             }
-        } else if dist <= mul(limit, 2.0) && miss.is_none_or(|(_, best, _)| dot > best) {
+        } else if dist <= (F(limit) * 2.0).0 && miss.is_none_or(|(_, best, _)| dot > best) {
             miss = Some((k, dot, lunge));
         }
     }
@@ -191,39 +192,39 @@ pub fn dive(r: &Reach, path: &[PathPoint], pos: [f32; 3], end: f32, face: [f32; 
         (None, Some((k, _, _))) => (k, false),
         _ => return None,
     };
-    let (dx, dz) = (sub(path[k].pos[0], pos[0]), sub(path[k].pos[2], pos[2]));
-    let inv = div(1.0, sqrt(add(add(mul(dz, dz), mul(dx, dx)), 0.0)));
-    let dir = [mul(dx, inv), mul(dz, inv)];
+    let (dx, dz) = ((F(path[k].pos[0]) - pos[0]).0, (F(path[k].pos[2]) - pos[2]).0);
+    let inv = (1.0 / (F(dz) * dz + F(dx) * dx + 0.0).sqrt()).0;
+    let dir = [(F(dx) * inv).0, (F(dz) * inv).0];
     let slide = if contact { arm_slide(r, dir, sub3(path[k].pos, pos)) } else { miss.unwrap().2 };
     Some(Dive { frame: k, contact, dir, slide, tick: 0, start: [pos[0], pos[2]], prev: [0.0; 2], origin: k, stopped: false, cut: false })
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [sub(a[0], b[0]), sub(a[1], b[1]), sub(a[2], b[2])]
+    [(F(a[0]) - b[0]).0, (F(a[1]) - b[1]).0, (F(a[2]) - b[2]).0]
 }
 
 fn len3(v: [f32; 3]) -> f32 {
-    sqrt(add(add(mul(v[0], v[0]), mul(v[1], v[1])), mul(v[2], v[2])))
+    (F(v[0]) * v[0] + F(v[1]) * v[1] + F(v[2]) * v[2]).sqrt().0
 }
 
 /// How far a contact dive slides so the arm (shoulder to racket tip, turned to `dir`) reaches the ball at `d`
 /// from the player: 0 when it already does.
 fn arm_slide(r: &Reach, dir: [f32; 2], d: [f32; 3]) -> f32 {
     let world = |v: [f32; 3]| {
-        let side = mul(v[0], r.hand);
-        [add(mul(side, dir[1]), mul(v[2], dir[0])), v[1], sub(mul(v[2], dir[1]), mul(side, dir[0]))]
+        let side = (F(v[0]) * r.hand).0;
+        [(F(side) * dir[1] + F(v[2]) * dir[0]).0, v[1], (F(v[2]) * dir[1] - F(side) * dir[0]).0]
     };
     let (a, b) = (world(r.shoulder), world(r.tip));
     let arm = len3(sub3(b, a));
     if arm >= len3(sub3(d, a)) {
         return 0.0;
     }
-    let t = -add(mul(dir[0], sub(a[0], d[0])), mul(dir[1], sub(a[2], d[2])));
-    let px = sub(d[0], add(mul(dir[0], t), a[0]));
-    let pz = sub(d[2], add(mul(dir[1], t), a[2]));
-    let (ax, ay, az) = (sub(d[0], a[0]), sub(d[1], a[1]), sub(d[2], a[2]));
-    let side = add(add(mul(ay, ay), mul(px, px)), mul(pz, pz));
-    sub(sqrt(add(mul(ax, ax), mul(az, az))), sqrt(sub(mul(arm, arm), side)))
+    let t = (-(dir[0] * (F(a[0]) - d[0]) + dir[1] * (F(a[2]) - d[2]))).0;
+    let px = (d[0] - (F(dir[0]) * t + a[0])).0;
+    let pz = (d[2] - (F(dir[1]) * t + a[2])).0;
+    let (ax, ay, az) = ((F(d[0]) - a[0]).0, (F(d[1]) - a[1]).0, (F(d[2]) - a[2]).0);
+    let side = (F(ay) * ay + F(px) * px + F(pz) * pz).0;
+    ((F(ax) * ax + F(az) * az).sqrt() - (F(arm) * arm - side).sqrt()).0
 }
 
 impl Dive {
@@ -251,20 +252,20 @@ impl Dive {
             return Some(pos);
         }
         let at = if n <= k {
-            let f = div(n as f32, k as f32);
-            [mul(mul(self.dir[0], self.slide), f), mul(mul(self.dir[1], self.slide), f)]
+            let f = (F(n as f32) / (k as f32)).0;
+            [(F(self.dir[0]) * self.slide * f).0, (F(self.dir[1]) * self.slide * f).0]
         } else {
             // the motion is held at time 4 through the slide, so it is 5 when the root phase starts
             let z = root_z((n - self.origin + 5) as f32);
-            [mul(self.dir[0], z), mul(self.dir[1], z)]
+            [(F(self.dir[0]) * z).0, (F(self.dir[1]) * z).0]
         };
-        let delta = [sub(at[0], self.prev[0]), sub(at[1], self.prev[1])];
+        let delta = [(F(at[0]) - self.prev[0]).0, (F(at[1]) - self.prev[1]).0];
         let now = mover(delta);
         self.prev = if n == k { [0.0; 2] } else { at };
-        if now != [add(pos[0], delta[0]), add(pos[1], delta[1])] {
-            let (dx, dz) = (sub(now[0], self.start[0]), sub(now[1], self.start[1]));
-            let inv = div(1.0, sqrt(add(mul(dx, dx), mul(dz, dz))));
-            if add(add(mul(mul(dz, inv), self.dir[1]), mul(mul(dx, inv), self.dir[0])), 0.0) < f32::from_bits(0x3f68_03ca) {
+        if now != [(F(pos[0]) + delta[0]).0, (F(pos[1]) + delta[1]).0] {
+            let (dx, dz) = ((F(now[0]) - self.start[0]).0, (F(now[1]) - self.start[1]).0);
+            let inv = (1.0 / (F(dx) * dx + F(dz) * dz).sqrt()).0;
+            if (F(dz) * inv * self.dir[1] + F(dx) * inv * self.dir[0] + 0.0).0 < f32::from_bits(0x3f68_03ca) {
                 if n <= k {
                     // ponytail: the slide's early end restarts the motion at time 5, as decompiled; no recorded case
                     self.prev = [0.0; 2];
@@ -283,8 +284,8 @@ impl Dive {
 /// A press whose search found nothing swings a smash at nothing (0x1f) when the ball is within 2 m across the
 /// ground of `pos` and the path rises above `middle` (the smash window's middle height) before its 2nd bounce.
 pub fn smash_whiff(path: &[PathPoint], ball: [f32; 3], pos: [f32; 3], middle: f32) -> bool {
-    let (dx, dz) = (ball[0] - pos[0], ball[2] - pos[2]);
-    dx * dx + dz * dz < 4.0 && path.iter().take_while(|p| p.bounces <= 1).any(|p| middle < -p.pos[1])
+    let (dx, dz) = (F(ball[0]) - pos[0], F(ball[2]) - pos[2]);
+    (dz * dz).madd(dx, dx) < 4.0 && path.iter().take_while(|p| p.bounces <= 1).any(|p| middle < -F(p.pos[1]))
 }
 
 /// The approach run a press starts before its search (the original's stroke state, on a press while standing or
@@ -298,16 +299,16 @@ pub fn approach(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, mut s
     let n = path.len();
     let dir = approach_dir(path, pos);
     let look = r.grades.len();
-    let height = |k: usize| -path[k].pos[1];
-    let wide = mul(r.reach, 1.3);
+    let height = |k: usize| (-F(path[k].pos[1])).0;
+    let wide = (F(r.reach) * 1.3).0;
     let mut at = [pos[0], pos[2]];
     for i in 0..=20 {
         let end = (look + i).min(n);
         let (mut d3, mut d2) = (vec![0.0; n], vec![0.0; n]);
         for k in i..end {
-            let (x, y, z) = (sub(path[k].pos[0], at[0]), sub(height(k), r.base), sub(path[k].pos[2], at[1]));
-            d3[k] = sqrt(add(add(mul(z, z), mul(x, x)), mul(y, y)));
-            d2[k] = sqrt(add(mul(x, x), mul(z, z)));
+            let (x, y, z) = ((F(path[k].pos[0]) - at[0]).0, (F(height(k)) - r.base).0, (F(path[k].pos[2]) - at[1]).0);
+            d3[k] = (F(z) * z + F(x) * x + F(y) * y).sqrt().0;
+            d2[k] = (F(x) * x + F(z) * z).sqrt().0;
         }
         let first = |max_bounces: i32, ok: &dyn Fn(usize) -> bool| {
             (i..end).take_while(|&k| path[k].bounces <= max_bounces).find(|&k| {
@@ -316,8 +317,8 @@ pub fn approach(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, mut s
             })
         };
         let found = first(1, &|k| r.smash_bottom <= height(k) && height(k) <= r.smash_top && d2[k] <= r.reach)
-            .or_else(|| first(0, &|k| 0.0 <= height(k) && height(k) <= mul(r.volley_height, 1.3) && d3[k] <= wide))
-            .or_else(|| first(1, &|k| height(k) <= add(r.base, wide) && d2[k] <= wide));
+            .or_else(|| first(0, &|k| 0.0 <= height(k) && height(k) <= (F(r.volley_height) * 1.3).0 && d3[k] <= wide))
+            .or_else(|| first(1, &|k| height(k) <= (F(r.base) + wide).0 && d2[k] <= wide));
         if found.is_some() {
             return Some((i, dir));
         }
@@ -333,14 +334,14 @@ pub fn approach(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, mut s
 pub fn approach_dir(path: &[PathPoint], pos: [f32; 3]) -> [f32; 2] {
     let n = path.len();
     let unit = |x: f32, z: f32| {
-        let inv = div(1.0, sqrt(add(mul(x, x), mul(z, z))));
-        [mul(x, inv), mul(z, inv)]
+        let inv = (1.0 / (F(x) * x + F(z) * z).sqrt()).0;
+        [(F(x) * inv).0, (F(z) * inv).0]
     };
-    let [dx, dz] = unit(sub(path[n - 1].pos[0], path[0].pos[0]), sub(path[n - 1].pos[2], path[0].pos[2]));
-    let mut dir = [sub(mul(dz, 1.0), 0.0), sub(0.0, mul(dx, 1.0))];
-    let [qx, qz] = unit(sub(pos[0], path[0].pos[0]), sub(pos[2], path[0].pos[2]));
-    if 0.0 < add(add(mul(qz, dir[1]), mul(qx, dir[0])), mul(sub(mul(dx, 0.0), mul(dz, 0.0)), 0.0)) {
-        dir = [mul(dir[0], -1.0), mul(dir[1], -1.0)];
+    let [dx, dz] = unit((F(path[n - 1].pos[0]) - path[0].pos[0]).0, (F(path[n - 1].pos[2]) - path[0].pos[2]).0);
+    let mut dir = [(F(dz) * 1.0 - 0.0).0, (0.0 - F(dx) * 1.0).0];
+    let [qx, qz] = unit((F(pos[0]) - path[0].pos[0]).0, (F(pos[2]) - path[0].pos[2]).0);
+    if 0.0 < (F(qz) * dir[1] + F(qx) * dir[0] + (F(dx) * 0.0 - F(dz) * 0.0) * 0.0).0 {
+        dir = [(F(dir[0]) * -1.0).0, (F(dir[1]) * -1.0).0];
     }
     dir
 }
@@ -415,12 +416,12 @@ pub fn timing_error(
 ) -> TimingError {
     let mut e = TimingError::default();
     if branch == 3 {
-        let ahead = add(mul(end, dive[1]), 0.0);
+        let ahead = (F(end) * dive[1] + 0.0).0;
         if ahead >= 0.70710677 {
             e.depth = bias.abs();
         } else if ahead <= -0.70710677 {
             e.depth = -bias.abs();
-        } else if sub(add(mul(end, dive[0]), 0.0), 0.0) > 0.0 {
+        } else if (F(end) * dive[0] + 0.0 - 0.0).0 > 0.0 {
             e.side = bias.abs();
         } else {
             e.side = -bias.abs();
@@ -452,14 +453,14 @@ pub fn timing_error(
 /// The depth error (tenths) of a contact `height` off the `ideal`: whole 10 cm past `from` cm count one each, past
 /// `step` cm two, × `scale`, signed by the side of the ideal.
 fn height_steps(height: f32, ideal: f32, [from, step]: [i32; 2], scale: f32) -> i32 {
-    let off = sub(height, ideal);
-    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
+    let off = (F(height) - ideal).0;
+    let cm = (F(off.abs()) * 100.0).0 as i32 / 10 * 10;
     let steps = match cm - from {
         n if n < 0 => 0,
         n if n < step => n / 10,
         n => step / 10 + (n - step) / 10 * 2,
     };
-    mul(steps as f32, scale) as i32 * if off > 0.0 { 1 } else { -1 }
+    (F(steps as f32) * scale).0 as i32 * if off > 0.0 { 1 } else { -1 }
 }
 
 /// A smash's timing scatter as the original sets it up at the swing and the launch: (side, depth) in metres
@@ -472,11 +473,11 @@ pub fn smash_scatter(s: &crate::player::ReachStats, grade: u8, bias: i32, height
     let clean = grade == 1 || grade == 2;
     let depth = if clean { 0 } else { bias + height_steps(height, s.smash[1], s.stroke_miss, 1.0) }.clamp(-10, 10);
     let side = nudge.clamp(-10, 10);
-    let mut sz = div(depth as f32, 10.0);
+    let mut sz = (F(depth as f32) / 10.0).0;
     if sz < 0.0 {
-        sz = mul(sz, 2.0);
+        sz = (F(sz) * 2.0).0;
     }
-    (div(div(side as f32, 10.0), 2.0), sub(mul(sz, scale), held))
+    ((F(side as f32) / 10.0 / 2.0).0, (F(sz) * scale - held).0)
 }
 
 /// A smash's depth scale: 1, or for a `plain` (not △) one off its timing (offset beyond ±1) 1 at 1.5 m from the
@@ -485,7 +486,7 @@ pub fn smash_scale(plain: bool, offset: i32, from_z: f32) -> f32 {
     if !plain || offset.abs() < 2 {
         return 1.0;
     }
-    add(div(sub(from_z.abs().clamp(1.5, 11.885), 1.5), 10.385), 1.0)
+    ((F(from_z.abs().clamp(1.5, 11.885)) - 1.5) / 10.385 + 1.0).0
 }
 
 /// See `timing_error`.
@@ -506,7 +507,7 @@ pub fn timing_launch(s: &crate::player::ReachStats, branch: u8, kind: i32, grade
     let side = ((if clean { 0 } else { e.side }) + nudge).clamp(-10, 10);
     let depth = if clean { 0 } else { e.depth }.clamp(-10, if short_only { 0 } else { 10 });
     let mode = e.mode.clamp(-10, 10);
-    let (sx, mut sz, mut blend) = (div(div(side as f32, 10.0), 2.0), div(depth as f32, 10.0), div(mode as f32, 10.0));
+    let (sx, mut sz, mut blend) = ((F(side as f32) / 10.0 / 2.0).0, (F(depth as f32) / 10.0).0, (F(mode as f32) / 10.0).0);
     let (base, mut add_) = match branch {
         1 => (s.power[1], s.low_power[0]),
         2 => (s.power[2], s.low_power[1]),
@@ -517,13 +518,13 @@ pub fn timing_launch(s: &crate::player::ReachStats, branch: u8, kind: i32, grade
             add_ = s.stroke_high_pow;
         }
         let top = (base + add_).min(16);
-        blend = if base < 16 { mul(blend, div((top - base) as f32, (16 - base) as f32)) } else { 0.0 };
+        blend = if base < 16 { (blend * (F((top - base) as f32) / ((16 - base) as f32))).0 } else { 0.0 };
     } else {
         let low = (base - add_).max(0);
-        blend = if base < 1 { 0.0 } else { mul(blend, div((base - low) as f32, base as f32)) };
+        blend = if base < 1 { 0.0 } else { (blend * (F((base - low) as f32) / (base as f32))).0 };
     }
     if branch == 1 && kind != 4 && sz < 0.0 {
-        sz = mul(sz, 2.0);
+        sz = (F(sz) * 2.0).0;
     }
     (sx, sz, blend)
 }
@@ -537,7 +538,7 @@ pub fn high_volley(branch: u8, kind: i32, framed: bool, from_z: f32, height: f32
 /// The high-ball ground stroke's (class-2 launch) blend: how much the volley power leaves the high-power stat.
 pub fn high_blend(s: &crate::player::ReachStats) -> f32 {
     let (base, top) = (s.power[2], (s.power[2] + s.stroke_high_pow).min(16));
-    if base < 16 { div((top - base) as f32, (16 - base) as f32) } else { 0.0 }
+    if base < 16 { (F((top - base) as f32) / ((16 - base) as f32)).0 } else { 0.0 }
 }
 
 /// The trajectory table mode a launch blend picks, as the original: for a shot class 2 launch (volleys, dives
@@ -637,7 +638,7 @@ pub fn mis_hit(grade: u8, branch: u8, kind: i32, tired: bool, awkward: bool, hei
         m.scale = 0.95;
     }
     if m.scale < 1.0 && branch == 2 {
-        m.scale = sub(1.0, div(sub(1.0, m.scale), 2.2));
+        m.scale = (1.0 - (F(1.0) - m.scale) / 2.2).0;
     }
     m
 }
@@ -647,18 +648,18 @@ pub fn mis_hit(grade: u8, branch: u8, kind: i32, tired: bool, awkward: bool, hei
 /// line) 3..6.4 m deep; 50%: anywhere across, 3..6.4 deep; else a third of the time the baseline anywhere across
 /// with a depth error, or a sideline 3..11.885 deep with a side error, either side.
 pub fn wild_aim(doubles: bool, end: f32, mut roll: impl FnMut() -> u32) -> ([f32; 3], f32, f32) {
-    let u = |r: u32| mul(2.3283064e-10, utof(r));
+    let u = |r: u32| (F(2.3283064e-10) * utof(r)).0;
     let line = if doubles { 5.485 } else { 4.115 };
-    let across = |r: u32| madd(add(0.0, -line), add(line, line), u(r));
-    let off = |r: u32| div(madd(add(0.0, -0.66), 1.66, u(r)), 1.5);
+    let across = |r: u32| (F::ZERO + -F(line)).madd(F(line) + line, u(r)).0;
+    let off = |r: u32| ((F::ZERO + -0.66).madd(1.66, u(r)) / 1.5).0;
     let (mut side, mut depth) = (0.0, 0.0);
     let pick = roll() >> 16 & 0x7fff;
     let (x, z) = if pick % 100 < 15 {
-        let x = if roll() >> 16 & 1 != 0 { -line } else { line };
-        (x, madd(add(0.0, 3.0), 3.4, u(roll())))
+        let x = if roll() >> 16 & 1 != 0 { (-F(line)).0 } else { line };
+        (x, (F::ZERO + 3.0).madd(3.4, u(roll())).0)
     } else if pick % 100 < 65 {
         let x = across(roll());
-        (x, madd(add(0.0, 3.0), 3.4, u(roll())))
+        (x, (F::ZERO + 3.0).madd(3.4, u(roll())).0)
     } else {
         let pick = (roll() >> 16 & 0x7fff) % 100;
         if pick < 33 {
@@ -666,11 +667,11 @@ pub fn wild_aim(doubles: bool, end: f32, mut roll: impl FnMut() -> u32) -> ([f32
             depth = off(roll());
             (x, 11.885)
         } else {
-            let (x, e) = if pick < 66 { (line, end) } else { (-line, -end) };
-            let z = madd(add(0.0, 3.0), 8.885, u(roll()));
-            side = mul(off(roll()), e);
+            let (x, e) = if pick < 66 { (line, end) } else { ((-F(line)).0, (-F(end)).0) };
+            let z = (F::ZERO + 3.0).madd(8.885, u(roll())).0;
+            side = (F(off(roll())) * e).0;
             (x, z)
         }
     };
-    ([x, 0.0, mul(z, end)], side, depth)
+    ([x, 0.0, (F(z) * end).0], side, depth)
 }
