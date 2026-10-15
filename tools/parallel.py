@@ -47,9 +47,9 @@ tools/parallel.sh — run several Claude agents on plan/TODO.md tasks at once (r
   tools/parallel.sh N [p|d] [f]
 
   N   number of agents at once, e.g. 5                          default: 3
-  p   priority: the next open tasks in plan/TODO.md order,
+  p   priority: the next open tasks in plan/TODO.md order,    default
       even if two of them edit the same files
-  d   different files: the first open task, then later tasks    default
+  d   different files: the first open task, then later tasks
       that don't touch the same files
   f   force: keep starting tasks past 90% weekly usage          default: pause until the weekly reset
 
@@ -67,7 +67,7 @@ _args = sys.argv[1:]
 if not _args or any(a in ('-h', '--help', 'help') for a in _args):
     raise SystemExit(HELP)
 SLOTS = int(next((a for a in _args if a.isdigit()), 3))
-MODE = next((a for a in _args if a in ('p', 'd')), 'd')
+MODE = next((a for a in _args if a in ('p', 'd')), 'p')
 FORCE = 'f' in _args
 if any(not re.fullmatch(r'[pdf]|\d+', a) for a in _args) or SLOTS < 1:
     raise SystemExit(f'unknown option: {" ".join(_args)}\n\n{HELP}')
