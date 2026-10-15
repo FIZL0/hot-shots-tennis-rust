@@ -926,6 +926,12 @@ impl Menu {
         self.join_seat().is_some() || self.local_roster() && !self.doubles
     }
 
+    /// B375: whether `dev` may swap Singles ↔ Doubles by hand: 1P's device on a local roster (B361 took it from
+    /// everyone; the other players still only change it by joining and leaving).
+    fn can_swap(&self, dev: Dev) -> bool {
+        self.local_roster() && self.seats[0] == Some(dev)
+    }
+
     /// B331: the local roster (not online, not the phone duo's): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
     fn local_roster(&self) -> bool {
@@ -1131,6 +1137,12 @@ impl Menu {
                     self.seats[p] = Some(dev);
                     self.unready(p);
                     out.push(Sound(2));
+                    return out;
+                }
+                // B375: 1P's device (only) swaps Singles ↔ Doubles with □ / Tab (or a tap on the mode bar)
+                if k.page && self.can_swap(dev) {
+                    self.swap_mode(true);
+                    out.push(Sound(0));
                     return out;
                 }
                 let Some(p) = self.driven(dev) else { return out };
@@ -2381,6 +2393,10 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
     let [sx, sy, sw, _] = g.strip;
     let bar = [sx + sw - 120.0, sy - 32.0, 120.0, 26.0];
     mode_bar(d, m.doubles as usize, true, bar, if m.doubles { "Doubles" } else { "Singles" });
+    if m.local_roster() {
+        // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's)
+        d.hit(bar, pointer::press(|k| k.page = true));
+    }
 
     // the roster's tiles on view
     let (start, roster) = m.page();
@@ -4400,8 +4416,8 @@ mod tests {
         }
     }
 
-    /// B306: one roster, no filters: Random, the disc's 14, every mod. B361: □ / Tab doesn't swap Singles ↔
-    /// Doubles any more (devices joining and leaving do).
+    /// B306: one roster, no filters: Random, the disc's 14, every mod. B375: 1P's □ / Tab swaps Singles ↔ Doubles,
+    /// 2P going to 3P (across the net) and back; nobody else's does (B361: they change it by joining and leaving).
     #[test]
     fn one_roster() {
         let from = |i: usize, s: &str| crate::mods::Mod { id: format!("m{i}"), source: s.into(), costumes: vec!["a".into()], ..fake_mod(i) };
@@ -4411,8 +4427,19 @@ mod tests {
         assert_eq!((r[0], r[1], r[CHARS + 1]), (None, Some(Who::Disc(GRID[0].0)), Some(Who::Mod(0))));
         let was = m.players;
         m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(Dev::Keys), None]));
+        m.step(Dev::Keys, press(|p| &mut p.page));
         assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(Dev::Keys), None, None]));
         assert_eq!(m.players[..2], was[..2]);
+        // only 1P's device swaps: 2P's □ doesn't
+        let pad = Dev::Pad(Entity::from_raw_u32(5).unwrap());
+        m.seats[1] = Some(pad);
+        m.step(pad, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pad), None, None]));
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(pad), None]));
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pad), None, None]));
         // the shown player: the one who pressed last while picking
         m.step(Dev::Keys, press(|p| &mut p.right));
         assert_eq!(m.shown(), 0);

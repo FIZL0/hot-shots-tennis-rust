@@ -214,6 +214,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let Some(p) = m.driven(dev) else {
                 return if m.can_join() { vec![(Act::Ok, "Join".into())] } else { vec![] };
             };
+            if m.can_swap(dev) {
+                v.push((Act::Page, "Singles / Doubles"));
+            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
