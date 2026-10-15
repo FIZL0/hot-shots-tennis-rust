@@ -518,7 +518,7 @@ pub(super) mod tests {
     }
 
     /// Hit rects follow their quads: on 16:9 the select (B296) reaches past the middle 4:3 to the window's sides,
-    /// 1P's column's Random card left of it, the computer's column's tiles its own (B368).
+    /// 1P's column's Random card left of it (B368); an unjoined seat's column is an empty card with no tiles.
     #[test]
     fn wide_window_hits() {
         let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
@@ -527,7 +527,7 @@ pub(super) mod tests {
         let cell = |p, k| m.tile_rect(p, k).unwrap();
         for (p, k) in [(0, 0), (0, 10), (1, 0), (1, 10)] {
             let [x, y, w, hh] = cell(p, k);
-            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(p, k)));
+            assert_eq!(at(x + w / 2.0, y + hh / 2.0), (p == 0).then_some(Act::Cell(p, k)));
         }
         assert!(cell(0, 0)[0] + cell(0, 0)[2] < 0.0, "left of the 4:3 screen");
         assert!(cell(1, 0)[0] > 320.0, "2P's column right of the middle");
