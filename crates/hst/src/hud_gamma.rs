@@ -6,9 +6,9 @@
 //! translucent and `@add` draws blend on encoded values as the GS does (grass blue 0x33 + 0x4c is 0x7f, not the
 //! 0x98 a linear-light add gives).
 //! The UI draws on its own camera into `hud` (cleared transparent, so it holds the UI premultiplied: colour·a, a),
-//! and a last camera puts `enc(hud / a)·a + scene·(1 − a)` on the window. Bevy blends the UI into an sRGB target in
-//! linear light, which makes translucent pieces read stronger (the serve panel's 35 % strip ≈ 0.45 over the court
-//! instead of ≈ 0.3).
+//! and a last camera (`out`, on its own render schedule) puts `enc(hud / a)·a + scene·(1 − a)` on the window. Bevy
+//! blends the UI into an sRGB target in linear light, which makes translucent pieces read stronger (the serve panel's
+//! 35 % strip ≈ 0.45 over the court instead of ≈ 0.3).
 //!
 //! While a match runs (`Persist`) the scene also keeps 25 % of the last frame shown, as the game's last draw does:
 //! a full-screen sprite of the other frame buffer at FIX 0x20 over the new frame (its fields shifted by half a line
