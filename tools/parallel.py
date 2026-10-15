@@ -348,6 +348,15 @@ def merge(tid):
         # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
         stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
             and not git('stash', 'push', '-q', '-m', f'runner {tid}').returncode
+        # merges go into main whatever the checkout is on: slots start from main and picks read main's TODO.md, so a
+        # merge onto another branch (split-1v1, 2026-10-14) left main stale and its tasks open
+        if (cur := git('branch', '--show-current').stdout.strip()) != 'main':
+            if git('checkout', '-q', 'main').returncode:
+                return f'the main checkout is on {cur or "a detached HEAD"} and could not switch to main'
+            # commits made there meanwhile (the master's fixes, plan edits) belong on main too, when they fast-forward
+            ff = cur and not git('merge', '-q', '--ff-only', cur).returncode
+            log(f'{tid}: the main checkout was on {cur or "a detached HEAD"}; switched it to main for the merge'
+                + (f' (main fast-forwarded to {cur})' if ff else f' ({cur} does not fast-forward: its commits stay there)'))
         try:
             pre = git('rev-parse', 'HEAD').stdout.strip()
             if git('merge', '--no-edit', f'task/{tid}').returncode:
