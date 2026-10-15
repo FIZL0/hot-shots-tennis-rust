@@ -112,7 +112,7 @@ static QUEUE: Mutex<std::collections::VecDeque<Weak<dyn Pending>>> = Mutex::new(
 
 /// A frame's budget for queued jobs (ms): one step is always done, a step is never cut, so a long one runs over.
 #[cfg(target_arch = "wasm32")]
-const BUDGET: std::time::Duration = std::time::Duration::from_millis(12);
+const BUDGET: std::time::Duration = std::time::Duration::from_millis(25);
 
 /// Browser: does queued jobs' steps, oldest job first, until this frame's [`BUDGET`] is used. Nothing on native.
 pub fn run() {
