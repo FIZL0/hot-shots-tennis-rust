@@ -544,6 +544,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M8f3** (in M8f) Umpire mod loader: the umpire select lists installed umpire mods after the disc five; a match plays the mod's clips in sound slot 5, a missing call the donor umpire's, timing always the donor's word lengths (post-point timeline unchanged); `--umpire-mod DIR`; online the room carries the mod id, peers without it hear the donor → `mods.rs` · `audio.rs` · `play/main_menu.rs` (umpire_screen) · `play.rs` (umpire voice, add fns only) · `mods_online.rs` | j: 2026-10-14-m8f-courts-umpires
 - [x] **C7** C2 follow-up, AI and maths: modules, same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged); libm keeps its bit tricks, only its float ops move → hst-sim/src/ai.rs · rng.rs · libm.rs
 - [x] **C6** C2 follow-up, bodies: convert these modules the same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged) → hst-sim/src/motion.rs · pose.rs · foot.rs · face.rs · position.rs · stats.rs · npc.rs · umpire.rs
+- [x] **G5** HDR/tonemapping (split from G1, stretch): a Settings → Graphics option, off in Original Mode; today every 3D shader outputs clamped gamma-encoded PS2 colour (hud_gamma.rs), so first decide what a tonemapper should act on (e.g. un-clamped VU1 light sums into a float target) → `graphics.rs` · `gs.wgsl` · `hud_gamma.rs` · `play/main_menu/options.rs` | j: 2026-10-14-g1-ambient-occlusion
 
 
 ### Shots
