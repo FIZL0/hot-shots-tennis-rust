@@ -642,6 +642,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B441** Online name selection uses the mods page popup: the online name entry should use the same popup as the mods page instead of its own, and both popups should support mobile keyboard mode (user 2026-10-15) → crates/hst/src/play/main_menu/names.rs · crates/hst/src/play/popups.rs · crates/hst/src/play/main_menu/online.rs
 - [x] **B421** Mobile stretch aspect ratio: add a "stretch" aspect ratio option on mobile (iOS and Android) that fills the whole screen, ignoring the island and notch safe-area rule we made (user 2026-10-15) → crates/hst/src/play/widescreen.rs · crates/hst/src/graphics.rs · crates/hst/src/play/touch_pad.rs
 - [x] **B440** Rematch default selection: when returning to the menu after a match, "rematch" should not be selected by default; the default selection should be local (user 2026-10-15) → crates/hst/src/play/match_stats.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/cursor.rs
+- [x] **B427** Singles / Doubles pill button hint (user 2026-10-15): the top-right mode pill shows its button glyph (□ / X / Tab per device) like the Costume LB/RB and Hand chips do → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/legend.rs
 
 
 ### Shots

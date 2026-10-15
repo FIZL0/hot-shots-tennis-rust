@@ -288,6 +288,9 @@ fn ringed_text(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, rgb: [f32; 3]) 
     d.text(s, x, y, size, rgb);
 }
 
+/// The legend's □ / Tab art (`Tex::Glyph`'s), the mode pill's button.
+const MODE_GLYPH: u8 = 4;
+
 /// A button's name as a small chip in `rgb` with dark words (the legend's L1 / R1, Q / E, Select…), `h` high from
 /// `[x, y]`; its width.
 fn chip(d: &mut Draw, s: &str, [x, y]: [f32; 2], h: f32, rgb: [f32; 3]) -> f32 {
@@ -317,13 +320,25 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
     let (mode, fill) = if m.doubles { ("Doubles", 0x2f7d4f) } else { ("Singles", 0x2f5f9d) };
     let ms = 16.0 * PY;
-    let mw = d.width(mode, ms) + 28.0 * PX;
+    let swaps = m.local_roster() || m.online() && m.net.hosting;
+    // B427: the button that swaps it (□ / X / Tab) in 1P's device's art, as the costume and hand pills show theirs
+    let glyph = match m.seats[0] {
+        Some(Dev::Pad(e)) if swaps => Some(legend::dev_style(Some(e))),
+        Some(Dev::Keys) if swaps => Some(legend::dev_style(None)),
+        _ => None,
+    };
+    let gh = 20.0 * PY;
+    let gw = glyph.map_or(0.0, |s| gh * legend::glyph_aspect(s, MODE_GLYPH) + 6.0 * PX);
+    let mw = d.width(mode, ms) + 28.0 * PX + gw;
     let mx = r - MARGIN * PX - mw;
     let my = t + 16.0 * PY;
     rounded(d, [mx, my, mw, 30.0 * PY], 15.0, WHITE, 128.0);
     rounded(d, [mx + 2.0 * PX, my + 2.0 * PY, mw - 4.0 * PX, 26.0 * PY], 13.0, hex(fill), 128.0);
-    d.centred(mode, mx + mw / 2.0, my + 7.0 * PY, ms, WHITE);
-    if m.local_roster() || m.online() && m.net.hosting {
+    if let Some(style) = glyph {
+        d.q(Tex::Glyph(style, MODE_GLYPH), [0.0; 4], [mx + 8.0 * PX, my + 15.0 * PY - gh / 2.0, gw - 6.0 * PX, gh], WHITE, 128.0);
+    }
+    d.centred(mode, mx + gw + (mw - gw) / 2.0, my + 7.0 * PY, ms, WHITE);
+    if swaps {
         // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's; B392: online, the host's)
         d.hit([mx, my, mw, 30.0 * PY], pointer::press(|k| k.page = true));
     }
