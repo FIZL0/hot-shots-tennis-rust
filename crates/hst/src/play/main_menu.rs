@@ -1323,7 +1323,10 @@ impl Menu {
                     out.push(Sound(1));
                 }
             }
-            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => {
+                self.net.pad = matches!(dev, Dev::Pad(_));
+                self.online_step(k, &mut out)
+            }
             Screen::Mods => self.mods_step(k, &mut out),
             _ => {}
         }
@@ -4141,8 +4144,8 @@ mod tests {
                 assert!(rects.iter().all(|&x| inside(x, [l, t, r - l, b - t])), "{a} {hosting} {rects:?}");
                 for i in 0..rects.len() {
                     for j in 0..i {
-                        // a computer's ✕ sits on its own seat's card
-                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 22.0, "{a} {hosting} {i} {j} {rects:?}");
+                        // B396: a seat's ✕ sits on its own card
+                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 16.0, "{a} {hosting} {i} {j} {rects:?}");
                     }
                 }
             }
