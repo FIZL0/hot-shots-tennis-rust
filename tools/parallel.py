@@ -327,6 +327,20 @@ def union(files, tid):
     return True
 
 
+def rewind(rev, tid):
+    """reset --keep to rev. It refuses when someone edited a file it would change during the tests (B315,
+    2026-10-14: a TODO.md edit kept a failed merge on main): move those edits aside, reset, put them back."""
+    if not git('reset', '-q', '--keep', rev).returncode:
+        return
+    git('stash', 'push', '-q', '-m', f'runner {tid} rewind')
+    if git('reset', '-q', '--keep', rev).returncode:
+        log(f'{tid}: could not reset main to {rev}: main still has the failed merge, fix by hand')
+        return git('stash', 'pop', '-q')
+    if git('stash', 'pop', '-q').returncode:
+        git('reset', '-q', '--hard')
+        log(f'{tid}: edits made in main during the tests clash with the rewind: kept in git stash "runner {tid} rewind"')
+
+
 def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
@@ -391,7 +405,7 @@ def merge(tid):
         inherited = ''
         later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
         if chk.returncode:
-            git('reset', '-q', '--keep', pre)
+            rewind(pre, tid)
             # main already failed that way without the branch (B231's flake, a disc test, main's own broken build):
             # not the branch's fault, so merge it anyway and say so instead of spending a model on it
             # ponytail: name-level match only; a branch that breaks an already-failing test differently slips through
@@ -402,13 +416,13 @@ def merge(tid):
                               cwd=ROOT, capture_output=True, text=True)
                 still = set(re.findall(r'^---- (\S+) stdout ----', base.stdout, re.M))
                 if base.returncode and ('BUILD FAILED' in base.stdout if build else still >= set(names)):
-                    git('reset', '-q', '--keep', merged)
+                    rewind(merged, tid)
                     inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
                     log(f'{tid}: {inherited}; merged anyway')
         if chk.returncode and not inherited:  # HEAD is at pre already
             if later and git('cherry-pick', *later).returncode:
                 git('cherry-pick', '--abort')
-                git('reset', '-q', '--keep', later[-1])  # can't replay them alone: keep them with the merge, master sorts it
+                rewind(later[-1], tid)  # can't replay them alone: keep them with the merge, master sorts it
                 return 'tests fail after the merge, and main got commits meanwhile: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
             return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
         git('branch', '-d', f'task/{tid}')
