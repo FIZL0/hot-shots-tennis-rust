@@ -957,6 +957,12 @@ impl Menu {
         (if p < 2 { 2..4 } else { 0..2 }).find(|&q| self.seats[q].is_none()).map(|q| (p, q))
     }
 
+    /// B449: 1P may swap Singles ↔ Doubles on the confirm screen: a local match, and singles only while at most two
+    /// people play.
+    fn confirm_swap(&self) -> bool {
+        !self.online() && (!self.doubles || self.humans() <= 2)
+    }
+
     /// B331: the local roster (not online): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
     fn local_roster(&self) -> bool {
@@ -1336,25 +1342,45 @@ impl Menu {
                 }
             }
             Screen::Confirm if host == Some(dev) => {
-                rows(CONFIRM_ROWS, &mut self.sel, &mut out);
-                // B212: every row but Start opens its picker on ✕ (the value it puts back on ○); ←→ here do nothing
-                if k.ok && self.sel != 0 {
+                // B449: the arrows go about the screen as its parts lie; Start (a pad's also sends ✕) starts
+                let start = k.name || (k.ok && self.sel == 0);
+                let k = Press { ok: k.ok && !k.name, ..k };
+                let to = self.confirm_step(k);
+                if to != self.sel {
+                    self.sel = to;
+                    out.push(Sound(0));
+                }
+                // B212: the court, Sets, Games and the umpire open their picker on ✕ (the value it puts back on ○)
+                if k.ok && (1..CONFIRM_ROWS).contains(&self.sel) {
                     self.picking = Some([0, self.court, self.sets, self.games as usize, self.umpire as usize][self.sel]);
                     out.push(Sound(2));
                 }
-                if k.ok && self.sel == 0 {
+                if start {
                     // ponytail: std's per-call hasher keys as the dice (not the match's RNG, which this never touches)
                     self.roll = std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0u8);
                 }
-                if k.ok && self.sel == 0 && self.online() {
+                if start && self.online() {
                     self.online_host(&mut out);
-                } else if k.ok && self.sel == 0 {
+                } else if start {
                     out.extend([Sound(2), Launch]);
                     self.screen = Screen::Playing;
                     self.rematch = true;
-                } else if k.back && self.online() {
+                } else if k.page && self.confirm_swap() {
+                    // B449: 1P's □ swaps Singles ↔ Doubles here too; new computer partners are picked on the select
+                    self.swap_mode(true);
+                    self.preset_coms();
+                    self.sel = 0;
+                    out.push(Sound(0));
+                    if !(0..self.players()).all(|q| self.players[q].ready) {
+                        self.screen = Screen::Chars;
+                    }
+                } else if k.page && !self.online() {
+                    // doubles with more than two people here can't be singles
+                    out.push(Sound(1));
+                } else if (k.back || k.ok && self.sel >= CONFIRM_ROWS) && self.online() {
                     self.go(Screen::Lobby, &mut out);
-                } else if k.back {
+                } else if k.back || k.ok && self.sel >= CONFIRM_ROWS {
+                    // ○, or ✕ on a plate: back to the select
                     for p in 0..4 {
                         self.unready(p);
                     }
@@ -2367,8 +2393,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
     }
-    // B221: the screens with no Back row show the title tab's Back
-    if matches!(m.screen, Screen::Mode | Screen::Assign | Screen::Chars | Screen::Confirm) && m.picking.is_none() {
+    // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
+    if matches!(m.screen, Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() {
         d.anchor = Anchor::Span;
         d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
         d.anchor = Anchor::Centre;
@@ -2443,25 +2469,6 @@ fn tile_face(c: Option<Who>) -> (Tex, [f32; 4]) {
 const TILE_RANDOM: [f32; 3] = [62.0, 60.0, 75.0];
 const TILE_DISC: [f32; 3] = [120.0, 88.0, 60.0];
 const TILE_MOD: [f32; 3] = [116.0, 98.0, 46.0];
-
-/// B306: a dashed rim round `[x, y, w, h]` (an open seat's card).
-fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3]) {
-    let (dash, gap, t) = (8.0f32, 5.0, 2.0);
-    let mut i = 0.0;
-    while i < w {
-        let l = dash.min(w - i);
-        d.q(Tex::Solid, [0.0; 4], [x + i, y, l, t], rgb, 128.0);
-        d.q(Tex::Solid, [0.0; 4], [x + i, y + h - t, l, t], rgb, 128.0);
-        i += dash + gap;
-    }
-    let mut i = 0.0;
-    while i < h {
-        let l = dash.min(h - i);
-        d.q(Tex::Solid, [0.0; 4], [x, y + i, t, l], rgb, 128.0);
-        d.q(Tex::Solid, [0.0; 4], [x + w - t, y + i, t, l], rgb, 128.0);
-        i += dash + gap;
-    }
-}
 
 /// B306: a T-shirt drawn from quads in `rgb` with an ink outline, filling `[x, y, w, h]`: the body, two sleeves
 /// tilted out, a neck cut out in the card's colour `bg`.
@@ -3755,15 +3762,13 @@ mod tests {
     #[test]
     fn random_court_and_umpire() {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, ..default() };
-        let (down, right, ok) = (press(|p| &mut p.down), press(|p| &mut p.right), press(|p| &mut p.ok));
-        m.step(Dev::Keys, down);
+        let (right, ok) = (press(|p| &mut p.right), press(|p| &mut p.ok));
+        m.sel = 1;
         m.step(Dev::Keys, ok);
         m.step(Dev::Keys, press(|p| &mut p.left)); // court 0, the strip's first after Random
         m.step(Dev::Keys, ok);
         assert_eq!(m.court, COURTS);
-        for _ in 0..3 {
-            m.step(Dev::Keys, press(|p| &mut p.down));
-        }
+        m.sel = 4;
         m.step(Dev::Keys, ok);
         m.step(Dev::Keys, right); // B191: Random by default (the strip's first) → umpire 0
         assert_eq!(m.step(Dev::Keys, ok), [Sound(2), SaveSettings]);
@@ -3810,9 +3815,8 @@ mod tests {
     fn court_and_umpire_pickers() {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, umpire: 0, ..default() };
         let [down, left, right, ok, back] = [press(|p| &mut p.down), press(|p| &mut p.left), press(|p| &mut p.right), press(|p| &mut p.ok), press(|p| &mut p.back)];
-        m.step(Dev::Keys, down);
-        m.step(Dev::Keys, right); // a closed row ignores ←→
-        assert_eq!((m.court, m.sel), (0, 1));
+        m.sel = 1;
+        assert_eq!(m.court, 0);
         m.step(Dev::Keys, ok);
         let walk: Vec<usize> = [right, right, down, left, left, left, right].iter().map(|&k| (m.step(Dev::Keys, k), m.court).1).collect();
         // the strip: Random, then the original's 0 3 5 1 7 8 10 9 2 6 4; ↑↓ do nothing, the ends stop
@@ -3823,9 +3827,9 @@ mod tests {
         assert_eq!(m.court, 4);
         m.step(Dev::Keys, back);
         assert_eq!((m.court, m.picking, m.screen), (0, None, Screen::Confirm));
-        for _ in 0..3 {
-            m.step(Dev::Keys, down);
-        }
+        // B449: → from the court's cell is the umpire's
+        m.step(Dev::Keys, right);
+        assert_eq!(m.sel, 4);
         m.step(Dev::Keys, ok);
         m.step(Dev::Keys, left);
         assert_eq!(m.step(Dev::Keys, left), []); // the umpire cards don't wrap: Random first
@@ -3847,8 +3851,7 @@ mod tests {
     #[test]
     fn sets_and_games_pickers() {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], sel: 2, sets: 0, games: 4, ..default() };
-        let [down, left, right, ok, back] = [press(|p| &mut p.down), press(|p| &mut p.left), press(|p| &mut p.right), press(|p| &mut p.ok), press(|p| &mut p.back)];
-        assert_eq!(m.step(Dev::Keys, right), []);
+        let [left, right, ok, back] = [press(|p| &mut p.left), press(|p| &mut p.right), press(|p| &mut p.ok), press(|p| &mut p.back)];
         assert_eq!((m.sets, m.picking), (0, None));
         m.step(Dev::Keys, ok);
         assert_eq!(m.picking, Some(0));
@@ -3857,7 +3860,9 @@ mod tests {
         assert_eq!(walk, [1, 2, 2]);
         m.step(Dev::Keys, ok);
         assert_eq!((m.sets, m.picking, m.screen), (2, None, Screen::Confirm));
-        m.step(Dev::Keys, down);
+        // B449: → from Sets is Games (the strip's next cell)
+        m.step(Dev::Keys, right);
+        assert_eq!(m.sel, 3);
         m.step(Dev::Keys, ok);
         let walk: Vec<i32> = (0..3).map(|_| (m.step(Dev::Keys, right), m.games).1).collect();
         assert_eq!(walk, [6, 6, 6]);
@@ -4101,7 +4106,7 @@ mod tests {
     fn lobby_and_confirm_fit_the_window() {
         use super::super::widescreen::{share, vplace, vshare};
         let inside = |r: [f32; 4], c: [f32; 4]| r[0] >= c[0] - 1e-3 && r[1] >= c[1] - 1e-3 && r[0] + r[2] <= c[0] + c[2] + 1e-3 && r[1] + r[3] <= c[1] + c[3] + 1e-3;
-        let overlap = |a: [f32; 4], b: [f32; 4]| a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+        let overlap = |a: [f32; 4], b: [f32; 4]| a[0] < b[0] + b[2] - 1e-3 && b[0] < a[0] + a[2] - 1e-3 && a[1] < b[1] + b[3] - 1e-3 && b[1] < a[1] + a[3] - 1e-3;
         for a in [0.4, 9.0 / 16.0, 0.99, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
             let g = Grid::fit(a);
             let (ex, ey) = ((640.0 / share(a) - 640.0) / 2.0, (448.0 / vshare(a) - 448.0) / 2.0);
@@ -4109,7 +4114,7 @@ mod tests {
             let mut m = Menu { screen: Screen::Confirm, grid: g, ..default() };
             // B397: the confirm screen's rows in the view, over the legend strip, apart
             let rows = confirm::rects(&m);
-            for r in rows {
+            for &r in &rows {
                 assert!(r[0] >= -ex && r[0] + r[2] <= 640.0 + ex + 1e-3 && r[1] >= -ey && r[2] > 0.0, "{a} {r:?}");
                 let (t, h) = vplace(r[1], r[3], a, Anchor::Centre);
                 assert!(t + h <= legend + 1e-3, "{a} {r:?}");
@@ -4127,7 +4132,8 @@ mod tests {
                 for i in 0..rects.len() {
                     for j in 0..i {
                         // B396: a seat's ✕ sits on its own card
-                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 16.0, "{a} {hosting} {i} {j} {rects:?}");
+                        // B449: a seat's X sits on its own plate
+                        assert!(!overlap(rects[i], rects[j]) || inside(rects[i], rects[j]) || inside(rects[j], rects[i]), "{a} {hosting} {i} {j} {rects:?}");
                     }
                 }
             }

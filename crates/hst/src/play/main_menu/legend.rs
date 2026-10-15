@@ -273,13 +273,13 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::Ok, "Select"), (Act::Back, "Cancel")]);
         }
         Screen::Confirm if host => {
-            v.push((Act::UpDown, "Move"));
-            match s {
-                0 => v.push((Act::Ok, "Start")),
-                _ if s < CONFIRM_ROWS => v.push((Act::Ok, "Choose")),
-                _ => {}
+            // B449: about the screen; ✕ on a plate sends that player back to the select
+            moves(&mut v, m.confirm_axes());
+            v.push((Act::Ok, if s == 0 { "Start" } else if s < CONFIRM_ROWS || !m.online() { "Change" } else { "Back" }));
+            if m.confirm_swap() {
+                v.push((Act::Page, "Singles / Doubles"));
             }
-            v.push((Act::Back, "Back"));
+            v.extend([(Act::Name, "Start"), (Act::Back, "Back")]);
         }
         Screen::Online => {
             moves(&mut v, m.pill_axes());
@@ -317,9 +317,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
         Screen::Lobby => {
             moves(&mut v, m.pill_axes());
-            if m.lobby_setting() {
-                v.push((Act::LeftRight, "Change"));
-            }
             if m.lobby_bot() {
                 v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
             }
@@ -329,6 +326,13 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             if let Some(ok) = m.lobby_ok() {
                 v.push((Act::Ok, ok));
+            }
+            // B449: the host's □ and Start, from anywhere
+            if m.lobby_mode() {
+                v.push((Act::Page, "Singles / Doubles"));
+            }
+            if m.net.hosting && m.net.room.is_some() && m.counting() == 0 {
+                v.push((Act::Name, "Start"));
             }
             v.push((Act::Back, "Leave"));
         }
