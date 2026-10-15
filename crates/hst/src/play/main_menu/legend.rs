@@ -40,7 +40,7 @@ pub(crate) enum Act {
     Ok,
     /// ○ / Esc.
     Back,
-    /// △: the attribute card.
+    /// △: the attribute card; on the select the name picker (B371).
     Card,
     /// L1 / R1: the costume; the Settings tab (B294).
     Costume,
@@ -211,12 +211,18 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let Some(p) = m.driven(dev) else {
                 return if m.can_join() { vec![(Act::Ok, "Join".into())] } else { vec![] };
             };
+            // B371: a name picker open takes the device's presses
+            let np = (0..m.players()).find(|&q| m.seats[q] == Some(dev) && m.naming(q)).unwrap_or(p);
+            if let Some(v) = m.name_acts(np, dev) {
+                return v.into_iter().map(|(a, l)| (a, l.to_string())).collect();
+            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
-            if !me.random {
-                v.push((Act::Card, if me.card { "Picture" } else { "Stats" }));
+            // B371: △ names the player on the device's own seat (Stats / Picture is the card's pill)
+            if m.seats[p] == Some(dev) {
+                v.push((Act::Card, "Name"));
             }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
@@ -965,6 +971,14 @@ mod tests {
         m.players[1].ready = true;
         starts.push((m.clone(), pad));
         m.players[0].ready = true;
+        starts.push((m, pad));
+        // B371: 2P's name picker: the list (a saved name, New name, No name), then typing one
+        let mut m = base(Screen::Assign);
+        (m.screen, m.seats[1]) = (Screen::Chars, Some(pad));
+        m.names.saved = vec!["ANNA".into()];
+        m.names.open[1] = Some(super::super::names::Picker::List(0));
+        starts.push((m.clone(), pad));
+        m.names.open[1] = Some(super::super::names::Picker::Typing("AB".into(), 0));
         starts.push((m, pad));
         for sel in [1, 4] {
             let mut m = base(Screen::Confirm);

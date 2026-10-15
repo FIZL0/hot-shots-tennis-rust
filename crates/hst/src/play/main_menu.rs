@@ -17,7 +17,7 @@
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -49,6 +49,7 @@ pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
 mod home;
+mod names;
 mod online;
 mod options;
 mod mods_screen;
@@ -423,6 +424,8 @@ struct Press {
     page: bool,
     /// Select / − (keyboard: the camera key, C): the hand toggle.
     hand: bool,
+    /// B371: the select's Stats / Picture pill (a tap; △ is the name picker now).
+    stats: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -546,6 +549,8 @@ struct Menu {
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
     calls: usize,
+    /// B371: the players' names (`names.rs`).
+    names: names::Names,
 }
 
 impl Default for Menu {
@@ -579,6 +584,7 @@ impl Default for Menu {
             duo: false,
             rematch: false,
             calls: 0,
+            names: default(),
         }
     }
 }
@@ -1128,6 +1134,11 @@ impl Menu {
                 }
                 let Some(p) = self.driven(dev) else { return out };
                 self.focus = p;
+                // B371: △ the name picker for the device's own seat; while open it takes the presses
+                let np = (0..self.players()).find(|&q| self.seats[q] == Some(dev) && self.naming(q)).unwrap_or(p);
+                if self.name_step(np, dev, k, &mut out) {
+                    return out;
+                }
                 let costumes = self.costumes(self.who(p));
                 let costume_to = |back: bool| self.next_free(p, self.who(p), (self.players[p].costume + if back { costumes - 1 } else { 1 }) % costumes, back);
                 let (next_c, prev_c) = (costume_to(false), costume_to(true));
@@ -1135,8 +1146,8 @@ impl Menu {
                     self.players[p].swap = !self.players[p].swap;
                     out.push(Sound(0));
                 }
-                // B347: △ the attribute card (none for Random, whose pick stays hidden)
-                if k.card && !self.players[p].random {
+                // B347: the attribute card (none for Random, whose pick stays hidden); B371: its pill's tap, △ names
+                if k.stats && !self.players[p].random {
                     self.players[p].card = !self.players[p].card;
                     out.push(Sound(0));
                 }
@@ -1406,6 +1417,7 @@ impl Menu {
             Seat::flag(&seats),
         ]);
         a.extend(slot_mods);
+        a.extend(self.name_flags(order));
         if swaps.contains(&"1") {
             a.extend(["--swap-hands".into(), swaps.join(",")]);
         }
@@ -1775,6 +1787,8 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
     menu.umpire = menu.settings.6;
+    // B371: the names saved so far (another run may have added some)
+    menu.names.saved = names::load(&args.iso);
     // back from a match: its pause menu may have changed them (B126)
     if let Ok(s) = saved {
         menu.settings = s;
@@ -1791,7 +1805,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -1834,6 +1848,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].random = screen == "chars-random";
         // B347: 1P's △ card up (`attrs`, `mods-attrs`)
         menu.players[0].card = screen.ends_with("attrs");
+        // B371: 1P named, its name picker open on the list or typing (`names`, `names-type`)
+        if screen.starts_with("names") {
+            menu.names.demo(0, Dev::Keys, screen == "names-type");
+        }
         // B264: 2P's computer readied on Random (`coms-random`, `confirm-random`)
         menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
         menu.players[1].ready |= menu.players[1].random;
@@ -2489,7 +2507,7 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
             let sb = [x + cw - 60.0, cy + ch - 24.0, 54.0, 18.0];
             d.pill_at(sb, [INK, WHITE, [70.0, 64.0, 80.0]], 128.0);
             d.label(if pl.card { "Picture" } else { "Stats" }, sb[0] + 27.0, sb[1] + 2.0, 13.0, 46.0, WHITE);
-            d.hit(sb, pointer::press(|k| k.card = true));
+            d.hit(sb, pointer::press(|k| k.stats = true));
         }
         // whose seat: the device, the online player, or a computer with its rank
         let whose = match m.remote(p).filter(|s| s.human() && online) {
@@ -2504,9 +2522,14 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
                 format!("COM · {}", RANK_NAMES.get(com_rank(&text.ranks, c, costume, m.doubles)).copied().unwrap_or(""))
             }
         };
-        let tag = format!("{}P", p + 1);
-        d.outlined(|d| d.text(&tag, x + 10.0, cy + 5.0, 28.0, WHITE));
-        let tx = x + 14.0 + d.width(&tag, 28.0);
+        // B371: the player's name in place of "1P" (a tap on it opens the name picker)
+        let tag = m.seat_tag(p);
+        let tw = d.width(&tag, 28.0).min(cw * 0.5);
+        d.outlined(|d| left(d, &tag, x + 10.0, cy + 5.0, 28.0, tw, WHITE));
+        if m.seats[p].is_some() {
+            d.hit([x + 6.0, cy + 2.0, tw + 8.0, 30.0], pointer::press(|k| k.card = true));
+        }
+        let tx = x + 14.0 + tw;
         // the hand tag top-right (B40e4's: Select / − or a tap swaps it), left of the drop ✕ when there is one
         let hx = x + cw - 72.0 - if m.droppable(p) { 22.0 } else { 0.0 };
         left(d, &whose, tx, cy + 9.0, 13.0, (hx - 4.0 - tx).max(10.0), WHITE);
@@ -2556,6 +2579,12 @@ fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
         if m.droppable(p) {
             drop_button(d, p, x + cw - 20.0, cy - 8.0);
         }
+    }
+    // B371: the name pickers over their players' cards and the roster above them (at least 180 wide)
+    for p in 0..n {
+        let x = x0 + (cw + 8.0) * p as f32 + if p >= team { vs - 8.0 } else { 0.0 };
+        let w = cw.max(180.0).min(cwa);
+        names::draw(d, m, p, [(x + (cw - w) / 2.0).clamp(cx0, cx0 + cwa - w), g.tiles[1], w, cy + ch - g.tiles[1]]);
     }
 
     // the description bar: the shown player's pick
@@ -3578,7 +3607,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
-        (online::poll.after(step).before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
+        (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
     previews::plugin(app);
     mods_screen::plugin(app);
@@ -4055,15 +4084,15 @@ mod tests {
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
     }
 
-    /// B347: △ on the select swaps the player's render for the attribute card and back, ready or not, and stays up
-    /// across characters; on Random it does nothing (the pick stays hidden).
+    /// B347: the Stats pill swaps the player's render for the attribute card and back, ready or not, and stays up
+    /// across characters; on Random it does nothing (the pick stays hidden). B371: △ opens the name picker instead.
     #[test]
-    fn triangle_shows_the_attribute_card() {
+    fn stats_pill_shows_the_attribute_card() {
         // 2P a human too, so a ready 1P's keys stay 1P's (not on to the computer's pick)
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
         m.players[0].cursor = 6;
-        let card = press(|p| &mut p.card);
+        let card = press(|p| &mut p.stats);
         assert_eq!(m.step(Dev::Keys, card), [Sound(0)]);
         assert!(m.players[0].card);
         m.step(Dev::Keys, press(|p| &mut p.right));
@@ -4074,6 +4103,8 @@ mod tests {
         m.players[0] = Player { random: true, ..default() };
         assert_eq!(m.step(Dev::Keys, card), []);
         assert!(!m.players[0].card);
+        m.step(Dev::Keys, press(|p| &mut p.card));
+        assert!(m.naming(0) && !m.players[0].card, "△ names the player");
     }
 
     /// B64: ✕ on Select Court / Select Umpire opens its picker; B257: ←→↑↓ walk the court grid (three to a row, no wrap),

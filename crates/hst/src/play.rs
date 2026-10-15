@@ -60,6 +60,7 @@ mod instant_replay;
 mod doubles_ai;
 mod flare;
 mod markers;
+pub mod name_tags;
 mod mod_match;
 pub mod hand_swap;
 pub mod net_hide;
@@ -575,6 +576,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(foot_fx::plugin);
     app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);
+    app.add_plugins(name_tags::plugin);
     app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);
     app.add_plugins(netplay::plugin);

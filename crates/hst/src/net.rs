@@ -276,6 +276,9 @@ pub struct Live {
     /// B234: the mod's own name, for peers that don't have it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// B371: the player's own name (`main_menu::names`), "" for none: shown in place of "1P".."4P".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub player: String,
 }
 
 impl Room {

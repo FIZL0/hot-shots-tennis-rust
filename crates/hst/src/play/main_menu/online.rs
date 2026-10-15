@@ -559,7 +559,7 @@ impl Menu {
                     super::Who::Disc(c) => (c, None, String::new()),
                     super::Who::Mod(i) => (self.mods[i].donor, Some(self.mods[i].id.clone()), self.mods[i].name.clone()),
                 };
-                Live { char, costume, ready: self.players[p].ready, r#mod: id, name }
+                Live { char, costume, ready: self.players[p].ready, r#mod: id, name, player: self.player_name(p).unwrap_or_default() }
             })
             .collect()
     }
@@ -1139,6 +1139,13 @@ fn relay_name(cfg: &Online) -> String {
 }
 
 /// The name `peer`'s player gave (its ID's start if none).
+/// B371: the name on lobby seat `i`: its player's own (this machine's, or the one its machine sent with its pick),
+/// else its machine's.
+fn seat_name(m: &Menu, r: &Room, i: usize, peer: &str) -> String {
+    let sent = || r.live_of(i).map(|l| super::names::clean(&l.player)).filter(|n| !n.is_empty());
+    m.player_name(i).or_else(sent).unwrap_or_else(|| name_of(r, peer))
+}
+
 fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
 }
@@ -1324,13 +1331,13 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                         (format!("COM #{} · {level}", s.pick.costume + 1), ("COM", Some(super::CHIP_COM)))
                     } else if r.deciding.contains(&s.peer) {
                         // B281: still choosing whether to download a mod
-                        (name_of(r, &s.peer), ("Deciding", None))
+                        (seat_name(m, r, i, &s.peer), ("Deciding", None))
                     } else if s.peer == "host" {
-                        (name_of(r, "host"), ("Host", Some(super::CHIP_HOST)))
+                        (seat_name(m, r, i, "host"), ("Host", Some(super::CHIP_HOST)))
                     } else if r.ready.contains(&s.peer) {
-                        (name_of(r, &s.peer), ("Ready", Some(super::CHIP_READY)))
+                        (seat_name(m, r, i, &s.peer), ("Ready", Some(super::CHIP_READY)))
                     } else {
-                        (name_of(r, &s.peer), ("Waiting", None))
+                        (seat_name(m, r, i, &s.peer), ("Waiting", None))
                     };
                     let remove = at(Item::Remove(i));
                     let row = super::SeatRow { p: i, face, name: &name, faint: choosing, who: &who, chip, filled: true, on };
@@ -1917,14 +1924,14 @@ pub(super) fn sample(m: &mut Menu) {
     }
     // B201: ACE-42 on Kaoru's second costume, live; as 2P (Sunny Day) on the shared select, the host ready beside them
     let r = m.net.room.as_mut().unwrap();
-    r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new() }]);
+    r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new(), player: String::new() }]);
     // B216: a computer player on 4P, the host's hand on it
     if menu == "lobby-bot" {
         r.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
         m.sel = 2;
     }
     if menu == "chars-online" {
-        r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new() }]);
+        r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new(), player: String::new() }]);
         r.ready.clear();
         (m.net.hosting, m.net.me, m.net.go) = (false, peers[0].into(), Some(Go::Code));
         m.align();
@@ -1979,7 +1986,9 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
             super::Dev::Open => None,
         })
         .collect();
-    let flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    let mut flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
+    // B371: every player's own name over them (presentation only: not part of the match's state)
+    flags.extend(menu.online_name_flags(&room, &me));
     // the mods by match slot (as `netplay::flags` orders the seats): the wire's gameplay, the looks this machine has
     let order: &[usize] = if room.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
     let mut mm = crate::mods::MatchMod::default();
@@ -2517,8 +2526,8 @@ mod tests {
         let mut m = Menu { screen: Screen::Chars, ..default() };
         sample(&mut m);
         let r = m.net.room.as_mut().unwrap();
-        r.live.insert("host".into(), vec![Live { char: 6, costume: 2, ready: true, r#mod: None, name: String::new() }]);
-        r.live.insert("r8mxw2pa0c1e".into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new() }]);
+        r.live.insert("host".into(), vec![Live { char: 6, costume: 2, ready: true, r#mod: None, name: String::new(), player: String::new() }]);
+        r.live.insert("r8mxw2pa0c1e".into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new(), player: String::new() }]);
         (m.net.hosting, m.net.me, m.net.go, m.seats[0], m.doubles) = (false, "k51qzi5uqu5d".into(), Some(Go::Code), Some(dev), false);
         m.players[0].cursor = 3;
         m.align();
@@ -2531,7 +2540,7 @@ mod tests {
         m.players[1].cursor = super::super::GRID.iter().position(|g| g.0 == 6).unwrap();
         m.players[1].costume = 2;
         assert!(m.blocked(1));
-        assert_eq!(m.lives(), vec![Live { char: 6, costume: 2, ready: false, r#mod: None, name: String::new() }]);
+        assert_eq!(m.lives(), vec![Live { char: 6, costume: 2, ready: false, r#mod: None, name: String::new(), player: String::new() }]);
         // the host: OK on the open seat adds a computer player nobody has and opens the select on it (B216): the
         // host's device drives its cursor; ready, its pick goes to the lobby
         let mut m = Menu { screen: Screen::Lobby, ..default() };
