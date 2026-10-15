@@ -38,3 +38,21 @@ All `hst::` systems together: ~1.3 ms/frame self (traced). Follow-ups: P36–P48
 
 Rerun: `tools/profile.sh context/perf/<name>.txt [seconds] [hst args…]` (builds `target/trace`, ~2.5 min first time).
 `samply` needs `perf_event_paranoid` ≤ 1 (root); trace_chrome needs nothing.
+
+## 2026-10-15 — umbrella check (parallel run)
+
+Picked up P35 itself while none of its parts had landed: P36–P48 are all still open in `plan/TODO.md`
+(nothing in `plan/DONE.md`). The umbrella's done-condition (≥480 fps in a 4-bot match at 1440p on the 9070 XT,
+P23's Deck numbers, replay tests bit-exact, no look change) can't hold before they do, and porting them here would
+mean doing 13 other tasks under one ID (and colliding with the agents taking them in parallel).
+
+- No new bench/profile run: this run shares the CPU with other agents' builds and PCSX2 copies, so a number taken now
+  would not be comparable to the baseline above. Re-measure on an idle machine when P36–P48 are in.
+- Moved P35 after P48 in `plan/TODO.md` and marked it blocked on them.
+
+Next (agent): once P36–P48 are ticked, `tools/profile.sh context/perf/p35-after.txt` and `tools/bench.sh` at
+`HST_WINDOW='2560 1440'` on an otherwise idle machine, log before/after here, then tick P35 or open follow-ups for
+whatever still keeps it under 480 fps.
+
+### Not verified / not 1:1
+- Frame rate target: not measured this run (machine shared with parallel agents; parts P36–P48 not landed yet).
