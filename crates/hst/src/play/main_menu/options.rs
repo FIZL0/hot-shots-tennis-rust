@@ -32,6 +32,8 @@ pub(super) enum Opt {
     Bloom,
     /// G5: HDR tonemapping (`Graphics::hdr`).
     Hdr,
+    /// G4: contact-hardening sun shadows (`Graphics::soft_shadows`).
+    SoftShadows,
     Fps,
     Vsync,
     Original,
@@ -88,7 +90,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, Fps, Vsync, Original, Mesh, Upscaled, Cull];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, SoftShadows, Fps, Vsync, Original, Mesh, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -111,7 +113,7 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
 /// The options the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
 /// Downloads, `modstore::install`; G1: WebGL2's Ambient Occlusion, no compute shaders for Bevy's SSAO).
 pub(super) fn locked(o: Opt) -> bool {
-    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads) || cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) && o == Ao
+    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads) || cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) && matches!(o, Ao | SoftShadows)
 }
 
 fn label(o: Opt) -> &'static str {
@@ -129,6 +131,7 @@ fn label(o: Opt) -> &'static str {
         Ao => "Ambient Occlusion",
         Bloom => "Bloom",
         Hdr => "HDR",
+        SoftShadows => "Soft Shadows",
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
@@ -164,6 +167,8 @@ fn about(o: Opt) -> &'static str {
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
+        SoftShadows if locked(o) => "Soft shadows need the WebGPU renderer.",
+        SoftShadows => "Not in the original: shadow edges sharp where things touch the ground and softer the higher what casts them is (a tree's canopy). Off in Original Mode.",
         Ao if locked(o) => "Ambient occlusion needs the WebGPU renderer.",
         Ao => "Not in the original: soft shade in corners and where things meet the ground (SSAO). Uses SMAA instead of MSAA for Anti-aliasing. Off in Original Mode.",
         Bloom => "Not in the original: a soft glow around the brightest parts of the court (sunlit lines, sky, glare). Off in Original Mode.",
@@ -283,6 +288,7 @@ impl Settings {
             Msaa => g.msaa = cycle(&MSAA, g.msaa, d),
             Ao => g.ao = (g.ao as isize + d).rem_euclid(AO.len() as isize) as u8,
             Bloom => g.bloom = (g.bloom as isize + d).rem_euclid(BLOOM.len() as isize) as u8,
+            SoftShadows => g.soft_shadows = !g.soft_shadows,
             Fps => g.fps = cycle(&FPS, g.fps, d),
             Vsync => g.vsync = !g.vsync,
             Hdr => g.hdr = !g.hdr,
@@ -340,6 +346,7 @@ impl Settings {
             Msaa => MSAA_NAMES[g.msaa.ilog2().min(2) as usize].into(),
             Ao => SHADOW_NAMES[g.ao.min(2) as usize].into(),
             Bloom => SHADOW_NAMES[g.bloom.min(2) as usize].into(),
+            SoftShadows => on_off(g.soft_shadows),
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Hdr => on_off(g.hdr),
@@ -626,7 +633,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | SoftShadows | Fps | Vsync | Original);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {
