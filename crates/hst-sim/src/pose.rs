@@ -266,6 +266,37 @@ impl Clip {
         (rot, pos)
     }
 
+    /// `sample` in host arithmetic, for drawing only (P43): the same keys, squad and Hermite curves, but plain f32
+    /// and musl's sine/arctangent in place of the VU0 micro program and the chopped FPU ops, ~1e-6 apart and many
+    /// times cheaper. Never feed it back into the match.
+    #[allow(clippy::float_arithmetic)]
+    pub fn sample_drawn(&self, k: usize, t: f32) -> (Option<[f32; 4]>, Option<[f32; 3]>) {
+        let tr = &self.tracks[k];
+        let tick = t * self.ticks_per_frame;
+        let rot = (!tr.rot.tick.is_empty()).then(|| match tr.rot.find(tick) {
+            Err(i) => tr.rot.value[i],
+            Ok((i, u)) => {
+                let a = host_slerp(tr.rot.value[i], tr.rot.value[i + 1], u);
+                let b = host_slerp(tr.rot.tan[i][0], tr.rot.tan[i + 1][0], u);
+                host_slerp(a, b, 2.0 * (1.0 - u) * u)
+            }
+        });
+        let pos = (!tr.pos.tick.is_empty()).then(|| {
+            let p = match tr.pos.find(tick) {
+                Err(i) => tr.pos.value[i],
+                Ok((i, u)) => {
+                    let (u2, u3) = (u * u, u * u * u);
+                    let h01 = 3.0 * u2 - 2.0 * u3;
+                    let (h00, h11, h10) = (1.0 - h01, u3 - u2, u + u3 - 2.0 * u2);
+                    let (v0, v1, m0, m1) = (tr.pos.value[i], tr.pos.value[i + 1], tr.pos.tan[i][1], tr.pos.tan[i + 1][0]);
+                    std::array::from_fn(|c| v0[c] * h00 + m0[c] * h10 + m1[c] * h11 + v1[c] * h01)
+                }
+            };
+            [0, 1, 2].map(|c| p[c] * tr.scale)
+        });
+        (rot, pos)
+    }
+
     /// Track `k`'s rotation and position key counts.
     pub fn keys(&self, k: usize) -> (usize, usize) {
         (self.tracks[k].rot.tick.len(), self.tracks[k].pos.tick.len())
@@ -289,6 +320,21 @@ impl Clip {
         }
         local
     }
+}
+
+/// `quat::micro_slerp`'s rule in host arithmetic: a plain lerp for a negative or near-1 dot, else the slerp.
+#[allow(clippy::float_arithmetic)]
+fn host_slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let dot = a[3] * b[3] + a[2] * b[2] + a[1] * b[1] + a[0] * b[0];
+    let sin2 = 1.0 - dot * dot;
+    let (w1, w2) = if dot < 0.0 || sin2 <= 0.0 || dot > 0.999 {
+        (1.0 - t, t)
+    } else {
+        let sin = sin2.sqrt();
+        let theta = musl::atan2f(sin, dot);
+        (musl::sinf((1.0 - t) * theta) / sin, musl::sinf(t * theta) / sin)
+    };
+    std::array::from_fn(|k| a[k] * w1 + b[k] * w2)
 }
 
 /// A skeleton's nodes as the motion player keeps them from frame to frame: each node's local rows, and the
@@ -339,14 +385,25 @@ impl Nodes {
 
     /// One frame of `clip` at `t`: lists of two or more keys resampled into the rows and the held values.
     pub fn sample(&mut self, clip: &Clip, t: f32) {
-        for k in 0..clip.tracks.len() {
-            let (tr, n) = (&clip.tracks[k], clip.tracks[k].node);
-            let (rot, pos) = clip.sample(k, t);
-            if let (true, Some(q)) = (tr.rot.tick.len() > 1, rot) {
-                self.rotate(n, q);
+        self.sample_kept(clip, t, |_| true);
+    }
+
+    /// `sample` on the nodes `keep` holds only (each node's rows and held values depend on its own tracks alone, so
+    /// the kept ones come out the same; the rest stay as they were).
+    pub fn sample_kept(&mut self, clip: &Clip, t: f32, keep: impl Fn(usize) -> bool) {
+        let tick = (F(t) * clip.ticks_per_frame).0;
+        for tr in &clip.tracks {
+            let n = tr.node;
+            if !keep(n) {
+                continue;
             }
-            if let (true, Some(p)) = (tr.pos.tick.len() > 1, pos) {
-                self.place(n, p, tr.pos.hermite((F(t) * clip.ticks_per_frame).0)[3]);
+            if tr.rot.tick.len() > 1 {
+                self.rotate(n, tr.rot.squad(tick));
+            }
+            if tr.pos.tick.len() > 1 {
+                // `Clip::sample`'s scaled position, and the interpolated key w unscaled
+                let p = tr.pos.hermite(tick);
+                self.place(n, [0, 1, 2].map(|c| (F(p[c]) * tr.scale).0), p[3]);
             }
         }
     }
@@ -354,8 +411,16 @@ impl Nodes {
     /// A crossfade's mix of `clip` at `t` over the first `count` tracks: each keyed list from the node's held value
     /// toward the clip's by `w`, into the rows only (position w 1).
     pub fn mix(&mut self, clip: &Clip, t: f32, w: f32, count: usize) {
+        self.mix_kept(clip, t, w, count, |_| true);
+    }
+
+    /// `mix` on the nodes `keep` holds only (still over the clip's first `count` tracks).
+    pub fn mix_kept(&mut self, clip: &Clip, t: f32, w: f32, count: usize, keep: impl Fn(usize) -> bool) {
         for k in 0..clip.tracks.len().min(count) {
             let n = clip.tracks[k].node;
+            if !keep(n) {
+                continue;
+            }
             let (rot, pos) = clip.sample(k, t);
             let (q, p) = crate::motion::mix((self.q[n], self.p[n]), (rot.unwrap_or(self.q[n]), pos.unwrap_or(self.p[n])), w);
             if rot.is_some() {

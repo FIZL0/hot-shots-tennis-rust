@@ -860,3 +860,42 @@ fn recorded_whiffs() {
     }
     eprintln!("{whiffs} whiffs, {repress} re-presses, {freed} freed");
 }
+
+/// P43: the drawing sampler (host arithmetic) stays within a hair of the game's over every motion of two characters,
+/// every track, at 64 times through each clip: rotations ≤ 2.5e-4 per component (~0.03°, the
+/// VU0 program's polynomial sine/arctangent against musl's), positions ~1e-7.
+#[test]
+fn drawn_sampler_close() {
+    use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+    use hst_sim::pose::{Clip, Skeleton};
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("ISO absent, skipped") };
+    let (mut samples, mut worst) = (0, [0.0f32; 2]);
+    for c in [1, 6] {
+        let mdata = iso.read(&format!("PC/PC{c:02}C00.XB")).unwrap();
+        let marc = Archive::parse(&mdata).unwrap();
+        let e = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")).unwrap();
+        let m = mdl::parse(&marc.read(e).unwrap()).unwrap();
+        let sk = Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+        let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+        let arc = Archive::parse(&data).unwrap();
+        for e in arc.entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".ani2")) {
+            let clip = Clip::new(&sk, &ani::parse(&arc.read(e).unwrap()).unwrap());
+            for i in 0..=64 {
+                let t = clip.length * i as f32 / 64.0;
+                for k in 0..clip.tracks.len() {
+                    let ((r0, p0), (r1, p1)) = (clip.sample(k, t), clip.sample_drawn(k, t));
+                    if let (Some(a), Some(b)) = (r0, r1) {
+                        worst[0] = worst[0].max((0..4).map(|j| (a[j] - b[j]).abs()).fold(0.0, f32::max));
+                    }
+                    if let (Some(a), Some(b)) = (p0, p1) {
+                        worst[1] = worst[1].max((0..3).map(|j| (a[j] - b[j]).abs() / a[j].abs().max(1.0)).fold(0.0, f32::max));
+                    }
+                    assert_eq!((r0.is_some(), p0.is_some()), (r1.is_some(), p1.is_some()));
+                    samples += 1;
+                }
+            }
+        }
+    }
+    eprintln!("{samples} track samples, worst rotation {:e}, position {:e}", worst[0], worst[1]);
+    assert!(samples > 100_000 && worst[0] < 5e-4 && worst[1] < 1e-5, "{samples} {worst:?}");
+}

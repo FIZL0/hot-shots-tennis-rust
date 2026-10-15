@@ -58,7 +58,15 @@ pub fn tested(category: u8, code: [u8; 4]) -> bool {
 /// i.e. the eye is looking into the inside of it.
 /// ponytail: plain f32 and the ball's sweep (`mesh::Object::sweep`, which drops texel-0 hits); presentation only.
 pub fn buried(v: &View, models: &[hst_sim::mesh::Model], o: &hst_sim::mesh::Object) -> bool {
-    let r = (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0);
+    buried_at(v, reach(v), models, o)
+}
+
+/// The sphere radius `buried` and `in_front` test with: tan 20° / tan(half the horizontal fov), clamped to 1..15.
+fn reach(v: &View) -> f32 {
+    (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0)
+}
+
+fn buried_at(v: &View, r: f32, models: &[hst_sim::mesh::Model], o: &hst_sim::mesh::Object) -> bool {
     let f = v.rot[2];
     let c = [v.eye[0] + f[0] * r, v.eye[1] + f[1] * r, v.eye[2] + f[2] * r, 1.0];
     let size = o.scale * o.radius;
@@ -79,8 +87,16 @@ pub fn buried(v: &View, models: &[hst_sim::mesh::Model], o: &hst_sim::mesh::Obje
 /// ponytail: by eye, not the original's (its cut-aways have no obstacle check, so it shows these too); sampled along
 /// the line, a box thinner than the step between samples can slip through.
 pub fn in_front(v: &View, lo: Vec3, hi: Vec3) -> bool {
-    let r = (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0);
+    in_front_at(v, reach(v), lo, hi)
+}
+
+fn in_front_at(v: &View, r: f32, lo: Vec3, hi: Vec3) -> bool {
     let (e, f) = (Vec3::from(v.eye), Vec3::from(v.rot[2]));
+    // P43: a box clear of the line's own box grown by r/2 (and a hair for rounding) can't be near any sample on it
+    let (end, reach) = (e + f * (3.0 * r), Vec3::splat(r / 2.0 + 1e-3));
+    if (e.min(end) - reach).cmpgt(hi).any() || (e.max(end) + reach).cmplt(lo).any() {
+        return false;
+    }
     (0..=12).any(|i| {
         let p = e + f * (3.0 * r * i as f32 / 12.0);
         p.clamp(lo, hi).distance(p) <= r / 2.0
@@ -120,19 +136,20 @@ fn hide_around_eye(g: Option<Res<Game>>, camera: Query<(&Transform, &Projection)
     let aspect = window.single().map_or(16.0 / 9.0, crate::play::widescreen::scene_aspect);
     let (e, f) = (t.translation * Vec3::new(1.0, -1.0, -1.0), *t.forward() * Vec3::new(1.0, -1.0, -1.0));
     let view = View { rot: [[0.0; 3], [0.0; 3], f.to_array()], eye: e.to_array(), fov: ((p.fov / 2.0).tan() / 0.75f32.max(1.0 / aspect)).atan() };
-    let world = &g.world.0;
+    let (world, r) = (&g.world.0, reach(&view));
     for (h, near, mut v) in &mut q {
         let hidden = h.is_some_and(|mut h| {
             let pos = h.pos;
-            // the prop whose placement takes the plant's ground position to its model origin
-            let prop = *h.prop.get_or_insert_with(|| {
+            // the prop whose placement takes the plant's ground position to its model origin (looked up once; read
+            // through `Mut` without marking it changed after that)
+            let prop = if let Some(p) = h.prop { p } else { *h.prop.get_or_insert_with(|| {
                 world.props.iter().position(|o| {
                     let m = hst_sim::vu0::transform(&o.to_model, [pos[0], pos[1], pos[2], 1.0]);
                     m[0].abs() + m[1].abs() + m[2].abs() < 1e-3
                 })
-            });
-            prop.is_some_and(|i| buried(&view, &world.models, &world.props[i]))
-        }) || near.is_some_and(|b| in_front(&view, b.lo, b.hi));
+            }) };
+            prop.is_some_and(|i| buried_at(&view, r, &world.models, &world.props[i]))
+        }) || near.is_some_and(|b| in_front_at(&view, r, b.lo, b.hi));
         v.set_if_neq(if hidden { Visibility::Hidden } else { Visibility::Inherited });
     }
 }
@@ -194,5 +211,34 @@ mod tests {
         assert!(hit(&cut, table(1.5, 0.0)) && hit(&cut, table(2.0, 0.6)));
         assert!(!hit(&cut, table(5.0, 0.0)) && !hit(&cut, table(1.5, 2.0)) && !hit(&cut, table(-1.0, 0.0)));
         assert!(hit(&view([0.0, -1.0, 0.0], [0.0, 0.0, 1.0], 20.0), table(5.0, 0.0)));
+    }
+
+    /// P43: the quick box rejection in `in_front` never changes its answer from the sampled test alone.
+    #[test]
+    fn in_front_rejection_is_exact() {
+        let mut seed = 0x2545_f491_u32;
+        let mut rnd = |lo: f32, hi: f32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            lo + (hi - lo) * (seed as f32 / u32::MAX as f32)
+        };
+        let mut hits = 0;
+        for _ in 0..20_000 {
+            let fwd = Vec3::new(rnd(-1.0, 1.0), rnd(-1.0, 1.0), rnd(-1.0, 1.0)).normalize_or(Vec3::Z);
+            let v = view([rnd(-3.0, 3.0), rnd(-3.0, 3.0), rnd(-3.0, 3.0)], fwd.to_array(), rnd(10.0, 70.0));
+            let c = Vec3::new(rnd(-12.0, 12.0), rnd(-12.0, 12.0), rnd(-12.0, 12.0));
+            let h = Vec3::new(rnd(0.0, 2.0), rnd(0.0, 2.0), rnd(0.0, 2.0));
+            let (lo, hi) = (c - h, c + h);
+            let r = (20f32.to_radians().tan() / v.fov.tan()).clamp(1.0, 15.0);
+            let (e, f) = (Vec3::from(v.eye), Vec3::from(v.rot[2]));
+            let sampled = (0..=12).any(|i| {
+                let p = e + f * (3.0 * r * i as f32 / 12.0);
+                p.clamp(lo, hi).distance(p) <= r / 2.0
+            });
+            assert_eq!(in_front(&v, lo, hi), sampled, "{v:?} {lo} {hi}");
+            hits += sampled as u32;
+        }
+        assert!(hits > 100, "{hits}");
     }
 }
