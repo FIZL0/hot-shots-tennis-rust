@@ -25,6 +25,9 @@ wgpu = { path = "third_party/wgpu" }
 # P36: a retained bin's GPU buffers are uploaded only when they changed, not per view × batch set every frame
 # (render_phase/mod.rs `dirty`, batching/gpu_preprocessing.rs write_binned_instance_buffers)
 bevy_render = { path = "third_party/bevy_render" }
+# P37: the mesh-preprocess bind groups kept while their buffers stay the same, instead of rebuilt for every view and
+# phase each frame (src/render/gpu_preprocess.rs)
+bevy_pbr = { path = "third_party/bevy_pbr" }
 # M91: iOS 27 requires the UIScene lifecycle; winit 0.30 puts its windows in the app's scene (src/platform_impl/ios/window.rs)
 # M101: Android pad key/motion events go to a queue (platform::android::gamepad) for `hst/src/android_pad.rs`, not into Touch/KeyboardInput
 winit = { path = "third_party/winit" }
