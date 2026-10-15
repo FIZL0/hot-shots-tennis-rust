@@ -49,6 +49,7 @@ mod lod;
 mod mode;
 mod noise;
 mod play;
+mod jobs;
 mod preload;
 mod sandbox;
 mod shade;

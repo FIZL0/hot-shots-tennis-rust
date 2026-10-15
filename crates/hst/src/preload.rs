@@ -7,19 +7,17 @@
 use crate::character::{self, CharacterData, Staged};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task};
 use std::sync::Mutex;
 
 /// A character loaded off the main thread with the assets it made.
 type Loaded = Result<(CharacterData, Staged<Mesh>, Staged<StandardMaterial>, Staged<Image>, Staged<SkinnedMeshInverseBindposes>), String>;
 
 /// Loads under way or done, by (character, costume).
-static LOADS: Mutex<Vec<((usize, usize), Task<Loaded>)>> = Mutex::new(Vec::new());
+static LOADS: Mutex<Vec<((usize, usize), crate::jobs::Job<Loaded>)>> = Mutex::new(Vec::new());
 
 /// Starts loading each of `which` (character, costume) from `iso`, each once. Nothing without the asset stores or the
 /// async pool (headless tests): the start loads them itself.
 pub fn characters(world: &mut World, iso: &str, which: &[(usize, usize)]) {
-    let Some(pool) = AsyncComputeTaskPool::try_get() else { return };
     let (Some(m), Some(t), Some(i), Some(b)) = (
         world.get_resource::<Assets<Mesh>>(),
         world.get_resource::<Assets<StandardMaterial>>(),
@@ -35,15 +33,16 @@ pub fn characters(world: &mut World, iso: &str, which: &[(usize, usize)]) {
             continue;
         }
         let (iso, p) = (iso.to_string(), providers.clone());
-        loads.push((
-            (c, costume),
-            pool.spawn(async move {
-                let mut iso = hst_data::iso::Iso::open(&iso).map_err(|e| e.to_string())?;
-                let (mut m, mut t, mut i, mut b) = (Staged::new(p.0), Staged::new(p.1), Staged::new(p.2), Staged::new(p.3));
-                let d = character::load_disc(&mut iso, c, costume, &mut m, &mut t, &mut i, &mut b)?;
-                Ok((d, m, t, i, b))
-            }),
-        ));
+        // B409: in the browser one a frame's budget, between frames (`jobs`)
+        let Some(job) = crate::jobs::spawn(move || {
+            let mut iso = hst_data::iso::Iso::open(&iso).map_err(|e| e.to_string())?;
+            let (mut m, mut t, mut i, mut b) = (Staged::new(p.0), Staged::new(p.1), Staged::new(p.2), Staged::new(p.3));
+            let d = character::load_disc(&mut iso, c, costume, &mut m, &mut t, &mut i, &mut b)?;
+            Ok((d, m, t, i, b))
+        }) else {
+            return;
+        };
+        loads.push(((c, costume), job));
     }
 }
 
@@ -71,8 +70,8 @@ pub fn load_disc(
         let mut loads = LOADS.lock().unwrap();
         loads.iter().position(|(k, _)| *k == (c, costume)).map(|at| loads.swap_remove(at).1)
     };
-    // still loading: wait for it, except in the browser, where it only runs between frames
-    let done = task.and_then(|t| if cfg!(target_arch = "wasm32") && !t.is_finished() { None } else { Some(bevy::tasks::block_on(t)) });
+    // still loading: wait for it (in the browser: still queued, so loaded now)
+    let done = task.map(crate::jobs::Job::wait);
     match done {
         Some(Ok((d, m, t, i, b))) => {
             m.insert(meshes);

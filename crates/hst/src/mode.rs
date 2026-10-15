@@ -200,7 +200,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(PreStartup, |w: &mut World| one_thread(&mut w.resource_mut::<Schedules>()))
         .insert_resource(compiling)
         .insert_resource(settle)
-        .add_systems(First, (crate::play::menu_art::land, switch, |w: &mut World| run(w, First), loaded).chain())
+        .add_systems(First, (crate::jobs::run, crate::play::menu_art::land, switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
         .add_systems(First, unwarm.before(switch))
         .add_systems(PostUpdate, warm.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
