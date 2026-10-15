@@ -31,6 +31,16 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gh auth switch -h github.com -u FIZL0 >/dev/null 2>&1 || true"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
