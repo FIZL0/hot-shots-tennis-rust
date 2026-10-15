@@ -43,3 +43,7 @@ gilrs has no Android backend, so pads did nothing in the APK. Now:
 - A pad unknown to the device list connects on its first event; that first press is lost (bevy inserts `Gamepad`
   by command, after the frame's raw events). Listed pads (every real one within ~1 s of plugging) are unaffected.
 - No rumble (bevy's rumble requests go to gilrs only).
+
+## Verified on a phone (user, 2026-10-15)
+The user played on their Android phone with a Bluetooth controller: the controller works (APK built 10:46 from the
+M101 tree). Xbox vs PS layout, hat d-pad and triggers weren't reported on separately.
