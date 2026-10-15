@@ -1422,8 +1422,11 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
 
 /// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr, and each frame over 33 ms as it happens
 /// (for profiling, P23, Z1).
-fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
+fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>, mut dts: Local<Vec<f32>>) {
     let dt = time.delta_secs();
+    if time.elapsed_secs() > 0.0 {
+        dts.push(dt);
+    }
     // a stutter: any frame over two 60 Hz frames, with when it happened
     if dt > 1.0 / 30.0 {
         eprintln!("slow frame {:.1} ms at {:.2} s", dt * 1e3, time.elapsed_secs());
@@ -1431,6 +1434,8 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
     *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt), acc.3);
     if acc.1 >= 5.0 {
         eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
+        eprintln!("{}", frame_spread(&mut dts));
+        dts.clear();
         // the process's CPU time (all threads) per frame: steadier than fps on a busy machine
         let cpu = std::fs::read_to_string("/proc/self/stat").ok().and_then(|s| {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
@@ -1446,6 +1451,38 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
         }
         *acc = (0, 0.0, 0.0, acc.3);
     }
+}
+
+/// P44: the spread of a run of frame times (s): percentiles, the 1 % / 0.1 % lows (the fps of the slowest 1 % / 0.1 %
+/// of frames, averaged) and the mean change from one frame to the next (pacing: an even 4 ms/4 ms/4 ms run is 0, a
+/// 2/6/2/6 one 4 at the same mean fps).
+fn frame_spread(dts: &mut [f32]) -> String {
+    if dts.len() < 2 {
+        return "frames: too few".into();
+    }
+    let n = dts.len();
+    let jitter = dts.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (n - 1) as f32;
+    let mean = dts.iter().sum::<f32>() / n as f32;
+    let sd = (dts.iter().map(|d| (d - mean) * (d - mean)).sum::<f32>() / n as f32).sqrt();
+    dts.sort_by(|a, b| a.total_cmp(b));
+    let pct = |p: f32| dts[((n as f32 * p) as usize).min(n - 1)] * 1e3;
+    let low = |p: f32| {
+        let k = ((n as f32 * p).ceil() as usize).max(1);
+        k as f32 / dts[n - k..].iter().sum::<f32>()
+    };
+    format!(
+        "frames ms: mean {:.2} sd {:.2} p50 {:.2} p90 {:.2} p99 {:.2} p99.9 {:.2} max {:.2} jitter {:.2} | 1% low {:.0} fps, 0.1% low {:.0} fps ({n} frames)",
+        mean * 1e3,
+        sd * 1e3,
+        pct(0.5),
+        pct(0.9),
+        pct(0.99),
+        pct(0.999),
+        dts[n - 1] * 1e3,
+        jitter * 1e3,
+        low(0.01),
+        low(0.001)
+    )
 }
 
 /// `HST_FPS=1` too (B276): every 5 s, how many images (and their bytes), meshes, materials and entities there are,
@@ -1547,6 +1584,21 @@ fn window_icon(mut done: Local<bool>, _main_thread: bevy::ecs::system::NonSendMa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P44: an even run has no jitter and its lows at its fps; a 2/6 ms alternation has the same mean but 4 ms jitter,
+    /// and one 20 ms hitch in 1000 frames is the 0.1 % low.
+    #[test]
+    fn frame_spread_lows_and_jitter() {
+        let even = frame_spread(&mut [0.004; 1000]);
+        assert!(even.contains("mean 4.00 sd 0.00") && even.contains("jitter 0.00") && even.contains("1% low 250 fps, 0.1% low 250 fps"), "{even}");
+        let alt: Vec<f32> = (0..1000).map(|i| if i % 2 == 0 { 0.002 } else { 0.006 }).collect();
+        let alt = frame_spread(&mut alt.clone());
+        assert!(alt.contains("mean 4.00") && alt.contains("jitter 4.00") && alt.contains("1% low 167 fps"), "{alt}");
+        let mut hitch = vec![0.004; 1000];
+        hitch[500] = 0.020;
+        let hitch = frame_spread(&mut hitch);
+        assert!(hitch.contains("max 20.00") && hitch.contains("0.1% low 50 fps"), "{hitch}");
+    }
 
     /// M8f3: `--umpire-mod DIR` plays the mod over its donor (the donor in the chair unless `--umpire` says
     /// otherwise, as the menu's and the online room's always do); `--umpire-mod-id` of a mod not installed: none.
