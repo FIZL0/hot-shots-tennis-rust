@@ -6,6 +6,8 @@
 // taps anywhere else reach the menu; in a match it appears wherever the left thumb lands.
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
 // goes fullscreen on the first tap, either way up (B112) (where the browser allows it; an installed app starts that way).
+// B312: in an online lobby or match a chat button (a speech bubble) sits beside Start, styled as Select/Start; it isn't
+// a pad button: a tap on it opens the game's chat box (`chat.rs`, which shows it through `hstTouchChat`).
 
 // every AudioContext the game makes, resumed on the next gesture
 const contexts = [];
@@ -106,6 +108,11 @@ const css = `
 .touch button::after { content: ''; position: absolute; inset: calc(var(--u) * -.2); border-radius: inherit; }
 .touch button.small { border-radius: calc(var(--u) * .3); width: calc(var(--u) * 1.5); height: calc(var(--u) * .7);
   font-size: calc(var(--u) * .3); opacity: .7; }
+/* B312: chat, an icon on Select/Start's small button: right of Start; upright there's no room on that row (L1/R1 all
+   but touch Select/Start), so it sits centred under the two */
+.touch button.chat { left: calc(50% + var(--u) * 2.4); top: calc(env(safe-area-inset-top) + var(--u) * .3); }
+@media (orientation: portrait) { .touch:not(.duo) button.chat { left: calc(50% - var(--u) * .75); top: calc(env(safe-area-inset-top) + var(--u) * 1.2); } }
+.touch button.chat svg { width: calc(var(--u) * .42); height: calc(var(--u) * .42); vertical-align: middle; fill: currentColor; }
 /* B112: upright, the pad sits under the picture (the 4:3 screen is letterboxed mid-height), sized by the width */
 @media (orientation: portrait) { .touch:not(.duo) { --u: min(12vw, 7vh); } .touch:not(.duo):not(.menu) .zone { top: 50%; } }
 /* B118: each player's set at their own end (a phone upright: the bottom and top 45%), the shoulders and Select/Start
@@ -126,6 +133,11 @@ const layout = [
   ['select', 'SELECT', 'left: calc(50% - var(--u) * 1.8); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
   ['start', 'START', 'left: calc(50% + var(--u) * .3); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
 ];
+const bubble = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10l-5 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>';
+// B312: the chat button, right of Start (the near player's layer only: a 1v1 on one phone is never online)
+const chatButton = `<button data-chat class="small chat" aria-label="Chat" hidden>${bubble}</button>`;
+let chatTaps = 0;
+let chatShown = false;
 const style = document.createElement('style');
 style.textContent = css;
 document.head.append(style);
@@ -152,7 +164,8 @@ const side = (index, far) => {
   if (!far) root.id = 'touch';
   root.hidden = true;
   root.innerHTML = `<div class="zone"><div class="base" hidden></div><div class="knob" hidden></div></div>`
-    + layout.map(([k, label, pos, cls = '']) => `<button data-b="${k}" class="${cls}" style="${pos}">${label}</button>`).join('');
+    + layout.map(([k, label, pos, cls = '']) => `<button data-b="${k}" class="${cls}" style="${pos}">${label}</button>`).join('')
+    + (far ? '' : chatButton);
   document.body.append(root);
 
   const stamp = () => (pad.timestamp = performance.now());
@@ -182,7 +195,7 @@ const side = (index, far) => {
     settle(k);
   };
   // a mouse or pen (`?touch` on a desktop); fingers come through the touch events below
-  for (const el of root.querySelectorAll('button')) {
+  for (const el of root.querySelectorAll('button[data-b]')) {
     const k = el.dataset.b;
     el.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
@@ -196,6 +209,19 @@ const side = (index, far) => {
   // B165: no browser gesture (pinch zoom, double-tap zoom, scroll) out of two fingers on the controls; iOS Safari can
   // start one despite `touch-action: none` and cancel both pointers
   for (const t of ['touchstart', 'touchmove']) root.addEventListener(t, e => e.cancelable && e.preventDefault(), { passive: false });
+  // B312: chat counts its taps for the game (`hstChatTaps`); a mouse or pen here, fingers in `touchstart` below
+  const chat = root.querySelector('[data-chat]');
+  const chatTap = () => {
+    chatTaps++;
+    if (buzz) buzzOnce();
+  };
+  // the phone's keyboard comes up from the finger's lift (index.html)
+  chat?.addEventListener('touchend', () => chatShown && window.hstChatKeys?.());
+  chat?.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
+    e.preventDefault();
+    chatTap();
+  });
 
   // the stick appears where the left thumb lands; full tilt at the base's radius
   const zone = root.querySelector('.zone');
@@ -258,7 +284,8 @@ const side = (index, far) => {
     for (const t of e.changedTouches) {
       const el = t.target instanceof Element ? t.target.closest('button, .zone') : null;
       if (!el || !root.contains(el) || control.has(t.identifier)) continue;
-      if (el === zone) {
+      if (el === chat) chatTap();
+      else if (el === zone) {
         if (stick) continue;
         control.set(t.identifier, 'stick');
         stickDown(t.identifier, t.clientX, t.clientY);
@@ -329,6 +356,16 @@ window.hstRealPad = anyReal;
 window.hstTouchMenu = on => {
   menu = on;
   for (const s of sides) s.menu(on);
+};
+// B312: the chat button shown (online, chat on, its box closed), and the taps on it since the last call
+window.hstTouchChat = on => {
+  chatShown = on;
+  for (const b of document.querySelectorAll('.touch [data-chat]')) b.hidden = !on;
+};
+window.hstChatTaps = () => {
+  const n = chatTaps;
+  chatTaps = 0;
+  return chatShown ? n : 0;
 };
 // B118: the game's 1v1 on this phone (both pads, held upright) and the Mobile settings' vibration
 window.hstTouchPads = (two, vibrate) => {
