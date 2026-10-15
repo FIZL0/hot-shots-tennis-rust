@@ -158,7 +158,7 @@ async fn fetch(url: &str, cap: u64) -> Result<Vec<u8>, String> {
 #[cfg(not(target_arch = "wasm32"))]
 async fn get(url: &str) -> Result<reqwest::Response, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let r = reqwest::Client::new()
+    let r = crate::modstore::client()
         .get(url)
         .header("User-Agent", "hot-shots-tennis")
         .header("Accept", "application/vnd.github+json, application/octet-stream")
