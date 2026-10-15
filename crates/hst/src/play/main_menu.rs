@@ -3328,7 +3328,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text, turn).chain(), bgm, cursor::tick));
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text, turn).chain(), bgm, cursor::tick))
+        .add_systems(Last, cursor::show);
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
