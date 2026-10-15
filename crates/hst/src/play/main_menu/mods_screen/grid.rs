@@ -1072,8 +1072,8 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let shot = [tx, ty, tw - card_w, ph];
     if v.shot {
         // the full preview, the select's portrait shape (0.8 wide), as big as fits
-        let pw = (shot[3] * 0.8).min(shot[2]);
-        let phh = pw / 0.8;
+        let pw = (shot[3] * super::super::previews::CARD_W).min(shot[2]);
+        let phh = pw / super::super::previews::CARD_W;
         d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [shot[0] + (shot[2] - pw) / 2.0, shot[1] + (shot[3] - phh) / 2.0, pw, phh], WHITE, 128.0);
     } else if let Some(Pic::Shown(slot, aspect)) = v.b.pics.get(&mt.sha256).copied() {
         let (pw, phh) = if aspect > shot[2] / shot[3] { (shot[2], shot[2] / aspect) } else { (shot[3] * aspect, shot[3]) };

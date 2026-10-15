@@ -1292,10 +1292,13 @@ fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
     if !name.is_empty() && child.is_none() {
         // the picture (as the select's) and the △ card beside it; in a wide short panel, text right of them
         let ph = 160.0f32.min(h - 24.0);
-        let pic = [x + 12.0, ty, (ph * 0.8).min(w - 174.0).max(60.0), ph];
+        let pic = [x + 12.0, ty, (ph * super::previews::CARD_W).min(w - 174.0).max(60.0), ph];
         d.box3(pic, 8.0, [None, None, Some([122.0, 108.0, 115.0])], 128.0);
         if v.shot {
-            d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], pic, WHITE, 128.0);
+            // B402: the bake's 4:5 on screen, as big as the box allows
+            let pw = pic[2].min(ph * super::previews::CARD_W);
+            let phh = pw / super::previews::CARD_W;
+            d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [pic[0] + (pic[2] - pw) / 2.0, pic[1] + (ph - phh) / 2.0, pw, phh], WHITE, 128.0);
         } else {
             d.centred("No picture", pic[0] + pic[2] / 2.0, pic[1] + ph / 2.0 - 7.0, 13.0, super::options::MUTED);
         }
