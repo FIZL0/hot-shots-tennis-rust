@@ -10,6 +10,9 @@
 //! few lines show at the bottom left, fading out, over the menus and the HUD alike, taking no presses from the match.
 //! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
 //! → Online & Mods → Chat off hides all of it.
+//!
+//! `HST_CHAT=lines|open|phrase` (for `--shot`s): chat shown outside a room, a few lines held at fixed ages (one
+//! fading), with the box open on a draft / the pads' phrase up.
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -122,8 +125,30 @@ struct Tap;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Chat>()
+        .add_systems(Startup, sample)
         .add_systems(PreUpdate, input.after(bevy::input::InputSystems))
         .add_systems(PostUpdate, draw);
+}
+
+/// `HST_CHAT` set (a shot of the chat).
+fn sampled() -> bool {
+    std::env::var_os("HST_CHAT").is_some()
+}
+
+/// `HST_CHAT`'s made-up lines and box.
+fn sample(mut chat: ResMut<Chat>) {
+    let Ok(how) = std::env::var("HST_CHAT") else { return };
+    let line = |name: &str, text: &str, age| Line { name: name.into(), text: text.into(), age };
+    chat.lines = vec![
+        line("Sunny Day", "gl hf!", LIFE - FADE / 3.0),
+        line("ACE-42", "Picking Kaoru, give me a sec", 6.0),
+        line("You", "Good luck!", 4.0),
+        line("", "ACE-42 muted.", 2.0),
+        line("Sunny Day", "Rematch after this one?", 0.0),
+    ];
+    chat.open = how == "open";
+    chat.draft = if chat.open { "sure, best of three".into() } else { String::new() };
+    chat.phrase = (how == "phrase").then_some((3, PICK));
 }
 
 /// The lines heard, and this machine's typing: while the box is open the keyboard's keys are the box's alone.
@@ -138,6 +163,9 @@ fn input(
     time: Res<Time<Real>>,
     mut was: Local<bool>,
 ) {
+    if sampled() {
+        return;
+    }
     let dt = time.delta_secs();
     chat.lines.iter_mut().for_each(|l| l.age += dt);
     chat.lines.retain(|l| l.age < LIFE);
@@ -261,9 +289,9 @@ fn draw(
     root: Query<(Entity, &mut Visibility), With<Root>>,
     mut tap: Query<&mut Visibility, (With<Tap>, Without<Root>)>,
     last: Option<Res<crate::play::main_menu::legend::Last>>,
-    mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow)>,
+    mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut BackgroundColor)>,
 ) {
-    let on = !HIDDEN.load(Ordering::Relaxed) && net.is_some_and(|n| n.in_room());
+    let on = !HIDDEN.load(Ordering::Relaxed) && (net.is_some_and(|n| n.in_room()) || sampled());
     let mut root = root;
     let Ok((_, mut vis)) = root.single_mut() else {
         if on {
@@ -292,10 +320,11 @@ fn draw(
     }
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
     let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
+    let val = |n: f32| if tall { Val::Vw(n / 448.0 * 75.0) } else { Val::Vh(n / 448.0 * 100.0) };
     let start = chat.lines.len().saturating_sub(SHOWN);
     let shown = &chat.lines[start..];
     let busy = chat.open || chat.phrase.is_some();
-    for (row, mut text, mut font, mut colour, mut shadow) in &mut rows {
+    for (row, mut text, mut font, mut colour, mut shadow, mut node, mut back) in &mut rows {
         let (s, alpha, c) = match row.0 {
             i if i < SHOWN => match shown.get(i) {
                 Some(l) => {
@@ -308,7 +337,7 @@ fn draw(
             // the box, or the pads' phrase
             SHOWN => match (chat.open, chat.phrase) {
                 (true, _) => (format!("Say: {}_", chat.draft), 1.0, Color::srgb(0.6, 1.0, 0.6)),
-                (_, Some((i, _))) => (format!("R2 next · L2 say: {}", chat.phrases()[i]), 1.0, Color::srgb(0.6, 1.0, 0.6)),
+                (_, Some((i, _))) => (format!("R2 next, L2 say: {}", chat.phrases()[i]), 1.0, Color::srgb(0.6, 1.0, 0.6)),
                 _ => (String::new(), 0.0, Color::WHITE),
             },
             // Chat to tap or click
@@ -330,8 +359,22 @@ fn draw(
         if shadow.color != sc {
             shadow.color = sc;
         }
+        // B398: each line on a slight dark rounded backing, fading with it, so it reads over any menu or the HUD;
+        // an empty or faded-out row takes no room
+        let bc = BACKING.with_alpha(BACKING.alpha() * alpha);
+        if back.0 != bc {
+            back.0 = bc;
+        }
+        let display = if text.0.is_empty() || alpha <= 0.0 { Display::None } else { Display::Flex };
+        let (pad, radius, gap) = (UiRect::axes(val(7.0), val(2.0)), BorderRadius::all(val(7.0)), UiRect::bottom(val(3.0)));
+        if node.display != display || node.padding != pad || node.border_radius != radius || node.margin != gap {
+            (node.display, node.padding, node.border_radius, node.margin) = (display, pad, radius, gap);
+        }
     }
 }
+
+/// The lines' backing at full strength (B398): dark, translucent enough to keep the screen under it.
+const BACKING: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
 
 fn spawn(commands: &mut Commands) {
     let node = Node {
@@ -342,7 +385,7 @@ fn spawn(commands: &mut Commands) {
         flex_direction: FlexDirection::Column,
         ..default()
     };
-    let row = |i| (Row(i), Text::new(""), TextFont::default(), TextColor(Color::NONE), TextShadow::default());
+    let row = |i| (Row(i), Text::new(""), TextFont::default(), TextColor(Color::NONE), TextShadow::default(), Node { align_self: AlignSelf::FlexStart, display: Display::None, ..default() }, BackgroundColor(Color::NONE));
     commands.spawn((Root, node, Visibility::Hidden, GlobalZIndex(i32::MAX - 1))).with_children(|p| {
         for i in 0..=SHOWN {
             p.spawn(row(i));
