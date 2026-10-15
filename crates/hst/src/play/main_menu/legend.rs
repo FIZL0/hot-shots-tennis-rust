@@ -285,11 +285,24 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::Ok, "OK"), (Act::Back, "Cancel")]);
         }
         Screen::Confirm if host && m.picking.is_some() => {
-            v.push((Act::LeftRight, ["", "Court", "Sets", "Games", "Umpire"].get(s).copied().unwrap_or("Change")));
-            if s == 4 && (m.umpire as usize) < super::UMPIRES {
-                v.push((Act::Card, "Preview Voice"));
+            if s == 4 {
+                // B451: the umpire picker's rows; △ only for an umpire with a voice to preview (B431)
+                let (rows, page, voice) = super::umpire_picker::axes(m);
+                v.push((Act::LeftRight, "Choose"));
+                if rows {
+                    v.push((Act::UpDown, "Row"));
+                }
+                if page {
+                    v.push((Act::Costume, "Scroll"));
+                }
+                if voice {
+                    v.push((Act::Card, "Hear voice"));
+                }
+                v.extend([(Act::Ok, "OK"), (Act::Back, "Cancel")]);
+            } else {
+                v.push((Act::LeftRight, ["", "Court", "Sets", "Games", "Umpire"].get(s).copied().unwrap_or("Change")));
+                v.extend([(Act::Ok, "Select"), (Act::Back, "Cancel")]);
             }
-            v.extend([(Act::Ok, "Select"), (Act::Back, "Cancel")]);
         }
         Screen::Confirm if host => {
             v.push((Act::UpDown, "Move"));
