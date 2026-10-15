@@ -15,7 +15,7 @@ use bevy::prelude::*;
 
 use super::super::pointer::{Act, OK, press};
 use super::super::{BROWN, CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, STYLE_NAMES, Tex, WHITE};
-use super::{Entry, GREEN, Page, RED, View, mb, modstore};
+use super::{Entry, GREEN, Kind, Page, RED, View, mb, modstore};
 
 /// The sort words, then (the whole store) Refresh, or (an author's mods) Download all and All mods.
 const SORTS: [&str; 3] = ["Newest", "A-Z", "Uploader"];
@@ -160,11 +160,11 @@ impl View {
         w
     }
 
-    /// The games the rail names: the most mods first (at most [`GAMES`]; the chosen one always), and whether any mod
-    /// is from another (Other).
+    /// The games the rail names (of the kind tab's mods): the most mods first (at most [`GAMES`]; the chosen one
+    /// always), and whether any mod is from another (Other).
     fn games(&self) -> (Vec<String>, bool) {
         let mut n: HashMap<&str, usize> = HashMap::new();
-        for e in self.entries() {
+        for e in self.entries().iter().filter(|e| e.meta.kind == self.kind) {
             *n.entry(e.meta.source.as_str()).or_default() += 1;
         }
         let mut l: Vec<(&str, usize)> = n.into_iter().filter(|(s, _)| !s.is_empty()).collect();
@@ -175,7 +175,7 @@ impl View {
         {
             names.push(s.clone());
         }
-        let other = self.entries().iter().any(|e| !names.contains(&e.meta.source));
+        let other = self.entries().iter().filter(|e| e.meta.kind == self.kind).any(|e| !names.contains(&e.meta.source));
         (names, other || self.b.game == Some(Game::Other))
     }
 
@@ -187,9 +187,12 @@ impl View {
         if other {
             l.push(Opt::Game(Some(Game::Other)));
         }
-        l.push(Opt::Style(None));
-        l.extend((0..4).map(|s| Opt::Style(Some(s))));
-        l.extend([Opt::Left(false), Opt::Left(true)]);
+        // M8f9: play style and handedness are a character's
+        if self.kind == Kind::Character {
+            l.push(Opt::Style(None));
+            l.extend((0..4).map(|s| Opt::Style(Some(s))));
+            l.extend([Opt::Left(false), Opt::Left(true)]);
+        }
         l.extend([Show::All, Show::NotInstalled, Show::Updates, Show::Verified, Show::Wish].map(Opt::Show));
         l
     }
@@ -211,6 +214,8 @@ impl View {
             Opt::Game(None) | Opt::Style(None) | Opt::Left(false) | Opt::Show(Show::All) => true,
             Opt::Game(Some(Game::Src(s))) => m.source == *s,
             Opt::Game(Some(Game::Other)) => !games.contains(&m.source),
+            // (a court or umpire has neither: those filters aren't on its tab's rail)
+            Opt::Style(Some(_)) | Opt::Left(true) if m.kind != Kind::Character => true,
             Opt::Style(Some(s)) => m.style == Some(*s),
             Opt::Left(true) => m.hand.is_some_and(|h| h < 0),
             Opt::Show(Show::NotInstalled) => self.state(e).is_none(),
@@ -575,7 +580,7 @@ impl Menu {
     pub(super) fn browse_remove(&mut self, sel: usize, out: &mut Vec<Effect>) {
         let Some(dir) = self.add.hovered(sel).and_then(|e| self.add.installed(e)).map(|(_, d)| d.clone()) else { return };
         let bare = |p: &std::path::Path| p.strip_prefix(".").unwrap_or(p).to_path_buf();
-        if let Some(i) = self.add.list.iter().position(|m| bare(&m.dir) == bare(&dir)) {
+        if let Some(i) = self.add.locals().iter().position(|m| bare(&m.dir) == bare(&dir)) {
             self.remove(i, out);
         }
     }
@@ -821,7 +826,7 @@ fn tile(d: &mut Draw, m: &Menu, e: &Entry, [x, y, w, _]: [f32; 4], ph: f32, on: 
 fn queue_pill(d: &mut Draw, v: &View, [x, y, w, h]: [f32; 4]) {
     d.pill_at([x, y, w, h], [INK, if v.doing.is_empty() { LIGHT } else { GOLD }, PANEL], 128.0);
     let words = match (v.doing.len(), v.queue.len()) {
-        (0, 0) => format!("{} installed", v.list.len()),
+        (0, 0) => format!("{} installed", v.installed_len()),
         (n, 0) => format!("{n} downloading"),
         (n, q) => format!("{n} downloading - {q} queued"),
     };
@@ -884,7 +889,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let v = &m.add;
     let l = lay(&m.grid);
     let tiles = v.tiles();
-    let tabs_w = [format!("Browse {}", v.entries_len()), format!("Installed {}", v.list.len()), "Upload".into(), "My mods".into()];
+    let tabs_w = [format!("Browse {}", v.entries_len()), format!("Installed {}", v.installed_len()), "Upload".into(), "My mods".into()];
     tabs(d, m, &tabs_w, 0, l.tabs_room);
     let g = &m.grid;
     super::mods_kind::row(d, [g.strip[0], g.strip[1] - 2.0, g.strip[2], super::mods_kind::ROW_H], v.kind, v.kind_counts());
@@ -1072,8 +1077,9 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let shot = [tx, ty, tw - card_w, ph];
     if v.shot {
         // the full preview, the select's portrait shape (0.8 wide), as big as fits
-        let pw = (shot[3] * super::super::previews::CARD_W).min(shot[2]);
-        let phh = pw / super::super::previews::CARD_W;
+        let aspect = v.shot_aspect.unwrap_or(super::super::previews::CARD_W);
+        let pw = (shot[3] * aspect).min(shot[2]);
+        let phh = pw / aspect;
         d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [shot[0] + (shot[2] - pw) / 2.0, shot[1] + (shot[3] - phh) / 2.0, pw, phh], WHITE, 128.0);
     } else if let Some(Pic::Shown(slot, aspect)) = v.b.pics.get(&mt.sha256).copied() {
         let (pw, phh) = if aspect > shot[2] / shot[3] { (shot[2], shot[2] / aspect) } else { (shot[3] * aspect, shot[3]) };

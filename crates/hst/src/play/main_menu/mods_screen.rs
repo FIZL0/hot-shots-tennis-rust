@@ -69,8 +69,10 @@ pub(super) enum Page {
 #[derive(Default, Clone, Debug)]
 pub(super) struct View {
     pub(super) page: Page,
-    /// Installed mods.
+    /// Installed mods: characters, and (M8f9) court and umpire mods (`mods::read_any`'s headers).
     list: Vec<Mod>,
+    courts: Vec<Mod>,
+    umpires: Vec<Mod>,
     /// The store's listing (None: not read yet).
     store: Option<Vec<Entry>>,
     /// M19: the player's own uploads (None: not read yet).
@@ -94,8 +96,10 @@ pub(super) struct View {
     /// The signed-in Hugging Face account; a press asked for the token on the clipboard.
     account: Option<String>,
     paste: bool,
-    /// The hovered mod's picture is in (`Shelf::shown`).
+    /// The hovered mod's picture is in (`Shelf::shown`); M8f9: a court's or umpire's own width over height (a
+    /// character's is the bake's 4:5).
     shot: bool,
+    shot_aspect: Option<f32>,
     /// B205: a mod was installed or removed since the game started (the note on the main menu's Mods row), and since
     /// the main menu last asked; the Reload / Later popup is up on the main menu (0 = Reload chosen).
     changed: bool,
@@ -136,7 +140,9 @@ impl View {
 
     fn refresh(&mut self) {
         self.list = crate::mods::list(root());
-        self.have = self.list.iter().filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
+        self.courts = crate::mods::list_kind(root(), &crate::mods::Kind::Court);
+        self.umpires = crate::mods::list_kind(root(), &crate::mods::Kind::Umpire);
+        self.have = self.list.iter().chain(&self.courts).chain(&self.umpires).filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
         self.child = None;
     }
 
@@ -264,16 +270,31 @@ impl View {
         mods_kind::coming(self.kind).is_some()
     }
 
-    /// B373: the installed mods on the kind tab (an installed mod is a character).
+    /// B373: the installed mods on the kind tab (M8f9: courts and umpires on theirs).
     fn locals(&self) -> &[Mod] {
-        if self.kind == Kind::Character { &self.list } else { &[] }
+        self.of_kind(self.kind)
+    }
+
+    /// M8f9: the installed mods of kind `k`.
+    fn of_kind(&self, k: Kind) -> &[Mod] {
+        match k {
+            Kind::Character => &self.list,
+            Kind::Court => &self.courts,
+            Kind::Umpire => &self.umpires,
+            Kind::Textures | Kind::Other => &[],
+        }
+    }
+
+    /// M8f9: every installed mod, of any kind (the Installed tab's count).
+    fn installed_len(&self) -> usize {
+        self.list.len() + self.courts.len() + self.umpires.len()
     }
 
     /// B373: each kind tab's count on this page (by `mods_kind::KINDS`).
     fn kind_counts(&self) -> [usize; 4] {
         mods_kind::KINDS.map(|k| match self.page {
             _ if mods_kind::coming(k).is_some() => 0,
-            Page::Installed | Page::Upload => self.list.len(),
+            Page::Installed | Page::Upload => self.of_kind(k).len(),
             Page::Browse | Page::Mine => self.entries().iter().filter(|e| e.meta.kind == k).count(),
         })
     }
@@ -543,7 +564,7 @@ impl Menu {
                 out.push(Sound(2));
             }
             Page::Upload => {
-                let mods = if s == 1 { self.add.list.clone() } else { vec![self.add.list[s - UP_TOP].clone()] };
+                let mods = if s == 1 { self.add.locals().to_vec() } else { vec![self.add.locals()[s - UP_TOP].clone()] };
                 match modstore::account() {
                     Some((name, token)) => {
                         self.queue(mods, name, token);
@@ -662,13 +683,13 @@ impl Menu {
                 } else if self.add.account.is_none() {
                     self.add.status = "Sign in first: Sign in, top left.".into();
                     out.push(Sound(1));
-                } else if s == 1 && self.add.list.is_empty() {
+                } else if s == 1 && self.add.locals().is_empty() {
                     self.add.status = "No mods installed to upload.".into();
                     out.push(Sound(1));
                 } else if s == 1 {
-                    self.open_child(&["Upload all"], format!("{RULE} Upload all {} mods?", self.add.list.len()), out);
+                    self.open_child(&["Upload all"], format!("{RULE} Upload all {} mods?", self.add.locals().len()), out);
                 } else {
-                    let m = &self.add.list[s - UP_TOP];
+                    let m = &self.add.locals()[s - UP_TOP];
                     if matches!(self.add.ups.get(&m.dir), Some(Up::Queued | Up::Uploading)) {
                         self.add.status = format!("{} is uploading already.", m.name);
                     } else {
@@ -751,14 +772,14 @@ impl Menu {
             if !std::mem::replace(&mut self.add.busy, true) {
                 modstore::pick(root());
             }
-            self.add.status = "Pick a mod .zip (a character from the mods repo).".into();
+            self.add.status = "Pick a mod .zip (a character, court or umpire from the mods repo).".into();
             out.push(Sound(2));
         } else if s == 1 {
             if let Err(e) = reload(out) {
                 self.add.status = e;
             }
         } else if s == 2 {
-            let n = self.add.list.iter().filter(|m| ours(m)).count();
+            let n = self.add.locals().iter().filter(|m| ours(m)).count();
             if n == 0 {
                 self.add.status = "No mods the game installed to remove.".into();
                 out.push(Sound(1));
@@ -766,7 +787,7 @@ impl Menu {
                 self.open_child(&["Remove all"], format!("Remove all {n} mods the game installed (Reload then takes them out of the select)?"), out);
             }
         } else {
-            let m = &self.add.list[s - TOP];
+            let m = &self.add.locals()[s - TOP];
             let (name, dir) = (m.name.clone(), m.dir.clone());
             if ours(m) {
                 self.open_child(&["Remove"], format!("Remove {name} (Reload then takes it out of the select)?"), out);
@@ -779,7 +800,7 @@ impl Menu {
 
     /// B335: Remove all: every installed mod the game put in ([`ours`]).
     fn remove_all(&mut self, out: &mut Vec<Effect>) {
-        self.add.list.iter().filter(|m| ours(m)).for_each(delete);
+        self.add.locals().iter().filter(|m| ours(m)).for_each(delete);
         self.add.refresh();
         self.add.changed();
         self.add.status = "Removed every mod the game installed. Reload to take them out of the select.".into();
@@ -788,8 +809,8 @@ impl Menu {
 
     /// Removes installed mod `i` (its child's Remove).
     fn remove(&mut self, i: usize, out: &mut Vec<Effect>) {
-        let name = self.add.list[i].name.clone();
-        delete(&self.add.list[i]);
+        let name = self.add.locals()[i].name.clone();
+        delete(&self.add.locals()[i]);
         self.add.refresh();
         self.add.changed();
         self.add.status = format!("Removed {name}. Reload to take it out of the select.");
@@ -1040,9 +1061,10 @@ const ORANGE: [f32; 3] = [90.0, 48.0, 3.0];
 const RED: [f32; 3] = [100.0, 15.0, 15.0];
 const GREY: [f32; 3] = [55.0; 3];
 
-/// Installed mod `md`'s face in the select's roster (built at startup: one added since has none yet).
+/// Installed mod `md`'s face in the select's roster (built at startup: one added since has none yet); M8f9/B400:
+/// an umpire mod's head from its `previews/umpire.png`, as the umpire select's card has it.
 fn face_of(m: &Menu, dir: &Path) -> Option<(Tex, [f32; 4])> {
-    mod_of(m, dir).map(|j| super::cell_face(Some(super::Who::Mod(j))))
+    mod_of(m, dir).map(|j| super::cell_face(Some(super::Who::Mod(j)))).or_else(|| super::umpire_mods::face_of(m, dir))
 }
 
 /// Installed mod `dir`'s place in the select's roster.
@@ -1149,7 +1171,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
         return;
     }
-    let tabs = [format!("Browse {}", v.entries_len()), format!("Installed {}", v.list.len()), "Upload".into(), "My mods".into()];
+    let tabs = [format!("Browse {}", v.entries_len()), format!("Installed {}", v.installed_len()), "Upload".into(), "My mods".into()];
     let words: Vec<&str> = tabs.iter().map(String::as_str).collect();
     super::options::tab_row(d, m, 5, &words, PAGES.iter().position(|p| *p == v.page));
     let g = &m.grid;
@@ -1226,9 +1248,13 @@ fn info(m: &Menu) -> String {
     }
     match (v.page, m.sel) {
         (Page::Installed, 0) if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
-        (Page::Installed, 0) => "Add a custom character from a mod .zip (its mod.json and models).".into(),
+        (Page::Installed, 0) => match v.kind {
+            Kind::Court => "Add a court from a mod .zip (its mod.json and court.glb).".into(),
+            Kind::Umpire => "Add an umpire from a mod .zip (its mod.json and voice calls).".into(),
+            _ => "Add a custom character from a mod .zip (its mod.json and models).".into(),
+        },
         (Page::Installed, 1) => "Reload the game: added mods join the select, removed ones leave it.".into(),
-        (Page::Installed, s) => v.local(s).map_or(String::new(), |md| format!("{} ({}, {} of {}): press to remove it.", md.name, md.folder(), s - TOP + 1, v.list.len())),
+        (Page::Installed, s) => v.local(s).map_or(String::new(), |md| format!("{} ({}, {} of {}): press to remove it.", md.name, md.folder(), s - TOP + 1, v.locals().len())),
         (Page::Browse, _) => grid::info(m),
         (Page::Upload, 0) => match &v.account {
             Some(name) => format!("Signed in to Hugging Face as {name}."),
@@ -1276,7 +1302,7 @@ fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
     } else if let Some(md) = v.local(m.sel) {
         name = md.name.clone();
         meta = format!("Folder {}", md.folder());
-        chips = facts(&md.source, Some(md.hand), Some(md.costumes.len()), Some(md.donor));
+        chips = if v.kind == Kind::Character { facts(&md.source, Some(md.hand), Some(md.costumes.len()), Some(md.donor)) } else { facts(&md.source, None, None, None) };
         stats = v.stats.get(&md.dir).copied();
         // B250: its upload's outcome (the pull request's link, or why not)
         if let Some(u) = v.ups.get(&md.dir).filter(|_| v.page == Page::Upload) {
@@ -1292,12 +1318,13 @@ fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
     if !name.is_empty() && child.is_none() {
         // the picture (as the select's) and the △ card beside it; in a wide short panel, text right of them
         let ph = 160.0f32.min(h - 24.0);
-        let pic = [x + 12.0, ty, (ph * super::previews::CARD_W).min(w - 174.0).max(60.0), ph];
+        let aspect = v.shot_aspect.unwrap_or(super::previews::CARD_W);
+        let pic = [x + 12.0, ty, (ph * aspect).min(w - 174.0).max(60.0), ph];
         d.box3(pic, 8.0, [None, None, Some([122.0, 108.0, 115.0])], 128.0);
         if v.shot {
-            // B402: the bake's 4:5 on screen, as big as the box allows
-            let pw = pic[2].min(ph * super::previews::CARD_W);
-            let phh = pw / super::previews::CARD_W;
+            // B402: the bake's 4:5 on screen (M8f9: a court's or umpire's own shape), as big as the box allows
+            let pw = pic[2].min(ph * aspect);
+            let phh = pw / aspect;
             d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [pic[0] + (pic[2] - pw) / 2.0, pic[1] + (ph - phh) / 2.0, pw, phh], WHITE, 128.0);
         } else {
             d.centred("No picture", pic[0] + pic[2] / 2.0, pic[1] + ph / 2.0 - 7.0, 13.0, super::options::MUTED);
@@ -1448,8 +1475,11 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         v.page = Page::Browse;
         // B387: `HST_RELOAD=1`: mods changed (Later chosen), the heading's Reload shown
         v.changed = std::env::var_os("HST_RELOAD").is_some();
+        // M8f9: made up from the chosen kind's installed mods (a court or umpire with its kind, no character facts)
+        let (src, kind) = (v.locals().to_vec(), v.kind);
+        let player = kind == Kind::Character;
         v.store = Some(
-            v.list.iter().take(if screen == "browsemods" { 60 } else { 9 }).enumerate().map(|(i, md)| {
+            src.iter().take(if screen == "browsemods" { 60 } else { 9 }).enumerate().map(|(i, md)| {
                 let meta = modstore::Meta {
                     id: md.id.clone(),
                     name: md.name.clone(),
@@ -1457,17 +1487,18 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
                     author: ["FIZL0", "someone", ""][i % 3].into(),
                     size: (i as u64 + 1) * 7 << 20,
                     sha256: if screen == "browsemods" { format!("{i:064x}") } else { format!("{:064}", i % 2) },
-                    style: (i % 3 != 2).then_some((i % 4) as u8),
-                    grades: (i % 3 != 2).then_some([5, 4, 3, 2, 1].map(|g: u8| 1 + (g + i as u8) % 5)),
-                    hand: Some(if md.hand < 0.0 { -1 } else { 1 }),
-                    costumes: Some(md.costumes.len() as u32),
-                    like: Some(md.donor as u8),
+                    style: (player && i % 3 != 2).then_some((i % 4) as u8),
+                    grades: (player && i % 3 != 2).then_some([5, 4, 3, 2, 1].map(|g: u8| 1 + (g + i as u8) % 5)),
+                    hand: player.then_some(if md.hand < 0.0 { -1 } else { 1 }),
+                    costumes: player.then_some(md.costumes.len() as u32),
+                    like: player.then_some(md.donor as u8),
+                    kind,
                     ..Default::default()
                 };
                 Entry { meta, rev: if i % 3 == 0 { "main".into() } else { format!("refs/pr/{}", 100 - i) }, verified: i % 3 == 0 }
             }).collect(),
         );
-        v.have = v.store.iter().flatten().zip(&v.list).take(4).map(|(e, md)| (e.key(), (format!("{:064}", 0), md.dir.clone()))).collect();
+        v.have = v.store.iter().flatten().zip(&src).take(4).map(|(e, md)| (e.key(), (format!("{:064}", 0), md.dir.clone()))).collect();
         m.sel = 2;
         // B372: the grid: the first four installed (the second an update), two downloading and one queued, no
         // network for the made-up mods' pictures; `HST_CHILD=search` searches "ma", `=keys` has the on-screen keyboard up
@@ -1747,7 +1778,7 @@ fn page(
         shelf.shots.retain(|k, h| !k.starts_with("local/") || h.is_some());
     }
     // an installed store mod shows the installed one's picture
-    let local = menu.add.hovered(menu.sel).and_then(|e| menu.add.installed(e)).and_then(|(_, dir)| menu.add.list.iter().find(|m| m.dir == *dir));
+    let local = menu.add.hovered(menu.sel).and_then(|e| menu.add.installed(e)).and_then(|(_, dir)| menu.add.locals().iter().find(|m| m.dir == *dir));
     let local = local.or_else(|| menu.add.local(menu.sel)).filter(|_| on);
     card.want = None;
     shelf.shown = if let Some(m) = local {
@@ -1756,12 +1787,14 @@ fn page(
         let h = match shelf.shots.get(&key) {
             Some(h) => h.clone(),
             None => {
-                let h = super::previews::card(&menu.add.iso, m).and_then(png).map(|i| images.add(i));
+                // M8f9: a court's or umpire's own picture (the select bakes characters only)
+                let pic = if menu.add.kind == Kind::Character { super::previews::card(&menu.add.iso, m) } else { own_picture(&m.dir, menu.add.kind) };
+                let h = pic.and_then(png).map(|i| images.add(i));
                 shelf.shots.insert(key, h.clone());
                 h
             }
         };
-        if h.is_none() {
+        if h.is_none() && menu.add.kind == Kind::Character {
             card.want = Some(m.clone());
         }
         h
@@ -1776,6 +1809,7 @@ fn page(
         None
     };
     menu.add.shot = shelf.shown.is_some();
+    menu.add.shot_aspect = shelf.shown.as_ref().filter(|_| menu.add.kind != Kind::Character).and_then(|h| images.get(h)).map(|i| i.width() as f32 / i.height().max(1) as f32);
     let rect = window.single().ok().and_then(|w| {
         // the view's % → the window's (B117: a fixed aspect ratio's view sits inside the window)
         let size = Vec2::new(w.width(), w.height()).max(Vec2::ONE);
@@ -1805,6 +1839,16 @@ impl Shelf {
             }
         }
     }
+}
+
+/// M8f9: an installed court's or umpire's own picture (the standard's `previews/court.png` / `previews/umpire.png`).
+fn own_picture(dir: &Path, kind: Kind) -> Option<Vec<u8>> {
+    let f = match kind {
+        Kind::Court => "previews/court.png",
+        Kind::Umpire => "previews/umpire.png",
+        _ => return None,
+    };
+    crate::modfs::read(&dir.join(f)).ok()
 }
 
 /// A store mod with no picture of its own that's installed: the select's picture of it (drawn when it has none).
@@ -2407,13 +2451,17 @@ mod tests {
 
     /// B373: the kind tabs filter every page (a court in the store shows on Courts only, never on Characters), L2 /
     /// R2 and a tap switch them on every page, and a kind the store doesn't carry yet is an empty page naming its task
-    /// where only the tabs and ○ do anything; the legend lists L2 / R2.
+    /// where only the tabs and ○ do anything; the legend lists L2 / R2. M8f9: courts and umpires are carried: their
+    /// tabs list the store's and the installed ones of their kind (counted per tab), and Browse's rail drops the
+    /// character-only filters there.
     #[test]
     fn kind_tabs_filter_every_page() {
         let e = |id: &str, kind: Kind| Entry { meta: Meta { id: id.into(), name: id.into(), author: "ann".into(), sha256: "1".repeat(64), size: 1, kind, ..Default::default() }, rev: "main".into(), verified: true };
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
-        m.add.store = Some(vec![e("c1", Kind::Character), e("court", Kind::Court), e("c2", Kind::Character), e("pack", Kind::Textures), e("new", Kind::Other)]);
+        m.add.courts = vec![a_mod("gag_c01", "Court 01")];
+        m.add.umpires = vec![a_mod("gag_ump00", "Umpire 00"), a_mod("gag_ump01", "Umpire 01")];
+        m.add.store = Some(vec![e("c1", Kind::Character), e("court", Kind::Court), e("c2", Kind::Character), e("pack", Kind::Textures), e("new", Kind::Other), e("ump", Kind::Umpire)]);
         m.add.mine = m.add.store.clone();
         let mut out = Vec::new();
         let ids = |m: &Menu| m.add.items().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
@@ -2424,31 +2472,55 @@ mod tests {
             let local = matches!(page, Page::Installed | Page::Upload);
             if local {
                 assert_eq!(m.add.rows() - m.add.acts(), 2, "{page:?}");
+                assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
             } else {
                 assert_eq!(ids(&m), ["c1", "c2"], "{page:?}");
-                assert_eq!(m.add.kind_counts(), [2, 0, 0, 0], "a court or pack in the store isn't installable yet");
+                assert_eq!(m.add.kind_counts(), [2, 1, 1, 0], "a pack in the store isn't installable yet");
             }
-            // R2 to Courts: nothing to choose, the empty state's words name M8f
+            // R2 to Courts: the court only, installed or in the store
             m.mods_step(r2, &mut out);
-            assert_eq!((m.add.kind, m.add.rows(), m.sel), (Kind::Court, 0, 0), "{page:?}");
-            assert!(info(&m).contains("M8f"));
+            assert_eq!(m.add.kind, Kind::Court, "{page:?}");
+            assert!(!m.add.empty_kind());
+            if local {
+                assert_eq!(m.add.rows() - m.add.acts(), 1);
+                assert_eq!(m.add.local(m.add.acts()).unwrap().id, "gag_c01");
+            } else {
+                assert_eq!(ids(&m), ["court"], "{page:?}");
+            }
+            if page == Page::Browse {
+                assert!(m.add.rail().iter().all(|o| !matches!(o, grid::Opt::Style(_) | grid::Opt::Left(_))));
+            }
+            // and Umpires
+            m.mods_step(r2, &mut out);
+            assert_eq!(m.add.kind, Kind::Umpire);
+            if local {
+                assert_eq!(m.add.local(m.add.acts() + 1).unwrap().id, "gag_ump01");
+            } else {
+                assert_eq!(ids(&m), ["ump"], "{page:?}");
+            }
+            // R2 to Texture packs: nothing to choose, the empty state's words name M5
+            m.mods_step(r2, &mut out);
+            assert_eq!((m.add.kind, m.add.rows(), m.sel), (Kind::Textures, 0, 0), "{page:?}");
+            assert!(info(&m).contains("mods/texture-replacements/"));
             for k in [ok(), Press { down: true, ..default() }, Press { card: true, ..default() }] {
                 m.mods_step(k, &mut out);
-                assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Court, 0));
+                assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Textures, 0));
             }
-            // L2 twice round to Texture packs; a tap on Characters' tab back
+            // L2 back to Umpires, R2 on round; a tap on Characters' tab back
             m.mods_step(l2, &mut out);
-            m.mods_step(l2, &mut out);
-            assert_eq!(m.add.kind, Kind::Textures);
-            assert!(info(&m).contains("mods/texture-replacements/"));
+            assert_eq!(m.add.kind, Kind::Umpire);
+            m.mods_step(r2, &mut out);
+            m.mods_step(r2, &mut out);
+            assert_eq!(m.add.kind, Kind::Character);
+            m.add.kind = Kind::Court;
             let tab = super::super::pointer::tests::hits(&m).0.into_iter().find(|h| h.act == super::super::pointer::Act::Kind(0)).unwrap().rect;
             assert_eq!(super::super::pointer::tests::act_at(&m, tab[0] + 4.0, tab[1] + 4.0), Some(super::super::pointer::Act::Kind(0)));
             m.point(super::super::Dev::Keys, super::super::pointer::Act::Kind(0), true);
             assert_eq!(m.add.kind, Kind::Character);
             // Q / E still change the page from an empty kind, which stays chosen
-            m.add.kind = Kind::Umpire;
+            m.add.kind = Kind::Textures;
             m.mods_step(Press { next: true, ..default() }, &mut out);
-            assert_eq!(m.add.kind, Kind::Umpire);
+            assert_eq!(m.add.kind, Kind::Textures);
             assert_ne!(m.add.page, page);
             m.add.page = page;
         }
@@ -2461,7 +2533,7 @@ mod tests {
         assert!(acts.iter().any(|(a, l)| *a == super::super::legend::Act::Kind && l == "Kind"));
         // ○ from an empty kind leaves for the main menu; its legend has no moves or ✕
         m.add.by = None;
-        m.add.kind = Kind::Court;
+        m.add.kind = Kind::Textures;
         let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
         assert_eq!(acts.iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), ["Tab", "Kind", "Back"]);
         m.mods_step(Press { back: true, ..default() }, &mut out);

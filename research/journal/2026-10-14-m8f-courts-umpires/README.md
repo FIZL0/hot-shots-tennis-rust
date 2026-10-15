@@ -20,3 +20,6 @@ One README per task; iterations below, newest last.
 - `5-GAG-ADDITIVE-FINAL.md` — M8f5a1 done: GaG's additive flag (texture record +0x24 bit 0) checked over all
   2558 court records; flagged materials export as `@add` (HST-MODS 27c618f), yamate's black octagon is now sun
   dapples. c17's black bars come from a gimmick → M8f5a2.
+- `6-STORE-FINAL.md` — M8f9 done: court and umpire mods upload, list (Courts / Umpires tabs) and install with
+  `kind` in `meta.json` (`mods::read_any`); umpire heads on the Mods pages (B400). The parent still waits on M8f7
+  (NPCs), M8f8 and M8f10.
