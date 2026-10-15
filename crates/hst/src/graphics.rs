@@ -296,7 +296,33 @@ pub fn plugin(app: &mut App) {
     if std::env::var_os("HST_FPS").is_some() {
         app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split));
     }
+    // `HST_PASSES=1` (P32): Bevy's per-pass render timings, with GPU time where the backend gives timestamps (Vulkan
+    // does, Metal doesn't), logged every 5 s: which pass a heavy court spends its GPU time in
+    if std::env::var_os("HST_PASSES").is_some() {
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, log_passes);
+    }
 }
+
+/// `HST_PASSES=1`: every 5 s, the ten render passes that took longest on the GPU (`elapsed_gpu`; CPU where none).
+/// A pass that stopped running keeps its last average (the menus' `msaa_writeback` shows on through a match).
+fn log_passes(d: Res<bevy::diagnostic::DiagnosticsStore>, time: Res<Time<Real>>, mut next: Local<f32>) {
+    let t = time.elapsed_secs();
+    if t < *next {
+        return;
+    }
+    *next = t + 5.0;
+    let gpu = d.iter().any(|g| g.path().as_str().ends_with("elapsed_gpu"));
+    let kind = if gpu { "elapsed_gpu" } else { "elapsed_cpu" };
+    let mut passes: Vec<(f64, String)> = d
+        .iter()
+        .filter(|g| g.path().as_str().starts_with("render/") && g.path().as_str().ends_with(kind))
+        .filter_map(|g| Some((g.average()?, g.path().as_str().trim_start_matches("render/").trim_end_matches(kind).trim_end_matches('/').to_string())))
+        .collect();
+    passes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top: Vec<String> = passes.iter().take(10).map(|(ms, p)| format!("{p} {ms:.2}")).collect();
+    eprintln!("passes {kind} ms at {t:.0} s: {}", top.join(", "));
+}
+
 
 /// The Mesh and Smooth Normals settings where the loaders read them (`MESH`, `SMOOTH`).
 fn mesh_detail(g: Res<Graphics>) {
