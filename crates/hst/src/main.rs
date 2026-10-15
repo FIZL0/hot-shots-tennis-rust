@@ -180,7 +180,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--show-fps-detailed" => gfx.show_fps = 2,
             // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
             "--sway-lod" | "--sway_lod" => noise::set_lod(a.next().is_none_or(|v| v != "off"), true),
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);

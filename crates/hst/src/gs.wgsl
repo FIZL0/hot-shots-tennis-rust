@@ -45,6 +45,10 @@ struct VertexOutput {
 #else
     @location(9) @interpolate(linear) fog: f32,
 #endif
+#ifdef GS_AO
+    // G1: the share of the vertex's light that isn't the sun's (ambient + the second light), what SSAO occludes
+    @location(10) ambient: f32,
+#endif
 }
 
 #ifdef MORPH_TARGETS
@@ -152,6 +156,15 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let tag = mesh_functions::get_tag(instance);
     let scale = select(1.0, bitcast<f32>(tag & 0x7fffffffu), (tag & 0x80000000u) != 0u);
     c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * scale * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
+#ifdef GS_AO
+    let fill = dot(gs.ambient.rgb * (1.0 - x * 0.5) + gs.light2_color.rgb * diffuse2, vec3(1.0));
+    let sun = dot(gs.light_color.rgb * scale * (1.0 - 0.6 * x) * diffuse, vec3(1.0));
+    out.ambient = select(1.0, fill / (fill + sun), fill + sun > 0.0);
+#endif
+#else
+#ifdef GS_AO
+    out.ambient = 1.0;
+#endif
 #endif
     // VU1: F from the vertex's view depth (clip w), at most F near, then at least F far (MINI, MAX), FTOI to an
     // integer; both ends go towards 255 as the eye rises past 30 m (game y = −Bevy y)
@@ -244,6 +257,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if a8 >= 128.0 { discard; }
 #endif
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+#ifdef GS_AO
+    // G1 (not the original's): the SSAO's visibility takes off the ambient share of the light, before the fog
+    // (Bevy's GTAO reads ≈ 0.89 on the open, flat court seen from the match camera: that is 1, unoccluded)
+    let ao = min(textureLoad(view_bindings::screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0).r / 0.89, 1.0);
+    rgb *= 1.0 - in.ambient * (1.0 - ao);
+#endif
 #ifdef GS_FOG
     // GS: the interpolated F truncated to 8 bits, (F·C + (255 − F)·FOGCOL) >> 8 on 8-bit values
 #ifdef GS_NO_LINEAR
