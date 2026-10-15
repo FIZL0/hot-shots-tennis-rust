@@ -207,6 +207,7 @@ impl Menu {
             // B269: the cursor on the cell the last pick readied on
             if let Some(c) = self.last {
                 self.put(i, c);
+                self.players[i].tab = self.last_tab;
                 self.skip_taken();
             }
             // B311: on the costume the lobby has
@@ -584,6 +585,7 @@ impl Menu {
             Some(Some(c)) => {
                 self.players[i] = default();
                 self.put(i, Some(c));
+                self.players[i].tab = self.last_tab;
                 self.skip_taken();
                 if self.blocked(i) {
                     return Some(first);

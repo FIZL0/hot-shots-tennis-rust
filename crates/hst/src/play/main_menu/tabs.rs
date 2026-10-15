@@ -511,6 +511,33 @@ mod tests {
         assert_eq!(m.view(1).lines[2], Line::Head(1));
     }
 
+    /// B428: 1P readied from Favorites: the computer player 1P picks for next opens in Favorites too, on the same
+    /// tile (not the character's own section); readied from its own section, the COM's opens there.
+    #[test]
+    fn the_com_opens_in_the_section_1p_readied_in() {
+        let ok = press(|p| &mut p.ok);
+        let section = |m: &Menu, q: usize| {
+            let secs = m.sections();
+            let s = m.section_at(q, &secs);
+            (secs[s].name.clone(), secs[s].cells.iter().position(|&c| c == m.cell(q)).unwrap())
+        };
+        for (tab, want) in [(FAVORITES, ("Favorites".to_string(), 0)), (HOT_SHOTS, ("Golf".to_string(), 1))] {
+            let mut m = menu();
+            m.put(0, Some(Who::Mod(4)));
+            m.toggle_favorite(0, &mut Vec::new());
+            m.players[0].tab = tab;
+            assert_eq!(section(&m, 0), want);
+            m.step(Dev::Keys, ok);
+            assert_eq!(m.driven(Dev::Keys), Some(1));
+            assert_eq!((m.cell(1), section(&m, 1)), (Some(Who::Mod(4)), want.clone()));
+            // → walks on from there
+            if tab == FAVORITES {
+                m.step(Dev::Keys, press(|p| &mut p.right));
+                assert_eq!(section(&m, 1), ("Hot Shots Tennis".into(), 0), "on past Favorites' end");
+            }
+        }
+    }
+
     #[test]
     fn tap_a_heading() {
         let mut m = menu();
