@@ -172,15 +172,16 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
         Screen::Main if m.main_rows().get(s) == Some(&super::home::Row::Update) => v.extend([(Act::UpDown, "Move"), (Act::Ok, crate::update::button()), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { "Quit" } else { "Choose" })]),
-        Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
+        Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
             let open = options::page(m.screen).get(s).is_some_and(|o| !options::locked(*o));
-            if m.editing.is_some() && open {
+            if m.editing.is_some() && open && options::page(m.screen).get(s) != Some(&options::Opt::Advanced) {
                 // B326: the row picked: ◀ ▶ change it, ✕ sets it, ○ puts it back
                 v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Select"), (Act::Back, "Cancel")]);
             } else {
                 v.push((Act::UpDown, "Option"));
                 if open {
-                    v.push((Act::Ok, "Change"));
+                    // B411: Graphics' Advanced row opens its page
+                    v.push((Act::Ok, if options::page(m.screen).get(s) == Some(&options::Opt::Advanced) { "Open" } else { "Change" }));
                 }
                 v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
             }
@@ -1027,7 +1028,7 @@ mod tests {
             m
         };
         let mut starts: Vec<(Menu, Dev)> = vec![(Menu::default(), Dev::Keys)];
-        for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
+        for s in [Screen::Display, Screen::Graphics, Screen::Advanced, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
             starts.push((base(s), Dev::Keys));
         }
         let mut m = base(Screen::Main);
@@ -1037,9 +1038,9 @@ mod tests {
         let mut m = base(Screen::Mods);
         m.add.kind = crate::modstore::Kind::Umpire;
         starts.push((m, Dev::Keys));
-        // B326: a Settings row picked, on every row of every page
-        for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings] {
-            for sel in 0..options::page(s).len() {
+        // B326: a Settings row picked, on every row of every page (B411: Advanced, which opens its page, never is)
+        for s in [Screen::Display, Screen::Graphics, Screen::Advanced, Screen::Sound, Screen::ModSettings] {
+            for sel in (0..options::page(s).len()).filter(|&i| options::page(s)[i] != options::Opt::Advanced) {
                 let mut m = base(s);
                 (m.sel, m.editing) = (sel, Some(m.settings));
                 starts.push((m, Dev::Keys));

@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, SWAY_LOD, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -51,10 +51,10 @@ pub(super) enum Opt {
     FewerShadows,
     /// B364: the characters' share of triangles (`Graphics::mesh`, `lod.rs`).
     Mesh,
-    /// B344: far/unseen characters' sway less often.
-    SwayLod,
     /// B374: look for a newer release at start (`crate::update`), desktop only.
     UpdateCheck,
+    /// B411: Graphics' last row, ✕ opens the Advanced sub-page (`Screen::Advanced`).
+    Advanced,
 }
 use Opt::*;
 
@@ -71,16 +71,19 @@ pub(super) const TABS: [(&str, Screen); 6] = [
 pub(super) fn tabs_shown() -> &'static [(&'static str, Screen)] {
     if super::touch_page() { &TABS } else { &TABS[..5] }
 }
-/// `page`'s tab.
+/// `page`'s tab (B411: Advanced's is Graphics).
 pub(super) fn tab(page: Screen) -> usize {
+    let page = if page == Screen::Advanced { Screen::Graphics } else { page };
     TABS.iter().position(|(_, s)| *s == page).unwrap_or(0)
 }
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] };
-/// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled];
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons] };
+/// What a preset sets, then the textures, then the way into Advanced.
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled, Advanced];
+/// B411: Graphics → Advanced, the speed-up switches for a slow device.
+const ADVANCED: &[Opt] = &[Mesh, FewerShadows, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -93,6 +96,7 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
     match s {
         Screen::Display => DISPLAY,
         Screen::Graphics => GRAPHICS,
+        Screen::Advanced => ADVANCED,
         Screen::Sound => SOUND,
         Screen::ModSettings => MODS,
         Screen::Mobile => MOBILE,
@@ -135,7 +139,7 @@ fn label(o: Opt) -> &'static str {
         UpdateCheck => "Check for Updates",
         FewerShadows => "Fewer Shadows",
         Mesh => "Mesh",
-        SwayLod => "Sway LOD",
+        Advanced => "Advanced",
     }
 }
 
@@ -172,7 +176,7 @@ fn about(o: Opt) -> &'static str {
         Vibration => vibration_about(),
         UpdateCheck => "Look for a newer version when the game starts. The main menu offers it: Update downloads and checks it, then restarts the game into it (or opens its page where the game can't replace itself).",
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
-        SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
+        Advanced => "Switches that trade a little detail for speed on a slow device: the characters' mesh detail, fewer shadows, skipping what's off-screen.",
     }
 }
 
@@ -224,6 +228,7 @@ fn choices(o: Opt) -> Vec<String> {
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
         OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
         AtOnce => (0..=super::max_downloads()).map(at_once_name).collect(),
+        Advanced => Vec::new(),
         _ => words(&["Off", "On"]),
     }
 }
@@ -292,10 +297,7 @@ impl Settings {
             }
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
             Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
-            SwayLod => {
-                self.0[SWAY_LOD] = !self.0[SWAY_LOD];
-                crate::noise::set_lod(self.0[SWAY_LOD], false);
-            }
+            Advanced => {}
         }
     }
 
@@ -331,7 +333,7 @@ impl Settings {
             Vibration => on_off(self.0[VIBRATION]),
             UpdateCheck => on_off(self.0[UPDATE_CHECK]),
             FewerShadows => on_off(g.fewer_shadows),
-            SwayLod => on_off(self.0[SWAY_LOD]),
+            Advanced => ">".into(),
         }
     }
 }
@@ -342,6 +344,10 @@ impl Menu {
     /// [`Self::step_tabs`].
     pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
         let o = page(self.screen).get(self.sel).copied().filter(|&o| !locked(o));
+        // B411: Advanced is never picked (it opens its page)
+        if o == Some(Advanced) {
+            self.editing = None;
+        }
         if let Some(was) = self.editing {
             let Some(o) = o else {
                 self.editing = None;
@@ -370,6 +376,11 @@ impl Menu {
                 }
                 out.push(Effect::Sound(1));
             }
+            return;
+        }
+        // B411: Advanced opens its page instead of being picked
+        if k.ok && o == Some(Advanced) {
+            self.go(Screen::Advanced, out);
             return;
         }
         if k.ok && o.is_some() {
@@ -422,9 +433,13 @@ impl Menu {
     }
 
     /// Any Settings page: L1 / R1 open the tab before / after it (wrapping), ○ goes back to the main menu's
-    /// Settings row (closes the pause overlay).
+    /// Settings row (closes the pause overlay); B411: on Advanced, ○ goes back to Graphics' Advanced row.
     pub(super) fn step_tabs(&mut self, k: Press, out: &mut Vec<Effect>) {
-        if k.prev || k.next {
+        if k.back && self.screen == Screen::Advanced {
+            self.screen = Screen::Graphics;
+            self.sel = GRAPHICS.len() - 1;
+            out.push(Effect::Sound(1));
+        } else if k.prev || k.next {
             let tabs = tabs_shown();
             let n = tabs.len();
             self.go(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
@@ -464,7 +479,7 @@ pub(super) fn row(list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
 fn tabs(d: &mut Draw, m: &Menu) {
     let tabs = tabs_shown();
     let words: Vec<&str> = tabs.iter().map(|t| t.0).collect();
-    tab_row(d, m, 1, &words, tabs.iter().position(|t| t.1 == m.screen));
+    tab_row(d, m, 1, &words, tabs.iter().position(|t| t.1 == TABS[tab(m.screen)].1));
 }
 
 /// Pills `words` across the title band, right of title `title`'s tab (shrunk to fit a narrow window), `on` dark; a
@@ -595,7 +610,9 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
         d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
     }
-    d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
+    // B411: Advanced says where it is (its tab is Graphics')
+    let foot = if m.screen == Screen::Advanced { "Graphics > Advanced: changes apply right away" } else { "Changes apply right away" };
+    d.text(foot, list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
         let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
         let note = if preset {
@@ -770,42 +787,7 @@ mod tests {
                 assert_eq!(m.sel, want);
             }
             assert_eq!(m.settings, Settings::default());
-            for (i, &o) in page(s).iter().enumerate() {
-                m.sel = i;
-                let was = m.settings;
-                for k in [Press { right: true, ..default() }, Press { left: true, ..default() }] {
-                    assert!(m.step(Dev::Keys, k).is_empty() && m.settings == was, "{o:?}");
-                }
-                m.step(Dev::Keys, press(|k| &mut k.ok));
-                assert_eq!(m.editing, Some(was), "{o:?}");
-                let fx = m.step(Dev::Keys, press(|k| &mut k.right));
-                if matches!(o, Volume(_)) {
-                    m.step(Dev::Keys, press(|k| &mut k.left));
-                    let fx = m.step(Dev::Keys, press(|k| &mut k.left));
-                    assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
-                } else {
-                    assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
-                    m.step(Dev::Keys, press(|k| &mut k.left));
-                    assert_eq!(m.settings, was, "{o:?}");
-                    m.step(Dev::Keys, press(|k| &mut k.right));
-                }
-                // still on it: ↓ and R1 do nothing while it's picked
-                m.step(Dev::Keys, press(|k| &mut k.down));
-                m.step(Dev::Keys, press(|k| &mut k.next));
-                assert_eq!((m.screen, m.sel), (s, i));
-                let changed = m.settings;
-                let fx = m.step(Dev::Keys, press(|k| &mut k.back));
-                assert!(fx.contains(&Effect::SaveSettings) && m.settings == was && m.editing.is_none(), "{o:?}: ○ puts it back");
-                m.step(Dev::Keys, press(|k| &mut k.ok));
-                m.settings = changed;
-                m.step(Dev::Keys, press(|k| &mut k.ok));
-                assert!(m.settings == changed && m.editing.is_none(), "{o:?}: ✕ keeps it");
-                for _ in 0..12 {
-                    assert!(choices(o).contains(&m.settings.value(o)), "{o:?} {}", m.settings.value(o));
-                    m.settings.step(o, -1);
-                }
-                m.settings = was;
-            }
+            each_row(&mut m, s);
             m.sel = 0;
             m.step(Dev::Keys, press(|k| &mut k.next));
         }
@@ -816,6 +798,71 @@ mod tests {
         assert_eq!((m.screen, m.sel), (Screen::Main, m.main_at(super::super::home::Row::Settings)));
     }
 
+    /// [`every_page`]'s checks of each of page `s`'s rows; B411: Graphics' Advanced row opens its page (✕, its rows
+    /// checked the same, its tab Graphics', ○ back on the Advanced row).
+    fn each_row(m: &mut Menu, s: Screen) {
+        for (i, &o) in page(s).iter().enumerate() {
+            m.sel = i;
+            if o == Advanced {
+                assert!(m.settings.value(o) == ">" && choices(o).is_empty());
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                assert_eq!((m.screen, m.sel, m.editing, tab(m.screen)), (Screen::Advanced, 0, None, tab(Screen::Graphics)));
+                each_row(m, Screen::Advanced);
+                m.step(Dev::Keys, press(|k| &mut k.back));
+                assert_eq!((m.screen, m.sel), (s, i));
+                continue;
+            }
+            let was = m.settings;
+            for k in [Press { right: true, ..default() }, Press { left: true, ..default() }] {
+                assert!(m.step(Dev::Keys, k).is_empty() && m.settings == was, "{o:?}");
+            }
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            assert_eq!(m.editing, Some(was), "{o:?}");
+            let fx = m.step(Dev::Keys, press(|k| &mut k.right));
+            if matches!(o, Volume(_)) {
+                m.step(Dev::Keys, press(|k| &mut k.left));
+                let fx = m.step(Dev::Keys, press(|k| &mut k.left));
+                assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
+            } else {
+                assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
+                m.step(Dev::Keys, press(|k| &mut k.left));
+                assert_eq!(m.settings, was, "{o:?}");
+                m.step(Dev::Keys, press(|k| &mut k.right));
+            }
+            // still on it: ↓ and R1 do nothing while it's picked
+            m.step(Dev::Keys, press(|k| &mut k.down));
+            m.step(Dev::Keys, press(|k| &mut k.next));
+            assert_eq!((m.screen, m.sel), (s, i));
+            let changed = m.settings;
+            let fx = m.step(Dev::Keys, press(|k| &mut k.back));
+            assert!(fx.contains(&Effect::SaveSettings) && m.settings == was && m.editing.is_none(), "{o:?}: ○ puts it back");
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            m.settings = changed;
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            assert!(m.settings == changed && m.editing.is_none(), "{o:?}: ✕ keeps it");
+            for _ in 0..12 {
+                assert!(choices(o).contains(&m.settings.value(o)), "{o:?} {}", m.settings.value(o));
+                m.settings.step(o, -1);
+            }
+            m.settings = was;
+        }
+    }
+
+    /// B411: Display keeps only display rows; the speed-up switches and Mesh are on Advanced, under Graphics, whose
+    /// tab stays lit there and whose L1 / R1 go to Graphics' neighbours.
+    #[test]
+    fn advanced_under_graphics() {
+        assert!(!DISPLAY.iter().any(|o| matches!(o, FewerShadows | Cull | Mesh)));
+        assert!(ADVANCED.iter().all(|o| !GRAPHICS.contains(o) && !DISPLAY.contains(o)) && GRAPHICS.last() == Some(&Advanced));
+        for (k, want) in [(press(|k| &mut k.next), Screen::Sound), (press(|k| &mut k.prev), Screen::Display)] {
+            let mut m = Menu { screen: Screen::Graphics, sel: GRAPHICS.len() - 1, ..default() };
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            assert_eq!(m.screen, Screen::Advanced);
+            m.step(Dev::Keys, k);
+            assert_eq!(m.screen, want);
+        }
+    }
+
     /// B294: at any aspect every page's rows sit in its list over the footnote, the side panel has room, and the
     /// busiest page draws within the pause overlay's quad pool.
     #[test]
@@ -823,7 +870,7 @@ mod tests {
         let t = super::super::pointer::tests::text_with_mods(0);
         for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 5.0 / 4.0, 9.0 / 16.0, 0.4] {
             let grid = Grid::fit(a);
-            for (_, s) in TABS {
+            for s in TABS.map(|t| t.1).into_iter().chain([Screen::Advanced]) {
                 let n = if s == Screen::Controls { controls::action_names().count() + 1 } else { page(s).len() };
                 let (list, side) = boxes(&grid, n);
                 assert!(side[2] >= 150.0 && side[3] >= 150.0 && list[0] + list[2] <= side[0] + side[2], "{a}: {list:?} {side:?}");
@@ -869,8 +916,8 @@ mod tests {
     /// too, which no native page shows) lands on each of its choices once and on nothing else.
     #[test]
     fn choices_are_each_rows_own_values() {
-        let all = [DISPLAY, &[Display, Renderer], GRAPHICS, SOUND, MODS, MOBILE].concat();
-        for o in all.into_iter().filter(|o| !matches!(o, Volume(_) | Preset)) {
+        let all = [DISPLAY, &[Display, Renderer], GRAPHICS, ADVANCED, SOUND, MODS, MOBILE].concat();
+        for o in all.into_iter().filter(|o| !matches!(o, Volume(_) | Preset | Advanced)) {
             let mut s = Settings::default();
             let want = choices(o);
             let seen: Vec<_> = (0..want.len()).map(|_| (s.value(o), s.step(o, 1)).0).collect();
@@ -984,9 +1031,7 @@ mod tests {
         s.step(AtOnce, 1);
         s.step(AtOnce, 1);
         assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once(), Settings::parse(&s.text()) == s), ("1", 1, true));
-        // B344: Sway LOD, off by default, saved
-        assert_eq!(s.value(SwayLod), "Off");
-        s.step(SwayLod, 1);
-        assert!(s.0[SWAY_LOD] && s.text().contains("sway_lod = on") && Settings::parse(&s.text()) == s);
+        // B411: Sway LOD is gone; an old settings.txt's key is ignored
+        assert_eq!(Settings::parse(&format!("{}sway_lod = on\n", s.text())), s);
     }
 }
