@@ -55,6 +55,7 @@ mod home;
 mod names;
 mod online;
 mod options;
+mod osk;
 mod mods_kind;
 mod mods_screen;
 mod pointer;
@@ -3296,6 +3297,7 @@ pub fn plugin(app: &mut App) {
     );
     previews::plugin(app);
     mods_screen::plugin(app);
+    osk::plugin(app);
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));

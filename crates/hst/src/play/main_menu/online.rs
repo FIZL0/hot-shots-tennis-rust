@@ -16,6 +16,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::osk::{self, Did};
 use super::pointer::{Act, OK};
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 
@@ -107,7 +108,6 @@ pub enum Fx {
 /// Join by Code's symbol keys (then its four buttons).
 const KEYS: usize = SYMBOLS.len();
 /// The name's keys on the same grid, and its longest.
-const NAME_KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const NAME_MAX: usize = 16;
 /// B323: a relay URL's keys (the rest typed or pasted), and its longest.
 const URL_KEYS: &[u8; 40] = b"abcdefghijklmnopqrstuvwxyz0123456789.-:/";
@@ -247,8 +247,6 @@ impl Menu {
     pub(super) fn keys(&self) -> &'static [u8] {
         if self.net.url {
             URL_KEYS
-        } else if self.net.naming {
-            NAME_KEYS
         } else {
             SYMBOLS
         }
@@ -765,6 +763,8 @@ impl Menu {
                     self.back_to_online(out);
                 }
             }
+            // B441: the name types in the Mods page's keyboard popup (`osk`) over the Online menu
+            Screen::Code if self.net.naming && !self.net.url => self.online_name_step(k, out),
             Screen::Code => {
                 // 8 columns of symbols, 4 rows (the name's: 5), then Delete, Paste (Clear), Join (Save), Back (two
                 // columns each)
@@ -787,10 +787,6 @@ impl Menu {
                             out.push(Sound(0));
                         }
                         Some(0) => out.push(Sound(if self.net.entry.pop().is_some() { 1 } else { 0 })),
-                        Some(1) if self.net.naming && !self.net.url => {
-                            self.net.entry.clear();
-                            out.push(Sound(1));
-                        }
                         Some(1) => out.push(Effect::Online(Fx::Paste)),
                         // B323: Save a relay URL that parses: Host, Find and Join use it from now on (the network
                         // restarts on it), and online.txt keeps it
@@ -806,11 +802,6 @@ impl Menu {
                                 out.push(Sound(1));
                             }
                         },
-                        Some(2) if self.net.naming && !self.net.entry.trim().is_empty() => {
-                            self.net.cfg.get_or_insert_with(Online::default).name = self.net.entry.trim().to_string();
-                            out.extend([Sound(2), Effect::Online(Fx::SaveCfg)]);
-                            self.code_back(out);
-                        }
                         Some(2) if !self.net.naming && is_short(&self.net.entry) => {
                             self.net.paste = self.net.entry.clone();
                             self.join_code(out);
@@ -991,6 +982,32 @@ impl Menu {
         }
         self.net.status.clear();
         self.go(Screen::Chars, out);
+    }
+
+    /// B441: a press in the name's popup: its keys type the name (in capitals), Save keeps one that isn't blank,
+    /// ○ leaves it as it was.
+    fn online_name_step(&mut self, k: Press, out: &mut Vec<Effect>) {
+        let did = osk::step(&mut self.sel, k, out);
+        match did {
+            Did::Nothing => {}
+            Did::Type(c) => self.type_char(c.to_ascii_uppercase()),
+            Did::Space => self.type_char(' '),
+            Did::Delete => _ = self.net.entry.pop(),
+            Did::Clear => self.net.entry.clear(),
+            Did::Done if self.net.entry.trim().is_empty() => {
+                out.pop();
+                out.push(Effect::Sound(1));
+            }
+            Did::Done => {
+                self.net.cfg.get_or_insert_with(Online::default).name = self.net.entry.trim().to_string();
+                out.push(Effect::Online(Fx::SaveCfg));
+                self.code_back(out);
+            }
+            Did::Close => {
+                out.pop();
+                self.code_back(out);
+            }
+        }
     }
 
     fn code_back(&mut self, out: &mut Vec<Effect>) {
@@ -1327,25 +1344,23 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             };
             d.info(&info);
         }
+        Screen::Code if m.net.naming && !m.net.url => {
+            // B441: the Mods page's keyboard popup over the Online menu
+            online_screen(d, m, hand_x);
+            let full = m.net.entry.chars().count() >= NAME_MAX;
+            osk::draw(d, &m.net.entry, m.sel, hand_x, osk::Look { title: Some("Your name (the other players see it)"), done: "Save", full });
+        }
         Screen::Code => {
             d.frame(0, 5);
             const ON: [f32; 3] = [128.0, 110.0, 40.0];
             const OFF: [f32; 3] = [70.0, 70.0, 80.0];
             let keys = m.keys();
-            let (top, rows) = if m.net.naming { (124.0, keys.len() / 8) } else { (132.0, 4) };
+            let (top, rows) = if m.net.url { (124.0, keys.len() / 8) } else { (132.0, 4) };
             if m.net.url {
                 // B323: the URL so far in the long pill, shrunk to fit, the cursor after it
                 d.pill(320.0 - 232.0 + 3.0, 72.0, 458.0, [40.0, 40.0, 50.0]);
                 let cursor = if m.net.entry.len() < URL_MAX { "_" } else { "" };
                 d.fitted(&format!("{}{cursor}", m.net.entry), 320.0, 78.0, 26.0, 420.0);
-            } else if m.net.naming {
-                // the name so far in one long pill, the cursor after it
-                d.pill(320.0 - 232.0 + 3.0, 72.0, 458.0, [40.0, 40.0, 50.0]);
-                let w = d.width(&m.net.entry, 26.0);
-                d.centred(&m.net.entry, 320.0, 78.0, 26.0, WHITE);
-                if m.net.entry.chars().count() < NAME_MAX {
-                    d.text("_", 320.0 + w / 2.0 + 2.0, 78.0, 26.0, ON);
-                }
             } else {
                 // the code so far, a pill a symbol
                 for i in 0..SHORT {
@@ -1370,14 +1385,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             let buttons = if m.net.url {
                 ["Delete", "Paste", "Save", "Back"]
-            } else if m.net.naming {
-                ["Delete", "Clear", "Save", "Back"]
             } else {
                 ["Delete", "Paste", "Join", "Back"]
             };
             for (i, l) in buttons.iter().enumerate().filter(|_| grid) {
                 let (x, y, on) = (320.0 - 232.0 + 116.0 * i as f32 + 2.0, top + 44.0 * rows as f32 + 8.0, m.sel == keys.len() + i);
-                let dim = i == 2 && if m.net.url { crate::net::relay_url(&m.net.entry).is_err() } else if m.net.naming { m.net.entry.trim().is_empty() } else { !is_short(&m.net.entry) };
+                let dim = i == 2 && if m.net.url { crate::net::relay_url(&m.net.entry).is_err() } else { !is_short(&m.net.entry) };
                 d.pill(x, y, 112.0, if on { ON } else { OFF });
                 d.hit([x, y, 112.0, 38.0], Act::Row(keys.len() + i, OK));
                 d.centred(l, x + 56.0, y + 7.0, 24.0, if on && !dim { WHITE } else if dim { [60.0; 3] } else { [100.0; 3] });
@@ -1386,9 +1399,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
                 _ if !grid && m.net.url => "Tap to type your relay's URL (https://...); Return saves it, Back goes on to n0's relays.".into(),
                 _ if m.net.url => "Your own iroh-relay's URL (https://...): type or Paste it; Save uses it, Back goes on to n0's relays.".into(),
-                _ if !grid && m.net.naming => "Tap to type your name; Return saves it.".into(),
                 _ if !grid => "Tap to type the host's code (or paste their link or code); Return joins.".into(),
-                _ if m.net.naming => "Type your name, or pick each letter; Save keeps it.".into(),
                 _ => "Type the host's code (or pick each symbol), or Paste their link or code.".into(),
             };
             d.info(&info);
@@ -1497,7 +1508,9 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     let cfg = m.net.cfg.clone().unwrap_or_default();
     // B323: the cycle's last choice, until OK types its URL
     let relay = if m.net.custom { "Custom...".into() } else { relay_name(&cfg) };
-    let sel = m.sel.min(5);
+    // B441: the name's popup up over it: its row on, the hand the popup's
+    let popup = m.screen == Screen::Code;
+    let sel = if popup { 4 } else { m.sel.min(5) };
     let rects = row_rects(m.grid.extra);
     for (i, &r) in rects.iter().enumerate() {
         let on = i == sel;
@@ -1516,7 +1529,7 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
             fit(d, &value, x + w - 12.0 - vw, y + 5.0, 15.0, w - 80.0, INK);
         }
         d.hit(r, Act::Row(i, OK));
-        if on {
+        if on && !popup {
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 60.0 + hand_x, y + h / 2.0 - 16.0, 64.0, 32.0], WHITE, 128.0);
         }
     }
@@ -1788,8 +1801,22 @@ pub(super) fn typing(
         typed.clear();
         return;
     }
+    // B441: the name's popup: Enter (Return) is its Save
+    let popup = menu.net.naming && !menu.net.url;
+    let save = if popup { osk::DONE } else { menu.keys().len() + 2 };
     for e in typed.read().filter(|e| e.state.is_pressed()) {
         match &e.logical_key {
+            // B441: the iPhone's system keyboard's Return comes as a character: a tap on Save / Join
+            Key::Character(c) if c.contains(['\n', '\r']) => {
+                menu.sel = save;
+                if let Some(p) = pending.as_mut() {
+                    p.0.push((Act::Row(save, OK), true));
+                }
+            }
+            Key::Space if popup => {
+                menu.type_char(' ');
+                keys.clear_just_pressed(e.key_code);
+            }
             Key::Character(c) => {
                 if !e.repeat {
                     c.chars().for_each(|c| menu.type_char(c));
@@ -1801,11 +1828,10 @@ pub(super) fn typing(
                 keys.clear_just_pressed(e.key_code);
             }
             // B159: Enter (either) finishes the entry: the cursor onto Save / Join, which the menu's OK then takes
-            Key::Enter => menu.sel = menu.keys().len() + 2,
+            Key::Enter => menu.sel = save,
             _ => {}
         }
     }
-    let save = menu.keys().len() + 2;
     // B207: Start on a pad finishes the entry from any key, as Enter: the cursor onto Save / Join, which its OK takes
     if gamepads.iter().any(|g| super::controls::readable(g) && g.just_pressed(GamepadButton::Start)) {
         menu.sel = save;
@@ -1825,19 +1851,17 @@ pub(super) fn typing(
         }
     }
     // B207: typing on the phone's keyboard only: the cursor stays on Save / Join (the touch pad's ✕ takes it)
-    if touch_typing() {
+    if touch_typing() && !popup {
         menu.sel = save;
     }
     #[cfg(not(target_arch = "wasm32"))]
     let _ = &mut pending;
 }
 
-/// B207: a touch page with no controller types on the phone's own keyboard: no letter grid or its buttons.
+/// B207: a touch page with no controller types on the phone's own keyboard: no letter grid or its buttons (B441:
+/// `osk`'s mobile keyboard mode, the iPhone and Android apps' system keyboard too).
 pub(super) fn touch_typing() -> bool {
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::touched() && !crate::web::real_pad();
-    #[cfg(not(target_arch = "wasm32"))]
-    false
+    osk::mobile()
 }
 
 /// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the QR).
@@ -2335,7 +2359,21 @@ mod tests {
         assert_eq!((m.screen, m.net.naming, m.net.entry.as_str()), (Screen::Code, true, "PLAYER"));
         m.net.entry.clear();
         "Sunny Day~".chars().for_each(|c| m.type_char(c));
-        m.sel = NAME_KEYS.len() + 2;
+        // B441: the popup's keys type capitals: ✕ on its "a", Space; ○ leaves the name as it was
+        m.sel = 0;
+        m.step(dev, ok);
+        m.sel = osk::SPACE;
+        m.step(dev, ok);
+        assert_eq!(m.net.entry, "Sunny DayA ");
+        let back = m.step(dev, Press { back: true, ..default() });
+        assert_eq!((m.screen, m.sel, m.net.naming, m.net.cfg.as_ref().unwrap().name.as_str(), back), (Screen::Online, 4, false, "Player", vec![Effect::Sound(1)]));
+        m.step(dev, ok);
+        m.net.entry = "Sunny Day".into();
+        // a blank name isn't saved; Save keeps one that isn't
+        let keep = std::mem::replace(&mut m.net.entry, " ".into());
+        m.sel = osk::DONE;
+        assert_eq!((m.step(dev, ok), m.screen), (vec![Effect::Sound(1)], Screen::Code));
+        m.net.entry = keep;
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::SaveCfg)), "{fx:?}");
         assert_eq!((m.screen, m.sel, m.net.cfg.unwrap().name.as_str()), (Screen::Online, 4, "Sunny Day"));
@@ -2388,7 +2426,7 @@ mod tests {
         // the name's entry is untouched by it
         let mut m = Menu { screen: Screen::Online, sel: 4, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
         m.step(dev, ok);
-        assert_eq!((m.net.url, m.keys().len()), (false, NAME_KEYS.len()));
+        assert_eq!((m.net.url, m.net.naming), (false, true));
     }
 
     /// B234: a mod pick is named by the mod, not its donor, on the peer that has it and on one that doesn't (the
@@ -2819,7 +2857,7 @@ mod tests {
             app.world_mut().resource_mut::<Menu>().sel = 0;
             app.world_mut().write_message(KeyboardInput { key_code: code, logical_key: Key::Enter, state: ButtonState::Pressed, text: None, repeat: false, window: Entity::PLACEHOLDER });
             app.update();
-            assert_eq!(app.world().resource::<Menu>().sel, NAME_KEYS.len() + 2, "{code:?}: on Save");
+            assert_eq!(app.world().resource::<Menu>().sel, osk::DONE, "{code:?}: on Save");
         }
         let mut m = app.world_mut().remove_resource::<Menu>().unwrap();
         m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
@@ -2840,7 +2878,7 @@ mod tests {
         app.world_mut().spawn(g);
         app.update();
         let mut m = app.world_mut().remove_resource::<Menu>().unwrap();
-        assert_eq!(m.sel, NAME_KEYS.len() + 2, "on Save");
+        assert_eq!(m.sel, osk::DONE, "on Save");
         // the same Start is the pad's OK
         m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert_eq!((m.screen, m.net.cfg.unwrap().name.as_str()), (Screen::Online, "SUNNY"), "saved without the hovered F");

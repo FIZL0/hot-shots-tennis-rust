@@ -15,7 +15,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use super::super::pointer::{Act, OK, press};
+use super::super::osk::{self, Did};
+use super::super::pointer::{Act, OK};
 use super::super::{CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, STYLE_NAMES, Tex, WHITE};
 use super::{Entry, GREEN, Kind, Page, RED, View, mb, modstore};
 
@@ -33,10 +34,6 @@ const TILE: [f32; 3] = [50.0, 46.0, 56.0];
 const LIGHT: [f32; 3] = [100.0, 96.0, 104.0];
 const BLUE: [f32; 3] = [30.0, 80.0, 125.0];
 const PINK: [f32; 3] = [118.0, 60.0, 84.0];
-
-/// The on-screen keyboard's keys: four rows of ten, then Space, Delete, Clear and Done.
-const KEYS: [&str; 4] = ["abcdefghij", "klmnopqrst", "uvwxyz0123", "456789-'.&"];
-const WIDE: [&str; 4] = ["Space", "Delete", "Clear", "Done"];
 
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub(super) enum Sort {
@@ -329,6 +326,11 @@ impl View {
     /// The mouse moved onto another tile: the next tap only chooses.
     pub(in super::super) fn b_untap(&mut self) {
         self.b.tapped = None;
+    }
+
+    /// B441: the on-screen keyboard is up (`osk`).
+    pub(in super::super) fn osk_up(&self) -> bool {
+        self.grid() && self.child.is_none() && self.b.osk.is_some()
     }
 }
 
@@ -649,52 +651,25 @@ impl Menu {
         }
     }
 
-    /// The on-screen keyboard's press (it takes them all while up): arrows move, ✕ presses the key, □ deletes, ○
-    /// closes.
+    /// The on-screen keyboard's press (it takes them all while up, B441: `osk`): arrows move, ✕ presses the key, □
+    /// deletes, ○ closes.
     pub(super) fn osk_step(&mut self, k: Press, out: &mut Vec<Effect>) {
-        let Some(at) = self.add.b.osk else { return };
-        let to = osk_move(at, k);
-        if to != at {
-            self.add.b.osk = Some(to);
-            out.push(Effect::Sound(0));
-        }
+        let Some(mut at) = self.add.b.osk else { return };
+        let did = osk::step(&mut at, k, out);
+        self.add.b.osk = Some(at);
         let s = &mut self.add.b.search;
-        if k.back {
-            self.add.b.osk = None;
-            out.push(Effect::Sound(1));
-        } else if k.page {
-            s.pop();
-            out.push(Effect::Sound(0));
-        } else if k.ok {
-            match at {
-                40 => s.push(' '),
-                41 => _ = s.pop(),
-                42 => s.clear(),
-                43 => self.add.b.osk = None,
-                k => s.push(KEYS[k / 10].chars().nth(k % 10).unwrap_or(' ')),
-            }
+        match did {
+            Did::Nothing => return,
+            Did::Close | Did::Done => self.add.b.osk = None,
+            Did::Type(c) => s.push(c),
+            Did::Space => s.push(' '),
+            Did::Delete => _ = s.pop(),
+            Did::Clear => s.clear(),
+        }
+        if k.ok {
             self.add.top = 0;
             self.add.b.tile_at = 0;
-            out.push(Effect::Sound(if at == 43 { 2 } else { 0 }));
         }
-    }
-}
-
-/// The keyboard's cursor moved: around each row; up and down between the rows (the wide keys a quarter each).
-fn osk_move(at: usize, k: Press) -> usize {
-    let (r, c) = if at >= 40 { (4, at - 40) } else { (at / 10, at % 10) };
-    match (r, k) {
-        (4, k) if k.left => 40 + (c + 3) % 4,
-        (4, k) if k.right => 40 + (c + 1) % 4,
-        (4, k) if k.up => 30 + (c * 10 + 5) / 4,
-        (4, k) if k.down => (c * 10 + 5) / 4,
-        (_, k) if k.left => r * 10 + (c + 9) % 10,
-        (_, k) if k.right => r * 10 + (c + 1) % 10,
-        (0, k) if k.up => 40 + c * 4 / 10,
-        (3, k) if k.down => 40 + c * 4 / 10,
-        (_, k) if k.up => at - 10,
-        (_, k) if k.down => at + 10,
-        _ => at,
     }
 }
 
@@ -719,6 +694,10 @@ pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCod
     let mut changed = false;
     for e in typed.read().filter(|e| e.state.is_pressed()) {
         match &e.logical_key {
+            // B441: the iPhone's system keyboard's Return comes as a character
+            Key::Character(c) if osk && c.contains(['\n', '\r']) => {
+                menu.add.b.osk = None;
+            }
             Key::Character(c) if c.chars().all(|c| !c.is_control()) => {
                 menu.add.b.search.push_str(c);
                 keys.clear_just_pressed(e.key_code);
@@ -1278,49 +1257,9 @@ pub(super) fn info(m: &Menu) -> String {
     }
 }
 
-/// The on-screen keyboard over the dimmed page: the search typed so far, the keys, the cursor's gold.
+/// The on-screen keyboard over the dimmed page (B441: `osk`, the Online menu's name's too).
 fn keyboard(d: &mut Draw, v: &View, hand_x: f32) {
-    use super::super::Anchor;
-    d.popup(Some(press(|k| k.back = true)));
-    d.anchor = Anchor::Span;
-    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 70.0);
-    d.anchor = Anchor::Centre;
-    let (kw, kh, g) = (34.0, 28.0, 4.0);
-    let w = 10.0 * kw + 9.0 * g + 24.0;
-    let (x, y) = (320.0 - w / 2.0, 110.0);
-    d.box3([x, y, w, 50.0 + 5.0 * (kh + g) + 10.0], 14.0, [Some(INK), Some(GOLD), Some(PANEL)], 128.0);
-    let field = [x + 12.0, y + 12.0, w - 24.0, 28.0];
-    d.pill_at(field, [INK, GOLD, [20.0, 18.0, 24.0]], 128.0);
-    super::super::left(d, &format!("{}_", v.b.search), field[0] + 12.0, field[1] + 7.0, 14.0, field[2] - 24.0, WHITE);
-    let at = v.b.osk.unwrap_or(0);
-    let ky = y + 50.0;
-    let mut cursor = None;
-    for (r, row) in KEYS.iter().enumerate() {
-        for (c, ch) in row.chars().enumerate() {
-            let k = r * 10 + c;
-            let rect = [x + 12.0 + c as f32 * (kw + g), ky + r as f32 * (kh + g), kw, kh];
-            d.box3(rect, 6.0, [Some(INK), Some(if k == at { WHITE } else { LIGHT }), Some(if k == at { GOLD } else { TILE })], 128.0);
-            d.centred(&ch.to_uppercase().to_string(), rect[0] + kw / 2.0, rect[1] + 6.0, 16.0, if k == at { INK } else { WHITE });
-            d.hit(rect, Act::Row(k, OK));
-            if k == at {
-                cursor = Some(rect);
-            }
-        }
-    }
-    let ww = (10.0 * kw + 9.0 * g - 3.0 * g) / 4.0;
-    for (i, word) in WIDE.iter().enumerate() {
-        let k = 40 + i;
-        let rect = [x + 12.0 + i as f32 * (ww + g), ky + 4.0 * (kh + g), ww, kh];
-        d.box3(rect, 6.0, [Some(INK), Some(if k == at { WHITE } else { LIGHT }), Some(if k == at { GOLD } else { [70.0, 66.0, 76.0] })], 128.0);
-        d.label(word, rect[0] + ww / 2.0, rect[1] + 7.0, 13.0, ww - 8.0, if k == at { INK } else { WHITE });
-        d.hit(rect, Act::Row(k, OK));
-        if k == at {
-            cursor = Some(rect);
-        }
-    }
-    if let Some(r) = cursor {
-        d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 18.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
-    }
+    osk::draw(d, &v.b.search, v.b.osk.unwrap_or(0), hand_x, osk::Look { title: None, done: "Done", full: false });
 }
 
 /// The legend's words on Browse.
@@ -1328,7 +1267,7 @@ pub(super) fn legend(m: &Menu) -> Vec<(super::super::legend::Act, &'static str)>
     use super::super::legend::Act as L;
     let v = &m.add;
     if v.b.osk.is_some() {
-        return vec![(L::Move, "Move"), (L::Ok, "Type"), (L::Page, "Delete"), (L::Back, "Close")];
+        return osk::legend(v.b.osk.unwrap_or(0), Some("Done"));
     }
     let mut l = vec![(L::Move, "Move")];
     match v.slot(m.sel) {

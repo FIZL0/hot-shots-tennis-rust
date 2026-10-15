@@ -289,17 +289,17 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let n = m.net.list.len();
             v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Join" } else if s == n { "Refresh" } else { "Back" }), (Act::Back, "Back")]);
         }
+        // B441: the name's popup (the Mods page's keyboard)
+        Screen::Code if m.net.naming && !m.net.url => v.extend(super::osk::legend(s, (!m.net.entry.trim().is_empty()).then_some("Save"))),
         Screen::Code => {
             let keys = m.keys().len();
             let ok = match s.checked_sub(keys) {
                 None => Some("Type"),
                 Some(0) => Some("Delete"),
-                Some(1) if m.net.naming && !m.net.url => (!m.net.entry.is_empty()).then_some("Clear"),
                 Some(1) => Some("Paste"),
-                // Save a name that isn't blank, Join a whole short code
+                // Join a whole short code
                 // B323: Save a relay URL that parses
                 Some(2) if m.net.url => crate::net::relay_url(&m.net.entry).is_ok().then_some("Save"),
-                Some(2) if m.net.naming => (!m.net.entry.trim().is_empty()).then_some("Save"),
                 Some(2) => crate::net::is_short(&m.net.entry).then_some("Join"),
                 _ => Some("Back"),
             };
