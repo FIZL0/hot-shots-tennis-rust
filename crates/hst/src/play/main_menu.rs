@@ -63,6 +63,7 @@ mod tabs;
 mod trace;
 mod umpire_mods;
 mod court_mods;
+mod court_picker;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
@@ -528,6 +529,8 @@ struct Menu {
     favs: tabs::Favorites,
     /// B371: the players' names (`names.rs`).
     names: names::Names,
+    /// B450: the court picker's rows' places.
+    court_pick: court_picker::Picker,
 }
 
 impl Default for Menu {
@@ -569,6 +572,7 @@ impl Default for Menu {
             switch: None,
             favs: default(),
             names: default(),
+            court_pick: default(),
         }
     }
 }
@@ -1281,16 +1285,15 @@ impl Menu {
             Screen::Confirm if host == Some(dev) && self.picking.is_some() => {
                 // the pickers: the court and umpire strips' ←→ (Random first, stop at the ends); ✕ keeps, ○ puts back
                 let d = k.right as i32 - k.left as i32;
-                if matches!(self.sel, 1 | 4) {
+                if self.sel == 1 {
+                    // B450: the court picker's rows
+                    court_picker::step(self, k, &mut out);
+                } else if self.sel == 4 {
                     let order = strip_order(self);
                     let at = strip_at(self);
                     let to = (at as i32 + d).clamp(0, order.len() as i32 - 1) as usize;
                     if to != at {
-                        if self.sel == 1 {
-                            self.court = order[to];
-                        } else {
-                            self.umpire = order[to] as u8;
-                        }
+                        self.umpire = order[to] as u8;
                         out.push(Sound(0));
                     }
                     if k.card && self.sel == 4 && self.umpire as usize != UMPIRES {
@@ -1842,7 +1845,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
-        "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
+        "lobby" | "lobby-bot" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" | "relay-url" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
         _ => Screen::Main,
@@ -2553,10 +2556,18 @@ fn left(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3
     d.label(s, x + w / 2.0, y, size, max, rgb);
 }
 
-/// The confirm screen (B397, `confirm.rs`); the court and umpire selects as their own screens over it.
+/// The confirm screen (B397, `confirm.rs`); the court picker over its players (B450; opened from the lobby: over the
+/// lobby's), the umpire select as its own screen.
 fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     match m.sel {
-        1 if m.picking.is_some() => court_screen(d, m, text),
+        1 if m.picking.is_some() => {
+            if m.net.venue {
+                online::layout(d, &m.venue_under(), hand_x);
+            } else {
+                confirm::draw(d, m, text, pads, hand_x);
+            }
+            court_picker::draw(d, m, text);
+        }
         4 if m.picking.is_some() => umpire_screen(d, m, text),
         _ => confirm::draw(d, m, text, pads, hand_x),
     }
@@ -2619,35 +2630,6 @@ fn court_picture(d: &mut Draw, m: &Menu, c: usize, [x, y, w, h]: [f32; 4]) {
         return;
     }
     d.q(court_pic(k), cover([568.0, 256.0], [w, h]), [x, y, w, h], WHITE, 128.0);
-}
-
-/// B192: Select Court as its own screen (ours): the hovered court's picture across the window under the title (cut
-/// only to fill the space above the strip), its name, surface and meters on a card top-left, the strip of court tiles
-/// along the foot.
-fn court_screen(d: &mut Draw, m: &Menu, text: &Text) {
-    d.frame(7, 8);
-    let [l, t, r, _] = m.grid.reach();
-    let (_, top) = strip_rects(m);
-    // under the title bar, over the wall
-    let at = d.out.len();
-    let (w, mut y, mut h) = (r - l + 48.0, t + 18.0, top - t - 18.0);
-    // a tall window: the whole picture across it, centred (a fill would cut more than a quarter off its sides)
-    if w / h < 568.0 / 256.0 * 0.75 {
-        y += (h - w * 256.0 / 568.0) / 2.0;
-        h = w * 256.0 / 568.0;
-    }
-    court_picture(d, m, m.court, [l - 24.0, y, w, h]);
-    let pic: Vec<Quad> = d.out.drain(at..).collect();
-    d.out.splice(1..1, pic);
-    let (name, sub) = match m.court {
-        COURTS => ("Random Court".to_string(), "Any of the 11 courts".to_string()),
-        // M8f6: a mod by its name, its game and the disc court it plays as
-        c if c > COURTS => (m.court_title(text, c), m.court_mod_sub(text, c).unwrap_or_default()),
-        c => (format!("{} {}", text.msg(276 + 2 * c), text.msg(277 + 2 * c)), format!("Court {} of {COURTS}", strip_at(m))),
-    };
-    name_card(d, m, &name, &sub, m.court < COURTS);
-    strip(d, m, text);
-    d.info(text.msg(349));
 }
 
 /// Select Umpire as its own screen (ours): the hovered umpire in her chair (the disc's still of her model,

@@ -265,6 +265,18 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Back, "Back"));
             }
         }
+        // B450: the court picker's rows
+        Screen::Confirm if host && m.picking.is_some() && s == 1 => {
+            let (rows, page) = super::court_picker::axes(m);
+            v.push((Act::LeftRight, "Choose"));
+            if rows {
+                v.push((Act::UpDown, "Row"));
+            }
+            if page {
+                v.push((Act::Costume, "Scroll"));
+            }
+            v.extend([(Act::Ok, "OK"), (Act::Back, "Cancel")]);
+        }
         Screen::Confirm if host && m.picking.is_some() => {
             v.push((Act::LeftRight, ["", "Court", "Sets", "Games", "Umpire"].get(s).copied().unwrap_or("Change")));
             if s == 4 && (m.umpire as usize) < super::UMPIRES {
