@@ -11,6 +11,9 @@
 //! B118: in a two-player phone match (`SIDEWAYS`) held upright, the HUD is laid out on the view turned a quarter turn
 //! (`hud_gamma` draws it turned back), so the score and pop-ups read from the phone's side, each player's panel at
 //! their own end (1P's at the bottom). `view_size`/`aspect`/`in_view` are the HUD's; the 3D cameras take `scene_aspect`.
+//!
+//! B314: in the browser the window is the canvas, which starts below the screen's top safe area (an iPhone's Dynamic
+//! Island, `web/index.html`), so the view here is already the shorter rect under it: HUD and menus never reach it.
 
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};

@@ -36,7 +36,10 @@ pub(super) struct OwnCam {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate), plain.after(super::simulate)))
+    // B315: `plain` reads the view the tick ends on, after the cut-away, replay camera and change-ends glide have
+    // written theirs (ordered only after `simulate`, it could see the plain view under a cut-away and hide it)
+    let plain = plain.after(super::simulate).after(super::cutaway::step).after(super::replay_camera::step).after(super::change_ends::step);
+    app.add_systems(FixedUpdate, (link.before(super::control), step.after(super::control).before(super::simulate), plain))
         // B230: made with the match, so the intro (which holds the fixed ticks) already shows this machine's side
         .add_systems(PostStartup, link.after(super::setup))
         .add_systems(Update, listener);
@@ -145,7 +148,9 @@ fn plain(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>) {
 /// plain match view, else the shared camera's (`g.prev_view`, `g.cam.view`).
 pub(super) fn shown(g: &Game, own: Option<&OwnCam>) -> (View, View) {
     // before the match's first tick (the intro holds them) neither camera has stepped: the view its first step cuts to
-    if g.instant.ticks == 0 {
+    // (B315: the point count restarts at each serve's set-up, whose tick still shows the cut-away; the match's time
+    // doesn't)
+    if g.instant.ticks == 0 && g.match_stats.frames == 0 {
         let mut c = own.map_or(g.cam, |o| o.cam);
         let players: Vec<_> = g.players.iter().map(|p| p.pos).collect();
         c.step(&Scene { players: &players, ball: g.flight.ball.pos });
@@ -165,6 +170,57 @@ fn listener(g: Option<Res<Game>>, own: Option<Res<OwnCam>>) {
 #[cfg(test)]
 mod tests {
     use super::cam_of;
+    use super::super::*;
+    use crate::{Args, GameSpace};
+    use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// B315: with this machine's own camera on (1v1 on one phone, online), a post-point cut-away still takes the
+    /// picture: from its second tick on (its first only picks the shot) the picture shows the shared camera's
+    /// view, the shot's (skipped without the ISO).
+    #[test]
+    fn a_cut_away_takes_the_own_cameras_picture() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
+        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, change_ends::plugin, super::plugin));
+        app.add_systems(Startup, setup);
+        // the match's time, as `match_stats` keeps it
+        let time = |mut g: ResMut<Game>| g.match_stats.tick();
+        app.add_systems(FixedUpdate, (remember, control, simulate, time, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        // following player 1, at the other end from the shared camera's: its picture differs from the shared one
+        let own = super::own_cam(app.world().resource::<Game>(), 1);
+        app.insert_resource(own);
+        let (mut shots, mut was, mut differs) = (0, false, false);
+        for _ in 0..60 * 120 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let w = app.world();
+            let (g, own) = (w.resource::<Game>(), w.resource::<super::OwnCam>());
+            let showing = w.resource::<cutaway::Director>().showing();
+            let (mine, shared) = (super::shown(g, Some(own)), super::shown(g, None));
+            if showing && was {
+                assert_eq!(mine, shared, "cut-away {shots}: the picture isn't the shot");
+            }
+            differs |= !showing && mine != shared;
+            shots += (showing && !was) as u32;
+            was = showing;
+            if shots == 3 && !showing {
+                break;
+            }
+        }
+        assert!(shots >= 2, "only {shots} cut-aways");
+        assert!(differs, "the own camera never showed its own view");
+    }
 
     #[test]
     fn each_human_follows_its_machines_first_player() {

@@ -89,10 +89,14 @@ const css = `
 .touch[hidden] { display: none; }
 /* B118: the far player's controls, the whole layer turned a half turn: its bottom is the screen's top */
 .touch.far { transform: rotate(180deg); }
+/* B314: the inset a layer's bottom keeps clear: the home indicator, or for the turned far layer the screen's top (the
+   Dynamic Island); its top keeps the screen's top clear (the near layer's shoulders, Select, Start) */
+.touch { --safe-b: env(safe-area-inset-bottom); }
+.touch.far { --safe-b: env(safe-area-inset-top); }
 .touch .zone { position: absolute; left: 0; top: 18%; bottom: 0; width: 45%; pointer-events: auto; touch-action: none; }
 .touch .base, .touch .knob { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); }
 .touch.menu .zone { top: auto; width: calc(var(--u) * 2.6); height: calc(var(--u) * 2.6); border-radius: 50%;
-  left: calc(env(safe-area-inset-left) + var(--u) * .4); bottom: calc(env(safe-area-inset-bottom) + var(--u) * .4); }
+  left: calc(env(safe-area-inset-left) + var(--u) * .4); bottom: calc(var(--safe-b) + var(--u) * .4); }
 .touch .base { width: calc(var(--u) * 2.6); height: calc(var(--u) * 2.6); background: #fff2; border: 2px solid #fff5; }
 .touch .knob { width: calc(var(--u) * 1.2); height: calc(var(--u) * 1.2); background: #fff6; }
 .touch button { position: absolute; pointer-events: auto; touch-action: none; border: 2px solid #fff5; background: #0004;
@@ -107,20 +111,20 @@ const css = `
 /* B118: each player's set at their own end (a phone upright: the bottom and top 45%), the shoulders and Select/Start
    over the face buttons instead of along the screen's far edge */
 .touch.duo { --u: min(11vw, 6.5vh); }
-.touch.duo:not(.menu) .zone { top: calc(100% - env(safe-area-inset-bottom) - var(--u) * 4); }
-.touch.duo button.small { top: auto !important; bottom: calc(env(safe-area-inset-bottom) + var(--u) * 4.1) !important; }
+.touch.duo:not(.menu) .zone { top: calc(100% - var(--safe-b) - var(--u) * 4); }
+.touch.duo button.small { top: auto !important; bottom: calc(var(--safe-b) + var(--u) * 4.1) !important; }
 `;
 // face buttons in a diamond for the right thumb, shoulders and Select/Start along the top
-const right = (x, y) => `right: calc(env(safe-area-inset-right) + var(--u) * ${x}); bottom: calc(env(safe-area-inset-bottom) + var(--u) * ${y})`;
+const right = (x, y) => `right: calc(env(safe-area-inset-right) + var(--u) * ${x}); bottom: calc(var(--safe-b) + var(--u) * ${y})`;
 const layout = [
   ['cross', '✕', right(1.4, 0.3)],
   ['circle', '○', right(0.2, 1.5)],
   ['square', '□', right(2.6, 1.5)],
   ['triangle', '△', right(1.4, 2.7)],
-  ['l1', 'L1', 'left: calc(env(safe-area-inset-left) + var(--u) * .4); top: calc(var(--u) * .3)', 'small'],
-  ['r1', 'R1', 'right: calc(env(safe-area-inset-right) + var(--u) * .4); top: calc(var(--u) * .3)', 'small'],
-  ['select', 'SELECT', 'left: calc(50% - var(--u) * 1.8); top: calc(var(--u) * .3)', 'small'],
-  ['start', 'START', 'left: calc(50% + var(--u) * .3); top: calc(var(--u) * .3)', 'small'],
+  ['l1', 'L1', 'left: calc(env(safe-area-inset-left) + var(--u) * .4); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['r1', 'R1', 'right: calc(env(safe-area-inset-right) + var(--u) * .4); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['select', 'SELECT', 'left: calc(50% - var(--u) * 1.8); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['start', 'START', 'left: calc(50% + var(--u) * .3); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
 ];
 const style = document.createElement('style');
 style.textContent = css;
