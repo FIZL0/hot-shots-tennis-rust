@@ -34,7 +34,7 @@ world sets the frame rate. Top self time, µs per frame:
 | 32 | `hst::play::net_hide::hide_around_eye` | |
 | 22 | `hst::play::main_menu::cursor::tick` | menu cursor running in a match |
 
-All `hst::` systems together: ~1.3 ms/frame self (traced). Follow-ups: P36–P44 in `plan/TODO.md`.
+All `hst::` systems together: ~1.3 ms/frame self (traced). Follow-ups: P36–P48 in `plan/TODO.md`.
 
 Rerun: `tools/profile.sh context/perf/<name>.txt [seconds] [hst args…]` (builds `target/trace`, ~2.5 min first time).
 `samply` needs `perf_event_paranoid` ≤ 1 (root); trace_chrome needs nothing.
