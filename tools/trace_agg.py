@@ -18,6 +18,10 @@ for line in open(path):
     if ph == 'B':
         st.append([name, ts, 0.0])
     elif st:
+        # an end closes the innermost open span of its name; spans left open inside it (no end on this thread) go
+        if st[-1][0] != name and any(e[0] == name for e in st):
+            while st[-1][0] != name:
+                st.pop()
         n, t0, child = st.pop()
         d = ts - t0
         if t0 >= skip * 1e6:
