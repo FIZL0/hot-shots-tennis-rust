@@ -1,4 +1,4 @@
-// Windows: hst.exe's icon (icon/hst.ico, from web/icon.svg) as a resource, compiled with MinGW's windres (tools/build.sh).
+// Windows: opentennis.exe's icon (icon/hst.ico, from web/icon.svg) as a resource, compiled with MinGW's windres (tools/build.sh).
 // B302: the git commit for the main menu's version corner (HST_COMMIT), "unknown" outside a git checkout.
 fn main() {
     println!("cargo:rerun-if-changed=icon/hst.ico");
@@ -24,6 +24,6 @@ fn main() {
     if ok {
         println!("cargo:rustc-link-arg-bins={out}");
     } else {
-        println!("cargo:warning=no x86_64-w64-mingw32-windres: hst.exe has no icon");
+        println!("cargo:warning=no x86_64-w64-mingw32-windres: opentennis.exe has no icon");
     }
 }
