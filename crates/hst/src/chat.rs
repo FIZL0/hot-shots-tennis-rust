@@ -5,7 +5,8 @@
 //! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
 //! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
 //! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch page (the
-//! legend hidden there) a small Chat label shows instead, and a tap on it opens the box (the phone's keyboard). The last
+//! legend hidden there) a small Chat label shows instead, and a tap on it opens the box (the phone's keyboard); in the
+//! browser that's a speech-bubble button beside Start on the page's on-screen pad (`web/touch.js`, B312). The last
 //! few lines show at the bottom left, fading out, over the menus and the HUD alike, taking no presses from the match.
 //! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
 //! → Online & Mods → Chat off hides all of it.
@@ -157,6 +158,8 @@ fn input(
         }
     }
     let tapped = !chat.open && tapped(&mut mouse, &mut touches, window.single().ok(), tap.single().ok().filter(|t| t.3.get()).map(|(n, at, t, _)| (n, at, t.physical_size().as_vec2())));
+    #[cfg(target_arch = "wasm32")]
+    let tapped = crate::web::chat_tapped() && !chat.open || tapped;
     if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped) {
         chat.open = true;
         typed.clear();
@@ -272,12 +275,15 @@ fn draw(
     if *vis != v {
         *vis = v;
     }
+    // B312: in the browser the on-screen pad's own chat button stands in for the label
+    #[cfg(target_arch = "wasm32")]
+    crate::web::touch_chat(on && !chat.open && chat.phrase.is_none());
     if !on {
         return;
     }
     // B320: the Chat label only on a touch page (no keys to press, and no legend strip there); elsewhere the
     // legend's T / R2 L2 say it
-    let touch = last.is_some_and(|l| *l == crate::play::main_menu::legend::Last::Touch);
+    let touch = !cfg!(target_arch = "wasm32") && last.is_some_and(|l| *l == crate::play::main_menu::legend::Last::Touch);
     for mut v in &mut tap {
         let want = if touch { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {

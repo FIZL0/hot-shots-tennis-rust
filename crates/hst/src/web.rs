@@ -282,6 +282,21 @@ pub fn touch_pads(duo: bool, buzz: bool) {
     }
 }
 
+/// B312: the page's chat button (beside Start on the on-screen pad, `web/touch.js`) shown or gone. Sent when it changes.
+pub fn touch_chat(on: bool) {
+    static SENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+    if SENT.swap(on as u8, std::sync::atomic::Ordering::Relaxed) != on as u8
+        && let Some(f) = page_fn("hstTouchChat")
+    {
+        let _ = f.call1(&JsValue::NULL, &on.into());
+    }
+}
+
+/// B312: taps on the page's chat button since the last call (none while it's hidden).
+pub fn chat_tapped() -> bool {
+    page_fn("hstChatTaps").and_then(|f| f.call0(&JsValue::NULL).ok()).and_then(|v| v.as_f64()).is_some_and(|n| n > 0.0)
+}
+
 /// B273: the renderer setting saved (`auto`, `webgpu`, `webgl2`): the page reloads into that build once it's left
 /// alone for a moment (a no-op when it's the one running).
 pub fn renderer(word: &str) {

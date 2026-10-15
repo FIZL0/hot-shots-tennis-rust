@@ -471,6 +471,9 @@ async function start() {
   // to the game one at a time (a space kept in it so Backspace always fires)
   const keys = document.getElementById('codekeys');
   window.hstCodeEntry = (on, url) => { keys.autocapitalize = url ? 'none' : 'characters'; keys.inputMode = url ? 'url' : 'text'; keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  // B312: the chat button's tap (touch.js) brings the keyboard up at once: a phone opens it only for a focus inside the
+  // tap's own event, and the game shows the entry (`hstCodeEntry`) a frame later
+  window.hstChatKeys = () => { keys.autocapitalize = 'characters'; keys.inputMode = 'text'; keys.hidden = false; keys.value = ' '; keys.focus(); };
   // B207: Return / Go finishes the entry (as Save / Join) and closes the keyboard
   keys.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); typed_code('\n'); keys.blur(); } };
   keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };
