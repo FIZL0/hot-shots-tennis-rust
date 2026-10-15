@@ -1445,6 +1445,8 @@ enum Tex {
     Qr,
     /// The hovered store mod's preview (`mods_screen::Shelf`).
     Shelf,
+    /// B372: a Browse tile's picture (`mods_screen::Shelf::thumbs[slot]`).
+    Thumb(u32),
     /// A character's face icon on the select ([`Icons`]; a disc one not baked yet draws its `FACES` square).
     Icon(Who),
     /// The main screen's face icons: [`Icons`]' only, nothing drawn until it's baked (no sheet square standing in).
@@ -3176,6 +3178,13 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Thumb(k) => match shelf.thumbs.get(k as usize).cloned().flatten() {
+                Some(h) => h,
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Qr => match &qr {
                 Some(qr) => qr.0.clone(),
                 None => {
@@ -3192,7 +3201,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);

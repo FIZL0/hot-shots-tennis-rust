@@ -41,6 +41,9 @@ pub(super) enum Act {
     Name(usize, usize),
     /// B373: the Mods pages' kind tab `i` (`mods_kind::KINDS`): a tap opens it.
     Kind(usize),
+    /// B372: a Browse tile (cursor slot `i`): the mouse over it selects it; a tap selects it, a tap on the one a tap
+    /// chose presses ✕ (a finger going down only, not hovering, so a drag scrolls without choosing).
+    Tile(usize),
 }
 
 /// ✕.
@@ -201,6 +204,21 @@ impl Menu {
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
             Act::Kind(_) => {}
+            Act::Tile(i) if tap => {
+                if self.add.tile_tap(i) && self.sel == i {
+                    out = self.step(dev, OK);
+                } else {
+                    self.choose(i);
+                    self.add.tile_tap(i);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Tile(i) => {
+                if self.choose(i) {
+                    self.add.b_untap();
+                    out.push(Effect::Sound(0));
+                }
+            }
         }
         out
     }
@@ -280,6 +298,8 @@ pub(in crate::play) fn pointer(
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
     let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..)));
+    // the mouse also hovers Browse's tiles (a finger doesn't: it scrolls them)
+    let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_)));
     // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
     let column = |a: Option<Act>| match a {
         Some(Act::Cell(p, _) | Act::Grid(p)) => Some(p),
@@ -328,7 +348,7 @@ pub(in crate::play) fn pointer(
         // hidden: still follow what's under it, so waking it (a compositor's stray motion as the pointer hides or shows)
         // doesn't pull the pad's or keyboard's cursor back to the row it rests on; only moving onto another row does
         if let Some(c) = win.cursor_position() {
-            (st.mouse, st.hovered) = (Some(c), hover(at(c, SLOP)));
+            (st.mouse, st.hovered) = (Some(c), mouse_hover(at(c, SLOP)));
         }
     } else if now - st.touched > 0.6 {
         let c = win.cursor_position();
@@ -336,7 +356,7 @@ pub(in crate::play) fn pointer(
         // coming back to the same row doesn't select it again
         if c.is_some() && c != st.mouse {
             st.mouse = c;
-            let a = c.and_then(|c| hover(at(c, SLOP)));
+            let a = c.and_then(|c| mouse_hover(at(c, SLOP)));
             if a != st.hovered {
                 st.hovered = a;
                 out(a, false);
