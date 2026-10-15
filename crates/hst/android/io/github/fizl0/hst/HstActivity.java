@@ -2,7 +2,10 @@ package io.github.fizl0.hst;
 
 import android.app.NativeActivity;
 import android.content.Intent;
+import android.os.Build;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.view.WindowManager;
 
 /** The game's NativeActivity (`tools/apk.sh`), plus what the native side can't do on its own (M99): the system's file
  *  picker for the disc image, and a restart once the disc is imported. Called from `crates/hst/src/android.rs`. */
@@ -11,6 +14,20 @@ public class HstActivity extends NativeActivity {
     /** The picked document's file descriptor (the native side owns it), -1 when the picker was cancelled, -2 when
      *  there's nothing new. */
     private volatile int picked = -2;
+
+    /** M106: the window reaches under the camera cutout on every Android, as it must from Android 15 on; the game keeps
+     *  its picture inside the safe area itself (`android.rs` `safe_area`, `widescreen.rs`). */
+    @Override
+    protected void onCreate(Bundle state) {
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams a = getWindow().getAttributes();
+            a.layoutInDisplayCutoutMode = Build.VERSION.SDK_INT >= 30
+                ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(a);
+        }
+        super.onCreate(state);
+    }
 
     /** Opens the system's document picker (any file: a disc image has no MIME type of its own). */
     public void pick() {

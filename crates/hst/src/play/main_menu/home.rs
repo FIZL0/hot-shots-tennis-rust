@@ -24,7 +24,7 @@ pub(super) enum Row {
 
 impl Menu {
     /// The main screen's rows, top to bottom (`sel` indexes them). A web page can't close itself (an `AppExit` there
-    /// only freezes it), so the browser build has no Quit.
+    /// only freezes it), so the browser build has no Quit; nor have the phone apps (M106), which the phone closes.
     pub(super) fn main_rows(&self) -> Vec<Row> {
         let mut v = Vec::new();
         if self.rematch {
@@ -34,7 +34,7 @@ impl Menu {
         if crate::update::latest().is_some() {
             v.push(Row::Update);
         }
-        if cfg!(not(target_arch = "wasm32")) {
+        if cfg!(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))) {
             v.push(Row::Quit);
         }
         v

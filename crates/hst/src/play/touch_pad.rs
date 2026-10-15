@@ -13,7 +13,8 @@
 //! than a frame still counts. A press gives the phone's light haptic tick (Settings → Mobile → Vibration).
 //!
 //! M102: the Android app's too (`tools/apk.sh`), where native touches arrive as `TouchInput` like the iPhone's; its safe
-//! area is the edge-to-edge window's system bars and camera cutout (`android.rs`).
+//! area is the edge-to-edge window's system bars and camera cutout (`android.rs`), read by `widescreen` (M106), which
+//! fits the view into it too.
 //!
 //! M102: it draws on its own camera, straight on the window: the UI (`hud_gamma`) is drawn only into the Aspect
 //! Ratio's centred view, 16:9 by default on a phone, which would clip a pad laid out for the whole window (the
@@ -260,14 +261,14 @@ fn drive(
     mut commands: Commands,
     mut pad: ResMut<Pad>,
     mut touches: ResMut<Touches>,
-    window: Query<(&Window, Option<&bevy::window::RawHandleWrapper>), With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
     ours: Query<(), With<Ours>>,
     mut gamepads: Query<(Entity, &mut Gamepad)>,
     mut connect: MessageWriter<GamepadConnectionEvent>,
 ) {
     let pad = &mut *pad;
     pad.frame += 1;
-    let Ok((win, handle)) = window.single() else { return };
+    let Ok(win) = window.single() else { return };
     // a mode switch took it (`mode.rs` keeps only the pads connected): a new one
     let entity = match pad.entity.filter(|&e| ours.contains(e)) {
         Some(e) => e,
@@ -294,22 +295,8 @@ fn drive(
         connect.write(GamepadConnectionEvent::new(entity, GamepadConnection::Connected { name: NAME.into(), vendor_id: Some(SONY), product_id: None }));
         pad.connected = true;
     }
-    if pad.frame % 30 == 1 {
-        #[cfg(target_os = "ios")]
-        if let Some(h) = handle {
-            pad.safe = crate::ios::safe_area(h);
-        }
-        #[cfg(target_os = "android")]
-        if let Some(px) = crate::android::safe_area() {
-            let safe = px.map(|v| v / win.scale_factor());
-            if safe != pad.safe {
-                info!("touch pad: safe area {safe:?} in a {}×{} window", win.width(), win.height());
-                pad.safe = safe;
-            }
-        }
-        #[cfg(not(target_os = "ios"))]
-        let _ = handle;
-    }
+    // M106: the insets `widescreen` follows for the view
+    pad.safe = super::widescreen::safe_insets(Vec2::new(win.width(), win.height()));
     let menu = MENU.load(Ordering::Relaxed);
     if menu != pad.menu {
         pad.menu = menu;
