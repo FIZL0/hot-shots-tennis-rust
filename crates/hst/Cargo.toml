@@ -64,6 +64,8 @@ raw-window-handle = "0.6"
 # M101: the input device list for gamepad hot-plug (`android_pad.rs`; the version android-activity already builds)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# M105: stderr and the engine log into hst-log.txt (`android.rs`)
+libc = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

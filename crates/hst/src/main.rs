@@ -327,6 +327,7 @@ fn main() {
 #[unsafe(no_mangle)]
 fn android_main(app: bevy::android::android_activity::AndroidApp) {
     let dir = app.external_data_path().expect("no external files dir");
+    android::log_to_files(&dir);
     let _ = bevy::android::ANDROID_APP.set(app);
     // mods/ and the other paths the desktop build keeps beside the binary land in the same dir
     let _ = std::env::set_current_dir(&dir);
@@ -390,9 +391,14 @@ fn start(argv: Vec<String>) {
     // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame
     #[cfg(target_os = "ios")]
     let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
+    // Android: into hst-log.txt too (`android.rs`)
+    #[cfg(target_os = "android")]
+    let plugins = plugins.set(bevy::log::LogPlugin { fmt_layer: android::log_layer, ..default() });
     app.add_plugins(plugins);
     #[cfg(target_os = "ios")]
     app.add_systems(Last, ios::heartbeat);
+    #[cfg(target_os = "android")]
+    app.add_systems(Last, android::heartbeat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]

@@ -3,13 +3,130 @@
 //! file picker (`HstActivity.pick`, the Storage Access Framework: Downloads, SD cards, cloud drives); the picked ISO is
 //! imported into `disc.pack` as on the desktop (`disc.rs`, M13) and the app restarts into the main menu
 //! (`HstActivity.restart`: the native window can only be made once per process).
+//!
+//! The same dir holds `hst-log.txt`, this launch's log (stderr, panics, fatal signals and the engine's log), so a phone's
+//! freeze or crash can be read without adb logcat; the launch before's is kept as `hst-log-previous.txt` (reopening the
+//! app after a crash would otherwise overwrite the crash's log). Everything still goes to logcat too.
 
 use bevy::input::keyboard::KeyboardInput;
+use bevy::log::{BoxedFmtLayer, tracing_subscriber};
 use bevy::prelude::*;
-use std::os::fd::FromRawFd;
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// This launch's `hst-log.txt`.
+static LOG: OnceLock<std::fs::File> = OnceLock::new();
+
+/// stdout and stderr into `dir/hst-log.txt` as well as logcat (android-activity's forwarder, which they went to
+/// before), fresh each launch. Call first thing in `android_main`.
+pub fn log_to_files(dir: &std::path::Path) {
+    let path = dir.join("hst-log.txt");
+    let _ = std::fs::rename(&path, dir.join("hst-log-previous.txt"));
+    let Ok(file) = std::fs::File::create(&path) else { return };
+    let file = LOG.get_or_init(|| file);
+    // a pipe over fds 1 and 2; a thread copies what comes through into the file and on to the old fd 2 (logcat)
+    let mut fds = [0; 2];
+    // SAFETY: plain pipe/dup/dup2 of fds this process owns, before any thread of ours writes to them
+    unsafe {
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            return;
+        }
+        let logcat = libc::dup(2);
+        libc::dup2(fds[1], 1);
+        libc::dup2(fds[1], 2);
+        libc::close(fds[1]);
+        let mut pipe = std::fs::File::from_raw_fd(fds[0]);
+        let mut logcat = (logcat >= 0).then(|| std::fs::File::from_raw_fd(logcat));
+        let _ = std::thread::Builder::new().name("hst-log".into()).spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = pipe.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let _ = (&*file).write_all(&buf[..n]);
+                if let Some(l) = &mut logcat {
+                    let _ = l.write_all(&buf[..n]);
+                }
+            }
+        });
+    }
+    // the frame-rate log (`main.rs` log_fps, log_assets; `graphics.rs` log_draws) every 5 s: the phone's only profiler
+    // SAFETY: first thing in android_main, before any thread of ours reads the environment
+    unsafe { std::env::set_var("HST_FPS", "1") };
+    eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
+    // a close with no log line and no crash report says nothing: these say which kind of end it was
+    unsafe {
+        libc::atexit(on_exit);
+        for sig in [libc::SIGABRT, libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGTRAP, libc::SIGFPE] {
+            let mut new: libc::sigaction = std::mem::zeroed();
+            new.sa_sigaction = on_signal as *const () as libc::sighandler_t;
+            new.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            libc::sigaction(sig, &new, &raw mut OLD[sig as usize]);
+        }
+    }
+}
+
+extern "C" fn on_exit() {
+    eprintln!("exit() called");
+}
+
+/// The handlers before ours (debuggerd's, which writes the tombstone), by signal number.
+static mut OLD: [libc::sigaction; 32] = unsafe { std::mem::zeroed() };
+
+extern "C" fn on_signal(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+    // only async-signal-safe calls here: write straight to the file (the pipe's thread may never run again), then
+    // hand the signal on to the handler before ours
+    let msg: &[u8] = match sig {
+        libc::SIGABRT => b"fatal signal: SIGABRT (abort)\n",
+        libc::SIGSEGV => b"fatal signal: SIGSEGV (bad memory access)\n",
+        libc::SIGBUS => b"fatal signal: SIGBUS (bad memory access)\n",
+        libc::SIGILL => b"fatal signal: SIGILL\n",
+        libc::SIGTRAP => b"fatal signal: SIGTRAP\n",
+        _ => b"fatal signal: SIGFPE\n",
+    };
+    unsafe {
+        if let Some(f) = LOG.get() {
+            libc::write(f.as_raw_fd(), msg.as_ptr().cast(), msg.len());
+        }
+        let old = &*(&raw const OLD[sig as usize]);
+        if old.sa_flags & libc::SA_SIGINFO != 0 && old.sa_sigaction > libc::SIG_IGN {
+            let h: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) = std::mem::transmute(old.sa_sigaction);
+            h(sig, info, ctx);
+        } else if old.sa_sigaction > libc::SIG_IGN {
+            let h: extern "C" fn(libc::c_int) = std::mem::transmute(old.sa_sigaction);
+            h(sig);
+        }
+        // nobody's (or a returning) handler: die of it
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+/// `LogPlugin::fmt_layer`: the engine's log as plain text into `hst-log.txt`, in place of bevy's coloured one on
+/// stderr (logcat gets the engine's log on its own).
+pub fn log_layer(_: &mut App) -> Option<BoxedFmtLayer> {
+    let file = LOG.get()?;
+    Some(Box::new(tracing_subscriber::fmt::Layer::default().with_ansi(false).with_writer(move || file)))
+}
+
+/// The first frame, a heartbeat every 5 s, quits asked for and lifecycle changes (pause, resume), in the log.
+pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<f32>, mut exits: MessageReader<AppExit>, mut life: MessageReader<bevy::window::AppLifecycle>) {
+    *frames += 1;
+    let t = time.elapsed_secs();
+    if *frames == 1 || t - *last >= 5.0 {
+        *last = t;
+        eprintln!("frame {} at {t:.1}s", *frames);
+    }
+    for e in exits.read() {
+        eprintln!("AppExit {e:?} at frame {}", *frames);
+    }
+    for l in life.read() {
+        eprintln!("lifecycle {l:?} at {t:.1}s");
+    }
+}
 
 /// A method of the running `HstActivity` (no arguments, returns `int` or `void`: 0), on the calling thread (attached to
 /// the VM for good). `None` if the call failed.
@@ -56,7 +173,7 @@ const INTRO: &str = "This remaster plays from your own copy of the original game
 pub fn no_disc(dir: PathBuf) -> ! {
     info!("no disc in {}", dir.display());
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { fmt_layer: log_layer, ..default() }))
         .insert_resource(ClearColor(Color::srgb(0.05, 0.12, 0.2)))
         .insert_resource(Start { pack: dir.join("disc.pack"), stage: Stage::Idle(None) })
         .add_systems(Startup, page)
