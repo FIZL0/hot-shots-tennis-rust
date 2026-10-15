@@ -22,3 +22,10 @@ Donate, yellow = selected, then Discord), white panel with the green header box,
 CSS with our font: the menu pills, wall and hand pointer in the game are the user's disc pixels rebuilt at run time
 (`play/menu_art.rs`), so a public page before an ISO can't use them. The separate settings, donate and in-game
 boards were dropped; Settings keeps only username + mods/caches/disc (the rest lives in the game's Settings).
+
+## v3 (user: keep the style, not the menu; scrolling page; mobile; name it OpenTennis)
+A normal scrolling page named **OpenTennis** ("Hot Shots Tennis" only for the original), still in the game's
+style: grid paper, gold top bar, white panels with thick dark outlines, outlined white headings, pill buttons,
+M PLUS Rounded 1c. Sections: hero (Pick your ISO), 3 steps, About (original / rewrite cards + platform pills),
+Settings & files, Donate (counts + Chip in), footer. Everything wraps to one column on a phone.
+Discord invite (user): https://discord.gg/kCkz5hFNXG
