@@ -53,3 +53,6 @@ One README per task; iterations below, newest last.
 - `11-OOB-COURTS-FINAL.md` — M8f10a3 done: `oob2gltf/court.py` exports 6 of Out of Bounds' 7 courses as court mods
   (static `.rem` reader, plants merged per nine, hole textures from the disc's loose `data/`), hard on paved ground
   (c01 Extra, c06 Park) else Jungle. Course 05 has no clear flat spot.
+- `12-SLAB-SURFACES-FINAL.md` — M8f10a4 done: the Fore!/OOB laid court wears the hole's own textures (exporters in
+  opentennis-mods): grass courts in the green's texture with a fairway run-off, hard courts (OOB c01/c06) in the
+  paving tinted blue/green with the paving as drawn beyond. Open Tee 2's court is real and needed nothing.
