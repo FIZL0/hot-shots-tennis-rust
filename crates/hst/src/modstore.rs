@@ -690,15 +690,20 @@ fn partial(r: reqwest::Response, what: &str) -> Result<reqwest::Response, String
 pub fn pick(root: &Path) {
     let root = root.to_path_buf();
     spawn(async move {
-        let Some(f) = rfd::AsyncFileDialog::new().add_filter("Mod", &["zip"]).set_title("Add mod").pick_file().await else {
+        #[cfg(not(target_os = "android"))]
+        let f = rfd::AsyncFileDialog::new().add_filter("Mod", &["zip"]).set_title("Add mod").pick_file().await.map(|f| f.path().to_path_buf());
+        // ponytail: no picker on Android (rfd has none; Android's needs Java/JNI); the mod store's downloads still work
+        #[cfg(target_os = "android")]
+        let f: Option<std::path::PathBuf> = None;
+        let Some(f) = f else {
             return send(Event::Installed(String::new(), Err("no file picked".into())));
         };
         let got = (|| {
-            let len = std::fs::metadata(f.path()).map_err(|e| e.to_string())?.len();
+            let len = std::fs::metadata(&f).map_err(|e| e.to_string())?.len();
             if len > MAX_ZIP {
                 return Err(format!("{len} bytes is bigger than a mod may be"));
             }
-            keep(&modfs::install_file(f.path(), &root, None, None)?)
+            keep(&modfs::install_file(&f, &root, None, None)?)
         })();
         send(Event::Installed(String::new(), got));
     });

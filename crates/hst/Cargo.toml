@@ -3,6 +3,14 @@ name = "hst"
 version = "0.1.0"
 edition = "2024"
 
+# Android (`tools/apk.sh`): the game as a NativeActivity .so; only built when asked for, never by `cargo test`
+[[example]]
+name = "hst"
+path = "src/main.rs"
+crate-type = ["cdylib"]
+required-features = ["android"]
+test = false
+
 [dependencies]
 # rollback (M2h, `play/rollback.rs`): ggrs core, its messages as bincode in iroh datagrams
 ggrs = { version = "0.13", features = ["sync-send"] }
@@ -38,8 +46,8 @@ miniz_oxide = "0.8"
 # the mod store's download check (M17, `modstore.rs`; already built for iroh)
 sha2 = "0.11"
 
-# copy/paste of join codes through the OS clipboard (arboard: none on iOS, where it stays in-app)
-[target.'cfg(not(target_os = "ios"))'.dependencies]
+# copy/paste of join codes through the OS clipboard (arboard: none on iOS/Android, where it stays in-app)
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 bevy = { version = "0.19.1", features = ["system_clipboard"] }
 
 # iOS: stderr into the app's log file (`ios.rs`); the window's view for the on-screen pad's safe area (`play/touch_pad.rs`)
@@ -74,10 +82,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 minisign-verify = "0.3"
 
 
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
-# Add mod's file picker on desktop (the xdg portal on Linux; the browser build uses the page's input, iOS the Files app)
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))'.dependencies]
+# Add mod's file picker on desktop (the xdg portal on Linux; the browser build uses the page's input, iOS the Files app; none on Android)
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [features]
 # the browser build on WebGPU (`tools/web.sh` builds it beside the default WebGL2 one; the page picks)
 webgpu = ["bevy/webgpu"]
+# the Android .so (`tools/apk.sh`)
+android = ["bevy/android-native-activity"]
