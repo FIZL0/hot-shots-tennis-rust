@@ -203,6 +203,9 @@ pub fn plugin(app: &mut App) {
         .add_systems(First, frame_start)
         .add_systems(RunFixedMainLoop, (mark::<1>.in_set(F::BeforeFixedMainLoop), mark::<2>.in_set(F::AfterFixedMainLoop)))
         .add_systems(Last, mark::<3>.before(limit));
+    // P49: ProMotion's refresh rate follows the frame limit (`ios::frame_rate`)
+    #[cfg(target_os = "ios")]
+    app.add_systems(PostUpdate, |g: Res<Graphics>| if g.is_changed() { crate::ios::frame_rate(g.fps) });
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
         use bevy::render::renderer::{RenderGraph, RenderGraphSystems as G};
         r.add_systems(RenderGraph, (mark::<4>.in_set(G::Begin), mark::<5>.in_set(G::Render).after(bevy::core_pipeline::schedule::camera_driver)))

@@ -388,9 +388,10 @@ fn start(argv: Vec<String>) {
         render.limits = bevy::render::settings::WgpuLimits { max_texture_dimension_2d: 8192, max_texture_dimension_3d: 2048, ..bevy::render::settings::WgpuLimits::downlevel_webgl2_defaults() };
     }
     let plugins = DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
-    // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame
+    // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame,
+    // and warns of each event it hands over while redrawing (P49: 14.5k of a 4-minute log's 15.8k lines)
     #[cfg(target_os = "ios")]
-    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
+    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn,winit::platform_impl::ios::app_state=error", bevy::log::DEFAULT_FILTER), ..default() });
     // Android: into hst-log.txt too (`android.rs`)
     #[cfg(target_os = "android")]
     let plugins = plugins.set(bevy::log::LogPlugin { fmt_layer: android::log_layer, ..default() });

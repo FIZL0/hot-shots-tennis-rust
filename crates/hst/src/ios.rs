@@ -199,3 +199,45 @@ pub fn safe_area(window: &bevy::window::RawHandleWrapper) -> [f32; 4] {
     }
     SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed)))
 }
+
+/// P49: the display's refresh rate for the frame limit (`graphics.rs`; 0 = uncapped). A ProMotion iPhone keeps an
+/// app's CAMetalLayer at 60 Hz unless something asks for more (Info.plist's CADisableMinimumFrameDurationOnPhone only
+/// allows it), and wgpu's Metal surface just presents with no display link. So a display link of our own on the main
+/// run loop asks for 80–120 Hz above a 60 cap and for the cap itself at or below it, so a 60 cap stays on 60 Hz vsyncs.
+pub fn frame_rate(fps: u32) {
+    // SAFETY: the main queue lives for the process; the context is the fps, not a pointer
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, fps as usize as *mut std::ffi::c_void, set_frame_rate) };
+}
+
+objc2::define_class!(
+    /// The display link's target: nothing to do on its ticks, it's only there for the rate it asks for.
+    #[unsafe(super(objc2::runtime::NSObject))]
+    #[name = "HstFrameRate"]
+    struct FrameRate;
+
+    impl FrameRate {
+        #[unsafe(method(tick:))]
+        fn tick(&self, _link: &objc2::runtime::AnyObject) {}
+    }
+);
+
+extern "C" fn set_frame_rate(fps: *mut std::ffi::c_void) {
+    use objc2::ClassType;
+    use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
+    thread_local! {
+        // main thread only: made on first use, kept
+        static LINK: std::cell::OnceCell<objc2::rc::Retained<CADisplayLink>> = const { std::cell::OnceCell::new() };
+    }
+    let fps = fps as usize as f32;
+    let range = if fps == 0.0 || fps > 60.0 { CAFrameRateRange { minimum: 80.0, maximum: 120.0, preferred: 120.0 } } else { CAFrameRateRange { minimum: fps, maximum: fps, preferred: fps } };
+    LINK.with(|l| {
+        let link = l.get_or_init(|| unsafe {
+            let target: objc2::rc::Retained<FrameRate> = objc2::msg_send![FrameRate::class(), new];
+            let link = CADisplayLink::displayLinkWithTarget_selector(&target, objc2::sel!(tick:));
+            link.addToRunLoop_forMode(&objc2_foundation::NSRunLoop::mainRunLoop(), objc2_foundation::NSRunLoopCommonModes);
+            link
+        });
+        link.setPreferredFrameRateRange(range);
+    });
+    eprintln!("display link: {}–{} Hz, preferred {}", range.minimum, range.maximum, range.preferred);
+}
