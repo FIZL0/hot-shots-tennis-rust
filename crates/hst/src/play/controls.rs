@@ -317,11 +317,12 @@ impl PadSlots {
     /// Drop pads gone from `present`, then give each new one the first free slot (in connection order). With seats a
     /// pad seat prefers its own pad and the others stay empty.
     pub fn update(&mut self, present: &[Entity]) {
-        self.update_with(present, cfg!(target_arch = "wasm32"));
+        self.update_with(present, cfg!(target_arch = "wasm32") || super::touch_pad::on());
     }
 
     /// `update`; `keys_take_spare`: the keyboard seat also takes a pad no other seat wants. B244: in the browser a phone's
-    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js) must drive that seat in the match.
+    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js; the iPhone app's `touch_pad.rs`) must
+    /// drive that seat in the match.
     pub fn update_with(&mut self, present: &[Entity], keys_take_spare: bool) {
         for s in &mut self.0 {
             if s.is_some_and(|e| !present.contains(&e)) {
@@ -355,9 +356,12 @@ impl PadSlots {
         self.0.iter().rposition(Option::is_some).map_or(0, |i| i + 1)
     }
 
-    /// The slot the keyboard drives: 1P without seats (alongside 1P's pad), else its own seat, if it has one.
+    /// The slot the keyboard drives: 1P without seats (alongside 1P's pad), else its own seat, if it has one; B388:
+    /// with none, 1P while 1P's pad is out (unplugged or flat), so the keyboard can play on or pause and reassign.
     pub fn keys(&self) -> Option<usize> {
-        self.1.map_or(Some(0), |seats| seats.iter().position(|s| *s == Some(Seat::Keys)))
+        self.1.map_or(Some(0), |seats| {
+            seats.iter().position(|s| *s == Some(Seat::Keys)).or((matches!(seats[0], Some(Seat::Pad(_))) && self.0[0].is_none()).then_some(0))
+        })
     }
 }
 
@@ -446,6 +450,17 @@ mod tests {
         let mut s = PadSlots::default();
         s.update(&[a, b, c]);
         assert_eq!((s.0, s.keys()), ([Some(a), Some(b), Some(c), None], Some(0)));
+        // B388: 1P's pad out and no keyboard seat: the keyboard drives 1P until a pad fills it again
+        let mut s = PadSlots([None; 4], Some([p(0), p(1), None, None]));
+        s.update(&[a, b]);
+        assert_eq!(s.keys(), None);
+        s.update(&[b]);
+        assert_eq!((s.0, s.keys()), ([None, Some(b), None, None], Some(0)));
+        s.update(&[a, b]);
+        assert_eq!(s.keys(), None);
+        // 2P's pad out instead: the keyboard stays off (it's 1P's stand-in only)
+        s.update(&[a]);
+        assert_eq!(s.keys(), None);
         assert_eq!(Seat::flag(&[k, None, p(1)]), "k,-,1");
         assert_eq!(["k", "-", "2", ""].map(Seat::parse), [k, None, p(2), None]);
     }

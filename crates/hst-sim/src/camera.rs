@@ -6,8 +6,12 @@
 //! 3. slides sideways and widens so the court (±5 m) and every player (±1.7 m) fit across;
 //! then eases the shown view 10 % toward that target and finally widens upward if the ball would leave the top
 //! 2 % of the picture. Game space (Y down); the camera's rows are right, down, forward.
-//! Float math is plain f32 here (transcendentals from `musl`, the same on every platform), not the PS2 sequence:
-//! the camera never feeds back into play.
+//! Arithmetic through `ps2::F` (the FPU's rounding; transcendentals from `musl`, the same on every platform), but
+//! not the game's exact sequence: the camera never feeds back into play.
+
+#![deny(clippy::float_arithmetic)]
+
+use crate::ps2::F;
 
 /// The field of view is the horizontal half-angle of the 4:3 picture; the vertical is scaled by this.
 pub const ASPECT: f32 = 0.7;
@@ -47,13 +51,13 @@ impl View {
         [dot(self.rot[0], d), dot(self.rot[1], d), dot(self.rot[2], d)]
     }
     fn vertical(&self) -> f32 {
-        musl::atanf(musl::tanf(self.fov) * ASPECT)
+        musl::atanf((F(musl::tanf(self.fov)) * ASPECT).0)
     }
     /// Pitch the view about its right axis by `a` (positive tilts the forward axis down).
     fn tilt(&mut self, a: f32) {
         let (s, c) = musl::sincosf(a);
         let (d, f) = (self.rot[1], self.rot[2]);
-        self.rot[1] = add(scale(d, c), scale(f, -s));
+        self.rot[1] = add(scale(d, c), scale(f, -F(s)));
         self.rot[2] = add(scale(f, c), scale(d, s));
     }
 }
@@ -78,14 +82,14 @@ pub struct Scene<'a> {
 /// Mode 0's resting view (also the view while the serve is set up), behind the −z baseline.
 pub fn base() -> View {
     let pitch = PITCH_DEG.to_radians();
-    let fov = (FOV_DEG * 0.5).to_radians(); // the table holds the full angle
-    let vertical = musl::atanf(musl::tanf(fov) * ASPECT);
-    let lift = musl::atanf(FRAMING * musl::tanf(vertical));
+    let fov = (F(FOV_DEG) * 0.5).0.to_radians(); // the table holds the full angle
+    let vertical = musl::atanf((F(musl::tanf(fov)) * ASPECT).0);
+    let lift = musl::atanf((FRAMING * F(musl::tanf(vertical))).0);
     let forward = [0.0, musl::sinf(pitch), musl::cosf(pitch)];
-    let orbit = pitch - lift;
+    let orbit = (F(pitch) - lift).0;
     View {
-        rot: [[1.0, 0.0, 0.0], [0.0, musl::cosf(pitch), -musl::sinf(pitch)], forward],
-        eye: [0.0, -DISTANCE * musl::sinf(orbit), -DISTANCE * musl::cosf(orbit)],
+        rot: [[1.0, 0.0, 0.0], [0.0, musl::cosf(pitch), (-F(musl::sinf(pitch))).0], forward],
+        eye: [0.0, (-F(DISTANCE) * musl::sinf(orbit)).0, (-F(DISTANCE) * musl::cosf(orbit)).0],
         fov,
     }
 }
@@ -94,7 +98,7 @@ pub fn base() -> View {
 /// player is on the +z half).
 pub fn base_turned() -> View {
     let v = base();
-    let t = |a: V3| [-a[0], a[1], -a[2]];
+    let t = |a: V3| [(-F(a[0])).0, a[1], (-F(a[2])).0];
     View { rot: [t(v.rot[0]), t(v.rot[1]), t(v.rot[2])], eye: t(v.eye), fov: v.fov }
 }
 
@@ -131,11 +135,11 @@ impl Camera {
         let vertical = v.vertical();
         let pitch = musl::asinf(v.rot[2][1]);
         // horizontal distance at which the frame's bottom edge meets the ground
-        let reach = -v.eye[1] / musl::tanf(vertical + pitch);
+        let reach = (-F(v.eye[1]) / musl::tanf((F(vertical) + pitch).0)).0;
         let ahead = norm([v.rot[2][0], 0.0, v.rot[2][2]]);
         let along = dot(sub(p, v.eye), ahead);
-        let want = if along < reach { along - reach } else { 0.0 };
-        self.dolly += DOLLY_EASE * (want - self.dolly);
+        let want = if along < reach { (F(along) - reach).0 } else { 0.0 };
+        self.dolly = (F(self.dolly) + DOLLY_EASE * (F(want) - self.dolly)).0;
         // the eye moves along the forward axis with its height part dropped, not renormalised
         v.eye = add(v.eye, scale([v.rot[2][0], 0.0, v.rot[2][2]], self.dolly));
     }
@@ -157,30 +161,30 @@ fn near_team<'a>(v: &View, s: &'a Scene) -> impl Iterator<Item = V3> + 'a {
 fn fit_bottom(v: &mut View, s: &Scene) {
     let forward_sign = if v.rot[2][2] < 0.0 { -1.0 } else { 1.0 };
     let mut lowest = near_team(v, s)
-        .map(|p| v.local([p[0], p[1], p[2] - BEHIND * forward_sign]))
+        .map(|p| v.local([p[0], p[1], (F(p[2]) - F(BEHIND) * forward_sign).0]))
         .min_by(|a, b| a[2].total_cmp(&b[2]))
         .unwrap_or([0.0, 0.0, 1.0]);
     if s.players.len() > 1 {
-        let b = v.local([s.ball[0], 0.0, s.ball[2].clamp(-HALF_LENGTH, HALF_LENGTH)]);
-        if lowest[1] / lowest[2] < b[1] / b[2] {
+        let b = v.local([s.ball[0], 0.0, s.ball[2].clamp((-F(HALF_LENGTH)).0, HALF_LENGTH)]);
+        if F(lowest[1]) / lowest[2] < F(b[1]) / b[2] {
             lowest = b;
         }
     }
-    let angle = musl::atanf(lowest[1] / lowest[2]);
+    let angle = musl::atanf((F(lowest[1]) / lowest[2]).0);
     let vertical = v.vertical();
-    let mid = (vertical + angle) * 0.5;
+    let mid = (F(vertical) + angle) * 0.5;
     if mid < vertical {
-        v.tilt(mid - vertical);
-        v.fov = musl::atanf(musl::tanf(mid) / ASPECT);
+        v.tilt((mid - vertical).0);
+        v.fov = musl::atanf((F(musl::tanf(mid.0)) / ASPECT).0);
     }
 }
 
 /// Points that must fit across: the court's sides at the centre, and each player ± their width.
 fn across(s: &Scene) -> Vec<V3> {
-    let mut pts = vec![[-COURT_SIDE, 0.0, 0.0], [COURT_SIDE, 0.0, 0.0]];
+    let mut pts = vec![[(-F(COURT_SIDE)).0, 0.0, 0.0], [COURT_SIDE, 0.0, 0.0]];
     for p in s.players {
-        pts.push([p[0] - PLAYER_SIDE, p[1], p[2]]);
-        pts.push([p[0] + PLAYER_SIDE, p[1], p[2]]);
+        pts.push([(F(p[0]) - PLAYER_SIDE).0, p[1], p[2]]);
+        pts.push([(F(p[0]) + PLAYER_SIDE).0, p[1], p[2]]);
     }
     pts
 }
@@ -191,18 +195,18 @@ fn fit_sides(v: &mut View, s: &Scene) {
     let (mut left, mut right) = (0.0f32, 0.0f32);
     for &p in &pts {
         let c = v.local(p);
-        let a = musl::atanf(c[0] / c[2]);
-        if v.fov < -a {
-            left = left.min(-(c[2] * musl::tanf(-a - v.fov)));
+        let a = musl::atanf((F(c[0]) / c[2]).0);
+        if v.fov < -F(a) {
+            left = left.min((-(F(c[2]) * musl::tanf((-F(a) - v.fov).0))).0);
         }
         if v.fov < a {
-            right = right.max(c[2] * musl::tanf(a - v.fov));
+            right = right.max((F(c[2]) * musl::tanf((F(a) - v.fov).0)).0);
         }
     }
-    v.eye = add(v.eye, scale(v.rot[0], left + right));
+    v.eye = add(v.eye, scale(v.rot[0], F(left) + right));
     let widest = pts.iter().map(|&p| {
         let c = v.local(p);
-        musl::atanf(c[0] / c[2]).abs()
+        musl::atanf((F(c[0]) / c[2]).0).abs()
     });
     let widest = widest.fold(0.0f32, f32::max);
     if v.fov < widest {
@@ -216,13 +220,13 @@ fn fit_ball_top(v: &mut View, ball: V3) {
     let vertical = v.vertical();
     let c = v.local(ball);
     let depth = c[2].abs();
-    let top = TOP_MARGIN * depth * musl::tanf(vertical);
-    let over = -c[1] - top;
+    let top = F(TOP_MARGIN) * depth * musl::tanf(vertical);
+    let over = -F(c[1]) - top;
     if over > 0.0 {
-        let edge = musl::atanf(top / depth);
-        let delta = musl::atanf((over * 0.5 + top) / depth) - edge;
-        v.fov = musl::atanf(musl::tanf(vertical + delta) / ASPECT);
-        v.tilt(-delta);
+        let edge = musl::atanf((top / depth).0);
+        let delta = F(musl::atanf(((over * 0.5 + top) / depth).0)) - edge;
+        v.fov = musl::atanf((F(musl::tanf((F(vertical) + delta).0)) / ASPECT).0);
+        v.tilt((-delta).0);
     }
 }
 
@@ -233,7 +237,7 @@ fn ease(from: View, to: View, t: f32) -> View {
     let d0 = mix(from.rot[1], to.rot[1]);
     let r = norm(cross(d0, f));
     let d = cross(f, r);
-    View { rot: [r, d, f], eye: mix(from.eye, to.eye), fov: from.fov + (to.fov - from.fov) * t }
+    View { rot: [r, d, f], eye: mix(from.eye, to.eye), fov: (F(from.fov) + (F(to.fov) - from.fov) * t).0 }
 }
 
 /// Ticks of the change-ends phase's camera move (the phase is as long).
@@ -242,8 +246,8 @@ pub const SWING: u32 = 80;
 /// The change-ends move's progress with `left` of its [`SWING`] ticks still to go (counted down before use,
 /// so the first tick has 79 left): t = 1 − left/80 eased as t^(2·(1−t)²), slow out, fast through the middle.
 pub fn swing_weight(left: u32) -> f32 {
-    let t = 1.0 - left as f32 / SWING as f32;
-    musl::powf(musl::powf(t, musl::powf(1.0 - t, 2.0)), 2.0)
+    let t = (1.0 - F(left as f32) / SWING as f32).0;
+    musl::powf(musl::powf(t, musl::powf((1.0 - F(t)).0, 2.0)), 2.0)
 }
 
 /// The change-ends move: the view the phase started from swung toward this tick's `to` by `w`, as the game's
@@ -262,33 +266,42 @@ pub fn swing(from: &View, to: &View, w: f32, pivot: V3) -> View {
         let l = v4(std::array::from_fn(|i| dot(d, v.rot[i])));
         let (f, r) = (v4(v.rot[2]), frame[2]);
         let (lp, ly) = (pitch(l), yaw(l));
-        [diff(pitch(f), pitch(r)), diff(yaw(f), yaw(r)), musl::atanf(musl::tanf(lp) / musl::cosf(ly)), ly, dot(d, d).sqrt(), v.fov]
+        [
+            diff(pitch(f), pitch(r)),
+            diff(yaw(f), yaw(r)),
+            musl::atanf((F(musl::tanf(lp)) / musl::cosf(ly)).0),
+            ly,
+            F(dot(d, d)).sqrt().0,
+            v.fov,
+        ]
     };
     let (a, b) = (parts(from), parts(to));
-    let [p, h, ep, ey, d, fov]: [f32; 6] = std::array::from_fn(|i| (b[i] - a[i]) * w + a[i] + 0.0);
+    let [p, h, ep, ey, d, fov]: [f32; 6] = std::array::from_fn(|i| ((F(b[i]) - a[i]) * w + a[i] + 0.0).0);
     let cam = mul(&mul(&frame, &rot_y(h)), &rot_x(p));
     let f = cam[2];
     let cam = mul(&rot_y(yaw(f)), &rot_x(pitch(f)));
-    let o = mul(&mul(&cam, &rot_y(ey)), &rot_x(musl::atanf(musl::tanf(ep) * musl::cosf(ey))));
+    let o = mul(&mul(&cam, &rot_y(ey)), &rot_x(musl::atanf((F(musl::tanf(ep)) * musl::cosf(ey)).0)));
     let r = |i: usize| [cam[i][0], cam[i][1], cam[i][2]];
-    View { rot: [r(0), r(1), r(2)], eye: std::array::from_fn(|i| pivot[i] - o[2][i] * d), fov }
+    View { rot: [r(0), r(1), r(2)], eye: std::array::from_fn(|i| (F(pivot[i]) - F(o[2][i]) * d).0), fov }
 }
 
 fn add(a: V3, b: V3) -> V3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+    std::array::from_fn(|i| (F(a[i]) + b[i]).0)
 }
 fn sub(a: V3, b: V3) -> V3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    std::array::from_fn(|i| (F(a[i]) - b[i]).0)
 }
-fn scale(a: V3, k: f32) -> V3 {
-    [a[0] * k, a[1] * k, a[2] * k]
+fn scale(a: V3, k: impl Into<F>) -> V3 {
+    let k = k.into();
+    std::array::from_fn(|i| (F(a[i]) * k).0)
 }
 fn dot(a: V3, b: V3) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    (F(a[0]) * b[0] + F(a[1]) * b[1] + F(a[2]) * b[2]).0
 }
 fn cross(a: V3, b: V3) -> V3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    let [a, b] = [a, b].map(|v| v.map(F));
+    [(a[1] * b[2] - a[2] * b[1]).0, (a[2] * b[0] - a[0] * b[2]).0, (a[0] * b[1] - a[1] * b[0]).0]
 }
 fn norm(a: V3) -> V3 {
-    scale(a, 1.0 / dot(a, a).sqrt())
+    scale(a, 1.0 / F(dot(a, a)).sqrt())
 }

@@ -17,3 +17,5 @@ build() {
 }
 build pkg
 build pkg-webgpu "--features webgpu"
+# B317: the build's commit, which an open page polls to offer a Refresh once a newer one is deployed (index.html)
+git rev-parse --short=7 HEAD 2>/dev/null > web/version.txt || date +%s > web/version.txt

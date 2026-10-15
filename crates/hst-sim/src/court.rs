@@ -1,4 +1,5 @@
 //! A disc court's collision world, built as the game builds it at court load (see `world` and `mesh`).
+#![deny(clippy::float_arithmetic)]
 
 use crate::ball::Material;
 use crate::mesh::{self, World};

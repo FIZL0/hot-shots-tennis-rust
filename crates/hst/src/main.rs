@@ -22,6 +22,8 @@ mod court_anim;
 mod cull;
 #[cfg(not(target_arch = "wasm32"))]
 mod disc;
+#[cfg(target_os = "ios")]
+mod ios;
 mod effects;
 mod graphics;
 mod handshake;
@@ -30,6 +32,9 @@ mod modfs;
 mod modstore;
 mod mods;
 mod mods_online;
+mod mods_umpire;
+mod mods_court;
+mod court_mod;
 mod net;
 mod chat;
 mod hud_gamma;
@@ -37,7 +42,6 @@ mod inspect;
 mod loading;
 mod mash;
 mod lod;
-mod merge;
 mod mode;
 mod noise;
 mod play;
@@ -45,7 +49,10 @@ mod sandbox;
 mod shade;
 mod shadow;
 mod spring;
+mod stall;
 mod textures;
+mod update;
+mod vertex_patch;
 mod weather;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -119,6 +126,12 @@ struct Cli {
     roster: Option<inspect::Roster>,
     /// `--swap-hands 1,0`: the select's hand toggle by match slot (`play::hand_swap`).
     swap_hands: play::hand_swap::SwapHands,
+    /// `--names a,,b`: the players' names by match slot (B371, `play::name_tags`).
+    names: play::name_tags::Names,
+    /// M8f3: `--umpire-mod DIR`, or `--umpire-mod-id ID` (online: the room's, if installed under `mods/`).
+    umpire_mod: Option<mods_umpire::Umpire>,
+    /// M8f6: `--court-mod DIR`, drawn and heard over its layout court.
+    court_mod: Option<mods_court::Court>,
 }
 
 fn parse(mut a: impl Iterator<Item = String>) -> Cli {
@@ -131,12 +144,15 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let mut shot_at = 0.5;
     let mut sound = None;
     let mut swap_hands = play::hand_swap::SwapHands::default();
+    let mut names = play::name_tags::Names::default();
     let mut outfits = Vec::new();
     let mut viewer_mod = None;
     let mut mod_slot = 0;
     let mut slot_mods = Vec::new();
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
+    let (mut umpire_given, mut umpire_mod, mut umpire_mod_id) = (false, None, None);
+    let (mut court_mod, mut court_mod_id) = (None::<String>, None::<String>);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -173,7 +189,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--original" => gfx.original = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
+            "--sway-lod" | "--sway_lod" => noise::set_lod(a.next().is_none_or(|v| v != "off"), true),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);
@@ -183,7 +201,11 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--windowed" => gfx.windowed = true,
             "--fullscreen" => gfx.windowed = false,
             "--music" => music = true,
-            "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
+            "--umpire" => (umpire, umpire_given) = (a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire), true),
+            "--umpire-mod" => umpire_mod = a.next(),
+            "--umpire-mod-id" => umpire_mod_id = a.next(),
+            "--court-mod" => court_mod = a.next(),
+            "--court-mod-id" => court_mod_id = a.next(),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
@@ -191,14 +213,14 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 pads = Some(std::array::from_fn(|i| v.get(i).copied().flatten()));
             }
             "--4x3" => play::main_menu::ASPECT.store(1, std::sync::atomic::Ordering::Relaxed),
-            // B118: the 1v1-on-a-phone layout (HUD turned for a portrait window, 1P's end kept at the bottom)
-            "--sideways" => play::widescreen::SIDEWAYS.store(true, std::sync::atomic::Ordering::Relaxed),
             // B117: Auto, 4:3, 16:9, 16:10, 21:9
             "--aspect" => {
                 let a = a.next().unwrap_or_default();
                 play::main_menu::ASPECT.store(play::widescreen::ASPECTS.iter().position(|n| *n == a).unwrap_or(0) as u8, std::sync::atomic::Ordering::Relaxed);
             }
             "--no-upscale" => upscale = false,
+            // B374: no check for a newer release this run
+            "--no-update-check" => update::NO_CHECK_FLAG.store(true, std::sync::atomic::Ordering::Relaxed),
             "--sound" => {
                 let mut n = || a.next().unwrap_or_default();
                 let (xb, hd, program, key) = (n(), n(), n(), n());
@@ -212,6 +234,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 std::process::exit(0);
             }
             "--swap-hands" => swap_hands = play::hand_swap::SwapHands::parse(&a.next().unwrap_or_default()),
+            "--names" => names = play::name_tags::Names::parse(&a.next().unwrap_or_default()),
             "--chars" => chars = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
@@ -228,8 +251,45 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     }
     // per parse, so a match after an `--original` one gets the remastered menu sheets back
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
+    // M8f3: an umpire mod is heard over its donor; `--umpire` (the menu's and the online room's: the donor) keeps
+    // the timing whatever the mod's manifest says
+    let umpire_mod = match (umpire_mod, umpire_mod_id) {
+        (Some(dir), _) => mods_umpire::read(dir.as_ref()).map_err(|e| warn!("{e}")).ok(),
+        (None, Some(id)) => {
+            let found = mods_umpire::find(&play::main_menu::Settings::path(&iso).with_file_name("mods"), &id);
+            if found.is_none() {
+                info!("umpire mod {id} not installed: umpire {umpire} calls the match");
+            }
+            found
+        }
+        (None, None) => None,
+    };
+    // M8f4: its model on the chair, whichever way it was picked
+    *mods::umpire::CHOSEN.lock().unwrap() = umpire_mod.as_ref().map(|u| u.dir.clone());
+    if let Some(u) = umpire_mod.as_ref().filter(|_| !umpire_given) {
+        umpire = u.donor;
+    }
+    // M8f6: a court mod plays on its layout court (`--stage`/`--court` default to it)
+    let court_mod = match (court_mod, court_mod_id) {
+        (Some(dir), _) => mods_court::read(dir.as_ref()).map_err(|e| warn!("{e}")).ok(),
+        // M8f8: an online room's, by id; not installed (or another layout) → the disc court the room plays on
+        (None, Some(id)) => {
+            let found = mods_court::find(&play::main_menu::Settings::path(&iso).with_file_name("mods"), &id).filter(|c| stage.is_none_or(|s| s == c.layout as u32 + 1));
+            if found.is_none() {
+                info!("court mod {id} not installed: the disc court is played");
+            }
+            found
+        }
+        (None, None) => None,
+    };
+    if let Some(c) = &court_mod {
+        stage = stage.or(Some(c.layout as u32 + 1));
+        if court == 0 {
+            court = c.layout as usize + 1;
+        }
+    }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod, court_mod }
 }
 
 // the browser build starts from `web::run` once the page has the disc pack
@@ -238,6 +298,8 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(target_os = "ios")]
+    ios::log_to_documents(&disc::data_dir());
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
     // `hst net … --play [disc] [flags]`: the online match once everyone's in
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
@@ -248,6 +310,8 @@ fn main() {
         *play::netplay::PENDING.lock().unwrap() = Some(started);
         argv = rest.unwrap_or_default();
     }
+    // B374: where the game's file is, before an update swaps it; a Windows update's leftover hst.exe.old goes
+    update::cleanup();
     disc::resolve(&mut argv);
     start(argv);
 }
@@ -268,8 +332,7 @@ fn android_main(app: bevy::android::android_activity::AndroidApp) {
 
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
-    let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
-    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands } = parse(argv.into_iter());
+    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod, court_mod } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
     if !args.archives.is_empty() && let Ok(mut iso) = Iso::open(&args.iso) {
@@ -283,10 +346,6 @@ fn start(argv: Vec<String>) {
     let menu = args.archives.is_empty() && args.stage.is_none() && !args.play && !args.ball && args.viewer.is_none() && args.sound.is_none() && roster.is_none();
     // `--windowed` on the command line holds for the whole run, over the menu's setting
     let windowed = gfx.windowed;
-    // so does `--merge-meshes` (the browser's `?merge-meshes=off`, B342), over the menu's setting and a match's flags
-    if merge_flag {
-        graphics::MERGE_FORCED.store(1 + gfx.merge_meshes as u8, std::sync::atomic::Ordering::Relaxed);
-    }
     // the menu opens the window as settings.txt's graphics say, so it doesn't start fullscreen and then shrink
     if menu && let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
         for (k, v) in t.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
@@ -315,7 +374,20 @@ fn start(argv: Vec<String>) {
     if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
         resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
     }
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
+    // HST_WEBGL2=1: the web WebGL2 build's limits on the desktop (no storage buffers, CPU batching, uniform skins), with
+    // the browser's usual 8k/2k (3D) textures, to reproduce WebGL2-only renderer bugs natively (B385)
+    let mut render = bevy::render::settings::WgpuSettings::default();
+    if std::env::var_os("HST_WEBGL2").is_some() {
+        render.priority = bevy::render::settings::WgpuSettingsPriority::WebGL2;
+        render.limits = bevy::render::settings::WgpuLimits { max_texture_dimension_2d: 8192, max_texture_dimension_3d: 2048, ..bevy::render::settings::WgpuLimits::downlevel_webgl2_defaults() };
+    }
+    let plugins = DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
+    // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame
+    #[cfg(target_os = "ios")]
+    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
+    app.add_plugins(plugins);
+    #[cfg(target_os = "ios")]
+    app.add_systems(Last, ios::heartbeat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
@@ -323,18 +395,22 @@ fn start(argv: Vec<String>) {
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
-    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, merge::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
     app.add_plugins(shade::plugin);
     app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
+    // the umpire's calls' (P33)
+    app.add_plugins(MaterialPlugin::<effects::OnTop>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
-    app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin));
+    app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
+    // M91a1: the iPhone's on-screen pad, kept through mode switches
+    app.add_plugins(play::touch_pad::plugin);
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
-        app.add_systems(Last, (log_fps, log_assets));
+        app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
     }
     if std::env::var_os("HST_KEYS").is_some() {
         app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
@@ -364,8 +440,9 @@ fn start(argv: Vec<String>) {
         });
         let a = args.clone();
         let first = mode::Mode::new(move |app| {
-            app.insert_resource(a).insert_resource(swap_hands).add_systems(Startup, load);
-            add_match(app, viewer_mod, mod_slot, slot_mods);
+            app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
+            add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
+            court_mod::add(app, court_mod);
         });
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
@@ -383,9 +460,12 @@ fn start(argv: Vec<String>) {
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
-/// player N (default 1st), its costume by `--outfits`.
-fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>) {
+/// player N (default 1st), its costume by `--outfits`; `umpire_mod` is heard in the chair (M8f3).
+fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>, umpire_mod: Option<mods_umpire::Umpire>) {
     app.add_plugins(play::plugin);
+    if let Some(u) = umpire_mod {
+        app.insert_resource(mods_umpire::MatchUmpire(u));
+    }
     slot_mods.extend(viewer_mod.map(|d| (mod_slot, d)));
     if !slot_mods.is_empty() {
         let mut mm = mods::MatchMod::default();
@@ -404,7 +484,7 @@ pub fn menu_mode(app: &mut App) {
 /// The menu's match in this app: `flags` read as on the command line (the settings' `--no-upscale` and
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
-    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, court_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
@@ -413,8 +493,9 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         // the app's own `--shot` goes on through the match
         let old = app.world().resource::<Args>();
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
-        app.insert_resource(args).insert_resource(swap_hands).add_systems(Startup, load);
-        add_match(app, viewer_mod, mod_slot, slot_mods);
+        app.insert_resource(args).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
+        add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
+        court_mod::add(app, court_mod);
     })
     .back(back)
     .cover(cover)
@@ -454,12 +535,14 @@ fn load(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
     (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
-    gfx: Option<Res<graphics::Graphics>>,
+    court_mod: Option<Res<mods_court::MatchCourt>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
         .spawn((GameSpace, Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default()))
         .id();
+    // M8f6: under a court mod the layout court is set up as ever (its sim, weather and generators) but not drawn
+    let root = court_mod.map_or(root, |_| commands.spawn((court_mod::DiscCourt, Transform::default(), Visibility::Hidden, ChildOf(root))).id());
     let mut bounds = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     // HST_ONLY / HST_SKIP: substring filters on model paths, for bisecting what draws what
     let only = std::env::var("HST_ONLY").ok();
@@ -579,6 +662,7 @@ fn load(
             acc: Vec::new(),
             clo: Vec::new(),
             last: None,
+            mix: None,
         };
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // the court load shifts the hole model's vertex colours in HSL by the court's and the hole's envir
@@ -641,8 +725,6 @@ fn load(
         if let Some(sun) = sun {
             commands.insert_resource(sun);
         }
-        // B328: the props' unblended parts drawn one mesh per material (B342: while Merge Court Meshes is on)
-        let mut merger = merge::Merger::new(gfx.as_deref().is_some_and(graphics::Graphics::merged));
         for p in &plants {
             let Some(e) = layout::resolve(&list, p, season) else { continue };
             if !matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard") {
@@ -662,7 +744,7 @@ fn load(
             let shape = model_shapes.get(&e.stem).cloned().unwrap_or_default();
             let near = matches!(e.dir.as_str(), "tree" | "prop");
             let cast = p.code[3] != b'0' && (17..=19).contains(&p.category);
-            let e = merger.add(&mut commands, root, parts, t, cast, &meshes, &gs_materials);
+            let e = spawn(&mut commands, parts, t);
             // B185: the Grand Palais end houses: the match camera behind your baseline sits inside one
             if stem.starts_with("w-house") {
                 let b = parts.iter().filter_map(|(m, _)| bevy::camera::primitives::MeshAabb::compute_aabb(meshes.get(m)?)).fold((Vec3::MAX, Vec3::MIN), |(lo, hi), a| (lo.min(a.min().into()), hi.max(a.max().into())));
@@ -714,7 +796,6 @@ fn load(
                 spawn(&mut commands, &decal, Transform::default());
             }
         }
-        merger.finish(&mut commands, root, &mut meshes);
         look.sky = sky;
         if envir.is_some() {
             commands.insert_resource(look);
@@ -887,14 +968,13 @@ fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>, model: &mdl::Model) 
     if idx.is_empty() {
         return None;
     }
-    Some(
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
-            .with_inserted_indices(Indices::U32(idx)),
-    )
+    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+        .with_inserted_indices(Indices::U32(idx));
+    Some(mesh)
 }
 
 /// Like [`models`], drawn as the GS draws them ([`gs`]): one mesh per material and batch PRIM, its texture raw and
@@ -920,6 +1000,9 @@ fn gs_models_anim(
     for_models(data, keep, |stem, model, mats| {
         let _pre = textures::prefetch(&mats);
         let anim = hst_sim::court_anim::CourtAnim::new(&model, tracks(&stem, "uva", 4).as_ref(), tracks(&stem, "mta", 1).as_ref(), &mats.materials);
+        // P32: a hole material whose alpha the `.MTA` animates, or whose texture a live reload can change, keeps its
+        // blended draws whole
+        let fixed_alpha = tracks(&stem, "mta", 1).is_none() && std::env::var_os("HST_TEXTURE_RELOAD").is_none();
         let mut parts = Vec::new();
         for (mi, packets) in model.materials.iter().enumerate() {
             let Some(mat) = mats.materials.get(mi) else { continue };
@@ -965,7 +1048,52 @@ fn gs_models_anim(
                 if own_mips.is_some() {
                     draws.iter_mut().for_each(|g| g.uniform.screen_lod = 1.0);
                 }
-                parts.push((mesh, draws, (mi, first)));
+                // P32: each of the hole's two draws keeps only the triangles with a pixel it can draw (the indoor
+                // court's floor is faded, its walls solid); a scrolling texture (`.UVA`) keeps them all
+                let mut split = Vec::new();
+                if stem.contains("_h01_") && fixed_alpha && k.1.is_none() {
+                    let see = texture.as_ref().and_then(|t| images.get(t)).and_then(gs::SeeThrough::new);
+                    if let (Some(Indices::U32(idx)), true) = (mesh.indices(), texture.is_none() || see.is_some()) {
+                        let alpha: Vec<f32> = match mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
+                            Some(bevy::mesh::VertexAttributeValues::Float32x4(c)) => c.iter().map(|c| c[3]).collect(),
+                            _ => Vec::new(),
+                        };
+                        let uv: &[[f32; 2]] = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+                            Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) => uv,
+                            _ => &[],
+                        };
+                        let can = |test| gs::hole_triangles(test, idx, &alpha, uv, mat.color[3], see.as_ref());
+                        let (ge, lt) = (can(gs::Test::Ge80), can(gs::Test::Lt80));
+                        // where every pixel passes A ≥ 0x80 the test is left out (an opaque draw without discard:
+                        // tile GPUs' hidden-surface removal works on it)
+                        let mut whole = Vec::new();
+                        for g in std::mem::take(&mut draws) {
+                            let pieces: Vec<(gs::GsMaterial, Vec<bool>)> = match g.key.test {
+                                gs::Test::Lt80 => vec![(g, lt.clone())],
+                                gs::Test::Ge80 => {
+                                    let always = gs::GsMaterial { key: gs::GsKey { test: gs::Test::Always, ..g.key }, ..g.clone() };
+                                    vec![(always, lt.iter().map(|&l| !l).collect()), (g, ge.iter().zip(&lt).map(|(&g, &l)| g && l).collect())]
+                                }
+                                _ => vec![(g, vec![true; idx.len() / 3])],
+                            };
+                            for (g, keep) in pieces {
+                                if keep.iter().all(|&k| k) {
+                                    whole.push(g);
+                                } else if keep.iter().any(|&k| k) {
+                                    let kept: Vec<u32> = idx.chunks(3).zip(&keep).filter(|(_, k)| **k).flat_map(|(t, _)| t.iter().copied()).collect();
+                                    let mut part = mesh.clone();
+                                    part.insert_indices(Indices::U32(kept));
+                                    split.push((part, vec![g], (mi, first)));
+                                }
+                            }
+                        }
+                        draws = whole;
+                    }
+                }
+                if !draws.is_empty() {
+                    parts.push((mesh, draws, (mi, first)));
+                }
+                parts.extend(split);
             }
         }
         out.push((stem, parts, anim));
@@ -1290,6 +1418,10 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
             Some(f.iter().sum::<u64>() as f32 * 10.0)
         });
+        #[cfg(target_os = "ios")]
+        let cpu = Some(ios::cpu_ms());
+        #[cfg(target_os = "ios")]
+        eprintln!("thermal {}", ios::thermal());
         if let Some(cpu) = cpu {
             eprintln!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
             acc.3 = cpu;
@@ -1397,6 +1529,64 @@ fn window_icon(mut done: Local<bool>, _main_thread: bevy::ecs::system::NonSendMa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M8f3: `--umpire-mod DIR` plays the mod over its donor (the donor in the chair unless `--umpire` says
+    /// otherwise, as the menu's and the online room's always do); `--umpire-mod-id` of a mod not installed: none.
+    #[test]
+    fn umpire_mod_flags() {
+        let dir = std::env::temp_dir().join(format!("hst-umpire-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"umpire","id":"u","name":"U","donor":1}"#).unwrap();
+        let cli = |f: &[&str]| parse(["x.iso", "--play"].iter().chain(f).map(|s| s.to_string()));
+        let d = dir.display().to_string();
+        let c = cli(&["--umpire-mod", &d]);
+        assert_eq!((c.args.umpire, c.umpire_mod.map(|u| u.id)), (1, Some("u".into())));
+        let c = cli(&["--umpire", "3", "--umpire-mod", &d]);
+        assert_eq!((c.args.umpire, c.umpire_mod.is_some()), (3, true));
+        let c = cli(&["--umpire", "2", "--umpire-mod-id", "not-installed-anywhere"]);
+        assert_eq!((c.args.umpire, c.umpire_mod.is_none()), (2, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M8f6: `--court-mod DIR` plays on the mod's layout court unless `--stage`/`--court` say otherwise; a broken
+    /// one is dropped (the disc court plays).
+    #[test]
+    fn court_mod_flags() {
+        let dir = std::env::temp_dir().join(format!("hst-court-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":4}"#).unwrap();
+        std::fs::write(dir.join("court.glb"), b"x").unwrap();
+        let cli = |f: &[&str]| parse(["x.iso", "--play"].iter().chain(f).map(|s| s.to_string()));
+        let d = dir.display().to_string();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.map(|c| c.id)), (Some(5), 5, Some("c".into())));
+        let c = cli(&["--stage", "2", "--court", "2", "--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.is_some()), (Some(2), 2, true));
+        std::fs::remove_file(dir.join("court.glb")).unwrap();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.court_mod.is_none()), (None, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M8f8: an online room's `--court-mod-id` is looked up under `mods/` beside the disc: installed, it's drawn over
+    /// the room's layout court; not installed (or on another layout here), the disc court plays as the room says.
+    #[test]
+    fn court_mod_id_flags() {
+        let root = std::env::temp_dir().join(format!("hst-court-id-{}", std::process::id()));
+        let dir = root.join("mods/pack/c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":4}"#).unwrap();
+        std::fs::write(dir.join("court.glb"), b"x").unwrap();
+        let iso = root.join("x.iso").display().to_string();
+        let cli = |f: &[&str]| parse([iso.as_str(), "--play"].iter().chain(f).map(|s| s.to_string()));
+        let c = cli(&["--stage", "5", "--court", "5", "--court-mod-id", "c"]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.map(|c| c.id)), (Some(5), 5, Some("c".into())));
+        let c = cli(&["--stage", "5", "--court", "5", "--court-mod-id", "not-installed-anywhere"]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.is_none()), (Some(5), 5, true));
+        let c = cli(&["--stage", "2", "--court", "2", "--court-mod-id", "c"]);
+        assert_eq!((c.args.stage, c.court_mod.is_none()), (Some(2), true), "another layout here: the room's court");
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn pow2_pads_with_edge_texels() {

@@ -148,3 +148,7 @@ features = [
     "Gaming_Input_ForceFeedback",
 ]
 optional = true
+
+# HST M91: iOS backend over Apple's GameController framework (src/platform/ios)
+[target.'cfg(target_os = "ios")'.dependencies.objc2]
+version = "0.6"

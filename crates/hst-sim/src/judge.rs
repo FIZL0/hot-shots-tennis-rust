@@ -1,8 +1,9 @@
 //! Line calls and point judging, ported from the original: the call made when a ball lands, the per-frame
 //! "is the point over?" check, the check made on every hit, and the umpire's verdict.
 //! Players 0..3; team = player & 1 (0 and 2 against 1 and 3).
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2::{add, sub};
+use crate::ps2::F;
 
 /// A ball's line call (+0xa5 of the ball object).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -63,14 +64,14 @@ pub fn call_landing(call: Call, net: bool, at: [f32; 4], l: &Lines) -> Option<(C
         return Some((Call::Net, None));
     }
     // ponytail: the original also skips contacts with material 0; every surface the port collides with has one.
-    let w = add(l.margin, if !l.doubles || serve { SINGLES_HALF_WIDTH } else { DOUBLES_HALF_WIDTH });
-    let len = add(l.margin, if serve { SERVICE_LENGTH } else { HALF_LENGTH });
+    let w = (F(l.margin) + if !l.doubles || serve { SINGLES_HALF_WIDTH } else { DOUBLES_HALF_WIDTH }).0;
+    let len = (F(l.margin) + if serve { SERVICE_LENGTH } else { HALF_LENGTH }).0;
     let (x, z) = (at[0], at[2]);
     let mut inside = false;
     if x.abs() <= w {
-        inside = if !l.hitter_far { 0.0 < z && z <= len } else { z < 0.0 && !(z < -len) };
+        inside = if !l.hitter_far { 0.0 < z && z <= len } else { z < 0.0 && !(z < -F(len)) };
         if serve && inside {
-            inside = if l.side == (!l.hitter_far) as i32 { sub(-CENTRE_SLACK, l.margin) <= x } else { x <= add(l.margin, CENTRE_SLACK) };
+            inside = if l.side == (!l.hitter_far) as i32 { -F(CENTRE_SLACK) - l.margin <= x } else { x <= F(l.margin) + CENTRE_SLACK };
         }
     }
     let after_net = call == Call::Net;
@@ -92,11 +93,11 @@ fn line_distance(at: [f32; 4], l: &Lines) -> f32 {
     let nearer = |a: f32, b: f32| if b.abs() <= a.abs() { b } else { a };
     if l.shots < 2 {
         // centre service line, sideline, service line
-        let side = sub(x, SINGLES_HALF_WIDTH);
-        nearer(if x <= side.abs() { x } else { side }, sub(z, SERVICE_LENGTH))
+        let side = (F(x) - SINGLES_HALF_WIDTH).0;
+        nearer(if x <= side.abs() { x } else { side }, (F(z) - SERVICE_LENGTH).0)
     } else {
         let w = if l.doubles { DOUBLES_HALF_WIDTH } else { SINGLES_HALF_WIDTH };
-        nearer(sub(x, w), sub(z, HALF_LENGTH))
+        nearer((F(x) - w).0, (F(z) - HALF_LENGTH).0)
     }
 }
 

@@ -87,6 +87,11 @@ const KEEP_MODELS: usize = 6;
 const KEEP_PNGS: usize = 48;
 /// Seconds a card's hover holds before its live model replaces the PNG.
 const SETTLE: f32 = 0.3;
+/// B402: a menu unit's width over its height on screen (the 640×448 screen shown 4:3: 448 / 480).
+pub(super) const UNIT_W: f32 = 14.0 / 15.0;
+/// B402: a preview's width over its height in menu units, for a picture that is the bake's 4:5 on screen (the PNG
+/// and the live drawing then show the same proportions).
+pub(super) const CARD_W: f32 = 0.8 / UNIT_W;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(inspect::plugin)
@@ -280,10 +285,8 @@ pub(super) fn card(iso: &str, m: &Mod) -> Option<Vec<u8>> {
 /// [`ICON_READS`] new ones a frame so a page turn doesn't stall.
 fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::Icons>, mut images: ResMut<Assets<Image>>, mut failed: Local<HashSet<Who>>) {
     let page: Vec<Who> = match menu.screen {
-        Screen::Chars => {
-            let (start, roster) = menu.page();
-            roster.into_iter().skip(start).take(menu.grid.per()).chain((0..menu.players()).map(|p| Some(menu.who(p)))).flatten().collect()
-        }
+        // B368: every column's tiles on view
+        Screen::Chars => menu.on_view(),
         // the main screen's pictures' faces (`home::faces`), as the baker draws them
         Screen::Main => super::home::faces(&menu),
         Screen::Mods => super::mods_screen::faces(&menu),
@@ -524,7 +527,8 @@ fn sync(
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
     let mut quads = match slide.incoming() {
         // B192: and the confirm screen's players
-        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm) => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        // B370: and the lobby's seat cards
+        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm | Screen::Lobby) => layout(&menu, &art.2, &bind, &[], 0.0).0,
         _ => Vec::new(),
     };
     let dx = slide.incoming().map_or(0.0, |s| s.0);
@@ -605,7 +609,8 @@ fn sync(
                         Who::Disc(c) => c,
                         Who::Mod(i) => menu.mods[i].donor,
                     };
-                    let image = inspect::target(&mut images, (Vec2::new(q.dst[2], q.dst[3]) * scale).as_uvec2());
+                    // B402: its on-screen pixels (a menu unit is narrower than tall), so it draws the shape it shows
+                    let image = inspect::target(&mut images, (Vec2::new(q.dst[2] * UNIT_W, q.dst[3]) * scale).as_uvec2());
                     let cam = inspect::spawn_into(&mut commands, &data, c, hand, 1 + p, image.clone());
                     commands.entity(cam).insert(Card(p));
                     let shown = if cover.is_some() { Visibility::Hidden } else { Visibility::Inherited };

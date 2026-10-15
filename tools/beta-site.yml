@@ -1,0 +1,29 @@
+# The whole of FIZL0/opentennis-beta (as .github/workflows/deploy.yml): that repo holds no site, only this. Each beta
+# run of this repo's pages.yml dispatches it; it puts the `beta` release's web.tar.gz on its GitHub Pages
+# (custom domain beta.opentennis.dev). Run it by hand from that repo's Actions tab too.
+name: deploy
+on:
+  repository_dispatch:
+    types: [beta]
+  workflow_dispatch:
+permissions:
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: mkdir web && gh release download beta -R FIZL0/open-tennis -p web.tar.gz -O - | tar xz -C web
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

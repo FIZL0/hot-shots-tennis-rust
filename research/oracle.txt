@@ -23,3 +23,26 @@ world_sweep 32f690
 # hst_sim::serve::overhead_solve; underhand serve (a0 player): hst_sim::serve::underhand_solve
 overhead_arm_solve 358ba0
 underhand_arm_solve 359ec0
+# C9 (crates/hst-oracle/tests/float_steps.rs). TParam.csv row parser (a0 = row offset into the record table; its
+# strtok/atoi/strcmp/memset/decimal-reader calls are hooked): hst_sim::player::Stats::new's speed = SPE / 10
+tparam_row 18b5e0
+tparam_strtok 120ac8
+tparam_strtok_r 120ae8
+tparam_atoi 11aae8
+tparam_strcmp 1202e0
+tparam_memset 11e4e0
+tparam_atof 1b32b0
+# Shot table lookup (a0 shot block, a1..a3 out elevation/speed/frames, t0..t3 table keys, stack: hit, target
+# pointers); its table-pointer and axis-bounds helpers are hooked: hst_sim::shot::lookup
+shot_lookup 37dbf0
+shot_table 37c750
+shot_bounds 37c9a0
+# Pad read (a0 = pad struct) and the human run direction (a0 player, a1 out vec4, a2/a3 out words); camera-side
+# flag read stubbed: hst_sim::player::pad_dir
+pad_read 188880
+pad_dir 348ff0
+pad_dir_flip 18a470
+# the lookup's last frames step: the truncation after its final madd (hooked to read the operands)
+shot_frames_trunc 38176c
+pad_mode 189f40
+pad_motor 18a480

@@ -1,7 +1,9 @@
 #!/bin/bash
-# tools/build.sh [linux|windows|all] — optimised (release) builds of the game into dist/:
+# tools/build.sh [linux|windows|ios|all] — optimised (release) builds of the game into dist/:
 #   dist/linux/hst        run: ./hst "Hot Shots Tennis (USA).iso"
 #   dist/windows/hst.exe  run: drop the ISO on hst.exe, or `hst.exe "Hot Shots Tennis (USA).iso"`
+#   dist/ios/hst-ios.ipa  unsigned (M91): the player signs it (AltStore, Sideloadly…); the ISO goes in its Files folder.
+#                         Needs the iOS SDK once: tools/ios-sdk.py Xcode_*.xip (see tools/ios-build.sh)
 # mods/ and settings.txt live beside the ISO, not the binary. No game data goes into dist/.
 # Windows is cross-compiled with MinGW. One-time setup (Arch):
 #   sudo pacman -S rustup mingw-w64-gcc     # rustup replaces the `rust` package
@@ -23,7 +25,7 @@ linux() {
     fi
     mkdir -p ~/.cache/hst-steamrt
     docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -v ~/.cache/hst-steamrt:/cache -w /src \
-        -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
+        -e HST_VERSION -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
         $sdk sh -ec '
             [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
             /cache/cargo/bin/cargo build --release -p hst'
@@ -59,6 +61,7 @@ windows() {
 case $what in
     linux) linux ;;
     windows) windows ;;
-    all) linux; windows ;;
-    *) echo "usage: tools/build.sh [linux|windows|all]" >&2; exit 2 ;;
+    ios) mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/hst-ios.ipa ;;
+    all) linux; windows; mkdir -p dist/ios && tools/ios-ipa.sh dist/ios/hst-ios.ipa ;;
+    *) echo "usage: tools/build.sh [linux|windows|ios|all]" >&2; exit 2 ;;
 esac

@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, SWAY_LOD, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -47,12 +47,14 @@ pub(super) enum Opt {
     Renderer,
     /// B118: the on-screen pad buzzes on each press.
     Vibration,
-    /// B343: the speed-up switches (`Graphics::fewer_shadows`, `batch_crowd`; B342: `merge_meshes`).
+    /// B343: the speed-up switch (`Graphics::fewer_shadows`).
     FewerShadows,
-    BatchCrowd,
-    MergeMeshes,
     /// B364: the characters' share of triangles (`Graphics::mesh`, `lod.rs`).
     Mesh,
+    /// B344: far/unseen characters' sway less often.
+    SwayLod,
+    /// B374: look for a newer release at start (`crate::update`), desktop only.
+    UpdateCheck,
 }
 use Opt::*;
 
@@ -76,11 +78,11 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, Cull, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled, Cull];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
-const MODS: &[Opt] = &[Downloads, AtOnce, OnlineMods, Chat];
+const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
 /// B289: Online Mod Downloads' values.
@@ -102,11 +104,6 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
 /// Downloads, `modstore::install`).
 pub(super) fn locked(o: Opt) -> bool {
     cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
-}
-
-/// Whether ✕ changes `o` too (a slider only takes ◀ ▶).
-pub(super) fn ok_changes(o: Opt) -> bool {
-    !matches!(o, Volume(_)) && !locked(o)
 }
 
 fn label(o: Opt) -> &'static str {
@@ -135,10 +132,10 @@ fn label(o: Opt) -> &'static str {
         Chat => "Chat",
         Renderer => "Renderer",
         Vibration => "Vibration",
+        UpdateCheck => "Check for Updates",
         FewerShadows => "Fewer Shadows",
-        BatchCrowd => "Batch Crowd",
-        MergeMeshes => "Merge Court Meshes",
         Mesh => "Mesh",
+        SwayLod => "Sway LOD",
     }
 }
 
@@ -156,7 +153,6 @@ fn about(o: Opt) -> &'static str {
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
-        MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
         Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
         Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
@@ -172,10 +168,11 @@ fn about(o: Opt) -> &'static str {
         AtOnce => "How many mods the mod store downloads side by side (Download all, or several installs). Auto: 3 on a computer, 2 in a browser, 1 on a phone; a browser keeps each one in memory until it's saved, so it allows fewer.",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
-        Renderer => "Auto: WebGPU when the browser has it, else WebGL2. The page reloads into it a moment after a change.",
+        Renderer => "Auto: WebGPU when the browser has it, else WebGL2. A change asks first: the page reloads into it.",
         Vibration => vibration_about(),
+        UpdateCheck => "Look for a newer version when the game starts. The main menu offers it: Update downloads and checks it, then restarts the game into it (or opens its page where the game can't replace itself).",
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
-        BatchCrowd => "Draw identical court creatures together in one draw, from the next match. Off by default: no measurable gain.",
+        SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
     }
 }
 
@@ -184,8 +181,9 @@ fn vibration_about() -> &'static str {
     #[cfg(target_arch = "wasm32")]
     let can = crate::web::vibration();
     #[cfg(not(target_arch = "wasm32"))]
-    let can = "vibrate";
+    let can = if cfg!(target_os = "ios") { "haptic" } else { "vibrate" };
     match &*can {
+        "haptic" => "A light haptic tick on each press of the on-screen controls.",
         "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",
         "ios" => "iPhone: Safari has no vibration, so each press gives the light haptic tick of iOS 18 and later instead (nothing on older iOS).",
         _ => "This browser can't vibrate, so this does nothing here.",
@@ -201,6 +199,11 @@ fn fps_name(fps: u32) -> String {
     if fps == 0 { "Uncapped".into() } else { format!("{fps} fps") }
 }
 
+/// B316: the words of the rows whose values are small indices, shared by [`choices`] and [`Settings::value`].
+const SHOW_FPS_NAMES: [&str; 3] = ["Off", "On", "Detailed"];
+const SHADOW_NAMES: [&str; 3] = ["Off", "Low", "High"];
+const MSAA_NAMES: [&str; 3] = ["Off", "2x", "4x"];
+
 /// B294: every value `o` can take, in order, as [`Settings::value`] words it (the side panel's choices).
 fn choices(o: Opt) -> Vec<String> {
     let words = |v: &[&str]| v.iter().map(|w| w.to_string()).collect();
@@ -212,9 +215,10 @@ fn choices(o: Opt) -> Vec<String> {
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Mesh => MESHES.iter().map(|s| format!("{s} %")).collect(),
-        Shadows | Msaa => words(if o == Shadows { &["Off", "Low", "High"] } else { &["Off", "2x", "4x"] }),
-        ShowFps => words(&["Off", "On", "Detailed"]),
-        Renderer => words(&["Auto", "WebGPU", "WebGL2"]),
+        Shadows => words(&SHADOW_NAMES),
+        Msaa => words(&MSAA_NAMES),
+        ShowFps => words(&SHOW_FPS_NAMES),
+        Renderer => RENDERERS.iter().map(|(_, n)| n.to_string()).collect(),
         ButtonIcons => super::legend::LAYOUTS.iter().map(|l| l.0.to_string()).collect(),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
@@ -282,10 +286,16 @@ impl Settings {
             }
             Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
             Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
+            UpdateCheck => {
+                self.0[UPDATE_CHECK] = !self.0[UPDATE_CHECK];
+                crate::update::CHECK.store(self.0[UPDATE_CHECK], std::sync::atomic::Ordering::Relaxed);
+            }
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
-            BatchCrowd => g.batch_crowd = !g.batch_crowd,
-            MergeMeshes => g.merge_meshes = !g.merge_meshes,
             Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
+            SwayLod => {
+                self.0[SWAY_LOD] = !self.0[SWAY_LOD];
+                crate::noise::set_lod(self.0[SWAY_LOD], false);
+            }
         }
     }
 
@@ -297,17 +307,16 @@ impl Settings {
             Display => if g.windowed { "Window" } else { "Fullscreen" }.into(),
             Aspect => ASPECTS[self.3 as usize].into(),
             MenuSize => menu_size_name(self.7),
-            ShowFps => ["Off", "On", "Detailed"][g.show_fps.min(2) as usize].into(),
+            ShowFps => SHOW_FPS_NAMES[g.show_fps.min(2) as usize].into(),
             KeyHints => on_off(self.0[KEY_HINTS]),
             ButtonIcons => super::legend::LAYOUTS[self.9 as usize].0.into(),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
-            Shadows => ["Off", "Low", "High"][g.shadows as usize].into(),
-            Msaa => ["Off", "2x", "4x"][g.msaa.ilog2().min(2) as usize].into(),
+            Shadows => SHADOW_NAMES[g.shadows as usize].into(),
+            Msaa => MSAA_NAMES[g.msaa.ilog2().min(2) as usize].into(),
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
-            MergeMeshes => on_off(g.merge_meshes),
             Cull => on_off(g.cull),
             Mesh => format!("{} %", g.mesh),
             Upscaled => on_off(self.0[0]),
@@ -318,26 +327,98 @@ impl Settings {
             AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
             Chat => on_off(self.0[CHAT]),
-            Renderer => ["Auto", "WebGPU", "WebGL2"][self.5 as usize].into(),
+            Renderer => RENDERERS[self.5 as usize].1.into(),
             Vibration => on_off(self.0[VIBRATION]),
+            UpdateCheck => on_off(self.0[UPDATE_CHECK]),
             FewerShadows => on_off(g.fewer_shadows),
-            BatchCrowd => on_off(g.batch_crowd),
+            SwayLod => on_off(self.0[SWAY_LOD]),
         }
     }
 }
 
 impl Menu {
-    /// An options page: ◀ ▶ (and ✕, but on a slider) change the row's option and save; L1 / R1 and ○ as [`Self::step_tabs`].
+    /// An options page (B326, as the confirm screen's Sets and Games): ✕ on a row picks it, ◀ ▶ then change it (applied
+    /// and saved at once), ✕ keeps it, ○ puts back what it was; ◀ ▶ on a row not picked do nothing; L1 / R1 and ○ as
+    /// [`Self::step_tabs`].
     pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
-        if let Some(&o) = page(self.screen).get(self.sel)
-            && !locked(o)
-            && (k.left || k.right || (k.ok && ok_changes(o)))
-        {
-            self.settings.step(o, if k.left { -1 } else { 1 });
-            out.extend([Effect::Sound(0), Effect::SaveSettings]);
+        let o = page(self.screen).get(self.sel).copied().filter(|&o| !locked(o));
+        if let Some(was) = self.editing {
+            let Some(o) = o else {
+                self.editing = None;
+                return;
+            };
+            if (k.left || k.right) && o == Renderer {
+                self.editing = None;
+                self.open_switch(if k.left { -1 } else { 1 }, out);
+                return;
+            }
+            if k.left || k.right {
+                let now = self.settings;
+                self.settings.step(o, if k.left { -1 } else { 1 });
+                if self.settings != now {
+                    out.extend([Effect::Sound(0), Effect::SaveSettings]);
+                }
+            } else if k.ok {
+                self.editing = None;
+                out.push(Effect::Sound(2));
+            } else if k.back {
+                self.editing = None;
+                if self.settings != was {
+                    self.settings = was;
+                    crate::chat::HIDDEN.store(!was.0[CHAT], std::sync::atomic::Ordering::Relaxed);
+                    out.push(Effect::SaveSettings);
+                }
+                out.push(Effect::Sound(1));
+            }
+            return;
+        }
+        if k.ok && o.is_some() {
+            self.editing = Some(self.settings);
+            out.push(Effect::Sound(2));
             return;
         }
         self.step_tabs(k, out);
+    }
+
+    /// B327: the page reloads into a new renderer, so a press on Renderer asks first: the popup opens on the value the
+    /// press (direction `d`) steps to, Switch chosen.
+    fn open_switch(&mut self, d: isize, out: &mut Vec<Effect>) {
+        self.switch = Some((self.renderer_step(self.settings.5, d), 0));
+        out.push(Effect::Sound(0));
+    }
+
+    /// The renderer after `r` one step in direction `d`, passing the one in use (the popup only offers a change).
+    fn renderer_step(&self, r: u8, d: isize) -> u8 {
+        let n = RENDERERS.len() as isize;
+        let mut r = r as isize;
+        loop {
+            r = (r + d).rem_euclid(n);
+            if r != self.settings.5 as isize {
+                return r as u8;
+            }
+        }
+    }
+
+    /// B327: one press while the Renderer switch's popup is up (it takes them all): ◀ ▶ change the renderer it
+    /// offers, ↑ ↓ move between Switch and Cancel, ✕ chooses, ○ is Cancel. Switch saves the setting, which reloads
+    /// the page into it (`web::renderer`); Cancel leaves it as it was. Returns whether the popup was up.
+    pub(super) fn switch_step(&mut self, k: Press, out: &mut Vec<Effect>) -> bool {
+        let Some((r, c)) = self.switch else { return false };
+        if k.left || k.right {
+            self.switch = Some((self.renderer_step(r, if k.left { -1 } else { 1 }), c));
+            out.push(Effect::Sound(0));
+        } else if k.up || k.down {
+            self.switch = Some((r, 1 - c));
+            out.push(Effect::Sound(0));
+        } else if k.ok && c == 0 {
+            self.settings.5 = r;
+            self.switch = None;
+            out.extend([Effect::Sound(2), Effect::SaveSettings]);
+        } else if k.ok || k.back {
+            self.switch = None;
+            out.push(Effect::Sound(1));
+        }
+        true
     }
 
     /// Any Settings page: L1 / R1 open the tab before / after it (wrapping), ○ goes back to the main menu's
@@ -463,9 +544,9 @@ fn side_panel(d: &mut Draw, side: [f32; 4], name: &str, about: &str, heading: &s
     para(d, note, x, y, w, 12.0, 16.0, MUTED);
 }
 
-/// An options page: the rows in the list, each label on the left and its value between ◀ ▶ on the right (a tap on
-/// the value's left half steps back, on its right half on, B221), a volume as a bar beside its number; the chosen
-/// one's name, description and choices in the side panel.
+/// An options page: the rows in the list, each label on the left and its value on the right (a tap picks the row;
+/// picked, its value between ◀ ▶, B326), a volume as a bar beside its number; the chosen one's name, description and
+/// choices in the side panel.
 pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let opts = page(m.screen);
     let (list, side) = chrome(d, m, opts.len());
@@ -480,7 +561,9 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         let vw = 130.0f32.min(w * 0.36);
         let vx = x + w - vw - 4.0;
         d.text(label(o), x + 14.0, y + (h - size) / 2.0, size, ink);
-        d.hit([x, y, vx - x, h], pointer::Act::Row(i, pointer::OK));
+        if m.editing.is_none() {
+            d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
+        }
         d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
         let value = m.settings.value(o);
         d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, if value == "Off" { MUTED } else { ink });
@@ -490,11 +573,25 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.box3(bar, 3.0, [None, None, Some([118.0, 105.0, 110.0])], 128.0);
             d.box3([bar[0], bar[1], (sw * m.settings.2 .0[s] as f32 / 10.0).max(6.0), 6.0], 3.0, [None, None, Some([109.0, 58.0, 72.0])], 128.0);
         }
-        if locked(o) {
+        // B326: only the picked row takes ◀ ▶: its value blue between them (a slider's gone at its ends), its value's
+        // halves step it, the rest of the row keeps it, a tap off puts it back (as ○)
+        if locked(o) || !(on && m.editing.is_some()) {
             continue;
         }
-        d.text("<", vx + 8.0, y + (h - size) / 2.0, size, BROWN);
-        d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, BROWN);
+        d.popup(Some(pointer::press(|k| k.back = true)));
+        d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [Some(INK), None, Some([40.0, 90.0, 128.0])], 128.0);
+        d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, WHITE);
+        let ends = match o {
+            Volume(s) => (m.settings.2 .0[s] > 0, m.settings.2 .0[s] < 10),
+            _ => (true, true),
+        };
+        if ends.0 {
+            d.text("<", vx + 8.0, y + (h - size) / 2.0, size, WHITE);
+        }
+        if ends.1 {
+            d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, WHITE);
+        }
+        d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
         d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
         d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
     }
@@ -517,6 +614,44 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         let now = m.settings.value(o);
         side_panel(d, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
     }
+    switch_layout(d, m, hand_x);
+}
+
+/// The Renderer switch's popup's pills (640×448): their tops, 40 px apart as the mods' Reload / Later popup's.
+const SWITCH_TOP: f32 = 226.0;
+
+/// B327: the Renderer switch's confirm popup over the dimmed page, as the mods' Reload / Later one
+/// (`mods_screen::ask_layout`): the renderer it offers between ◀ ▶ (a tap on either side steps it), Switch and Cancel.
+fn switch_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
+    let Some((r, c)) = m.switch else { return };
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    // the page's own hand goes; the popup has its own
+    if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
+        d.out.remove(i);
+    }
+    // a tap off the popup is Cancel
+    d.popup(Some(pointer::Act::Row(1, pointer::OK)));
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = super::Anchor::Centre;
+    let top = SWITCH_TOP - 70.0;
+    d.box3([160.0, top, 320.0, 70.0 + 72.0 + 16.0], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    let name = format!("Switch to {}?", RENDERERS[r as usize].1);
+    d.outlined(|d| d.label(&name, 320.0, SWITCH_TOP - 56.0, 22.0, 224.0, WHITE));
+    d.outlined(|d| d.label("The page reloads to change it.", 320.0, SWITCH_TOP - 32.0, 18.0, 288.0, WHITE));
+    d.outlined(|d| d.text("<", 176.0, SWITCH_TOP - 56.0, 22.0, WHITE));
+    d.outlined(|d| d.text(">", 464.0 - d.width(">", 22.0), SWITCH_TOP - 56.0, 22.0, WHITE));
+    d.hit([160.0, top, 160.0, 36.0], pointer::Act::Press(Press { left: true, ..default() }));
+    d.hit([320.0, top, 160.0, 36.0], pointer::Act::Press(Press { right: true, ..default() }));
+    for (k, word) in ["Switch", "Cancel"].into_iter().enumerate() {
+        let y = SWITCH_TOP + 40.0 * k as f32;
+        let on = k == c;
+        d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+        d.hit([176.0, y, 288.0, 32.0], pointer::Act::Row(k, pointer::OK));
+        d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
+    }
+    // no `said` line: Settings has no description bar, its ticker would run over the list's footnote
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, SWITCH_TOP + 40.0 * c as f32, 64.0, 32.0], WHITE, 128.0);
 }
 
 /// B324: what the WebGL2 build reaches here, in words: `fps`, the best second's frame rate (`play`: in a match,
@@ -619,8 +754,9 @@ mod tests {
     }
 
     /// Every tab: ✕ on the main menu's Settings opens the first, R1 walks them in order and wraps, L1 back; ↓ walks each
-    /// page's rows and wraps (changing nothing); ◀ ▶ on each option change it and save (◀ undoing ▶ on a cycle), each
-    /// value it takes one of its side panel's choices; ○ lands on the main menu's Settings row.
+    /// page's rows and wraps (changing nothing); ◀ ▶ on a row not picked change nothing (B326); ✕ picks it, then ◀ ▶
+    /// change it and save (◀ undoing ▶ on a cycle), ↓ and L1 / R1 stay on it, ✕ keeps it, ○ puts it back; each value it
+    /// takes one of its side panel's choices; ○ lands on the main menu's Settings row.
     #[test]
     fn every_page() {
         let mut m = Menu::default();
@@ -637,6 +773,11 @@ mod tests {
             for (i, &o) in page(s).iter().enumerate() {
                 m.sel = i;
                 let was = m.settings;
+                for k in [Press { right: true, ..default() }, Press { left: true, ..default() }] {
+                    assert!(m.step(Dev::Keys, k).is_empty() && m.settings == was, "{o:?}");
+                }
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                assert_eq!(m.editing, Some(was), "{o:?}");
                 let fx = m.step(Dev::Keys, press(|k| &mut k.right));
                 if matches!(o, Volume(_)) {
                     m.step(Dev::Keys, press(|k| &mut k.left));
@@ -646,7 +787,19 @@ mod tests {
                     assert!(fx.contains(&Effect::SaveSettings) && m.settings != was, "{o:?}");
                     m.step(Dev::Keys, press(|k| &mut k.left));
                     assert_eq!(m.settings, was, "{o:?}");
+                    m.step(Dev::Keys, press(|k| &mut k.right));
                 }
+                // still on it: ↓ and R1 do nothing while it's picked
+                m.step(Dev::Keys, press(|k| &mut k.down));
+                m.step(Dev::Keys, press(|k| &mut k.next));
+                assert_eq!((m.screen, m.sel), (s, i));
+                let changed = m.settings;
+                let fx = m.step(Dev::Keys, press(|k| &mut k.back));
+                assert!(fx.contains(&Effect::SaveSettings) && m.settings == was && m.editing.is_none(), "{o:?}: ○ puts it back");
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                m.settings = changed;
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                assert!(m.settings == changed && m.editing.is_none(), "{o:?}: ✕ keeps it");
                 for _ in 0..12 {
                     assert!(choices(o).contains(&m.settings.value(o)), "{o:?} {}", m.settings.value(o));
                     m.settings.step(o, -1);
@@ -678,7 +831,7 @@ mod tests {
                 assert!(r[1] + r[3] <= list[1] + list[3] - 24.0 && r[3] >= 20.0, "{a} {s:?}");
                 for sel in 0..n {
                     let m = Menu { screen: s, sel, grid, ..default() };
-                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0.0).out.len();
+                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
                     assert!(q < super::super::pause::POOL_HERE, "{a} {s:?} {sel}: {q} quads");
                 }
             }
@@ -712,16 +865,82 @@ mod tests {
         assert!(set.text().contains("menu_size = 150\n") && Settings::parse(&set.text()) == set);
     }
 
+    /// B316: every row's choices are its own values — stepping one round through any row (the web build's Renderer
+    /// too, which no native page shows) lands on each of its choices once and on nothing else.
+    #[test]
+    fn choices_are_each_rows_own_values() {
+        let all = [DISPLAY, &[Display, Renderer], GRAPHICS, SOUND, MODS, MOBILE].concat();
+        for o in all.into_iter().filter(|o| !matches!(o, Volume(_) | Preset)) {
+            let mut s = Settings::default();
+            let want = choices(o);
+            let seen: Vec<_> = (0..want.len()).map(|_| (s.value(o), s.step(o, 1)).0).collect();
+            assert_eq!((s.value(o), seen.len()), (seen[0].clone(), want.len()), "{o:?}");
+            assert!(want.iter().all(|c| seen.contains(c)), "{o:?}: {seen:?} vs {want:?}");
+        }
+        assert_eq!(choices(Renderer), ["Auto", "WebGPU", "WebGL2"]);
+        let mut s = Settings::default();
+        s.step(Renderer, -1);
+        assert_eq!(s.value(Renderer), "WebGL2");
+    }
+
     /// B235: the sliders clamp to 0..=10 and the volumes round-trip settings.txt.
     #[test]
     fn sound_sliders() {
         let mut m = Menu { screen: Screen::Sound, sel: 1, ..default() };
-        m.step(Dev::Keys, press(|k| &mut k.right));
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert!(m.step(Dev::Keys, press(|k| &mut k.right)).is_empty(), "at its end: no sound, no save");
         assert_eq!(m.settings.2, Volumes([10, 10, 10, 10]));
         (0..12).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
         assert_eq!(m.settings.2, Volumes([10, 0, 10, 10]));
-        assert!(m.step(Dev::Keys, press(|k| &mut k.ok)).is_empty());
+        m.step(Dev::Keys, press(|k| &mut k.ok));
         assert_eq!(Settings::parse(&m.settings.text()), m.settings);
+    }
+
+    /// B327: Renderer asks before it switches (the browser build's Display page; forced here, the desktop has no such
+    /// row): the popup offers the value the press steps to, ◀ ▶ step it past the one in use, Cancel / ○ / a tap off it
+    /// change nothing, Switch saves; while it's up it takes the presses, the legend says so, and it draws within the
+    /// pause overlay's pool at any aspect.
+    #[test]
+    fn renderer_asks_first() {
+        let mut m = Menu { screen: Screen::Display, sel: 1, ..default() };
+        let mut out = Vec::new();
+        m.open_switch(1, &mut out);
+        assert_eq!((m.switch, &out[..]), (Some((1, 0)), &[Effect::Sound(0)][..]));
+        m.step(Dev::Keys, press(|k| &mut k.right));
+        assert_eq!(m.switch, Some((2, 0)));
+        // Auto is in use: not offered
+        m.step(Dev::Keys, press(|k| &mut k.right));
+        assert_eq!(m.switch, Some((1, 0)));
+        let fx = m.step(Dev::Keys, press(|k| &mut k.down));
+        assert_eq!((m.switch, m.sel, fx), (Some((1, 1)), 1, vec![Effect::Sound(0)]));
+        let fx = m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!((m.switch, m.settings, fx), (None, Settings::default(), vec![Effect::Sound(1)]));
+        m.open_switch(-1, &mut out);
+        assert_eq!(m.switch, Some((2, 0)));
+        let fx = m.step(Dev::Keys, press(|k| &mut k.back));
+        assert_eq!((m.switch, m.screen, m.settings, fx), (None, Screen::Display, Settings::default(), vec![Effect::Sound(1)]));
+        // a tap off the popup is Cancel; a tap on Switch switches
+        m.open_switch(-1, &mut out);
+        let t = super::super::pointer::tests::text_with_mods(0);
+        let d = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0);
+        assert_eq!(d.outside, Some(pointer::Act::Row(1, pointer::OK)));
+        assert!(super::super::legend::acts(&m, Dev::Keys).iter().any(|(_, w)| w == "Cancel"));
+        m.point(Dev::Keys, pointer::Act::Row(1, pointer::OK), true);
+        assert_eq!((m.switch, m.settings.5), (None, 0));
+        m.open_switch(-1, &mut out);
+        let fx = m.point(Dev::Keys, pointer::Act::Row(0, pointer::OK), true);
+        assert!(m.switch.is_none() && m.settings.5 == 2 && fx.contains(&Effect::SaveSettings));
+        assert!(m.settings.text().contains("renderer = webgl2") || !cfg!(target_arch = "wasm32"));
+        assert_eq!(m.settings.value(Renderer), "WebGL2");
+        assert!(choices(Renderer).contains(&m.settings.value(Renderer)));
+        // the popup again (from WebGL2: Auto offered first), on every aspect
+        m.open_switch(1, &mut out);
+        assert_eq!(m.switch, Some((0, 0)));
+        for a in [4.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
+            m.grid = Grid::fit(a);
+            let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
+            assert!(q < super::super::pause::POOL_HERE, "{a}: {q} quads");
+        }
     }
 
     /// The preset steps through the presets; changing what it sets makes it Custom; Display and Show FPS survive a
@@ -765,5 +984,9 @@ mod tests {
         s.step(AtOnce, 1);
         s.step(AtOnce, 1);
         assert_eq!((s.value(AtOnce).as_str(), s.downloads_at_once(), Settings::parse(&s.text()) == s), ("1", 1, true));
+        // B344: Sway LOD, off by default, saved
+        assert_eq!(s.value(SwayLod), "Off");
+        s.step(SwayLod, 1);
+        assert!(s.0[SWAY_LOD] && s.text().contains("sway_lod = on") && Settings::parse(&s.text()) == s);
     }
 }

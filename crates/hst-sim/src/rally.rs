@@ -2,12 +2,13 @@
 //! timing the swing), with the path copy, the landing and bounce picks, the dive check, the smash search, the
 //! ready check and the stroke-frame pickers it calls; and the NET and BASE rally routines (waiting in the formation
 //! between shots, the shot records the partners leave each other, the volley search).
+#![deny(clippy::float_arithmetic)]
 
 use crate::ai::{AiParams, Mind, PathBall, Runner, Searcher};
 use crate::aim::{Look, Pair};
 use crate::position::{zone_in, Cue, Formation, Return, Team};
 use crate::player::{self, ReachStats, Stats};
-use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
+use crate::ps2::F;
 
 /// The most path entries the AI copies.
 pub const PATH_MAX: usize = 180;
@@ -214,7 +215,7 @@ pub struct Out {
 }
 
 fn abs(v: f32) -> f32 {
-    if v < 0.0 { -v } else { v }
+    if v < 0.0 { (-F(v)).0 } else { v }
 }
 
 fn sign(v: f32) -> i32 {
@@ -256,7 +257,7 @@ impl Body {
     /// The walk toward `out`: leaves the unit direction there (zero when there, or within ⅔ of a step unless
     /// `keep`); true when it arrives.
     fn walk(&self, w: &World, out: &mut [f32; 4], keep: bool) -> bool {
-        let mut d: [f32; 4] = std::array::from_fn(|k| sub(out[k], self.pos[k]));
+        let mut d: [f32; 4] = std::array::from_fn(|k| (F(out[k]) - self.pos[k]).0);
         if abs(d[0]) < f32::from_bits(0x3a83_126f) {
             d[0] = 0.0;
         }
@@ -264,18 +265,18 @@ impl Body {
             d[2] = 0.0;
         }
         (d[1], d[3]) = (0.0, 0.0);
-        let mut len = sqrt(madd(mul(d[2], d[2]), d[0], d[0]));
+        let mut len = (F(d[2]) * d[2]).madd(d[0], d[0]).sqrt().0;
         if len <= 0.0 {
             *out = [0.0; 4];
             return true;
         }
-        let inv = div(1.0, len);
-        *out = d.map(|c| mul(c, inv));
+        let inv = (F(1.0) / len).0;
+        *out = d.map(|c| (F(c) * inv).0);
         let step = self.step(w);
-        if !keep && len <= div(mul(2.0, step), 3.0) {
+        if !keep && len <= (F(2.0) * step / 3.0).0 {
             *out = [0.0; 4];
         } else {
-            len = sub(len, step);
+            len = (F(len) - step).0;
         }
         len <= 0.0 || zero(out)
     }
@@ -285,8 +286,8 @@ impl Body {
         let b = player::bot_stick([dir[0], dir[2]]);
         let [x, z] = player::stick_dir(b, 3);
         let step = self.step(w);
-        me[0] = add(me[0], mul(x, step));
-        me[2] = add(me[2], mul(z, step));
+        me[0] = (me[0] + F(x) * step).0;
+        me[2] = (me[2] + F(z) * step).0;
     }
 
     /// The ball-lost mark (a computer player's, in the rally).
@@ -397,41 +398,41 @@ impl Rally {
             return false;
         }
         let me = b.pos;
-        let horiz = |v: &[f32; 4]| sqrt(madd(mul(v[2], v[2]), v[0], v[0]));
+        let horiz = |v: &[f32; 4]| (F(v[2]) * v[2]).madd(v[0], v[0]).sqrt().0;
         let mut v;
         if let Some(e) = c.balls[..len].iter().find(|e| e.bounces > 0) {
             *out = e.pos;
             v = e.vel;
             let h = horiz(&v);
             if !(h <= 0.0) {
-                let inv = div(1.0, h);
-                v = v.map(|c| mul(c, inv));
+                let inv = (F(1.0) / h).0;
+                v = v.map(|c| (F(c) * inv).0);
             }
         } else {
             let e = c.balls[len - 1];
             *out = e.pos;
             v = e.vel;
             while !(out[1] <= 0.0) {
-                let s = sqrt(madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2]));
-                v = v.map(|c| msub(add(0.0, c), mul(c, s), w.drag));
-                v[1] = msub(add(0.0, v[1]), f32::from_bits(0x3b32_6750), w.gravity);
+                let s = (F(v[1]) * v[1]).madd(v[0], v[0]).madd(v[2], v[2]).sqrt().0;
+                v = v.map(|c| (F::ZERO + c).msub(F(c) * s, w.drag).0);
+                v[1] = (F::ZERO + v[1]).msub(f32::from_bits(0x3b32_6750), w.gravity).0;
                 for k in 0..4 {
-                    out[k] = add(out[k], v[k]);
+                    out[k] = (F(out[k]) + v[k]).0;
                 }
             }
             let h = horiz(&v);
             if !(h <= 0.0) {
-                let inv = div(1.0, h);
-                v = v.map(|c| mul(c, inv));
+                let inv = (F(1.0) / h).0;
+                v = v.map(|c| (F(c) * inv).0);
             }
         }
-        let p: [f32; 4] = std::array::from_fn(|k| madd(add(0.0, out[k]), v[k], half));
-        let rs = mul(b.reach.reach, b.side);
-        let dz = sub(p[2], me[2]);
-        let (l, r) = (sub(p[0], rs), add(p[0], rs));
-        let (dl, dr) = (sub(l, me[0]), sub(r, me[0]));
-        let d1 = madd(mul(dz, dz), dl, dl);
-        let d2 = madd(mul(dz, dz), dr, dr);
+        let p: [f32; 4] = std::array::from_fn(|k| (F::ZERO + out[k]).madd(v[k], half).0);
+        let rs = (F(b.reach.reach) * b.side).0;
+        let dz = (F(p[2]) - me[2]).0;
+        let (l, r) = ((F(p[0]) - rs).0, (F(p[0]) + rs).0);
+        let (dl, dr) = ((F(l) - me[0]).0, (F(r) - me[0]).0);
+        let d1 = (F(dz) * dz).madd(dl, dl).0;
+        let d2 = (F(dz) * dz).madd(dr, dr).0;
         *out = p;
         out[0] = if d1 <= d2 { l } else { r };
         true
@@ -444,27 +445,27 @@ impl Rally {
             return true;
         }
         let n = (self.len as usize).min(16);
-        let speed = sqrt(madd(mul(b.vel[1], b.vel[1]), b.vel[0], b.vel[0]));
-        let run = mul(1.25, speed);
+        let speed = (F(b.vel[1]) * b.vel[1]).madd(b.vel[0], b.vel[0]).sqrt().0;
+        let run = (F(1.25) * speed).0;
         let r = &b.reach;
-        let (low, high) = (mul(f32::from_bits(0x3e4c_cccd), r.stroke_height), mul(f32::from_bits(0x3fe6_6666), r.stroke_height));
-        let far = mul(f32::from_bits(0x3fa6_6666), r.reach);
+        let (low, high) = ((F(f32::from_bits(0x3e4c_cccd)) * r.stroke_height).0, (F(f32::from_bits(0x3fe6_6666)) * r.stroke_height).0);
+        let far = (F(f32::from_bits(0x3fa6_6666)) * r.reach).0;
         for t in 5..n {
             let e = c.balls[t].pos;
             if abs(e[2]) < 0.5 || sign(b.side) == sign(e[2]) || !(low <= e[1] && e[1] <= high) {
                 continue;
             }
-            let mut d: [f32; 4] = std::array::from_fn(|k| sub(e[k], b.pos[k]));
+            let mut d: [f32; 4] = std::array::from_fn(|k| (F(e[k]) - b.pos[k]).0);
             d[1] = 0.0;
-            let len = sqrt(madd(mul(d[2], d[2]), d[0], d[0]));
-            let inv = div(1.0, len);
-            let n = [mul(d[0], inv), mul(0.0, inv), mul(d[2], inv)];
+            let len = (F(d[2]) * d[2]).madd(d[0], d[0]).sqrt().0;
+            let inv = (F(1.0) / len).0;
+            let n = [(F(d[0]) * inv).0, (F(0.0) * inv).0, (F(d[2]) * inv).0];
             let f = b.facing;
-            let dot = madd(madd(mul(f[1], n[1]), f[0], n[0]), f[2], n[2]);
+            let dot = (F(f[1]) * n[1]).madd(f[0], n[0]).madd(f[2], n[2]).0;
             if dot < f32::from_bits(0x3f6c_835e) {
                 continue;
             }
-            let lim = mul(2.0, madd(add(0.0, far), run, t as f32));
+            let lim = (2.0 * (F::ZERO + far).madd(run, t as f32)).0;
             if !(lim < len) {
                 return false;
             }
@@ -477,8 +478,8 @@ impl Rally {
         let r = &b.reach;
         let [high, ideal, low] = r.smash;
         let runner = self.runner(b, w);
-        let off_x = |x| sub(x, div(mul(b.hand, mul(b.smash_off[0], b.side)), 2.0));
-        let off_z = |z| sub(z, div(mul(b.smash_off[1], b.side), 2.0));
+        let off_x = |x: f32| (x - b.hand * (F(b.smash_off[0]) * b.side) / 2.0).0;
+        let off_z = |z: f32| (z - F(b.smash_off[1]) * b.side / 2.0).0;
         let mut best: Option<(usize, f32, i32)> = None;
         for at in (if from < 0 { self.first } else { from }).max(0) as usize..self.len.max(0) as usize {
             let e = c.balls[at];
@@ -496,7 +497,7 @@ impl Rally {
             if !(abs(sz) < 11.885) {
                 continue;
             }
-            let score = abs(sub(y, ideal));
+            let score = abs((F(y) - ideal).0);
             let frames = runner.frames_to([sx, sz]);
             if (at as i32 - self.first) < frames {
                 continue;
@@ -543,16 +544,16 @@ impl Rally {
             if abs(z) < p.net || sign(b.side) == sign(z) || e.bounces < p.min || !(p.low <= y && y <= p.high) {
                 continue;
             }
-            let (dx, dy, dz) = (sub(x, me[0]), sub(y, me[1]), sub(z, me[2]));
+            let (dx, dy, dz) = ((F(x) - me[0]).0, (F(y) - me[1]).0, (F(z) - me[2]).0);
             let d = if p.flat {
-                sqrt(madd(mul(dz, dz), dx, dx))
+                (F(dz) * dz).madd(dx, dx).sqrt().0
             } else {
-                sqrt(madd(madd(mul(dy, dy), dx, dx), dz, dz))
+                (F(dy) * dy).madd(dx, dx).madd(dz, dz).sqrt().0
             };
             if !(p.near <= d && d <= p.far) {
                 continue;
             }
-            let score = abs(sub(madd(add(0.0, me[2]), p.depth, b.side), z));
+            let score = abs(((F::ZERO + me[2]).madd(p.depth, b.side) - z).0);
             if best.is_none_or(|(_, s)| score < s) {
                 best = Some((at, score));
             }
@@ -568,7 +569,7 @@ impl Rally {
     /// The pick for contact kind `kind`.
     fn kind_frame(&self, b: &Body, c: &PathCopy, kind: u8) -> Option<i32> {
         let r = &b.reach;
-        let m = mul;
+        let m = |a: f32, b: f32| (F(a) * b).0;
         let far = m(f32::from_bits(0x3fa6_6666), r.reach);
         let base = Pick { stop: 1, net: 0.5, min: 0, low: 0.0, high: 0.0, near: 0.0, far, flat: false, depth: b.depth };
         let got = match kind {
@@ -590,7 +591,7 @@ impl Rally {
     /// The tiered kind's pick at one tier (0 the tightest band round the stroke height and reach, 3 the widest).
     fn tier_frame(&self, b: &Body, c: &PathCopy, tier: u8) -> Option<(i32, bool)> {
         let r = &b.reach;
-        let m = mul;
+        let m = |a: f32, b: f32| (F(a) * b).0;
         let (h, rr) = (r.stroke_height, r.reach);
         let (lo, hi, near, far) = match tier {
             0 => (m(0.9, h), m(f32::from_bits(0x3f8c_cccd), h), m(0.9, rr), m(f32::from_bits(0x3f8c_cccd), rr)),
@@ -606,22 +607,22 @@ impl Rally {
     /// is, 0 when neither.
     fn ready(&self, b: &Body, w: &World) -> i32 {
         let r = &b.reach;
-        let far = mul(f32::from_bits(0x3fa6_6666), r.reach);
+        let far = (F(f32::from_bits(0x3fa6_6666)) * r.reach).0;
         let mut me = b.pos;
         me[1] = r.base;
-        let (dx, dz) = (sub(self.stand[0], me[0]), sub(self.stand[2], me[2]));
-        let len = sqrt(madd(mul(dz, dz), dx, dx));
+        let (dx, dz) = ((F(self.stand[0]) - me[0]).0, (F(self.stand[2]) - me[2]).0);
+        let len = (F(dz) * dz).madd(dx, dx).sqrt().0;
         let dir = if len <= 0.0 {
             [0.0; 4]
         } else {
-            let inv = div(1.0, len);
-            [mul(dx, inv), mul(0.0, inv), mul(dz, inv), mul(0.0, inv)]
+            let inv = (F(1.0) / len).0;
+            [(F(dx) * inv).0, (F(0.0) * inv).0, (F(dz) * inv).0, (F(0.0) * inv).0]
         };
         b.nudge(w, dir, &mut me);
         for v in 1..=2 {
-            let (dx, dy, dz) = (sub(self.ball[0], me[0]), sub(self.ball[1], me[1]), sub(self.ball[2], me[2]));
-            let d3 = sqrt(madd(madd(mul(dy, dy), dx, dx), dz, dz));
-            let d2 = sqrt(madd(mul(dz, dz), dx, dx));
+            let (dx, dy, dz) = ((F(self.ball[0]) - me[0]).0, (F(self.ball[1]) - me[1]).0, (F(self.ball[2]) - me[2]).0);
+            let d3 = (F(dy) * dy).madd(dx, dx).madd(dz, dz).sqrt().0;
+            let d2 = (F(dz) * dz).madd(dx, dx).sqrt().0;
             let ok = match self.kind {
                 3 => d2 <= r.reach,
                 2 => d3 <= far,
@@ -664,11 +665,11 @@ impl Rally {
         let l = self.level as usize;
         const SURE: [i32; 4] = [50, 60, 70, 80];
         const WIDE: [i32; 4] = [55, 67, 80, 95];
-        let out = mul(100.0, sub(abs(b.pos[0]), 5.485));
+        let out = (100.0 * (F(abs(b.pos[0])) - 5.485)).0;
         let zone = 'z: {
             if !(out <= 0.0) {
                 let p = if out <= 50.0 { out } else { 50.0 };
-                if chance(roll, div(p, 2.5) as i32) {
+                if chance(roll, (F(p) / 2.5).0 as i32) {
                     let lane = crate::position::zone_in([b.pos[0], b.pos[2]], 5.485, None).0;
                     if chance(roll, 50) {
                         self.plan = 10;
@@ -731,10 +732,10 @@ impl Rally {
         let deuce = w.court == 0;
         let opp = b.opp[0];
         let (ol, od) = crate::position::zone_in([opp[0], opp[2]], W, Some(&mut *roll));
-        let out = mul(sub(abs(b.pos[0]), 5.485), 100.0);
+        let out = ((F(abs(b.pos[0])) - 5.485) * 100.0).0;
         if 0.0 < out {
             let p = if out <= 50.0 { out } else { 50.0 };
-            if chance(roll, div(p, 2.5) as i32) {
+            if chance(roll, (F(p) / 2.5).0 as i32) {
                 let lane = crate::position::zone_in([b.pos[0], b.pos[2]], W, None).0;
                 let (mut x, d) = if chance(roll, 50) {
                     self.plan = 10;
@@ -857,8 +858,8 @@ impl Rally {
                 }
                 out.stick[2] = b.pos[2];
                 out.stick[0] = match (self.guess, w.court) {
-                    (1, 0) => mul(5.485, b.side),
-                    (2, 1) => mul(-5.485, b.side),
+                    (1, 0) => (F(5.485) * b.side).0,
+                    (2, 1) => (F(-5.485) * b.side).0,
                     _ => 0.0,
                 };
                 b.walk(w, &mut out.stick, false);
@@ -949,15 +950,15 @@ impl Rally {
                 if self.guess == 0 {
                     return false;
                 }
-                let f6 = if self.guess == 1 { b.side } else { -b.side };
+                let f6 = if self.guess == 1 { b.side } else { (-F(b.side)).0 };
                 self.guess = 0;
                 if !go {
                     return false;
                 }
-                let (dz, dx) = (sub(self.stand[2], self.from[1]), sub(self.stand[0], self.from[0]));
-                let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
-                let (nz, nx) = (mul(dz, inv), mul(dx, inv));
-                let dot = madd(madd(add(0.0, 0.0), nx, f6), nz, 0.0);
+                let (dz, dx) = ((F(self.stand[2]) - self.from[1]).0, (F(self.stand[0]) - self.from[0]).0);
+                let inv = (1.0 / (F(dz) * dz).madd(dx, dx).sqrt()).0;
+                let (nz, nx) = ((F(dz) * inv).0, (F(dx) * inv).0);
+                let dot = (F::ZERO + 0.0).madd(nx, f6).madd(nz, 0.0).0;
                 if !(dot < 0.5) {
                     self.push = true;
                 } else if dot < 0.0 {
@@ -999,11 +1000,11 @@ impl Rally {
             if b.swing == 1 {
                 if self.push {
                     let k = if self.body { 1.5 } else { 2.0 };
-                    self.stick = self.stick.map(|c| mul(c, k));
-                    let len = sqrt(madd(mul(self.stick[2], self.stick[2]), self.stick[0], self.stick[0]));
+                    self.stick = self.stick.map(|c| (F(c) * k).0);
+                    let len = (F(self.stick[2]) * self.stick[2]).madd(self.stick[0], self.stick[0]).sqrt().0;
                     if !(len <= 1.0) {
-                        let inv = div(1.0, len);
-                        self.stick = self.stick.map(|c| mul(c, inv));
+                        let inv = (F(1.0) / len).0;
+                        self.stick = self.stick.map(|c| (F(c) * inv).0);
                     }
                 }
                 out.stick = self.stick;
@@ -1012,7 +1013,7 @@ impl Rally {
             if done && self.singles && self.dash {
                 // singles: the net dash goes in to the shot's line at the net reach
                 self.stand[0] = b.target[0];
-                self.stand[2] = mul(-self.reach, b.side);
+                self.stand[2] = (-F(self.reach) * b.side).0;
             }
             if b.swing < 0 && w.hitter >= 0 && (w.hitter & 1) != (b.team & 1) && self.wait > 0 {
                 self.wait -= 1;
@@ -1050,7 +1051,7 @@ impl Rally {
     /// Stand at its depth on the half the ball isn't in.
     fn hold_spot(&mut self, b: &Body, w: &World) {
         self.spot = b.pos;
-        self.spot[0] = mul(f32::from_bits(0xc02f_851f), sign(w.ball[0]) as f32);
+        self.spot[0] = (F(f32::from_bits(0xc02f_851f)) * (sign(w.ball[0]) as f32)).0;
     }
 
     /// The walk back to the spot: true when it walks this frame (`out` then heads there).
@@ -1081,7 +1082,7 @@ impl Rally {
         if kind == 3 && !self.dash && (style == 1 || style == 3) {
             self.dash = true;
             self.stand[0] = 0.0;
-            self.stand[2] = mul(-self.reach, b.side);
+            self.stand[2] = (-F(self.reach) * b.side).0;
         }
     }
 
@@ -1127,20 +1128,20 @@ impl Rally {
         }
         let (t, m) = (theirs.n, mine.n);
         let run = |s: &Shot| {
-            let (dz, dx) = (sub(s.vec[2], s.pos[2]), sub(s.vec[0], s.pos[0]));
-            sqrt(madd(mul(dz, dz), dx, dx))
+            let (dz, dx) = ((F(s.vec[2]) - s.pos[2]).0, (F(s.vec[0]) - s.pos[0]).0);
+            (F(dz) * dz).madd(dx, dx).sqrt().0
         };
         let yes = t >= 0 && {
             let (f4, f3) = (run(mine), run(theirs));
             if self.mate > 0 {
-                if f4 < 2.5 && add(1.0, abs(b.pos[2])) < abs(b.mate[2]) {
+                if f4 < 2.5 && (F(1.0) + abs(b.pos[2])).0 < abs(b.mate[2]) {
                     false
                 } else if f3 < 2.0 {
                     true
                 } else if f4 < 2.5 {
                     false
                 } else if t.wrapping_sub(m).wrapping_abs() < 30 {
-                    add(f3, 1.0) < f4
+                    (F(f3) + 1.0).0 < f4
                 } else {
                     t < m
                 }
@@ -1178,8 +1179,8 @@ impl Rally {
     /// The partner stands nearer `t` than it does.
     fn mate_nearer(b: &Body, t: &[f32; 4]) -> bool {
         let d = |p: &[f32; 4]| {
-            let (dz, dx) = (sub(t[2], p[2]), sub(t[0], p[0]));
-            madd(mul(dz, dz), dx, dx)
+            let (dz, dx) = ((F(t[2]) - p[2]).0, (F(t[0]) - p[0]).0);
+            (F(dz) * dz).madd(dx, dx).0
         };
         d(&b.mate) < d(&b.pos)
     }
@@ -1195,8 +1196,8 @@ impl Rally {
     fn volley_search(&self, b: &Body, w: &World, c: &PathCopy, from: i32, all: bool, body: bool) -> Option<Found> {
         let r = &b.reach;
         let vh = r.volley_height;
-        let top = mul(f32::from_bits(0x3fa6_6666), vh);
-        let r2 = mul(r.reach, r.reach);
+        let top = (F(f32::from_bits(0x3fa6_6666)) * vh).0;
+        let r2 = (F(r.reach) * r.reach).0;
         let runner = self.runner(b, w);
         let (mx, mz) = (b.pos[0], b.pos[2]);
         let mut best: Option<(i32, f32, i32, [f32; 4])> = None;
@@ -1212,19 +1213,19 @@ impl Rally {
                     if !(0.0 <= p[1] && p[1] <= top) {
                         break 'c;
                     }
-                    let dy = sub(p[1], r.base);
-                    let f = msub(add(0.0, r2), dy, dy);
+                    let dy = (F(p[1]) - r.base).0;
+                    let f = (F::ZERO + r2).msub(dy, dy).0;
                     if f < 0.0 {
                         break 'c;
                     }
-                    let half = if body { 0.0 } else { sqrt(f) };
-                    let (l, rr) = (sub(p[0], half), add(p[0], half));
-                    let dz = sub(p[2], mz);
-                    let (dl, dr) = (sub(l, mx), sub(rr, mx));
+                    let half = if body { 0.0 } else { F(f).sqrt().0 };
+                    let (l, rr) = ((F(p[0]) - half).0, (F(p[0]) + half).0);
+                    let dz = (F(p[2]) - mz).0;
+                    let (dl, dr) = ((F(l) - mx).0, (F(rr) - mx).0);
                     let mut s = p;
-                    s[0] = if madd(mul(dz, dz), dl, dl) <= madd(mul(dz, dz), dr, dr) { l } else { rr };
-                    let score = abs(sub(p[1], vh));
-                    s[2] = sub(p[2], div(mul(b.depth, b.side), 2.0));
+                    s[0] = if (F(dz) * dz).madd(dl, dl).0 <= (F(dz) * dz).madd(dr, dr).0 { l } else { rr };
+                    let score = abs((F(p[1]) - vh).0);
+                    s[2] = (p[2] - F(b.depth) * b.side / 2.0).0;
                     let frames = runner.frames_to([s[0], s[2]]);
                     if at - self.first < frames {
                         break 'c;
@@ -1382,11 +1383,11 @@ impl Rally {
                 let check = p.n < 0
                     || p.n < frame
                     || (p.n < frame + 8 && same && !(abs(bz) <= abs(pz)))
-                    || (!(abs(bz) <= add(2.0, abs(pz))) && same);
+                    || (!(abs(bz) <= (F(2.0) + abs(pz)).0) && same);
                 if check {
                     let near = || {
-                        let (dz, dx) = (sub(oz, bz), sub(b.pos[0], w.ball[0]));
-                        sqrt(madd(mul(dz, dz), dx, dx)) <= 3.0
+                        let (dz, dx) = ((F(oz) - bz).0, (F(b.pos[0]) - w.ball[0]).0);
+                        (F(dz) * dz).madd(dx, dx).sqrt().0 <= 3.0
                     };
                     if !self.middle && (sign(oz) != sign(bz) || abs(bz) <= abs(oz) || near()) {
                         (self.follow, self.fresh) = (false, true);
@@ -1571,11 +1572,11 @@ impl Rally {
     fn dash_spot(&mut self, b: &Body) {
         let lim = f32::from_bits(0x402f_92c5);
         let x = b.target[0];
-        self.stand[0] = if x < -lim { -lim } else if x <= lim { x } else { lim };
+        self.stand[0] = if x < -F(lim) { (-F(lim)).0 } else if x <= lim { x } else { lim };
         self.stand[2] = if self.plan == 10 {
-            mul(b.side, -add(div(sub(11.885, self.reach), 3.0), self.reach))
+            (F(b.side) * -F(((F(11.885) - self.reach) / 3.0 + self.reach).0)).0
         } else {
-            mul(-self.reach, b.side)
+            (-F(self.reach) * b.side).0
         };
     }
 
@@ -1590,13 +1591,13 @@ impl Rally {
             let mine = zone_in(xz(b.pos), 4.115, None);
             self.spot[0] = 0.0;
             if shot.0 == 1 || shot == them {
-                self.spot[2] = if abs(b.pos[2]) <= 10.0 { b.pos[2] } else { mul(-10.0, b.side) };
+                self.spot[2] = if abs(b.pos[2]) <= 10.0 { b.pos[2] } else { (F(-10.0) * b.side).0 };
             } else {
-                let back = add(div(mul(2.0, sub(11.885, self.reach)), 3.0), self.reach);
-                self.spot[2] = mul(b.side, -back);
+                let back = (2.0 * (F(11.885) - self.reach) / 3.0 + self.reach).0;
+                self.spot[2] = (F(b.side) * -F(back)).0;
                 let oz = abs(b.opp[0][2]);
                 if !(abs(self.spot[2]) <= oz) {
-                    self.spot[2] = mul(b.side, -oz);
+                    self.spot[2] = (F(b.side) * -F(oz)).0;
                 }
                 if mine.1 < 2 || them.1 < 2 {
                     self.dash = true;
@@ -1726,12 +1727,12 @@ impl Rally {
             }
             if Self::our_hit(b, w) {
                 if self.dash {
-                    out.stick = if net { self.stand } else { [0.0, 0.0, mul(-self.reach, b.side), 0.0] };
+                    out.stick = if net { self.stand } else { [0.0, 0.0, (-F(self.reach) * b.side).0, 0.0] };
                     b.walk(w, &mut out.stick, false);
                 } else if self.back.there {
                 } else if self.back.going {
-                    let (dz, dx) = (sub(self.spot[2], b.pos[2]), sub(self.spot[0], b.pos[0]));
-                    if madd(mul(dz, dz), dx, dx) <= mul(self.radius, self.radius) {
+                    let (dz, dx) = ((F(self.spot[2]) - b.pos[2]).0, (F(self.spot[0]) - b.pos[0]).0);
+                    if (F(dz) * dz).madd(dx, dx).0 <= (F(self.radius) * self.radius).0 {
                         self.back.there = true;
                     } else {
                         out.stick = self.spot;

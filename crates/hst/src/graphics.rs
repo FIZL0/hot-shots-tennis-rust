@@ -37,12 +37,6 @@ pub struct Graphics {
     /// B343: at Shadows Low only the players, the umpire and what shades the court cast (`shadow::Minor`, B351);
     /// off, Low casts everything High does. A speed-up a device can turn off; not part of a preset.
     pub fewer_shadows: bool,
-    /// B343: identical court creatures share their meshes and materials (each one's shade rides in its draw's
-    /// `MeshTag`, `shade::Shared`) so the renderer can draw them as one instanced draw. Not part of a preset.
-    pub batch_crowd: bool,
-    /// B342: the court props' unblended parts drawn as one mesh per material (`merge.rs`) instead of one per part.
-    /// Off by default: no gain measured (Bevy already batches the copies' draws). Not part of a preset.
-    pub merge_meshes: bool,
     /// Leave the characters' and effects' meshes out of a view they're outside of (B345, `cull.rs`); off draws them
     /// all as before. Not part of a preset.
     pub cull: bool,
@@ -54,9 +48,6 @@ pub struct Graphics {
 /// `Graphics::mesh` for the loaders, which have no world (`character.rs`, `mods.rs`); kept in step by `mesh_detail`.
 pub static MESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
 
-/// `--merge-meshes` given at launch: 0 not given, 1 off, 2 on; it holds over `Graphics::merge_meshes` (B342).
-pub static MERGE_FORCED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
 pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
 
@@ -65,26 +56,26 @@ pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
 pub const MESHES: [u32; 4] = [25, 50, 75, 100];
-/// The speed-up switches' defaults (`Graphics::fewer_shadows`, `batch_crowd`, `merge_meshes`).
+/// The speed-up switch's default (`Graphics::fewer_shadows`).
 const FEWER_SHADOWS: bool = true;
-const BATCH_CROWD: bool = false;
-const MERGE_MESHES: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
-    /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
-    /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen and the iOS app's first
+    /// run): Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`), at 67% scale with 2x
+    /// MSAA. M91: an iPhone 15 Pro at 100%/2x is GPU-bound on the Grand Indoor Palace (40 fps); a phone's dense screen
+    /// hides the lower scale.
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -97,12 +88,10 @@ impl Graphics {
             "original" => self.original = v != "off",
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
-            "merge_meshes" | "merge-meshes" => self.merge_meshes = v != "off",
             "cull" => self.cull = v != "off",
             "mesh" => self.mesh = v.trim_end_matches('%').trim().parse::<u32>().map_or(self.mesh, |m| m.clamp(10, 100)),
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             "fewer_shadows" | "fewer-shadows" => self.fewer_shadows = v != "off",
-            "batch_crowd" | "batch-crowd" => self.batch_crowd = v != "off",
             _ => return false,
         }
         true
@@ -113,7 +102,7 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\ncull = {}\nmesh = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
@@ -122,8 +111,6 @@ impl Graphics {
             on(self.windowed),
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
             on(self.fewer_shadows),
-            on(self.batch_crowd),
-            on(self.merge_meshes),
             on(self.cull),
             self.mesh
         )
@@ -149,11 +136,9 @@ impl Graphics {
             1 => f.push("--show-fps".into()),
             _ => f.push("--show-fps-detailed".into()),
         }
-        // the speed-up switches only when not at their defaults (also the browser's `?fewer-shadows=off` etc.)
-        for (flag, on, default) in [("--fewer-shadows", self.fewer_shadows, FEWER_SHADOWS), ("--batch-crowd", self.batch_crowd, BATCH_CROWD), ("--merge-meshes", self.merge_meshes, MERGE_MESHES)] {
-            if on != default {
-                f.extend([flag.into(), if on { "on" } else { "off" }.into()]);
-            }
+        // Fewer Shadows only when not at its default (also the browser's `?fewer-shadows=off`)
+        if self.fewer_shadows != FEWER_SHADOWS {
+            f.extend(["--fewer-shadows".into(), if self.fewer_shadows { "on" } else { "off" }.into()]);
         }
         if self.mesh != 100 {
             f.extend(["--mesh".into(), self.mesh.to_string()]);
@@ -167,15 +152,7 @@ impl Graphics {
 
     /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, the speed-up switches).
     pub fn keep(&self, p: Graphics) -> Graphics {
-        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, merge_meshes: self.merge_meshes, cull: self.cull, mesh: self.mesh, ..p }
-    }
-
-    /// Whether court meshes are drawn merged (`merge.rs`): the setting, unless `--merge-meshes` said otherwise.
-    pub fn merged(&self) -> bool {
-        match MERGE_FORCED.load(Ordering::Relaxed) {
-            0 => self.merge_meshes,
-            f => f == 2,
-        }
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, cull: self.cull, mesh: self.mesh, ..p }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -221,11 +198,86 @@ pub fn plugin(app: &mut App) {
         use bevy::render::renderer::{RenderGraph, RenderGraphSystems as G};
         r.add_systems(RenderGraph, (mark::<4>.in_set(G::Begin), mark::<5>.in_set(G::Render).after(bevy::core_pipeline::schedule::camera_driver)))
             .add_systems(bevy::render::Render, mark::<6>.in_set(bevy::render::RenderSystems::Cleanup));
+        // the swapchain acquire: waits there while the GPU is still busy with earlier frames (P28)
+        use bevy::render::{RenderSystems as R, view::prepare_windows};
+        r.add_systems(bevy::render::Render, (mark::<7>.in_set(R::PrepareViews).before(prepare_windows), mark::<8>.in_set(R::PrepareViews).after(prepare_windows)));
+        #[cfg(target_os = "ios")]
+        r.add_systems(RenderGraph, (gpu_time::<false>.in_set(G::Begin), gpu_time::<true>.after(G::Render).before(G::Submit)));
     }
     if std::env::var_os("HST_FPS").is_some() {
-        app.add_systems(Last, log_draws);
+        app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split, |t: Res<Time<Real>>| NOW.store(t.elapsed_secs().to_bits(), Ordering::Relaxed)));
+        if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            r.add_systems(bevy::render::Render, log_pipelines.in_set(bevy::render::RenderSystems::Cleanup));
+        }
+    }
+    // `HST_PASSES=1` (P32): Bevy's per-pass render timings, with GPU time where the backend gives timestamps (Vulkan
+    // does, Metal doesn't), logged every 5 s: which pass a heavy court spends its GPU time in
+    if std::env::var_os("HST_PASSES").is_some() {
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, log_passes);
+    }
+    // `HST_MAIN8=1` (P34): an 8-bit main texture for the 3D cameras; on by default on iOS (tile GPU), `HST_MAIN8=0` off
+    if std::env::var("HST_MAIN8").map_or(cfg!(target_os = "ios"), |v| v != "0") {
+        app.add_systems(PostUpdate, main8);
     }
 }
+
+/// `HST_MAIN8=1` (P34): the scene cameras draw into an `Rgba8Unorm` main texture instead of `Hdr`'s `Rgba16Float`,
+/// half the colour bandwidth (most of it on a tile GPU with MSAA). Without `Hdr` Bevy gives the main texture the
+/// scene image's format, `Rgba8Unorm`, and the upscale copies it unconverted, so the
+/// encoded values land in the scene image as before; `CompositingSpace::Srgb` would decode them on that copy. An LDR
+/// view dithers Bevy's PBR in its shader, which `Hdr`'s tonemapping pass skips with `Tonemapping::None`: dither off.
+/// Blends then round to 8 bits after each draw, as the GS's do.
+fn main8(mut commands: Commands, q: Query<Entity, (With<crate::hud_gamma::Scene>, With<bevy::camera::Hdr>)>) {
+    for e in &q {
+        commands.entity(e).remove::<bevy::camera::Hdr>().insert(bevy::core_pipeline::tonemapping::DebandDither::Disabled);
+    }
+}
+
+/// The app's real time (s, f32 bits) for the render world's logs.
+static NOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `HST_FPS=1` (P30): each render pipeline as it's first queued, with when: one queued mid-match is a first-draw
+/// compile the loading screen's warm-up (`mode.rs`) missed.
+fn log_pipelines(cache: Res<bevy::render::render_resource::PipelineCache>, mut seen: Local<usize>) {
+    use bevy::render::render_resource::PipelineDescriptor;
+    let all: Vec<_> = cache.pipelines().collect();
+    for p in &all[(*seen).min(all.len())..] {
+        let PipelineDescriptor::RenderPipelineDescriptor(d) = &p.descriptor else { continue };
+        let defs = |v: &[bevy::shader::ShaderDefVal]| v.iter().map(|d| format!("{d:?}").replace("Bool(\"", "").replace("\", true)", "")).collect::<Vec<_>>().join(" ");
+        eprintln!(
+            "pipeline at {:.2} s: {} | {} vertex buffers ({} attrs) | samples {} | vs [{}] | fs [{}]",
+            f32::from_bits(NOW.load(Ordering::Relaxed)),
+            d.label.as_deref().unwrap_or("?"),
+            d.vertex.buffers.len(),
+            d.vertex.buffers.iter().map(|b| b.attributes.len()).sum::<usize>(),
+            d.multisample.count,
+            defs(&d.vertex.shader_defs),
+            d.fragment.as_ref().map_or(String::new(), |f| defs(&f.shader_defs)),
+        );
+    }
+    *seen = all.len();
+}
+
+/// `HST_PASSES=1`: every 5 s, the ten render passes that took longest on the GPU (`elapsed_gpu`; CPU where none).
+/// A pass that stopped running keeps its last average (the menus' `msaa_writeback` shows on through a match).
+fn log_passes(d: Res<bevy::diagnostic::DiagnosticsStore>, time: Res<Time<Real>>, mut next: Local<f32>) {
+    let t = time.elapsed_secs();
+    if t < *next {
+        return;
+    }
+    *next = t + 5.0;
+    let gpu = d.iter().any(|g| g.path().as_str().ends_with("elapsed_gpu"));
+    let kind = if gpu { "elapsed_gpu" } else { "elapsed_cpu" };
+    let mut passes: Vec<(f64, String)> = d
+        .iter()
+        .filter(|g| g.path().as_str().starts_with("render/") && g.path().as_str().ends_with(kind))
+        .filter_map(|g| Some((g.average()?, g.path().as_str().trim_start_matches("render/").trim_end_matches(kind).trim_end_matches('/').to_string())))
+        .collect();
+    passes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top: Vec<String> = passes.iter().take(10).map(|(ms, p)| format!("{p} {ms:.2}")).collect();
+    eprintln!("passes {kind} ms at {t:.0} s: {}", top.join(", "));
+}
+
 
 /// The Mesh setting where the loaders read it (`MESH`).
 fn mesh_detail(g: Res<Graphics>) {
@@ -234,14 +286,14 @@ fn mesh_detail(g: Res<Graphics>) {
     }
 }
 
-/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the scene cameras see and
+/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the active scene cameras see and
 /// how many distinct (mesh, material) pairs they are (the most draws they can batch down to), the spectators' and
 /// creatures' share (`shadow::Minor` rigs) and the meshes the sun's cascades draw.
 #[allow(clippy::type_complexity)]
 fn log_draws(
     time: Res<Time<Real>>,
     mut next: Local<f32>,
-    cams: Query<&bevy::camera::visibility::VisibleEntities, With<Camera3d>>,
+    cams: Query<(&bevy::camera::visibility::VisibleEntities, &Camera), With<Camera3d>>,
     cascades: Query<&bevy::camera::visibility::CascadesVisibleEntities>,
     parts: Query<(&Mesh3d, Option<&MeshMaterial3d<crate::gs::GsMaterial>>, Option<&MeshMaterial3d<StandardMaterial>>)>,
     parents: Query<&ChildOf>,
@@ -253,7 +305,10 @@ fn log_draws(
     }
     *next = now + 5.0;
     let (mut seen, mut pairs, mut npcs, mut npc_pairs) = (0, std::collections::HashSet::new(), 0, std::collections::HashSet::new());
-    for v in &cams {
+    for (v, c) in &cams {
+        if !c.is_active {
+            continue;
+        }
         for &e in v.get(std::any::TypeId::of::<Mesh3d>()) {
             let Ok((mesh, gs, std)) = parts.get(e) else { continue };
             let pair = (mesh.0.id(), gs.map(|m| m.0.id().untyped()).or(std.map(|m| m.0.id().untyped())));
@@ -266,36 +321,119 @@ fn log_draws(
         }
     }
     let cast: Vec<Vec<usize>> = cascades.iter().flat_map(|c| c.entities.values()).map(|v| v.iter().map(|c| c.entities.len()).collect()).collect();
-    eprintln!("draws at {now:.0} s: {} cameras, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().count(), pairs.len(), npc_pairs.len());
+    eprintln!("draws at {now:.0} s: {} of {} cameras active, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().filter(|(_, c)| c.is_active).count(), cams.iter().count(), pairs.len(), npc_pairs.len());
 }
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
 /// game's update, 4 the render graph's start (extract, prepare and queue done), 5 pass encoding done, 6 submitted and
-/// presented. On the web all of it runs on one thread in that order; natively rendering overlaps the next frame.
-static MARKS: std::sync::Mutex<[Option<bevy::platform::time::Instant>; 7]> = std::sync::Mutex::new([None; 7]);
+/// presented, 7/8 the swapchain acquire's start/end (`prepare_windows`, between 3 and 4). On the web all of it runs on
+/// one thread in that order; natively rendering overlaps the next frame.
+static MARKS: std::sync::Mutex<[Option<bevy::platform::time::Instant>; 9]> = std::sync::Mutex::new([None; 9]);
 
 fn mark<const I: usize>() {
     MARKS.lock().unwrap()[I] = Some(bevy::platform::time::Instant::now());
 }
 
 /// Sums of the frames since the counter last showed them, in ms: frame, game (incl. sim), sim, prepare (extract,
-/// prepare, queue), encode, submit (+ present), worst frame, frames.
+/// prepare, queue; with the acquire), encode, submit (+ present), worst frame, frames, then the swapchain acquire (of
+/// prepare) and the GPU's time from the frame's first command buffer starting to its last ending, over that many
+/// frames (Metal only: `gpu_time`).
 #[derive(Resource, Default)]
-struct Split([f32; 8]);
+struct Split([f32; 11]);
 
-fn frame_start(mut split: ResMut<Split>) {
+/// The same for `HST_FPS`'s log, every 5 s.
+#[derive(Resource, Default)]
+struct SplitLog(Split);
+
+fn frame_start(mut split: ResMut<Split>, log: Option<ResMut<SplitLog>>) {
     let now = bevy::platform::time::Instant::now();
     let mut m = MARKS.lock().unwrap();
-    if let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5), Some(t6)] = *m {
-        let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
-        let frame = ms(t0, now);
-        for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
-            *sum += v;
+    let (gpu, gpu_n) = std::mem::take(&mut *GPU_MS.lock().unwrap());
+    for split in std::iter::once(&mut *split).chain(log.map(|l| &mut l.into_inner().0)) {
+        if let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5), Some(t6), t7, t8] = *m {
+            let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
+            let frame = ms(t0, now);
+            let acquire = t7.zip(t8).map_or(0.0, |(a, b)| ms(a, b));
+            for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
+                *sum += v;
+            }
+            split.0[6] = split.0[6].max(frame);
+            split.0[7] += 1.0;
+            split.0[8] += acquire;
         }
-        split.0[6] = split.0[6].max(frame);
-        split.0[7] += 1.0;
+        split.0[9] += gpu;
+        split.0[10] += gpu_n;
     }
-    *m = [Some(now), None, None, None, None, None, None];
+    *m = [Some(now), None, None, None, None, None, None, None, None];
+}
+
+/// `HST_FPS=1`: every 5 s, the frame split (`Split`) to stderr: prep without the swapchain acquire, the acquire (the
+/// CPU waiting for a drawable, i.e. for the GPU), and the GPU's own time per frame where Metal gives it.
+fn log_split(time: Res<Time<Real>>, mut log: ResMut<SplitLog>, mut next: Local<f32>) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let [frame, game, sim, prep, enc, sub, worst, n, acquire, gpu, gpu_n] = log.0.0;
+    if n > 0.0 {
+        let a = |v: f32| v / n;
+        let gpu = if gpu_n > 0.0 { format!("{:.2}", gpu / gpu_n) } else { "n/a".into() };
+        eprintln!(
+            "frame split ms: frame {:.2} (worst {worst:.1}) game {:.2} sim {:.2} prep {:.2} acquire {:.2} enc {:.2} submit {:.2} idle {:.2} gpu {gpu}",
+            a(frame),
+            a(game),
+            a(sim),
+            a(prep - acquire),
+            a(acquire),
+            a(enc),
+            a(sub),
+            a((frame - game - prep - enc - sub).max(0.0))
+        );
+    }
+    log.0.0 = [0.0; 11];
+}
+
+/// Metal's GPU time of the frames finished since `frame_start` last took it: ms summed, frames.
+static GPU_MS: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
+
+/// Brackets the frame's command buffers with two of its own (`END` = false: before the render graph's passes, true:
+/// after them, both submitted with them in order) and reads Metal's GPUStartTime of the first and GPUEndTime of the
+/// last when they complete: the GPU's time on the frame's rendering (plus any gap the GPU sat idle inside it, none
+/// when GPU-bound). Each carries a 4-byte fill so Metal schedules it. Bevy's RenderDiagnosticsPlugin only gets CPU
+/// times on Metal (M91 build 2014).
+#[cfg(target_os = "ios")]
+fn gpu_time<const END: bool>(mut ctx: bevy::render::renderer::RenderContext, mut buf: Local<Option<bevy::render::render_resource::Buffer>>) {
+    use wgpu::hal;
+    use objc2_metal::MTLCommandBuffer;
+    static START: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
+    let device = ctx.render_device().clone();
+    let buf = buf.get_or_insert_with(|| device.create_buffer(&wgpu::BufferDescriptor { label: Some("gpu_time"), size: 4, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gpu_time") });
+    let done = block2::RcBlock::new(|cb: std::ptr::NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+        let cb = unsafe { cb.as_ref() };
+        if !END {
+            *START.lock().unwrap() = Some(cb.GPUStartTime());
+        } else if let Some(start) = START.lock().unwrap().take() {
+            let ms = ((cb.GPUEndTime() - start) * 1000.0) as f32;
+            if ms > 0.0 && ms < 1000.0 {
+                let mut g = GPU_MS.lock().unwrap();
+                *g = (g.0 + ms, g.1 + 1.0);
+            }
+        }
+    });
+    // SAFETY: only the raw API records on this encoder; the buffer lives in the Local for the app's life
+    unsafe {
+        let Some(hal_buf) = buf.as_hal::<hal::api::Metal>() else { return };
+        enc.as_hal_mut::<hal::api::Metal, _, _>(|e| {
+            let Some(e) = e else { return };
+            hal::CommandEncoder::clear_buffer(e, &*hal_buf, 0..4);
+            if let Some(cb) = e.raw_command_buffer() {
+                cb.addCompletedHandler(&*done as *const _ as *mut _);
+            }
+        });
+    }
+    ctx.add_command_buffer(enc.finish());
 }
 
 fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
@@ -385,7 +523,7 @@ fn fps_counter(
         return;
     }
     let fps = d.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS).and_then(|f| f.smoothed()).unwrap_or(0.0);
-    let [frame, game, sim, prep, enc, sub, worst, n] = split.0;
+    let [frame, game, sim, prep, enc, sub, worst, n, acquire, ..] = split.0;
     if g.show_fps == 1 {
         let s = format!("{fps:.0} FPS");
         if text.0 != s {
@@ -405,16 +543,17 @@ fn fps_counter(
         });
         let gpu = adapter.map_or(String::new(), |a| format!("{:?} {}", a.backend, a.name));
         // and to the log (the browser's console: Safari's Web Inspector on a phone)
-        info!("frame split ms: frame {:.2} game {:.2} sim {:.2} render {:.2} idle {:.2} meshes {shown} cast {cast}", a(frame), a(game), a(sim), a(render), a((frame - game - render).max(0.0)));
+        info!("frame split ms: frame {:.2} game {:.2} sim {:.2} render {:.2} (prep {:.2} acquire {:.2} enc {:.2} submit {:.2}) idle {:.2} meshes {shown} cast {cast}", a(frame), a(game), a(sim), a(render), a(prep - acquire), a(acquire), a(enc), a(sub), a((frame - game - render).max(0.0)));
         text.0 = format!(
-            "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
+            "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} acquire {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
             a(frame),
             a(game + render),
             a((frame - game - render).max(0.0)),
             a(game),
             a(sim),
             a(render),
-            a(prep),
+            a(prep - acquire),
+            a(acquire),
             a(enc),
             a(sub),
             g.shadows.name(),
@@ -422,7 +561,7 @@ fn fps_counter(
         );
     }
     if frame >= 500.0 || g.show_fps == 1 {
-        split.0 = [0.0; 8];
+        split.0 = [0.0; 11];
     }
     // 16 lines of the PS2's 448 (detailed: 11, it has six)
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
@@ -458,7 +597,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, cull: !p.cull, mesh: 50 };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -468,18 +607,16 @@ mod tests {
         assert_eq!(Graphics { scale: 75, ..default() }.preset(), "Custom");
         assert_eq!(Graphics { windowed: true, ..default() }.preset(), "Default");
         assert_eq!(Graphics { show_fps: 1, ..default() }.preset(), "Default");
-        assert_eq!(Graphics { merge_meshes: true, ..default() }.preset(), "Default");
-        assert_eq!(Graphics { merge_meshes: true, ..default() }.flags().last().unwrap(), "on");
         assert_eq!(Graphics { show_fps: 1, ..default() }.flags().last().unwrap(), "--show-fps");
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics { cull: false, ..default() }.preset(), "Default");
         assert_eq!(Graphics { cull: false, ..default() }.flags()[8..], ["--cull", "off"]);
-        assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "100", "--shadows", "low", "--msaa", "4x"]);
+        assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "2x"]);
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
-        // B343: the speed-up switches pass only off their defaults, keep through a preset and read back as flags
-        let g = Graphics { fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, ..default() };
+        // B343: Fewer Shadows passes only off its default, keeps through a preset and reads back as a flag
+        let g = Graphics { fewer_shadows: !FEWER_SHADOWS, ..default() };
         assert_eq!(g.preset(), "Default");
-        assert_eq!(g.keep(Graphics::PHONE), Graphics { fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, ..Graphics::PHONE });
+        assert_eq!(g.keep(Graphics::PHONE), Graphics { fewer_shadows: !FEWER_SHADOWS, ..Graphics::PHONE });
         let f = g.flags();
         let mut back = Graphics::default();
         for kv in f[8..].chunks(2) {

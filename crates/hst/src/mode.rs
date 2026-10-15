@@ -4,7 +4,7 @@
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
 //! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
-//! time paused, until the next mode's render pipelines are built; the BGM stops with the old mode. Leaving a running
+//! time paused, until the next mode's render pipelines are built and its uploads are done; the BGM stops with the old mode. Leaving a running
 //! mode, its last frame zooms up about the screen centre while it fades out over the loading screen first, as the
 //! original's menu → match handoff looks (similar, not frame-matched: user 2026-10-11).
 
@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy::window::{Monitor, PrimaryWindow};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 type Build = Box<dyn FnOnce(&mut App) + Send + Sync>;
 type Cover = Box<dyn FnOnce(&mut World, Entity) + Send + Sync>;
@@ -89,7 +89,7 @@ struct Base {
 }
 
 /// The loading screen: `up` frames shown before the switch, then `after` frames since it, `idle` of them in a row
-/// with no pipeline compiling.
+/// with no pipeline compiling and the render side settled ([`Unsettled`]).
 #[derive(Component, Default)]
 pub(crate) struct Loading {
     up: u32,
@@ -125,9 +125,33 @@ impl Compiling {
     }
 }
 
+/// P31: the render side's last frame didn't settle yet: it uploaded new textures or meshes (a material whose textures
+/// land late isn't specialised, so its pipelines aren't queued yet: `Compiling` can read 0 before they are) or took
+/// longer than [`SETTLED`] (an upload, a compile holding a lock, the GPU catching up). Without a renderer it never is.
+#[derive(Resource, Clone, Default)]
+struct Unsettled(Arc<AtomicBool>);
+
+/// The longest render frame (from the last one's end) that counts as settled.
+const SETTLED: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the render frame that just ended uploaded something or took long (`Unsettled`), since `last` ended.
+fn unsettled(
+    images: Res<bevy::render::render_asset::ExtractedAssets<bevy::render::texture::GpuImage>>,
+    meshes: Res<bevy::render::render_asset::ExtractedAssets<bevy::render::mesh::RenderMesh>>,
+    u: Res<Unsettled>,
+    mut last: Local<Option<bevy::platform::time::Instant>>,
+) {
+    let now = bevy::platform::time::Instant::now();
+    let slow = last.is_some_and(|t| now.saturating_duration_since(t) > SETTLED);
+    *last = Some(now);
+    u.0.store(slow || !images.added.is_empty() || !meshes.added.is_empty(), Ordering::Relaxed);
+}
+
 pub fn plugin(app: &mut App) {
     let compiling = Compiling::default();
+    let settle = Unsettled::default();
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        r.insert_resource(settle.clone()).add_systems(bevy::render::Render, unsettled.in_set(bevy::render::RenderSystems::Cleanup));
         r.insert_resource(compiling.clone()).add_systems(
             bevy::render::Render,
             (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| {
@@ -141,6 +165,7 @@ pub fn plugin(app: &mut App) {
     }
     app.init_resource::<Next>()
         .insert_resource(compiling)
+        .insert_resource(settle)
         .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
         .add_systems(First, unwarm.before(switch))
@@ -323,27 +348,30 @@ fn show_loading(world: &mut World) {
     }
 }
 
-/// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling
-/// (10 s at most), and starts game time again.
+/// Takes the loading screen down once the new mode has drawn a few frames with no pipeline left compiling and nothing
+/// left uploading (10 s at most), and starts game time again.
 fn loaded(world: &mut World) {
     let compiling = world.get_resource::<Compiling>().map_or(0, |c| c.0.load(Ordering::Relaxed));
+    let unsettled = world.get_resource::<Unsettled>().is_some_and(|u| u.0.load(Ordering::Relaxed));
     let mut q = world.query::<(Entity, &mut Loading)>();
     let Some((e, mut l)) = q.iter_mut(world).next().filter(|(_, l)| l.built) else { return };
     l.after += 1;
-    l.idle = if compiling == 0 { l.idle + 1 } else { 0 };
+    l.idle = if compiling == 0 && !unsettled { l.idle + 1 } else { 0 };
     if (l.after < 5 || l.idle < 3) && l.after < 600 {
         return;
     }
-    info!("loading screen down after {} frames", l.after);
+    info!("loading screen down after {} frames at {:.2} s", l.after, crate::stall::since_start());
+    crate::stall::watch();
     world.entity_mut(e).despawn();
     if let Some(mut t) = world.get_resource_mut::<Time<Virtual>>() {
         t.unpause();
     }
 }
 
-/// A mesh drawn under the loading screen this frame: its own visibility and whether it was frustum culled.
+/// A mesh drawn under the loading screen this frame: its own visibility, whether it was frustum culled and whether it
+/// was on no render layer (an emptied effect, `effects::hide_empty`).
 #[derive(Component)]
-struct Warming(Visibility, bool);
+struct Warming(Visibility, bool, bool);
 
 /// While the loading screen is up over the new mode, every mesh is drawn under it, hidden or out of view too, so the
 /// pipelines a hidden effect needs (a hit's sparks, a lob's landing marks) compile behind the cover, not on its first
@@ -351,7 +379,7 @@ struct Warming(Visibility, bool);
 fn warm(
     mut commands: Commands,
     loading: Query<&Loading>,
-    mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>), (With<Mesh3d>, Without<Warming>)>,
+    mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>, Option<&bevy::camera::visibility::RenderLayers>), (With<Mesh3d>, Without<Warming>)>,
     mut cams: Query<(Entity, &mut Camera), Without<WarmingCamera>>,
 ) {
     if !loading.iter().any(|l| l.built) {
@@ -364,8 +392,14 @@ fn warm(
             commands.entity(e).insert(WarmingCamera);
         }
     }
-    for (e, mut v, unculled) in &mut q {
-        commands.entity(e).insert((Warming(*v, !unculled), bevy::camera::visibility::NoFrustumCulling));
+    // P30: an emptied effect (a hit's sparks and ribbon, B328) sits on no layer: on the scene's for the warm-up
+    for (e, mut v, unculled, layers) in &mut q {
+        let none = layers.is_some_and(|l| l.iter().next().is_none());
+        let mut e = commands.entity(e);
+        e.insert((Warming(*v, !unculled, none), bevy::camera::visibility::NoFrustumCulling));
+        if none {
+            e.remove::<bevy::camera::visibility::RenderLayers>();
+        }
         *v = Visibility::Visible;
     }
 }
@@ -375,17 +409,21 @@ fn warm(
 struct WarmingCamera;
 
 /// Each warmed mesh and camera back as its systems left it, before they run again.
-fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming)>, mut cams: Query<(Entity, &mut Camera), With<WarmingCamera>>) {
+fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming, Has<crate::effects::Emptied>)>, mut cams: Query<(Entity, &mut Camera), With<WarmingCamera>>) {
     for (e, mut c) in &mut cams {
         c.is_active = false;
         commands.entity(e).remove::<WarmingCamera>();
     }
-    for (e, mut v, w) in &mut q {
+    for (e, mut v, w, emptied) in &mut q {
         *v = w.0;
         let mut e = commands.entity(e);
         e.remove::<Warming>();
         if w.1 {
             e.remove::<bevy::camera::visibility::NoFrustumCulling>();
+        }
+        // still empty (one filled meanwhile has dropped its marker and stays on the scene's layer)
+        if w.2 && emptied {
+            e.insert(bevy::camera::visibility::RenderLayers::none());
         }
     }
 }
@@ -577,5 +615,31 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert!(app.should_exit().is_some());
+    }
+
+    /// P30: an emptied effect mesh (on no render layer, `effects::hide_empty`) is drawn under the loading screen like
+    /// any hidden mesh, so its pipeline doesn't compile on the match's first hit; it's hidden again after, unless
+    /// filled meanwhile.
+    #[test]
+    fn the_warm_up_draws_emptied_effects() {
+        use bevy::camera::visibility::RenderLayers;
+        let mut app = App::new();
+        app.add_systems(Update, (unwarm, warm).chain());
+        let mesh = Mesh3d(Handle::default());
+        let empty = app.world_mut().spawn((mesh.clone(), Visibility::Hidden, crate::effects::Emptied, RenderLayers::none())).id();
+        let filled = app.world_mut().spawn((mesh, Visibility::Hidden, crate::effects::Emptied, RenderLayers::none())).id();
+        let screen = app.world_mut().spawn(Loading { built: true, ..default() }).id();
+        app.update();
+        for e in [empty, filled] {
+            let e = app.world().entity(e);
+            assert!(e.get::<RenderLayers>().is_none(), "an emptied mesh stayed on no layer under the loading screen");
+            assert_eq!(e.get::<Visibility>(), Some(&Visibility::Visible));
+        }
+        app.world_mut().entity_mut(filled).remove::<crate::effects::Emptied>();
+        app.world_mut().despawn(screen);
+        app.update();
+        assert_eq!(app.world().entity(empty).get::<RenderLayers>(), Some(&RenderLayers::none()));
+        assert!(app.world().entity(filled).get::<RenderLayers>().is_none(), "a filled mesh went back to no layer");
+        assert_eq!(app.world().entity(empty).get::<Visibility>(), Some(&Visibility::Hidden));
     }
 }

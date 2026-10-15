@@ -1,10 +1,16 @@
 //! Sky clouds (drawn in singles only; made in doubles too): flat quads scaled 40 scattered in a 2R square 200..400 m up (heavy rain: 200 of them
 //! 80..200 m up, `weather::cloud_layout`), drifting with the court's wind and wrapping around; each fades out over
 //! the outer tenth of the radius.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::{self, F};
 
 const R: f32 = 2000.0;
+const NEG_R: f32 = -R;
+const TWO_R: f32 = 2.0 * R;
+const R2: f32 = R * R;
+/// R² − (0.9R)², the fade's width.
+const RIM: f32 = R * R - 0.81 * R * R;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Cloud {
@@ -22,12 +28,12 @@ pub struct Cloud {
 /// before the first higher one).
 pub fn spawn(draws: &[u32], models: usize, y: [f32; 2]) -> Vec<Cloud> {
     let unit = |t: u32| ps2::utof(t & 0xffff_f800);
-    let at = |lo: f32, hi: f32, t: u32| ps2::madd(ps2::add(0.0, lo), ps2::mul(4.656_613e-10, ps2::sub(hi, lo)), unit(t));
+    let at = |lo: f32, hi: f32, t: u32| (F::ZERO + lo).madd(4.656_613e-10 * (F(hi) - lo), unit(t)).0;
     let mut v: Vec<Cloud> = draws
         .chunks_exact(5)
         .map(|d| Cloud {
-            yaw: ps2::mul(6.283_185_5, ps2::mul(4.656_613e-10, unit(d[0]))),
-            pos: [at(-R, R, d[3]), at(y[0], y[1], d[2]), at(-R, R, d[1])],
+            yaw: (6.283_185_5 * (4.656_613e-10 * F(unit(d[0])))).0,
+            pos: [at(NEG_R, R, d[3]), at(y[0], y[1], d[2]), at(NEG_R, R, d[1])],
             model: d[4] as usize % models.max(1),
         })
         .collect();
@@ -38,8 +44,8 @@ pub fn spawn(draws: &[u32], models: usize, y: [f32; 2]) -> Vec<Cloud> {
 /// One 60 Hz tick: drift towards `degrees` at `speed`, wrapping x and z into ±R.
 pub fn tick(clouds: &mut [Cloud], degrees: f32, speed: f32) {
     let (s, c) = musl::sincosf(degrees.to_radians());
-    let step = speed / 600.0 * 40.0;
-    let wrap = |v: f32| if v > R { v - 2.0 * R } else if v < -R { v + 2.0 * R } else { v };
+    let step = F(speed) / 600.0 * 40.0;
+    let wrap = |v: F| if v > R { v - TWO_R } else if v < NEG_R { v + TWO_R } else { v }.0;
     for k in clouds {
         k.pos[0] = wrap(k.pos[0] + step * s);
         k.pos[2] = wrap(k.pos[2] + step * c);
@@ -48,8 +54,8 @@ pub fn tick(clouds: &mut [Cloud], degrees: f32, speed: f32) {
 
 /// Opacity 0..1: full inside 0.9R, none at R.
 pub fn fade(k: &Cloud) -> f32 {
-    let r2 = k.pos[0] * k.pos[0] + k.pos[2] * k.pos[2];
-    ((R * R - r2) / (R * R - 0.81 * R * R)).clamp(0.0, 1.0)
+    let r2 = F(k.pos[0]) * k.pos[0] + F(k.pos[2]) * k.pos[2];
+    ((R2 - r2) / RIM).clamp(0.0, 1.0).0
 }
 
 #[cfg(test)]

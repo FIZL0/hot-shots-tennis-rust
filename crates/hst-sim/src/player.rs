@@ -1,9 +1,10 @@
 //! Player locomotion as the original: run speed (character speed, acceleration and stamina), the per-frame run
 //! counter and stamina drain, and the motion each standing or running player plays (ready stance, turned
 //! stances toward the ball, runs by direction relative to the player's forward, dash, tired variants).
+#![deny(clippy::float_arithmetic)]
 
 use crate::libm::acosf;
-use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
+use crate::ps2::{F, chop, f, f32s, fs};
 
 /// A character's movement stats (TParam.csv: SPE, Agili, STA, and the stamina a dive / backhand / smash costs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -26,7 +27,8 @@ impl Stats {
     pub fn new(spe: i32, agility: i32, stamina: i32, [dive, backhand, smash]: [i32; 3], weather: u8) -> Self {
         // the game's integer ×150/100 in weather 2 and 3
         let agility = if weather.wrapping_sub(2) < 2 { agility * 150 / 100 } else { agility };
-        Stats { speed: spe as f32 / 10.0, agility, stamina, dive, backhand, smash }
+        // the FPU's int-to-float chops too (only shows past 2^24)
+        Stats { speed: (F(chop(spe as f64)) / 10.0).0, agility, stamina, dive, backhand, smash }
     }
 }
 
@@ -85,7 +87,7 @@ impl ReachStats {
         let t: Vec<&str> = row.split(',').filter(|c| !c.is_empty()).map(str::trim).collect();
         let part = |k: usize, i: usize| t[k].split('/').nth(i).unwrap_or("");
         let int = |s: &str| atoi(s);
-        let m = |s: &str| div(atoi(s) as f32, 100.0);
+        let m = |s: &str| (F(atoi(s) as f32) / 100.0).0;
         let three = |k: usize| [0, 1, 2].map(|i| m(part(k, i)));
         ReachStats {
             body_adj: int(t[22]),
@@ -95,7 +97,7 @@ impl ReachStats {
             stroke_high_pow: int(t[52]),
             serve_scatter: atof(t[53]),
             base: atof(t[54]),
-            reach: add(m(t[55]), m(t[56])),
+            reach: (F(m(t[55])) + m(t[56])).0,
             dive_start: m(t[57]),
             dive_limit: m(t[58]),
             collision: m(part(60, 1)),
@@ -135,20 +137,20 @@ fn atoi(s: &str) -> i32 {
 fn atof(s: &str) -> f32 {
     let b = s.as_bytes();
     let dot = b.iter().position(|&c| c == b'.');
-    let mut v = 0.0f32;
+    let mut v = F::ZERO;
     if let Some(d) = dot {
-        let mut w = 0.1f32;
+        let mut w = f(0.1);
         for &c in b[d + 1..].iter().take_while(|c| c.is_ascii_digit()) {
-            v = madd(add(v, 0.0), (c - b'0') as f32, w);
-            w = div(w, 10.0);
+            v = (v + 0.0).madd((c - b'0') as f32, w);
+            w /= 10.0;
         }
     }
-    let mut w = 1.0f32;
+    let mut w = F::ONE;
     for &c in b[..dot.unwrap_or(b.len())].iter().rev().take_while(|c| c.is_ascii_digit()) {
-        v = madd(add(v, 0.0), (c - b'0') as f32, w);
-        w = mul(w, 10.0);
+        v = (v + 0.0).madd((c - b'0') as f32, w);
+        w *= 10.0;
     }
-    v
+    v.0
 }
 
 /// Stamina after a stroke's contact (during the rally of a game with more than one player): ground strokes
@@ -177,25 +179,26 @@ fn on_court(x: f32, z: f32) -> bool {
 /// with `fallback` the nearest on-court point of four around the partner (else `restore`) when the push leaves
 /// the court; `None` when the push leaves the court and there is no fallback.
 fn push(cur: [f32; 3], mate: [f32; 3], restore: [f32; 3], fallback: bool) -> Option<[f32; 3]> {
-    let (dx, dz) = (sub(cur[0], mate[0]), sub(cur[2], mate[2]));
-    let d2 = madd(mul(dz, dz), dx, dx);
+    let (m, r) = (fs(mate), fs(restore));
+    let (dx, dz) = (F(cur[0]) - m[0], F(cur[2]) - m[2]);
+    let d2 = (dz * dz).madd(dx, dx);
     if !(d2 < 1.0) {
         return Some(cur);
     }
-    let inv = div(1.0, sqrt(d2));
-    let out = [add(mate[0], mul(dx, inv)), add(mate[1], 0.0), add(mate[2], mul(dz, inv))];
+    let inv = 1.0 / d2.sqrt();
+    let out = f32s([m[0] + dx * inv, m[1] + 0.0, m[2] + dz * inv]);
     if on_court(out[0], out[2]) {
         return Some(out);
     }
     if !fallback {
         return None;
     }
-    let (sx, sz) = (sqrt(msub(1.0, dz, dz)), sqrt(msub(1.0, dx, dx)));
-    let cands = [(sub(mate[0], sx), restore[2]), (add(mate[0], sx), restore[2]), (restore[0], sub(mate[2], sz)), (restore[0], add(mate[2], sz))];
-    let mut best: Option<((f32, f32), f32)> = None;
+    let (sx, sz) = (F::ONE.msub(dz, dz).sqrt(), F::ONE.msub(dx, dx).sqrt());
+    let cands = [(m[0] - sx, r[2]), (m[0] + sx, r[2]), (r[0], m[2] - sz), (r[0], m[2] + sz)].map(|(x, z)| (x.0, z.0));
+    let mut best: Option<((f32, f32), F)> = None;
     for c in cands.into_iter().filter(|c| on_court(c.0, c.1)) {
-        let (ex, ez) = (sub(c.0, restore[0]), sub(c.1, restore[2]));
-        let d = madd(mul(ez, ez), ex, ex);
+        let (ex, ez) = (c.0 - r[0], c.1 - r[2]);
+        let d = (ez * ez).madd(ex, ex);
         if best.is_none_or(|(_, b)| d < b) {
             best = Some((c, d));
         }
@@ -212,24 +215,24 @@ pub fn mover(pos: [f32; 3], delta: [f32; 3], forward: f32, mate: Option<[f32; 3]
         cur = push(cur, m, pos, true).unwrap_or(pos);
     }
     let saved = cur;
-    cur = [add(cur[0], delta[0]), add(cur[1], delta[1]), add(cur[2], delta[2])];
+    cur = [0, 1, 2].map(|i| (F(cur[i]) + delta[i]).0);
     if !(cur[0].abs() <= SIDE) {
-        cur[0] = mul(SIDE, if cur[0] < 0.0 { -1.0 } else { 1.0 });
+        cur[0] = (F(SIDE) * if cur[0] < 0.0 { -1.0 } else { 1.0 }).0;
     }
     if !(cur[2].abs() <= BACK) {
-        cur[2] = mul(-BACK, forward);
+        cur[2] = (-F(BACK) * forward).0;
     }
     if cur[2].abs() < NET {
-        cur[2] = mul(-NET, forward);
+        cur[2] = (-F(NET) * forward).0;
     }
     if short {
-        let lim = f32::from_bits(0x40cc_cccd);
+        let lim = F(f32::from_bits(0x40cc_cccd));
         if forward < 0.0 {
             if !(cur[2] <= lim) {
-                cur[2] = lim;
+                cur[2] = lim.0;
             }
         } else if cur[2] < -lim {
-            cur[2] = -lim;
+            cur[2] = (-lim).0;
         }
     }
     if let Some(m) = mate {
@@ -248,19 +251,19 @@ pub const STAMINA_FRAMES: i32 = 60;
 /// Speed of a running player, metres per frame: `run` frames into the run, with `stamina` left. `size` is the
 /// player's size percentage (100 in normal play).
 pub fn run_speed(s: &Stats, run: i32, stamina: i32, size: i32) -> f32 {
-    let frac = div(run.min(s.agility) as f32, s.agility as f32);
-    let base = mul(RUN, madd(1.0, f32::from_bits(0x3e99_999a), frac)); // 1 + 0.3·frac
+    let frac = F(run.min(s.agility) as f32) / s.agility as f32;
+    let base = RUN * F::ONE.madd(f32::from_bits(0x3e99_999a), frac); // 1 + 0.3·frac
     let scale = if stamina < TIRED {
-        div(mul(msub(1.0, f32::from_bits(0x3cf5_c28f), (TIRED - stamina) as f32), size as f32), 100.0)
+        F::ONE.msub(f32::from_bits(0x3cf5_c28f), (TIRED - stamina) as f32) * size as f32 / 100.0
     } else {
-        div(size as f32, 100.0)
+        F(size as f32) / 100.0
     };
-    mul(mul(base, s.speed), scale)
+    (base * s.speed * scale).0
 }
 
 /// Velocity for a unit run direction (game space), as the game scales it.
 pub fn run_velocity(dir: [f32; 3], speed: f32) -> [f32; 3] {
-    dir.map(|d| mul(d, speed))
+    dir.map(|d| (F(d) * speed).0)
 }
 
 /// The stamina drain while running: every `STAMINA_FRAMES` frames one point, during the rally (phase 3) of a
@@ -280,20 +283,20 @@ pub fn drain(s: &Stats, stamina: i32, counter: i32, players: i32, rally: bool, f
 /// Signed angle (radians) from the player's forward (`forward` = ±1 along z) to `dir`, mirrored by `hand`
 /// (−1 left-handed). Left-handers' direction is nudged 0.01 sideways first (their model is mirrored).
 pub fn angle(dir: [f32; 3], forward: f32, hand: f32) -> f32 {
-    let (mut x, z) = (dir[0], dir[2]);
+    let (mut x, z) = (F(dir[0]), dir[2]);
     if hand < 0.0 {
-        x = madd(add(0.0, x), f32::from_bits(0x3c23_d70a), if z < 0.0 { -1.0 } else { 1.0 });
+        x = (F::ZERO + x).madd(f32::from_bits(0x3c23_d70a), if z < 0.0 { -1.0 } else { 1.0 });
     }
-    let dot = madd(0.0, forward, z);
+    let dot = F::ZERO.madd(forward, z);
     let a = if dot.abs() < f32::from_bits(0x3f7f_ff58) {
-        let a = acosf(dot);
-        if mul(forward, x) < 0.0 { mul(a, -1.0) } else { a }
+        let a = F(acosf(dot.0));
+        if F(forward) * x < 0.0 { a * -1.0 } else { a }
     } else if dot <= 0.0 {
-        f32::from_bits(0x4049_0fdb)
+        F(f32::from_bits(0x4049_0fdb))
     } else {
-        0.0
+        F::ZERO
     };
-    mul(a, hand)
+    (a * hand).0
 }
 
 const QUARTER: f32 = f32::from_bits(0x3f49_0fdb); // π/4
@@ -302,7 +305,7 @@ const THREE_QUARTERS: f32 = f32::from_bits(0x4016_cbe4); // 3π/4
 /// Run motion (3 forward, 4 back, 5 left, 6 right, 7 dash) for direction angle `a`, with hysteresis on the run
 /// motion already playing (`current`, tired variants folded). `dash`: run counter past half the agility.
 pub fn run_motion(current: i32, a: f32, dash: bool) -> i32 {
-    let (q, tq) = (QUARTER, THREE_QUARTERS);
+    let (q, tq) = (f(QUARTER), f(THREE_QUARTERS));
     let side = |a: f32| if a < 0.0 { 5 } else { 6 };
     let m = match current {
         5 => {
@@ -408,8 +411,8 @@ pub fn stance(s: &StanceInput) -> i32 {
     if s.players == 1 && !s.watching {
         return 0;
     }
-    let (dx, dz) = (crate::ps2::sub(s.pos[0], s.ball[0]), crate::ps2::sub(s.pos[2], s.ball[2]));
-    let cross = msub(mul(dz, s.ball_dir[0]), dx, s.ball_dir[2]);
+    let (dx, dz) = (F(s.pos[0]) - s.ball[0], F(s.pos[2]) - s.ball[2]);
+    let cross = (dz * s.ball_dir[0]).msub(dx, s.ball_dir[2]);
     let left = s.hand < 0.0;
     if (cross > 0.0) != left { 2 } else { 1 }
 }
@@ -444,14 +447,14 @@ const STEP: f32 = f32::from_bits(0x3f6c_835e);
 
 /// Rotation about −y by the angle with cosine `c` (sign of its sine `s`), as the game's axis-angle builder.
 fn rot_y(c: f32, s: f32) -> [[f32; 4]; 4] {
-    let (ax, ay, az) = (mul(0.0, -1.0), mul(1.0, -1.0), mul(0.0, -1.0));
-    let k = sub(1.0, c);
-    let sn = mul(s, sqrt(msub(add(0.0, 1.0), c, c)));
-    let (xy, zx, yz) = (mul(ax, ay), mul(az, ax), mul(ay, az));
+    let (ax, ay, az) = (f(0.0) * -1.0, f(1.0) * -1.0, f(0.0) * -1.0);
+    let k = F::ONE - c;
+    let sn = F(s) * (F::ZERO + 1.0).msub(c, c).sqrt();
+    let (xy, zx, yz) = (ax * ay, az * ax, ay * az);
     [
-        [madd(add(0.0, c), k, mul(ax, ax)), msub(mul(k, xy), az, sn), madd(mul(ay, sn), k, zx), 0.0],
-        [madd(mul(az, sn), k, xy), madd(add(0.0, c), k, mul(ay, ay)), msub(mul(k, yz), ax, sn), 0.0],
-        [msub(mul(k, zx), ay, sn), madd(mul(ax, sn), k, yz), madd(add(0.0, c), k, mul(az, az)), 0.0],
+        f32s([(F::ZERO + c).madd(k, ax * ax), (k * xy).msub(az, sn), (ay * sn).madd(k, zx), F::ZERO]),
+        f32s([(az * sn).madd(k, xy), (F::ZERO + c).madd(k, ay * ay), (k * yz).msub(ax, sn), F::ZERO]),
+        f32s([(k * zx).msub(ay, sn), (ax * sn).madd(k, yz), (F::ZERO + c).madd(k, az * az), F::ZERO]),
         [0.0, 0.0, 0.0, 1.0],
     ]
 }
@@ -462,12 +465,14 @@ fn clamp1(x: f32) -> f32 {
 
 /// FPU dot product in the game's order: (a.y·b.y + a.x·b.x) + a.z·b.z.
 fn dot(a: [f32; 4], b: [f32; 4]) -> f32 {
-    madd(madd(mul(a[1], b[1]), a[0], b[0]), a[2], b[2])
+    let (a, b) = (fs(a), fs(b));
+    (a[1] * b[1]).madd(a[0], b[0]).madd(a[2], b[2]).0
 }
 
 /// a × b (w = 0), each component `a.i·b.j − a.j·b.i` through the accumulator.
 fn cross(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    [msub(mul(a[1], b[2]), a[2], b[1]), msub(mul(a[2], b[0]), a[0], b[2]), msub(mul(a[0], b[1]), a[1], b[0]), 0.0]
+    let (a, b) = (fs(a), fs(b));
+    f32s([(a[1] * b[2]).msub(a[2], b[1]), (a[2] * b[0]).msub(a[0], b[2]), (a[0] * b[1]).msub(a[1], b[0]), F::ZERO])
 }
 
 /// One frame of the body turning toward `target` (+0x3dc0): within 22.5° it snaps, otherwise it steps 22.5°.
@@ -492,58 +497,62 @@ pub fn turn(f: &mut Facing, target: [f32; 4], forward: f32, hand: f32, start: us
     }
     let mut t = target;
     if hand < 0.0 {
-        t[0] = madd(add(0.0, t[0]), f32::from_bits(0x3c23_d70a), if t[2] < 0.0 { -1.0 } else { 1.0 });
+        t[0] = (F::ZERO + t[0]).madd(f32::from_bits(0x3c23_d70a), if t[2] < 0.0 { -1.0 } else { 1.0 }).0;
     }
-    let side = |x: f32| if x < 0.0 { -1.0 } else { 1.0 };
-    if side(msub(mul(t[2], d[0]), t[0], d[2])) != side(f.cross[1]) {
+    let side = |x: F| if x < 0.0 { -1.0 } else { 1.0 };
+    // (a.z·b.x − a.x·b.z) through the accumulator
+    let cy = |a: [f32; 4], b: [f32; 4]| (F(a[2]) * b[0]).msub(a[0], b[2]);
+    if side(cy(t, d)) != side(F(f.cross[1])) {
         f.way = -1;
     }
     if f.way == -1 {
         // the pelvis forward of motion m on the court plane, toward the player's forward
         let pfwd = |m: usize| {
             let [x, z] = pelvis[m];
-            let x = mul(x, hand);
-            let inv = div(1.0, sqrt(madd(mul(z, z), x, x)));
-            [mul(mul(x, inv), forward), mul(0.0, forward), mul(mul(z, inv), forward), mul(0.0, forward)]
+            let x = F(x) * hand;
+            let inv = 1.0 / (F(z) * z).madd(x, x).sqrt();
+            f32s([x * inv * forward, F(0.0) * forward, z * inv * forward, F(0.0) * forward])
         };
+        // the forward-facing dot: (v.y·0 + v.x·0) + v.z·forward
+        let ahead = |v: [f32; 4]| clamp1((F(v[1]) * 0.0).madd(v[0], 0.0).madd(v[2], forward).0);
         let p1 = pfwd(start);
         let c = cross(t, d);
-        let r = rot_y(clamp1(madd(madd(mul(d[1], 0.0), d[0], 0.0), d[2], forward)), side(c[1]));
+        let r = rot_y(ahead(d), side(F(c[1])));
         let q1 = crate::vu0::transform(&r, p1);
         let (q2, p2) = if start == now {
-            let r = rot_y(clamp1(dot(d, t)), side(msub(mul(d[2], t[0]), d[0], t[2])));
+            let r = rot_y(clamp1(dot(d, t)), side(cy(d, t)));
             (crate::vu0::transform(&r, q1), p1)
         } else {
             let p2 = pfwd(now);
-            let r = rot_y(clamp1(madd(madd(mul(t[1], 0.0), t[0], 0.0), t[2], forward)), side(msub(mul(d[2], t[0]), d[0], t[2])));
+            let r = rot_y(ahead(t), side(cy(d, t)));
             (crate::vu0::transform(&r, p2), p2)
         };
-        let mut a = acosf(clamp1(dot(q2, q1)));
-        let mut b = acosf(clamp1(dot(p2, p1)));
-        let mut g = acosf(clamp1(dot(t, d)));
-        if -msub(mul(q2[2], q1[0]), q2[0], q1[2]) < 0.0 {
-            a = mul(a, -1.0);
+        let mut a = F(acosf(clamp1(dot(q2, q1))));
+        let mut b = F(acosf(clamp1(dot(p2, p1))));
+        let mut g = F(acosf(clamp1(dot(t, d))));
+        if -cy(q2, q1) < 0.0 {
+            a *= -1.0;
         }
-        if -msub(mul(p2[2], p1[0]), p2[0], p1[2]) < 0.0 {
-            b = mul(b, -1.0);
+        if -cy(p2, p1) < 0.0 {
+            b *= -1.0;
         }
-        let mut other = -sub(f32::from_bits(0x40c9_0fdb), g);
+        let mut other = -(F(f32::from_bits(0x40c9_0fdb)) - g);
         f.way = 0;
-        if -c[1] < 0.0 {
+        if -F(c[1]) < 0.0 {
             f.way = 1;
-            g = mul(g, -1.0);
-            other = mul(other, -1.0);
+            g *= -1.0;
+            other *= -1.0;
         }
-        let (e1, e2) = (sub(a, add(b, g)), sub(a, add(b, other)));
+        let (e1, e2) = (a - (b + g), a - (b + other));
         if !(e1.abs() <= e2.abs()) {
             f.way = 1 - f.way;
         }
     }
-    let mut s = if f.way != 0 { -1.0 } else { 1.0 };
+    let mut s = if f.way != 0 { F(-1.0) } else { F::ONE };
     if start_base != 7 && f.reversed {
-        s = mul(s, -1.0);
+        s *= -1.0;
     }
-    f.dir = crate::vu0::transform(&rot_y(STEP, s), d);
+    f.dir = crate::vu0::transform(&rot_y(STEP, s.0), d);
     f.cross = cross(t, f.dir);
 }
 
@@ -561,38 +570,44 @@ pub fn pad_held(b: u8) -> i32 {
 
 /// A human's run direction (game x, z) from the pad: the left stick (`lx`, `ly` bytes, 0x80 centre; bytes ≥ 0x81 drop
 /// by one, so the centre itself reads a hair right/down) rescaled past a 48/127 dead square, or the d-pad (`buttons`
-/// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit inside |48|; then
-/// ×1.2, clipped to length 1. Zero outside serve, rally and point-over (phases 2–4). The camera on the +z side flips
-/// it by π about y — not done here (callers negate).
+/// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit within |48| (±48
+/// included: the rescaled stick is exactly zero there); then ×1.2, clipped to length 1. Zero outside serve, rally
+/// and point-over (phases 2–4). The camera on the +z side flips it by π about y — not done here (`turned`).
 pub fn pad_dir(buttons: u16, lx: u8, ly: u8, phase: u8) -> [f32; 2] {
     let axis = |b: u8| b as i32 - (b >= 0x81) as i32 - 0x7f;
     let (ix, iy) = (axis(lx), axis(ly));
-    let (mut x, mut z) = if ix.abs() < 48 && iy.abs() < 48 {
+    let (mut x, mut z) = if ix.abs() <= 48 && iy.abs() <= 48 {
         let (r, l, u, d) = (buttons & 0x20 != 0, buttons & 0x80 != 0, buttons & 0x10 != 0, buttons & 0x40 != 0);
-        let x: f32 = if r { 1.0 } else if l { -1.0 } else { 0.0 };
-        let z: f32 = if u { 1.0 } else if d { -1.0 } else { -0.0 };
-        let len = sqrt(madd(madd(mul(0.0, 0.0), x, x), z, z));
-        if len <= 1.0 { (x, z) } else { let n = div(1.0, len); (mul(x, n), mul(z, n)) }
+        let x = f(if r { 1.0 } else if l { -1.0 } else { 0.0 });
+        let z = f(if u { 1.0 } else if d { -1.0 } else { -0.0 });
+        let len = (f(0.0) * 0.0).madd(x, x).madd(z, z).sqrt();
+        if len <= 1.0 { (x, z) } else { let n = 1.0 / len; (x * n, z * n) }
     } else {
-        let (fx, fz) = (div(ix as f32, 127.0), div(-iy as f32, 127.0));
-        let n = div(1.0, sqrt(madd(mul(fz, fz), fx, fx)));
+        let (fx, fz) = (F(ix as f32) / 127.0, F(-iy as f32) / 127.0);
+        let n = 1.0 / (fz * fz).madd(fx, fx).sqrt();
         let mut mag = fx.abs();
         if mag <= fz.abs() {
             mag = fz.abs();
         }
-        let t = f32::from_bits(0x3ec1_8306);
-        let m = if mag <= t { 0.0 } else { div(sub(mag, t), f32::from_bits(0x3f1f_3e7d)) };
-        (mul(mul(fx, n), m), mul(mul(fz, n), m))
+        let t = F(f32::from_bits(0x3ec1_8306));
+        let m = if mag <= t { F::ZERO } else { (mag - t) / f32::from_bits(0x3f1f_3e7d) };
+        (fx * n * m, fz * n * m)
     };
     let k = f32::from_bits(0x3f99_999a);
-    (x, z) = (mul(x, k), mul(z, k));
-    let len = sqrt(madd(mul(z, z), x, x));
+    (x, z) = (x * k, z * k);
+    let len = (z * z).madd(x, x).sqrt();
     if 1.0 < len {
-        let n = div(1.0, len);
-        (x, z) = (mul(x, n), mul(z, n));
+        let n = 1.0 / len;
+        (x, z) = (x * n, z * n);
     }
     // the camera matrix (identity) turns −0 into +0
-    if (2..=4).contains(&phase) { [x + 0.0, z + 0.0] } else { [0.0, 0.0] }
+    if (2..=4).contains(&phase) { f32s([x + 0.0, z + 0.0]) } else { [0.0, 0.0] }
+}
+
+/// `pad_dir` seen from a camera on the +z side: turned by π about y. The camera matrix's product leaves the same
+/// values negated, but a zero comes out +0, not −0.
+pub fn turned([x, z]: [f32; 2]) -> [f32; 2] {
+    f32s([-f(x) + 0.0, -f(z) + 0.0])
 }
 
 /// One frame of the server before the toss (play state 1): `dir` is the run direction (`pad_dir`, or a bot's), and
@@ -607,19 +622,20 @@ pub fn serve_walk(x: f32, dir: [f32; 2], end: f32, side: i32, doubles: bool, han
         return (x, 0x20);
     }
     let step = if dir[0] < 0.0 { -1.0 } else { 1.0 };
-    let x = madd(add(0.0, x), WALK, step);
+    let x = (F::ZERO + x).madd(WALK, step);
     let court = if side == 0 { 1.0 } else { -1.0 };
-    let far = mul(mul(if doubles { WALK_MAX_DOUBLES } else { WALK_MAX_SINGLES }, end), court);
+    let far = F(if doubles { WALK_MAX_DOUBLES } else { WALK_MAX_SINGLES }) * end * court;
+    let min = F(WALK_MIN);
     let x = if 0.0 < far {
-        if x < WALK_MIN { WALK_MIN } else if x <= far { x } else { far }
+        if x < min { min } else if x <= far { x } else { far }
     } else if x < far {
         far
-    } else if x <= -WALK_MIN {
+    } else if x <= -min {
         x
     } else {
-        -WALK_MIN
+        -min
     };
-    (x, crate::motion::serve_walk(dir[0], end, hand))
+    (x.0, crate::motion::serve_walk(dir[0], end, hand))
 }
 
 /// A computer player's stick as the game passes it on: each axis of the AI's wanted direction (x, z) rounded half
@@ -627,7 +643,7 @@ pub fn serve_walk(x: f32, dir: [f32; 2], end: f32, side: i32, doubles: bool, han
 pub fn bot_stick(v: [f32; 2]) -> [u8; 2] {
     v.map(|f| {
         let sign = if f < 0.0 { -1.0 } else { 1.0 };
-        ((madd(mul(0.5, sign), 127.0, f) as i32 + 0x80).clamp(1, 255)) as u8
+        (((F(0.5) * sign).madd(127.0, f).0 as i32 + 0x80).clamp(1, 255)) as u8
     })
 }
 
@@ -637,9 +653,9 @@ pub fn stick_dir(b: [u8; 2], phase: u8) -> [f32; 2] {
     if !(2..=4).contains(&phase) {
         return [0.0, 0.0];
     }
-    let [x, z] = b.map(|b| div((b as i32 - 0x80) as f32, 127.0));
-    let len = sqrt(madd(mul(z, z), x, x));
-    if len <= 1.0 { [x, z] } else { let n = div(1.0, len); [mul(x, n), mul(z, n)] }
+    let [x, z] = b.map(|b| F((b as i32 - 0x80) as f32) / 127.0);
+    let len = (z * z).madd(x, x).sqrt();
+    f32s(if len <= 1.0 { [x, z] } else { let n = 1.0 / len; [x * n, z * n] })
 }
 
 const NEAR: f32 = f32::from_bits(0x3a83_126f); // 0.001
@@ -691,7 +707,8 @@ impl Body {
     /// zero to stand), `pelvis` the character's per-motion pelvis rows (see [`turn`]).
     pub fn step(&mut self, s: &Stats, input: [f32; 2], sc: &Scene, pelvis: &[[f32; 2]]) {
         let start = self.motion;
-        let len = sqrt(madd(mul(input[1], input[1]), input[0], input[0]));
+        let [ix, iz] = fs(input);
+        let len = (iz * iz).madd(ix, ix).sqrt();
         if self.running {
             self.run += 1;
             (self.stamina, self.stamina_tick) = drain(s, self.stamina, self.stamina_tick, sc.players, sc.phase == 3, 0);
@@ -700,8 +717,8 @@ impl Body {
             if !self.running {
                 self.run = 0;
             }
-            let inv = div(1.0, len);
-            self.go(s, [mul(input[0], inv), 0.0, mul(input[1], inv), 0.0], sc);
+            let inv = 1.0 / len;
+            self.go(s, f32s([ix * inv, F::ZERO, iz * inv, F::ZERO]), sc);
         } else {
             if self.running && base_motion(self.motion) == 4 && self.stance(sc) == 2 {
                 self.face.turned = true;
@@ -720,30 +737,30 @@ impl Body {
     /// direction, or the target within one step. ponytail: modes 0/1 only (`running`); a stroke (mode 2) would
     /// count the run from 0, the drain floor is `step`'s 0.
     pub fn toward(&self, s: &Stats, target: [f32; 2], players: i32, phase: u8, keep: bool) -> ([f32; 2], bool) {
-        let mut x = sub(target[0], self.pos[0]);
-        let mut z = sub(target[1], self.pos[2]);
+        let mut x = F(target[0]) - self.pos[0];
+        let mut z = F(target[1]) - self.pos[2];
         if x.abs() < NEAR {
-            x = 0.0;
+            x = F::ZERO;
         }
         if z.abs() < NEAR {
-            z = 0.0;
+            z = F::ZERO;
         }
-        let len = sqrt(madd(mul(z, z), x, x));
+        let len = (z * z).madd(x, x).sqrt();
         if len <= 0.0 {
             return ([0.0, 0.0], true);
         }
-        let inv = div(1.0, len);
-        let dir = [mul(x, inv), mul(z, inv)];
+        let inv = 1.0 / len;
+        let dir = f32s([x * inv, z * inv]);
         let (run, stamina) = if self.running {
             (self.run + 1, drain(s, self.stamina, self.stamina_tick, players, phase == 3, 0).0)
         } else {
             (0, self.stamina)
         };
         let step = run_speed(s, run, stamina, 100);
-        if !keep && len <= div(mul(2.0, step), 3.0) {
+        if !keep && len <= f(2.0) * step / 3.0 {
             return ([0.0, 0.0], true);
         }
-        (dir, sub(len, step) <= 0.0)
+        (dir, len - step <= 0.0)
     }
 
     fn stance(&self, sc: &Scene) -> i32 {
@@ -775,11 +792,12 @@ impl Body {
     fn go(&mut self, s: &Stats, dir: [f32; 4], sc: &Scene) {
         let current = base_motion(self.motion);
         self.running = true;
-        let ahead = madd(madd(mul(0.0, dir[1]), 0.0, dir[0]), sc.forward, dir[2]);
-        self.target = if f32::from_bits(0x3f7d_70a4) < ahead {
+        let ahead = (f(0.0) * dir[1]).madd(0.0, dir[0]).madd(sc.forward, dir[2]);
+        let straight = F(f32::from_bits(0x3f7d_70a4));
+        self.target = if straight < ahead {
             [0.0, 0.0, sc.forward, 0.0]
-        } else if ahead < -f32::from_bits(0x3f7d_70a4) {
-            [-0.0, -0.0, mul(sc.forward, -1.0), -0.0]
+        } else if ahead < -straight {
+            [-0.0, -0.0, (F(sc.forward) * -1.0).0, -0.0]
         } else {
             dir
         };

@@ -500,7 +500,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (step.after(super::read_input), draw).chain().before(super::main_menu::pause::Systems))
         // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match
         .add_systems(Startup, super::main_menu::cursor::setup)
-        .add_systems(Update, super::main_menu::cursor::tick.after(draw));
+        .add_systems(Update, super::main_menu::cursor::tick.after(draw))
+        .add_systems(Last, super::main_menu::cursor::show);
     super::main_menu::pause::plugin(app);
     super::main_menu::legend::plugin(app);
     app.add_systems(Update, legend.after(step));

@@ -20,8 +20,8 @@ Remaster-only feature; the yardstick is the donor disc character. Iteration: thi
 - `--shot` (HST_AUTOPLAY, singles, mod in slot 1): `context/m1c/test_pc00_s4.png` (stage 4, left-handed pc00
   mid-rally), `fore_pc00_phoebe.png` (sweet hit), `getagrip_pc12_suzuki.png` (wav voices loaded, texture face).
 - `tools/check.sh -p hst`: 56 pass.
-- Test data: `context/mods/test_pc00` rebuilt as in the M1a journal (rerig.py of HST-MODS `pc00_c00.glb`);
-  symlinks `fore_pc00_phoebe`, `getagrip_pc00_emi`, `getagrip_pc12_suzuki` into `~/repos/HST-MODS/out/mods`.
+- Test data: `context/mods/test_pc00` rebuilt as in the M1a journal (rerig.py of open-tennis-mods `pc00_c00.glb`);
+  symlinks `fore_pc00_phoebe`, `getagrip_pc00_emi`, `getagrip_pc12_suzuki` into `~/repos/open-tennis-mods/out/mods`.
 
 ## Not verified / not 1:1
 - Nothing to compare in the original (mods are remaster-only); only checked against the donor path.

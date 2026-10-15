@@ -52,7 +52,7 @@ await sleep(300);
 check('the page says it vibrates', (await evaluate('hstVibration()')) === 'vibrate', await evaluate('hstVibration()'));
 await tapCross(1);
 check('a tap on ✕ buzzes 15 ms', JSON.stringify(await evaluate('buzzes')) === '[15]', await evaluate('buzzes'));
-await evaluate('hstTouchPads(false, false)');
+await evaluate('hstTouchBuzz(false)');
 await tapCross(2);
 check('...and not with Vibration off', (await evaluate('buzzes.length')) === 1, await evaluate('buzzes'));
 
@@ -69,7 +69,7 @@ const before = await flipped();
 await tapCross(3);
 check('a tap on ✕ flips the hidden switch', before === false && (await flipped()) === true, [before, await flipped()]);
 check('...without its click reaching the page', (await evaluate('clicks')) === 0, await evaluate('clicks'));
-await evaluate('hstTouchPads(false, false)');
+await evaluate('hstTouchBuzz(false)');
 await tapCross(4);
 check('...and not with Vibration off', (await flipped()) === true);
 process.exit(failed ? 1 : 0);

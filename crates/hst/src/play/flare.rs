@@ -159,7 +159,8 @@ fn draw(
         return;
     }
     let (sprites, rays) = build(&g.rng.flare, &sun, p, tf.rotation);
-    let on = crate::weather::now() < 2;
+    // M8f6: none on a court mod without its own
+    let on = crate::weather::now() < 2 && !crate::court_mod::FLARE_OFF.load(std::sync::atomic::Ordering::Relaxed);
     let mut built = [Some(rays), Some(sprites)];
     for (part, mesh, mut vis) in &mut parts {
         let Some(b) = built[part.0 as usize].take() else { continue };
@@ -167,6 +168,10 @@ fn draw(
         // an empty one stays as it was, hidden: Bevy's mesh allocator logs a use-after-free for a mesh with no
         // vertices, twice a frame while the sun is out of the picture (B163)
         if b.pos.is_empty() {
+            continue;
+        }
+        // hidden, it waits for the next frame it's on: each `get_mut` re-uploads the mesh (B357)
+        if !on {
             continue;
         }
         if let Some(mut m) = meshes.get_mut(&mesh.0) {

@@ -35,11 +35,18 @@ use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace};
 
+mod court_people;
+#[cfg(test)]
+pub(super) use court_people::seen as court_people_seen;
+
 pub fn plugin(app: &mut App) {
+    app.add_plugins(court_people::plugin);
     app.init_resource::<Ambience>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
         .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)))
+        .add_systems(FixedUpdate, mod_umpire.after(step).before(super::play_sounds))
+        .add_systems(Update, mod_look.after(look))
         .add_systems(PostUpdate, cull_crowd.before(bevy::transform::TransformSystems::Propagate));
 }
 
@@ -117,7 +124,6 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     mut ambience: ResMut<Ambience>,
-    gfx: Option<Res<crate::graphics::Graphics>>,
 ) {
     *ambience = default();
     let Ok(root) = root.single() else { return };
@@ -129,27 +135,16 @@ fn setup(
     let arc = Archive::parse(&data).expect("court archive");
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/GAME.BIN").expect("GAME.BIN"));
     let game = exe::Game::new(&cnf, &bin).expect("supported disc");
-    // with Batch Crowd on, the figures of one model share its loaded meshes and materials (`shade::Shared`)
-    let batch = gfx.is_some_and(|g| g.batch_crowd);
-    let mut loaded = std::collections::HashMap::new();
-    let mut load = |(stem, anims): (String, Vec<String>), share: bool| {
-        if let Some(d) = loaded.get(&(stem.clone(), anims.clone())).filter(|_| share) {
-            return Some(Arc::clone(d));
-        }
-        let d = character::load_npc(&arc, &stem, &anims, &mut meshes, &mut materials, &mut images, &mut bindposes).map(Arc::new)?;
-        if share {
-            loaded.insert((stem, anims), d.clone());
-        }
-        Some(d)
+    // M8f4: an umpire mod's own model, drawn in the disc one's place
+    let modded = crate::mods::umpire::chosen().and_then(|u| crate::mods::umpire::load(&u, &mut *meshes, &mut *materials, &mut *images, &mut *bindposes).inspect_err(|e| warn!("{e}")).ok().flatten()).map(Arc::new);
+    let mut load = |(stem, anims): (String, Vec<String>)| {
+        character::load_npc(&arc, &stem, &anims, &mut meshes, &mut materials, &mut images, &mut bindposes).map(Arc::new)
     };
-    let mut place = |data: &Arc<CharacterData>, world: &[[f32; 4]; 4], scale: f32, share: bool| {
+    let mut place = |data: &Arc<CharacterData>, world: &[[f32; 4]; 4], scale: f32| {
         let e = character::spawn(&mut commands, data, root);
         commands.entity(e).insert(Transform::from_matrix(Mat4::from_cols_array_2d(world)).with_scale(Vec3::splat(scale)));
         // B351: no shadow at Shadows Low (the umpire's comes back below)
         commands.entity(e).insert(crate::shadow::Minor);
-        if share {
-            commands.entity(e).insert(crate::shade::Shared);
-        }
         e
     };
     let players = g.rules.players as u32;
@@ -163,15 +158,15 @@ fn setup(
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
             npc::Kind::Umpire => {
-                let Some(data) = load(layout::umpire_files(args.umpire), false) else { continue };
+                let Some(data) = modded.clone().or_else(|| load(layout::umpire_files(args.umpire))) else { continue };
                 // she faces the court centre: rows (up × forward, up, forward, chair)
                 let ([x, z], p) = (umpire.forward, umpire.pos);
                 let world = [[z, 0.0, -x, 0.0], [0.0, 1.0, 0.0, 0.0], [x, 0.0, z, 0.0], [p[0], p[1], p[2], 1.0]];
-                npcs.umpire = Some((place(&data, &world, 1.0, false), Anim::default()));
+                npcs.umpire = Some((place(&data, &world, 1.0), Anim::default()));
             }
             npc::Kind::Walker(k) => {
                 let [model, set, _] = walkers[k as usize];
-                let Some(data) = load(layout::walker_files(model, set), batch) else { continue };
+                let Some(data) = load(layout::walker_files(model, set)) else { continue };
                 let lens = std::array::from_fn(|a| data.motions.get(&a).map_or(0.0, |c| c.length));
                 let slot = npcs.walkers.len() as u32;
                 let mut w = npc::Walker { slot, mode: 0, counter: 0, anim: 0, frame: 0.0, next: 0.0, speed: 1.0, advancing: true, lens, ..Default::default() };
@@ -183,7 +178,7 @@ fn setup(
                 // the serve placement before the first point turns it to the court centre
                 let world = npc::walker_facing(c.world[3], 0.0);
                 w.wander = npc::Wander::new(c.world[3], &[], &[]);
-                npcs.walkers.push((place(&data, &world, c.scale, batch), w, c.world[3]));
+                npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
             }
             npc::Kind::Trigger(t) => {
                 if npc::EMITTERS.contains(&t) {
@@ -205,9 +200,7 @@ fn setup(
                     }
                     continue;
                 };
-                // the fading ones (`step`) keep draws of their own
-                let share = batch && !FADING.contains(&t);
-                let Some(data) = load(layout::trigger_files(&model, &base, clips), share) else { continue };
+                let Some(data) = load(layout::trigger_files(&model, &base, clips)) else { continue };
                 let row = game.trigger(t);
                 // a two-clip creature plays its first
                 let len = data.motions.get(&0).map_or(0.0, |c| c.length);
@@ -219,7 +212,7 @@ fn setup(
                     tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
                 }
                 tr.reset(&row, &mut roll);
-                let e = place(&data, &c.world, c.scale, share);
+                let e = place(&data, &c.world, c.scale);
                 if t == 15 {
                     hidden.push(e); // the passing ball waits off until a change of ends rolls it
                 } else if !(tr.active && tr.on && tr.speed != 0.0) {
@@ -258,6 +251,9 @@ fn setup(
     if let Some((e, _)) = &npcs.umpire {
         commands.entity(*e).remove::<crate::shadow::Minor>();
     }
+    if let (Some((e, _)), Some(_)) = (&npcs.umpire, &modded) {
+        commands.entity(*e).insert(ModUmpire::default());
+    }
     npcs.uncull = hidden;
     if let Ok(look) = crate::effects::look(&mut iso, "npc/clap", &mut materials, &mut images) {
         npcs.sprites = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
@@ -266,9 +262,6 @@ fn setup(
     }
     commands.insert_resource(npcs);
 }
-
-/// The trigger creatures `step` fades through their own materials (the passing ball, court 8's startled ones).
-const FADING: [u8; 3] = [15, 31, 32];
 
 /// Turn walker `e` at `home` toward (0, 0, `z`), keeping its scale.
 fn face(turn: &mut Query<&mut Transform, With<character::Rig>>, e: Entity, home: [f32; 4], z: f32) {
@@ -577,7 +570,6 @@ fn step(
             31 | 32 => Some(t.weight),
             _ => None,
         };
-        debug_assert_eq!(fade.is_some(), FADING.contains(&t.ty));
         if let Some(a) = fade {
             // its materials once its meshes are there
             let k = npcs.fade.iter().position(|(f, _)| f == e).unwrap_or_else(|| {
@@ -1041,5 +1033,53 @@ mod b283_tests {
         assert!(!super::crowd_shown(-30.0, 700.0));
         assert!(!super::crowd_shown(0.0005, 700.0));
         assert!(!super::crowd_shown(0.5, 700.0));
+    }
+}
+
+/// M8f4: the umpire is a mod's model (`mods::umpire`), on its own `wait` clock.
+#[derive(Component, Default)]
+struct ModUmpire {
+    wait: f32,
+}
+
+/// A mod umpire's clips over `step`'s: during play (the disc's still first idle frame) its `wait` loops if it has
+/// one; a turn it lacks holds the idle's first frame. Looks only: the match never reads the umpire's pose.
+fn mod_umpire(g: Res<Game>, mut q: Query<(&character::Rig, &mut Motion, &mut ModUmpire)>) {
+    let (motion, over) = (g.umpire.motion as usize, g.umpire.over);
+    for (rig, mut m, mut u) in &mut q {
+        match rig.data.motions.get(&crate::mods::umpire::WAIT) {
+            Some(c) if motion == 0 && !over => {
+                show(&mut m, crate::mods::umpire::WAIT, u.wait, true);
+                u.wait = (u.wait + 1.0) % c.length.max(1.0);
+                continue;
+            }
+            _ => u.wait = 0.0,
+        }
+        if !rig.data.motions.contains_key(&motion) {
+            show(&mut m, 0, 0.0, false);
+        }
+    }
+}
+
+/// [`look`] for a mod umpire, whose head joint has the model's axes (standard §3b: +Z the face, +Y down) rather
+/// than the disc's bone axes: the same 0.7 of the turn toward `Umpire::head` within ±70°, and of the tilt within
+/// 35° down and 25° up, about the head's y then x.
+fn mod_look(g: Res<Game>, npcs: Option<Res<Npcs>>, rigs: Query<(&character::Rig, &Transform), With<ModUmpire>>, mut joints: Query<&mut Transform, Without<character::Rig>>) {
+    let Some((e, _)) = npcs.as_ref().and_then(|n| n.umpire.as_ref()) else { return };
+    let Ok((rig, at)) = rigs.get(*e) else { return };
+    let Some(head) = ["head", "Bip01Head"].into_iter().find_map(|n| rig.data.joint(n)) else { return };
+    let rest = rig.data.joints[head].rest;
+    let mut m = rest.to_matrix();
+    let mut j = rig.data.joints[head].parent;
+    while let Some(k) = j {
+        let Ok(tf) = joints.get(rig.joints[k]) else { return };
+        m = tf.to_matrix() * m;
+        j = rig.data.joints[k].parent;
+    }
+    let p = (at.to_matrix() * m).inverse().transform_point3(Vec3::from(g.umpire.head));
+    let yaw = (0.7 * p.x.atan2(p.z)).clamp(-70f32.to_radians(), 70f32.to_radians());
+    let tilt = (0.7 * (-p.y).atan2(p.x.hypot(p.z))).clamp(-35f32.to_radians(), 25f32.to_radians());
+    if let Ok(mut tf) = joints.get_mut(rig.joints[head]) {
+        *tf = rest.with_rotation(rest.rotation * Quat::from_rotation_y(yaw) * Quat::from_rotation_x(tilt));
     }
 }

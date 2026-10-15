@@ -17,8 +17,8 @@ pub(super) enum Row {
     Online,
     Mods,
     Settings,
-    /// B118: a 1v1 on this phone (touch screens only).
-    Duo,
+    /// B317: a newer build is out (`update.rs`): Refresh (browser) or Download (desktop).
+    Update,
     Quit,
 }
 
@@ -31,8 +31,8 @@ impl Menu {
             v.push(Row::Rematch);
         }
         v.extend([Row::Local, Row::Online, Row::Mods, Row::Settings]);
-        if super::touch_page() {
-            v.push(Row::Duo);
+        if crate::update::latest().is_some() {
+            v.push(Row::Update);
         }
         if cfg!(not(target_arch = "wasm32")) {
             v.push(Row::Quit);
@@ -56,7 +56,7 @@ impl Menu {
         } else {
             format!("Singles - {} vs {}", name(0), name(1))
         };
-        let court = if self.court == COURTS { "Random Court".to_string() } else { text.msg(276 + 2 * self.court).to_string() };
+        let court = self.court_short(text, self.court);
         let sets = SETS[self.sets];
         (teams, format!("{court} - {sets} set{}", if sets == 1 { "" } else { "s" }))
     }
@@ -77,6 +77,8 @@ const RIGHT: f32 = 16.0;
 const PILL_H: f32 = 38.0;
 const PITCH: f32 = 46.0;
 const CARD_H: f32 = 62.0;
+/// B317's new-version card.
+const UPDATE_H: f32 = 48.0;
 /// The preview's picture height and the facts' tiles.
 const PIC_H: f32 = 170.0;
 const FACT_H: f32 = 44.0;
@@ -107,7 +109,7 @@ fn backdrop(r: Row) -> [f32; 3] {
         Row::Online => [92.0, 108.0, 122.0],
         Row::Mods => [114.0, 104.0, 122.0],
         Row::Settings => [118.0, 104.0, 98.0],
-        Row::Duo => [100.0, 116.0, 96.0],
+        Row::Update => [118.0, 104.0, 70.0],
         Row::Quit => [100.0; 3],
     }
 }
@@ -122,9 +124,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
     let head = format!("{pads} pad{}  -  Disc: SCUS-97610", if pads == 1 { "" } else { "s" });
     let w = d.width(&head, 16.0);
     d.outlined(|d| d.text(&head, 624.0 - w, 18.0, 16.0, WHITE));
-    let version = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
-    let w = d.width(version, 10.0);
-    d.outlined(|d| d.text(version, 624.0 - w, 37.0, 10.0, WHITE));
+    // B374: a release build's own tag
+    let version = format!("{} - {}", crate::update::VERSION.unwrap_or(concat!("v", env!("CARGO_PKG_VERSION"))), env!("HST_COMMIT"));
+    let w = d.width(&version, 10.0);
+    d.outlined(|d| d.text(&version, 624.0 - w, 37.0, 10.0, WHITE));
     d.anchor = super::Anchor::Centre;
 
     let rows = m.main_rows();
@@ -143,6 +146,18 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
                 fit_text(d, &a, x + 14.0, y + 21.0, 18.0, LIST_W - 26.0, INK);
                 fit_text(d, &b, x + 14.0, y + 41.0, 14.0, LIST_W - 26.0, MUTED);
                 y += CARD_H + 12.0;
+                rect
+            }
+            Row::Update => {
+                // the notice: a gold card under the rows, its button's word big
+                let rect = [x, y + 4.0, LIST_W, UPDATE_H];
+                d.box3(rect, 12.0, [Some(INK), Some(if on { ON } else { WHITE }), Some(if on { ON } else { [118.0, 100.0, 50.0] })], 128.0);
+                d.text("NEW VERSION OUT", x + 14.0, rect[1] + 6.0, 13.0, if on { WHITE } else { [90.0, 60.0, 0.0] });
+                d.text(name(r), x + 14.0, rect[1] + 21.0, 22.0, if on { WHITE } else { INK });
+                if on {
+                    d.text(">", x + LIST_W - 28.0, rect[1] + 21.0, 22.0, WHITE);
+                }
+                y += UPDATE_H + 4.0;
                 rect
             }
             Row::Quit => {
@@ -187,17 +202,14 @@ fn name(r: Row) -> &'static str {
         Row::Online => "Online",
         Row::Mods => "Mods",
         Row::Settings => "Settings",
-        Row::Duo => "1v1 Here",
+        Row::Update => crate::update::button(),
         Row::Quit => "Quit",
     }
 }
 
 /// The umpire's name, or Random.
 fn umpire(m: &Menu, text: &Text) -> String {
-    match m.umpire as usize {
-        super::UMPIRES => "Random".into(),
-        u => text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string(),
-    }
+    m.umpire_name(text, m.umpire as usize)
 }
 
 /// `s` from (x, y) at `size`, squeezed across to fit `max`.
@@ -244,7 +256,9 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Online => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
         Row::Mods => "Browse the mod store, add characters from other games and manage the ones you have.".into(),
         Row::Settings => text.msg(190).to_string(),
-        Row::Duo => "Two players, one phone: lay it flat between you, each plays from their own end.".into(),
+        Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
+        Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
+        Row::Update => "A new version is out. Download opens its release page: swap this game for the new build, keeping your settings and mods beside it.".into(),
         Row::Quit => "Close the game.".into(),
     };
     let top = if r == Row::Quit { y + 60.0 } else { y + PIC_H + 16.0 };
@@ -256,9 +270,9 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
             vec![("Players", format!("{humans} + {} COM", m.players() - humans)), ("Games", m.games.to_string()), ("Umpire", umpire(m, text))]
         }
         Row::Local => {
-            let mut v = vec![("Singles", "1-2 players".to_string()), ("Doubles", "3-4 players".into())];
+            let mut v = vec![("Singles", "1-2 players".to_string()), ("Doubles", "1-4 players".into())];
             if m.rematch {
-                let court = if m.court == COURTS { "Random Court".to_string() } else { text.msg(276 + 2 * m.court).to_string() };
+                let court = m.court_short(text, m.court);
                 v.push(("Last match", format!("{}, {court}", if m.doubles { "Doubles" } else { "Singles" })));
             }
             v
@@ -274,7 +288,9 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
             }
             v
         }
-        Row::Duo => vec![("Players", "2".into()), ("Pads", "On screen".into()), ("Phone", "Flat".into())],
+        Row::Update if cfg!(target_arch = "wasm32") => vec![("Refresh", "Reloads this page".into()), ("Keeps", "Settings, mods, ISO".into())],
+        Row::Update if crate::update::installs() => vec![("Update", "Download, check, restart".into()), ("Keeps", "Settings, mods, ISO".into())],
+        Row::Update => vec![("Download", "GitHub release page".into()), ("Builds", "Linux, Windows".into())],
         Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Upscaled", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
         Row::Quit => vec![],
     };
@@ -319,7 +335,6 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
             device_tiles(d, &seats, [x, y, w, h]);
             caption(d, "The devices plugged in now: each takes a seat", x + w - 13.0, y + h - 21.0, [23.0, 45.0, 22.0]);
         }
-        Row::Duo => device_tiles(d, &[("phone", "Near end".into()), ("phone", "Far end".into())], [x, y, w, h]),
         Row::Online => {
             // the courts' tiles (`Confirmation_02`: courts 0–6 down its left column, 7–10 its right)
             let (tw, th) = (92.0 * 0.9, 68.0 * 0.9);
@@ -346,6 +361,29 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
                 let dst = [x0 + (pw + 10.0) * (k % cols) as f32, y + 14.0 + 40.0 * (k / cols) as f32, pw, 32.0];
                 d.pill_at(dst, [INK, WHITE, OFF], 128.0);
                 d.label(page, dst[0] + pw / 2.0, dst[1] + 6.0, 20.0, pw - 24.0, [110.0; 3]);
+            }
+        }
+        Row::Update => {
+            // this build's and the new one's, side by side
+            let (old, new) = (crate::update::ours(), crate::update::latest().unwrap_or_default());
+            let tw = ((w - 80.0) / 2.0).min(150.0);
+            let x0 = x + (w - 2.0 * tw - 40.0) / 2.0;
+            for (k, (label, v, fill)) in [("NOW", old, OFF), ("NEW", new, ON)].into_iter().enumerate() {
+                let r = [x0 + (tw + 40.0) * k as f32, y + 34.0, tw, 64.0];
+                d.box3(r, 10.0, [Some(INK), Some(WHITE), Some(fill)], 128.0);
+                d.centred(label, r[0] + tw / 2.0, r[1] + 8.0, 13.0, WHITE);
+                d.label(&v, r[0] + tw / 2.0, r[1] + 26.0, 24.0, tw - 16.0, WHITE);
+            }
+            d.outlined(|d| d.centred(">", x0 + tw + 20.0, y + 52.0, 28.0, WHITE));
+            // B374: the install's progress bar and words
+            if let Some((says, k)) = crate::update::progress() {
+                let bw = 2.0 * tw + 40.0;
+                if let Some(k) = k {
+                    let r = [x0, y + 108.0, bw, 14.0];
+                    d.box3(r, 7.0, [Some(INK), Some(WHITE), Some(OFF)], 128.0);
+                    d.box3([r[0], r[1], (bw * k).max(14.0), 14.0], 7.0, [None, None, Some(ON)], 128.0);
+                }
+                d.outlined(|d| d.label(&says, x0 + bw / 2.0, y + 126.0, 12.0, bw, WHITE));
             }
         }
         Row::Quit => {}

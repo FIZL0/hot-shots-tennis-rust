@@ -5,8 +5,10 @@
 //! (fade in, roll, hold, fade out). When the show is over the ends may change, and the next frame leaves for
 //! the change-ends phase (a fixed camera cut) or straight to the next serve. Counted in the match's own ticks:
 //! the game sometimes spends several vsyncs on one tick while it loads, and those don't count.
+#![deny(clippy::float_arithmetic)]
 
 use crate::judge::Rally;
+use crate::ps2::F;
 use crate::score::{Event, Score};
 use hst_data::exe::ScoreboardTiming;
 
@@ -249,7 +251,7 @@ impl PostPoint {
     /// The call model showing, if any: alpha 1 until the fade, then 128·t/5 (in 128ths) down to 0.
     pub fn call(&self) -> Option<CallState> {
         match self.board {
-            Board::Call(c) => Some(CallState { call: c.call, alpha: if c.fade < 0 { 1.0 } else { (128 * c.fade / CALL_FADE) as f32 / 128.0 } }),
+            Board::Call(c) => Some(CallState { call: c.call, alpha: if c.fade < 0 { 1.0 } else { (F((128 * c.fade / CALL_FADE) as f32) / 128.0).0 } }),
             _ => None,
         }
     }
@@ -355,7 +357,7 @@ impl Show {
         if self.settled {
             self.held += 1;
             let hold = if matches!(self.event, Event::Point | Event::TiebreakPoint) { tm.point_hold } else { tm.game_hold };
-            if hold * 60.0 <= self.held as f32 && !self.fading_out {
+            if F(hold) * 60.0 <= self.held as f32 && !self.fading_out {
                 (self.fading_out, self.t) = (true, 5);
             }
         }
@@ -384,17 +386,17 @@ pub struct Placement {
 /// `player` 0..3 (even = first team), `faults` this point's faults so far, `formation` the player's doubles
 /// formation (2 = both back), `swapped` the teams' ends have changed.
 pub fn serve_placement(player: i32, s: &Score, faults: i32, stance: f32, formation: u8, swapped: bool) -> Placement {
-    let facing = if (player & 1 == 0) != swapped { 1.0 } else { -1.0 };
-    let court: f32 = if s.side == 0 { 1.0 } else { -1.0 };
+    let facing = F(if (player & 1 == 0) != swapped { 1.0 } else { -1.0 });
+    let court = F(if s.side == 0 { 1.0 } else { -1.0 });
     let deep = if formation == 2 { -7.9 } else { 0.0 };
     let (x, z) = if player == s.server {
-        (court * stance * facing, facing * -BASELINE)
+        (court * stance * facing, facing * -F(BASELINE))
     } else if s.server & 1 == player & 1 {
         (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -3.2 })
     } else if player == s.receiver {
-        (facing * 3.0 * court, facing * if faults == 0 { -BASELINE } else { -11.0 })
+        (facing * 3.0 * court, facing * if faults == 0 { -F(BASELINE) } else { F(-11.0) })
     } else {
         (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -5.2 })
     };
-    Placement { pos: [x, 0.0, z], facing }
+    Placement { pos: [x.0, 0.0, z.0], facing: facing.0 }
 }

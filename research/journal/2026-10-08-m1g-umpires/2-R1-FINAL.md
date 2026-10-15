@@ -4,7 +4,7 @@ This replaces the first pass in README.md. That pass shipped `test_pc00` as a pl
 Those `mods/umpire_0..4` placeholders are deleted (they were git-ignored, removed with `rm -r` and no glob).
 
 ## Pipeline
-Run `python3 tools/rerig/hst_umpires.py [HST-Remastered dir]` in HST-MODS (commit bc37b03). Its output goes to the
+Run `python3 tools/rerig/hst_umpires.py [open-tennis dir]` in open-tennis-mods (commit bc37b03). Its output goes to the
 git-ignored `out/`. In the game the mods show up as `mods/hst-mods/hst_umpire_NN_<slug>`.
 
 1. `hst-gltf umpires context/xb out/models/hst/umpires` exports `u00..u04.glb` from the umpires' own MDLs, with
@@ -43,7 +43,7 @@ git-ignored `out/`. In the game the mods show up as `mods/hst-mods/hst_umpire_NN
 6. **Donor fallback, engine side.** Before this change a mod with any wav was silent on the programs it didn't ship.
    - `play/mod_match.rs::apply` now copies the donor's disc `hd/bd` into the mod's bank.
    - `audio.rs::Sound::play` plays a mod wav when that program has one, else the hd path.
-   - Standard §5 in HST-MODS documents the rule.
+   - Standard §5 in open-tennis-mods documents the rule.
 
 ## Roster
 B40a's custom roster lists `mods/` (`mods::list`). The five appear there, after the disc cast, in id order.

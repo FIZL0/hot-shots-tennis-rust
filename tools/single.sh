@@ -50,7 +50,7 @@ while grep -q '^- \[ \]' plan/TODO.md; do
   # stall check, as tools/parallel.py: transcript quiet HST_STALL s (20 min) at a prompt, or 65 min with a tool running
   ( while sleep 60; do
       t=$(find ~/.claude/projects -name "$id.jsonl" 2>/dev/null | head -1); [ -n "$t" ] || continue
-      q=$(( $(date +%s) - $(stat -c %Y "$t") )) c=$(/home/ryha/repos/HST-Remastered/tools/pgrep -f -- "--session-id $id" | head -1)
+      q=$(( $(date +%s) - $(stat -c %Y "$t") )) c=$(/home/ryha/repos/open-tennis/tools/pgrep -f -- "--session-id $id" | head -1)
       if [ "$q" -gt 3900 ] || { [ "$q" -gt "${HST_STALL:-1200}" ] && ! pgrep -P "${c:-1}" >/dev/null; }; then
         echo "=== $(date -Is) run $run looks stalled: no transcript activity for $((q / 60)) min" | tee -a "$log"
         printf '\a'; break

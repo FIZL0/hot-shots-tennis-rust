@@ -364,7 +364,8 @@ pub fn good_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Every file of the mod in `dir` read the way the game reads it, as hostile input: `mods::read`, each `.glb`
+/// Every file of the mod in `dir` read the way the game reads it, as hostile input: `mods::read_any` (M8f9: a court
+/// or umpire mod as its kind), each `.glb`
 /// through `mods::open`'s checks (every costume also §7's), each image decoded within limits, each `.wav` as PCM16.
 pub fn check_all(dir: &Path, files: &[String]) -> Result<Mod, String> {
     let m = check_mod(dir)?;
@@ -373,7 +374,7 @@ pub fn check_all(dir: &Path, files: &[String]) -> Result<Mod, String> {
 }
 
 fn check_mod(dir: &Path) -> Result<Mod, String> {
-    let m = mods::read(dir)?;
+    let m = mods::read_any(dir)?;
     mods::check(&m)?;
     Ok(m)
 }
@@ -433,7 +434,7 @@ pub fn install_file(zip: &Path, root: &Path, want: Option<&str>, owner: Option<&
 pub fn folder_for(root: &Path, id: &str, stage: &Path, owner: Option<&str>) -> PathBuf {
     let same = |d: &Path| {
         let stamp = crate::modstore::stamp(d);
-        mods::read(d).is_ok_and(|m| m.id == id)
+        mods::read_any(d).is_ok_and(|m| m.id == id)
             && match owner {
                 Some(o) => stamp.is_some_and(|s| s.author.is_empty() || s.author == o),
                 None => stamp.is_none() && read(&d.join("mod.json")).ok() == read(&stage.join("mod.json")).ok(),
@@ -539,7 +540,7 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
             mem.insert(format!("{to}{}", &k[from.len()..]), b);
         }
     }
-    mods::read(&dir)
+    mods::read_any(&dir)
 }
 
 /// A zip of `files` (stored or deflated), each with Unix mode `mode`, written by hand like any zip tool would (M17 upload packages, and the tests' archives).

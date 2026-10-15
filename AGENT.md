@@ -7,6 +7,8 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
   Single exception (user decision, 2026-10-06): `hst-data::exe` reads tuning *data* that only exists inside the
   game program from the user's own GAME.BIN at documented offsets, after checking the disc is SCUS-97610 US 1.00.
   No code addresses, no game data in git.
+  Second exception (user decision, 2026-10-15): a small curated set of promo screenshots of our own renderer (website,
+  README) may be committed, in `docs/screenshots/`; not texture sheets, raw captures or bulk dumps.
 - Exactness: ported math uses `hst_sim::ps2` (PCSX2's EE FPU model: chop rounding, aligned adds) wherever the
   original's float results must match bit for bit.
 - Research: our own scripts and notes are in `research/` (in git: no game data, no decompiled code, no captures or
@@ -51,7 +53,7 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
 ## Controlling the game
 `plan/REFERENCE.md` → *Controlling the real game* (PINE, virtual pad `tools/vpad.py`, `tools/screenshot.sh`; remaster `--shot`s in a fixed-size floating window: `tools/shot.sh`) and
 `PLAN.md` → *When blocked* (switch prompts, never stop while work remains). Unattended runs: `tools/single.sh`
-(one task at a time) or `tools/parallel.sh [N] [p|d] [f]` (N at once in worktrees; p = TODO order, d = different files, f = past the 94% weekly cap; each slot builds in its own worktree `target/`, dependencies shared through sccache; don't set `CARGO_TARGET_DIR`). Multi-step game drives
+(one task at a time) or `tools/parallel.sh [N] [p|d] [f]` (N at once in worktrees; p = TODO order (default), d = different files, f = past the 94% weekly cap; each slot builds in its own worktree `target/`, dependencies shared through sccache; don't set `CARGO_TARGET_DIR`). Multi-step game drives
 go under `tools/pcsx2.sh <cmd>`; pine.py tools take the same lock by themselves. In a parallel run `HST_PCSX2=N` gives
 each agent its own PCSX2 copy (tools, pad, PINE and lock all follow it). When you're done with the game for your task,
 close yours: `tools/pcsx2.sh tools/pcsx2-hst.sh stop` (waits for anything mid-use). Never `pkill pcsx2-qt`.

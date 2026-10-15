@@ -5,8 +5,10 @@
 //!
 //! The game also has a flash quad for a grade-1 hit's tornado, but its size and colours are never set (zero), so it
 //! draws nothing and isn't ported.
+#![deny(clippy::float_arithmetic)]
 
-use crate::{libm, ps2, world};
+use crate::ps2::F;
+use crate::{libm, world};
 
 type V4 = [f32; 4];
 
@@ -30,20 +32,20 @@ pub struct Tornado {
 impl Tornado {
     /// A shot leaves the racket at `vel`; `fade` is the game's fade length (frames).
     pub fn start(&mut self, vel: V4, fade: i32) {
-        use ps2::{add, madd, mul};
-        let speed = ps2::sqrt(madd(madd(mul(vel[0], vel[0]), vel[1], vel[1]), vel[2], vel[2]));
-        let kmh = ps2::div(mul(mul(speed, 60.0), 3600.0), 1000.0);
-        *self = Tornado { on: kmh >= 90.0, t: 0.0, end: add(add(mul(speed, 8.0), 0.0), 0.0), speed, fade, ..*self };
+        let [x, y, z, _] = vel.map(F);
+        let speed = (x * x).madd(y, y).madd(z, z).sqrt();
+        let kmh = speed * 60.0 * 3600.0 / 1000.0;
+        *self = Tornado { on: kmh >= 90.0, t: 0.0, end: (speed * 8.0 + 0.0 + 0.0).0, speed: speed.0, fade, ..*self };
     }
 
     /// The UV animation's speed (frames a frame).
     pub fn uv_speed(&self) -> f32 {
-        ps2::add(self.speed, 1.5)
+        (F(self.speed) + 1.5).0
     }
 
     /// The model's material alpha (1 opaque).
     pub fn opacity(&self) -> f32 {
-        if self.end <= self.t { self.alpha / 128.0 } else { 1.0 }
+        if self.end <= self.t { (F(self.alpha) / 128.0).0 } else { 1.0 }
     }
 
     /// A slow-motion in-between frame, `frac` (0..1] of the way from the last [`Tornado::tick`] to the next, as the
@@ -51,43 +53,40 @@ impl Tornado {
     /// after the last tick; `floor` the game's lowest alpha. Returns the drawn scale and UV time (`t` stays the
     /// tick's; the alpha is the in-between's).
     pub fn between(&mut self, bounces: i32, pos: V4, vel: V4, frac: f32, uv: [f32; 2], fade: i32, floor: i32) -> (f32, f32) {
-        use ps2::{add, div, madd, mul, sub};
-        let mut scale = self.t;
+        let mut scale = F(self.t);
         if self.t < self.end {
-            scale = madd(add(0.0, self.t), self.speed, frac);
+            scale = (F::ZERO + self.t).madd(self.speed, frac);
         }
-        let uv = madd(add(0.0, uv[0]), frac, sub(uv[1], uv[0]));
+        let uv = (F::ZERO + uv[0]).madd(frac, F(uv[1]) - uv[0]);
         if !self.on {
-            return (scale, uv);
+            return (scale.0, uv.0);
         }
         if bounces >= 1 {
             self.on = false;
-            return (scale, uv);
+            return (scale.0, uv.0);
         }
         self.aim(pos, vel);
         if self.end <= scale {
-            let a = div(mul(128.0, sub(self.fade as f32, frac)), fade as f32);
-            self.alpha = if a < floor as f32 { floor as f32 } else { a };
+            let a = F(128.0) * (F(self.fade as f32) - frac) / fade as f32;
+            self.alpha = if a < floor as f32 { floor as f32 } else { a.0 };
         }
-        (scale, uv)
+        (scale.0, uv.0)
     }
 
     fn aim(&mut self, pos: V4, vel: V4) {
-        use ps2::{add, madd, mul, sub};
-        let d: V4 = std::array::from_fn(|k| sub(add(pos[k], vel[k]), pos[k]));
-        let pitch = libm::atan2f(-d[1], ps2::sqrt(madd(mul(d[0], d[0]), d[2], d[2])));
-        self.m = world::mat_mul(&world::rot_x(pitch), &world::rot_y(libm::atan2f(d[0], d[2])));
+        let d: [F; 4] = std::array::from_fn(|k| F(pos[k]) + vel[k] - pos[k]);
+        let pitch = libm::atan2f((-d[1]).0, (d[0] * d[0]).madd(d[2], d[2]).sqrt().0);
+        self.m = world::mat_mul(&world::rot_x(pitch), &world::rot_y(libm::atan2f(d[0].0, d[2].0)));
         self.m[3] = pos;
     }
 
     /// One frame: the ball at `pos` moving at `vel`, `bounces` so far; `fade` as at the start.
     pub fn tick(&mut self, bounces: i32, pos: V4, vel: V4, fade: i32) {
-        use ps2::add;
         if !self.on {
             return;
         }
         if self.t < self.end {
-            self.t = add(self.t, self.speed);
+            self.t = (F(self.t) + self.speed).0;
         }
         if bounces >= 1 {
             self.on = false;

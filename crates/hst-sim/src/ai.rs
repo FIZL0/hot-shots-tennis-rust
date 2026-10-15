@@ -2,8 +2,9 @@
 //!
 //! The table has 168 rows: six blocks of 14 characters for singles, then the same for doubles (row + 84). A row is
 //! picked per player from its character and outfit (`menu_row`) and placed at match start (`Choice::new`).
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::{self, F};
 
 /// Rows in AIParam.csv.
 pub const ROWS: usize = 168;
@@ -88,21 +89,21 @@ fn atoi(s: &[u8]) -> i32 {
 /// The game's own decimal reader: the digits after the first '.' (×0.1, ×0.01, …), then those before it read right
 /// to left (×1, ×10, …), each step a multiply-add; no sign.
 pub fn atof(s: &[u8]) -> f32 {
-    let mut sum = 0.0f32;
+    let mut sum = F(0.0);
     let dot = s.iter().position(|&c| c == b'.');
     if let Some(d) = dot {
-        let mut w = 0.1f32;
+        let mut w = F(0.1);
         for &c in s[d + 1..].iter().take_while(|c| c.is_ascii_digit()) {
-            sum = ps2::madd(sum, ps2::utof((c - b'0') as u32), w);
-            w = ps2::div(w, 10.0);
+            sum = sum.madd(ps2::utof((c - b'0') as u32), w);
+            w /= 10.0;
         }
     }
-    let mut w = 1.0f32;
+    let mut w = F(1.0);
     for &c in s[..dot.unwrap_or(s.len())].iter().rev().take_while(|c| c.is_ascii_digit()) {
-        sum = ps2::madd(sum, ps2::utof((c - b'0') as u32), w);
-        w = ps2::mul(w, 10.0);
+        sum = sum.madd(ps2::utof((c - b'0') as u32), w);
+        w *= 10.0;
     }
-    sum
+    sum.0
 }
 
 /// `strtok`: the non-empty pieces between any of `delims`.
@@ -270,8 +271,8 @@ impl Choice {
         let row = row.min(83) + if doubles { 84 } else { 0 };
         let reach = match level {
             0 => 2.5,
-            1 => ps2::add(2.5, 0.35000002),
-            _ => ps2::add(2.5, 0.70000005),
+            1 => (F(2.5) + 0.35000002).0,
+            _ => (F(2.5) + 0.70000005).0,
         };
         Choice { row: row as usize, level, strategy: (setup >> 16) as u8, reach }
     }
@@ -311,15 +312,16 @@ pub struct Timing {
 
 /// The ball's speed as the game sums it (y² first).
 fn speed(v: [f32; 3]) -> f32 {
-    ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(v[1], v[1]), v[0], v[0]), v[2], v[2]))
+    let v = ps2::fs(v);
+    (v[1] * v[1]).madd(v[0], v[0]).madd(v[2], v[2]).sqrt().0
 }
 
 /// Change-of-pace error between two shots' velocities: `p` = [threshold %, frames per 5 % past it, most frames,
 /// chance %]. None below the threshold.
 fn pace(last: [f32; 3], earlier: [f32; 3], p: [i32; 4]) -> Option<i32> {
-    let (a, b) = (speed(last), speed(earlier));
-    let (r, sign) = if a < b { (ps2::div(b, a), -1) } else { (ps2::div(a, b), 1) };
-    let pct = ps2::mul(ps2::sub(r, 1.0), 100.0) as i32;
+    let (a, b) = (F(speed(last)), F(speed(earlier)));
+    let (r, sign) = if a < b { (b / a, -1) } else { (a / b, 1) };
+    let pct = ((r - 1.0) * 100.0).0 as i32;
     (pct >= p[0]).then(|| (p[1] * (pct - p[0]) / 5).min(p[2]) * sign)
 }
 
@@ -378,7 +380,7 @@ impl AiParams {
             if !first
                 && chance(roll, self.react_speed[2])
                 && (s.last.kind != 0 || receiver)
-                && ps2::div(ps2::mul(3600.0, ps2::mul(60.0, speed(s.last.vel))), 1000.0) > self.react_speed[0] as f32
+                && 3600.0 * (60.0 * F(speed(s.last.vel))) / 1000.0 > self.react_speed[0] as f32
             {
                 t.fast_ball = self.react_speed[1];
                 t.reacted = true;
@@ -519,8 +521,8 @@ impl Guess {
     /// is the half the serve comes from (`ad`: the ad court serves), else the centre line. `side`: its side sign.
     pub fn target_x(self, side: f32, ad: bool) -> f32 {
         match (self, ad) {
-            (Guess::Wide, false) => side * 5.485,
-            (Guess::Other, true) => side * -5.485,
+            (Guess::Wide, false) => (F(side) * 5.485).0,
+            (Guess::Other, true) => (F(side) * -5.485).0,
             _ => 0.0,
         }
     }
@@ -528,10 +530,10 @@ impl Guess {
     /// Judged when the AI first finds its contact point: the direction from where it stood at the draw (x, z) to
     /// that point, against the guessed side.
     pub fn verdict(self, side: f32, from: [f32; 2], contact: [f32; 2]) -> Verdict {
-        let dir = if self == Guess::Wide { side } else { -side };
-        let (dx, dz) = (ps2::sub(contact[0], from[0]), ps2::sub(contact[1], from[1]));
-        let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dx, dx), dz, dz)));
-        let d = ps2::add(ps2::madd(ps2::mul(ps2::mul(dz, inv), 0.0), ps2::mul(dx, inv), dir), 0.0);
+        let dir = if self == Guess::Wide { F(side) } else { -F(side) };
+        let (dx, dz) = (F(contact[0]) - from[0], F(contact[1]) - from[1]);
+        let inv = 1.0 / (dx * dx).madd(dz, dz).sqrt();
+        let d = (dz * inv * 0.0).madd(dx * inv, dir) + 0.0;
         if d >= 0.5 {
             Verdict::Right
         } else if d < 0.0 {
@@ -555,7 +557,7 @@ impl AiParams {
 
     /// How far out the AI runs round: the court's half width (singles or doubles) plus the row's extend.
     pub fn run_round_width(&self, singles: bool) -> f32 {
-        ps2::add(if singles { 4.115 } else { 5.485 }, self.strong_side_extend)
+        (F(if singles { 4.115 } else { 5.485 }) + self.strong_side_extend).0
     }
 }
 
@@ -582,12 +584,12 @@ pub fn stand_side(
         (Some(m), p) => return Some(m.0 >= 1 || p.is_none()),
         (None, Some(_)) => return Some(false),
     };
-    let off = ps2::mul(reach, side);
-    let x = [ps2::sub(m[0], off), ps2::add(p[0], off)];
-    let back = ps2::div(ps2::mul(depth, side), 2.0);
+    let off = F(reach) * side;
+    let x = [(m[0] - off).0, (p[0] + off).0];
+    let back = F(depth) * side / 2.0;
     let dist = |x: f32, z: f32| {
-        let (dx, dz) = (ps2::sub(x, from[0]), ps2::sub(ps2::sub(z, back), from[1]));
-        ps2::madd(ps2::mul(dz, dz), dx, dx)
+        let (dx, dz) = (F(x) - from[0], z - back - from[1]);
+        (dz * dz).madd(dx, dx)
     };
     let nearer_minus = dist(x[0], m[1]) <= dist(x[1], p[1]);
     let strong_minus = match strong {
@@ -730,7 +732,7 @@ pub fn serve_spot(level0: bool, doubles: bool, side: f32, ad: bool, roll: &mut i
     } else {
         0.7
     };
-    ps2::mul(ps2::mul(x, side), if ad { -1.0 } else { 1.0 })
+    (F(x) * side * if ad { -1.0 } else { 1.0 }).0
 }
 
 /// How long a serving AI stands on its spot before the toss: 60 to 119 frames.
@@ -763,7 +765,7 @@ pub struct Runner {
 
 /// The PS2's `neg.s`-if-negative absolute value (keeps −0).
 fn abs(v: f32) -> f32 {
-    if v < 0.0 { -v } else { v }
+    if v < 0.0 { (-F(v)).0 } else { v }
 }
 
 impl Runner {
@@ -775,16 +777,16 @@ impl Runner {
         if sign(self.side) == sign(z) || !(abs(x) <= 8.685) || abs(z) < 1.5 || !(abs(z) <= 17.885) {
             return 9999;
         }
-        let (dz, dx) = (ps2::sub(z, self.pos[1]), ps2::sub(x, self.pos[0]));
-        let mut dist = ps2::sqrt(ps2::madd(ps2::mul(dz, dz), dx, dx));
+        let (dz, dx) = (F(z) - self.pos[1], F(x) - self.pos[0]);
+        let mut dist = (dz * dz).madd(dx, dx).sqrt();
         if dist <= 0.0 {
             return 0; // ponytail: the game runs on with its speed register unset; standing on the spot is rare
         }
         let s = &self.stats;
         let drain = |st, tick| crate::player::drain(s, st, tick, self.players, self.rally, self.floor);
         let speed = |st, run| crate::player::run_speed(s, run, st, self.size);
-        let fit = |dist, v| {
-            let q = ps2::div(dist, v);
+        let fit = |dist: F, v: f32| {
+            let q = (dist / v).0;
             let k = q as i32;
             k + ((k as f32) < q) as i32
         };
@@ -799,22 +801,22 @@ impl Runner {
         }
         let mut v = speed(st, run);
         let mut frames = 1;
-        dist = ps2::sub(dist, v);
+        dist -= v;
         while run < s.agility && !(dist <= 0.0) {
             run += 1;
             (st, tick) = drain(st, tick);
             v = speed(st, run);
             frames += 1;
-            dist = ps2::sub(dist, v);
+            dist -= v;
         }
         if st >= crate::player::TIRED {
             // the frames left before it tires, in one go
             let n = (59 - tick) + (st - crate::player::TIRED) * 60;
-            let fresh = ps2::mul(v, n as f32);
+            let fresh = F(v) * n as f32;
             if dist <= fresh {
                 return frames + fit(dist, v);
             }
-            dist = ps2::sub(dist, fresh);
+            dist -= fresh;
             (frames, tick, st) = (frames + n, 59, crate::player::TIRED);
         }
         while !(dist <= 0.0) {
@@ -827,7 +829,7 @@ impl Runner {
                 return frames + fit(dist, v);
             }
             frames += 1;
-            dist = ps2::sub(dist, v);
+            dist -= v;
         }
         frames
     }
@@ -888,17 +890,17 @@ impl Searcher<'_> {
         roll: &mut impl FnMut() -> u32,
     ) -> Option<Contact> {
         let r = self.reach;
-        let far = ps2::mul(1.3, r.reach);
+        let far = 1.3 * F(r.reach);
         let run = self.row.run_round(self.beside_human, roll);
-        let top = ps2::add(r.base, far);
+        let top = F(r.base) + far;
         let w = Window {
             low: r.stroke_height,
-            top: if r.volley_height <= top { r.volley_height } else { top },
-            d2: [0.0, ps2::mul(far, far)],
+            top: if r.volley_height <= top { r.volley_height } else { top.0 },
+            d2: [0.0, (far * far).0],
         };
         let low = r.stroke_height;
         let reach = if body { 0.0 } else { r.reach };
-        self.scan(from, min_bounces, all, reach, !body, run, w, None, |b| ps2::sub(b[1], low), |new, best| !(new <= best))
+        self.scan(from, min_bounces, all, reach, !body, run, w, None, |b| (F(b[1]) - low).0, |new, best| !(new <= best))
     }
 
     /// The tiered search: the entry nearest the stroke height (`no_height`: nearest the ground), with a penalty
@@ -918,7 +920,7 @@ impl Searcher<'_> {
         roll: &mut impl FnMut() -> u32,
     ) -> Option<Contact> {
         let r = self.reach;
-        let (h, m) = (r.stroke_height, |k: f32, v: f32| ps2::mul(k, v));
+        let (h, m) = (r.stroke_height, |k: f32, v: f32| (F(k) * v).0);
         // ponytail: a tier past 3 leaves the game's band unset; it gets tier 3's
         let (low, high, near, far) = match tier {
             0 => (m(0.9, h), m(1.1, h), m(0.9, r.reach), m(1.1, r.reach)),
@@ -927,20 +929,20 @@ impl Searcher<'_> {
             _ => (0.0, m(3.0, h), 0.0, m(1.3, r.reach)),
         };
         let run = self.row.run_round(self.beside_human, roll);
-        let top = ps2::add(r.base, far);
+        let top = (F(r.base) + far).0;
         let w = Window { low, top: if high <= top { high } else { top }, d2: [m(near, near), m(far, far)] };
         let width = self.row.run_round_width(self.singles);
         let h = if no_height { 0.0 } else { h };
         let reach = if no_reach { 0.0 } else { r.reach };
-        let over = |v: f32| ps2::div(ps2::mul(0.05, v), 0.5);
+        let over = |v: F| 0.05 * v / 0.5;
         let score = |b: [f32; 3]| {
-            let mut s = abs(ps2::sub(h, b[1]));
-            for p in [over(ps2::sub(abs(b[2]), 11.885)), over(ps2::sub(abs(b[0]), width))] {
+            let mut s = F(abs((F(h) - b[1]).0));
+            for p in [over(F(abs(b[2])) - 11.885), over(F(abs(b[0])) - width)] {
                 if !(p <= 0.0) {
-                    s = ps2::add(s, p);
+                    s += p;
                 }
             }
-            s
+            s.0
         };
         self.scan(from, min_bounces, all, reach, !no_reach, run, w, Some(seen), score, |new, best| !(best <= new))
     }
@@ -962,8 +964,8 @@ impl Searcher<'_> {
     ) -> Option<Contact> {
         let rn = &self.runner;
         let side = rn.side;
-        let off = ps2::mul(reach, side);
-        let back = |z| ps2::sub(z, ps2::div(ps2::mul(self.depth, side), 2.0));
+        let off = F(reach) * side;
+        let back = |z: f32| (z - F(self.depth) * side / 2.0).0;
         let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
         let base = self.reach.base;
         // per side (minus, plus): the entry, its score and its run frames
@@ -981,10 +983,10 @@ impl Searcher<'_> {
                 continue;
             }
             if b.bounces >= min_bounces && w.low <= y && y <= w.top {
-                for (k, sx) in [ps2::sub(x, off), ps2::add(x, off)].into_iter().enumerate().take(1 + plus as usize) {
+                for (k, sx) in [(x - off).0, (x + off).0].into_iter().enumerate().take(1 + plus as usize) {
                     let sz = back(z);
-                    let (dy, dx, dz) = (ps2::sub(base, y), ps2::sub(sx, x), ps2::sub(sz, z));
-                    let d2 = ps2::madd(ps2::madd(ps2::mul(dy, dy), dx, dx), dz, dz);
+                    let (dy, dx, dz) = (F(base) - y, F(sx) - x, F(sz) - z);
+                    let d2 = (dy * dy).madd(dx, dx).madd(dz, dz).0;
                     if !(w.d2[0] <= d2 && d2 <= w.d2[1]) {
                         continue;
                     }
@@ -1011,8 +1013,8 @@ impl Searcher<'_> {
         let minus = stand_side(spot(0), spot(1), rn.pos, reach, side, self.depth, self.strong, run.then_some(width))?;
         let (at, _, frames) = best[if minus { 0 } else { 1 }]?;
         let [x, _, z] = self.path[at].pos;
-        let acc = ps2::add(0.0, x);
-        let sx = if minus { ps2::msub(acc, reach, side) } else { ps2::madd(acc, reach, side) };
-        Some(Contact { at, frames, stand: [sx, back(z)] })
+        let acc = F::ZERO + x;
+        let sx = if minus { acc.msub(reach, side) } else { acc.madd(reach, side) };
+        Some(Contact { at, frames, stand: [sx.0, back(z)] })
     }
 }

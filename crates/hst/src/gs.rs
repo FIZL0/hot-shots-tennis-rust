@@ -406,6 +406,106 @@ impl GsMaterial {
     }
 }
 
+/// Which triangles of a hole batch's two draws ([`GsMaterial::for_court_batch`]) can draw a pixel. By gs.wgsl's maths
+/// the alpha tested is ⌊At·Af / 0x80⌋, At the sampled texel alpha (0..0x80: texel byte · 0x80/0xff, rounded) and Af
+/// the vertex alpha (vertex × material colour, cut to 8 bits, interpolated); filtering and interpolation only mix
+/// values between those of the texels and vertices around. So the blended `Test::Lt80` draw has nothing in a triangle
+/// whose three vertices have Af ≥ 0x80 and whose texels (all its UVs can sample, at any level) are all 0xff, and the
+/// `Test::Ge80` one nothing in a triangle whose vertices all have Af < 0x80, or Af ≤ 0x80 and no 0xff texel. P32: the
+/// indoor court's hole model fills the screen and draws its floor faded (Af 0x6c), so every pixel was shaded by both.
+pub struct SeeThrough {
+    /// Per mip level: width, height and summed-area tables of the texels below 0xff and of those at 0xff.
+    levels: Vec<(i64, i64, [Vec<u32>; 2])>,
+    repeat: [bool; 2],
+}
+
+impl SeeThrough {
+    /// From the texture as uploaded (RGBA8, its levels one after another); `None` if it isn't that.
+    pub fn new(img: &Image) -> Option<SeeThrough> {
+        let data = img.data.as_ref()?;
+        if img.texture_descriptor.format.block_copy_size(None) != Some(4) {
+            return None;
+        }
+        let (mut w, mut h) = (img.width() as i64, img.height() as i64);
+        let (mut levels, mut at) = (Vec::new(), 0);
+        for _ in 0..img.texture_descriptor.mip_level_count {
+            let texels = data.get(at..at + (4 * w * h) as usize)?;
+            let sat = |opaque: bool| {
+                let mut sat = vec![0u32; ((w + 1) * (h + 1)) as usize];
+                for y in 0..h {
+                    let mut row = 0;
+                    for x in 0..w {
+                        row += ((texels[(4 * (y * w + x) + 3) as usize] == 0xff) == opaque) as u32;
+                        sat[((y + 1) * (w + 1) + x + 1) as usize] = sat[(y * (w + 1) + x + 1) as usize] + row;
+                    }
+                }
+                sat
+            };
+            levels.push((w, h, [sat(false), sat(true)]));
+            at += (4 * w * h) as usize;
+            (w, h) = ((w / 2).max(1), (h / 2).max(1));
+        }
+        let repeat = match &img.sampler {
+            bevy::image::ImageSampler::Descriptor(d) => [d.address_mode_u, d.address_mode_v].map(|m| m == bevy::image::ImageAddressMode::Repeat),
+            _ => [true; 2],
+        };
+        Some(SeeThrough { levels, repeat })
+    }
+
+    /// Whether a texel below 0xff (`opaque` false) or at 0xff (true) lies where UVs in `lo..=hi` can sample, at any
+    /// level.
+    fn any(&self, lo: [f32; 2], hi: [f32; 2], opaque: bool) -> bool {
+        self.levels.iter().any(|(w, h, sats)| {
+            let sat = &sats[opaque as usize];
+            // the bilinear footprint (texel centres at +0.5) and a texel's margin for rounding
+            let span = |l: f32, h: f32, n: i64, repeat: bool| -> Vec<(i64, i64)> {
+                let (a, b) = ((l * n as f32 - 0.5).floor() as i64 - 1, (h * n as f32 - 0.5).floor() as i64 + 2);
+                if !repeat {
+                    return vec![(a.clamp(0, n - 1), b.clamp(0, n - 1))];
+                }
+                if b - a + 1 >= n {
+                    return vec![(0, n - 1)];
+                }
+                let (a, b) = (a.rem_euclid(n), b.rem_euclid(n));
+                if a <= b { vec![(a, b)] } else { vec![(a, n - 1), (0, b)] }
+            };
+            let at = |x: i64, y: i64| sat[(y * (w + 1) + x) as usize];
+            span(lo[0], hi[0], *w, self.repeat[0]).into_iter().any(|(x0, x1)| {
+                span(lo[1], hi[1], *h, self.repeat[1]).into_iter().any(|(y0, y1)| at(x1 + 1, y1 + 1) + at(x0, y0) > at(x0, y1 + 1) + at(x1 + 1, y0))
+            })
+        })
+    }
+}
+
+/// [`SeeThrough`]: per triangle of `indices` (a list), whether the hole draw with `test` (`Test::Ge80` or
+/// `Test::Lt80`) can draw a pixel of it, given the vertices' alphas and UVs (`alpha` empty: no vertex colours, 1.0) and
+/// the material colour's alpha. `texture` `None`: untextured (At = 0x80). Where `Test::Lt80` can't, every pixel passes
+/// `Test::Ge80`.
+pub fn hole_triangles(test: Test, indices: &[u32], alpha: &[f32], uv: &[[f32; 2]], colour_a: f32, texture: Option<&SeeThrough>) -> Vec<bool> {
+    // gs.wgsl's vertex stage: the colour × material colour, FTOI to 8 bits
+    let af = |i: u32| ((alpha.get(i as usize).copied().unwrap_or(1.0) * colour_a * 128.0).min(255.0) + 1e-3).floor();
+    let lt = test == Test::Lt80;
+    indices
+        .chunks(3)
+        .map(|t| {
+            let (lo_a, hi_a) = t.iter().map(|&i| af(i)).fold((f32::INFINITY, f32::NEG_INFINITY), |(l, h), a| (l.min(a), h.max(a)));
+            if lt && lo_a < 128.0 || !lt && hi_a > 128.0 {
+                return true;
+            }
+            if !lt && hi_a < 128.0 {
+                return false;
+            }
+            let Some(tex) = texture else { return !lt };
+            let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+            for &i in t {
+                let Some(&[u, v]) = uv.get(i as usize) else { return true };
+                (lo, hi) = ([lo[0].min(u), lo[1].min(v)], [hi[0].max(u), hi[1].max(v)]);
+            }
+            !(lo[0].is_finite() && lo[1].is_finite() && hi[0].is_finite() && hi[1].is_finite()) || tex.any(lo, hi, !lt)
+        })
+        .collect()
+}
+
 impl Material for GsMaterial {
     fn vertex_shader() -> ShaderRef {
         "embedded://hst/gs.wgsl".into()
@@ -413,6 +513,10 @@ impl Material for GsMaterial {
 
     fn fragment_shader() -> ShaderRef {
         "embedded://hst/gs.wgsl".into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://hst/gs_prepass.wgsl".into()
     }
 
     fn prepass_fragment_shader() -> ShaderRef {
@@ -437,7 +541,7 @@ impl Material for GsMaterial {
     }
 
     fn enable_prepass() -> bool {
-        false
+        true
     }
 
     fn specialize(
@@ -449,12 +553,12 @@ impl Material for GsMaterial {
         let k = key.bind_group_data;
         // ponytail: the shadow pass (Bevy's only DEPTH_PREPASS here) keeps both faces, as the shadows had before;
         // check against the game's caster draw if a one-sided prop's shadow looks wrong
-        let shadow = key.mesh_key.contains(bevy::pbr::MeshPipelineKey::DEPTH_PREPASS);
+        let shadow = descriptor.vertex.shader_defs.iter().any(|d| matches!(d, bevy::shader::ShaderDefVal::Bool(n, true) if n == "PREPASS_PIPELINE"));
         descriptor.primitive.cull_mode = (k.cull && !shadow).then_some(if k.mirror { bevy::render::render_resource::Face::Front } else { bevy::render::render_resource::Face::Back });
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(!matches!(k.test, Test::Lt60 | Test::Lt70 | Test::Lt80 | Test::Never));
         }
-        if k.guard {
+        if k.guard && !shadow {
             descriptor.vertex.shader_defs.push("GS_GUARD".into());
         }
         // the browser build is WebGL2's (no noperspective)
@@ -580,6 +684,52 @@ mod tests {
         assert!((u.shininess - 39.46).abs() < 0.05 && u.highlight == 0.9, "{u:?}");
         assert_eq!(GsMaterial::for_batch(&material("x", 5, 1.0), 0x30, tex.clone())[0].uniform.shininess, 1.0);
         assert!(!keys(&material("x", 5, 1.0), 0x10)[0].fog);
+    }
+
+    #[test]
+    fn hole_triangles_where_a_pixel_can_pass() {
+        use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        // 16×16 with one see-through texel at (15, 0), and its 8×8 level 1 at (7, 0)
+        let mut data = vec![0xff; 4 * 256];
+        data[4 * 15 + 3] = 0xfe;
+        let mut img = Image::new(Extent3d { width: 16, height: 16, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, default());
+        let data = img.data.as_mut().unwrap();
+        data.extend([0xff; 4 * 64]);
+        data[4 * 256 + 4 * 7 + 3] = 0x80;
+        img.texture_descriptor.mip_level_count = 2;
+        let tex = SeeThrough::new(&img).unwrap();
+        let tri = [0, 1, 2];
+        let (yes, no) = (vec![true], vec![false]);
+        let rect = |x: [f32; 2], y: [f32; 2]| [[x[0], y[0]], [x[1], y[1]], [x[0], y[1]]];
+        let (left, right) = (rect([0.0, 0.1], [0.4, 0.7]), rect([0.9, 0.95], [0.0, 0.05]));
+        // repeating: the left middle is clear; the top right holds it, and so does a UV a turn further on
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &left, 1.0, Some(&tex)), no);
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &right, 1.0, Some(&tex)), yes);
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &rect([1.9, 1.95], [0.0, 0.05]), 1.0, Some(&tex)), yes);
+        // a faded vertex or material keeps it; a brighter vertex alpha doesn't drop an untextured one below 0x80
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[1.0, 1.0, 127.0 / 128.0], &left, 1.0, Some(&tex)), yes);
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &left, 0.5, Some(&tex)), yes);
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[2.0, 1.0, 1.0], &[], 1.0, None), no);
+        // all 0xff: nothing, however far the UVs run
+        let opaque = Image::new(Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, TextureDimension::D2, vec![0xff; 16], TextureFormat::Rgba8Unorm, default());
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &[[-5.0, 0.0], [9.0, 3.0], [0.0, -7.0]], 1.0, Some(&SeeThrough::new(&opaque).unwrap())), no);
+        // clamped: left of the texture is its left column; right of it, its right column
+        img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::ClampToEdge, address_mode_v: ImageAddressMode::ClampToEdge, ..default() });
+        let tex = SeeThrough::new(&img).unwrap();
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &rect([-1.0, -0.5], [0.0, 0.05]), 1.0, Some(&tex)), no);
+        assert_eq!(hole_triangles(Test::Lt80, &tri, &[], &rect([1.5, 1.9], [0.0, 0.05]), 1.0, Some(&tex)), yes);
+        // A ≥ 0x80: never with every vertex below 0x80 (the palace floor's 0x6c), whatever the texels; at 0x80 only
+        // over a 0xff texel; a brighter vertex keeps it
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[108.0 / 128.0; 3], &left, 1.0, Some(&tex)), no);
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[108.0 / 128.0; 3], &[], 1.0, None), no);
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[1.0, 0.5, 0.5], &left, 1.0, Some(&tex)), yes);
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[], &[], 1.0, None), yes);
+        let mut faint = Image::new(Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, TextureDimension::D2, vec![0x31; 16], TextureFormat::Rgba8Unorm, default());
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[], &left, 1.0, Some(&SeeThrough::new(&faint).unwrap())), no);
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[2.0, 1.0, 1.0], &left, 1.0, Some(&SeeThrough::new(&faint).unwrap())), yes);
+        faint.data.as_mut().unwrap()[3] = 0xff;
+        assert_eq!(hole_triangles(Test::Ge80, &tri, &[], &left, 1.0, Some(&SeeThrough::new(&faint).unwrap())), yes);
     }
 
     #[test]

@@ -177,11 +177,15 @@ pub struct Pick {
     /// Drawn by the Random card: the lobby shows "Random", not who it drew (the mod still streams as any).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub random: bool,
+    /// B370: the select's hand toggle (Select / −): the match plays the character with the other hand
+    /// (`--swap-hands`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swap: bool,
 }
 
 impl Pick {
     pub fn disc(char: usize, costume: usize) -> Pick {
-        Pick { char, costume, r#mod: None, random: false }
+        Pick { char, costume, r#mod: None, random: false, swap: false }
     }
 }
 
@@ -212,6 +216,16 @@ pub struct Room {
     pub games: i32,
     pub umpire: u8,
     pub seats: Vec<Option<Seat>>,
+    /// M8f3: the host's umpire mod (id, name); `umpire` is its donor, whose word lengths time the calls on every
+    /// peer. A peer with the mod installed hears it (`--umpire-mod-id`), one without hears the donor. None in a
+    /// vanilla lobby (`netplay::flags`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umpire_mod: Option<(String, String)>,
+    /// M8f8: the host's court mod (id, name); `court` is its layout court, the one the match plays on every peer
+    /// (collision, judging, the chair). A peer with the mod installed draws and hears it (`--court-mod-id`), one
+    /// without plays the plain disc court. None in a vanilla lobby (`netplay::flags`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub court_mod: Option<(String, String)>,
     /// Set by the host at the start (M2g): the match's seed (the weather generator's, `main.rs`) and the input delay
     /// in ticks, from the slowest guest's measured round trip.
     #[serde(default)]
@@ -259,6 +273,9 @@ pub struct Room {
     /// same code and QR as the host's and can pass the lobby on. Never the long ticket (B224).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub short: String,
+    /// B370: each guest's last round trip to the host (ms, by peer), for the lobby's cards.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ping: std::collections::BTreeMap<String, u32>,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -276,6 +293,14 @@ pub struct Live {
     /// B234: the mod's own name, for peers that don't have it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// B370: the hand toggle and the Random card, as they change (the lobby's cards follow them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swap: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub random: bool,
+    /// B371: the player's own name (`main_menu::names`), "" for none: shown in place of "1P".."4P".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub player: String,
 }
 
 impl Room {
@@ -742,6 +767,10 @@ pub enum Cmd {
     /// In the lobby (B195): this machine's chosen picks for the seats it holds; the host's court, sets, games, umpire.
     Picks(Vec<Pick>),
     Venue(usize, usize, i32, u8),
+    /// M8f3: the host's umpire mod (id, name) alongside `Venue`'s umpire (its donor), or none.
+    UmpireMod(Option<(String, String)>),
+    /// M8f8: the host's court mod (id, name) alongside `Venue`'s court (its layout), or none.
+    CourtMod(Option<(String, String)>),
     /// B201: this machine's players' places on the select; the host's computer player in a seat (`None` opens it);
     /// the host's singles (false) or doubles.
     Live(Vec<Live>),
@@ -1676,6 +1705,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => {
                 broadcast(&joined, &Msg::Ping(micros(t0)));
+                // B370: the round trips the lobby's cards show, to everyone when one moves (5 ms steps)
+                let ms: std::collections::BTreeMap<String, u32> = joined.iter().filter_map(|(p, ..)| Some((p.clone(), (rtt.get(p)?.as_millis() as u32).div_ceil(5) * 5))).collect();
+                if starting.is_none() && ms != room.ping {
+                    room.ping = ms;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
             }
             // B215: the countdown's next second (shown on every peer), and at 0 the start
             _ = n0_future::time::sleep(next_second(count)), if count.is_some() => {
@@ -1770,6 +1806,18 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 Some(Cmd::Venue(court, sets, games, umpire)) if starting.is_none() => {
                     (room.court, room.sets, room.games, room.umpire) = (court, sets, games, umpire);
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
+                }
+                Some(Cmd::UmpireMod(u)) if starting.is_none() && u != room.umpire_mod => {
+                    room.umpire_mod = u;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
+                }
+                Some(Cmd::CourtMod(c)) if starting.is_none() && c != room.court_mod => {
+                    room.court_mod = c;
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
@@ -2336,8 +2384,12 @@ pub fn code_in(text: &str) -> Option<String> {
 /// The short codes' symbols: digits and capitals without the look-alikes 0/O and 1/I (32^4 ≈ 1M codes).
 pub const SYMBOLS: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 pub const SHORT: usize = 4;
-/// The browser build's page: a lobby link is this with `?code=<short code>`.
-pub const SITE: &str = "https://opentennis.dev/";
+/// The browser build's page: a lobby link is this with `?code=<short code>`. Beta builds are built with
+/// `HST_SITE=https://beta.opentennis.dev/` (pages.yml), so their links open the beta site.
+pub const SITE: &str = match option_env!("HST_SITE") {
+    Some(s) if !s.is_empty() => s,
+    _ => "https://opentennis.dev/",
+};
 /// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
 /// theirs there too.
 const PKARR: &str = "https://relay.pkarr.org";
@@ -2759,7 +2811,9 @@ mod tests {
             hcmd.send(Cmd::Bot(2, Some(Pick::disc(9, 4)))).unwrap();
             hcmd.send(Cmd::Bot(1, None)).unwrap();
             hcmd.send(Cmd::Venue(5, 1, 4, 2)).unwrap();
-            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5)).await else { unreachable!() };
+            // M8f8: the host's court mod rides along with its layout court
+            hcmd.send(Cmd::CourtMod(Some(("gag_c01_yamate".into(), "Yamate".into())))).unwrap();
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5 && r.court_mod.is_some())).await else { unreachable!() };
             assert_eq!(seen.seats[2].as_ref().map(|s| (s.human(), s.pick.char, s.pick.costume)), Some((false, 9, 4)));
             assert_eq!(seen.seats[1].as_ref().map(|s| s.peer.as_str()), Some(me.as_str()), "the guest's seat isn't the host's to clear");
             assert_eq!(seen.live_of(0).map(|l| l.char), Some(2));
@@ -2770,6 +2824,7 @@ mod tests {
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             let seats: Vec<_> = r.seats.iter().flatten().map(|s| (s.pick.char, s.pick.costume)).collect();
             assert_eq!(seats[..3], [(0, 0), (6, 3), (9, 4)], "the match has the lobby's picks and the host's computer player");
+            assert_eq!((r.court, r.court_mod), (5, Some(("gag_c01_yamate".into(), "Yamate".into()))));
         });
     }
 
@@ -3458,7 +3513,7 @@ mod tests {
         assert_eq!(txt_of(&dns_txt(&t)).as_deref(), Some(t.as_str()));
         assert_eq!(code_in(" k7qx "), Some("K7QX".into()));
         assert_eq!(code_in(&link("K7QX")), Some("K7QX".into()));
-        assert_eq!(code_in("https://fizl0.github.io/hot-shots-tennis-rust/?code=k7qx&x=1"), Some("K7QX".into()));
+        assert_eq!(code_in("https://fizl0.github.io/open-tennis/?code=k7qx&x=1"), Some("K7QX".into()));
         assert_eq!(code_in("https://opentennis.dev/?code=k7qx&x=1"), Some("K7QX".into()));
         assert_eq!(code_in("K0QX"), None, "0 isn't a symbol");
         assert_eq!(code_in("K7QXY"), None);

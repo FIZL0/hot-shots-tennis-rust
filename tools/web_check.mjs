@@ -5,10 +5,27 @@
 // visit 2 (click = a tap in the middle); the audio contexts' state and the loudest sample handed to them are logged.
 // WEB_STALL=s:ms blocks the page's main thread for ms at second s of visit 2; the audio log then also gives `rate`: seconds of
 // audio buffers started per second of the context's clock since the previous log (1 = real time, 2 = buffers overlapping).
-// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader). WEB_CPUPROFILE=s:n records the page's CPU profile from second s for n seconds of visit 2 into OUT/visit2.cpuprofile (B273; summed by research/b273_profile.py). WEB_HIDE=s:ms minimises the window at second s of visit 2 for ms (B260, below). WEB_TRACE=s:n logs the page's main-thread CPU ms per frame over n seconds from second s of visit 2 (thread time: steady under other load; B345).
+// PROFILE=dir another chromium profile. THROTTLE=n slows the page's CPU n× (a phone: 4–6) on visit 2; console lines then carry ms since load. MOBILE=1 a phone-sized touch screen. WEB_PRELOAD=js runs before the page's scripts (e.g. make a browser API hang). OUT/framesN.json: every rAF frame of visit N as [ms since load, frame ms]. SHOT_EVERY=s screenshots more often. WEB_ROTATE=ms turns a touch phone viewport portrait ↔ landscape every ms. WEB_CARDS=1 copies the baked select cards (OPFS previews/) to OUT/cards/. CHROME_FLAGS adds flags (e.g. "--enable-features=Vulkan" for WebGPU on SwiftShader). WEB_CPUPROFILE=s:n records the page's CPU profile from second s for n seconds of visit 2 into OUT/visit2.cpuprofile (B273; summed by research/b273_profile.py). WEB_HIDE=s:ms minimises the window at second s of visit 2 for ms (B260, below). WEB_TRACE=s:n logs the page's main-thread CPU ms per frame over n seconds from second s of visit 2 (thread time: steady under other load; B345), and the page's and the GPU process's instructions per frame and the GPU process's time on the GPU (B389).
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+// B389: a process's time on the GPU (ns, every engine of every DRM client it holds), from the kernel's fdinfo
+// (amdgpu, i915/xe, …: `drm-engine-*`); 0 where there's none
+function gpuNs(pid) {
+  const last = new Map();
+  let fds = [];
+  try { fds = readdirSync(`/proc/${pid}/fd`); } catch { return 0; }
+  for (const fd of fds) {
+    try {
+      if (!readlinkSync(`/proc/${pid}/fd/${fd}`).startsWith('/dev/dri/')) continue;
+      const info = readFileSync(`/proc/${pid}/fdinfo/${fd}`, 'utf8');
+      const client = info.match(/^drm-client-id:\s*(\d+)/m)?.[1];
+      for (const [, engine, ns] of info.matchAll(/^drm-engine-([\w-]+):\s*(\d+) ns/gm)) last.set(`${client} ${engine}`, +ns);
+    } catch {}
+  }
+  return [...last.values()].reduce((a, b) => a + b, 0);
+}
 
 const [iso, out, query = 'play', secs = '60'] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
@@ -35,7 +52,7 @@ async function visit(n, pick) {
   let id = 0;
   const waiting = new Map();
   const trace = [];
-  let traced, instr;
+  let traced, instr, instrGpu, gpuPid, gpuNs0;
   ws.onmessage = ({ data }) => {
     const m = JSON.parse(data);
     if (m.id && waiting.has(m.id)) waiting.get(m.id)(m), waiting.delete(m.id);
@@ -117,7 +134,12 @@ async function visit(n, pick) {
         const stat = new Map(procs.map(([p, s]) => { const f = s.slice(s.lastIndexOf(')') + 2).split(' '); return [p, { ppid: +f[1], cpu: +f[11] + +f[12] }]; }));
         const ours = p => { for (let q = p; q > 1; q = stat.get(q)?.ppid ?? 0) if (q === chrome.pid) return true; return false; };
         const renderer = [...stat].filter(([p]) => ours(p) && readFileSync(`/proc/${p}/cmdline`, 'utf8').includes('--type=renderer')).sort((a, b) => b[1].cpu - a[1].cpu)[0]?.[0];
-        instr = renderer && new Promise(r => { const c = spawn('python3', [resolve('tools/instr.py'), String(renderer), String(len)]); let o = ''; c.stdout.on('data', d => (o += d)); c.on('close', () => r(+o)); });
+        const count = (p, all) => new Promise(r => { const c = spawn('python3', [resolve('tools/instr.py'), String(p), String(len), ...(all ? ['all'] : [])]); let o = ''; c.stdout.on('data', d => (o += d)); c.on('close', () => r(+o)); });
+        instr = renderer && count(renderer);
+        // B389: and the GPU process's, all threads (where draw calls cost: ANGLE's GL → Vulkan, Dawn's WebGPU)
+        const gpu = [...stat].find(([p]) => ours(p) && readFileSync(`/proc/${p}/cmdline`, 'utf8').includes('--type=gpu-process'))?.[0];
+        instrGpu = gpu && count(gpu, true);
+        (gpuPid = gpu), (gpuNs0 = gpuNs(gpu));
         await evaluate('self.__traceFrom = __frames.length');
         await send('Tracing.start', { categories: 'toplevel,__metadata', transferMode: 'ReportEvents' });
       }
@@ -125,6 +147,8 @@ async function visit(n, pick) {
         const done = new Promise(r => (traced = r));
         const frames = await evaluate('__frames.length - __traceFrom');
         const ins = (await instr) || 0;
+        const insGpu = (await instrGpu) || 0;
+        const gpuMs = (gpuNs(gpuPid) - gpuNs0) / 1e6;
         await send('Tracing.end');
         await done;
         // the renderer main thread that worked the most (the page's)
@@ -136,7 +160,7 @@ async function visit(n, pick) {
           wall[k] = (wall[k] ?? 0) + (e.dur ?? 0) / 1000;
         }
         const k = Object.keys(cpu).sort((a, b) => cpu[b] - cpu[a])[0];
-        log.push(`[${n}] trace ${len} s: ${frames} frames, main thread cpu ${(cpu[k] ?? 0).toFixed(0)} ms (${((cpu[k] ?? 0) / frames).toFixed(2)} ms/frame), wall in tasks ${(wall[k] ?? 0).toFixed(0)} ms, ${(ins / frames / 1e6).toFixed(2)} M instructions/frame`);
+        log.push(`[${n}] trace ${len} s: ${frames} frames, main thread cpu ${(cpu[k] ?? 0).toFixed(0)} ms (${((cpu[k] ?? 0) / frames).toFixed(2)} ms/frame), wall in tasks ${(wall[k] ?? 0).toFixed(0)} ms, ${(ins / frames / 1e6).toFixed(2)} M instructions/frame, GPU process ${(insGpu / frames / 1e6).toFixed(2)} M instructions/frame, GPU busy ${(gpuMs / frames).toFixed(2)} ms/frame`);
       }
     }
     if (t === stallAt) {

@@ -337,6 +337,31 @@ impl bevy::pbr::MaterialExtension for SortOnly {
     }
 }
 
+/// The umpire's call models' material (P33): the match camera draws them over the scene as the original's overlay
+/// does, so no depth test, no depth write and no hardware depth bias; `depth_bias` only sorts them after the scene's
+/// blended draws.
+pub type OnTop = bevy::pbr::ExtendedMaterial<StandardMaterial, NoDepth>;
+
+/// Draws whatever the depth buffer holds (`OnTop`).
+#[derive(Asset, bevy::render::render_resource::AsBindGroup, Reflect, Clone, Default)]
+pub struct NoDepth {}
+
+impl bevy::pbr::MaterialExtension for NoDepth {
+    fn specialize(
+        _: &bevy::pbr::MaterialExtensionPipeline,
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        _: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _: bevy::pbr::MaterialExtensionKey<Self>,
+    ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.bias.constant = 0;
+            depth.depth_compare = Some(bevy::render::render_resource::CompareFunction::Always);
+            depth.depth_write_enabled = Some(false);
+        }
+        Ok(())
+    }
+}
+
 /// A material `model`/`look` can build: the menus' and NPCs' plain `StandardMaterial` or the match's `Fx`.
 pub(crate) trait EffectMaterial: Material {
     fn new(m: StandardMaterial) -> Self;
@@ -368,12 +393,24 @@ impl EffectMaterial for Fx {
     }
 }
 
+impl EffectMaterial for OnTop {
+    fn new(base: StandardMaterial) -> Self {
+        OnTop { base, extension: NoDepth {} }
+    }
+    fn std(&mut self) -> &mut StandardMaterial {
+        &mut self.base
+    }
+    fn std_ref(&self) -> &StandardMaterial {
+        &self.base
+    }
+}
+
 /// Effect meshes [`fill`] has emptied (true) or filled again since [`hide_empty`] last ran.
 static EMPTIED: std::sync::Mutex<Vec<(AssetId<Mesh>, bool)>> = std::sync::Mutex::new(Vec::new());
 
 /// Shown on no camera while its mesh is [`fill`]'s empty placeholder.
 #[derive(Component)]
-struct Emptied;
+pub(crate) struct Emptied;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostUpdate, hide_empty.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));

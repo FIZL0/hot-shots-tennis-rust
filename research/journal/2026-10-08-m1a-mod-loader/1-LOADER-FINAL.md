@@ -15,20 +15,20 @@
 - Voices: `voice/<program>_<key>.wav` (PCM16, mono or stereo, any rate), grouped by program, sorted by key.
 
 ## Test data (local, git-ignored)
-- `context/mods/test_pc00`: `python3 modding/tools/rerig.py ~/repos/HST-MODS/out/models/hst/pc00_c00.glb
+- `context/mods/test_pc00`: `python3 modding/tools/rerig.py ~/repos/open-tennis-mods/out/models/hst/pc00_c00.glb
   context/mods/test_pc00/model/c00.glb` with `mod.json` donor 0, hand left, overrides `Serv POW` 4, `SPE` "10",
   `リーチ(cm)` 170.
 - `context/mods/test_broken`: the same glb with node `Bip01LThigh` renamed `LeftThigh` (JSON chunk edit).
-- `context/mods/fore_pc00_phoebe`, `getagrip_pc00_emi`: symlinks into `~/repos/HST-MODS/out/mods/`.
+- `context/mods/fore_pc00_phoebe`, `getagrip_pc00_emi`: symlinks into `~/repos/open-tennis-mods/out/mods/`.
 
 ## Results
 - `tools/check.sh -p hst`: 54 tests pass, including `mods::rerigged_mod_plays_forehand_and_run` (rerigged pc00 vs
   disc pc00: forehand 0x10 and run 3 core joints within 1 cm, arm table, racket, face track count),
   `packaged_mod_plays`, `rejects_non_conforming_mod`, `checks_the_manifest`, `audio::plays_mod_wavs`.
-- `HST_MODS=~/repos/HST-MODS/out/mods cargo test -p hst loads_every_mod -- --ignored`: 87 of 87 mods load.
+- `HST_MODS=~/repos/open-tennis-mods/out/mods cargo test -p hst loads_every_mod -- --ignored`: 87 of 87 mods load.
 - Viewer screenshots (`context/m1a/side.png`, motion 16 at radius 6): disc pc00 and the rerigged mod look the
   same; Get a Grip Emi renders skinned and textured with the donor's racket.
-- `rerig.py` now writes POSITION min/max for rigid meshes too (valid glTF); same fix in HST-MODS (be83b5c).
+- `rerig.py` now writes POSITION min/max for rigid meshes too (valid glTF); same fix in open-tennis-mods (be83b5c).
 
 ## Not verified / not 1:1
 - Everything: no original to compare against (mods are remaster-only); checked against the disc character only.

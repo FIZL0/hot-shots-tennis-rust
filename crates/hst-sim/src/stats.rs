@@ -12,6 +12,9 @@
 //!   last hitter, an ace to the server (the serve alone won it), else the point to its hitter; then the fastest
 //!   serve (not on a fault or let), double faults, the longest rally and the rates;
 //! - each game won: each team's share of the game's points, scaled so the leader's is 100, summed for the rating.
+#![deny(clippy::float_arithmetic)]
+
+use crate::ps2::F;
 
 /// One player's counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -40,7 +43,7 @@ impl Player {
 }
 
 fn rate(n: u32, of: u32) -> f32 {
-    if of == 0 { 0.0 } else { n as f32 / of as f32 * 100.0 }
+    if of == 0 { 0.0 } else { (F(n as f32) / of as f32 * 100.0).0 }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -94,7 +97,7 @@ impl Stats {
     /// The ball's speed (km/h) the frame after the serve was struck.
     pub fn serve_speed(&mut self, kmh: f32) {
         if self.serve_kmh <= 0.0 {
-            self.serve_kmh = kmh * 0.9;
+            self.serve_kmh = (F(kmh) * 0.9).0;
         }
     }
 
@@ -157,20 +160,20 @@ impl Stats {
         let top = points[0].max(points[1]) as f32;
         self.games += 1;
         for t in 0..2 {
-            self.share[t] += (100.0 / top * points[t] as f32 + 0.5) as i32;
+            self.share[t] += (F(100.0) / top * points[t] as f32 + 0.5).0 as i32;
         }
     }
 
     /// The match's end, `winner` the winning team: the screen's table.
     pub fn finish(&self, winner: usize) -> Table {
         let g = self.games as f32;
-        let avg = self.share.map(|s| (s as f32 / g + 0.5) as i32);
+        let avg = self.share.map(|s| (F(s as f32) / g + 0.5).0 as i32);
         let mut rating = [0; 2];
-        rating[0] = (avg[0] as f32 / (avg[0] + avg[1]) as f32 * 100.0 + 0.5) as i32;
+        rating[0] = (F(avg[0] as f32) / avg[0].wrapping_add(avg[1]) as f32 * 100.0 + 0.5).0 as i32;
         if rating[0] == 50 {
             rating[0] = if winner == 0 { 51 } else { 49 };
         }
-        rating[1] = 100 - rating[0];
+        rating[1] = 100i32.wrapping_sub(rating[0]);
         if rating[winner] < 50 {
             (rating[winner], rating[winner ^ 1]) = (51, 49);
         }
@@ -178,7 +181,7 @@ impl Stats {
             let p = &self.players[i];
             let strokes = p.hits.saturating_sub(p.serves_struck + p.dives + p.smashes);
             [
-                p.fastest_kmh.clamp(0.0, 999.0) as i32 as f32 * 0.62137,
+                (F(p.fastest_kmh.clamp(0.0, 999.0) as i32 as f32) * 0.62137).0,
                 p.points_won.min(999) as f32,
                 p.missed().min(999) as f32,
                 p.double_faults.min(999) as f32,
@@ -222,16 +225,17 @@ mod tests {
         s.serve_speed(180.0);
         s.point(0, Some(0), 1, 0, 0);
         assert_eq!((s.players[0].aces, s.players[0].points_won), (1, 1));
-        assert_eq!(s.players[0].fastest_kmh, 162.0);
+        // 180 × 0.9 chops just below 162 on the FPU
+        assert_eq!(s.players[0].fastest_kmh, 161.99998);
         s.serve();
         s.serve_speed(200.0);
         s.point(3, Some(1), 1, 0, 2);
         assert_eq!(s.players[0].double_faults, 1);
-        assert_eq!(s.players[0].fastest_kmh, 162.0);
+        assert_eq!(s.players[0].fastest_kmh, 161.99998);
         s.game([4, 2]);
         s.game([1, 4]);
         let t = s.finish(0);
-        assert_eq!(t.rows[0][0], 162.0 * 0.62137);
+        assert_eq!(t.rows[0][0], (F(161.0) * 0.62137).0);
         assert_eq!(t.rows[0][5], 25.0);
         assert_eq!(t.rows[0][6], 100.0);
         assert_eq!(t.rows[0][7], 100.0);

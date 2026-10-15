@@ -1,6 +1,6 @@
 // PS2 GS colour path for court models (see gs.rs). Values are in PS2 units: 1.0 = 0x80 for vertex/material colour
 // and alpha, texel colour 1.0 = 0xff, texel alpha 1.0 = 0x80 (mtl.rs expands it to 0xff).
-#import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows}
+#import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows, shadow_sampling}
 #import bevy_pbr::{mesh_bindings::mesh, mesh_functions, skinning, morph, forward_io::Vertex}
 #import bevy_pbr::view_transformations::position_world_to_clip
 
@@ -147,11 +147,7 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
     let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
     let diffuse2 = lit * max(-dot(n, gs.light2_dir.xyz), 0.0);
-    // B343: a court creature sharing its draws with others of its model carries its own light scale in its tag (the
-    // scale's bits, top bit set; `shade::shade_tag`), the others have it in `light_color` already
-    let tag = mesh_functions::get_tag(instance);
-    let scale = select(1.0, bitcast<f32>(tag & 0x7fffffffu), (tag & 0x80000000u) != 0u);
-    c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * scale * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
+    c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
 #endif
     // VU1: F from the vertex's view depth (clip w), at most F near, then at least F far (MINI, MAX), FTOI to an
     // integer; both ends go towards 255 as the eye rises past 30 m (game y = −Bevy y)
@@ -241,7 +237,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if a8 < 128.0 { discard; }
 #endif
 #ifdef GS_LT80
-    if a8 >= 128.0 { discard; }
+    // P32: alpha 0 blends to the frame buffer as it was (SrcAlpha·Cs + (1 − SrcAlpha)·Cd, or + 0 for `@add`), so the
+    // hole's see-through texels are left out before the blend
+    if a8 >= 128.0 || a <= 0.0 { discard; }
 #endif
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
 #ifdef GS_FOG

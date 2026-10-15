@@ -36,8 +36,8 @@ watchdog; an earlier run: DeviceLost then exit 101).
   On start, any other `cache/previews/*` folder is deleted, which clears out a stale renderer version (bump
   `RENDER` when the preview look changes).
 - **Mods ship their own.** A mod may carry `previews/<costume glb stem>.png`, which is used ahead of the cache and
-  never baked. Added to ../HST-MODS `standard/` §1, with `tools/rerig/previews.py` copying HST's bakes into
-  `out/mods` and a README step (HST-MODS 7d7043b). Checked: a scratch ISO dir with one mod carrying shipped previews
+  never baked. Added to ../open-tennis-mods `standard/` §1, with `tools/rerig/previews.py` copying HST's bakes into
+  `out/mods` and a README step (open-tennis-mods 7d7043b). Checked: a scratch ISO dir with one mod carrying shipped previews
   baked the 140 disc pictures and none for the mod.
 
 ## Results

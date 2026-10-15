@@ -33,6 +33,46 @@ pub struct SoundBank {
     pub hd: Vec<u8>,
     pub bd: Vec<u8>,
     pub wav: std::collections::HashMap<usize, Vec<(Arc<[i16]>, u32)>>,
+    /// M8f3: an umpire mod's calls over its donor's disc bank, by exact (program, key): heard by `play_centre` in
+    /// place of the disc take (a key without one plays the donor's), never by `centre_frames` (the match times
+    /// each word by the donor's length).
+    pub takes: std::collections::HashMap<(usize, usize), (Arc<[i16]>, u32)>,
+    /// M8f6: a court mod's BGM, a looping wav stream played in the BGM's place (`Sound::music`); `None` on disc banks.
+    pub stream: Option<Arc<Track>>,
+}
+
+/// M8f6: a looping PCM16 stream (a court mod's BGM or ambience layer): interleaved samples, `channels` a frame, its
+/// rate, the loop's start and end frame, and the gain that brings its loudness to the disc court BGMs'.
+pub struct Track {
+    pub pcm: Arc<[i16]>,
+    pub channels: usize,
+    pub rate: u32,
+    pub at: [usize; 2],
+    pub gain: f32,
+}
+
+impl Track {
+    /// The disc court BGMs' loudness at the match's level 55: the RMS of their mix, as a fraction of full scale
+    /// (`court_bgm_loudness` measures it over their first 20 s: 0.051 to 0.080 over the eleven, this their median).
+    pub const BGM_RMS: f32 = 0.069;
+
+    /// A RIFF PCM16 wav looping over frames `at` (`[0, 0]`, or an end past the file: to its end), its gain set so
+    /// its RMS over the loop is `rms` of full scale.
+    pub fn read(d: &[u8], at: [u64; 2], rms: f32) -> Option<Track> {
+        let (pcm, channels, rate) = pcm_frames(d)?;
+        let len = pcm.len() / channels;
+        let end = if at[1] == 0 || at[1] as usize > len { len } else { at[1] as usize };
+        let start = if at[0] as usize >= end { 0 } else { at[0] as usize };
+        if end == 0 {
+            return None;
+        }
+        // every 7th sample is plenty for a level
+        let body = &pcm[start * channels..end * channels];
+        let (sum, n) = body.iter().step_by(7).fold((0.0f64, 0usize), |(s, n), &x| (s + (x as f64 / 32768.0).powi(2), n + 1));
+        let own = (sum / n.max(1) as f64).sqrt() as f32;
+        let gain = if own > 1e-4 { (rms / own).min(4.0) } else { 1.0 };
+        Some(Track { pcm: pcm.into(), channels, rate, at: [start, end], gain })
+    }
 }
 
 impl SoundBank {
@@ -41,7 +81,7 @@ impl SoundBank {
         let data = iso.read(xb).ok()?;
         let arc = Archive::parse(&data).ok()?;
         let read = |name: &str| arc.read(arc.entries.iter().find(|e| e.name.replace('\\', "/").ends_with(name))?).ok();
-        Some(Self { hd: read(hd)?, bd: read(&hd.replace(".hd", ".bd"))?, wav: Default::default() })
+        Some(Self { hd: read(hd)?, bd: read(&hd.replace(".hd", ".bd"))?, wav: Default::default(), takes: Default::default(), stream: None })
     }
 
     /// A BGM: bank `data/sound/BGM/<dir>/<name>.hd` and the MIDI file beside it in `SND/BGM/<NAME>.XB`.
@@ -64,13 +104,37 @@ impl SoundBank {
             }
         }
         let wav: std::collections::HashMap<_, _> = wav.into_iter().map(|(p, mut ks)| { ks.sort_by_key(|k| k.0); (p, ks.into_iter().map(|k| k.1).collect()) }).collect();
-        (!wav.is_empty()).then(|| Self { hd: Vec::new(), bd: Vec::new(), wav })
+        (!wav.is_empty()).then(|| Self { hd: Vec::new(), bd: Vec::new(), wav, takes: Default::default(), stream: None })
+    }
+
+    /// M8f3: `self` (a disc umpire's bank) with an umpire mod's calls `dir/<program>_<key>.wav` as its [`takes`],
+    /// each on its own key (a key the mod lacks stays the disc's); how many it found.
+    ///
+    /// [`takes`]: SoundBank::takes
+    pub fn with_takes(mut self, dir: &std::path::Path) -> (Self, usize) {
+        for e in crate::modfs::read_dir(dir) {
+            let name = e.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+            let Some((p, k)) = name.strip_suffix(".wav").and_then(|s| s.split_once('_')) else { continue };
+            let (Ok(p), Ok(k)) = (p.parse(), k.parse()) else { continue };
+            match crate::modfs::read(&e).ok().and_then(|d| pcm(&d)) {
+                Some((pcm, rate)) => _ = self.takes.insert((p, k), (pcm.into(), rate)),
+                None => warn!("{}: not a PCM16 wav, skipped", e.display()),
+            }
+        }
+        let n = self.takes.len();
+        (self, n)
     }
 }
 
 /// A RIFF PCM16 wav as mono samples (channels averaged) and its sample rate.
-// ponytail: PCM16 only (what the mod tools write)
 pub(crate) fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
+    let (data, ch, rate) = pcm_frames(d)?;
+    Some((data.chunks_exact(ch).map(|f| (f.iter().map(|&s| s as i32).sum::<i32>() / ch as i32) as i16).collect(), rate))
+}
+
+/// A RIFF PCM16 wav's interleaved samples, channels and sample rate.
+// ponytail: PCM16 only (what the mod tools write)
+fn pcm_frames(d: &[u8]) -> Option<(Vec<i16>, usize, u32)> {
     if d.get(0..4)? != b"RIFF" || d.get(8..12)? != b"WAVE" {
         return None;
     }
@@ -87,8 +151,8 @@ pub(crate) fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
     }
     let ((1, ch @ 1.., rate @ 1.., 16), Some(data)) = (fmt?, data) else { return None };
     let ch = ch as usize;
-    let mono = data.chunks_exact(2 * ch).map(|f| (f.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as i32).sum::<i32>() / ch as i32) as i16);
-    Some((mono.collect(), rate))
+    let whole = data.len() / (2 * ch) * 2 * ch;
+    Some((data[..whole].chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect(), ch, rate))
 }
 
 /// The tone every disc voice take keys on (all 14 characters' banks): set volume 127, tone volume 127, centred,
@@ -112,7 +176,8 @@ fn midi(iso: &mut Iso, xb: &str) -> Option<Vec<u8>> {
 /// The BGM playing: its bank, track, and per MIDI channel the program, volume (CC7), pan (CC10) and expression (CC11).
 struct Music {
     bank: Arc<SoundBank>,
-    seq: snd::Sequencer,
+    /// `None`: the bank's `stream` plays instead, as the loop with the music's `id` (M8f6).
+    seq: Option<snd::Sequencer>,
     channels: [[u8; 4]; 16],
     /// The sequence volume (the game's BGM volume, 55 at full).
     volume: u32,
@@ -147,8 +212,37 @@ struct Mix {
     /// B77: the plays the match re-levels every frame (`update`, `turn`: the flight whistle and rush, the flyover).
     followed: Vec<u64>,
     vol: Vol,
-    /// B203: the menu cue sounding, cut when the next starts.
-    menu: u64,
+    /// B203: the menu cues sounding, cut when the next of their lane starts; B307: [cursor move, every other cue].
+    menu: [u64; 2],
+    /// M8f6: the looping streams sounding (a court mod's BGM and ambience).
+    loops: Vec<Looping>,
+}
+
+/// A [`Track`] sounding: its play id, group, level (× the track's gain) and where it is (in its frames).
+struct Looping {
+    id: u64,
+    track: Arc<Track>,
+    group: Group,
+    level: f32,
+    at: f64,
+}
+
+impl Looping {
+    /// The next 48 kHz output frame (L, R), linearly between the track's frames, round its loop.
+    fn tick(&mut self) -> [i32; 2] {
+        let t = &*self.track;
+        let i = self.at as usize;
+        let next = if i + 1 >= t.at[1] { t.at[0] } else { i + 1 };
+        let f = (self.at - i as f64) as f32;
+        let s = |k: usize, c: usize| t.pcm[k * t.channels + c.min(t.channels - 1)] as f32;
+        let k = t.gain * self.level;
+        let out = [0, 1].map(|c| ((s(i, c) + (s(next, c) - s(i, c)) * f) * k) as i32);
+        self.at += t.rate as f64 / 48_000.0;
+        if self.at >= t.at[1] as f64 {
+            self.at -= (t.at[1] - t.at[0]) as f64;
+        }
+        out
+    }
 }
 
 /// B235: the volume settings' groups. Presentation only: applied to the output, never to a play's level.
@@ -263,7 +357,7 @@ impl Mix {
         playing.retain(|p| p.next < p.events.len());
         self.playing = playing;
         if let Some(mut m) = self.music.take() {
-            for e in m.seq.frame() {
+            for e in m.seq.as_mut().map(snd::Sequencer::frame).unwrap_or_default() {
                 self.midi(&mut m, e);
             }
             self.music = Some(m);
@@ -278,14 +372,18 @@ impl Mix {
                 let [l, r] = v.tick(&b.bd);
                 s[g] = [s[g][0] + l, s[g][1] + r];
             }
+            for lp in self.loops.iter_mut().filter(|l| !(tags.held && tags.ids.contains(&l.id))) {
+                let ([l, r], g) = (lp.tick(), lp.group as usize);
+                s[g] = [s[g][0] + l, s[g][1] + r];
+            }
             // ponytail: dry voices only — no core/master volume or reverb
             out.extend([0, 1].map(|c| (0..3).map(|g| s[g][c] as f32 * gain[g]).sum::<f32>().clamp(-32768.0, 32767.0) / 32768.0));
         }
         self.voices.retain(|v| v.0.phase != 0);
-        let (voices, playing) = (&self.voices, &self.playing);
-        self.tags.ids.retain(|&id| playing.iter().any(|q| q.id == id) || voices.iter().any(|v| v.2 == id));
+        let (voices, playing, loops) = (&self.voices, &self.playing, &self.loops);
+        self.tags.ids.retain(|&id| playing.iter().any(|q| q.id == id) || voices.iter().any(|v| v.2 == id) || loops.iter().any(|l| l.id == id));
         let music = self.music.as_ref().map(|m| m.id..m.id + 16);
-        self.vol.groups.retain(|id, _| music.as_ref().is_some_and(|r| r.contains(id)) || playing.iter().any(|q| q.id == *id) || voices.iter().any(|v| v.2 == *id));
+        self.vol.groups.retain(|id, _| music.as_ref().is_some_and(|r| r.contains(id)) || playing.iter().any(|q| q.id == *id) || voices.iter().any(|v| v.2 == *id) || loops.iter().any(|l| l.id == *id));
     }
 
     /// A new play id, tagged as the match's while one runs unpaused.
@@ -366,14 +464,7 @@ impl Sound {
         // program the mod ships no wav for falls to `hd`, empty on a mod bank (B181: never its donor's), so silence
         // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)
         if let Some((w, rate)) = bank.wav.get(&program).and_then(|ks| ks.get(key % ks.len())) {
-            let mut m = self.0.lock().unwrap();
-            let id = m.id();
-            m.vol.groups.insert(id, group);
-            let mut level = Level { velocity: 127, ..level };
-            level.tone(127, VOICE_TONE, &m.gain);
-            let voice = Voice::key_on_pcm(w.clone(), VOICE_TONE.adsr(), wav_pitch(*rate, scale), level.volume(&m.pan));
-            m.voices.push((voice, bank.clone(), id, 0, *rate, level));
-            return id;
+            return self.play_take(bank, w, *rate, level, scale, group);
         }
         let Some(events) = Bank::parse(&bank.hd).ok().and_then(|b| b.key_ons(program, key)) else { return 0 };
         let mut m = self.0.lock().unwrap();
@@ -383,17 +474,52 @@ impl Sound {
         id
     }
 
+    /// A wav take `w` at `rate`: a voice keyed on at once with the disc voices' tone at velocity 127.
+    fn play_take(&self, bank: &Arc<SoundBank>, w: &Arc<[i16]>, rate: u32, level: Level, scale: u32, group: Group) -> u64 {
+        let mut m = self.0.lock().unwrap();
+        let id = m.id();
+        m.vol.groups.insert(id, group);
+        let mut level = Level { velocity: 127, ..level };
+        level.tone(127, VOICE_TONE, &m.gain);
+        let voice = Voice::key_on_pcm(w.clone(), VOICE_TONE.adsr(), wav_pitch(rate, scale), level.volume(&m.pan));
+        m.voices.push((voice, bank.clone(), id, 0, rate, level));
+        id
+    }
+
     /// Starts a BGM from the top at `volume` (the game's 55), replacing the one playing.
     pub fn music(&self, bank: &Arc<SoundBank>, mid: &[u8], volume: u32) {
         let mut m = self.0.lock().unwrap();
         if let Some(old) = m.music.take() {
             m.voices.iter_mut().filter(|v| (old.id..old.id + 16).contains(&v.2)).for_each(|v| v.0.key_off());
+            m.loops.retain(|l| l.id != old.id);
         }
-        let Some(seq) = snd::Sequencer::new(mid) else { return };
+        // M8f6: a court mod's BGM, a wav looping from its top, levelled as a sequence at `volume` would be
+        let seq = match &bank.stream {
+            Some(_) => None,
+            None => match snd::Sequencer::new(mid) {
+                Some(seq) => Some(seq),
+                None => return,
+            },
+        };
         let id = m.ids + 1;
         m.ids += 16;
         m.vol.groups.extend((id..id + 16).map(|c| (c, Group::Music)));
+        if let Some(track) = &bank.stream {
+            m.loops.push(Looping { id, track: track.clone(), group: Group::Music, level: volume as f32 / 55.0, at: 0.0 });
+        }
         m.music = Some(Music { bank: bank.clone(), seq, channels: [[0, 100, 0x40, 127]; 16], volume, id });
+    }
+
+    /// M8f6: a looping stream (a court mod's ambience layer) in volume group `group` at `level` (1 = the track's
+    /// gain), from its top until `stop` or the match's end.
+    pub fn play_loop(&self, track: &Arc<Track>, group: Group, level: f32) -> u64 {
+        let mut m = self.0.lock().unwrap();
+        let id = m.id();
+        // the match's, whenever it starts: cut with it (`end_match`), held while paused
+        m.tags.ids.insert(id);
+        m.vol.groups.insert(id, group);
+        m.loops.push(Looping { id, track: track.clone(), group, level, at: 0.0 });
+        id
     }
 
     /// B235: the volume settings, applied at once to everything sounding and to come.
@@ -411,6 +537,7 @@ impl Sound {
         let mut m = self.0.lock().unwrap();
         if let Some(old) = m.music.take() {
             m.voices.retain(|v| !(old.id..old.id + 16).contains(&v.2));
+            m.loops.retain(|l| l.id != old.id);
         }
     }
 
@@ -420,6 +547,9 @@ impl Sound {
         let m = &mut *m;
         let Some(music) = &mut m.music else { return };
         music.volume = volume;
+        if let Some(l) = m.loops.iter_mut().find(|l| l.id == music.id) {
+            l.level = volume as f32 / 55.0;
+        }
         for (v, .., level) in m.voices.iter_mut().filter(|v| (music.id..music.id + 16).contains(&v.2)) {
             level.seq = [volume; 2];
             v.volume = level.volume(&m.pan);
@@ -460,6 +590,7 @@ impl Sound {
         let ids = std::mem::take(&mut m.tags).ids;
         m.playing.retain(|q| !ids.contains(&q.id));
         m.voices.retain(|v| !ids.contains(&v.2));
+        m.loops.retain(|l| !ids.contains(&l.id));
     }
 
     /// Match sounds still playing or held.
@@ -470,7 +601,7 @@ impl Sound {
     /// A mixer with no tables and no output, for tests that only follow plays.
     #[cfg(test)]
     pub fn bare() -> Self {
-        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 })))
+        Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() })))
     }
 
     /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
@@ -478,42 +609,57 @@ impl Sound {
     pub fn endless(&self) -> u64 {
         let mut m = self.0.lock().unwrap();
         let id = m.id();
-        let bank = Arc::new(SoundBank { hd: Vec::new(), bd: Vec::new(), wav: Default::default() });
+        let bank = Arc::new(SoundBank { hd: Vec::new(), bd: Vec::new(), wav: Default::default(), takes: Default::default(), stream: None });
         m.playing.push(Playing { id, bank, events: vec![KeyOn { frame: u32::MAX, channel: 0, note: 0, velocity: 0, set: 0 }], next: 0, frame: 0, level: default(), scale: 0x1000 });
         id
     }
 
     /// A non-positional play (the umpire's voice): centred, sequence volume `p.volume`.
     /// ponytail: the library's non-positional level is taken as the positional one straight ahead with no falloff
+    /// An umpire mod's take for the call (`SoundBank::takes`) plays in place of the disc's.
     pub fn play_centre(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u64 {
+        self.centre(bank, p, true)
+    }
+
+    /// `play_centre`, the bank's `takes` heard (`takes`) or left out (the disc's play, as `centre_frames` times it).
+    fn centre(&self, bank: &Arc<SoundBank>, p: sound::Play, takes: bool) -> u64 {
         let bank_volume = self.0.lock().unwrap().bank_volumes[p.slot as usize];
         let level = Level { seq: [p.volume as u32; 2], bank: bank_volume, pan: [0x40; 3], ..default() };
-        self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of(p.slot))
+        let (program, key, scale) = (p.program as usize, p.key as usize, sound::speed_word(p.speed));
+        if let Some((w, rate)) = bank.takes.get(&(program, key)).filter(|_| takes) {
+            return self.play_take(bank, w, *rate, level, scale, Group::of(p.slot));
+        }
+        self.play_as(bank, program, key, level, scale, Group::of(p.slot))
     }
 
     /// B203: a menu cue (system bank key `key`, centred, full volume) that cuts the one before it, so mashing
-    /// buttons or a held direction's repeat never stacks cues louder than one press.
+    /// buttons or a held direction's repeat never stacks cues louder than one press. B307: the cursor move (key 0)
+    /// only cuts the cursor move before it, so a select/back cue still sounding plays out under it; any other cue
+    /// cuts both.
     pub fn play_menu(&self, bank: &Arc<SoundBank>, key: u8) -> u64 {
+        let lane = usize::from(key != 0);
         let mut m = self.0.lock().unwrap();
-        let last = m.menu;
-        m.playing.retain(|q| q.id != last);
-        m.voices.retain(|v| v.2 != last);
+        let menu = m.menu;
+        let cut = &menu[..lane + 1];
+        m.playing.retain(|q| !cut.contains(&q.id));
+        m.voices.retain(|v| !cut.contains(&v.2));
         drop(m);
         let id = self.play_centre(bank, sound::Play { slot: 9, program: 0, key, volume: 0x80, speed: 1.0 });
-        self.0.lock().unwrap().menu = id;
+        self.0.lock().unwrap().menu[lane] = id;
         id
     }
 
     /// How many 60 Hz frames `play_centre(bank, p)` sounds for: rendered alone on a silent copy of the mixer, so
     /// the match can time the umpire's voice by ticks, the same on every machine (the live mixer runs on the audio
-    /// device's clock). ponytail: capped at 30 s; a looping sequence would never end
+    /// device's clock). An umpire mod's `takes` are left out: a word lasts as long as the disc's take it replaces
+    /// (M8f3). ponytail: capped at 30 s; a looping sequence would never end
     pub fn centre_frames(&self, bank: &Arc<SoundBank>, p: sound::Play) -> u32 {
         let solo = {
             let m = self.0.lock().unwrap();
-            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+            Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() }
         };
         let solo = Self(Arc::new(Mutex::new(solo)));
-        let id = solo.play_centre(bank, p);
+        let id = solo.centre(bank, p, false);
         let mut out = Vec::new();
         let mut n = 0;
         while id != 0 && solo.playing(id) && n < 30 * 60 {
@@ -536,6 +682,18 @@ impl Sound {
         self.0.lock().unwrap().ids
     }
 
+    /// M8f3: how many wav takes are sounding (an umpire mod's calls, a mod's voice), for tests.
+    #[cfg(test)]
+    pub fn takes_sounding(&self) -> usize {
+        self.0.lock().unwrap().voices.iter().filter(|v| v.0.pcm.is_some()).count()
+    }
+
+    /// M8f6: how many loops (a court mod's BGM and ambience) are playing, for tests.
+    #[cfg(test)]
+    pub fn looping(&self) -> usize {
+        self.0.lock().unwrap().loops.len()
+    }
+
     /// B77: the match paused. As the original's per-frame update does while paused, every play the match re-levels
     /// each frame is held at play speed 0 (pitch 0: it stops where it is, silent); the match's next `update` after
     /// it resumes picks it up again. Every other voice (one-shots, the crowd, the BGM) plays on, as there.
@@ -550,13 +708,14 @@ impl Sound {
     /// The play `id` still has key-ons to come or voices sounding.
     pub fn playing(&self, id: u64) -> bool {
         let m = self.0.lock().unwrap();
-        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id)
+        m.playing.iter().any(|q| q.id == id) || m.voices.iter().any(|v| v.2 == id) || m.loops.iter().any(|l| l.id == id)
     }
 
     /// Ends the play `id`: no more key-ons, its voices released.
     pub fn stop(&self, id: u64) {
         let mut m = self.0.lock().unwrap();
         m.playing.retain(|q| q.id != id);
+        m.loops.retain(|l| l.id != id);
         m.voices.iter_mut().filter(|v| v.2 == id).for_each(|v| v.0.key_off());
     }
 
@@ -712,7 +871,7 @@ fn mix(iso: &mut Iso) -> Mix {
     let (pan, gain) = exe::sound_tables(&elf).expect("supported disc");
     let stereo = exe::stereo_tables(&elf).expect("supported disc");
     let bank_volumes = exe::bank_volumes(&elf).expect("supported disc");
-    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+    Mix { pitch, pan, gain, stereo, bank_volumes, voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() }
 }
 
 #[cfg(test)]
@@ -767,6 +926,62 @@ mod tests {
         }
         eprintln!("jingle 1: {frames} frames");
         assert!(frames > 30 && frames < 3600);
+    }
+
+    /// B386: the match-end sounds of a win, a loss and an annihilation (the banner differs, the sounds don't): the
+    /// result music `bgmm_10`, the win and loss jingles (keys 3, 4), every character's prize voice (program 0 won,
+    /// 1 lost, either line, the B court's set too) and each court's gallery ovation and groan (programs 3/7, 4/8)
+    /// load and are heard.
+    #[test]
+    fn match_end_sounds_are_heard() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let base = mix(&mut iso);
+        // the loudest sample of one play over 2 s
+        let peak = |bank: &Arc<SoundBank>, p: sound::Play| {
+            let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+            sound.play_centre(bank, p);
+            let mut out = Vec::new();
+            for _ in 0..120 {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            out.iter().fold(0f32, |a, x| a.max(x.abs()))
+        };
+        let (bgm, mid) = SoundBank::music(&mut iso, "Menu", "bgmm_10").expect("result music");
+        let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+        sound.music(&Arc::new(bgm), &mid, 55);
+        let mut out = Vec::new();
+        for _ in 0..600 {
+            sound.0.lock().unwrap().render(&mut out);
+        }
+        let music = out.iter().fold(0f32, |a, x| a.max(x.abs()));
+        assert!(music > 0.01, "result music peak {music}");
+        let jingles = Arc::new(SoundBank::load(&mut iso, "SND/JGL/JIG_00.XB", "data/sound/JINGLE/jig_00.hd").unwrap());
+        for key in [3, 4] {
+            let p = peak(&jingles, sound::Play { slot: 8, program: 0, key, volume: 0x80, speed: 1.0 });
+            assert!(p > 0.01, "jingle {key} peak {p}");
+        }
+        for c in 0..14 {
+            for b in ["", "B"] {
+                let voice = SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase()));
+                let voice = Arc::new(voice.unwrap_or_else(|| panic!("prize voice {c:02}{b}")));
+                for (program, key) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let p = peak(&voice, sound::Play { slot: 1, program, key, volume: 0x80, speed: 1.0 });
+                    assert!(p > 0.01, "character {c}{b} program {program} key {key} peak {p}");
+                }
+            }
+        }
+        for n in 1..=11 {
+            for pick in 0..4 {
+                let Some(gallery) = gallery_bank(&mut iso, n, pick) else { continue };
+                let gallery = Arc::new(gallery);
+                for (program, key) in [(3, 0), (7, 0), (7, 1), (4, 0), (8, 0)] {
+                    let p = peak(&gallery, sound::Play { slot: 6, program, key, volume: 0x80, speed: 1.0 });
+                    assert!(p > 0.01, "court {n} gallery {pick} program {program} key {key} peak {p}");
+                }
+            }
+        }
     }
 
     /// B235: each volume slider at 0 silences only its group — the BGM (music), a system sound (SFX), the umpire
@@ -865,6 +1080,29 @@ mod tests {
         }
     }
 
+    /// B307: a cursor move right after a select lets the select cue play out under it; a select cuts both.
+    #[test]
+    fn cursor_move_keeps_select() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let bank = Arc::new(SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").unwrap());
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        let mut out = Vec::new();
+        let select = sound.play_menu(&bank, 2);
+        sound.0.lock().unwrap().render(&mut out);
+        assert!(sound.playing(select));
+        let mut moves = Vec::new();
+        for _ in 0..3 {
+            moves.push(sound.play_menu(&bank, 0));
+            sound.0.lock().unwrap().render(&mut out);
+            assert!(sound.playing(select), "a cursor move cut the select cue");
+        }
+        assert!(moves[..2].iter().all(|&id| !sound.playing(id)), "cursor moves stacked");
+        let back = sound.play_menu(&bank, 1);
+        assert!(!sound.playing(select) && !sound.playing(moves[2]) && sound.playing(back));
+    }
+
     /// A mod's `voice/<program>_<key>.wav` takes load (stereo 22.05 kHz → mono), play at the sequence's full
     /// level and end; a key past the takes wraps round them; a program without wavs is silent, or the donor's.
     #[test]
@@ -901,7 +1139,7 @@ mod tests {
         assert!(frames == 6 && peak > 0.1 && peak < 1.0);
         // with the donor's disc bank beside the wavs (`mod_match::apply`), a program the mod lacks plays the disc's
         let disc = voice_bank(&mut iso, 0, 2, 1, false).unwrap();
-        let both = Arc::new(SoundBank { hd: disc.hd, bd: disc.bd, wav: bank.wav.clone() });
+        let both = Arc::new(SoundBank { hd: disc.hd, bd: disc.bd, wav: bank.wav.clone(), takes: Default::default(), stream: None });
         assert_ne!(sound.play(&both, 2, 0, Level { seq: [127; 2], bank: 127, pan: [0x40; 3], ..default() }, 0x1000), 0);
     }
 
@@ -1017,7 +1255,91 @@ mod tests {
         assert!(render(20) > 0.01, "the whistle goes on");
     }
 
+    /// A RIFF PCM16 wav of `frames` (interleaved).
+    fn wav(frames: &[[i16; 2]], rate: u32) -> Vec<u8> {
+        let data: Vec<u8> = frames.iter().flatten().flat_map(|s| s.to_le_bytes()).collect();
+        let mut w = b"RIFF".to_vec();
+        w.extend((36 + data.len() as u32).to_le_bytes());
+        w.extend(b"WAVEfmt ");
+        w.extend(16u32.to_le_bytes());
+        w.extend([1u16, 2].iter().flat_map(|x| x.to_le_bytes()));
+        w.extend(rate.to_le_bytes());
+        w.extend((rate * 4).to_le_bytes());
+        w.extend([4u16, 16].iter().flat_map(|x| x.to_le_bytes()));
+        w.extend(b"data");
+        w.extend((data.len() as u32).to_le_bytes());
+        w.extend(data);
+        w
+    }
+
+    /// M8f6: a court mod's BGM plays through `Sound::music` as a stream at the disc BGMs' loudness, round its loop
+    /// (frames past the loop's end never sound), follows `music_volume` and the music volume group, and stops with
+    /// `stop_music`; an ambience layer plays until `stop`, and is held with the match's other sounds.
+    #[test]
+    fn a_court_mod_stream_loops_at_the_bgm_loudness() {
+        // 0.5 s at 48 kHz: a square wave in the loop [4800, 19200), full scale after it
+        let frames: Vec<[i16; 2]> = (0..24_000).map(|i| if i >= 19_200 { [i16::MAX; 2] } else if (i / 50) % 2 == 0 { [8000, -8000] } else { [-8000, 8000] }).collect();
+        let track = Arc::new(Track::read(&wav(&frames, 48_000), [4800, 19_200], Track::BGM_RMS).unwrap());
+        assert_eq!((track.channels, track.rate, track.at), (2, 48_000, [4800, 19_200]));
+        let bank = Arc::new(SoundBank { hd: Vec::new(), bd: Vec::new(), wav: Default::default(), takes: Default::default(), stream: Some(track.clone()) });
+        let mix = Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() };
+        let sound = Sound(Arc::new(Mutex::new(mix)));
+        let render = |n: usize| {
+            let mut out = Vec::new();
+            for _ in 0..n {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            out
+        };
+        let rms = |o: &[f32]| (o.iter().map(|x| x * x).sum::<f32>() / o.len().max(1) as f32).sqrt();
+        sound.music(&bank, &[], 55);
+        assert!(sound.music_of(&bank));
+        // 2 s: four times round the loop, never the full-scale tail
+        let out = render(120);
+        assert!((rms(&out) - Track::BGM_RMS).abs() < 0.005, "rms {}", rms(&out));
+        assert!(out.iter().all(|x| x.abs() < 0.2));
+        sound.music_volume(0);
+        assert!(rms(&render(10)) < 1e-4);
+        sound.music_volume(55);
+        sound.set_volumes(Volumes([10, 0, 10, 10]));
+        assert!(rms(&render(10)) < 1e-4, "the music volume group");
+        sound.set_volumes(Volumes([10; 4]));
+        sound.stop_music();
+        assert!(rms(&render(10)) < 1e-4);
+        let id = sound.play_loop(&track, Group::Sfx, 1.0);
+        assert!(sound.playing(id) && rms(&render(10)) > 0.05);
+        sound.stop(id);
+        assert!(!sound.playing(id) && rms(&render(10)) < 1e-4);
+    }
+
+    /// The loudness `Track::BGM_RMS` levels a court mod's BGM to: each disc court BGM's RMS over its first 20 s at the
+    /// match's level 55. Slow (eleven sequences played): `tools/check.sh -p hst court_bgm_loudness -- --ignored
+    /// --nocapture` after touching the music mix.
+    #[test]
+    #[ignore]
+    fn court_bgm_loudness() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let base = mix(&mut iso);
+        let mut all = Vec::new();
+        for n in 1..=11 {
+            let (bank, mid) = SoundBank::music(&mut iso, "Court", &format!("bgmg_{n:02}")).unwrap();
+            let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+            sound.music(&Arc::new(bank), &mid, 55);
+            let mut out = Vec::new();
+            for _ in 0..1200 {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+            eprintln!("bgmg_{n:02}: rms {rms:.4}");
+            all.push(rms);
+        }
+        let (lo, hi) = all.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
+        assert!((lo..=hi).contains(&Track::BGM_RMS), "{lo}..{hi}");
+    }
+
     fn mix_clone(m: &Mix) -> Mix {
-        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: 0 }
+        Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() }
     }
 }

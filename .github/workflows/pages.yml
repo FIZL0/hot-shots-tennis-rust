@@ -1,11 +1,19 @@
 # The browser build (`tools/web.sh`) on GitHub Pages: the page and the wasm only, no game data (players pick their ISO).
-# Each run also replaces the rolling "Latest alpha" release (tag `alpha`, marked latest) with Linux + Windows builds of
-# the same commit, as tools/build.sh makes them. tools/ship-local.sh builds the website on the dev machine and runs this
-# with `prebuilt`: that run only deploys the uploaded web/ (the build jobs are skipped).
+# Every push to main is a beta: it replaces the rolling "Beta" release (tag `beta`, a pre-release, never Latest) with
+# Linux + Windows builds and the website (web.tar.gz) of that commit, then asks FIZL0/opentennis-beta (one workflow,
+# tools/beta-site.yml) to put that website on https://beta.opentennis.dev (secret BETA_DISPATCH_TOKEN: a fine-grained
+# token with Contents read/write on that repo; without it the beta site isn't updated).
+# Which builds go on https://opentennis.dev is the repo variable SITE_FROM:
+#   unset / main   every push to main (as before)
+#   release        only published releases (tools/release.sh): `gh variable set SITE_FROM --body release`
+# tools/ship-local.sh builds the website on the dev machine and runs this with `prebuilt`: that run only deploys the
+# uploaded web/ (the build jobs are skipped) to opentennis.dev, or to the beta site when SITE_FROM is release.
 name: pages
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       prebuilt:
@@ -19,10 +27,13 @@ permissions:
 # a running deploy always finishes (builds take ~20 min, merges come faster); GitHub keeps only the newest queued one
 # tools/ship-local.sh's prebuilt deploys have their own group, so they don't wait behind a build
 concurrency:
-  group: pages${{ inputs.prebuilt && '-prebuilt' || '' }}
+# releases have their own group too: a queued push run must not replace a queued release deploy
+  group: pages-${{ github.event_name }}${{ inputs.prebuilt && '-prebuilt' || '' }}
   cancel-in-progress: false
 jobs:
   build:
+    # a release only builds the site when it is the one opentennis.dev shows
+    if: ${{ github.event_name != 'release' || vars.SITE_FROM == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - if: ${{ inputs.prebuilt }}
@@ -48,11 +59,19 @@ jobs:
           echo "$PWD/binaryen-version_123/bin" >> "$GITHUB_PATH"
       - if: ${{ !inputs.prebuilt }}
         run: tools/web.sh
+        env:
+          HST_SITE: ${{ github.event_name != 'release' && vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
+      - run: tar -czf web.tar.gz -C web .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: web.tar.gz
   deploy:
     needs: build
+    if: ${{ (github.event_name == 'release') == (vars.SITE_FROM == 'release') }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -62,14 +81,16 @@ jobs:
       - id: fresh
         env:
           GH_TOKEN: ${{ github.token }}
+        # a release deploys its own tag, whatever main is at
         run: |
-          [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)" = "$GITHUB_SHA" ] && echo ok=1 >> "$GITHUB_OUTPUT" || echo "main moved on, skipping"
+          [ "$GITHUB_EVENT_NAME" = release ] || [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)" = "$GITHUB_SHA" ] && echo ok=1 >> "$GITHUB_OUTPUT" || echo "main moved on, skipping"
       - if: ${{ steps.fresh.outputs.ok }}
         id: deployment
         uses: actions/deploy-pages@v4
   # executables are only built by Actions: tools/ship-local.sh ships the website alone
+  # releases ship tools/release.sh's own builds
   linux:
-    if: ${{ !inputs.prebuilt }}
+    if: ${{ !inputs.prebuilt && github.event_name != 'release' }}
     runs-on: ubuntu-latest
     # Steam Runtime sniper (glibc 2.31) like tools/build.sh, so it runs on every SteamOS / Steam Deck
     container: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
@@ -79,7 +100,9 @@ jobs:
           curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
-      - run: |
+      - env:
+          HST_SITE: ${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
+        run: |
           cargo build --release -p hst
           mkdir -p dist/linux
           strip -o dist/linux/hst target/release/hst
@@ -91,7 +114,7 @@ jobs:
           name: linux
           path: hst-linux-x86_64.tar.gz
   windows:
-    if: ${{ !inputs.prebuilt }}
+    if: ${{ !inputs.prebuilt && github.event_name != 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +124,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update -q && sudo apt-get install -yq gcc-mingw-w64-x86-64
+          export HST_SITE=${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
             cargo build --release -p hst --target x86_64-pc-windows-gnu
           x86_64-w64-mingw32-strip -o hst.exe target/x86_64-pc-windows-gnu/release/hst.exe
@@ -109,8 +133,11 @@ jobs:
         with:
           name: windows
           path: hst-windows-x86_64.zip
-  alpha:
-    needs: [linux, windows]
+  # a prebuilt run has only the website: it updates the beta site, not the release, and only when opentennis.dev
+  # doesn't already show it
+  beta:
+    needs: [build, linux, windows]
+    if: ${{ !cancelled() && github.event_name != 'release' && needs.build.result == 'success' && (inputs.prebuilt && vars.SITE_FROM == 'release' || !inputs.prebuilt && needs.linux.result == 'success' && needs.windows.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,14 +148,27 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          DISPATCH: ${{ secrets.BETA_DISPATCH_TOKEN }}
+          PREBUILT: ${{ inputs.prebuilt }}
         run: |
           # a stale run leaves it to the newer one: tagging a commit whose workflow files differ from main's is a
           # workflow change, which github.token may not make (HTTP 403), and the delete below would leave no release
           [ "$(gh api "repos/$GH_REPO/commits/main" -q .sha)" = "$GITHUB_SHA" ] || { echo "main moved on, skipping"; exit 0; }
-          # recreated each time so the tag moves to this commit; the download links stay the same
-          gh release delete alpha --cleanup-tag -y || true
-          printf '%s\n\n%s\n\n%s\n' "**Rolling alpha: rebuilt on every change to main (${GITHUB_SHA::7}). Expect bugs.**" \
-            "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
-            "Browser version: https://opentennis.dev/" > notes.md
-          gh release create alpha --latest --target "$GITHUB_SHA" --title "Latest alpha (${GITHUB_SHA::7})" \
-            --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip
+          if [ "$PREBUILT" = true ]; then
+            gh release upload beta --clobber web.tar.gz
+          else
+            # recreated each time so the tag moves to this commit; the download links stay the same
+            gh release delete beta --cleanup-tag -y || true
+            gh release delete alpha --cleanup-tag -y 2>/dev/null || true  # the old rolling alpha, once
+            printf '%s\n\n%s\n\n%s\n' \
+              "**Beta: rebuilt on every change to main (${GITHUB_SHA::7}). Newer than the latest release, less tested.** For the stable version, see [the latest release](https://github.com/$GH_REPO/releases/latest)." \
+              "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \
+              "Beta in the browser: https://beta.opentennis.dev/" > notes.md
+            gh release create beta --prerelease --latest=false --target "$GITHUB_SHA" --title "Beta (${GITHUB_SHA::7})" \
+              --notes-file notes.md hst-linux-x86_64.tar.gz hst-windows-x86_64.zip web.tar.gz
+          fi
+          if [ -n "$DISPATCH" ]; then
+            GH_TOKEN=$DISPATCH gh api repos/FIZL0/opentennis-beta/dispatches -f event_type=beta
+          else
+            echo "::warning::no BETA_DISPATCH_TOKEN secret: beta.opentennis.dev not updated"
+          fi

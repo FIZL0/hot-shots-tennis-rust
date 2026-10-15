@@ -38,7 +38,7 @@ const CHEERS: [i32; 4] = [45, 135, 225, 325];
 const CHEER_VOLUME: i32 = 0x20;
 /// The result music (`SND/BGM/BGMM_10.XB`, menu BGM 7) for a win and a loss alike, the tick it starts on (silent;
 /// the original's loader thread got to it 44 ticks into the ceremony) and its full level, reached 55/60 a tick once
-/// the match-end jingle has ended. The court BGM went with the match.
+/// the match-end jingle has ended. The court BGM went with the match. Played with the match music off too (B386).
 const RESULT_BGM: &str = "bgmm_10";
 const BGM_AT: u32 = 44;
 const BGM: f32 = 55.0;
@@ -193,7 +193,7 @@ pub(super) struct Ceremony {
     voice: Option<Arc<SoundBank>>,
     /// The shown character, whose prize voice speaks.
     speaker: i32,
-    /// The result music (with `--music`) and its level.
+    /// The result music (with or without `--music`) and its level.
     music: Option<(Arc<SoundBank>, Vec<u8>)>,
     level: f32,
     flakes: Vec<Flake>,
@@ -314,7 +314,8 @@ pub(super) fn begin(
         court_rng: g.rng.court.clone(),
         voice,
         speaker: c,
-        music: args.music.then(|| SoundBank::music(&mut iso, "Menu", RESULT_BGM)).flatten().map(|(b, m)| (Arc::new(b), m)),
+        // B386: the result music plays whatever the match music setting (that is the court's BGM only)
+        music: SoundBank::music(&mut iso, "Menu", RESULT_BGM).map(|(b, m)| (Arc::new(b), m)),
         level: 0.0,
         flakes: Vec::new(),
         confetti: None,
@@ -378,6 +379,7 @@ pub(super) fn tick(c: &mut Ceremony, players: u32, court: u8, sound: Option<&Sou
         }
         if c.t == BGM_AT {
             s.music(bank, mid, 0);
+            info!("result music starts");
         }
         if c.t >= BGM_AT {
             let step = BGM / 60.0;

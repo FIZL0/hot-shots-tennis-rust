@@ -26,7 +26,7 @@ def poke_sun(v):
     n=sum(x*x for x in d)**0.5
     for i in range(3): p.write32(f+0x10+4*i,struct.unpack('<I',struct.pack('<f',d[i]/n))[0])
 def view(): return [fl(0x1e7d20+4*i) for i in range(3)]+[fl(0x1e7d30+4*i) for i in range(3)]+[fl(0x1e7d40+4*i) for i in range(3)]+[fl(0x1e7d64)]
-d=f"/home/ryha/repos/HST-Remastered-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
+d=f"/home/ryha/repos/open-tennis-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
 odir=os.environ.get("HST_SHOTS","context/p3f5"); os.makedirs(odir,exist_ok=True)
 pid=open(f"{os.environ['XDG_RUNTIME_DIR']}/hst-pcsx2{os.environ['HST_PCSX2']}.pid").read().strip()
 t0=time.time();n=0;prev=None;last_shot=-999

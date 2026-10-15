@@ -9,10 +9,10 @@ sg slot (0,29) / (1,9) is the disaster hole ("Hmm, useless rubbish." / "No, plas
 multi-part cues, all parts joined) was transcribed with faster-whisper small, English (the model was already cached
 for `tools/voice_lang.py`; it ran in a scratch venv). The transcripts were laid out per slot across the 17 actors:
 each slot says the same thing in every actor's words, so the slot's event can be read off. Transcripts are game
-data and stay out of git; the slot → meaning table and the per-character skips are in ../HST-MODS `notes/oob.md`
+data and stay out of git; the slot → meaning table and the per-character skips are in ../open-tennis-mods `notes/oob.md`
 "Voice lines".
 
-**Fix (../HST-MODS c454aea, `tools/rerig/oob_data.py voices()`).**
+**Fix (../open-tennis-mods c454aea, `tools/rerig/oob_data.py voices()`).**
 
 | program | now | was |
 |---|---|---|

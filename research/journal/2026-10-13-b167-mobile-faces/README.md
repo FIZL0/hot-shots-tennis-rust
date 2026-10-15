@@ -30,5 +30,5 @@ the cached cards re-bake. `tools/web_check.mjs WEB_CARDS=1` copies the browser's
 - **Face-icon crops on d06 and d01 (costumes 5–9) still differ between native and web.** The full cards are identical
   there. `face_square`'s alpha heuristic picks a slightly different square from near-identical alpha. This is B176's
   open crop task, so it was left alone.
-- **Mod costumes' (HST-MODS) face cards vary slightly between two native bakes,** e.g. Hubert's mouth opening. Both
+- **Mod costumes' (open-tennis-mods) face cards vary slightly between two native bakes,** e.g. Hubert's mouth opening. Both
   bakes show expressions; not chased (mods, not disc data).

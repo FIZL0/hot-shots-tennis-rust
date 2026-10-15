@@ -1,0 +1,12 @@
+{
+ "prompts": 1585,
+ "tokens": 6976022331,
+ "input_tokens": 150258,
+ "output_tokens": 37253923,
+ "cache_read_tokens": 6772907607,
+ "cache_write_tokens": 165710543,
+ "commits": 2287,
+ "sessions": 1607,
+ "since": "2026-09-17",
+ "updated": "2026-10-15"
+}

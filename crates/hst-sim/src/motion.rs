@@ -1,5 +1,8 @@
 //! The motion numbers the game sets outside standing and running (`player`): strokes (wind-up turn, the swing
 //! timed to contact, the soft follow-through, whiffs), the serve, and the reactions after a point.
+#![deny(clippy::float_arithmetic)]
+
+use crate::ps2::{F, f32s, fs};
 
 /// A player's motion clock (its motion player's time). The motion setter restarts it at 0 with the speed; each
 /// frame, after the player's update, the player samples at the time wrapped into the clip (looping) or clamped
@@ -26,11 +29,11 @@ impl Clock {
             None => {
                 self.time = crate::pose::wrap(self.time, length, self.looping);
                 self.sampled = self.time;
-                self.time = crate::ps2::add(self.time, self.speed);
+                self.time = (F(self.time) + self.speed).0;
             }
             Some(n) if n < 1 => {
                 self.hold = None;
-                self.time = crate::ps2::add(self.time, self.speed);
+                self.time = (F(self.time) + self.speed).0;
             }
             Some(n) => self.hold = Some(n - 1),
         }
@@ -72,8 +75,7 @@ impl Default for Fade {
 impl Fade {
     /// The setter switching from motion `cur_id` (clock `cur`, `cur_clip` whether it has a clip) to `id`.
     pub fn start(&mut self, frames: i32, id: i32, hold: bool, cur_id: i32, cur_clip: bool, cur: &Clock) {
-        use crate::ps2::{div, madd, sub};
-        let ratio = |a: i32, b: i32| div(a as f32, b as f32);
+        let ratio = |a: i32, b: i32| (F(a as f32) / b as f32).0;
         let cut = |f: &mut Fade| (f.id, f.clip) = (-1, false);
         let take = |f: &mut Fade| (f.id, f.clip, f.time, f.speed, f.looping) = (cur_id, cur_clip, cur.time, cur.speed, cur.looping);
         if frames < 2 {
@@ -92,15 +94,15 @@ impl Fade {
             } else {
                 take(self);
                 // truncated toward zero, as cvt.w.s
-                self.count = madd(0.5, if 0.5 <= f { f } else { sub(1.0, f) }, frames as f32) as i32;
+                self.count = F(0.5).madd(if 0.5 <= f { F(f) } else { F(1.0) - f }, frames as f32).0 as i32;
             }
             self.count -= 1;
         }
         self.hold = hold;
         self.weight = ratio(self.count, self.frames);
         if hold {
-            self.time = sub(self.time, self.speed);
-            self.weight = sub(1.0, self.weight);
+            self.time = (F(self.time) - self.speed).0;
+            self.weight = (F(1.0) - self.weight).0;
         }
         self.sampled = self.time;
     }
@@ -120,12 +122,12 @@ impl Fade {
             self.time = crate::pose::wrap(self.time, length, self.looping);
             self.sampled = self.time;
         }
-        self.time = crate::ps2::add(self.time, self.speed);
+        self.time = (F(self.time) + self.speed).0;
         self.count -= 1;
         if self.count < 0 {
             (self.id, self.clip) = (-1, false);
         } else {
-            self.weight = crate::ps2::div(self.count as f32, self.frames as f32);
+            self.weight = (F(self.count as f32) / self.frames as f32).0;
         }
         w
     }
@@ -141,7 +143,7 @@ impl Fade {
         if self.count < 0 {
             (self.id, self.clip, self.hold) = (-1, false, false);
         } else {
-            self.weight = crate::ps2::sub(1.0, crate::ps2::div(self.count as f32, self.frames as f32));
+            self.weight = (F(1.0) - F(self.count as f32) / self.frames as f32).0;
         }
         Some(w)
     }
@@ -150,8 +152,7 @@ impl Fade {
 /// One track of the fade's mix: the current rotation and position toward the other pose's by `w` (shortest-arc
 /// slerp; `old` positions taken from `cur` by madd).
 pub fn mix(cur: ([f32; 4], [f32; 3]), other: ([f32; 4], [f32; 3]), w: f32) -> ([f32; 4], [f32; 3]) {
-    use crate::ps2::{add, madd, sub};
-    (crate::quat::slerp(cur.0, other.0, w), std::array::from_fn(|i| madd(add(0.0, cur.1[i]), sub(other.1[i], cur.1[i]), w)))
+    (crate::quat::slerp(cur.0, other.0, w), std::array::from_fn(|i| (F::ZERO + cur.1[i]).madd(F(other.1[i]) - cur.1[i], w).0))
 }
 
 /// A stroke starting with `frames` to contact (+0x3ec4) on contact-search branch `branch` (+0x3ec1: 1 ground,
@@ -162,7 +163,7 @@ pub fn stroke_start(branch: u8, frames: i32, anim: i32) -> (i32, f32, Option<i32
     if (1..=2).contains(&branch) && 8 < frames {
         return (if anim & 1 == 0 { 1 } else { 2 }, 1.0, Some(anim));
     }
-    let speed = if branch == 3 || frames < 1 { 1.0 } else { 8.0 / frames as f32 };
+    let speed = if branch == 3 || frames < 1 { 1.0 } else { (F(8.0) / frames as f32).0 };
     (anim, speed, None)
 }
 
@@ -241,7 +242,8 @@ impl Whiff {
 /// next frame to the soft follow-through, `f_w` 0x1c or `b_w` 0x1d (crossfaded in, `SOFT_FOLLOW_HOLD`). `side` is the contact's
 /// side bits (+0x3f50; bit 1 the left side), mirrored for left-handers.
 pub fn soft_follow(branch: u8, anim: i32, ball_vel: [f32; 3], side: u32, hand: f32) -> Option<i32> {
-    let v2 = ball_vel[2] * ball_vel[2] + ball_vel[0] * ball_vel[0] + ball_vel[1] * ball_vel[1];
+    let v = fs(ball_vel);
+    let v2 = v[2] * v[2] + v[0] * v[0] + v[1] * v[1];
     if !(v2 < 0.2143347 && (0x10..0x16).contains(&anim) && branch == 1) {
         return None;
     }
@@ -298,7 +300,7 @@ pub fn ai_serve_stick(after: u32, recover: u32, shots: i32, fresh: bool, hold: &
 /// x, `serve_l` 0x21 otherwise, swapped for left-handers), the toss (0x24 underhand, else 0x23) and the swing
 /// (0x26 underhand, else 0x25, at speed 8 / frames to contact).
 pub fn serve_walk(stick_x: f32, forward: f32, hand: f32) -> i32 {
-    let right = 0.0 < stick_x * forward;
+    let right = 0.0 < F(stick_x) * forward;
     if right != (hand < 0.0) { 0x22 } else { 0x21 }
 }
 
@@ -307,7 +309,7 @@ pub fn serve_toss(under: bool) -> i32 {
 }
 
 pub fn serve_swing(under: bool, frames: i32) -> (i32, f32) {
-    (if under { 0x26 } else { 0x25 }, if frames < 1 { 1.0 } else { 8.0 / frames as f32 })
+    (if under { 0x26 } else { 0x25 }, if frames < 1 { 1.0 } else { (F(8.0) / frames as f32).0 })
 }
 
 /// The point's reaction for a player: hit by the ball (`re_ball` 0x2b); one-player modes `di_set` 0x2f /
@@ -357,15 +359,14 @@ pub fn team_reaction(base: i32, character: i32, taken: &[i32], draw: impl FnOnce
 /// the player moves by the change. Team reactions (`team`, motions 0x30..) only go forward (path x, y dropped),
 /// 0.55 as far for character 5; `gu_set` follows the whole path.
 pub fn reaction_root(p: [f32; 4], team: bool, character: i32, rows: [[f32; 4]; 3], base: [f32; 4], acc: [f32; 4]) -> [f32; 4] {
-    use crate::ps2::{add, madd, mul, sub};
     let m = [rows[0], rows[1], rows[2], [0.0, 0.0, 0.0, 1.0]];
     let to = if team {
-        let v = crate::vu0::transform(&m, [0.0, 0.0, p[2], p[3]]);
+        let v = fs(crate::vu0::transform(&m, [0.0, 0.0, p[2], p[3]]));
         let s = if character == 5 { 0.55 } else { 1.0 };
-        [add(base[0], mul(v[0], s)), madd(add(0.0, base[1]), v[1], s), madd(add(0.0, base[2]), v[2], s), madd(add(0.0, base[3]), v[3], s)]
+        [F(base[0]) + v[0] * s, (F::ZERO + base[1]).madd(v[1], s), (F::ZERO + base[2]).madd(v[2], s), (F::ZERO + base[3]).madd(v[3], s)]
     } else {
         let v = crate::vu0::transform(&m, p);
-        std::array::from_fn(|k| add(base[k], v[k]))
+        std::array::from_fn(|k| F(base[k]) + v[k])
     };
-    std::array::from_fn(|k| add(acc[k], sub(to[k], acc[k])))
+    f32s(std::array::from_fn(|k| F(acc[k]) + (to[k] - acc[k])))
 }

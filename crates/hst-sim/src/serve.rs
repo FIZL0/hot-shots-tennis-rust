@@ -1,8 +1,10 @@
 //! The original's serve: walking along the baseline, the toss, the contact search when the swing is pressed,
 //! the aim inside the service box (and how a mistimed strong toss throws it off), and the timing balloon shown
 //! over a hitter's head (strokes too).
+#![deny(clippy::float_arithmetic)]
 
 use crate::pose::{Clip, M4, Path, Skeleton, node_world};
+use crate::ps2::{F, f32s};
 use crate::swing::PathPoint;
 use crate::shot::{self, Bounds, Table};
 
@@ -75,24 +77,23 @@ impl ServeData {
 /// The ball's launch velocity for a toss from `hand` peaking at `apex` (game space): straight up at
 /// √(2gh), drifting to the apex's x/z by the time it gets there.
 pub fn toss_velocity(hand: [f32; 3], apex: [f32; 3]) -> [f32; 3] {
-    let up = (TOSS_GRAVITY * 2.0 * (hand[1] - apex[1]).abs()).sqrt();
+    let up = (F(TOSS_GRAVITY) * 2.0 * (F(hand[1]) - apex[1]).abs()).sqrt();
     let t = up / TOSS_GRAVITY;
-    [(apex[0] - hand[0]) / t, -up, (apex[2] - hand[2]) / t]
+    f32s([(F(apex[0]) - hand[0]) / t, -up, (F(apex[2]) - hand[2]) / t])
 }
 
 /// Where the hand releases the ball and where the toss peaks, for a server with matrix `player` (rows, the
 /// spot in row 3; mirrored for a left-hander): the hand's point turned into place, and the apex at the window's
 /// top, drifted from the hand toward a point 0.7 m up the racket by 1 / (1 + √(drop to the ideal height / rise)).
 pub fn toss_points(d: &ServeData, toss: Toss, player: &M4) -> ([f32; 3], [f32; 3]) {
-    use crate::ps2::{add, div, sqrt, sub};
     use crate::vu0::transform;
     let (hand, racket) = if toss == Toss::Under { (d.hand_under, &d.racket_under) } else { (d.hand_over, &d.racket_over) };
     let h = transform(player, hand);
     let q = transform(&crate::pose::vmul(racket, player), [0.0, 0.7, 0.0, 1.0]);
     let [top, ideal, _] = d.window(toss);
-    let y = -top;
-    let k = add(1.0, sqrt(div(sub(-ideal, y), sub(h[1], y))));
-    ([h[0], h[1], h[2]], [add(h[0], div(sub(q[0], h[0]), k)), y, add(h[2], div(sub(q[2], h[2]), k))])
+    let y = (-F(top)).0;
+    let k = (1.0 + ((-F(ideal) - y) / (F(h[1]) - y)).sqrt()).0;
+    ([h[0], h[1], h[2]], [(h[0] + (F(q[0]) - h[0]) / k).0, y, (h[2] + (F(q[2]) - h[2]) / k).0])
 }
 
 /// A character's toss hand and racket (`ServeData`), sampled once from its motions with the player at the
@@ -110,20 +111,19 @@ pub fn toss_setup(sk: &Skeleton, toss: &Clip, swing: &Clip) -> ([f32; 4], M4) {
 /// less a margin of 0.15 m across and 0.1 m along, each scaled by the share of the contact→aim direction along it
 /// (unscaled when the serve is `bent`: the character bends it and the special condition holds).
 pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3], bent: bool) -> [f32; 3] {
-    use crate::ps2::{add, div, madd, mul, sqrt, sub};
     let (mut lo, mut hi) = (-4.115, 4.115);
     if server_x < 0.0 { lo = 0.0 } else { hi = 0.0 }
     let (mut mx, mut mz) = (0.15, 0.1);
     if !bent && (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi) {
-        let (dz, dx) = (sub(aim[2], hit[2]), sub(aim[0], hit[0]));
-        let inv = div(1.0, sqrt(madd(mul(dz, dz), dx, dx)));
-        mx = mul(mx, mul(dx, inv).abs());
-        mz = mul(mz, mul(dz, inv).abs());
+        let (dz, dx) = ((F(aim[2]) - hit[2]).0, (F(aim[0]) - hit[0]).0);
+        let inv = (1.0 / (F(dz) * dz).madd(dx, dx).sqrt()).0;
+        mx = (F(mx) * ((F(dx) * inv).0.abs())).0;
+        mz = (F(mz) * ((F(dz) * inv).0.abs())).0;
     }
-    let (x0, x1, z1) = (add(lo, mx), sub(hi, mx), sub(6.4, mz));
+    let (x0, x1, z1) = ((F(lo) + mx).0, (F(hi) - mx).0, (F(6.4) - mz).0);
     let x = if aim[0] < x0 { x0 } else if x1 < aim[0] { x1 } else { aim[0] };
-    let z = if aim[2] < -z1 { -z1 } else if z1 < aim[2] { z1 } else { aim[2] };
-    [add(aim[0], sub(x, aim[0])), aim[1], add(aim[2], sub(z, aim[2]))]
+    let z = if aim[2] < -F(z1) { (-F(z1)).0 } else if z1 < aim[2] { z1 } else { aim[2] };
+    [(aim[0] + (F(x) - aim[0])).0, aim[1], (aim[2] + (F(z) - aim[2])).0]
 }
 
 /// The held ball on the walk and in the toss until release: this point of the left hand's `Bip01 LFinger21`.
@@ -132,9 +132,8 @@ pub const HAND_BALL: [f32; 4] = [-0.05, 0.03, -0.05, 1.0];
 /// The ball in the server's stance before the toss (game space): the point of the stance's ball track
 /// (`*_serve_ad00_ball`) at the motion's sampled time, turned by the server's rows and moved to their spot.
 pub fn stance_ball(point: [f32; 4], rows: [[f32; 4]; 3], pos: [f32; 3]) -> [f32; 3] {
-    use crate::ps2::add;
     let v = crate::vu0::transform(&[rows[0], rows[1], rows[2], [0.0, 0.0, 0.0, 1.0]], point);
-    [add(v[0], pos[0]), add(v[1], pos[1]), add(v[2], pos[2])]
+    [(F(v[0]) + pos[0]).0, (F(v[1]) + pos[1]).0, (F(v[2]) + pos[2]).0]
 }
 
 /// A character's serve timing table (grades, depth bias) for one toss, as the original builds it at setup: as the
@@ -161,9 +160,9 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
         if p.bounces > 0 {
             break;
         }
-        let h = -p.pos[1];
+        let h = -F(p.pos[1]);
         if grades[k] != 0 && low <= h && h <= top {
-            let off = (h - ideal).abs();
+            let off = (h - ideal).abs().0;
             if best.is_none_or(|(_, b)| off < b) {
                 best = Some((k, off));
             }
@@ -178,7 +177,7 @@ pub fn search(d: &ServeData, toss: Toss, path: &[PathPoint]) -> Option<usize> {
 pub fn ai_search(d: &ServeData, toss: Toss, quick: bool, path: &[PathPoint]) -> Option<usize> {
     let quick = quick && toss != Toss::Under;
     // heights are −y; ponytail: the vertical speed is the next frame's rise (the path carries no velocity)
-    let path = path.windows(2).map(|w| (-w[0].pos[1], crate::ps2::sub(w[0].pos[1], w[1].pos[1]), w[0].bounces));
+    let path = path.windows(2).map(|w| ((-F(w[0].pos[1])).0, (F(w[0].pos[1]) - w[1].pos[1]).0, w[0].bounces));
     ai_pick(d.window(toss), quick, path)
 }
 
@@ -193,7 +192,7 @@ pub fn ai_pick(window: [f32; 3], quick: bool, path: impl IntoIterator<Item = (f3
             break;
         }
         if (if quick { vy >= 0.0 } else { vy <= 0.0 }) && low <= h && h <= top {
-            let off = crate::ps2::sub(h, ideal).abs();
+            let off = (F(h) - ideal).0.abs();
             if best.is_none_or(|(_, b)| off < b) {
                 best = Some((k, off));
             }
@@ -223,13 +222,12 @@ pub fn target(
     stick: [f32; 2],
     mut rand: impl FnMut() -> bool,
 ) -> ([f32; 3], Miss) {
-    use crate::ps2::{add, div, mul, madd, sqrt, sub};
     let strong = toss == Toss::Strong;
     let sweet = strong || offset.abs() < 2;
-    let (width, depth) = if sweet { (2.0575, 3.4) } else { (sub(2.0575, 0.5), sub(3.4, 1.0)) };
-    let half = div(depth, 2.0);
-    let x = mul(2.0575, facing);
-    let base = [if side == 0 { mul(x, -1.0) } else { x }, mul(add(3.0, half), facing)];
+    let (width, depth) = if sweet { (2.0575, 3.4) } else { ((F(2.0575) - 0.5).0, (F(3.4) - 1.0).0) };
+    let half = (F(depth) / 2.0).0;
+    let x = (F(2.0575) * facing).0;
+    let base = [if side == 0 { (F(x) * -1.0).0 } else { x }, ((F(3.0) + half) * facing).0];
     let h = shot::Hitter { end: facing, from: [server[0], server[2]], ..Default::default() };
     let s = shot::AimStats { con: [0, 0, d.max_angle as i32], ..Default::default() };
     let t = shot::aim_from(&h, &s, stick, doubles, false, None, base, width, half);
@@ -243,18 +241,18 @@ pub fn target(
     let mut miss = Miss { side: 0.0, depth: 0.0, nudge };
     if strong && (grade == 3 || grade == 4) {
         let sign = if offset < 1 { -1 } else { 1 };
-        miss.depth = madd(add(0.0, 0.0), 0.01, (sign * d.miss[0]) as f32);
-        let full = sqrt(madd(mul(stick[1], stick[1]), stick[0], stick[0]));
+        miss.depth = (F::ZERO + 0.0).madd(0.01, (sign * d.miss[0]) as f32).0;
+        let full = (F(stick[1]) * stick[1]).madd(stick[0], stick[0]).sqrt().0;
         if full > 0.0 {
-            let inv = div(1.0, full);
-            let along = |acc: f32, s: f32| madd(add(0.0, acc), mul(mul(mul(s, inv), facing), d.miss[1] as f32), 0.01);
+            let inv = (F(1.0) / full).0;
+            let along = |acc: f32, s: f32| (F::ZERO + acc).madd(F(s) * inv * facing * (d.miss[1] as f32), 0.01).0;
             miss.side = along(0.0, stick[0]);
             miss.depth = along(miss.depth, stick[1]);
         } else {
-            miss.side = madd(add(0.0, 0.0), 0.01, ((if rand() { -1 } else { 1 }) * d.miss[2]) as f32);
+            miss.side = (F::ZERO + 0.0).madd(0.01, ((if rand() { -1 } else { 1 }) * d.miss[2]) as f32).0;
         }
-        miss.side = mul(miss.side, 0.6666667);
-        miss.depth = mul(miss.depth, 0.6666667);
+        miss.side = (F(miss.side) * 0.6666667).0;
+        miss.depth = (F(miss.depth) * 0.6666667).0;
     }
     (t, miss)
 }
@@ -282,37 +280,35 @@ pub struct Miss {
 /// frame `k`, and 6 for every 10 cm the contact height `height` strays from the ideal past `reach[0]`, 12 per
 /// 10 cm past `reach[1]` more. A clean hit (grade 1 or 2) has none; ±1 m at most.
 pub fn depth_error(d: &ServeData, toss: Toss, k: usize, grade: u8, height: f32) -> i32 {
-    use crate::ps2::{mul, sub};
     if grade == 1 || grade == 2 {
         return 0;
     }
-    let off = sub(height, d.window(toss)[1]);
-    let cm = mul(off.abs(), 100.0) as i32 / 10 * 10;
+    let off = (F(height) - d.window(toss)[1]).0;
+    let cm = (F(off.abs()) * 100.0).0 as i32 / 10 * 10;
     let [from, step] = d.reach;
     let steps = match cm - from {
         n if n < 0 => 0,
         n if n < step => n / 10,
         n => step / 10 + (n - step) / 10 * 2,
     };
-    let e = mul(steps as f32, 6.0) as i32 * if off > 0.0 { 1 } else { -1 };
+    let e = (F(steps as f32) * 6.0).0 as i32 * if off > 0.0 { 1 } else { -1 };
     (d.bias(toss)[k] + e).clamp(-10, 10)
 }
 
 /// Whether a weak toss serves from the `dw1` tables: its −0.5 variant weight, scaled by the share of the serve
 /// power the low-ball power covers, must stay below −0.2.
 pub fn dw1(d: &ServeData) -> bool {
-    d.power >= 1 && -0.5 * ((d.power - (d.power - d.low_power).max(0)) as f32 / d.power as f32) < -0.2
+    d.power >= 1 && -0.5 * (F((d.power - (d.power - d.low_power).max(0)) as f32) / d.power as f32) < -0.2
 }
 
 /// Where the serve lands off its aim (add it to the aim; see `launch`): the swing's `miss` with the depth
 /// `error` of `depth_error` (a strong toss's short error × `short_miss`), × 1.5, sideways and along the line
 /// from the contact `hit` to the `aim`.
 pub fn scatter(d: &ServeData, toss: Toss, miss: Miss, error: i32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
-    use crate::ps2::{add, div, mul};
-    let side = add(div(div(miss.nudge.clamp(-10, 10) as f32, 10.0), 2.0), miss.side);
-    let mut depth = add(div(error as f32, 10.0), miss.depth);
+    let side = (F(miss.nudge.clamp(-10, 10) as f32) / 10.0 / 2.0 + miss.side).0;
+    let mut depth = (F(error as f32) / 10.0 + miss.depth).0;
     if toss == Toss::Strong && depth < 0.0 {
-        depth = mul(depth, d.short_miss);
+        depth = (F(depth) * d.short_miss).0;
     }
     scatter_along(side, depth, hit, aim)
 }
@@ -320,17 +316,16 @@ pub fn scatter(d: &ServeData, toss: Toss, miss: Miss, error: i32, hit: [f32; 3],
 /// `side` and `depth` (m) × 1.5 across and along the line from `hit` to `aim`, as the original's launch sets
 /// out every timing scatter.
 pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f32; 3] {
-    use crate::ps2::{div, madd, mul, sqrt, sub};
     use crate::vu0::{cross, normalize, transform};
     if side == 0.0 && depth == 0.0 {
         return [0.0; 3];
     }
-    let (dx, dz) = (sub(aim[0], hit[0]), sub(aim[2], hit[2]));
-    let inv = div(1.0, sqrt(madd(mul(dx, dx), dz, dz)));
+    let (dx, dz) = ((F(aim[0]) - hit[0]).0, (F(aim[2]) - hit[2]).0);
+    let inv = (1.0 / (F(dx) * dx).madd(dz, dz).sqrt()).0;
     let up = normalize([0.0, 1.0, 0.0, 0.0]);
-    let across = normalize(cross(up, [mul(dx, inv), 0.0, mul(dz, inv), 0.0]));
+    let across = normalize(cross(up, [(F(dx) * inv).0, 0.0, (F(dz) * inv).0, 0.0]));
     let ahead = normalize(cross(across, up));
-    let v = transform(&[across, up, ahead, [0.0, 0.0, 0.0, 1.0]], [mul(1.5, side), 0.0, mul(1.5, depth), 0.0]);
+    let v = transform(&[across, up, ahead, [0.0, 0.0, 0.0, 1.0]], [(F(1.5) * side).0, 0.0, (F(1.5) * depth).0, 0.0]);
     [v[0], v[1], v[2]]
 }
 
@@ -339,8 +334,8 @@ pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f3
 /// (radians; only slice serves have a side angle) and whether the server is left-handed (see
 /// `shot::launch_turned`), and `bend` the special serve's (`shot::effect`).
 pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool), bend: f32) -> shot::Launch {
-    let l = shot::lookup(table, &Bounds::serve(underhand, radius), [hit[0] - scatter[0], hit[1], hit[2] - scatter[2]], aim);
-    let target = [crate::ps2::add(aim[0], scatter[0]), aim[1], crate::ps2::add(aim[2], scatter[2]), 1.0];
+    let l = shot::lookup(table, &Bounds::serve(underhand, radius), [(F(hit[0]) - scatter[0]).0, hit[1], (F(hit[2]) - scatter[2]).0], aim);
+    let target = [(F(aim[0]) + scatter[0]).0, aim[1], (F(aim[2]) + scatter[2]).0, 1.0];
     let (spin, side, lefty) = turn;
     shot::launch_turned(0, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, bend, lefty, l.frames)
 }
@@ -404,7 +399,7 @@ pub fn balloon_alpha(age: u32) -> Option<f32> {
     } else {
         return None;
     };
-    Some(a as f32 / 128.0)
+    Some((F(a as f32) / 128.0).0)
 }
 
 /// The serve's (and smash's) arm table entry, built at player load from an overhead (smash 0x1f, serve 0x25) or the
@@ -433,7 +428,6 @@ pub struct ServeArm {
 /// from the shoulder, then the arm turned 135° about z (overhead) or 90° about y (underhand).
 pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -> ServeArm {
     use crate::pose::{ARM_NODES, axis_angle, transpose3, vmul};
-    use crate::ps2::{div, madd, msub, mul, sqrt, sub};
     use crate::vu0::transform;
     let idx = ARM_NODES.map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
     let local = clip.locals(sk, clip.wrap(8.0, false));
@@ -447,18 +441,18 @@ pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -
     let tip = [racket, hand, forearm, upper, chain].iter().fold(crate::pose::TIP, |v, m| transform(m, v));
     let m = vmul(&upper, &chain);
     let sh = m[3];
-    let d: [f32; 4] = std::array::from_fn(|k| sub(tip[k], sh[k]));
-    let radius = sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2]));
-    let inv = div(1.0, sqrt(madd(mul(d[2], d[2]), d[1], d[1])));
-    let (ny, nz) = (mul(d[1], inv), mul(d[2], inv));
+    let d: [f32; 4] = std::array::from_fn(|k| (F(tip[k]) - sh[k]).0);
+    let radius = (F(d[1]) * d[1]).madd(d[0], d[0]).madd(d[2], d[2]).sqrt().0;
+    let inv = (1.0 / (F(d[2]) * d[2]).madd(d[1], d[1]).sqrt()).0;
+    let (ny, nz) = ((F(d[1]) * inv).0, (F(d[2]) * inv).0);
     let (dot, cross) = if under {
-        (madd(madd(mul(ny, 0.0), 0.0, 0.0), nz, 1.0), msub(mul(ny, 1.0), nz, 0.0))
+        ((F(ny) * 0.0).madd(0.0, 0.0).madd(nz, 1.0).0, (F(ny) * 1.0).msub(nz, 0.0).0)
     } else {
-        (madd(madd(mul(ny, -1.0), 0.0, 0.0), nz, 0.0), msub(mul(ny, 0.0), nz, -1.0))
+        ((F(ny) * -1.0).madd(0.0, 0.0).madd(nz, 0.0).0, (F(ny) * 0.0).msub(nz, -1.0).0)
     };
     let mut angle = crate::libm::acosf(dot.clamp(-1.0, 1.0));
     if cross < 0.0 {
-        angle = mul(angle, -1.0);
+        angle = (F(angle) * -1.0).0;
     }
     let twist = if under { axis_angle(f32::from_bits(0x3fc9_0fdb), [0.0, 1.0, 0.0]) } else { axis_angle(f32::from_bits(0x4016_cbe4), [0.0, 0.0, 1.0]) };
     let mut aimed = vmul(&vmul(&vmul(&m, &axis_angle(angle, [1.0, 0.0, 0.0])), &twist), &transpose3(&chain));
@@ -474,36 +468,35 @@ pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -
 /// root height. `contact`, `pos` are world points, `scale` the player's two size factors.
 pub fn overhead_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> (crate::pose::ArmSolve, f32) {
     use crate::pose::{axis_cos, transpose3};
-    use crate::ps2::{add, div, madd, msub, mul, sqrt, sub};
     use crate::vu0::transform;
-    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
-    let s01 = mul(scale[0], scale[1]);
+    let d: [f32; 4] = std::array::from_fn(|k| (F(contact[k]) - pos[k]).0);
+    let s01 = (F(scale[0]) * scale[1]).0;
     let sh = a.shoulder;
-    let mut v = [sub(mul(d[0], s01), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
+    let mut v = [(F(d[0]) * s01 - sh[0]).0, (F(d[1]) - sh[1]).0, (F(d[2]) * scale[0] - sh[2]).0, (F(d[3]) - sh[3]).0];
     let mut step = [0.0f32; 4];
-    let lim = div(a.radius, f32::from_bits(0x3fb5_04f3));
+    let lim = (F(a.radius) / f32::from_bits(0x3fb5_04f3)).0;
     if v[2] < 0.0 {
         step[2] = v[2];
     } else if !(v[2] <= lim) {
-        step[2] = sub(v[2], lim);
+        step[2] = (F(v[2]) - lim).0;
     }
-    v[2] = sub(v[2], step[2]);
-    let ax = if v[0].abs() <= lim { sqrt(msub(mul(a.radius, a.radius), v[0], v[0])) } else { v[0].abs() };
-    let up = add(v[1], ax);
-    let jump = if up <= 0.0 { -up } else { 0.0 };
-    v[1] = add(v[1], jump);
-    let jump_scale = div(-jump, a.lift);
+    v[2] = (F(v[2]) - step[2]).0;
+    let ax = if v[0].abs() <= lim { (F(a.radius) * a.radius).msub(v[0], v[0]).sqrt().0 } else { v[0].abs() };
+    let up = (F(v[1]) + ax).0;
+    let jump = if up <= 0.0 { (-F(up)).0 } else { 0.0 };
+    v[1] = (F(v[1]) + jump).0;
+    let jump_scale = (-F(jump) / a.lift).0;
     // face the point: turn about x taking −y onto it
-    let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[1], v[1])));
-    let (ny, nz) = (mul(v[1], inv), mul(v[2], inv));
-    let dot = madd(madd(mul(ny, -1.0), 0.0, 0.0), nz, 0.0);
-    let turn = if msub(mul(ny, 0.0), nz, -1.0) < 0.0 { -1.0 } else { 1.0 };
+    let inv = (1.0 / (F(v[2]) * v[2]).madd(v[1], v[1]).sqrt()).0;
+    let (ny, nz) = ((F(v[1]) * inv).0, (F(v[2]) * inv).0);
+    let dot = (F(ny) * -1.0).madd(0.0, 0.0).madd(nz, 0.0).0;
+    let turn = if (F(ny) * 0.0).msub(nz, -1.0).0 < 0.0 { -1.0 } else { 1.0 };
     let r0 = axis_cos(dot.clamp(-1.0, 1.0), turn, [1.0, 0.0, 0.0]);
     let v = transform(&r0, v);
     let solve = arm_ccd(a, v, transpose3(&r0), [0, 1], false);
     let mut solve = solve;
-    solve.step[2] = mul(step[2], scale[0]);
-    solve.step[0] = mul(solve.step[0], s01);
+    solve.step[2] = (F(step[2]) * scale[0]).0;
+    solve.step[0] = (F(solve.step[0]) * s01).0;
     (solve, jump_scale)
 }
 
@@ -511,15 +504,14 @@ pub fn overhead_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f3
 /// pass; the body doesn't move (zero step).
 pub fn underhand_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) -> crate::pose::ArmSolve {
     use crate::pose::{axis_cos, transpose3};
-    use crate::ps2::{div, madd, msub, mul, sqrt, sub};
     use crate::vu0::transform;
-    let d: [f32; 4] = std::array::from_fn(|k| sub(contact[k], pos[k]));
+    let d: [f32; 4] = std::array::from_fn(|k| (F(contact[k]) - pos[k]).0);
     let sh = a.shoulder;
-    let v = [sub(mul(d[0], mul(scale[0], scale[1])), sh[0]), sub(d[1], sh[1]), sub(mul(d[2], scale[0]), sh[2]), sub(d[3], sh[3])];
-    let inv = div(1.0, sqrt(madd(mul(v[2], v[2]), v[1], v[1])));
-    let (ny, nz) = (mul(v[1], inv), mul(v[2], inv));
-    let dot = madd(madd(mul(ny, 0.0), 0.0, 0.0), nz, 1.0);
-    let turn = if msub(mul(ny, 1.0), nz, 0.0) < 0.0 { -1.0 } else { 1.0 };
+    let v = [(d[0] * (F(scale[0]) * scale[1]) - sh[0]).0, (F(d[1]) - sh[1]).0, (F(d[2]) * scale[0] - sh[2]).0, (F(d[3]) - sh[3]).0];
+    let inv = (1.0 / (F(v[2]) * v[2]).madd(v[1], v[1]).sqrt()).0;
+    let (ny, nz) = ((F(v[1]) * inv).0, (F(v[2]) * inv).0);
+    let dot = (F(ny) * 0.0).madd(0.0, 0.0).madd(nz, 1.0).0;
+    let turn = if (F(ny) * 1.0).msub(nz, 0.0).0 < 0.0 { -1.0 } else { 1.0 };
     let r0 = axis_cos(dot.clamp(-1.0, 1.0), turn, [1.0, 0.0, 0.0]);
     let mut s = arm_ccd(a, transform(&r0, v), transpose3(&r0), [0, 2], true);
     s.step = [0.0; 4];
@@ -528,10 +520,9 @@ pub fn underhand_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f
 
 /// Unit (a − b) in the plane of components `c`.
 fn unit_in(a: [f32; 4], b: [f32; 4], c: [usize; 2]) -> [f32; 2] {
-    use crate::ps2::{div, madd, mul, sqrt, sub};
-    let (x, y) = (sub(a[c[0]], b[c[0]]), sub(a[c[1]], b[c[1]]));
-    let inv = div(1.0, sqrt(madd(mul(y, y), x, x)));
-    [mul(x, inv), mul(y, inv)]
+    let (x, y) = ((F(a[c[0]]) - b[c[0]]).0, (F(a[c[1]]) - b[c[1]]).0);
+    let inv = (1.0 / (F(y) * y).madd(x, x).sqrt()).0;
+    [(F(x) * inv).0, (F(y) * inv).0]
 }
 
 /// The bend shared by both serve solves, toward `v` (already in the facing frame `t0` undoes) in the plane of
@@ -540,18 +531,17 @@ fn unit_in(a: [f32; 4], b: [f32; 4], c: [usize; 2]) -> [f32; 2] {
 /// once (underhand). Leaves the step's raw x (unscaled) in `step[0]`.
 fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) -> crate::pose::ArmSolve {
     use crate::pose::{TIP, axis_cos, keep_row3, transpose3, vmul};
-    use crate::ps2::{add, div, madd, msub, mul, sub};
     use crate::vu0::transform;
     let axis = if under { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
     // the plane's dot and the turn's sign (the cross product's out-of-plane component)
-    let dot_of = |u: [f32; 2], w: [f32; 2]| madd(madd(mul(u[1], w[1]), u[0], w[0]), 0.0, 0.0);
-    let cross_of = |u: [f32; 2], w: [f32; 2]| if under { msub(add(0.0, mul(u[1], w[0])), u[0], w[1]) } else { msub(add(0.0, mul(u[0], w[1])), u[1], w[0]) };
+    let dot_of = |u: [f32; 2], w: [f32; 2]| (F(u[1]) * w[1]).madd(u[0], w[0]).madd(0.0, 0.0).0;
+    let cross_of = |u: [f32; 2], w: [f32; 2]| if under { (0.0 + F(u[1]) * w[0]).msub(u[0], w[1]).0 } else { (0.0 + F(u[0]) * w[1]).msub(u[1], w[0]).0 };
     let (chain, mut hand, mut forearm, mut aimed) = (a.chain, a.hand, a.forearm, a.aimed);
     let at_hand = if under { transform(&hand, transform(&a.racket, TIP)) } else { transform(&vmul(&a.racket, &hand), TIP) };
     let tip = |forearm: &M4, aimed: &M4| transform(&chain, transform(aimed, transform(forearm, at_hand)));
     let dist = |v: [f32; 4], p: [f32; 4]| {
-        let (dx, dy) = (sub(v[c[0]], p[c[0]]), sub(v[c[1]], p[c[1]]));
-        madd(mul(dy, dy), dx, dx)
+        let (dx, dy) = ((F(v[c[0]]) - p[c[0]]).0, (F(v[c[1]]) - p[c[1]]).0);
+        (F(dy) * dy).madd(dx, dx).0
     };
     let mut p = tip(&forearm, &aimed);
     let mut elbow = true;
@@ -580,7 +570,7 @@ fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) ->
         let (u, w) = (unit_in(p, m[3], c), unit_in(v, m[3], c));
         let dot = dot_of(u, w);
         if !(dot < f32::from_bits(0x3f5d_b3d7)) {
-            let cr = if under { msub(mul(u[1], w[0]), u[0], w[1]) } else { msub(mul(u[0], w[1]), u[1], w[0]) };
+            let cr = if under { (F(u[1]) * w[0]).msub(u[0], w[1]).0 } else { (F(u[0]) * w[1]).msub(u[1], w[0]).0 };
             let bent = vmul(&vmul(&m, &axis_cos(dot.clamp(-1.0, 1.0), if cr < 0.0 { -1.0 } else { 1.0 }, axis)), &transpose3(&frame));
             hand = keep_row3(bent, &hand);
         }
@@ -591,8 +581,8 @@ fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) ->
         if v[0].abs() <= p[0].abs() {
             break;
         }
-        step[0] = div(sub(v[0], p[0]), 2.0);
-        v[0] = sub(v[0], step[0]);
+        step[0] = ((F(v[0]) - p[0]) / 2.0).0;
+        v[0] = (F(v[0]) - step[0]).0;
     }
     // back out of the facing turn
     aimed = vmul(&vmul(&vmul(&aimed, &chain), &t0), &transpose3(&chain));

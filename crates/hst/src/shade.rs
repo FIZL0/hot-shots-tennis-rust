@@ -42,26 +42,10 @@ pub struct FixedLight(pub [Vec4; 5]);
 
 /// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half, mirrored) last applied.
 #[derive(Component)]
-struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool)>);
+struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool, Option<(u8, f32)>)>);
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<SharedDraws>().add_systems(Update, (own_materials.after(crate::noise::attach), light.after(crate::weather::apply)).chain());
-}
-
-/// B343: a court creature drawn with the same GS draws as the others of its model (`Graphics::batch_crowd`,
-/// `play::npcs`), so the renderer can instance them: its light scale rides in its draws' `MeshTag` ([`shade_tag`])
-/// instead of in the shared materials' light colour.
-#[derive(Component)]
-pub struct Shared;
-
-/// The [`Shared`] rigs' GS draws, by the StandardMaterial of their model they stand in for.
-#[derive(Resource, Default)]
-struct SharedDraws(HashMap<AssetId<StandardMaterial>, Vec<Handle<GsMaterial>>>);
-
-/// A [`Shared`] rig's light scale as its draws' tag: the scale's bits with the top bit set (`gs.wgsl` reads an
-/// untagged 0 as 1).
-fn shade_tag(s: f32) -> bevy::mesh::MeshTag {
-    bevy::mesh::MeshTag(s.max(0.0).to_bits() | 1 << 31)
+    app.add_systems(Update, (own_materials.after(crate::noise::attach), light.after(crate::weather::apply)).chain());
 }
 
 /// Model-space (min, max) over the packet boxes, the box the game frames the map with.
@@ -87,23 +71,17 @@ pub fn build(frame: Frame, casters: &[shade::Caster], hole: &hst_data::mdl::Mode
 
 /// Give every new rig and the ball GS draws of their own (so each can be shaded apart) in place of their
 /// StandardMaterials; a second draw (TEST mode 20..29) is a sibling with the same mesh.
-/// B343: a [`Shared`] rig takes the draws the first rig of its model made, and tags its parts with its light scale.
 #[allow(clippy::too_many_arguments)]
 fn own_materials(
     mut commands: Commands,
-    rigs: Query<(Entity, Option<&Rig>, Has<Shared>), Or<(Added<Rig>, Added<Ball>)>>,
+    rigs: Query<(Entity, Option<&Rig>), Or<(Added<Rig>, Added<Ball>)>>,
     children: Query<&Children>,
     parts: Query<(&MeshMaterial3d<StandardMaterial>, &Mesh3d, Option<&bevy::mesh::skinning::SkinnedMesh>, Option<&bevy::mesh::morph::MeshMorphWeights>, &Transform, &ChildOf)>,
     materials: Res<Assets<StandardMaterial>>,
     mut gs: ResMut<Assets<GsMaterial>>,
-    mut shared_draws: ResMut<SharedDraws>,
     cullable: Query<(), With<crate::cull::Cullable>>,
 ) {
-    if rigs.iter().any(|r| r.2) {
-        // a past match's models are gone
-        shared_draws.0.retain(|m, _| materials.contains(*m));
-    }
-    for (root, rig, shared) in &rigs {
+    for (root, rig) in &rigs {
         let mut own = Vec::new();
         for e in children.iter_descendants(root) {
             let Ok((m, mesh, skin, morph, t, up)) = parts.get(e) else { continue };
@@ -112,27 +90,13 @@ fn own_materials(
                 None => materials.get(&m.0).and_then(|s| s.base_color_texture.as_ref()).and_then(|t| BALL_GS.lock().unwrap().get(&t.id()).cloned()),
             };
             for (k, d) in draws.into_iter().flatten().enumerate() {
-                let h = if shared {
-                    let made = shared_draws.0.entry(m.0.id()).or_default();
-                    if made.len() <= k {
-                        made.push(gs.add(d));
-                    }
-                    made[k].clone()
-                } else {
-                    gs.add(d)
-                };
+                let h = gs.add(d);
                 own.push(h.clone());
                 if k == 0 {
                     commands.entity(e).try_remove::<MeshMaterial3d<StandardMaterial>>().try_insert(MeshMaterial3d(h));
-                    if shared {
-                        commands.entity(e).try_insert(shade_tag(1.0));
-                    }
                     continue;
                 }
                 let mut c = commands.spawn((mesh.clone(), *t, MeshMaterial3d(h)));
-                if shared {
-                    c.insert(shade_tag(1.0));
-                }
                 if let Some(s) = skin {
                     c.insert(s.clone());
                 }
@@ -166,14 +130,14 @@ fn light(
     shade: Option<Res<Shade>>,
     look: Option<Res<crate::weather::CourtLook>>,
     sun: Option<Res<crate::shadow::Sun>>,
-    mut rigs: Query<(Entity, &GlobalTransform, &mut Lit, Has<Ball>, Has<crate::effects::SwingTrail>, Option<&FixedLight>, Has<Shared>)>,
+    mut rigs: Query<(&GlobalTransform, &mut Lit, Has<Ball>, Has<crate::effects::SwingTrail>, Option<&FixedLight>)>,
     mut materials: ResMut<Assets<GsMaterial>>,
-    children: Query<&Children>,
-    mut tags: Query<&mut bevy::mesh::MeshTag>,
 ) {
     let rain = crate::weather::now() >= 2;
     let w = look.as_ref().and_then(|l| l.last);
-    for (root, t, mut lit, ball, player, fixed, shared) in &mut rigs {
+    // B360: fading towards the next game's weather as the court is (`weather::apply`)
+    let mix = look.as_ref().and_then(|l| l.mix);
+    for (t, mut lit, ball, player, fixed) in &mut rigs {
         if let Some(FixedLight([dir, colour, ambient, dir2, second])) = fixed {
             // a left-hander's inspect rig is mirrored too: cull as the match does (checked each frame, as its
             // materials may not be loaded yet on the first)
@@ -184,7 +148,7 @@ fn light(
                 }
             }
             if lit.1.is_none() {
-                lit.1 = Some((1.0, None, false, false));
+                lit.1 = Some((1.0, None, false, false, None));
                 for h in &lit.0 {
                     let Some(mut m) = materials.get_mut(h) else { continue };
                     let u = &mut m.uniform;
@@ -211,15 +175,22 @@ fn light(
         // a left-hander is drawn mirrored (x scale −1): its one-sided parts keep the faces towards the camera, as
         // the game's (Will's eyes are one-sided)
         let mirror = t.affine().matrix3.determinant() < 0.0;
-        let key = (s, w, player && p.z < 0.0, mirror);
+        let key = (s, w, player && p.z < 0.0, mirror, mix);
         if lit.1 == Some(key) {
             continue;
         }
         lit.1 = Some(key);
-        let court = look.as_deref().zip(w).map(|(look, w)| {
+        let of = |look: &crate::weather::CourtLook, w: u8| {
             let l = look.looks.get(w as usize).map_or(hst_sim::weather::Look::CLEAR, |r| hst_sim::weather::look(w, *r));
             let light = if player { gs::player_light(&look.envir, &l, look.players) } else { gs::model_light(&look.envir, &l) };
             (light, gs::court_fog(&look.envir, &l))
+        };
+        let court = look.as_deref().zip(w).map(|(look, w)| {
+            let (light, fog) = of(look, w);
+            let Some((to, t)) = mix else { return (light, fog) };
+            let (light2, fog2) = of(look, to);
+            let v = |a: Vec4, b: Vec4| a.lerp(b, t);
+            (light.zip(light2).map(|(a, b)| (v(a.0, b.0), v(a.1, b.1), v(a.2, b.2))).or(light), fog.zip(fog2).map(|(a, b)| (v(a.0, b.0), v(a.1, b.1), v(a.2, b.2), v(a.3, b.3))).or(fog))
         });
         let (mut dir, mut colour, mut ambient) = gs::DEFAULT_LIGHT;
         let (mut dir2, mut second) = (Vec4::ZERO, Vec4::ZERO);
@@ -228,31 +199,10 @@ fn light(
             // the players' second light runs along the court towards their end (Bevy z is −game z)
             (dir2, second) = (if player { gs::player_light2(-p.z) } else { -dir }, t);
         }
-        // B343: a shared rig's scale goes in its tags; its draws (the same for every rig of its model) are written
-        // only when they change
-        let scale = if shared {
-            for d in children.iter_descendants(root) {
-                if let Ok(mut tag) = tags.get_mut(d) {
-                    tag.set_if_neq(shade_tag(s));
-                }
-            }
-            1.0
-        } else {
-            s
-        };
         for h in &lit.0 {
-            if shared
-                && materials.get(h).is_some_and(|m| {
-                    let u = &m.uniform;
-                    let fog = court.and_then(|c| c.1).is_none_or(|(main, _, _, fog)| u.fog == main && u.fog_color == fog);
-                    m.key.mirror == mirror && (u.light_dir, u.light_color, u.ambient, u.light2_dir, u.light2_color, u.glare) == (dir, colour.truncate().extend(1.0), ambient, dir2, second, !rain as u8 as f32) && fog
-                })
-            {
-                continue;
-            }
             let Some(mut m) = materials.get_mut(h) else { continue };
             m.key.mirror = mirror;
-            (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (dir, (colour.truncate() * scale).extend(1.0), ambient);
+            (m.uniform.light_dir, m.uniform.light_color, m.uniform.ambient) = (dir, (colour.truncate() * s).extend(1.0), ambient);
             (m.uniform.light2_dir, m.uniform.light2_color, m.uniform.glare) = (dir2, second, !rain as u8 as f32);
             if let Some((_, Some((mut main, _, _, fog)))) = court {
                 // the players' fog is the court's with their own near F (`exe::Game::player_light`[3])

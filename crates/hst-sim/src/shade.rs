@@ -11,6 +11,10 @@
 //!   ray cast down at the court model ([`ball_height`]). The players are never shaded. The scale multiplies the
 //!   model's directional light colour (VU1), not the ambient.
 
+#![deny(clippy::float_arithmetic)]
+
+use crate::ps2::{F, fs};
+use crate::vu0::Vf;
 use crate::{mesh, ps2, vu0};
 
 /// Bits per map row (game z) and rows (game x).
@@ -29,53 +33,55 @@ impl Frame {
     /// The game's map frame for a hole model whose packet boxes span `lo`..`hi` (model space), drawn at scale `s`
     /// and translation `t`. The camera height is worked in double precision (the C library's `tan`),
     /// truncated back to single.
+    #[allow(clippy::float_arithmetic)] // the C library's double-precision `tan` work, not the FPU
     pub fn new(lo: [f32; 3], hi: [f32; 3], s: f32, t: [f32; 3]) -> Frame {
-        let (m, a) = (ps2::mul, ps2::add);
-        let centre = |k: usize| m(m(a(lo[k], hi[k]), 0.5), s);
+        let (lo, hi, t) = (fs(lo), fs(hi), fs(t));
+        let centre = |k: usize| (lo[k] + hi[k]) * 0.5 * s;
         let (cx, cz) = (centre(0), centre(2));
-        let zext = ps2::sub(m(hi[2], s), m(lo[2], s));
-        let xext = ps2::sub(m(hi[0], s), m(lo[0], s));
+        let zext = hi[2] * s - lo[2] * s;
+        let xext = hi[0] * s - lo[0] * s;
         let tan = musl::tan(f32::from_bits(0x3eb2_b8c2) as f64); // 20°: half the field of view
         // the camera height (game y, negative is up) that frames the longer side
-        let h = if ps2::div(zext, xext) > 1.333_333_4 {
-            ps2::chop(m(-zext, 0.5) as f64 / tan)
+        let h = if zext / xext > 1.333_333_4 {
+            ps2::chop((-zext * 0.5).0 as f64 / tan)
         } else {
-            ps2::chop(4.0 * (m(-xext, 0.5) as f64 / tan) / 3.0)
+            ps2::chop(4.0 * ((-xext * 0.5).0 as f64 / tan) / 3.0)
         };
         let hz = ps2::chop(-h as f64 * tan);
         let hx = ps2::chop(3.0 * (-h as f64 * tan) / 4.0);
         Frame {
-            origin: [ps2::sub(a(t[2], cz), hz), ps2::sub(a(t[0], cx), hx)],
-            scale: [ps2::div(1.0, ps2::div(m(hz, 2.0), 1280.0)), ps2::div(1.0, ps2::div(m(hx, 2.0), 896.0))],
+            origin: [(t[2] + cz - hz).0, (t[0] + cx - hx).0],
+            scale: [(1.0 / (F(hz) * 2.0 / 1280.0)).0, (1.0 / (F(hx) * 2.0 / 896.0)).0],
         }
     }
 }
 
 /// `cvt.w.s` read as unsigned, the halved path for values from 2³¹.
 fn ftou(f: f32) -> u32 {
-    if f < 2_147_483_648.0 { f as i32 as u32 } else { (ps2::sub(f, 2_147_483_648.0) as i32 as u32) | 0x8000_0000 }
+    if f < 2_147_483_648.0 { f as i32 as u32 } else { ((F(f) - 2_147_483_648.0).0 as i32 as u32) | 0x8000_0000 }
 }
 
 /// The light scale at game (x, z): 1.0 off the map.
 pub fn lookup(map: &[u8], f: &Frame, x: f32, z: f32) -> f32 {
-    let fr = ps2::mul(f.scale[1], ps2::sub(x, f.origin[1]));
-    let row = ftou(fr);
+    let fr = F(f.scale[1]) * (F(x) - f.origin[1]);
+    let row = ftou(fr.0);
     if row >= ROWS as u32 - 1 {
         return 1.0;
     }
-    let fc = ps2::mul(f.scale[0], ps2::sub(z, f.origin[0]));
-    let col = ftou(fc);
+    let fc = F(f.scale[0]) * (F(z) - f.origin[0]);
+    let col = ftou(fc.0);
     if col >= COLS as u32 - 1 {
         return 1.0;
     }
-    let lit = |i: u32| if map[(i >> 3) as usize] >> (i & 7) & 1 != 0 { 0.0 } else { 1.0 };
+    let lit = |i: u32| {
+        if map[(i >> 3) as usize] >> (i & 7) & 1 != 0 { 0.0 } else { 1.0 }
+    };
     let i = col + row * COLS as u32;
     let a = [lit(i), lit(i + COLS as u32), lit(i + 1), lit(i + COLS as u32 + 1)];
-    let (wr, wc) = (ps2::sub(fr, ps2::utof(row)), ps2::sub(fc, ps2::utof(col)));
-    let (m, s) = (ps2::mul, ps2::sub);
-    let near = ps2::add(m(s(1.0, wr), a[0]), m(wr, a[1]));
-    let far = ps2::add(m(s(1.0, wr), a[2]), m(wr, a[3]));
-    ps2::add(m(s(1.0, wc), near), m(wc, far))
+    let (wr, wc) = (fr - ps2::utof(row), fc - ps2::utof(col));
+    let near = (1.0 - wr) * a[0] + wr * a[1];
+    let far = (1.0 - wr) * a[2] + wr * a[3];
+    ((1.0 - wc) * near + wc * far).0
 }
 
 /// The ball's light scale: under a unit above the ground (`height`, up positive) the map's but at least the height
@@ -91,7 +97,7 @@ pub fn ball(map: &[u8], f: &Frame, x: f32, z: f32, height: f32) -> f32 {
 
 /// The ball's height above the ground for [`ball`], from its game position (y down), over [`ground`].
 pub fn ball_height(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Option<f32> {
-    ground(court, models, pos).map(|(g, _)| -ps2::sub(pos[1], g[1]))
+    ground(court, models, pos).map(|(g, _)| (-(F(pos[1]) - g[1])).0)
 }
 
 /// The ground under the ball (game position, y down) and its normal (towards the ball), which the ball's light and
@@ -104,36 +110,36 @@ pub fn ground(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Op
         return Some(([x, 0.0, z, w], [-0.0, -1.0, -0.0, -0.0]));
     }
     let mut hit = mesh::Hit::NONE;
-    court.ray(models, &mut hit, pos, [x, ps2::add(y, 200.0), z, w]).then_some((hit.centre, hit.normal))
+    court.ray(models, &mut hit, pos, [x, (F(y) + 200.0).0, z, w]).then_some((hit.centre, hit.normal))
 }
 
 /// The ball shadow's placement (game space, row vectors: across, the ground's down axis, towards the camera, then
 /// the position) on the ground `point` with `normal` from [`ground`], seen from the camera at `eye`: turned about
 /// the normal to face the camera (or along game z on ground steeper than 0.1 from vertical), 0.005 above the ground.
 pub fn ball_shadow(point: [f32; 4], normal: [f32; 4], eye: [f32; 4]) -> [[f32; 4]; 4] {
-    let down = normal.map(|v| -v);
-    let to_eye = if down[1] > 0.1 { std::array::from_fn(|k| ps2::sub(eye[k], point[k])) } else { [0.0, -1.0, 0.0, 0.0] };
+    let down = normal.map(|v| (-F(v)).0);
+    let to_eye = if down[1] > 0.1 { std::array::from_fn(|k| (F(eye[k]) - point[k]).0) } else { [0.0, -1.0, 0.0, 0.0] };
     let y = vu0::normalize(down);
     let x = vu0::normalize(vu0::cross(y, to_eye));
     let z = vu0::normalize(vu0::cross(x, y));
-    [x, y, z, std::array::from_fn(|k| if k == 3 { point[3] } else { ps2::add(point[k], ps2::mul(normal[k], 0.005)) })]
+    [x, y, z, std::array::from_fn(|k| if k == 3 { point[3] } else { (point[k] + F(normal[k]) * 0.005).0 })]
 }
 
 /// How far the ball shadow is drawn stretched along its towards-the-camera axis: 1 within 10 units (across the
 /// ground) of the camera `eye`, rising to 3 at 50 and beyond, so it keeps its size on screen.
 pub fn ball_shadow_stretch(pos: [f32; 4], eye: [f32; 4]) -> f32 {
-    let (dx, dz) = (ps2::sub(pos[0], eye[0]), ps2::sub(pos[2], eye[2]));
-    let d = ps2::sqrt(ps2::add(ps2::mul(dx, dx), ps2::mul(dz, dz)));
+    let (dx, dz) = (F(pos[0]) - eye[0], F(pos[2]) - eye[2]);
+    let d = (dx * dx + dz * dz).sqrt();
     if d <= 10.0 {
         return 1.0;
     }
-    let t = ps2::div(ps2::sub(d, 10.0), ps2::sub(50.0, 10.0)).clamp(0.0, 1.0);
-    ps2::add(ps2::mul(t, ps2::sub(3.0, 1.0)), 1.0)
+    let t = ((d - 10.0) / (F(50.0) - 10.0)).clamp(0.0, 1.0);
+    (t * (F(3.0) - 1.0) + 1.0).0
 }
 
 /// tan of half the camera's full field of view `fov` (degrees), as the ball draw works it out each frame.
 pub fn half_fov_tan(fov: f32) -> f32 {
-    crate::libm::tanf(ps2::mul(ps2::mul(fov, 0.5), 0.017453292))
+    crate::libm::tanf((F(fov) * 0.5 * 0.017453292).0)
 }
 
 /// The ball model's draw scale for its object scale `scale` (2.0) at view depth `depth` with `t` from
@@ -143,21 +149,28 @@ pub fn ball_scale(scale: f32, depth: f32, t: f32, grow: bool) -> f32 {
     if !grow {
         return scale;
     }
-    ps2::mul(scale, ps2::mul(0.13, ps2::mul(depth, t)).max(1.0))
+    (F(scale) * (0.13 * (F(depth) * t)).max(1.0)).0
 }
 
 /// The ball's outline billboard (a second `ballshadow.mdl`, drawn only at full ball alpha): scale 2 × the ball's
 /// draw scale `ball` × 0.4·depth·t clamped to 0.8..1, and its placement (game space, row vectors) at the ball `pos`
 /// seen from `eye`: across = normalize((pos − eye) × down), then normalize(down × across), down (the camera's
 /// down axis), so its xz quad stands facing the camera.
-pub fn ball_outline(ball: f32, depth: f32, t: f32, pos: [f32; 4], eye: [f32; 4], down: [f32; 4]) -> (f32, [[f32; 4]; 4]) {
-    let s = ps2::mul(0.4, ps2::mul(depth, t));
+pub fn ball_outline(
+    ball: f32,
+    depth: f32,
+    t: f32,
+    pos: [f32; 4],
+    eye: [f32; 4],
+    down: [f32; 4],
+) -> (f32, [[f32; 4]; 4]) {
+    let s = (0.4 * (F(depth) * t)).0;
     let s = if s < 0.8 { 0.8 } else { s.min(1.0) };
     let d = vu0::normalize(down);
-    let to = std::array::from_fn(|k| ps2::sub(pos[k], eye[k]));
+    let to = std::array::from_fn(|k| (F(pos[k]) - eye[k]).0);
     let x = vu0::normalize(vu0::cross(to, d));
     let y = vu0::normalize(vu0::cross(d, x));
-    (ps2::mul(ps2::mul(ball, 2.0), s), [x, y, d, pos])
+    ((F(ball) * 2.0 * s).0, [x, y, d, pos])
 }
 
 /// A shadow caster: its model's triangles (model space) drawn solid, those of its alpha-tested materials drawn
@@ -177,7 +190,7 @@ impl Caster {
     pub fn new(shape: &Shape, p: &hst_data::layout::Placement, axes: &[vu0::V4; 3]) -> Caster {
         let (mut item, _) = crate::world::place(p.category, p.pos, p.yaw, p.code);
         if p.scale != 1.0 {
-            item[..3].iter_mut().for_each(|r| r[..3].iter_mut().for_each(|x| *x = vu0::mul(*x, p.scale)));
+            item[..3].iter_mut().for_each(|r| r[..3].iter_mut().for_each(|x| *x = (Vf(*x) * p.scale).0));
         }
         let (light, planes) = (light_matrix(&item, p.scale, shape.centre, shape.half, axes), planes(&item, p.scale, shape.centre, shape.half, axes));
         Caster { item, light, planes, tris: shape.tris.clone(), cut: shape.cut.clone() }
@@ -213,8 +226,8 @@ pub struct Shape {
 impl Shape {
     pub fn new(model: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl) -> Shape {
         let mut s = Shape {
-            centre: std::array::from_fn(|k| ps2::mul(ps2::add(model.lo[k], model.hi[k]), 0.5)),
-            half: std::array::from_fn(|k| ps2::mul(ps2::sub(model.hi[k], model.lo[k]), 0.5)),
+            centre: std::array::from_fn(|k| ((F(model.lo[k]) + model.hi[k]) * 0.5).0),
+            half: std::array::from_fn(|k| ((F(model.hi[k]) - model.lo[k]) * 0.5).0),
             ..Shape::default()
         };
         for (mi, packets) in model.materials.iter().enumerate() {
@@ -247,6 +260,7 @@ impl Shape {
 
 /// A game point through a caster's light matrix `l` (row vectors): its shadow texture (u, v) in −1..1, over the
 /// light's w.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn light_uv(l: &[vu0::V4; 4], p: [f64; 3]) -> [f64; 2] {
     let c = |j: usize| p[0] * l[0][j] as f64 + p[1] * l[1][j] as f64 + p[2] * l[2][j] as f64 + l[3][j] as f64;
     let w = c(3);
@@ -254,12 +268,14 @@ fn light_uv(l: &[vu0::V4; 4], p: [f64; 3]) -> [f64; 2] {
 }
 
 /// A model point through a caster's item matrix (row vectors) into game space.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn to_world(m: &[vu0::V4; 4], p: [f32; 3]) -> [f64; 3] {
     std::array::from_fn(|j| p[0] as f64 * m[0][j] as f64 + p[1] as f64 * m[1][j] as f64 + p[2] as f64 * m[2][j] as f64 + m[3][j] as f64)
 }
 
 /// The GS's fill of triangle `v` (fixed point, `unit` per pixel) over a `w` × `h` grid: pixel centres on whole
 /// pixels, top-left fill convention; `put(column, row, barycentric weights)`.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn raster(mut v: [[i64; 2]; 3], unit: i64, w: usize, h: usize, mut put: impl FnMut(usize, usize, [f64; 3])) {
     let cr = |a: [i64; 2], b: [i64; 2], c: [i64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     let mut area = cr(v[0], v[1], v[2]);
@@ -299,6 +315,7 @@ const TEX: usize = 128;
 /// A caster's shadow texture (palette index 0..15, red = index·0x20 clamped): its triangles drawn in light space at
 /// twice the size with red 0x80 over 0, every other pixel kept as red >> 4. Solid triangles write 0x80; a
 /// [`Shape`]'s cut ones blend toward it by their texture's bilinear alpha ((0x80 − Rd)·At >> 7 + Rd) where At ≥ 1.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn texture(c: &Caster) -> Vec<u8> {
     let mut red = vec![0u32; TEX * TEX];
     let screen = |t: &[[f32; 3]; 3]| t.map(|p| light_uv(&c.light, to_world(&c.item, p)).map(|u| ((128.0 * u + 126.0) * 16.0).floor() as i64));
@@ -321,6 +338,7 @@ fn texture(c: &Caster) -> Vec<u8> {
 }
 
 /// The GS's bilinear read (4-bit fraction) of a cutout's alpha at (s, t), wrapped or clamped as its material sets.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn alpha(k: &Cutout, s: f64, t: f64) -> u32 {
     let fix = |s: f64, n: usize| ((s * n as f64 - 0.5) * 16.0).floor() as i64;
     let (u, v) = (fix(s, k.width), fix(t, k.height));
@@ -331,6 +349,7 @@ fn alpha(k: &Cutout, s: f64, t: f64) -> u32 {
 }
 
 /// The GS's bilinear read (4-bit fraction, clamped) of a shadow texture (red index·0x20, clamped) at (s, t) in 0..1.
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 fn sample(tex: &[u8], s: f64, t: f64) -> u32 {
     let fix = |s: f64| ((s * TEX as f64 - 0.5) * 16.0).floor() as i64;
     let (u, v) = (fix(s), fix(t));
@@ -347,6 +366,7 @@ fn sample(tex: &[u8], s: f64, t: f64) -> u32 {
 /// camera on paper is 40° perspective), the raster and sampling are worked in double precision, not the game's
 /// VU1/GS, and every fogged cutout blends toward 0x7f (the game's court 10 seat and statue stay at 0x80, cause not
 /// found): IoU ≈ 0.97 against the game's map on court 10 (rendering only has to look right).
+#[allow(clippy::float_arithmetic)] // double-precision raster standing in for VU1/GS (render only), not the FPU
 pub fn build(f: &Frame, casters: &[Caster], hole: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl) -> Vec<u8> {
     let texs: Vec<Vec<u8>> = casters.iter().map(texture).collect();
     let (sz, sx) = (f.scale[0] as f64, f.scale[1] as f64);
@@ -379,7 +399,9 @@ pub fn build(f: &Frame, casters: &[Caster], hole: &hst_data::mdl::Model, mats: &
 pub fn tex_matrix(light: &[vu0::V4; 4]) -> [vu0::V4; 4] {
     const B: [vu0::V4; 4] = [[0.5, 0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0; 4], [0.5, 0.5, 1.0, 1.0]];
     // the EE sums the products as ((r1·b1 + r0·b0) + r2·b2) + r3·b3
-    light.map(|r| std::array::from_fn(|j| ps2::madd(ps2::madd(ps2::madd(ps2::mul(r[1], B[1][j]), r[0], B[0][j]), r[2], B[2][j]), r[3], B[3][j])))
+    light.map(|r| {
+        std::array::from_fn(|j| (F(r[1]) * B[1][j]).madd(r[0], B[0][j]).madd(r[2], B[2][j]).madd(r[3], B[3][j]).0)
+    })
 }
 
 /// The sun at a match's start as the game sets it up, from the court's time-of-day row (`start`, `end` pitch,
@@ -389,24 +411,24 @@ pub fn tex_matrix(light: &[vu0::V4; 4]) -> [vu0::V4; 4] {
 pub fn sun(start: f32, end: f32, tilt: f32, azimuth: f32, hour: i32) -> (vu0::V4, vu0::V4) {
     use crate::{libm, shot, world};
     let deg = f32::from_bits(0x3c8e_fa35); // π/180
-    let t = ps2::div((hour - 1) as f32, 17.0);
-    let pitch = -ps2::madd(ps2::add(0.0, start), t, ps2::sub(end, start));
-    let mut yaw = ps2::msub(ps2::add(0.0, -world::HALF_PI), deg, azimuth);
+    let t = (F((hour - 1) as f32) / 17.0).0;
+    let pitch = (-(F::ZERO + start).madd(t, F(end) - start)).0;
+    let mut yaw = (F::ZERO + -F(world::HALF_PI)).msub(deg, azimuth).0;
     if yaw > world::PI {
-        yaw = ps2::sub(yaw, world::TWO_PI);
-    } else if yaw < -world::PI {
-        yaw = ps2::add(world::TWO_PI, yaw);
+        yaw = (F(yaw) - world::TWO_PI).0;
+    } else if yaw < -F(world::PI) {
+        yaw = (F(world::TWO_PI) + yaw).0;
     }
     let m = world::mat_mul(&world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(pitch)), &shot::rot_z(tilt)), &world::rot_y(yaw));
     let [x, y, z, w] = m[2];
-    let r = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
-    let light = [ps2::mul(x, r), ps2::mul(y, r), ps2::mul(z, r), ps2::mul(w, r)];
+    let r = (1.0 / (F(y) * y).madd(x, x).madd(z, z).sqrt()).0;
+    let light = [(F(x) * r).0, (F(y) * r).0, (F(z) * r).0, (F(w) * r).0];
     let [x, y, z, w] = light;
     let h = libm::atan2f(x, z);
-    let e = libm::atan2f(y, ps2::madd(ps2::mul(z, libm::cosf(h)), x, libm::sinf(h)));
-    let e = e.max(ps2::mul(deg, 50.0));
+    let e = libm::atan2f(y, (F(z) * libm::cosf(h)).madd(x, libm::sinf(h)).0);
+    let e = e.max((F(deg) * 50.0).0);
     let c = libm::cosf(e);
-    (light, [ps2::mul(c, libm::sinf(h)), libm::sinf(e), ps2::mul(c, libm::cosf(h)), w])
+    (light, [(F(c) * libm::sinf(h)).0, libm::sinf(e), (F(c) * libm::cosf(h)).0, w])
 }
 
 /// The light axes the game derives from the sun (unit, sun → ground) at load: lu = (0, 0, 1) × sun normalized (or
@@ -415,22 +437,13 @@ pub fn sun_axes(sun: vu0::V4) -> [vu0::V4; 3] {
     let [x, y, z, _] = sun;
     let lu = if z.abs() < 0.99999 {
         let k = [0.0, 0.0, 1.0];
-        let c = [
-            ps2::msub(ps2::mul(k[1], z), k[2], y),
-            ps2::msub(ps2::mul(k[2], x), k[0], z),
-            ps2::msub(ps2::mul(k[0], y), k[1], x),
-        ];
-        let r = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(c[1], c[1]), c[0], c[0]), c[2], c[2])));
-        [ps2::mul(c[0], r), ps2::mul(c[1], r), ps2::mul(c[2], r), ps2::mul(0.0, r)]
+        let c = [(F(k[1]) * z).msub(k[2], y).0, (F(k[2]) * x).msub(k[0], z).0, (F(k[0]) * y).msub(k[1], x).0];
+        let r = (1.0 / (F(c[1]) * c[1]).madd(c[0], c[0]).madd(c[2], c[2]).sqrt()).0;
+        [(F(c[0]) * r).0, (F(c[1]) * r).0, (F(c[2]) * r).0, (F::ZERO * r).0]
     } else {
         [1.0, 0.0, 0.0, 0.0]
     };
-    let lv = [
-        ps2::msub(ps2::mul(y, lu[2]), z, lu[1]),
-        ps2::msub(ps2::mul(z, lu[0]), x, lu[2]),
-        ps2::msub(ps2::mul(x, lu[1]), y, lu[0]),
-        0.0,
-    ];
+    let lv = [(F(y) * lu[2]).msub(z, lu[1]).0, (F(z) * lu[0]).msub(x, lu[2]).0, (F(x) * lu[1]).msub(y, lu[0]).0, 0.0];
     [lu, lv, sun]
 }
 
@@ -440,37 +453,38 @@ pub fn sun_axes(sun: vu0::V4) -> [vu0::V4; 3] {
 /// extent across the light.
 pub fn light_matrix(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3], axes: &[vu0::V4; 3]) -> [vu0::V4; 4] {
     let (w, o) = box_frame(item, scale, centre);
-    let a: [vu0::V4; 3] = std::array::from_fn(|i| w[i].map(|x| ps2::mul(x, half[i])));
+    let a: [vu0::V4; 3] = std::array::from_fn(|i| w[i].map(|x| (F(x) * half[i]).0));
     // |a0·l| + |a1·l|, then |a2·l| + that; each dot as (y·y + x·x) + z·z of a and l
     let reach = |l: vu0::V4| {
         let d = |v: vu0::V4| dot_yxz(v, l).abs();
-        ps2::add(d(a[2]), ps2::add(d(a[0]), d(a[1])))
+        (d(a[2]) + (F(d(a[0])) + d(a[1]))).0
     };
     let (su, sv) = (reach(axes[0]), reach(axes[1]));
-    let s = ps2::div(1.0, if su < sv { sv } else { su });
-    let o = o.map(|x| ps2::mul(x, s));
-    let r = ps2::div(1.0, o[3]);
-    inverse(&[axes[0], axes[1], axes[2], o].map(|v| v.map(|x| ps2::mul(x, r))))
+    let s = (F(1.0) / if su < sv { sv } else { su }).0;
+    let o = o.map(|x| (F(x) * s).0);
+    let r = (F(1.0) / o[3]).0;
+    inverse(&[axes[0], axes[1], axes[2], o].map(|v| v.map(|x| (F(x) * r).0)))
 }
 
 /// The EE's (a.y·b.y + a.x·b.x) + a.z·b.z (mula, madda, madd).
 fn dot_yxz(a: vu0::V4, b: vu0::V4) -> f32 {
-    ps2::madd(ps2::madd(ps2::mul(a[1], b[1]), a[0], b[0]), a[2], b[2])
+    (F(a[1]) * b[1]).madd(a[0], b[0]).madd(a[2], b[2]).0
 }
 
 /// The caster's matrix over its scale (`w`) and its box centre through it (`o`, w last), as the load-time setup
 /// works them out for both [`light_matrix`] and [`planes`].
 fn box_frame(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3]) -> ([vu0::V4; 4], vu0::V4) {
-    let ws = ps2::div(1.0, scale);
-    let w = item.map(|r| r.map(|x| ps2::mul(x, ws)));
+    let ws = (F(1.0) / scale).0;
+    let w = item.map(|r| r.map(|x| (F(x) * ws).0));
     let [cx, cy, cz] = centre;
-    let c: [f32; 4] = std::array::from_fn(|k| ps2::madd(ps2::madd(ps2::madd(ps2::mul(cy, w[1][k]), cx, w[0][k]), cz, w[2][k]), 0.0, w[3][k]));
-    let f = ps2::div(1.0, w[3][3]);
+    let c: [f32; 4] =
+        std::array::from_fn(|k| (F(cy) * w[1][k]).madd(cx, w[0][k]).madd(cz, w[2][k]).madd(0.0, w[3][k]).0);
+    let f = (F(1.0) / w[3][3]).0;
     let mut o = [0.0; 4];
     for k in 0..3 {
-        o[k] = ps2::madd(ps2::add(0.0, w[3][k]), ps2::mul(c[k], f), w[3][3]);
+        o[k] = (F::ZERO + w[3][k]).madd(F(c[k]) * f, w[3][3]).0;
     }
-    o[3] = ps2::add(w[3][3], 0.0);
+    o[3] = (F(w[3][3]) + 0.0).0;
     (w, o)
 }
 
@@ -484,38 +498,38 @@ fn box_frame(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3]) -> ([vu0::V4; 4]
 pub fn planes(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3], axes: &[vu0::V4; 3]) -> Planes {
     let (w, o) = box_frame(item, scale, centre);
     let s = axes[2];
-    let r = ps2::div(1.0, o[3]);
-    let o = o.map(|x| ps2::mul(x, r));
-    let f = ps2::div(1.0, w[3][3]);
-    let neg = |v: vu0::V4| v.map(|x| ps2::mul(x, -1.0));
+    let r = (F(1.0) / o[3]).0;
+    let o = o.map(|x| (F(x) * r).0);
+    let f = (F(1.0) / w[3][3]).0;
+    let neg = |v: vu0::V4| v.map(|x| (F(x) * -1.0).0);
     let mut d = [0.0; 3];
     let a: [vu0::V4; 3] = std::array::from_fn(|i| {
-        let a = w[i].map(|x| ps2::mul(ps2::mul(x, half[i]), f));
+        let a = w[i].map(|x| (F(x) * half[i] * f).0);
         d[i] = dot_yxz(a, s);
         if d[i] > 0.0 {
-            d[i] = ps2::mul(d[i], -1.0);
+            d[i] = (F(d[i]) * -1.0).0;
             return neg(a);
         }
         a
     });
-    let corner: vu0::V4 = std::array::from_fn(|k| ps2::add(ps2::add(ps2::add(o[k], a[0][k]), a[1][k]), a[2][k]));
+    let corner: vu0::V4 = std::array::from_fn(|k| (F(o[k]) + a[0][k] + a[1][k] + a[2][k]).0);
     let p: [vu0::V4; 3] = std::array::from_fn(|i| {
-        let mut p: vu0::V4 = std::array::from_fn(|k| ps2::add(a[i][k], ps2::mul(s[k], d[i])));
-        p[0] = ps2::madd(ps2::add(0.0, a[i][0]), s[0], d[i]);
+        let mut p: vu0::V4 = std::array::from_fn(|k| (a[i][k] + F(s[k]) * d[i]).0);
+        p[0] = (F::ZERO + a[i][0]).madd(s[0], d[i]).0;
         p
     });
     let h = |g: fn(f32, f32, f32) -> f32| -> vu0::V4 { std::array::from_fn(|k| g(p[0][k], p[1][k], p[2][k])) };
     let hex = [
-        h(|a, b, c| ps2::sub(ps2::add(a, b), c)),
-        h(|a, b, c| ps2::sub(ps2::add(-a, b), c)),
-        h(|a, b, c| ps2::add(ps2::add(-a, b), c)),
-        h(|a, b, c| ps2::add(ps2::sub(-a, b), c)),
-        h(|a, b, c| ps2::add(ps2::sub(a, b), c)),
-        h(|a, b, c| ps2::sub(ps2::sub(a, b), c)),
+        h(|a, b, c| (F(a) + b - c).0),
+        h(|a, b, c| (-F(a) + b - c).0),
+        h(|a, b, c| (-F(a) + b + c).0),
+        h(|a, b, c| (-F(a) - b + c).0),
+        h(|a, b, c| (F(a) - b + c).0),
+        h(|a, b, c| (F(a) - b - c).0),
     ];
     let unit = |n: vu0::V4| {
-        let r = ps2::div(1.0, ps2::sqrt(dot_yxz(n, n)));
-        n.map(|x| ps2::mul(x, r))
+        let r = (1.0 / F(dot_yxz(n, n)).sqrt()).0;
+        n.map(|x| (F(x) * r).0)
     };
     let mut cap = s;
     if cap[1].abs() < f32::from_bits(0x3f7d_70a4) {
@@ -523,12 +537,17 @@ pub fn planes(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3],
     }
     let cap = unit(cap);
     let mut out = [[0.0, 0.0, 0.0, f32::from_bits(0x5d5e_0b6b)]; 8]; // 1e18
-    out[0] = [cap[0], cap[1], cap[2], -vu0::dot3(cap, corner)];
+    out[0] = [cap[0], cap[1], cap[2], (-F(vu0::dot3(cap, corner))).0];
     let mut n_out = 1;
     let mut prev = hex[5];
     for cur in hex {
-        let e: [f32; 3] = std::array::from_fn(|k| ps2::sub(cur[k], prev[k]));
-        let mut n = [ps2::msub(ps2::mul(s[1], e[2]), s[2], e[1]), ps2::msub(ps2::mul(s[2], e[0]), s[0], e[2]), ps2::msub(ps2::mul(s[0], e[1]), s[1], e[0]), 0.0];
+        let e: [f32; 3] = std::array::from_fn(|k| (F(cur[k]) - prev[k]).0);
+        let mut n = [
+            (F(s[1]) * e[2]).msub(s[2], e[1]).0,
+            (F(s[2]) * e[0]).msub(s[0], e[2]).0,
+            (F(s[0]) * e[1]).msub(s[1], e[0]).0,
+            0.0,
+        ];
         let dd = vu0::dot3(n, prev);
         if dd.abs() > f32::from_bits(0x33d6_bf95) {
             // 1e-7
@@ -536,13 +555,13 @@ pub fn planes(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3],
                 n = neg(n);
             }
             let n = unit(n);
-            let at: vu0::V4 = std::array::from_fn(|k| ps2::add(prev[k], o[k]));
-            out[n_out] = [n[0], n[1], n[2], -vu0::dot3(n, at)];
+            let at: vu0::V4 = std::array::from_fn(|k| (F(prev[k]) + o[k]).0);
+            out[n_out] = [n[0], n[1], n[2], (-F(vu0::dot3(n, at))).0];
             n_out += 1;
         }
         prev = cur;
     }
-    let back = d.iter().fold(-dot_yxz(s, o), |acc, d| ps2::add(d.abs(), acc));
+    let back = d.iter().fold((-F(dot_yxz(s, o))).0, |acc, d| (F(d.abs()) + acc).0);
     out[7] = [s[0], s[1], s[2], back];
     std::array::from_fn(|b| std::array::from_fn(|r| std::array::from_fn(|j| out[4 * b + j][r])))
 }
@@ -550,160 +569,164 @@ pub fn planes(item: &[vu0::V4; 4], scale: f32, centre: [f32; 3], half: [f32; 3],
 /// The game's general 4×4 inverse in EE floats: the 2×2 minors' determinant, the 16 cofactors in the game's op order
 /// (generated from its code), each times 1/det; the identity when det is 0.
 fn inverse(m: &[vu0::V4; 4]) -> [vu0::V4; 4] {
-    let m = m.as_flattened();
-    let p = |a: usize, b: usize, c: usize, d: usize| ps2::msub(ps2::mul(m[a], m[b]), m[c], m[d]);
-    let det = ps2::msub(ps2::mul(p(0, 5, 1, 4), p(10, 15, 11, 14)), p(0, 6, 2, 4), p(9, 15, 11, 13));
-    let det = ps2::madd(ps2::msub(ps2::madd(ps2::madd(det, p(0, 7, 3, 4), p(9, 14, 10, 13)), p(1, 6, 2, 5), p(8, 15, 11, 12)), p(1, 7, 3, 5), p(8, 14, 10, 12)), p(2, 7, 3, 6), p(8, 13, 9, 12));
+    let m: [F; 16] = std::array::from_fn(|i| F(m[i / 4][i % 4]));
+    let p = |a: usize, b: usize, c: usize, d: usize| (m[a] * m[b]).msub(m[c], m[d]);
+    let det = (p(0, 5, 1, 4) * p(10, 15, 11, 14)).msub(p(0, 6, 2, 4), p(9, 15, 11, 13));
+    let det = det
+        .madd(p(0, 7, 3, 4), p(9, 14, 10, 13))
+        .madd(p(1, 6, 2, 5), p(8, 15, 11, 12))
+        .msub(p(1, 7, 3, 5), p(8, 14, 10, 12))
+        .madd(p(2, 7, 3, 6), p(8, 13, 9, 12));
     if det == 0.0 {
         return std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1.0 } else { 0.0 }));
     }
-    let r = ps2::div(1.0, det);
-    let t2 = ps2::mul(m[2], m[13]);
-    let t3 = ps2::mul(m[0], m[13]);
-    let t4 = ps2::mul(m[0], m[5]);
-    let t5 = ps2::mul(m[1], m[12]);
-    let t6 = ps2::mul(m[1], m[4]);
-    let t7 = ps2::mul(m[10], m[12]);
-    let t8 = ps2::mul(m[8], m[14]);
-    let t9 = ps2::mul(m[9], m[14]);
-    let t10 = ps2::mul(m[10], m[13]);
-    let t11 = ps2::mul(m[8], m[13]);
-    let t12 = ps2::mul(m[9], m[12]);
-    let t13 = ps2::mul(m[5], m[11]);
-    let t14 = ps2::mul(m[7], m[9]);
-    let t15 = ps2::mul(m[7], m[8]);
-    let t16 = ps2::mul(m[4], m[11]);
-    let t17 = ps2::mul(m[3], m[5]);
-    let t18 = ps2::mul(m[1], m[7]);
-    let t19 = ps2::mul(m[0], m[7]);
-    let t20 = ps2::mul(m[3], m[4]);
-    let t21 = ps2::mul(m[3], m[13]);
-    let t22 = ps2::mul(m[1], m[15]);
-    let t23 = ps2::mul(m[0], m[15]);
-    let t24 = ps2::mul(m[3], m[12]);
-    let t25 = ps2::mul(m[11], m[13]);
-    let t26 = ps2::mul(m[9], m[15]);
-    let t27 = ps2::mul(m[8], m[15]);
-    let t28 = ps2::mul(m[11], m[12]);
-    let t29 = ps2::mul(m[7], m[10]);
-    let t30 = ps2::mul(m[6], m[11]);
-    let t31 = ps2::mul(m[2], m[7]);
-    let t32 = ps2::mul(m[3], m[6]);
-    let t33 = ps2::mul(m[2], m[15]);
-    let t34 = ps2::mul(m[3], m[14]);
-    let t35 = ps2::mul(m[10], m[15]);
-    let t36 = ps2::mul(m[11], m[14]);
-    let t37 = ps2::mul(m[0], m[14]);
-    let t38 = ps2::sub(t9, t10);
-    let t39 = ps2::mul(m[1], m[14]);
-    let t40 = ps2::sub(t10, t9);
-    let t41 = ps2::mul(m[1], m[6]);
-    let t42 = ps2::sub(t35, t36);
-    let t43 = ps2::mul(m[2], m[5]);
-    let t44 = ps2::sub(t36, t35);
-    let t45 = ps2::mul(m[6], m[9]);
-    let t46 = ps2::sub(t25, t26);
-    let t47 = ps2::mul(m[5], m[10]);
-    let t48 = ps2::sub(t26, t25);
-    let t49 = ps2::mul(m[2], m[12]);
-    let t50 = ps2::mul(m[6], t46);
-    let t51 = ps2::mul(m[0], m[6]);
-    let t52 = ps2::madd(ps2::add(0.0, t50), m[5], t42);
-    let t53 = ps2::mul(m[2], m[4]);
-    let t54 = ps2::madd(ps2::add(0.0, t52), m[7], t38);
-    let t55 = ps2::mul(m[4], m[10]);
-    let t56 = ps2::mul(m[4], t48);
-    let t57 = ps2::mul(m[6], m[8]);
-    let t58 = ps2::sub(t39, t2);
-    let t59 = ps2::mul(m[5], m[8]);
-    let t60 = ps2::sub(t2, t39);
-    let t61 = ps2::mul(m[4], m[9]);
-    let t62 = ps2::sub(t33, t34);
-    let t63 = ps2::sub(t34, t33);
-    let t64 = ps2::sub(t21, t22);
-    let t65 = ps2::mul(m[10], t64);
-    let t66 = ps2::sub(t22, t21);
-    let t67 = ps2::mul(m[8], t66);
-    let t68 = ps2::sub(t41, t43);
-    let t69 = ps2::madd(ps2::add(0.0, t65), m[9], t62);
-    let t70 = ps2::sub(t43, t41);
-    let t71 = ps2::madd(ps2::add(0.0, t69), m[11], t58);
-    let t72 = ps2::sub(t31, t32);
-    let t73 = ps2::sub(t32, t31);
-    let t74 = ps2::sub(t37, t49);
-    let t75 = ps2::sub(t17, t18);
-    let t76 = ps2::sub(t18, t17);
-    let t77 = ps2::mul(m[14], t75);
-    let t78 = ps2::madd(ps2::add(0.0, t77), m[13], t72);
-    let t79 = ps2::madd(ps2::add(0.0, t78), m[15], t68);
-    let t80 = ps2::mul(m[12], t76);
-    let t81 = ps2::sub(t45, t47);
-    let t82 = ps2::sub(t47, t45);
-    let t83 = ps2::sub(t29, t30);
-    let t84 = ps2::sub(t30, t29);
-    let t85 = ps2::sub(t13, t14);
-    let t86 = ps2::sub(t14, t13);
-    let t87 = ps2::mul(m[2], t85);
-    let t88 = ps2::madd(ps2::add(0.0, t87), m[1], t83);
-    let t89 = ps2::madd(ps2::add(0.0, t88), m[3], t81);
-    let t90 = ps2::mul(m[0], t86);
-    let t91 = ps2::sub(t27, t28);
-    let t92 = ps2::sub(t28, t27);
-    let t93 = ps2::sub(t7, t8);
-    let t94 = ps2::sub(t8, t7);
-    let t95 = ps2::mul(m[7], t93);
-    let t96 = ps2::madd(ps2::add(0.0, t95), m[6], t91);
-    let t97 = ps2::mul(m[5], t94);
-    let t98 = ps2::madd(ps2::add(0.0, t96), m[4], t44);
-    let t99 = ps2::sub(t23, t24);
-    let t100 = ps2::sub(t24, t23);
-    let t101 = ps2::sub(t49, t37);
-    let t102 = ps2::mul(m[11], t101);
-    let t103 = ps2::madd(ps2::add(0.0, t102), m[10], t99);
-    let t104 = ps2::mul(m[9], t74);
-    let t105 = ps2::madd(ps2::add(0.0, t103), m[8], t63);
-    let t106 = ps2::sub(t19, t20);
-    let t107 = ps2::sub(t20, t19);
-    let t108 = ps2::sub(t53, t51);
-    let t109 = ps2::mul(m[15], t108);
-    let t110 = ps2::madd(ps2::add(0.0, t109), m[14], t106);
-    let t111 = ps2::sub(t51, t53);
-    let t112 = ps2::madd(ps2::add(0.0, t110), m[12], t73);
-    let t113 = ps2::mul(m[13], t111);
-    let t114 = ps2::sub(t15, t16);
-    let t115 = ps2::sub(t16, t15);
-    let t116 = ps2::sub(t55, t57);
-    let t117 = ps2::sub(t57, t55);
-    let t118 = ps2::mul(m[3], t116);
-    let t119 = ps2::madd(ps2::add(0.0, t118), m[2], t114);
-    let t120 = ps2::mul(m[1], t117);
-    let t121 = ps2::madd(ps2::add(0.0, t119), m[0], t84);
-    let t122 = ps2::sub(t11, t12);
-    let t123 = ps2::madd(ps2::add(0.0, t56), m[7], t122);
-    let t124 = ps2::madd(ps2::add(0.0, t123), m[5], t92);
-    let t125 = ps2::sub(t12, t11);
-    let t126 = ps2::sub(t3, t5);
-    let t127 = ps2::madd(ps2::add(0.0, t67), m[11], t126);
-    let t128 = ps2::madd(ps2::add(0.0, t127), m[9], t100);
-    let t129 = ps2::sub(t5, t3);
-    let t130 = ps2::sub(t4, t6);
-    let t131 = ps2::madd(ps2::add(0.0, t80), m[15], t130);
-    let t132 = ps2::madd(ps2::add(0.0, t131), m[13], t107);
-    let t133 = ps2::sub(t59, t61);
-    let t134 = ps2::madd(ps2::add(0.0, t90), m[3], t133);
-    let t135 = ps2::madd(ps2::add(0.0, t134), m[1], t115);
-    let t136 = ps2::madd(ps2::add(0.0, t97), m[4], t40);
-    let t137 = ps2::madd(ps2::add(0.0, t136), m[6], t125);
-    let t138 = ps2::sub(t6, t4);
-    let t139 = ps2::madd(ps2::add(0.0, t104), m[8], t60);
-    let t140 = ps2::madd(ps2::add(0.0, t139), m[10], t129);
-    let t141 = ps2::sub(t61, t59);
-    let t142 = ps2::madd(ps2::add(0.0, t113), m[12], t70);
-    let t143 = ps2::madd(ps2::add(0.0, t142), m[14], t138);
-    let t144 = ps2::madd(ps2::add(0.0, t120), m[0], t82);
-    let t145 = ps2::madd(ps2::add(0.0, t144), m[2], t141);
+    let r = F(1.0) / det;
+    let t2 = m[2] * m[13];
+    let t3 = m[0] * m[13];
+    let t4 = m[0] * m[5];
+    let t5 = m[1] * m[12];
+    let t6 = m[1] * m[4];
+    let t7 = m[10] * m[12];
+    let t8 = m[8] * m[14];
+    let t9 = m[9] * m[14];
+    let t10 = m[10] * m[13];
+    let t11 = m[8] * m[13];
+    let t12 = m[9] * m[12];
+    let t13 = m[5] * m[11];
+    let t14 = m[7] * m[9];
+    let t15 = m[7] * m[8];
+    let t16 = m[4] * m[11];
+    let t17 = m[3] * m[5];
+    let t18 = m[1] * m[7];
+    let t19 = m[0] * m[7];
+    let t20 = m[3] * m[4];
+    let t21 = m[3] * m[13];
+    let t22 = m[1] * m[15];
+    let t23 = m[0] * m[15];
+    let t24 = m[3] * m[12];
+    let t25 = m[11] * m[13];
+    let t26 = m[9] * m[15];
+    let t27 = m[8] * m[15];
+    let t28 = m[11] * m[12];
+    let t29 = m[7] * m[10];
+    let t30 = m[6] * m[11];
+    let t31 = m[2] * m[7];
+    let t32 = m[3] * m[6];
+    let t33 = m[2] * m[15];
+    let t34 = m[3] * m[14];
+    let t35 = m[10] * m[15];
+    let t36 = m[11] * m[14];
+    let t37 = m[0] * m[14];
+    let t38 = t9 - t10;
+    let t39 = m[1] * m[14];
+    let t40 = t10 - t9;
+    let t41 = m[1] * m[6];
+    let t42 = t35 - t36;
+    let t43 = m[2] * m[5];
+    let t44 = t36 - t35;
+    let t45 = m[6] * m[9];
+    let t46 = t25 - t26;
+    let t47 = m[5] * m[10];
+    let t48 = t26 - t25;
+    let t49 = m[2] * m[12];
+    let t50 = m[6] * t46;
+    let t51 = m[0] * m[6];
+    let t52 = (F::ZERO + t50).madd(m[5], t42);
+    let t53 = m[2] * m[4];
+    let t54 = (F::ZERO + t52).madd(m[7], t38);
+    let t55 = m[4] * m[10];
+    let t56 = m[4] * t48;
+    let t57 = m[6] * m[8];
+    let t58 = t39 - t2;
+    let t59 = m[5] * m[8];
+    let t60 = t2 - t39;
+    let t61 = m[4] * m[9];
+    let t62 = t33 - t34;
+    let t63 = t34 - t33;
+    let t64 = t21 - t22;
+    let t65 = m[10] * t64;
+    let t66 = t22 - t21;
+    let t67 = m[8] * t66;
+    let t68 = t41 - t43;
+    let t69 = (F::ZERO + t65).madd(m[9], t62);
+    let t70 = t43 - t41;
+    let t71 = (F::ZERO + t69).madd(m[11], t58);
+    let t72 = t31 - t32;
+    let t73 = t32 - t31;
+    let t74 = t37 - t49;
+    let t75 = t17 - t18;
+    let t76 = t18 - t17;
+    let t77 = m[14] * t75;
+    let t78 = (F::ZERO + t77).madd(m[13], t72);
+    let t79 = (F::ZERO + t78).madd(m[15], t68);
+    let t80 = m[12] * t76;
+    let t81 = t45 - t47;
+    let t82 = t47 - t45;
+    let t83 = t29 - t30;
+    let t84 = t30 - t29;
+    let t85 = t13 - t14;
+    let t86 = t14 - t13;
+    let t87 = m[2] * t85;
+    let t88 = (F::ZERO + t87).madd(m[1], t83);
+    let t89 = (F::ZERO + t88).madd(m[3], t81);
+    let t90 = m[0] * t86;
+    let t91 = t27 - t28;
+    let t92 = t28 - t27;
+    let t93 = t7 - t8;
+    let t94 = t8 - t7;
+    let t95 = m[7] * t93;
+    let t96 = (F::ZERO + t95).madd(m[6], t91);
+    let t97 = m[5] * t94;
+    let t98 = (F::ZERO + t96).madd(m[4], t44);
+    let t99 = t23 - t24;
+    let t100 = t24 - t23;
+    let t101 = t49 - t37;
+    let t102 = m[11] * t101;
+    let t103 = (F::ZERO + t102).madd(m[10], t99);
+    let t104 = m[9] * t74;
+    let t105 = (F::ZERO + t103).madd(m[8], t63);
+    let t106 = t19 - t20;
+    let t107 = t20 - t19;
+    let t108 = t53 - t51;
+    let t109 = m[15] * t108;
+    let t110 = (F::ZERO + t109).madd(m[14], t106);
+    let t111 = t51 - t53;
+    let t112 = (F::ZERO + t110).madd(m[12], t73);
+    let t113 = m[13] * t111;
+    let t114 = t15 - t16;
+    let t115 = t16 - t15;
+    let t116 = t55 - t57;
+    let t117 = t57 - t55;
+    let t118 = m[3] * t116;
+    let t119 = (F::ZERO + t118).madd(m[2], t114);
+    let t120 = m[1] * t117;
+    let t121 = (F::ZERO + t119).madd(m[0], t84);
+    let t122 = t11 - t12;
+    let t123 = (F::ZERO + t56).madd(m[7], t122);
+    let t124 = (F::ZERO + t123).madd(m[5], t92);
+    let t125 = t12 - t11;
+    let t126 = t3 - t5;
+    let t127 = (F::ZERO + t67).madd(m[11], t126);
+    let t128 = (F::ZERO + t127).madd(m[9], t100);
+    let t129 = t5 - t3;
+    let t130 = t4 - t6;
+    let t131 = (F::ZERO + t80).madd(m[15], t130);
+    let t132 = (F::ZERO + t131).madd(m[13], t107);
+    let t133 = t59 - t61;
+    let t134 = (F::ZERO + t90).madd(m[3], t133);
+    let t135 = (F::ZERO + t134).madd(m[1], t115);
+    let t136 = (F::ZERO + t97).madd(m[4], t40);
+    let t137 = (F::ZERO + t136).madd(m[6], t125);
+    let t138 = t6 - t4;
+    let t139 = (F::ZERO + t104).madd(m[8], t60);
+    let t140 = (F::ZERO + t139).madd(m[10], t129);
+    let t141 = t61 - t59;
+    let t142 = (F::ZERO + t113).madd(m[12], t70);
+    let t143 = (F::ZERO + t142).madd(m[14], t138);
+    let t144 = (F::ZERO + t120).madd(m[0], t82);
+    let t145 = (F::ZERO + t144).madd(m[2], t141);
     let o = [t54, t71, t79, t89, t98, t105, t112, t121, t124, t128, t132, t135, t137, t140, t143, t145];
-    std::array::from_fn(|i| std::array::from_fn(|j| ps2::mul(o[4 * i + j], r)))
+    std::array::from_fn(|i| std::array::from_fn(|j| (o[4 * i + j] * r).0))
 }
 
 /// One shade receiver vertex as the game's VU1 program sends it to the GS: screen X, Y (12.4 fixed point) and
@@ -714,10 +737,10 @@ fn inverse(m: &[vu0::V4; 4]) -> [vu0::V4; 4] {
 pub fn receiver_vertex(item: &[vu0::V4; 4], vp: &[vu0::V4; 4], tex: &[vu0::V4; 4], p: [f32; 3]) -> ([u16; 2], [f32; 3]) {
     let v = [p[0], p[1], p[2], 1.0];
     let clip = vu0::transform(&item.map(|r| vu0::transform(vp, r)), v);
-    let q = vu0::div(1.0, clip[3]);
+    let q = (Vf(1.0) / clip[3]).0;
     let st = vu0::transform(tex, v);
-    let ftoi4 = |x: f32| (vu0::mul(x, q) * 16.0) as i32 as u16; // FTOI4 truncates
-    ([ftoi4(clip[0]), ftoi4(clip[1])], [vu0::mul(st[0], q), vu0::mul(st[1], q), vu0::mul(st[2], q)])
+    let ftoi4 = |x: f32| (Vf(x) * q * 16.0).0 as i32 as u16; // FTOI4 truncates
+    ([ftoi4(clip[0]), ftoi4(clip[1])], [(Vf(st[0]) * q).0, (Vf(st[1]) * q).0, (Vf(st[2]) * q).0])
 }
 
 /// A caster's shadow-volume planes as the game keeps them: two blocks of four planes, row k of a block holding
@@ -728,7 +751,11 @@ pub type Planes = [[vu0::V4; 4]; 2];
 /// `planes` taken into a receiver node's space by its matrix `m` (VU0: row k = P0·Mk.x + P1·Mk.y + P2·Mk.z +
 /// P3·Mk.w). The hole's nodes are identity.
 pub fn node_planes(planes: &Planes, m: &[vu0::V4; 4]) -> Planes {
-    planes.map(|p| m.map(|r| std::array::from_fn(|j| vu0::madd(vu0::madd(vu0::madd(vu0::mul(p[0][j], r[0]), p[1][j], r[1]), p[2][j], r[2]), p[3][j], r[3]))))
+    planes.map(|p| {
+        m.map(|r| {
+            std::array::from_fn(|j| (Vf(p[0][j]) * r[0]).madd(p[1][j], r[1]).madd(p[2][j], r[2]).madd(p[3][j], r[3]).0)
+        })
+    })
 }
 
 /// The game's box test (VU0): a box is out when for some plane ((((((d + |nz|·hz) + |ny|·hy) + |nx|·hx) + nz·cz)
@@ -736,8 +763,15 @@ pub fn node_planes(planes: &Planes, m: &[vu0::V4; 4]) -> Planes {
 pub fn box_out(p: &Planes, centre: [f32; 3], half: [f32; 3]) -> bool {
     p.iter().any(|b| {
         (0..4).any(|j| {
-            let v = [(b[2][j].abs(), half[2]), (b[1][j].abs(), half[1]), (b[0][j].abs(), half[0]), (b[2][j], centre[2]), (b[1][j], centre[1]), (b[0][j], centre[0])];
-            v.iter().fold(b[3][j], |a, &(n, x)| vu0::madd(a, n, x)) <= 0.0
+            let v = [
+                (b[2][j].abs(), half[2]),
+                (b[1][j].abs(), half[1]),
+                (b[0][j].abs(), half[0]),
+                (b[2][j], centre[2]),
+                (b[1][j], centre[1]),
+                (b[0][j], centre[0]),
+            ];
+            v.iter().fold(b[3][j], |a, &(n, x)| Vf(a).madd(n, x).0) <= 0.0
         })
     })
 }
@@ -747,7 +781,7 @@ fn outside(p: &Planes, v: [f32; 3]) -> [bool; 8] {
     std::array::from_fn(|i| {
         let b = &p[i / 4];
         let j = i % 4;
-        vu0::madd(vu0::madd(vu0::madd(b[3][j], b[2][j], v[2]), b[1][j], v[1]), b[0][j], v[0]).is_sign_negative()
+        Vf(b[3][j]).madd(b[2][j], v[2]).madd(b[1][j], v[1]).madd(b[0][j], v[0]).0.is_sign_negative()
     })
 }
 
@@ -762,11 +796,15 @@ fn tri_out(p: &Planes, v1: [f32; 3], v2: [f32; 3], v3: [f32; 3], w: f32) -> bool
     if !s.iter().any(|s| s[0]) {
         return false;
     }
-    let a: [f32; 3] = std::array::from_fn(|k| vu0::mul(vu0::sub(v2[k], v1[k]), -w));
-    let b: [f32; 3] = std::array::from_fn(|k| vu0::sub(v3[k], v1[k]));
-    let n = [vu0::msub(vu0::mul(a[1], b[2]), b[1], a[2]), vu0::msub(vu0::mul(a[2], b[0]), b[2], a[0]), vu0::msub(vu0::mul(a[0], b[1]), b[0], a[1])];
+    let a: [f32; 3] = std::array::from_fn(|k| ((Vf(v2[k]) - v1[k]) * -Vf(w)).0);
+    let b: [f32; 3] = std::array::from_fn(|k| (Vf(v3[k]) - v1[k]).0);
+    let n = [
+        (Vf(a[1]) * b[2]).msub(b[1], a[2]).0,
+        (Vf(a[2]) * b[0]).msub(b[2], a[0]).0,
+        (Vf(a[0]) * b[1]).msub(b[0], a[1]).0,
+    ];
     let sun = &p[1];
-    vu0::madd(vu0::madd(vu0::mul(sun[2][3], n[2]), sun[1][3], n[1]), sun[0][3], n[0]) < 0.0
+    (Vf(sun[2][3]) * n[2]).madd(sun[1][3], n[1]).madd(sun[0][3], n[0]).0 < 0.0
 }
 
 /// One packet's strip as a caster's receiver pass draws it, the game's load-time cull: each vertex closes a
@@ -806,7 +844,7 @@ pub fn receiver_tris(p: &Planes, hole: &hst_data::mdl::Model, mats: &hst_data::m
     let hits = |m: usize| mats.materials.get(m).is_some_and(|m| m.attributes.is_some());
     for pk in hole.materials.iter().enumerate().filter(|&(m, _)| hits(m)).flat_map(|(_, ps)| ps).filter(|pk| pk.fixed && pk.flags & 8 != 0) {
         let [lo, hi] = pk.bounds;
-        if box_out(p, pk.centre, std::array::from_fn(|k| ps2::mul(ps2::sub(hi[k], lo[k]), 0.5))) {
+        if box_out(p, pk.centre, std::array::from_fn(|k| ((F(hi[k]) - lo[k]) * 0.5).0)) {
             continue;
         }
         let pos: Vec<[f32; 3]> = pk.vertices.iter().map(|v| v.pos).collect();
@@ -890,12 +928,14 @@ fn texel_round(st: f32, q: i32) -> f32 {
 
 /// Integer coordinates along a span from `left`: truncated at the span start, then per lane its truncated offset
 /// from the aligned group of [`LANES`] at or before `left` and whole truncated group steps.
+#[allow(clippy::float_arithmetic)] // PCSX2's software GS: x86 SSE singles (round to nearest), not the EE FPU
 fn pass_lanes(t0: f32, d: f32, left: i32, n: i32) -> impl Iterator<Item = i32> {
     let (skip, step) = (left % LANES, (d * LANES as f32) as i32);
     (skip..skip + n).map(move |j| (t0 as i32).wrapping_add((d * (j % LANES - skip) as f32) as i32).wrapping_add(j / LANES * step))
 }
 
 /// The Gouraud channel (8.7 fixed point) along a span: 16-bit lanes from the truncated start, kept ≥ 0 per group step.
+#[allow(clippy::float_arithmetic)] // PCSX2's software GS: x86 SSE singles (round to nearest), not the EE FPU
 fn pass_colour(c0: f32, d: f32, left: i32, n: i32) -> Vec<i32> {
     let (skip, step) = (left % LANES, (d * LANES as f32) as i32 & 0xffff);
     let mut c: Vec<i32> = (0..LANES).map(|k| (c0 as i32 + ((d * (k - skip) as f32) as i32 & 0xffff)) & 0xffff).collect();
@@ -927,6 +967,7 @@ fn pass_sample(t: &PassTexture, u: i32, v: i32) -> i32 {
 
 /// One triangle into the target: the vertices' (s, t, colour) as the GS's software setup takes them, then
 /// [`gs_tri`]'s spans sampled and written where the destination alpha test and the alpha reference pass.
+#[allow(clippy::float_arithmetic)] // PCSX2's software GS: x86 SSE singles (round to nearest), not the EE FPU
 fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
     let tsz = d.tex.as_ref().map_or([0.0; 2], |x| x.log2.map(|l| (0x10000u32 << l) as f32));
     let v: [[f32; 5]; 3] = t.map(|p| {
@@ -960,6 +1001,7 @@ fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
 /// gradients from the cross product, spans [left, right) from ceil(edge x) at each row inside the scissor, and the
 /// attributes at the span start interpolated from the top vertex of its section, handed to `span` with the scan
 /// gradient.
+#[allow(clippy::float_arithmetic)] // PCSX2's software GS: x86 SSE singles (round to nearest), not the EE FPU
 fn gs_tri(v: [[f32; 5]; 3], scissor: [i32; 4], mut span: impl FnMut(i32, i32, i32, [f32; 5], [f32; 5])) {
     let ys = [v[0][1], v[1][1], v[2][1]];
     let m1 = (ys[0] > ys[1]) as usize | ((ys[0] > ys[2]) as usize) << 1 | ((ys[1] > ys[2]) as usize) << 2;
@@ -975,7 +1017,9 @@ fn gs_tri(v: [[f32; 5]; 3], scissor: [i32; 4], mut span: impl FnMut(i32, i32, i3
         return;
     }
     let m2 = cross < 0.0;
-    let slope = |a: [f32; 5]| if a[1] != 0.0 { a[0] / a[1] } else { f32::INFINITY };
+    let slope = |a: [f32; 5]| {
+        if a[1] != 0.0 { a[0] / a[1] } else { f32::INFINITY }
+    };
     let dd = [slope(dv0), dv1[0] / dv1[1], slope(dv2)];
     let c = [dv0[0], dv0[1], dv1[0], dv1[1]].map(|x| x / cross);
     let dscan: [f32; 5] = std::array::from_fn(|k| dv1[k] * c[1] - dv0[k] * c[3]);
@@ -1024,6 +1068,7 @@ pub struct ReceiverDraw<'a> {
 /// setup the GS rounds S, T and Q (the draw's Z is constant); when Q is the same over the whole batch, S/Q and T/Q are
 /// taken per vertex and stepped as integers like the texture pass's, else divided per pixel, Q stepped per group of
 /// [`LANES`].
+#[allow(clippy::float_arithmetic)] // PCSX2's software GS: x86 SSE singles (round to nearest), not the EE FPU
 pub fn receiver_tile(draws: &[ReceiverDraw]) -> Vec<u8> {
     let mut fb = vec![0u8; 640 * 224];
     for d in draws {

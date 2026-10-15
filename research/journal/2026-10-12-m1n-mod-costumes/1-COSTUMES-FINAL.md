@@ -8,7 +8,7 @@ was needed there.
 
 ## Why Sam's costumes 5–8 drew nothing
 That was B99's bug (a motions file keying a joint only some costumes have made costumes 4+ of many Fore! mods fail
-to load), which B99 already fixed. Re-checked today against the current `../HST-MODS/out/mods`:
+to load), which B99 already fixed. Re-checked today against the current `../open-tennis-mods/out/mods`:
 - `mods::tests::loads_every_mod` (ignored test, `HST_MODS=…`) now loads **every** costume of every mod (it used to
   load only costume 0) and fails a costume with no vertices to draw: 361 of 361 costumes of 92 mods load.
 - Every baked select PNG in the main checkout's `cache/previews/SCUS_976.10-r3/m-*.png` (717 files) has a figure

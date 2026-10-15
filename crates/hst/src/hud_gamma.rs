@@ -41,7 +41,11 @@ pub fn plugin(app: &mut App) {
 struct Targets {
     scene: Handle<Image>,
     hud: Handle<Image>,
-    composite: Handle<Composite>,
+    /// The composite of the scene, of `last[0]` and of `last[1]`: the node swaps between them, as changing what one
+    /// samples prepares its bind group again, every frame of a match (B357).
+    composite: [Handle<Composite>; 3],
+    /// The node showing one of them.
+    node: Entity,
     /// The camera putting the composite on the window: only in the view (B117's fixed aspect ratios), black around it.
     out: Entity,
     /// The persistence's two images, cameras and mixes: frame parity `i` draws `mixes[i]` into `last[i]` with
@@ -102,17 +106,19 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         IsDefaultUiCamera,
         Msaa::Off,
     ));
-    let composite = materials.add(Composite { scene: scene.clone(), hud: hud.clone() });
+    // HDR like the scene cameras, so the mix lands in the image unencoded
+    let last = [(); 2].map(|_| images.add(target(TextureFormat::Rgba8Unorm)));
+    let composite = [&scene, &last[0], &last[1]].map(|shown| materials.add(Composite { scene: shown.clone(), hud: hud.clone() }));
     let out = commands
         .spawn((Camera2d, Camera { order: 51, output_mode: bevy::camera::CameraOutputMode::Write { blend_state: None, clear_color: ClearColorConfig::Custom(Color::BLACK) }, ..default() }, Msaa::Off, RenderLayers::layer(LAYER)))
         .id();
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-        MaterialNode(composite.clone()),
-        UiTargetCamera(out),
-    ));
-    // HDR like the scene cameras, so the mix lands in the image unencoded
-    let last = [(); 2].map(|_| images.add(target(TextureFormat::Rgba8Unorm)));
+    let node = commands
+        .spawn((
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            MaterialNode(composite[0].clone()),
+            UiTargetCamera(out),
+        ))
+        .id();
     let mixes = [0, 1].map(|i| mixes.add(Mix { scene: scene.clone(), last: last[1 - i].clone(), weight: Vec4::ZERO }));
     let cameras = [0, 1].map(|i| {
         let cam = commands
@@ -133,7 +139,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         ));
         cam
     });
-    commands.insert_resource(Targets { scene, hud, composite, out, last, cameras, mixes });
+    commands.insert_resource(Targets { scene, hud, composite, node, out, last, cameras, mixes });
 }
 
 /// A 3D camera drawing into the scene image.
@@ -214,8 +220,6 @@ fn follow_window(
         let k = g.scale as f32 / 100.0;
         ((size((pw * k).floor(), (ph * k).floor()), k), (size(pw, ph), 1.0))
     };
-    // B118: a two-player phone match upright lays the HUD out turned a quarter (the composite turns it back)
-    let hud = if crate::play::widescreen::turned(Vec2::new(pw, ph)) { Extent3d { width: hud.height, height: hud.width, ..hud } } else { hud };
     let sampler = if g.original { ImageSampler::nearest() } else { ImageSampler::Default };
     for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
@@ -234,7 +238,9 @@ fn follow_window(
     // resized images are: again the frame after
     if *stale > 0 {
         *stale -= 1;
-        materials.get_mut(&t.composite).map(|m| m.into_inner());
+        for c in &t.composite {
+            materials.get_mut(c).map(|m| m.into_inner());
+        }
         for m in &t.mixes {
             mixes.get_mut(m).map(|m| m.into_inner());
         }
@@ -268,7 +274,7 @@ fn persist(
     images: Res<Assets<Image>>,
     mut cams: Query<&mut Camera>,
     mut mixes: ResMut<Assets<Mix>>,
-    mut materials: ResMut<Assets<Composite>>,
+    mut node: Query<&mut MaterialNode<Composite>>,
     mut parity: Local<usize>,
 ) {
     *parity ^= 1;
@@ -292,12 +298,14 @@ fn persist(
             let w = if fix > 0.0 { 0.0 } else { 0.25f32.powf((time.delta_secs() * 60.0).clamp(0.25, 1.0)) };
             m.weight = Vec4::new(w, fix, texel.x, texel.y);
         }
-        &t.last[i]
+        &t.composite[1 + i]
     } else {
-        &t.scene
+        &t.composite[0]
     };
-    if materials.get(&t.composite).is_some_and(|c| c.scene != *shown) {
-        materials.get_mut(&t.composite).unwrap().scene = shown.clone();
+    if let Ok(mut n) = node.get_mut(t.node)
+        && n.0 != *shown
+    {
+        n.0 = shown.clone();
     }
 }
 
