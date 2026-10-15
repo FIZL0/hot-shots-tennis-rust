@@ -768,7 +768,16 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
     let weights = bevy::mesh::morph::MorphWeights::new(vec![0.0; data.morph_names.len()], None).unwrap_or_default();
     let root = commands.spawn((Transform::default(), Visibility::default(), Motion::default(), weights)).id();
     commands.entity(parent).add_child(root);
-    let joints: Vec<Entity> = data.joints.iter().map(|j| commands.spawn((j.rest, Visibility::default())).id()).collect();
+    // P41: only the joints over the racket carry a visibility (it inherits the rig's through them); the rest are
+    // transforms alone, so the per-view visibility checks don't walk them
+    let racket = data.joint("Racket").filter(|_| !data.racket.is_empty());
+    let mut shown = vec![false; data.joints.len()];
+    let mut up = racket;
+    while let Some(j) = up {
+        shown[j] = true;
+        up = data.joints[j].parent;
+    }
+    let joints: Vec<Entity> = data.joints.iter().zip(&shown).map(|(j, &v)| if v { commands.spawn((j.rest, Visibility::default())).id() } else { commands.spawn(j.rest).id() }).collect();
     for (i, j) in data.joints.iter().enumerate() {
         let up = j.parent.map_or(root, |p| joints[p]);
         commands.entity(up).add_child(joints[i]);
@@ -793,9 +802,18 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
     root
 }
 
+/// A background figure (`shadow::Minor`) hidden itself: not posed while it stays so (P41). Its own `Visibility` is set
+/// in the tick (`npcs::step`), ahead of `animate`, so the frame it shows again is posed.
+pub fn put_away(minor: bool, shown: Option<&Visibility>) -> bool {
+    minor && shown == Some(&Visibility::Hidden)
+}
+
 /// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
-pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights)>, mut joints: Query<&mut Transform>) {
-    for (rig, motion, mut weights) in &mut rigs {
+pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>, mut pose: Local<Vec<Transform>>) {
+    for (rig, motion, mut weights, minor, shown) in &mut rigs {
+        if put_away(minor, shown) {
+            continue;
+        }
         let fading = rig.data.drawn(motion.fade.id as usize).filter(|_| motion.fade.clip);
         // the face: each bound track's weight at the face clock's last sampled time (unbound targets 0)
         // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
@@ -818,13 +836,11 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
             (Some((w, false)), Some(old)) => (new, t, Some((old, motion.fade.sampled, w))),
             _ => (new, t, None),
         };
-        for (j, joint) in rig.data.joints.iter().enumerate() {
-            if let Ok(mut tf) = joints.get_mut(rig.joints[j]) {
-                *tf = joint.rest;
-            }
-        }
+        // posed here, then written only where a joint changed (P41: a still joint isn't marked for propagation)
+        pose.clear();
+        pose.extend(rig.data.joints.iter().map(|j| j.rest));
         for (k, track) in clip.tracks.iter().enumerate() {
-            let Ok(mut tf) = joints.get_mut(rig.joints[track.node]) else { continue };
+            let tf = &mut pose[track.node];
             let (rot, pos) = clip.sample(k, t);
             // a rotation key is the conjugate of the joint's local rotation
             if let Some([x, y, z, w]) = rot {
@@ -837,7 +853,7 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
         // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
         if let Some((other, t, w)) = over {
             for (k, track) in other.tracks.iter().enumerate().take(23) {
-                let Ok(mut tf) = joints.get_mut(rig.joints[track.node]) else { continue };
+                let tf = &mut pose[track.node];
                 let (rot, pos) = other.sample(k, t);
                 let r = tf.rotation;
                 let (q, p) = hst_sim::motion::mix(([-r.x, -r.y, -r.z, r.w], tf.translation.into()), (rot.unwrap_or([-r.x, -r.y, -r.z, r.w]), pos.unwrap_or(tf.translation.into())), w);
@@ -853,9 +869,14 @@ pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy
         if let Some((quats, w)) = motion.arm {
             for (name, q) in ["Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"].iter().zip(quats) {
                 let Some(j) = rig.data.joint(name) else { continue };
-                let Ok(mut tf) = joints.get_mut(rig.joints[j]) else { continue };
+                let tf = &mut pose[j];
                 let [x, y, z, w] = hst_sim::quat::slerp([0.0, 0.0, 0.0, 1.0], q, w);
                 tf.rotation = (Quat::from_xyzw(-x, -y, -z, w).normalize() * tf.rotation).normalize();
+            }
+        }
+        for (e, p) in rig.joints.iter().zip(pose.iter()) {
+            if let Ok(mut tf) = joints.get_mut(*e) {
+                tf.set_if_neq(*p);
             }
         }
     }

@@ -101,8 +101,12 @@ fn turned(above: Mat4, turn: Quat, local: Quat) -> Quat {
     Quat::from_mat3(&(a.inverse() * Mat3::from_quat(turn) * a * Mat3::from_quat(local))).normalize()
 }
 
-pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring)>, mut joints: Query<&mut Transform>) {
-    for (rig, global, mut s) in &mut rigs {
+pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>) {
+    for (rig, global, mut s, minor, shown) in &mut rigs {
+        // not posed while put away (`character::animate`), so not swung on top of the last pose either
+        if crate::character::put_away(minor, shown) {
+            continue;
+        }
         let masses = springs(rig);
         s.state.resize(masses.len(), None);
         // ponytail: whole 60 Hz steps against this frame's pose (none while paused); sub-frame targets if it judders

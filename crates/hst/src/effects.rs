@@ -132,7 +132,8 @@ pub(crate) fn model<M: EffectMaterial>(
     commands.entity(parent).add_child(root);
     let holder = commands.spawn((Transform::default(), Visibility::default(), Collapse(root))).id();
     commands.entity(root).add_child(holder);
-    let joints: Vec<Entity> = model.node_local.iter().map(|l| commands.spawn((Transform::from_matrix(Mat4::from_cols_array_2d(l)), Visibility::default())).id()).collect();
+    // the parts hang off the holder, so the joints carry no visibility (P41: the per-view checks don't walk them)
+    let joints: Vec<Entity> = model.node_local.iter().map(|l| commands.spawn(Transform::from_matrix(Mat4::from_cols_array_2d(l))).id()).collect();
     for (i, p) in model.node_parent.iter().enumerate() {
         commands.entity(p.map_or(holder, |p| joints[p])).add_child(joints[i]);
     }
