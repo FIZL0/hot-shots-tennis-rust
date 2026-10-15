@@ -888,7 +888,7 @@ fn setup(mut commands: Commands) {
     let node = Node {
         position_type: PositionType::Absolute,
         flex_direction: FlexDirection::Row,
-        justify_content: JustifyContent::FlexEnd,
+        justify_content: JustifyContent::Center,
         align_items: AlignItems::Center,
         overflow: Overflow::clip(),
         ..default()
@@ -961,18 +961,19 @@ pub(crate) fn draw(
     *shown = key;
     (node.left, node.width) = (Val::Percent(left), Val::Percent(width));
     (node.top, node.height) = (Val::Percent(top), Val::Percent(height));
-    // 11 of the strip's 12 units tall, 8 apart (a group's tag 14 before it), 8 in from the right; the row shrinks
-    // as one if it's wider than the strip
+    // 11 of the strip's 12 units tall, 8 apart (a group's tag 14 before it), centred with 8 clear at each end; the
+    // row shrinks as one if it's wider than the strip
     let room = width / 100.0 * vw - 16.0 * unit;
-    let used: f32 = plan.iter().map(|(k, tag)| chips.0[k].1 * 11.0 + if *tag { 14.0 } else { 8.0 }).sum();
+    let gap = |i: usize, tag: bool| if i == 0 { 0.0 } else if tag { 14.0 } else { 8.0 };
+    let used: f32 = plan.iter().enumerate().map(|(i, (k, tag))| chips.0[k].1 * 11.0 + gap(i, *tag)).sum();
     let k = unit * (room / (used * unit)).min(1.0);
-    node.padding = UiRect::right(Val::Px(8.0 * unit));
+    node.padding = UiRect::horizontal(Val::Px(8.0 * unit));
     commands.entity(root).despawn_related::<Children>();
     commands.entity(root).with_children(|p| {
-        for (key, tag) in &plan {
+        for (i, (key, tag)) in plan.iter().enumerate() {
             let (img, aspect) = chips.0[key].clone();
             let h = 11.0 * k;
-            let margin = UiRect::left(Val::Px(if *tag { 14.0 } else { 8.0 } * k));
+            let margin = UiRect::left(Val::Px(gap(i, *tag) * k));
             p.spawn((ImageNode::new(img), Node { width: Val::Px(h * aspect), height: Val::Px(h), flex_shrink: 0.0, margin, ..default() }));
         }
     });
