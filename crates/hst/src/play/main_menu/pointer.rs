@@ -31,6 +31,8 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B369: the select's category tab `i` (`tabs.rs`, the shown player's): a tap switches its player to it.
+    Category(usize),
 }
 
 /// ✕.
@@ -125,11 +127,15 @@ impl Menu {
             }
             Act::Cell(i) => {
                 let Some(p) = self.driven(dev) else { return out };
+                // the tiles on view are the shown player's tab's (B369)
+                let tabs = self.tabs();
+                let tab = &tabs[self.tab_at(self.shown(), &tabs)];
                 self.focus = p;
                 if self.players[p].ready {
                     return out;
                 }
-                let Some(&c) = self.roster().get(i) else { return out };
+                let Some(&c) = tab.cells.get(i) else { return out };
+                self.players[p].tab = tab.id;
                 if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
                     if self.full(p, c) {
@@ -165,6 +171,16 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
+            Act::Category(i) if tap => {
+                let Some(p) = self.driven(dev) else { return out };
+                self.focus = p;
+                let tabs = self.tabs();
+                if !self.players[p].ready && i < tabs.len() && i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i) {
+                    self.skip_taken();
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Category(_) => {}
         }
         out
     }

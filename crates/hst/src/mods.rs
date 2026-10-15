@@ -79,6 +79,11 @@ impl Mod {
     pub fn folder(&self) -> String {
         self.dir.file_name().map_or_else(|| self.id.clone(), |n| n.to_string_lossy().to_string())
     }
+
+    /// B369: the select's category tab it goes under: its game (`source`), "Mods" when unset.
+    pub fn game(&self) -> &str {
+        if self.source.is_empty() { "Mods" } else { &self.source }
+    }
 }
 
 /// Reads and checks `dir/mod.json`.
