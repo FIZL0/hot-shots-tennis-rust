@@ -50,3 +50,6 @@ One README per task; iterations below, newest last.
 - `10-FORE-COURTS-FINAL.md` — M8f10a2 done: `fore2gltf court` (HST-MODS 5411330) exports 14 of Fore!'s 15 courses as
   court mods: the flattest survey spot on drawn ground, hole ground + plants + sky moved onto HST's court, a laid
   grass court (slab, lines, net, chair), Jungle/Greece by run-off. Course 14 (mini golf) has no spot on drawn ground.
+- `11-OOB-COURTS-FINAL.md` — M8f10a3 done: `oob2gltf/court.py` exports 6 of Out of Bounds' 7 courses as court mods
+  (static `.rem` reader, plants merged per nine, hole textures from the disc's loose `data/`), hard on paved ground
+  (c01 Extra, c06 Park) else Jungle. Course 05 has no clear flat spot.
