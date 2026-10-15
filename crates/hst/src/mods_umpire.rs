@@ -30,6 +30,14 @@ pub struct Umpire {
     pub voice: String,
 }
 
+impl Umpire {
+    /// The game it comes from for the menus (B408): the part after a `Series: Game` colon, else "Mod". The donor
+    /// isn't named: it only fills the calls the mod lacks and lends its word timing.
+    pub fn game(&self) -> &str {
+        self.source.split(':').next_back().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("Mod")
+    }
+}
+
 /// The umpire mod playing in this match (`--umpire-mod DIR`, or the online room's id found under `mods/`).
 #[derive(Resource, Clone, Debug)]
 pub struct MatchUmpire(pub Umpire);
@@ -130,6 +138,8 @@ mod tests {
         let ids: Vec<_> = list(&root).into_iter().map(|u| u.id).collect();
         assert_eq!(ids, ["gag_ump00", "gag_ump01"]);
         assert_eq!(find(&root, "gag_ump01").map(|u| u.donor), Some(0));
+        // B408: the menus show the game, never the donor
+        assert_eq!((u.game(), find(&root, "gag_ump01").unwrap().game()), ("Get a Grip", "Mod"));
         assert_eq!(find(&root, "nope"), None);
         // and the character roster doesn't take them
         assert!(crate::mods::list(&root).is_empty());

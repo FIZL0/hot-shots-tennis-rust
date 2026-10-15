@@ -231,7 +231,8 @@ fn side_panel(d: &mut Draw, m: &Menu, text: &Text, g: &Geo, rows: &[[f32; 4]; su
     }
     let (name, sub) = match (u, m.umpire_mod_of(u)) {
         (UMPIRES, _) => ("Random Umpire".to_string(), "Picked at the start".to_string()),
-        (_, Some(x)) => (x.name.clone(), format!("Calls as {}", m.umpire_name(text, x.donor as usize))),
+        // B408: the mod's game, not its donor
+        (_, Some(x)) => (x.name.clone(), x.game().to_string()),
         _ => (m.umpire_name(text, u), format!("Umpire {} of {UMPIRES}", u + 1)),
     };
     let tx = fx + size / 2.0 + 8.0;
