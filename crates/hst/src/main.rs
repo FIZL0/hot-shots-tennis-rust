@@ -16,6 +16,8 @@
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
 //! upscale into `mods/texture-replacements/`.
 
+#[cfg(any(target_os = "android", test))]
+mod android_pad;
 mod audio;
 mod character;
 mod court_anim;
@@ -408,6 +410,9 @@ fn start(argv: Vec<String>) {
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
     // M91a1: the iPhone's on-screen pad, kept through mode switches
     app.add_plugins(play::touch_pad::plugin);
+    // M101: Android's controllers, which gilrs can't read
+    #[cfg(target_os = "android")]
+    app.add_plugins(android_pad::plugin);
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);

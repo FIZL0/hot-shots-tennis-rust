@@ -60,6 +60,10 @@ block2 = "0.6"
 wgpu = "29"
 raw-window-handle = "0.6"
 
+# M101: the input device list for gamepad hot-plug (`android_pad.rs`; the version android-activity already builds)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

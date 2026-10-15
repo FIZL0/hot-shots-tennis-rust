@@ -18,8 +18,8 @@ User asked to look into a native Android build again (dropped 2026-10-12, see `2
   browser synthesizes; the menu/match touch layer needs to read touches.
 - HTTPS (mod store, pkarr relay): `rustls-platform-verifier` panics "Expect rustls-platform-verifier to be
   initialized" — it needs its Java side; use webpki roots on Android instead.
-- Gamepads: gilrs has no Android backend ("Gilrs does not support current platform"); winit's Android key events
-  carry gamepad buttons, or a gilrs Android backend.
+- Gamepads: gilrs has no Android backend ("Gilrs does not support current platform") → done in M101 (patched winit
+  queue + `android_pad.rs`, see 2026-10-15-m101-android-pads).
 - Getting the ISO onto a phone without adb (Android 11+ hides Android/data from file managers): needs a SAF picker
   (Java/JNI) or reading from /sdcard/Download with storage permission.
 - Not run on a real arm64 phone; no match played (SwiftShader too slow to judge performance).

@@ -18,6 +18,7 @@ use crate::error;
 use crate::error::EventLoopError;
 use crate::event::{self, Force, InnerSizeWriter, StartCause};
 use crate::event_loop::{self, ActiveEventLoop as RootAEL, ControlFlow, DeviceEvents};
+use crate::platform::android::gamepad::PadEvent;
 use crate::platform::pump_events::PumpStatus;
 use crate::platform_impl::Fullscreen;
 use crate::window::{
@@ -33,6 +34,26 @@ pub(crate) use crate::cursor::{
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 
 static HAS_FOCUS: AtomicBool = AtomicBool::new(true);
+
+/// Pad input taken out of the event stream (`platform::android::gamepad`, an opentennis patch).
+static PAD_EVENTS: Mutex<VecDeque<PadEvent>> = Mutex::new(VecDeque::new());
+
+fn push_pad_event(event: PadEvent) {
+    let mut queue = PAD_EVENTS.lock().unwrap();
+    if queue.len() >= crate::platform::android::gamepad::CAP {
+        queue.pop_front();
+    }
+    queue.push_back(event);
+}
+
+pub(crate) fn take_pad_events() -> Vec<PadEvent> {
+    PAD_EVENTS.lock().unwrap().drain(..).collect()
+}
+
+/// Whether an input `source` (`InputDevice.SOURCE_*` bits) is a gamepad's or a joystick's.
+fn is_pad_source(source: u32) -> bool {
+    source & 0x0000_0400 != 0 || source & 0x0100_0000 != 0
+}
 
 /// Returns the minimum `Option<Duration>`, taking into account that `None`
 /// equates to an infinite timeout, not a zero timeout (so can't just use
@@ -373,6 +394,27 @@ impl<T: 'static> EventLoop<T> {
     {
         let mut input_status = InputStatus::Handled;
         match event {
+            InputEvent::MotionEvent(motion_event)
+                if is_pad_source(motion_event.source().into()) =>
+            {
+                if motion_event.pointer_count() > 0 {
+                    let pointer = motion_event.pointer_at_index(0);
+                    let axes = crate::platform::android::gamepad::AXES
+                        .map(|axis| pointer.axis_value(axis.into()));
+                    push_pad_event(PadEvent::Motion { device: motion_event.device_id(), axes });
+                }
+            },
+            InputEvent::KeyEvent(key) if is_pad_source(key.source().into()) => {
+                let pressed = match key.action() {
+                    KeyAction::Down if key.repeat_count() == 0 => Some(true),
+                    KeyAction::Up => Some(false),
+                    _ => None,
+                };
+                if let Some(pressed) = pressed {
+                    let keycode: u32 = key.key_code().into();
+                    push_pad_event(PadEvent::Key { device: key.device_id(), keycode, pressed });
+                }
+            },
             InputEvent::MotionEvent(motion_event) => {
                 let window_id = window::WindowId(WindowId);
                 let device_id = event::DeviceId(DeviceId(motion_event.device_id()));

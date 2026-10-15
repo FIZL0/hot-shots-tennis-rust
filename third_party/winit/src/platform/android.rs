@@ -186,3 +186,30 @@ pub mod activity {
     #[doc(hidden)]
     pub struct AndroidApp;
 }
+
+/// Gamepads (opentennis patch, M101). Winit has no gamepad API, and Android delivers pads as key and motion events
+/// from a gamepad or joystick source. On Android those don't become `KeyboardInput` or `Touch` events (a stick's
+/// motion would otherwise read as a finger near the window's corner); they queue here instead, for the app to take
+/// each frame. The queue keeps the newest [`gamepad::CAP`] events if nobody takes them.
+#[cfg(android_platform)]
+pub mod gamepad {
+    /// The axes a [`PadEvent::Motion`] carries, as Android's `MotionEvent.AXIS_*` numbers: X, Y, Z, RZ, RX, RY,
+    /// HAT_X, HAT_Y, LTRIGGER, RTRIGGER, BRAKE, GAS.
+    pub const AXES: [u32; 12] = [0, 1, 11, 14, 12, 13, 15, 16, 17, 18, 23, 22];
+    /// How many events the queue keeps.
+    pub const CAP: usize = 1024;
+
+    /// One pad input, in the order it arrived.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub enum PadEvent {
+        /// A button (`KeyEvent.KEYCODE_*`) went down or up; repeats are dropped.
+        Key { device: i32, keycode: u32, pressed: bool },
+        /// The pad's axes, in [`AXES`] order, as of this motion event.
+        Motion { device: i32, axes: [f32; 12] },
+    }
+
+    /// Takes every pad event queued since the last call.
+    pub fn take() -> Vec<PadEvent> {
+        crate::platform_impl::take_pad_events()
+    }
+}
