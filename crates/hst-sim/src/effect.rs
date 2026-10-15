@@ -8,13 +8,16 @@
 //! `.UVA` files sit beside some effects but never play: the game loads them into the alpha channel as a second
 //! clip it never selects.
 
+#![deny(clippy::float_arithmetic)]
+
 use hst_data::{ani::Anim, mdl::Model, mor::Tracks, mtl::Material};
 
 use crate::{
     face,
     motion::Clock,
     pose::{Clip, M4, Skeleton},
-    ps2, world,
+    ps2::{F, f32s, fs},
+    world,
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -48,7 +51,7 @@ impl Channel {
 
     /// Sample every track at the clock's sampled time into `out[target]` (`empty` for a track without keys).
     pub(crate) fn apply(&mut self, out: &mut [f32], empty: f32) {
-        let t = ps2::mul(self.clock.sampled, self.ticks_per_frame);
+        let t = (F(self.clock.sampled) * self.ticks_per_frame).0;
         for tr in &mut self.tracks {
             out[tr.target] = if tr.ticks.is_empty() { empty } else { face::sample(&tr.ticks, &tr.values, t, &mut tr.cursor, false)[0] };
         }
@@ -208,7 +211,7 @@ impl SmashSearch {
     pub fn at(&self) -> Option<[f32; 2]> {
         match self.marks[..] {
             [a] => Some(a),
-            [a, b, ..] => Some([0, 1].map(|k| ps2::mul(ps2::add(a[k], b[k]), 0.5))),
+            [a, b, ..] => Some([0, 1].map(|k| ((F(a[k]) + b[k]) * 0.5).0)),
             [] => None,
         }
     }
@@ -259,31 +262,35 @@ mod tests {
 /// The racket-impact effect's scale for shot kind `kind` (0 top … 4 drop) from the ball's velocity as the shot
 /// leaves: twice the speed for top and flat shots, 1 otherwise.
 pub fn impact_scale(kind: i32, vel: [f32; 3]) -> f32 {
-    use ps2::{add, mul};
     if kind != 0 && kind != 2 {
         return 1.0;
     }
-    let [x, y, z] = vel;
-    mul(ps2::sqrt(add(add(mul(x, x), mul(y, y)), mul(z, z))), 2.0)
+    let [x, y, z] = fs(vel);
+    ((x * x + y * y + z * z).sqrt() * 2.0).0
 }
 
 /// The racket-impact effect's world matrix (rows x, y, z, translation): z along the ball's velocity `vel` (its w
 /// scaled alike), x level (up × z), y = z × x, at the ball's position `pos`, fixed as the shot leaves.
 pub fn impact_matrix(vel: [f32; 4], pos: [f32; 3]) -> [[f32; 4]; 4] {
-    use ps2::{div, mul, sub};
-    let len = |[x, y, z]: [f32; 3]| div(1.0, ps2::sqrt(ps2::madd(ps2::madd(mul(x, x), y, y), z, z)));
-    let q = len([vel[0], vel[1], vel[2]]);
-    let [x, y, z, w] = vel.map(|c| mul(c, q));
+    let len = |[x, y, z]: [F; 3]| 1.0 / (x * x).madd(y, y).madd(z, z).sqrt();
+    let v = fs(vel);
+    let q = len([v[0], v[1], v[2]]);
+    let [x, y, z, w] = v.map(|c| c * q);
     let place = [pos[0], pos[1], pos[2], 1.0];
     if y.abs() >= 0.999999 {
         // ponytail: straight up/down never happens off a racket; the game turns a quarter turn about x
-        let s = if y < 0.0 { 1.0 } else { -1.0 };
-        return [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, s, 0.0], [0.0, -s, 0.0, 0.0], place];
+        let (s, neg) = if y < 0.0 { (1.0, -1.0) } else { (-1.0, 1.0) };
+        return [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, s, 0.0], [0.0, neg, 0.0, 0.0], place];
     }
-    let a = [sub(mul(z, 1.0), mul(y, 0.0)), sub(mul(x, 0.0), mul(z, 0.0)), sub(mul(y, 0.0), mul(x, 1.0))];
-    let b = [sub(mul(y, a[2]), mul(z, a[1])), sub(mul(z, a[0]), mul(x, a[2])), sub(mul(x, a[1]), mul(y, a[0]))];
+    let a = [z * 1.0 - y * 0.0, x * 0.0 - z * 0.0, y * 0.0 - x * 1.0];
+    let b = [y * a[2] - z * a[1], z * a[0] - x * a[2], x * a[1] - y * a[0]];
     let (qa, qb) = (len(a), len(b));
-    [[mul(a[0], qa), mul(a[1], qa), mul(a[2], qa), mul(qa, 0.0)], [mul(b[0], qb), mul(b[1], qb), mul(b[2], qb), mul(qb, 0.0)], [x, y, z, w], place]
+    [
+        f32s([a[0] * qa, a[1] * qa, a[2] * qa, qa * 0.0]),
+        f32s([b[0] * qb, b[1] * qb, b[2] * qb, qb * 0.0]),
+        f32s([x, y, z, w]),
+        place,
+    ]
 }
 
 /// Hit sparks: up to [`SPARKS`] billboards thrown off the ball as a shot leaves, each from a pre-rolled
@@ -308,7 +315,7 @@ impl Roll {
 
     /// One roll from four uniform draws: the angle (a unit times 2π), then the uniforms.
     pub fn draw(rng: &mut crate::rng::Mt) -> Roll {
-        let angle = ps2::mul(rng.unit(), 6.283_185_5);
+        let angle = (F(rng.unit()) * 6.283_185_5).0;
         Roll::new(angle, [rng.unit(), rng.unit(), rng.unit()])
     }
 
@@ -374,35 +381,36 @@ impl Sparks {
     /// Throw a burst for shot kind `kind` (`smash`: the hitter's smash branch) from the ball at `pos` moving
     /// `vel`: sparks 0..n restart, any older ones past n play on.
     pub fn start(&mut self, kind: i32, smash: bool, pos: [f32; 4], vel: [f32; 4]) {
-        use ps2::{add, div, madd, mul, sub};
         self.live = true;
         let b = &BURSTS[kind.clamp(0, 4) as usize];
-        let [x, y, z, _] = vel;
-        let speed = ps2::sqrt(madd(madd(mul(y, y), x, x), z, z));
+        let [x, y, z, _] = fs(vel);
+        let speed = (y * y).madd(x, x).madd(z, z).sqrt();
         let (n, offset, spread, lo, hi, size_lo, size_hi, base) = if smash || b.by_speed {
-            let n = madd(add(0.0, 5.0), 40.0, speed);
-            let n = if SPARKS as f32 <= n { SPARKS } else { n as usize };
-            let sp = mul(f32::from_bits(0x3e23_d70a), speed);
-            let lo = add(0.1, sp);
-            (n, add(0.5, speed), mul(6.0, speed), lo, add(0.3, sp), lo, madd(add(0.0, 0.3), 0.5, speed), speed)
+            let n = (F::ZERO + 5.0).madd(40.0, speed);
+            let n = if SPARKS as f32 <= n { SPARKS } else { n.0 as usize };
+            let sp = F(f32::from_bits(0x3e23_d70a)) * speed;
+            let lo = 0.1 + sp;
+            (n, 0.5 + speed, 6.0 * speed, lo, 0.3 + sp, lo, (F::ZERO + 0.3).madd(0.5, speed), speed)
         } else {
-            (SPARKS, b.offset, b.spread, b.speed[0], b.speed[1], b.size[0], b.size[1], f32::from_bits(0x3ea8_f5c3))
+            let [offset, spread, lo, hi, size_lo, size_hi] =
+                fs([b.offset, b.spread, b.speed[0], b.speed[1], b.size[0], b.size[1]]);
+            (SPARKS, offset, spread, lo, hi, size_lo, size_hi, F(f32::from_bits(0x3ea8_f5c3)))
         };
-        let (range, size_range) = (sub(hi, lo), sub(size_hi, size_lo));
+        let (range, size_range) = (hi - lo, size_hi - size_lo);
         let mut m = impact_matrix(vel, [pos[0], pos[1], pos[2]]);
-        m[3] = std::array::from_fn(|k| madd(add(0.0, pos[k]), m[2][k], offset));
-        let pace = if b.exponent > 0.0 { crate::libm::powf(base, b.exponent) } else { base };
+        m[3] = std::array::from_fn(|k| (F::ZERO + pos[k]).madd(m[2][k], offset).0);
+        let pace = if b.exponent > 0.0 { F(crate::libm::powf(base.0, b.exponent)) } else { base };
         for (s, r) in self.sparks[..n].iter_mut().zip(&self.rolls) {
             m = std::array::from_fn(|i| crate::vu0::transform(&m, r.turn[i]));
-            let u = r.u[0];
-            let d: [f32; 4] = std::array::from_fn(|k| sub(madd(add(0.0, m[3][k]), mul(m[0][k], u), spread), pos[k]));
-            let q = div(1.0, ps2::sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2])));
-            let v = mul(madd(add(0.0, lo), r.u[1], range), pace);
+            let u = F(r.u[0]);
+            let d: [F; 4] = std::array::from_fn(|k| (F::ZERO + m[3][k]).madd(F(m[0][k]) * u, spread) - pos[k]);
+            let q = 1.0 / (d[1] * d[1]).madd(d[0], d[0]).madd(d[2], d[2]).sqrt();
+            let v = (F::ZERO + lo).madd(r.u[1], range) * pace;
             *s = Spark {
                 pos,
-                vel: d.map(|c| mul(mul(c, q), v)),
-                size: div(madd(add(0.0, size_lo), sub(1.0, u), size_range), 2.0),
-                life: madd(add(0.0, LIFE[0] as f32), r.u[2], (LIFE[1] - LIFE[0]) as f32) as i32,
+                vel: f32s(d.map(|c| c * q * v)),
+                size: ((F::ZERO + size_lo).madd(1.0 - u, size_range) / 2.0).0,
+                life: (F::ZERO + LIFE[0] as f32).madd(r.u[2], (LIFE[1] - LIFE[0]) as f32).0 as i32,
             };
         }
     }
@@ -410,7 +418,6 @@ impl Sparks {
     /// One frame: every spark ages, moves and slows; when none is left the burst ends and a quarter of the table
     /// is rolled afresh from `rng` (the sound generator).
     pub fn tick(&mut self, rng: &mut crate::rng::Mt) {
-        use ps2::{add, mul};
         if !self.live {
             return;
         }
@@ -419,9 +426,9 @@ impl Sparks {
             s.life -= 1;
             if s.life > 0 {
                 any = true;
-                s.pos = std::array::from_fn(|k| add(s.pos[k], s.vel[k]));
-                s.vel = s.vel.map(|c| mul(c, 0.9));
-                s.size = mul(s.size, 0.95);
+                s.pos = std::array::from_fn(|k| (F(s.pos[k]) + s.vel[k]).0);
+                s.vel = s.vel.map(|c| (F(c) * 0.9).0);
+                s.size = (F(s.size) * 0.95).0;
             }
         }
         if !any {
@@ -463,7 +470,6 @@ impl Trail {
 
     /// One frame with the player playing `motion` and the racket at `racket` (rows; y and translation used).
     pub fn tick(&mut self, motion: i32, racket: &M4) {
-        use ps2::{add, div, madd, mul, sub};
         if !self.live {
             return;
         }
@@ -477,11 +483,11 @@ impl Trail {
         if self.stored >= TRAIL_POINTS {
             return;
         }
-        let at = |c: f32| std::array::from_fn(|k| madd(add(0.0, racket[3][k]), racket[1][k], c));
+        let at = |c: f32| std::array::from_fn(|k| (F::ZERO + racket[3][k]).madd(racket[1][k], c).0);
         let p = [at(0.47), at(0.93)];
         let dist = |a: [f32; 4], b: [f32; 4]| {
-            let d: [f32; 3] = std::array::from_fn(|k| sub(a[k], b[k]));
-            ps2::sqrt(madd(madd(mul(d[1], d[1]), d[0], d[0]), d[2], d[2]))
+            let d: [F; 3] = std::array::from_fn(|k| F(a[k]) - b[k]);
+            (d[1] * d[1]).madd(d[0], d[0]).madd(d[2], d[2]).sqrt()
         };
         let close = self.stored > 0 && dist(self.points[self.stored - 1][1], p[1]) <= 0.01;
         self.points.truncate(self.stored);
@@ -497,7 +503,7 @@ impl Trail {
         let (life, length) = (self.life, self.length);
         // a trail started with no frames left (a rollback restoring a swing past its end) never ends at 0 and
         // divides by 0 here: the game's `div` doesn't trap, so it gets the EE's quotient (see `ee_div`)
-        let (rise, fall) = (mul(length as f32, 0.3) as i32, mul(length as f32, 0.4) as i32);
+        let (rise, fall) = ((F(length as f32) * 0.3).0 as i32, (F(length as f32) * 0.4).0 as i32);
         let a = if length - life < rise {
             ee_div((length - life) * 128, rise) as f32
         } else if life < fall {
@@ -506,12 +512,12 @@ impl Trail {
             128.0
         };
         let n = self.count;
-        let a = madd(add(0.0, a), dist(self.points[n - 1][1], self.points[n - 2][1]), 64.0);
-        self.alpha = if a <= 255.0 { a } else { 255.0 };
-        self.reach = div(life as f32, length as f32);
-        let x = mul(std::f32::consts::PI, crate::libm::powf(sub(1.0, self.reach), 0.5));
-        if (-std::f32::consts::PI..=std::f32::consts::PI).contains(&x) {
-            self.width = mul(0.5, crate::libm::table_sin(x));
+        let a = (F::ZERO + a).madd(dist(self.points[n - 1][1], self.points[n - 2][1]), 64.0);
+        self.alpha = if a <= 255.0 { a.0 } else { 255.0 };
+        self.reach = (F(life as f32) / length as f32).0;
+        let x = std::f32::consts::PI * F(crate::libm::powf((1.0 - F(self.reach)).0, 0.5));
+        if (-F(std::f32::consts::PI)..=F(std::f32::consts::PI)).contains(&x) {
+            self.width = (0.5 * F(crate::libm::table_sin(x.0))).0;
             self.reach = crate::libm::powf(self.reach, 0.5);
         }
     }
@@ -525,12 +531,21 @@ impl Trail {
         let rows = 2 * n - 1;
         (0..rows)
             .map(|i| {
-                let t = i as f32 / (rows - 1) as f32;
+                let t = F(i as f32) / (rows - 1) as f32;
                 let back = 1.0 - t;
-                let [a, b] = if i == rows - 1 { self.points[n - 1] } else { spline(back * self.reach * -((n - 1) as f32) + (n - 1) as f32, &self.points) };
-                let d: [f32; 3] = std::array::from_fn(|k| b[k] - a[k]);
+                let [a, b] = if i == rows - 1 {
+                    self.points[n - 1]
+                } else {
+                    spline((back * self.reach * -F((n - 1) as f32) + (n - 1) as f32).0, &self.points)
+                };
+                let d: [F; 3] = std::array::from_fn(|k| F(b[k]) - a[k]);
                 let s = back * self.width / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                (std::array::from_fn(|k| a[k] - d[k] * s), std::array::from_fn(|k| b[k] + d[k] * s), 0.98 * t, self.alpha * t)
+                (
+                    std::array::from_fn(|k| (F(a[k]) - d[k] * s).0),
+                    std::array::from_fn(|k| (F(b[k]) + d[k] * s).0),
+                    (0.98 * t).0,
+                    (self.alpha * t).0,
+                )
             })
             .collect()
     }
@@ -548,7 +563,7 @@ pub fn ee_div(a: i32, b: i32) -> i32 {
 /// the first sample, ends clamped.
 fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
     let i = x as usize;
-    let u = x - i as f32;
+    let u = F(x) - i as f32;
     let (u2, u3, v) = (u * u, u * u * u, 1.0 - u);
     let [w0, w1, w2, w3] = match i {
         0 => [v * v * v, 3.0 * u + (21.0 * u3 / 12.0 - 9.0 * u2 / 2.0), -11.0 * u3 / 12.0 + 3.0 * u2 / 2.0, u3 / 6.0],
@@ -560,7 +575,9 @@ fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
     // past its buffer there, draw only)
     let i = i.min(last);
     let q = [p[i.saturating_sub(1)], p[i], p[(i + 1).min(last)], p[(i + 2).min(last)]];
-    std::array::from_fn(|e| std::array::from_fn(|k| w0 * q[0][e][k] + w1 * q[1][e][k] + w2 * q[2][e][k] + w3 * q[3][e][k]))
+    std::array::from_fn(|e| {
+        std::array::from_fn(|k| (w0 * q[0][e][k] + w1 * q[1][e][k] + w2 * q[2][e][k] + w3 * q[3][e][k]).0)
+    })
 }
 
 /// The ball's flight ribbon: the ball's positions since the last hit (a ring of 50; a sample in line with the two
@@ -600,7 +617,6 @@ impl Flight {
 
     /// One frame of the ball at `pos` moving at `vel`.
     pub fn tick(&mut self, pos: [f32; 4], vel: [f32; 4]) {
-        use ps2::{add, div, madd, mul, sub};
         if !self.live {
             return;
         }
@@ -611,18 +627,18 @@ impl Flight {
             let j = back(self.head, 2);
             if self.count > 2 {
                 let (a, b) = (self.points[j], self.points[back(j, 1)]);
-                let d: [f32; 3] = std::array::from_fn(|k| sub(pos[k], a[k]));
-                let e: [f32; 3] = std::array::from_fn(|k| sub(a[k], b[k]));
-                let r = div(1.0, ps2::sqrt(add(add(mul(e[2], e[2]), mul(e[0], e[0])), mul(e[1], e[1]))));
-                let e = e.map(|v| mul(v, r));
-                let c = [sub(mul(d[0], e[1]), mul(d[1], e[0])), sub(mul(d[2], e[0]), mul(d[0], e[2])), sub(mul(d[1], e[2]), mul(d[2], e[1]))];
-                if ps2::sqrt(add(add(mul(c[0], c[0]), mul(c[2], c[2])), mul(c[1], c[1]))) < 0.05 {
+                let d: [F; 3] = std::array::from_fn(|k| F(pos[k]) - a[k]);
+                let e: [F; 3] = std::array::from_fn(|k| F(a[k]) - b[k]);
+                let r = 1.0 / (e[2] * e[2] + e[0] * e[0] + e[1] * e[1]).sqrt();
+                let e = e.map(|v| v * r);
+                let c = [d[0] * e[1] - d[1] * e[0], d[2] * e[0] - d[0] * e[2], d[1] * e[2] - d[2] * e[1]];
+                if (c[0] * c[0] + c[2] * c[2] + c[1] * c[1]).sqrt() < 0.05 {
                     keep = false;
                 }
             }
             let a = self.points[j];
-            let d: [f32; 3] = std::array::from_fn(|k| sub(pos[k], a[k]));
-            if keep && ps2::sqrt(add(add(mul(d[2], d[2]), mul(d[0], d[0])), mul(d[1], d[1]))) < 0.01 {
+            let d: [F; 3] = std::array::from_fn(|k| F(pos[k]) - a[k]);
+            if keep && (d[2] * d[2] + d[0] * d[0] + d[1] * d[1]).sqrt() < 0.01 {
                 keep = false;
             }
         }
@@ -637,7 +653,8 @@ impl Flight {
         } else {
             self.points[back(self.head, 1)] = pos;
         }
-        self.speed = ps2::sqrt(madd(madd(mul(vel[0], vel[0]), vel[1], vel[1]), vel[2], vel[2]));
+        let v = fs(vel);
+        self.speed = (v[0] * v[0]).madd(v[1], v[1]).madd(v[2], v[2]).sqrt().0;
     }
 }
 
@@ -706,7 +723,15 @@ pub struct Puff {
 impl Puff {
     fn new(pos: [f32; 4], size: f32, grow: f32) -> Puff {
         let life = PUFF_LIFE as f32;
-        Puff { pos, life: PUFF_LIFE, size, grow: ps2::div(grow, life), alpha: 128.0, fade: -ps2::div(128.0, life), fresh: true }
+        Puff {
+            pos,
+            life: PUFF_LIFE,
+            size,
+            grow: (F(grow) / life).0,
+            alpha: 128.0,
+            fade: (-(F(128.0) / life)).0,
+            fresh: true,
+        }
     }
 
     /// One frame; false once it has died out.
@@ -714,8 +739,8 @@ impl Puff {
         if std::mem::take(&mut self.fresh) {
             return true;
         }
-        self.size = ps2::add(self.size, self.grow);
-        self.alpha = ps2::add(self.alpha, self.fade);
+        self.size = (F(self.size) + self.grow).0;
+        self.alpha = (F(self.alpha) + self.fade).0;
         more(self);
         self.life -= 1;
         self.life >= 1
@@ -762,20 +787,15 @@ impl Bounce {
     /// `smash` when a first bounce now would be a smash landing.
     // ponytail: wet courts (spray model, rising puffs) and the replay's larger crater are left out
     pub fn tick(&mut self, bounces: i32, contacts: &[Contact], smash: bool) {
-        use ps2::{add, div, mul, sub};
         let (mut ring, mut crater) = (false, false);
         if let Some(c) = contacts.first().filter(|_| bounces == 1 && self.seen != 1) {
             let mut p = c.point;
-            let v: [f32; 4] = std::array::from_fn(|k| sub(add(p[k], c.vel[k]), p[k]));
-            let q = div(1.0, ps2::sqrt(add(mul(v[0], v[0]), mul(v[2], v[2]))));
-            let fwd = [mul(v[0], q), 0.0, mul(v[2], q), 0.0];
+            let v: [F; 4] = std::array::from_fn(|k| F(p[k]) + c.vel[k] - p[k]);
+            let q = 1.0 / (v[0] * v[0] + v[2] * v[2]).sqrt();
+            let fwd = [(v[0] * q).0, 0.0, (v[2] * q).0, 0.0];
             let up = [0.0, 1.0, 0.0, 0.0];
-            let side = [
-                sub(mul(up[1], fwd[2]), mul(up[2], 0.0)),
-                sub(mul(up[2], fwd[0]), mul(up[0], fwd[2])),
-                sub(mul(up[0], 0.0), mul(up[1], fwd[0])),
-                0.0,
-            ];
+            let (u, w) = (fs(up), fs(fwd));
+            let side = [(u[1] * w[2] - u[2] * 0.0).0, (u[2] * w[0] - u[0] * w[2]).0, (u[0] * 0.0 - u[1] * w[0]).0, 0.0];
             if c.court {
                 p[1] = 0.0; // effects sit on the court plane
             }
@@ -783,20 +803,25 @@ impl Bounce {
                 crater = true;
                 self.crater.start();
                 self.crater_at = [side, up, fwd, p];
-                let d = Puff::new([p[0], 0.1, p[2], p[3]], mul(0.15, 2.0), mul(0.3, 2.0));
+                let d = Puff::new([p[0], 0.1, p[2], p[3]], (F(0.15) * 2.0).0, (F(0.3) * 2.0).0);
                 self.dust = Some((d, [fwd[0], 0.0, fwd[2], 0.0], 0.05));
             } else if c.court {
                 if self.marks.len() == MARKS {
                     self.marks.remove(0);
                 }
-                let len = ps2::sqrt(add(mul(c.vel[0], c.vel[0]), mul(c.vel[2], c.vel[2])));
-                self.marks.push(Mark { m: [side, up, fwd, [p[0], -0.01, p[2], p[3]]], life: MARK_LIFE, len, alpha: 0.0 });
+                let len = (F(c.vel[0]) * c.vel[0] + F(c.vel[2]) * c.vel[2]).sqrt().0;
+                self.marks.push(Mark {
+                    m: [side, up, fwd, [p[0], -0.01, p[2], p[3]]],
+                    life: MARK_LIFE,
+                    len,
+                    alpha: 0.0,
+                });
                 self.puff(Puff::new(p, 0.15, 0.3));
             }
             if !self.crater.live {
                 ring = true;
                 let n = c.normal;
-                let pitch = crate::libm::atan2f(-n[1], ps2::sqrt(ps2::madd(mul(n[2], n[2]), n[0], n[0])));
+                let pitch = crate::libm::atan2f((-F(n[1])).0, (F(n[2]) * n[2]).madd(n[0], n[0]).sqrt().0);
                 let m = world::mat_mul(&world::rot_x(pitch), &world::rot_y(crate::libm::atan2f(n[0], n[2])));
                 self.ring_at = [m[0], m[1], m[2], [p[0], p[1], p[2], 1.0]];
                 self.ring.start();
@@ -810,7 +835,7 @@ impl Bounce {
         self.marks.retain_mut(|m| {
             let before = m.life;
             m.life -= fading as i32;
-            m.alpha = div((before << 7) as f32, MARK_LIFE as f32);
+            m.alpha = (F((before << 7) as f32) / MARK_LIFE as f32).0;
             m.life >= 0
         });
         if self.puffing {
@@ -818,8 +843,8 @@ impl Bounce {
         }
         if let Some((d, dir, speed)) = &mut self.dust {
             let alive = d.tick(|d| {
-                d.pos = std::array::from_fn(|k| add(add(mul(dir[k], *speed), d.pos[k]), 0.0));
-                *speed = mul(*speed, 0.95);
+                d.pos = std::array::from_fn(|k| (F(dir[k]) * *speed + d.pos[k] + 0.0).0);
+                *speed = (F(*speed) * 0.95).0;
             });
             if !alive {
                 self.dust = None;

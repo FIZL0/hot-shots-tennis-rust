@@ -536,6 +536,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B307** Menu sounds: the navigation (cursor move) sound must not cut off a still-playing select/confirm sound — it's too abrupt; let the select sound finish (separate channel/voice) — user 2026-10-14
 - [x] **B365** Mod style and complexity check: look into the mods, especially the ones from games like Hot Shots Out of Bounds, and see if they can be made to match HST's style more closely; also consider a polygon/complexity maximum for mods, since they run much slower. Investigation only, make no commits, leave the changes for the user to review (user 2026-10-14) → crates/hst/src/mods.rs · crates/hst/src/character.rs · crates/hst/src/modstore.rs
 - [x] **B381** Remove Lily, Anna, Suzuki and Chika from the modded playable characters: drop these four characters from the modded character list because their meshes are weird (user 2026-10-14) → crates/hst/src/mods.rs · crates/hst/src/modstore.rs · crates/hst/src/play/main_menu/roster.rs
+- [x] **C8** C2 follow-up, presentation: convert these modules the same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged); checked by their recording tests, not the state hash → hst-sim/src/camera.rs · cutaway.rs · shade.rs · effect.rs · sound.rs
 
 
 ### Shots
