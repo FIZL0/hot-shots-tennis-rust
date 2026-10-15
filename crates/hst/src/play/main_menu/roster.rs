@@ -393,9 +393,12 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let mine_cell = m.cell(p);
     for (k, &cell) in roster.iter().enumerate().skip(start).take(c.per()) {
         let rect = c.cell(p, k - start);
-        let on = active && cell == mine_cell;
+        let on = active && cell == mine_cell && !pl.on_tabs;
         if on {
             ringed(d, rect, 10.0, 3.0, s.ring, s.sel);
+        } else if active && cell == mine_cell {
+            // B391: the cursor up on the tab row: the pick's tile filled, without its ring
+            rounded(d, rect, 10.0, s.sel, 128.0);
         } else {
             rounded(d, rect, 10.0, s.tile, 128.0);
         }

@@ -232,7 +232,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             let me = m.players[p];
             if !me.ready {
-                v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
+                // B391: on the tab row the moves pick a category, ✕ goes down onto its tiles
+                v.extend([(Act::Move, if me.on_tabs { "Category" } else { "Character" }), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
             // B369 / B375: △ in or out of the favourites (not Random)
             if !me.ready && !me.random {
@@ -242,7 +243,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.seats[p] == Some(dev) {
                 v.push((Act::Name, "Name"));
             }
-            if !me.ready && !m.blocked(p) {
+            if !me.ready && me.on_tabs {
+                v.push((Act::Ok, "Characters"));
+            } else if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
             }
             if me.ready {

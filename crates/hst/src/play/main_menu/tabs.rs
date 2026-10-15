@@ -4,6 +4,11 @@
 //! to the next tab, ← past its first back to the previous one, wrapping, on the same row (clamped to the new tab's
 //! last) at its first or last tile; ↑↓ stay in the tab. A tap on a tab switches to it. □ marks the highlighted
 //! character a favourite (or not): saved in `favourites.txt` beside `settings.txt`, a star on its tile.
+//!
+//! B391: the tab row takes the cursor: ↑ from the grid's top row (or the pointer over a tab) focuses the player's
+//! tab, ←→ there go straight onto the previous / next tab (wrapping, a tab with nothing open passed over), ↓ or ✕
+//! back down onto the tile. The row keeps every tab at its own width and scrolls sideways (« » at a cut end) to show
+//! the player's, never squeezing the tabs to fit the column.
 
 use super::{COLOURS, Draw, Effect, GOLD, INK, Menu, Press, WHITE, Who, pointer};
 
@@ -118,6 +123,9 @@ impl Menu {
             return false;
         }
         let tabs = self.tabs();
+        if self.players[p].on_tabs {
+            return self.row_move(p, &tabs, dx, dy);
+        }
         let cols = self.cols(p);
         let mut t = self.tab_at(p, &tabs);
         if !tabs[t].cells.contains(&self.cell(p)) {
@@ -134,6 +142,11 @@ impl Menu {
             let mut to = at as i32;
             loop {
                 to += dy * cols as i32;
+                if to < 0 && tabs.len() > 1 {
+                    // B391: ↑ off the top row onto the tab row (with another tab to go to)
+                    self.players[p].on_tabs = true;
+                    return true;
+                }
                 if !(0..cells.len() as i32).contains(&to) {
                     let edge = to.clamp(0, cells.len() as i32 - 1) as usize;
                     break if self.full(p, cells[edge]) { None } else { Some((t, edge)) };
@@ -169,6 +182,32 @@ impl Menu {
             }
             _ => false,
         }
+    }
+
+    /// B391: a move on the tab row: ←→ onto the next tab that way with anything open (wrapping), ↓ back down onto
+    /// the tile. Whether the cursor moved.
+    fn row_move(&mut self, p: usize, tabs: &[Tab], dx: i32, dy: i32) -> bool {
+        if dy > 0 {
+            self.players[p].on_tabs = false;
+            return true;
+        }
+        let n = tabs.len();
+        if dx == 0 || n < 2 {
+            return false;
+        }
+        let t = self.tab_at(p, tabs);
+        (1..n).map(|s| if dx > 0 { (t + s) % n } else { (t + n - s) % n }).any(|u| self.set_tab(p, tabs, u))
+    }
+
+    /// B391: ✕ on the tab row: down onto the tab's tile (not a pick); `k` without its ✕ then.
+    pub(super) fn tabs_ok(&mut self, p: usize, k: Press, out: &mut Vec<Effect>) -> Press {
+        if !(k.ok && self.players[p].on_tabs && !self.players[p].ready) {
+            return k;
+        }
+        self.players[p].on_tabs = false;
+        self.follow(p);
+        out.push(Effect::Sound(0));
+        Press { ok: false, ..k }
     }
 
     /// Past row `row`'s end of tab `t` (`right`: its last tile): the next tab's same row (its last if it's shorter),
@@ -225,28 +264,70 @@ impl Menu {
 }
 
 /// The tab row of player `p`'s column (its colour), in `[x, y, w, h]`: a pill per tab with its count, theirs filled
-/// (the column's footer names the tab and its neighbours).
+/// (the column's footer names the tab and its neighbours), ringed gold while the cursor is on the row (B391). B391:
+/// every pill at its own width; too many for the column, the row shows a run of whole tabs round theirs, a « / » at
+/// a cut end (a tap there goes on to the tab past it).
 pub(super) fn row(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
     let tabs = m.tabs();
     let t = m.tab_at(p, &tabs);
     let size = h * 0.62;
-    let n = tabs.len();
-    let room = w - 4.0 * (n - 1) as f32;
+    let gap = 4.0;
     let labels: Vec<String> = tabs.iter().map(|tab| format!("{} {}", tab.name, tab.cells.len())).collect();
-    // too wide: the words get smaller (down to 70%), then squeezed
-    let words: f32 = labels.iter().map(|l| d.width(l, size)).sum();
-    let k = ((room - h * 0.6 * n as f32) / words).clamp(0.7, 1.0);
-    let want: Vec<f32> = labels.iter().map(|l| d.width(l, size * k) + h * 0.6).collect();
-    let fit = (room / want.iter().sum::<f32>()).min(1.0);
+    let want: Vec<f32> = labels.iter().map(|l| d.width(l, size) + h * 0.6).collect();
+    let arrow = h * 0.8;
+    let (lo, hi, room) = shown(&want, t, w, gap, arrow);
+    let focused = m.players[p].on_tabs && !m.players[p].ready;
     let mut px = x;
-    for (i, label) in labels.iter().enumerate() {
-        let pw = want[i] * fit;
+    if lo > 0 {
+        d.label("«", x + arrow / 2.0, y + (h - size) / 2.0, size, arrow, WHITE);
+        d.hit([x, y, arrow, h], pointer::Act::Category(p, lo - 1));
+    }
+    if (lo, hi) != (0, tabs.len()) {
+        px += arrow + gap;
+    }
+    for i in lo..hi {
+        let pw = want[i].min(room);
         let on = i == t;
         let fill = if on { COLOURS[p] } else { [24.0, 22.0, 30.0] };
-        d.pill_at([px, y, pw, h], [INK, if on { WHITE } else { [70.0; 3] }, fill], 128.0);
-        d.label(label, px + pw / 2.0, y + (h - size * k) / 2.0, size * k, pw - h * 0.5, if on { WHITE } else { [100.0; 3] });
+        let ring = if on && focused { GOLD } else if on { WHITE } else { [70.0; 3] };
+        if on && focused {
+            d.pill_at([px - 2.0, y - 2.0, pw + 4.0, h + 4.0], [GOLD; 3], 128.0);
+        }
+        d.pill_at([px, y, pw, h], [INK, ring, fill], 128.0);
+        d.label(&labels[i], px + pw / 2.0, y + (h - size) / 2.0, size, pw - h * 0.5, if on { WHITE } else { [100.0; 3] });
         d.hit([px, y, pw, h], pointer::Act::Category(p, i));
-        px += pw + 4.0;
+        px += pw + gap;
+    }
+    if hi < tabs.len() {
+        d.label("»", x + w - arrow / 2.0, y + (h - size) / 2.0, size, arrow, WHITE);
+        d.hit([x + w - arrow, y, arrow, h], pointer::Act::Category(p, hi));
+    }
+}
+
+/// B391: the run of tabs `lo..hi` the row shows (pill widths `want`, `gap` apart, in `w`), round tab `t` (grown a tab
+/// each way in turn while they fit), and the most one pill may take; a cut row keeps `arrow` (+ `gap`) at each end.
+fn shown(want: &[f32], t: usize, w: f32, gap: f32, arrow: f32) -> (usize, usize, f32) {
+    let n = want.len();
+    if want.iter().sum::<f32>() + gap * n.saturating_sub(1) as f32 <= w {
+        return (0, n, w);
+    }
+    let room = w - 2.0 * (arrow + gap);
+    let (mut lo, mut hi, mut used) = (t, t + 1, want[t]);
+    loop {
+        let mut grew = false;
+        if hi < n && used + gap + want[hi] <= room {
+            used += gap + want[hi];
+            hi += 1;
+            grew = true;
+        }
+        if lo > 0 && used + gap + want[lo - 1] <= room {
+            used += gap + want[lo - 1];
+            lo -= 1;
+            grew = true;
+        }
+        if !grew {
+            break (lo, hi, room);
+        }
     }
 }
 
@@ -404,6 +485,50 @@ mod tests {
         // Random has no favourite; a ready player's △ does nothing
         n.put(0, None);
         assert!(n.step(Dev::Keys, press(|p| &mut p.card)).is_empty());
+    }
+
+    /// B391: ↑ off the top row focuses the tab row; ←→ there switch tabs (wrapping), ✕ or ↓ go back to the tile.
+    #[test]
+    fn the_tab_row_takes_the_cursor() {
+        let mut m = menu();
+        m.players[0].random = false;
+        m.put(0, m.tab_cells(0)[2]);
+        let k = |m: &mut Menu, f: fn(&mut Press) -> &mut bool| {
+            m.step(Dev::Keys, press(f));
+            let tabs = m.tabs();
+            (tabs[m.tab_at(0, &tabs)].name.clone(), m.players[0].on_tabs)
+        };
+        assert_eq!(k(&mut m, |p| &mut p.up), ("Hot Shots".into(), true));
+        // on the row: → straight onto Get a Grip's first tile, ← back (the same tile kept), ← wraps to Mods
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), true));
+        assert_eq!(m.cell(0), Some(Who::Mod(10)));
+        assert_eq!(k(&mut m, |p| &mut p.left), ("Hot Shots".into(), true));
+        assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), true));
+        assert_eq!(k(&mut m, |p| &mut p.up), ("Mods".into(), true));
+        // ✕ goes down, not ready; ↓ too
+        assert_eq!(k(&mut m, |p| &mut p.ok), ("Mods".into(), false));
+        assert!(!m.players[0].ready);
+        assert_eq!(k(&mut m, |p| &mut p.up), ("Mods".into(), true));
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), false));
+        assert_eq!(m.cell(0), Some(Who::Mod(0)));
+        // the pointer over a tab focuses it and puts the player on it; over a tile, back on the grid
+        m.point(Dev::Keys, pointer::Act::Category(0, 2), false);
+        assert_eq!((m.players[0].tab, m.players[0].on_tabs), (GAMES + 1, true));
+        m.point(Dev::Keys, pointer::Act::Cell(0, 1), false);
+        assert_eq!((m.players[0].on_tabs, m.cell(0)), (false, Some(Who::Mod(4))));
+    }
+
+    /// B391: tabs too wide for the row keep their widths: a run round the player's tab, « » room at the ends.
+    #[test]
+    fn the_row_scrolls_instead_of_squeezing() {
+        let want = [50.0; 6];
+        assert_eq!(shown(&want, 3, 400.0, 4.0, 10.0), (0, 6, 400.0));
+        let (lo, hi, room) = shown(&want, 5, 200.0, 4.0, 10.0);
+        assert_eq!((lo, hi, room), (3, 6, 172.0));
+        assert_eq!(shown(&want, 0, 200.0, 4.0, 10.0).0..shown(&want, 0, 200.0, 4.0, 10.0).1, 0..3);
+        assert_eq!(&shown(&want, 2, 200.0, 4.0, 10.0).0, &1);
+        // one pill wider than the row: just it, squeezed to the room
+        assert_eq!(shown(&[500.0, 50.0], 0, 200.0, 4.0, 10.0), (0, 1, 172.0));
     }
 
     #[test]
