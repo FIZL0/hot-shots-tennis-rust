@@ -175,8 +175,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
             let open = options::page(m.screen).get(s).is_some_and(|o| !options::locked(*o));
             if m.editing.is_some() && open {
-                // B326: the row picked: ◀ ▶ change it, ✕ keeps, ○ puts it back
-                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Keep"), (Act::Back, "Cancel")]);
+                // B326: the row picked: ◀ ▶ change it, ✕ sets it, ○ puts it back
+                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Select"), (Act::Back, "Cancel")]);
             } else {
                 v.push((Act::UpDown, "Option"));
                 if open {
@@ -191,7 +191,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
         Screen::Assign if host => {
-            v.push((Act::UpDown, "Pick"));
+            v.push((Act::UpDown, "Move"));
             if m.host_swap(false).is_some() || m.host_swap(true).is_some() {
                 v.push((Act::LeftRight, "Swap"));
             }
@@ -262,7 +262,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if s == 4 && (m.umpire as usize) < super::UMPIRES {
                 v.push((Act::Card, "Preview Voice"));
             }
-            v.extend([(Act::Ok, "Keep"), (Act::Back, "Cancel")]);
+            v.extend([(Act::Ok, "Select"), (Act::Back, "Cancel")]);
         }
         Screen::Confirm if host => {
             v.push((Act::UpDown, "Move"));

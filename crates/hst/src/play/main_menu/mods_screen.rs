@@ -2088,7 +2088,7 @@ mod tests {
         // the legend says what a tile's buttons do
         m.sel = t0 + 2;
         let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
-        assert_eq!(l, ["Browse", "Update", "More by", "Wish list", "Tab", "Kind", "Back"]);
+        assert_eq!(l, ["Move", "Update", "More by", "Wish list", "Tab", "Kind", "Back"]);
         // Upload: Sign in and Upload all side by side, then the mods
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];

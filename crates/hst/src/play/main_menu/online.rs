@@ -378,7 +378,7 @@ impl Menu {
         Some(match self.items().get(self.sel).copied().unwrap_or(Item::Button("Leave")) {
             Item::Seat(i) if self.guest(i).is_some() => "Take Out",
             Item::Seat(_) if self.lobby_bot() => "Pick",
-            Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add Computer"),
+            Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add COM"),
             Item::Remove(_) => "Remove",
             Item::Mode if self.can_switch() => "Singles / Doubles",
             Item::Mode => return None,

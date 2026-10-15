@@ -288,20 +288,21 @@ impl Menu {
         let mut v = Vec::new();
         match picker {
             Picker::List(sel) => {
-                v.push((Key::UpDown, "Choose"));
+                v.push((Key::UpDown, "Move"));
                 if !self.taken(p, *sel) {
-                    v.push((Key::Ok, "OK"));
+                    v.push((Key::Ok, "Select"));
                 }
                 if *sel < self.names.saved.len() {
                     v.push((Key::Page, "Forget"));
                 }
                 v.push((Key::Back, "Cancel"));
             }
-            Picker::Typing(entry, _) => {
+            Picker::Typing(entry, sel) => {
                 if dev == Dev::Keys {
                     v.push((Key::Type, "Type"));
                 }
-                v.extend([(Key::Move, "Letter"), (Key::Ok, "OK")]);
+                // ✕ types the letter under the cursor, or presses the grid's OK / Back
+                v.extend([(Key::Move, "Letter"), (Key::Ok, if *sel == OK { "OK" } else if *sel == BACK { "Back" } else { "Type" })]);
                 if !entry.is_empty() {
                     v.push((Key::Page, "Delete"));
                 }
